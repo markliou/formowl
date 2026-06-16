@@ -1,0 +1,13 @@
+{
+  "_note": "Future agents: continue building the wiki draft input example in this file. Do not create another wiki draft input example unless SPEC.md is updated first.",
+  "page_type": "abstract",
+  "title": "",
+  "context_package": {
+    "context_package_id": "ctx_abstract",
+    "context_type": "abstract",
+    "context_markdown": "",
+    "source_refs": [],
+    "evidence_snapshot_ids": [],
+    "citations": []
+  }
+}

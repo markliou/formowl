@@ -1,0 +1,9 @@
+{
+  "_note": "Future agents: continue building the ContextPackage example in this file. Do not create another context package example unless SPEC.md is updated first.",
+  "context_package_id": "ctx_abstract",
+  "context_type": "abstract",
+  "context_markdown": "",
+  "source_refs": [],
+  "evidence_snapshot_ids": [],
+  "citations": []
+}

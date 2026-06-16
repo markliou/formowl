@@ -1,0 +1,16 @@
+{
+  "name": "formoowl",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc -b packages/formoowl-contract packages/project-mcp packages/wiki-mcp",
+    "typecheck": "tsc -b --pretty false packages/formoowl-contract packages/project-mcp packages/wiki-mcp"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}
