@@ -1,0 +1,23 @@
+services:
+  project-mcp:
+    build:
+      context: .
+      dockerfile: containers/runtime/Dockerfile
+    command: ["python", "-m", "formowl_project_mcp.server"]
+    environment:
+      FORMOWL_DATA_DIR: /data
+    volumes:
+      - formowl-data:/data
+
+  wiki-mcp:
+    build:
+      context: .
+      dockerfile: containers/runtime/Dockerfile
+    command: ["python", "-m", "formowl_wiki_mcp.server"]
+    environment:
+      FORMOWL_DATA_DIR: /data
+    volumes:
+      - formowl-data:/data
+
+volumes:
+  formowl-data:

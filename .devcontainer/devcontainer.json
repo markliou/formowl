@@ -1,0 +1,13 @@
+{
+  "name": "formowl",
+  "build": {
+    "dockerfile": "../containers/dev/Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspace",
+  "remoteEnv": {
+    "PYTHONPATH": "/workspace/python:/workspace/python/formowl_project_mcp:/workspace/python/formowl_wiki_mcp",
+    "FORMOWL_DATA_DIR": "/workspace/.formowl/data"
+  },
+  "postCreateCommand": "python -m unittest discover -s tests"
+}

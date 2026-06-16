@@ -1,0 +1,13 @@
+[package]
+name = "formowl-core"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+name = "formowl_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "formowl-core"
+path = "src/main.rs"

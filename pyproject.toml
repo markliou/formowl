@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "formowl"
+version = "0.1.0"
+description = "Source-preserving knowledge management MCP servers."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+formowl-project-mcp = "formowl_project_mcp.server:main"
+formowl-wiki-mcp = "formowl_wiki_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = [
+  "python",
+  "python/formowl_project_mcp",
+  "python/formowl_wiki_mcp"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [
+  "python",
+  "python/formowl_project_mcp",
+  "python/formowl_wiki_mcp"
+]
