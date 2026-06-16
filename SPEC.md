@@ -2,22 +2,31 @@
 
 ## 1. Overview
 
-`formowl` is a knowledge management system designed to connect ChatGPT, project management systems, and wiki/documentation systems through MCP.
+`formowl` is a source-preserving, graph-governed knowledge management system for turning multimodal resources, project execution data, conversations, and wiki/documentation systems into governed knowledge views.
 
-The first version contains two independently maintained MCP servers:
+The target architecture is a pipeline:
+
+```text
+Raw Resources
+  -> Resource Extraction
+  -> Observation / Semantic Metadata
+  -> Candidate Graph
+  -> Governed Canonical Knowledge Graph
+  -> User Knowledge Graph
+  -> Wiki Projection / WikiRevision
+```
+
+The current repository starts with independently maintained MCP servers and a shared contract package:
 
 ```text id="1b5hso"
 Project MCP
 Wiki MCP
-```
-
-They interoperate through a shared contract package:
-
-```text id="xlg12u"
 formowl-contract
 ```
 
-The goal is to keep project execution data and wiki knowledge artifacts decoupled, while preserving provenance, citations, and source traceability.
+These components are not the whole product boundary. They are the first concrete entrypoints for retrieving source context, preserving evidence, generating wiki artifacts, and validating the contract model that later resource extraction and graph assembly layers must also use.
+
+The goal is to keep raw resources, project execution state, canonical graph state, user-specific graph views, and wiki artifacts decoupled, while preserving provenance, citations, source traceability, extraction lineage, graph governance, and revision history.
 
 The system must be usable by people who are not software engineers. Administrative owners, project coordinators, reviewers, and process operators should be able to work through natural-language instructions and review-oriented actions. Technical mechanisms such as Git, object storage, schemas, hashes, and revision backends must remain implementation details unless an administrator explicitly asks to inspect them.
 
@@ -27,18 +36,28 @@ The system must be usable by people who are not software engineers. Administrati
 
 ```text id="1mhwmd"
 ChatGPT / LLM Host
-  ?? Project MCP
-  ?? Wiki MCP
+  -> Project MCP
+  -> Wiki MCP
+  -> future ingestion and graph orchestration tools
 
 Shared Contract
-  ?? formowl-contract
+  -> formowl-contract
+
+Knowledge Pipeline
+  -> Observation
+  -> Candidate Graph
+  -> Governed Canonical Graph
+  -> User Knowledge Graph
+  -> WikiRevision
 ```
 
 Project MCP is responsible for project execution context.
 
 Wiki MCP is responsible for knowledge artifact creation and wiki publishing lifecycle.
 
-`formowl-contract` defines the shared data structures that allow both MCPs to exchange information without depending on each other? internal implementation.
+Resource extraction and graph assembly are responsible for converting raw resources into observations, candidate atoms, canonical atoms, canonical entities, canonical relations, user graph revisions, and projection-ready graph views.
+
+`formowl-contract` defines the shared data structures that allow Project MCP, Wiki MCP, ingestion tools, and graph assembly tools to exchange information without depending on each other's internal implementation.
 
 ---
 
@@ -46,44 +65,50 @@ Wiki MCP is responsible for knowledge artifact creation and wiki publishing life
 
 1. Raw data is the source of truth.
 2. Wiki pages are knowledge views, not source of truth.
-3. LLM-generated summaries, drafts, and extracted knowledge are derived data.
+3. LLM-generated summaries, drafts, extracted observations, candidate atoms, and graph proposals are derived data.
 4. Project management systems own execution state.
 5. Wiki systems own published knowledge views.
-6. Project MCP and Wiki MCP must be independently maintainable.
-7. Integration between MCPs must happen through shared schemas, not direct dependencies.
-8. Every generated knowledge artifact must preserve source references.
-9. Any external data used to generate knowledge must be traceable.
-10. Write operations must use proposal and review flows.
-11. The primary user workflow must be natural-language-first and non-technical-user-friendly.
-12. Technical governance mechanisms must be hidden behind task-oriented actions such as save draft, submit for review, compare changes, publish, refresh from sources, and restore.
-13. Wiki artifacts are versioned knowledge views derived from raw data; they are not raw truth.
-14. Regenerating a wiki artifact must create a reviewable proposal or diff, not silently overwrite reviewed or published knowledge.
-15. Git may be used as a revision backend, audit mirror, or engineering workflow, but it must not be required as the user-facing wiki workflow.
-16. A canonical atom model should describe reusable, source-grounded knowledge parts, but it must not be treated as any user's final knowledge graph.
-17. Different users may assemble different knowledge graphs from the same raw data, evidence snapshots, and canonical atoms.
-18. Personal knowledge graphs are derived, versioned user views. They may reflect changing user goals, attention, terminology, and preferred granularity.
-19. Any personal graph assembly must preserve provenance back to raw data, evidence snapshots, citations, and canonical atoms when available.
-20. Development, testing, and deployment must be container-first to maximize portability and avoid host-machine assumptions.
-21. Python and Rust are the primary implementation languages.
-22. Python is the preferred language for orchestration, MCP service glue, workflows, adapters, tests, and day-to-day debugging.
-23. Rust must own heavy computing, security-sensitive logic, parsers, validators, hash/signature work, data integrity checks, concurrency-sensitive code, and any feature whose Python implementation would expose strange, hard-to-read, or hard-to-maintain syntax.
-24. Rust core functionality should be exposed to Python through stable bindings so most contributors can read and debug the Python-facing API without editing Rust internals.
+6. Raw resources do not directly generate wiki pages; they first become observations and semantic metadata.
+7. Observations are the common intermediate form for audio, video, image, document, text, project, wiki, and conversation resources.
+8. External extractors and LLM graph tools must write to observation stores, candidate stores, or import buffers, not directly to the canonical graph.
+9. Candidate graph output is a proposal layer; it must pass granularity policy, entity resolution, relation resolution, lifecycle policy, and review policy before canonical commit.
+10. Atom granularity is a first-class governance policy, not an incidental property of an extractor.
+11. Canonical atoms, canonical entities, and canonical relations are reusable governed knowledge parts, not any user's final graph.
+12. Different users may assemble different knowledge graphs from the same raw data, evidence snapshots, observations, candidate atoms, and canonical atoms.
+13. User knowledge graphs are derived, versioned views. They may reflect changing user goals, attention, terminology, permissions, tasks, and preferred granularity.
+14. Wiki projection must be controlled by projection specs and review flows, not by unconstrained one-off generation.
+15. Every generated knowledge artifact must preserve source references.
+16. Any external data used to generate knowledge must be traceable.
+17. Any user graph assembly must preserve provenance back to raw data, evidence snapshots, citations, observations, and canonical atoms when available.
+18. Write operations must use proposal and review flows.
+19. The primary user workflow must be natural-language-first and non-technical-user-friendly.
+20. Technical governance mechanisms must be hidden behind task-oriented actions such as save draft, submit for review, compare changes, publish, refresh from sources, and restore.
+21. Wiki artifacts are versioned knowledge views derived from graph views and source evidence; they are not raw truth.
+22. Regenerating a wiki artifact must create a reviewable proposal or diff, not silently overwrite reviewed or published knowledge.
+23. Git may be used as a revision backend, audit mirror, or engineering workflow, but it must not be required as the user-facing wiki workflow.
+24. Project MCP, Wiki MCP, ingestion tools, and graph assembly tools must remain independently maintainable.
+25. Integration between components must happen through shared schemas, not direct dependencies.
+26. Development, testing, and deployment must be container-first to maximize portability and avoid host-machine assumptions.
+27. Python and Rust are the primary implementation languages.
+28. Python is the preferred language for orchestration, MCP service glue, workflows, adapters, tests, and day-to-day debugging.
+29. Rust must own heavy computing, security-sensitive logic, parsers, validators, hash/signature work, data integrity checks, concurrency-sensitive code, and any feature whose Python implementation would expose strange, hard-to-read, or hard-to-maintain syntax.
+30. Rust core functionality should be exposed to Python through stable bindings so most contributors can read and debug the Python-facing API without editing Rust internals.
 
 ---
 
-## 4. First Version Scope
+## 4. Current Implementation and Target Scope
 
-The first version should prove this workflow:
+The current implementation proves this workflow:
 
 ```text id="lmvw9o"
 ChatGPT
-  ??Project MCP retrieves project/work item context
-  ??ChatGPT passes context to Wiki MCP
-  ??Wiki MCP generates a markdown/wiki draft
-  ??Generated draft includes source references and evidence snapshots
+  -> Project MCP retrieves project/work item context
+  -> ChatGPT passes context to Wiki MCP
+  -> Wiki MCP generates a markdown/wiki draft
+  -> Generated draft includes source references and evidence snapshots
 ```
 
-Included:
+Currently implemented or scaffolded:
 
 ```text id="ny0cw0"
 Project MCP
@@ -103,21 +128,40 @@ Container-first development and deployment baseline
 Python/Rust implementation policy
 ```
 
-Not included in the first version:
+Target architecture capabilities to add:
+
+```text
+Multimodal asset ingestion
+Asset and object stores
+Observation extraction for audio, video, image, document, text, project, wiki, and conversation resources
+Semantic metadata extraction from observations
+CandidateAtom and CandidateRelation stores
+Candidate graph preview and review
+AtomGranularityPolicy enforcement
+Entity and relation resolution
+Canonical graph commit workflow
+CanonicalAtom, CanonicalEntity, and CanonicalRelation contract objects
+AtomLifecycleEvent, EntityResolutionEvent, and RelationResolutionEvent records
+UserGraphAssemblyPolicy and UserKnowledgeGraphRevision
+WikiProjectionSpec-driven page generation
+Graph-aware WikiRevision lineage
+IngestionJob and ExtractorRun tracking
+Vector search and optional graph storage
+```
+
+Capabilities that should not be assumed to exist until implemented:
 
 ```text id="lr46ln"
 Full Jira adapter
-Full knowledge graph database
-Canonical atom extraction service
-Per-user graph database or automated personal graph assembly
 Automatic wiki publishing
 Automatic project write-back
 Company-wide ontology
 Full permission engine
-Full raw data ingestion pipeline
 User-facing Git workflow requirements
 Host-machine-specific development requirements
 ```
+
+This section is an implementation status boundary, not a product boundary. The product architecture is the full resource extraction, graph assembly, user graph, and wiki projection pipeline.
 
 ---
 
@@ -207,7 +251,7 @@ Wiki snapshot capture
 Revisioned artifact store abstraction
 Change comparison and restore proposals
 Natural-language operation mapping
-Future canonical atom and personal graph view lifecycle
+Canonical graph and user graph view lifecycle
 ```
 
 Wiki MCP does not own:
@@ -229,7 +273,7 @@ User-facing Git operations
 
 It defines portable objects used by both Project MCP and Wiki MCP.
 
-Core objects:
+Current core objects:
 
 ```text id="qv0xks"
 SourceRef
@@ -245,9 +289,138 @@ WikiRevision
 MCPResultEnvelope
 ```
 
+Target graph and ingestion objects:
+
+```text
+Asset
+Observation
+SemanticMetadata
+CandidateAtom
+CandidateRelation
+CanonicalAtom
+CanonicalEntity
+CanonicalRelation
+AtomGranularityPolicy
+AtomLifecycleEvent
+EntityResolutionEvent
+RelationResolutionEvent
+UserGraphAssemblyPolicy
+UserKnowledgeGraphRevision
+WikiProjectionSpec
+IngestionJob
+ExtractorRun
+```
+
 Both MCP servers must import or implement this contract.
 
-No MCP server should depend on another MCP server? internal types.
+No MCP server should depend on another MCP server's internal types.
+
+---
+
+## 5.4 Resource Extraction Layer
+
+The Resource Extraction Layer converts raw resources into observations and semantic metadata.
+
+Supported resource families should include:
+
+```text
+audio
+video
+image
+document
+text
+project data
+conversation
+wiki source
+```
+
+Resource extraction owns:
+
+```text
+asset registration
+extractor selection
+observation creation
+extractor metadata capture
+location metadata capture such as timestamp, page, bounding box, frame, speaker, or section
+re-extraction when extractor versions or extraction policies change
+```
+
+Resource extraction does not own:
+
+```text
+final atom granularity
+canonical entity merges
+canonical relation commits
+user graph assembly
+wiki page generation
+```
+
+All extractor output must remain derived data until reviewed or committed through the graph assembly workflow.
+
+---
+
+## 5.5 Knowledge Graph Assembly Layer
+
+The Knowledge Graph Assembly Layer converts observations and semantic metadata into governed graph state.
+
+The assembly flow is:
+
+```text
+Observation
+  -> CandidateAtom / CandidateRelation
+  -> Granularity policy
+  -> Entity resolution
+  -> Relation resolution
+  -> CanonicalAtom / CanonicalEntity / CanonicalRelation
+  -> UserKnowledgeGraphRevision
+```
+
+Graph assembly owns:
+
+```text
+candidate graph preview
+granularity policy enforcement
+entity resolution
+relation resolution
+canonical graph commits
+atom lifecycle events
+user graph assembly policies
+graph revision lineage
+```
+
+Graph assembly must treat external extractor and LLM graph outputs as proposals. It must not trust them as canonical graph state.
+
+---
+
+## 5.6 Governance and Policy Layer
+
+Governance crosses every layer of the system.
+
+Policy objects should include:
+
+```text
+ExtractionPolicy
+AtomGranularityPolicy
+OntologyPolicy
+EntityResolutionPolicy
+RelationResolutionPolicy
+LifecyclePolicy
+UserGraphAssemblyPolicy
+WikiProjectionPolicy
+```
+
+The Governance and Policy Layer controls:
+
+```text
+which resources may be extracted
+how extracted data becomes observations
+what counts as one atom
+when to split, merge, supersede, deprecate, or archive graph objects
+which entities and relations may be auto-accepted
+which candidates require human review
+which graph granularity different users or tasks should receive
+how wiki artifacts are projected from graph views
+```
 
 ---
 
@@ -978,43 +1151,89 @@ propose_wiki_refresh
 restore_wiki_revision
 ```
 
-MVP implementations may model these through `generate_wiki_draft`, `update_wiki_draft`, `publish_wiki_page`, and an internal revision store.
+The current Wiki MCP implementation may model these through `generate_wiki_draft`, `update_wiki_draft`, `publish_wiki_page`, and an internal revision store. Graph-aware implementations should also record projection specs, user graph revisions, included atoms, and generator policy.
 
 Git-specific operations such as commit, branch, pull request, merge, or rebase must not be required from normal wiki authors. If Git is used, the system should create commits or pull requests on behalf of the workflow and expose them only as optional audit details.
 
 ---
 
-## 9. Personal Knowledge Graph and Canonical Atom Model
+## 9. Multimodal Knowledge Graph and Wiki Projection Model
 
-Wiki specifications must distinguish between source material, reusable knowledge parts, personal knowledge graphs, and published wiki artifacts.
+Wiki specifications must distinguish between raw resources, observations, candidate knowledge, reusable canonical graph parts, user knowledge graphs, and published wiki artifacts.
 
-The system must not assume that one source document, work item, or wiki page has one correct knowledge graph. Different users may read the same evidence with different goals, attention, terminology, and preferred granularity. A project owner may want a coarse operational summary. A reviewer may care about policy exceptions. An engineer may inspect method details. These are all valid derived views if their provenance is preserved.
+The system must not assume that one source document, work item, meeting recording, image, ChatGPT session, or wiki page has one correct knowledge graph. Different users may read the same evidence with different goals, attention, terminology, and preferred granularity. A project owner may want a coarse operational summary. A reviewer may care about policy exceptions. An engineer may inspect method details. These are all valid derived views if their provenance is preserved.
 
-This chapter defines the model boundary. It does not require a full knowledge graph database in the first version.
+This chapter defines the model boundary. It requires the architecture to support the full pipeline even when a particular deployment implements only part of it.
 
 ## 9.1 Layered Knowledge Model
 
-The wiki knowledge model has five layers:
+The knowledge model has seven layers:
 
 ```text id="knowledge-graph-layers"
-Raw data
-EvidenceSnapshot and Citation
-Canonical atom graph
+Raw resource
+EvidenceSnapshot / Citation / Asset
+Observation / SemanticMetadata
+Candidate graph
+Governed canonical graph
 User knowledge graph
-WikiRevision
+WikiProjection / WikiRevision
 ```
 
 Layer responsibilities:
 
 ```text id="knowledge-layer-responsibilities"
-Raw data -> source-of-truth records from external systems, captured sessions, files, or wiki snapshots.
-EvidenceSnapshot and Citation -> traceable captured evidence and locators into source material.
-Canonical atom graph -> source-grounded reusable parts extracted from evidence.
-User knowledge graph -> a user's versioned assembly, filtering, grouping, labeling, and weighting of atoms.
-WikiRevision -> a governed output artifact such as a markdown page or published wiki page.
+Raw resource -> source-of-truth records from files, external systems, captured sessions, media, documents, or wiki snapshots.
+EvidenceSnapshot / Citation / Asset -> traceable captured evidence, source locators, and raw-resource metadata.
+Observation / SemanticMetadata -> normalized extracted facts, spans, scenes, blocks, transcripts, OCR, captions, and semantic hints.
+Candidate graph -> proposed atoms and relations that have not yet passed governance.
+Governed canonical graph -> source-grounded reusable atoms, entities, relations, and lifecycle mappings.
+User knowledge graph -> a user's versioned assembly, filtering, grouping, labeling, weighting, and permission-aware view of canonical and user-authored knowledge.
+WikiProjection / WikiRevision -> a governed output artifact such as a markdown page or published wiki page generated from a graph view and source evidence.
 ```
 
 `WikiRevision` is output governance. It records a versioned artifact. It must not be overloaded to become the user's full knowledge graph.
+
+## 9.1.1 Observation and Semantic Metadata
+
+All resource extractors should produce `Observation` records before graph assembly.
+
+An `Observation` is a normalized description of something found in a raw resource. Examples include transcript segments, video scenes, OCR blocks, document paragraphs, page regions, issue comments, wiki sections, or ChatGPT messages.
+
+An observation should carry:
+
+```text
+observation_id
+asset_id or evidence_snapshot_id
+type
+modality
+text, caption, structured payload, or extracted value
+location metadata such as timestamp, page, bounding box, frame, speaker, section, or message sequence
+extractor name, version, model, and run id
+confidence
+permission_scope
+created_at
+```
+
+`SemanticMetadata` records optional structured interpretations extracted from observations, such as entities, relations, claims, decisions, action items, topics, events, requirements, risks, deadlines, owners, and unresolved questions.
+
+Observation and semantic metadata are not canonical truth. They are the substrate for candidate graph generation.
+
+## 9.1.2 Candidate Graph
+
+External extractors, LLM tools, rule-based processors, and user imports may produce graph-shaped output, but that output must first enter a candidate graph.
+
+Candidate graph objects should include:
+
+```text
+CandidateAtom
+CandidateRelation
+CandidateEntityMention
+ExternalGraphImport
+```
+
+Candidate atoms and relations represent possible knowledge units and links. They must record source observations, extractor metadata, confidence, proposed atom type, proposed granularity, and review state.
+
+Candidate graph state may be previewed, rejected, split, merged, revised, or committed. It must not be silently promoted to canonical graph state.
 
 ## 9.2 Canonical Atom Model
 
@@ -1041,25 +1260,38 @@ relationship
 Future contract objects may include:
 
 ```text id="future-atom-contract-objects"
-KnowledgeAtom
-AtomRelation
-AtomGraphRevision
-AtomExtractionPolicy
+CanonicalAtom
+CanonicalEntity
+CanonicalRelation
+CanonicalGraphRevision
+CandidateAtom
+CandidateRelation
+Observation
+SemanticMetadata
+ExtractionPolicy
 AtomGranularityPolicy
 AtomLifecycleEvent
+EntityResolutionEvent
+RelationResolutionEvent
 ```
 
-A future `KnowledgeAtom` should carry at least:
+A future `CanonicalAtom` should carry at least:
 
 ```text id="knowledge-atom-minimum-fields"
 atom_id
 atom_type
 canonical_text or normalized_summary
+granularity_level
+status
+source_candidate_atom_ids
+source_observation_ids
 source_refs
 evidence_snapshot_ids
 citations
 content_hash
 extraction_policy_id
+granularity_policy_id
+confidence
 created_at
 ```
 
@@ -1077,14 +1309,16 @@ domain
 metadata
 ```
 
-Canonical atoms are not a company-wide ontology. They are source-grounded parts that can later be organized into many graphs. A canonical atom graph may include relationships between atoms, but the presence of a relationship in the canonical graph must still be traceable to evidence or an explicit human modeling action.
+Canonical atoms are not a company-wide ontology. They are source-grounded parts that can later be organized into many graphs. A canonical graph may include atoms, entities, and relations, but the presence of a canonical graph object must still be traceable to evidence, a committed candidate, or an explicit human modeling action.
+
+Canonical graph commits should be explicit events. A commit should record which candidates were accepted, changed, split, merged, or rejected; which policies were used; who or what approved the change; and which graph revision was created.
 
 ## 9.3 Atom Granularity Rules
 
 The system must avoid both extremes:
 
 ```text id="atom-granularity-extremes"
-Atoms that are too coarse cannot support personal assembly.
+Atoms that are too coarse cannot support user graph assembly.
 Atoms that are too fine become noise and lose useful meaning.
 ```
 
@@ -1095,7 +1329,7 @@ It can be traced to source evidence.
 It can be independently reviewed or corrected.
 It can be assembled into a larger view.
 It has enough context to remain understandable.
-Splitting it further would not materially improve reuse, review, or personalization.
+Splitting it further would not materially improve reuse, review, or user-specific assembly.
 ```
 
 Granularity is domain-sensitive. The system may extract a method section more finely for one workflow and an introduction more finely for another, as long as the extraction policy and evidence trail are recorded.
@@ -1104,7 +1338,7 @@ Granularity is domain-sensitive. The system may extract a method section more fi
 
 The definition of the smallest useful atom must evolve over time. It may change as source data changes, user goals change, user behavior accumulates, review feedback is collected, and better extraction or summarization policies are introduced.
 
-The system must not allow atom graphs to drift toward unlimited fragmentation. Fine-grained atoms that are rarely used, repeatedly displayed together, or no longer improve retrieval, review, wiki generation, or personal graph assembly should become candidates for coarsening or fusion.
+The system must not allow atom graphs to drift toward unlimited fragmentation. Fine-grained atoms that are rarely used, repeatedly displayed together, or no longer improve retrieval, review, wiki generation, or user graph assembly should become candidates for coarsening or fusion.
 
 Granularity evolution should be governed by explicit policies, not ad hoc rewrites. A future `AtomGranularityPolicy` should record:
 
@@ -1127,7 +1361,7 @@ Related algorithm families include:
 Minimum Description Length for balancing model complexity against explanatory value.
 Graph summarization for compact graph representations.
 Graph coarsening for merging strongly related nodes into supernodes.
-Personalized graph summarization for user-specific summaries based on targets or workloads.
+User-specific graph summarization based on targets or workloads.
 Incremental graph summarization for updating summaries as graph data changes.
 Concept drift detection for deciding when behavior or data distributions changed enough to revise policies.
 Ontology evolution and graph alignment for mapping old concepts and atoms to new versions.
@@ -1179,11 +1413,59 @@ derived_from
 
 Old atoms must remain resolvable for any existing `WikiRevision`, `UserKnowledgeGraphRevision`, citation, or evidence trail that refers to them. New graph revisions may prefer the newer atom, split atoms, or merged super-atom.
 
-Canonical graph evolution should be slower and more governed than personal graph evolution. User behavior may provide evidence for a canonical policy change, but it should first affect that user's `UserGraphAssemblyPolicy` or create a reviewable canonical change proposal. The system must not silently rewrite every user's graph because one user's habits changed.
+Canonical graph evolution should be slower and more governed than user graph evolution. User behavior may provide evidence for a canonical policy change, but it should first affect that user's `UserGraphAssemblyPolicy` or create a reviewable canonical change proposal. The system must not silently rewrite every user's graph because one user's habits changed.
 
-## 9.5 User Knowledge Graphs
+## 9.5 Entity and Relation Resolution
 
-Each user may have one or more personal knowledge graphs.
+Entity resolution decides whether entity mentions in observations or candidate atoms refer to the same canonical entity.
+
+Entity resolution should combine:
+
+```text
+exact alias match
+normalized string match
+embedding similarity
+graph neighborhood similarity
+type compatibility checks
+LLM-assisted adjudication for ambiguous cases
+human review for low-confidence merges
+```
+
+Entity resolution must not rely only on LLM generation. It must record an `EntityResolutionEvent` when a candidate entity is merged, rejected, aliased, split, or deferred for review.
+
+Relation resolution decides whether a candidate relation should enter the canonical graph.
+
+Relation resolution should consider:
+
+```text
+relation type compatibility
+subject and object canonical entity mapping
+temporal validity
+confidence score
+contradiction with existing graph state
+redundancy with existing relations
+whether the relation is semantically rich enough to become an atom node
+```
+
+Some relations should be represented as nodes rather than simple edges. For example, a decision should usually be represented as:
+
+```text
+(:Team)-[:MADE]->(:Decision)-[:TARGETS]->(:Artifact)
+```
+
+instead of only:
+
+```text
+(:Team)-[:DECIDED_TO_BUILD]->(:Artifact)
+```
+
+This allows the decision to carry metadata, lifecycle state, sources, confidence, review history, and wiki revision references.
+
+Relation resolution must record a `RelationResolutionEvent` when a candidate relation is accepted, rejected, converted into an atom, superseded, or deferred for review.
+
+## 9.6 User Knowledge Graphs
+
+Each user may have one or more user knowledge graphs.
 
 A user graph is a derived, versioned assembly of canonical atoms and user-authored additions. It may include:
 
@@ -1227,7 +1509,7 @@ status
 permission_scope
 ```
 
-Personal graph revisions may change when:
+User graph revisions may change when:
 
 ```text id="user-graph-change-reasons"
 source evidence changes
@@ -1239,7 +1521,7 @@ the user manually edits grouping, labels, weights, or notes
 
 The same raw data may therefore produce multiple valid user graph revisions at the same time.
 
-## 9.6 Relationship to WikiRevision
+## 9.7 Wiki Projection and Relationship to WikiRevision
 
 A `WikiRevision` may be generated from:
 
@@ -1251,9 +1533,29 @@ user knowledge graph revision
 manual human edits
 ```
 
-When a wiki page is generated from a personal graph in a future version, the frontmatter may include:
+Graph-aware wiki generation should be controlled by a `WikiProjectionSpec`.
+
+A `WikiProjectionSpec` should define:
+
+```text
+projection_id
+page_type
+target entity or query
+source graph revision or user graph revision
+sections
+section source such as entity_summary, graph_query, graph_neighbors, source_observations, or manual_notes
+filters such as atom_type, status, permission_scope, relation_type, and confidence
+generator policy
+review requirements
+```
+
+When a wiki page is generated from a user graph, the frontmatter may include:
 
 ```yaml id="future-graph-frontmatter"
+projection_spec_id: artifact_page_projection_v1
+included_atom_ids:
+  - atom_001
+  - atom_002
 atom_graph_revision_id: atom_graph_rev_20260616_001
 atom_extraction_policy_id: atom_extraction_policy_v3
 atom_granularity_policy_id: atom_granularity_policy_v2
@@ -1262,35 +1564,104 @@ graph_profile_id: graph_profile_person_yifan_research_detail
 assembly_policy_id: assembly_policy_method_fine_intro_coarse
 ```
 
-These fields are optional future fields. MVP markdown drafts only need the existing source, evidence, citation, and wiki revision metadata.
+These fields are required when a draft is generated from graph-aware inputs. Drafts generated only from current `ContextPackage` inputs must still preserve enough source, evidence, citation, and wiki revision metadata to support later observation extraction and graph assembly.
 
 Publishing a user graph-derived wiki artifact to a project, team, or public wiki must follow the same review and proposal flow as other wiki revisions. Private user notes must not be published unless the user explicitly includes them and permissions allow it.
 
-## 9.7 MVP Boundary
+## 9.8 Storage and Tool Boundaries
 
-The first version must not require:
+The system should maintain separate stores for separate responsibilities:
 
-```text id="personal-graph-mvp-nonrequirements"
+```text
+AssetStore -> raw resource metadata
+ObjectStore -> raw binary files
+ObservationStore -> extracted observations
+CandidateAtomStore -> uncommitted candidate atoms and relations
+CanonicalGraphStore -> canonical atoms, entities, relations, and graph revisions
+UserGraphStore -> user-specific graph revisions
+WikiStore -> wiki pages, drafts, revisions, and publish metadata
+VectorStore -> embeddings for similarity search
+JobStore -> ingestion and extraction jobs
+```
+
+External tools may be used for media parsing, OCR, ASR, speaker diarization, scene detection, document parsing, candidate graph extraction, graph visualization, and graph-assisted retrieval.
+
+Examples include:
+
+```text
+WhisperX
+Docling
+Unstructured
+PySceneDetect
+Neo4j LLM Graph Builder
+LlamaIndex PropertyGraphIndex
+LangChain LLMGraphTransformer
+GraphRAG-style tools
+```
+
+External tools must not directly write to `CanonicalGraphStore`.
+
+They may only write to:
+
+```text
+ObservationStore
+CandidateAtomStore
+ExternalGraphImport
+```
+
+FormOwl then performs:
+
+```text
+CandidateGraph
+  -> GranularityPolicyEngine
+  -> EntityResolver
+  -> RelationResolver
+  -> CanonicalGraphCommit
+```
+
+MCP is an orchestration interface, not the core data processing engine. Heavy extraction jobs should run in FormOwl backend services, with MCP tools used to create jobs, inspect status, review candidates, and trigger approved commits.
+
+Recommended future MCP tools include:
+
+```text
+upload_asset_reference
+create_ingestion_job
+get_ingestion_job
+list_observations
+extract_graph_candidates
+preview_graph_candidates
+resolve_entity_candidate
+commit_candidates_to_graph
+get_entity
+search_graph
+generate_wiki_page
+```
+
+## 9.9 Current Implementation Boundary
+
+The current implementation does not yet require:
+
+```text id="current-graph-nonrequirements"
 a graph database
 canonical atom extraction
-automatic personal graph assembly
+automatic user graph assembly
 company-wide ontology management
 user graph visualization
 ```
 
-This is a sequencing rule, not a rejection of graph storage. A full graph database is a reasonable later implementation once the atom model, provenance rules, user assembly semantics, and review workflow have been validated.
+This is a sequencing status, not a product constraint. A full graph database, extraction backend, and user graph store are expected parts of the target architecture once the atom model, provenance rules, user assembly semantics, and review workflow have been validated.
 
-The first version should not require a graph database because:
+The current implementation can still be useful without a graph database because:
 
 ```text id="full-graph-db-deferral-rationale"
 Provenance and review correctness can be validated without graph storage.
 Atom granularity rules should be tested before they are hardened into a database schema.
-Personal graph assembly behavior depends on real user workflows and should not be guessed too early.
+User graph assembly behavior depends on real user workflows and should not be guessed too early.
 WikiRevision governance must remain useful even when graph infrastructure is absent.
 Raw data, evidence snapshots, and citations must remain source-of-truth layers regardless of storage backend.
 ```
 
-The first version should still avoid designs that would block this model later. In particular, wiki drafts, citations, evidence snapshots, and revision metadata should preserve enough source traceability for future atom extraction and personal graph assembly.
+The current implementation must still avoid designs that would block this model later. In particular, wiki drafts, citations, evidence snapshots, and revision metadata should preserve enough source traceability for future observation extraction, candidate graph generation, canonical graph commits, and user graph assembly.
 
 ---
 
@@ -1388,7 +1759,7 @@ User message record:
   "actor_source": "source_account",
   "source_account_id": "chatgpt:yifanliou@gmail.com",
   "timestamp": null,
-  "content": "???潸??冽?",
+  "content": "Please turn the project discussion into a wiki draft.",
   "attachments": [],
   "authorship": {
     "message_author": "person_yifan",
@@ -1410,7 +1781,7 @@ Assistant message record:
   "actor_id": "openai_chatgpt",
   "source_account_id": "chatgpt:yifanliou@gmail.com",
   "model": "unknown-or-captured-model",
-  "content": "LLM ???冽?",
+  "content": "Drafted summary content generated for the captured account.",
   "authorship": {
     "message_author": "openai_chatgpt",
     "generated_for_account": "chatgpt:yifanliou@gmail.com",
@@ -1434,7 +1805,7 @@ It may only enter an unverified import queue.
 
 ```text id="kscw3h"
 User:
-  ?寞? OpenProject #123 ?Ｙ? ADR wiki draft??
+  Create an ADR wiki draft from OpenProject #123.
 ChatGPT:
   1. Calls Project MCP: get_work_item_context(OP #123)
   2. Receives ContextPackage
@@ -1468,6 +1839,41 @@ The handoff object is:
   "citations": [],
   "permission_scope": {}
 }
+```
+
+---
+
+## 12.3 Multimodal Resource to Wiki Projection
+
+```text
+User:
+  Turn this meeting recording and related project issues into a meeting page and update the project hub.
+FormOwl:
+  1. Registers the audio/video file and project references as assets.
+  2. Creates an ingestion job.
+  3. Runs ASR, speaker diarization, scene detection, OCR, and project context extraction.
+  4. Stores transcript segments, scene descriptions, OCR blocks, and issue records as observations.
+  5. Extracts candidate decisions, action items, topics, risks, and dependencies.
+  6. Shows the candidate graph for review.
+  7. Applies atom granularity, entity resolution, relation resolution, and lifecycle policies.
+  8. Commits approved candidates to the canonical graph.
+  9. Assembles a project-manager user graph.
+  10. Applies meeting-page and project-hub WikiProjectionSpec objects.
+  11. Generates reviewable WikiRevision drafts with citations and graph lineage.
+```
+
+## 12.4 Candidate Graph Review Workflow
+
+```text
+Observation batch
+  -> CandidateAtom and CandidateRelation extraction
+  -> Candidate graph preview
+  -> Human or policy review
+  -> Split / merge / reject / defer / approve
+  -> Entity and relation resolution
+  -> Canonical graph commit
+  -> User graph revision
+  -> Wiki projection
 ```
 
 ---
@@ -1606,6 +2012,23 @@ formowl/
       Containerfile
 
   schemas/
+    asset.schema.json
+    observation.schema.json
+    semantic-metadata.schema.json
+    candidate-atom.schema.json
+    candidate-relation.schema.json
+    canonical-atom.schema.json
+    canonical-entity.schema.json
+    canonical-relation.schema.json
+    atom-granularity-policy.schema.json
+    atom-lifecycle-event.schema.json
+    entity-resolution-event.schema.json
+    relation-resolution-event.schema.json
+    user-graph-assembly-policy.schema.json
+    user-knowledge-graph-revision.schema.json
+    wiki-projection-spec.schema.json
+    ingestion-job.schema.json
+    extractor-run.schema.json
     source-ref.schema.json
     evidence-snapshot.schema.json
     citation.schema.json
@@ -1618,6 +2041,26 @@ formowl/
     formowl_contract/
       __init__.py
       models.py
+
+    formowl_ingestion/
+      README.md
+      formowl_ingestion/
+        assets.py
+        extraction.py
+        jobs.py
+        observations.py
+        extractors/
+        storage/
+
+    formowl_graph/
+      README.md
+      formowl_graph/
+        candidates.py
+        canonical.py
+        policies.py
+        resolution.py
+        user_graphs.py
+        storage/
 
     formowl_project_mcp/
       README.md
@@ -1709,7 +2152,18 @@ formowl/
 ```md id="3mp5w0"
 # formowl
 
-formowl is a source-preserving knowledge management system built around two decoupled MCP servers:
+formowl is a source-preserving, graph-governed knowledge management system that turns raw resources into governed wiki views:
+
+```text
+Raw Resources
+  -> Observation / Semantic Metadata
+  -> Candidate Graph
+  -> Governed Canonical Graph
+  -> User Knowledge Graph
+  -> Wiki Projection / WikiRevision
+```
+
+The current repository starts with two decoupled MCP servers:
 
 - Project MCP
 - Wiki MCP
@@ -1718,7 +2172,7 @@ Project MCP retrieves project execution context from systems such as OpenProject
 
 Wiki MCP generates and manages markdown/wiki knowledge artifacts.
 
-Both MCPs interoperate through `formowl-contract`, which defines shared schemas for source references, evidence snapshots, citations, permission scopes, and context packages.
+Both MCPs interoperate through `formowl-contract`, which currently defines shared schemas for source references, evidence snapshots, citations, permission scopes, context packages, wiki revisions, and MCP result envelopes. The target contract expands to assets, observations, candidate graph objects, canonical graph objects, user graph revisions, projection specs, ingestion jobs, and extractor runs.
 
 FormOwl is container-first. The canonical development, test, and runtime environment is provided by containers.
 
@@ -1730,7 +2184,7 @@ Project systems own execution state.
 
 Wiki systems own published knowledge views.
 
-Raw data and evidence snapshots preserve source traceability.
+Raw resources do not directly become final wiki pages. They first become observations, candidate graph proposals, governed canonical graph commits, user graph revisions, and projection-spec-driven wiki revisions.
 ```
 
 ---
@@ -1758,27 +2212,34 @@ Recommended order:
 16. Add real OpenProject adapter
 ```
 
-Post-MVP graph extension order:
+Pipeline extension order:
 
-```text id="post-mvp-graph-extension-order"
-1. Validate atom granularity rules against real wiki and project workflows
-2. Define KnowledgeAtom and AtomRelation contract schemas
-3. Define AtomGraphRevision, AtomExtractionPolicy, and AtomGranularityPolicy contract schemas
-4. Define AtomLifecycleEvent mappings for split, merge, archive, supersede, and equivalence
-5. Define UserGraphProfile and UserKnowledgeGraphRevision contract schemas
-6. Add optional graph lineage and granularity policy fields to markdown frontmatter
-7. Implement canonical atom extraction with review and provenance
-8. Implement usage-signal collection for split and merge proposals
-9. Implement reviewed atom split, merge, archive, and supersede workflows
-10. Implement user graph assembly policies and revision history
-11. Add graph storage or graph database only after the contract and workflows stabilize
+```text id="pipeline-extension-order"
+1. Define Asset, Observation, SemanticMetadata, IngestionJob, and ExtractorRun contract schemas
+2. Add an AssetStore, ObjectStore, ObservationStore, and JobStore
+3. Implement resource extraction for project data, markdown/wiki pages, ChatGPT sessions, and document blocks
+4. Add audio/video/image extractors behind the same Observation contract
+5. Define CandidateAtom, CandidateRelation, and ExternalGraphImport contract schemas
+6. Implement candidate graph extraction and preview from observations
+7. Define CanonicalAtom, CanonicalEntity, CanonicalRelation, and CanonicalGraphRevision contract schemas
+8. Define ExtractionPolicy, AtomGranularityPolicy, EntityResolutionPolicy, RelationResolutionPolicy, LifecyclePolicy, and WikiProjectionPolicy
+9. Implement granularity policy enforcement, entity resolution, and relation resolution
+10. Define AtomLifecycleEvent, EntityResolutionEvent, and RelationResolutionEvent mappings
+11. Implement reviewed canonical graph commits with provenance
+12. Define UserGraphProfile, UserGraphAssemblyPolicy, and UserKnowledgeGraphRevision contract schemas
+13. Implement user graph assembly policies and revision history
+14. Define WikiProjectionSpec and add graph lineage fields to markdown frontmatter
+15. Implement projection-spec-driven wiki generation from user graph revisions
+16. Implement usage-signal collection for split and merge proposals
+17. Implement reviewed atom split, merge, archive, deprecate, supersede, and equivalence workflows
+18. Add vector search and graph storage once the contract and review workflows stabilize
 ```
 
 ---
 
 ## 18. Acceptance Criteria
 
-The first version is usable when:
+The current implementation is usable when:
 
 ```text id="8fvc4g"
 Project can be developed and tested inside a container.
@@ -1795,6 +2256,21 @@ Project-system writes are proposal-only.
 Wiki publishing is proposal-only unless explicitly configured otherwise.
 ```
 
+The target pipeline is usable when:
+
+```text
+Raw resources can be registered as assets with permission scope and source lineage.
+Resource extractors can create observations with location metadata and extractor runs.
+Semantic metadata can produce candidate atoms and relations without committing them as truth.
+Candidate graph previews can be reviewed, split, merged, rejected, or committed.
+Entity and relation resolution events are recorded for canonical graph changes.
+Canonical atoms, entities, relations, and lifecycle mappings remain resolvable across revisions.
+User graph revisions can assemble different valid views from the same canonical graph.
+WikiProjectionSpec can generate reviewable wiki drafts from user graph revisions.
+Wiki revisions preserve graph lineage, source refs, evidence snapshots, citations, and generator metadata.
+External tools cannot directly mutate canonical graph state.
+```
+
 ---
 
 ## 19. Non-Goals
@@ -1805,9 +2281,12 @@ Do not make Project MCP generate wiki pages.
 Do not assume ChatGPT always exposes every workspace MCP in every session.
 Do not allow automatic project-system writes without approval.
 Do not treat LLM-generated output as source of truth.
-Do not require a full knowledge graph database in the first version.
+Do not let external extractors or LLM graph tools write directly to the canonical graph.
+Do not treat transcript chunks, OCR blocks, PDF paragraphs, or issue comments as canonical atoms without governance.
+Do not generate final wiki pages directly from raw resources without observation, graph, projection, and review boundaries.
+Do not require a full knowledge graph database before the graph contracts and workflows are stable.
 Do not treat a canonical atom graph as a company-wide ontology.
-Do not collapse personal knowledge graph state into WikiRevision.
+Do not collapse user knowledge graph state into WikiRevision.
 Do not silently rewrite canonical atoms based only on one user's behavior.
 Do not require non-engineering wiki authors to use Git or inspect backend revision IDs.
 Do not require contributors to install host-level runtimes when a container can provide them.
@@ -1818,7 +2297,18 @@ Do not implement hard-to-read Python syntax when a Rust core API can hide the co
 
 ## 20. Final Architecture Statement
 
-formowl uses two decoupled MCP servers:
+formowl's target architecture is a governed knowledge pipeline:
+
+```text
+Raw Resources
+  -> Observation / SemanticMetadata
+  -> Candidate Graph
+  -> Governed Canonical Graph
+  -> User Knowledge Graph
+  -> WikiProjection / WikiRevision
+```
+
+The current implementation uses two decoupled MCP servers:
 
 ```text id="kbd0ln"
 Project MCP = project execution context
@@ -1836,13 +2326,15 @@ ContextPackage
 MCPResultEnvelope
 ```
 
-Future personal graph work must preserve this separation:
+Graph and wiki work must preserve this separation:
 
 ```text id="final-graph-boundary-summary"
-Raw data and evidence snapshots remain source-of-truth layers.
-Canonical atoms are reusable source-grounded parts.
-User knowledge graphs are personal versioned assemblies.
-Wiki revisions are governed output artifacts.
+Raw resources, assets, evidence snapshots, and citations remain source-of-truth and locator layers.
+Observations and semantic metadata are extracted intermediate data.
+Candidate graphs are reviewable proposals.
+Canonical atoms, entities, and relations are reusable governed graph parts.
+User knowledge graphs are versioned assemblies for roles, tasks, permissions, and preferred granularity.
+Wiki revisions are governed output artifacts generated through projection specs and review flows.
 ```
 
 The runtime policy is:
