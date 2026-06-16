@@ -59,11 +59,15 @@ Wiki MCP is responsible for knowledge artifact creation and wiki publishing life
 13. Wiki artifacts are versioned knowledge views derived from raw data; they are not raw truth.
 14. Regenerating a wiki artifact must create a reviewable proposal or diff, not silently overwrite reviewed or published knowledge.
 15. Git may be used as a revision backend, audit mirror, or engineering workflow, but it must not be required as the user-facing wiki workflow.
-16. Development, testing, and deployment must be container-first to maximize portability and avoid host-machine assumptions.
-17. Python and Rust are the primary implementation languages.
-18. Python is the preferred language for orchestration, MCP service glue, workflows, adapters, tests, and day-to-day debugging.
-19. Rust must own heavy computing, security-sensitive logic, parsers, validators, hash/signature work, data integrity checks, concurrency-sensitive code, and any feature whose Python implementation would expose strange, hard-to-read, or hard-to-maintain syntax.
-20. Rust core functionality should be exposed to Python through stable bindings so most contributors can read and debug the Python-facing API without editing Rust internals.
+16. A canonical atom model should describe reusable, source-grounded knowledge parts, but it must not be treated as any user's final knowledge graph.
+17. Different users may assemble different knowledge graphs from the same raw data, evidence snapshots, and canonical atoms.
+18. Personal knowledge graphs are derived, versioned user views. They may reflect changing user goals, attention, terminology, and preferred granularity.
+19. Any personal graph assembly must preserve provenance back to raw data, evidence snapshots, citations, and canonical atoms when available.
+20. Development, testing, and deployment must be container-first to maximize portability and avoid host-machine assumptions.
+21. Python and Rust are the primary implementation languages.
+22. Python is the preferred language for orchestration, MCP service glue, workflows, adapters, tests, and day-to-day debugging.
+23. Rust must own heavy computing, security-sensitive logic, parsers, validators, hash/signature work, data integrity checks, concurrency-sensitive code, and any feature whose Python implementation would expose strange, hard-to-read, or hard-to-maintain syntax.
+24. Rust core functionality should be exposed to Python through stable bindings so most contributors can read and debug the Python-facing API without editing Rust internals.
 
 ---
 
@@ -104,6 +108,8 @@ Not included in the first version:
 ```text id="lr46ln"
 Full Jira adapter
 Full knowledge graph database
+Canonical atom extraction service
+Per-user graph database or automated personal graph assembly
 Automatic wiki publishing
 Automatic project write-back
 Company-wide ontology
@@ -201,6 +207,7 @@ Wiki snapshot capture
 Revisioned artifact store abstraction
 Change comparison and restore proposals
 Natural-language operation mapping
+Future canonical atom and personal graph view lifecycle
 ```
 
 Wiki MCP does not own:
@@ -977,7 +984,317 @@ Git-specific operations such as commit, branch, pull request, merge, or rebase m
 
 ---
 
-## 9. Markdown Frontmatter Standard
+## 9. Personal Knowledge Graph and Canonical Atom Model
+
+Wiki specifications must distinguish between source material, reusable knowledge parts, personal knowledge graphs, and published wiki artifacts.
+
+The system must not assume that one source document, work item, or wiki page has one correct knowledge graph. Different users may read the same evidence with different goals, attention, terminology, and preferred granularity. A project owner may want a coarse operational summary. A reviewer may care about policy exceptions. An engineer may inspect method details. These are all valid derived views if their provenance is preserved.
+
+This chapter defines the model boundary. It does not require a full knowledge graph database in the first version.
+
+## 9.1 Layered Knowledge Model
+
+The wiki knowledge model has five layers:
+
+```text id="knowledge-graph-layers"
+Raw data
+EvidenceSnapshot and Citation
+Canonical atom graph
+User knowledge graph
+WikiRevision
+```
+
+Layer responsibilities:
+
+```text id="knowledge-layer-responsibilities"
+Raw data -> source-of-truth records from external systems, captured sessions, files, or wiki snapshots.
+EvidenceSnapshot and Citation -> traceable captured evidence and locators into source material.
+Canonical atom graph -> source-grounded reusable parts extracted from evidence.
+User knowledge graph -> a user's versioned assembly, filtering, grouping, labeling, and weighting of atoms.
+WikiRevision -> a governed output artifact such as a markdown page or published wiki page.
+```
+
+`WikiRevision` is output governance. It records a versioned artifact. It must not be overloaded to become the user's full knowledge graph.
+
+## 9.2 Canonical Atom Model
+
+A canonical atom is the smallest useful, source-grounded knowledge part that the system can cite, compare, reuse, and assemble.
+
+Atoms may represent:
+
+```text id="canonical-atom-types"
+concept
+definition
+claim
+decision
+requirement
+assumption
+constraint
+method_step
+evidence_span
+risk
+open_question
+exception
+relationship
+```
+
+Future contract objects may include:
+
+```text id="future-atom-contract-objects"
+KnowledgeAtom
+AtomRelation
+AtomGraphRevision
+AtomExtractionPolicy
+AtomGranularityPolicy
+AtomLifecycleEvent
+```
+
+A future `KnowledgeAtom` should carry at least:
+
+```text id="knowledge-atom-minimum-fields"
+atom_id
+atom_type
+canonical_text or normalized_summary
+source_refs
+evidence_snapshot_ids
+citations
+content_hash
+extraction_policy_id
+created_at
+```
+
+Optional fields may include:
+
+```text id="knowledge-atom-optional-fields"
+parent_atom_ids
+child_atom_ids
+related_atom_ids
+granularity_level
+confidence
+labels
+language
+domain
+metadata
+```
+
+Canonical atoms are not a company-wide ontology. They are source-grounded parts that can later be organized into many graphs. A canonical atom graph may include relationships between atoms, but the presence of a relationship in the canonical graph must still be traceable to evidence or an explicit human modeling action.
+
+## 9.3 Atom Granularity Rules
+
+The system must avoid both extremes:
+
+```text id="atom-granularity-extremes"
+Atoms that are too coarse cannot support personal assembly.
+Atoms that are too fine become noise and lose useful meaning.
+```
+
+An atom should normally satisfy these rules:
+
+```text id="atom-granularity-rules"
+It can be traced to source evidence.
+It can be independently reviewed or corrected.
+It can be assembled into a larger view.
+It has enough context to remain understandable.
+Splitting it further would not materially improve reuse, review, or personalization.
+```
+
+Granularity is domain-sensitive. The system may extract a method section more finely for one workflow and an introduction more finely for another, as long as the extraction policy and evidence trail are recorded.
+
+## 9.4 Adaptive Atom Granularity Evolution
+
+The definition of the smallest useful atom must evolve over time. It may change as source data changes, user goals change, user behavior accumulates, review feedback is collected, and better extraction or summarization policies are introduced.
+
+The system must not allow atom graphs to drift toward unlimited fragmentation. Fine-grained atoms that are rarely used, repeatedly displayed together, or no longer improve retrieval, review, wiki generation, or personal graph assembly should become candidates for coarsening or fusion.
+
+Granularity evolution should be governed by explicit policies, not ad hoc rewrites. A future `AtomGranularityPolicy` should record:
+
+```text id="atom-granularity-policy-fields"
+policy_id
+parent_policy_id
+policy_version
+scope
+split_rules
+merge_rules
+archive_rules
+usage_signal_window
+review_requirements
+created_at
+```
+
+Related algorithm families include:
+
+```text id="granularity-related-algorithm-families"
+Minimum Description Length for balancing model complexity against explanatory value.
+Graph summarization for compact graph representations.
+Graph coarsening for merging strongly related nodes into supernodes.
+Personalized graph summarization for user-specific summaries based on targets or workloads.
+Incremental graph summarization for updating summaries as graph data changes.
+Concept drift detection for deciding when behavior or data distributions changed enough to revise policies.
+Ontology evolution and graph alignment for mapping old concepts and atoms to new versions.
+```
+
+The system should treat atom granularity as an optimization problem with reviewable decisions:
+
+```text id="granularity-decision-rules"
+Split when the task value of finer atoms exceeds the added complexity, maintenance cost, and revision churn.
+Merge when the simplicity gained by coarser atoms exceeds the loss of detail, query precision, and provenance clarity.
+Archive when an atom is obsolete or unused but must remain addressable for historical reproducibility.
+Supersede when a new atom or super-atom better represents the current model without deleting the old atom.
+```
+
+Potential split signals:
+
+```text id="atom-split-signals"
+Users repeatedly expand the same atom.
+Different users manually split the same atom in similar ways.
+Queries often target different internal parts of the atom.
+The atom contains multiple separable claims, decisions, requirements, or method steps.
+The atom carries multiple citations that support different subclaims.
+Reviewers repeatedly request local edits inside the atom.
+Generated wiki drafts often need only part of the atom.
+```
+
+Potential merge or coarsening signals:
+
+```text id="atom-merge-signals"
+Atoms are rarely accessed directly.
+Atoms are almost always cited, displayed, or exported together.
+Atoms are semantically near-duplicates.
+Users repeatedly collapse or manually group the same atoms.
+Fine-grained atoms do not improve retrieval, summarization, review, or wiki generation.
+The maintenance cost of separate atoms exceeds their observed value.
+```
+
+Atom lifecycle changes must be represented as mappings, not destructive edits:
+
+```text id="atom-lifecycle-relations"
+split_into
+merged_into
+summarized_by
+supersedes
+deprecated_by
+equivalent_to
+derived_from
+```
+
+Old atoms must remain resolvable for any existing `WikiRevision`, `UserKnowledgeGraphRevision`, citation, or evidence trail that refers to them. New graph revisions may prefer the newer atom, split atoms, or merged super-atom.
+
+Canonical graph evolution should be slower and more governed than personal graph evolution. User behavior may provide evidence for a canonical policy change, but it should first affect that user's `UserGraphAssemblyPolicy` or create a reviewable canonical change proposal. The system must not silently rewrite every user's graph because one user's habits changed.
+
+## 9.5 User Knowledge Graphs
+
+Each user may have one or more personal knowledge graphs.
+
+A user graph is a derived, versioned assembly of canonical atoms and user-authored additions. It may include:
+
+```text id="user-graph-assembly-actions"
+include atom
+exclude atom
+merge atoms
+split view over atoms
+rename or relabel atom
+group atoms into a topic
+assign importance or attention weight
+choose coarse or fine granularity
+add private note
+add user-specific relation
+pin preferred source or citation
+```
+
+Future contract objects may include:
+
+```text id="future-user-graph-contract-objects"
+UserGraphProfile
+UserKnowledgeGraphRevision
+UserGraphAssemblyPolicy
+UserGraphNode
+UserGraphEdge
+```
+
+A future `UserKnowledgeGraphRevision` should carry at least:
+
+```text id="user-graph-revision-minimum-fields"
+user_graph_revision_id
+user_id or owner_scope
+parent_user_graph_revision_id
+atom_graph_revision_id
+assembly_policy_id
+source_refs
+evidence_snapshot_ids
+included_atom_ids
+created_at
+status
+permission_scope
+```
+
+Personal graph revisions may change when:
+
+```text id="user-graph-change-reasons"
+source evidence changes
+canonical atom extraction changes
+the user's goal changes
+the user's preferred granularity changes
+the user manually edits grouping, labels, weights, or notes
+```
+
+The same raw data may therefore produce multiple valid user graph revisions at the same time.
+
+## 9.6 Relationship to WikiRevision
+
+A `WikiRevision` may be generated from:
+
+```text id="wiki-revision-generation-sources"
+ContextPackage
+EvidenceSnapshot
+canonical atom graph revision
+user knowledge graph revision
+manual human edits
+```
+
+When a wiki page is generated from a personal graph in a future version, the frontmatter may include:
+
+```yaml id="future-graph-frontmatter"
+atom_graph_revision_id: atom_graph_rev_20260616_001
+atom_extraction_policy_id: atom_extraction_policy_v3
+atom_granularity_policy_id: atom_granularity_policy_v2
+user_graph_revision_id: user_graph_rev_person_yifan_20260616_001
+graph_profile_id: graph_profile_person_yifan_research_detail
+assembly_policy_id: assembly_policy_method_fine_intro_coarse
+```
+
+These fields are optional future fields. MVP markdown drafts only need the existing source, evidence, citation, and wiki revision metadata.
+
+Publishing a user graph-derived wiki artifact to a project, team, or public wiki must follow the same review and proposal flow as other wiki revisions. Private user notes must not be published unless the user explicitly includes them and permissions allow it.
+
+## 9.7 MVP Boundary
+
+The first version must not require:
+
+```text id="personal-graph-mvp-nonrequirements"
+a graph database
+canonical atom extraction
+automatic personal graph assembly
+company-wide ontology management
+user graph visualization
+```
+
+This is a sequencing rule, not a rejection of graph storage. A full graph database is a reasonable later implementation once the atom model, provenance rules, user assembly semantics, and review workflow have been validated.
+
+The first version should not require a graph database because:
+
+```text id="full-graph-db-deferral-rationale"
+Provenance and review correctness can be validated without graph storage.
+Atom granularity rules should be tested before they are hardened into a database schema.
+Personal graph assembly behavior depends on real user workflows and should not be guessed too early.
+WikiRevision governance must remain useful even when graph infrastructure is absent.
+Raw data, evidence snapshots, and citations must remain source-of-truth layers regardless of storage backend.
+```
+
+The first version should still avoid designs that would block this model later. In particular, wiki drafts, citations, evidence snapshots, and revision metadata should preserve enough source traceability for future atom extraction and personal graph assembly.
+
+---
+
+## 10. Markdown Frontmatter Standard
 
 Every generated markdown page must include frontmatter.
 
@@ -1033,7 +1350,7 @@ revision_backend:
 
 ---
 
-## 10. ChatGPT Session Capture
+## 11. ChatGPT Session Capture
 
 ChatGPT session capture uses the same provenance model.
 
@@ -1111,9 +1428,9 @@ It may only enter an unverified import queue.
 
 ---
 
-## 11. Workflow Examples
+## 12. Workflow Examples
 
-## 11.1 Project Context to Wiki Draft
+## 12.1 Project Context to Wiki Draft
 
 ```text id="kscw3h"
 User:
@@ -1127,7 +1444,7 @@ ChatGPT:
 
 ---
 
-## 11.2 Staged Workflow
+## 12.2 Staged Workflow
 
 If only one MCP is available at a time:
 
@@ -1155,7 +1472,7 @@ The handoff object is:
 
 ---
 
-## 12. Observability
+## 13. Observability
 
 Every MCP tool call must be logged.
 
@@ -1192,7 +1509,7 @@ Did ChatGPT use Project MCP and Wiki MCP in the same workflow?
 
 ---
 
-## 13. Runtime, Language, and Container Policy
+## 14. Runtime, Language, and Container Policy
 
 FormOwl must be container-first.
 
@@ -1267,7 +1584,7 @@ This policy does not mean all difficult code belongs in Rust. Business workflows
 
 ---
 
-## 14. Suggested Repository Layout
+## 15. Suggested Repository Layout
 
 ```text id="cf1xgs"
 formowl/
@@ -1387,7 +1704,7 @@ formowl/
 
 ---
 
-## 15. README Summary
+## 16. README Summary
 
 ```md id="3mp5w0"
 # formowl
@@ -1418,7 +1735,7 @@ Raw data and evidence snapshots preserve source traceability.
 
 ---
 
-## 16. Implementation Order
+## 17. Implementation Order
 
 Recommended order:
 
@@ -1441,9 +1758,25 @@ Recommended order:
 16. Add real OpenProject adapter
 ```
 
+Post-MVP graph extension order:
+
+```text id="post-mvp-graph-extension-order"
+1. Validate atom granularity rules against real wiki and project workflows
+2. Define KnowledgeAtom and AtomRelation contract schemas
+3. Define AtomGraphRevision, AtomExtractionPolicy, and AtomGranularityPolicy contract schemas
+4. Define AtomLifecycleEvent mappings for split, merge, archive, supersede, and equivalence
+5. Define UserGraphProfile and UserKnowledgeGraphRevision contract schemas
+6. Add optional graph lineage and granularity policy fields to markdown frontmatter
+7. Implement canonical atom extraction with review and provenance
+8. Implement usage-signal collection for split and merge proposals
+9. Implement reviewed atom split, merge, archive, and supersede workflows
+10. Implement user graph assembly policies and revision history
+11. Add graph storage or graph database only after the contract and workflows stabilize
+```
+
 ---
 
-## 17. Acceptance Criteria
+## 18. Acceptance Criteria
 
 The first version is usable when:
 
@@ -1464,7 +1797,7 @@ Wiki publishing is proposal-only unless explicitly configured otherwise.
 
 ---
 
-## 18. Non-Goals
+## 19. Non-Goals
 
 ```text id="qpfu4w"
 Do not make Wiki MCP depend on OpenProject internals.
@@ -1473,6 +1806,9 @@ Do not assume ChatGPT always exposes every workspace MCP in every session.
 Do not allow automatic project-system writes without approval.
 Do not treat LLM-generated output as source of truth.
 Do not require a full knowledge graph database in the first version.
+Do not treat a canonical atom graph as a company-wide ontology.
+Do not collapse personal knowledge graph state into WikiRevision.
+Do not silently rewrite canonical atoms based only on one user's behavior.
 Do not require non-engineering wiki authors to use Git or inspect backend revision IDs.
 Do not require contributors to install host-level runtimes when a container can provide them.
 Do not implement hard-to-read Python syntax when a Rust core API can hide the complexity.
@@ -1480,7 +1816,7 @@ Do not implement hard-to-read Python syntax when a Rust core API can hide the co
 
 ---
 
-## 19. Final Architecture Statement
+## 20. Final Architecture Statement
 
 formowl uses two decoupled MCP servers:
 
@@ -1498,6 +1834,15 @@ Citation
 PermissionScope
 ContextPackage
 MCPResultEnvelope
+```
+
+Future personal graph work must preserve this separation:
+
+```text id="final-graph-boundary-summary"
+Raw data and evidence snapshots remain source-of-truth layers.
+Canonical atoms are reusable source-grounded parts.
+User knowledge graphs are personal versioned assemblies.
+Wiki revisions are governed output artifacts.
 ```
 
 The runtime policy is:

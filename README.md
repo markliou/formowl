@@ -1,6 +1,6 @@
 # formowl
 
-<!-- Future agents: continue building from the files listed in SPEC.md section 13. Do not create parallel replacement files unless the specification is updated first. -->
+<!-- Future agents: continue building from the files listed in the SPEC.md Suggested Repository Layout section. Do not create parallel replacement files unless the specification is updated first. -->
 
 formowl is a source-preserving knowledge management system built around two decoupled MCP servers:
 
