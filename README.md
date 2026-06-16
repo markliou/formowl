@@ -47,6 +47,17 @@ Run tests inside the dev container:
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python -m unittest discover -s tests && cargo test --workspace"
 ```
 
+Install and run pre-commit checks:
+
+```sh
+python -m pip install -e ".[dev]"
+npm install
+pre-commit install
+pre-commit run --all-files
+```
+
+The pre-commit suite checks credentials/secrets, merge conflict markers, large files, text whitespace, Python/JSON/TOML syntax, Python lint/format with Ruff, TypeScript/JSON/YAML/Markdown style with Prettier, TypeScript typecheck, Python unit tests, and Rust `fmt`/`check`/`clippy`. Run it in the dev container, or install Rust with `cargo`, `rustfmt`, and `clippy` on the host. On Windows PowerShell, use `npm.cmd install` if `npm.ps1` is blocked by execution policy.
+
 On Windows PowerShell, use semicolon-separated `PYTHONPATH` values for host-side Python:
 
 ```powershell
@@ -67,7 +78,21 @@ python -m formowl_project_mcp.server
 Request:
 
 ```json
-{"tool":"get_work_item_context","arguments":{"source_ref":{"source_system":"openproject","source_type":"work_package","source_id":"123"},"include_comments":true,"include_activities":true,"include_relations":true,"include_attachments":true,"create_evidence_snapshot":true}}
+{
+  "tool": "get_work_item_context",
+  "arguments": {
+    "source_ref": {
+      "source_system": "openproject",
+      "source_type": "work_package",
+      "source_id": "123"
+    },
+    "include_comments": true,
+    "include_activities": true,
+    "include_relations": true,
+    "include_attachments": true,
+    "create_evidence_snapshot": true
+  }
+}
 ```
 
 Wiki MCP example:

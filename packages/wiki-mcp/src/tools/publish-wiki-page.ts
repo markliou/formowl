@@ -6,9 +6,11 @@ import type { WikiPublishProposalData } from "../types";
 import type { PublishWikiPageInput } from "./wiki-tools";
 
 export type PublishWikiPageTool = (
-  input: PublishWikiPageInput
+  input: PublishWikiPageInput,
 ) => Promise<McpResultEnvelope<WikiPublishProposalData>>;
 
 export abstract class PublishWikiPageHandler {
-  abstract publish_wiki_page(input: PublishWikiPageInput): Promise<McpResultEnvelope<WikiPublishProposalData>>;
+  abstract publish_wiki_page(
+    input: PublishWikiPageInput,
+  ): Promise<McpResultEnvelope<WikiPublishProposalData>>;
 }

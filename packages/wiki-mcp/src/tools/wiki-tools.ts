@@ -4,7 +4,7 @@
 import type {
   ContextPackage,
   McpResultEnvelope,
-  WikiPageRef
+  WikiPageRef,
 } from "@formowl/contract";
 import type {
   WikiDraft,
@@ -14,7 +14,7 @@ import type {
   WikiPageType,
   WikiPublishProposalData,
   WikiPublishTarget,
-  WikiSnapshot
+  WikiSnapshot,
 } from "../types";
 
 export interface SearchWikiPagesInput {
@@ -71,10 +71,22 @@ export interface CaptureWikiSnapshotData {
 }
 
 export interface WikiMcpTools {
-  search_wiki_pages(input: SearchWikiPagesInput): Promise<McpResultEnvelope<SearchWikiPagesData>>;
-  get_wiki_page(input: GetWikiPageInput): Promise<McpResultEnvelope<GetWikiPageData>>;
-  generate_wiki_draft(input: GenerateWikiDraftInput): Promise<McpResultEnvelope<GenerateWikiDraftData>>;
-  update_wiki_draft(input: UpdateWikiDraftInput): Promise<McpResultEnvelope<UpdateWikiDraftData>>;
-  publish_wiki_page(input: PublishWikiPageInput): Promise<McpResultEnvelope<WikiPublishProposalData>>;
-  capture_wiki_snapshot(input: CaptureWikiSnapshotInput): Promise<McpResultEnvelope<CaptureWikiSnapshotData>>;
+  search_wiki_pages(
+    input: SearchWikiPagesInput,
+  ): Promise<McpResultEnvelope<SearchWikiPagesData>>;
+  get_wiki_page(
+    input: GetWikiPageInput,
+  ): Promise<McpResultEnvelope<GetWikiPageData>>;
+  generate_wiki_draft(
+    input: GenerateWikiDraftInput,
+  ): Promise<McpResultEnvelope<GenerateWikiDraftData>>;
+  update_wiki_draft(
+    input: UpdateWikiDraftInput,
+  ): Promise<McpResultEnvelope<UpdateWikiDraftData>>;
+  publish_wiki_page(
+    input: PublishWikiPageInput,
+  ): Promise<McpResultEnvelope<WikiPublishProposalData>>;
+  capture_wiki_snapshot(
+    input: CaptureWikiSnapshotInput,
+  ): Promise<McpResultEnvelope<CaptureWikiSnapshotData>>;
 }

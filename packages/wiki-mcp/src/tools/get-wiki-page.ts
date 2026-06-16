@@ -4,8 +4,12 @@
 import type { McpResultEnvelope } from "@formowl/contract";
 import type { GetWikiPageData, GetWikiPageInput } from "./wiki-tools";
 
-export type GetWikiPageTool = (input: GetWikiPageInput) => Promise<McpResultEnvelope<GetWikiPageData>>;
+export type GetWikiPageTool = (
+  input: GetWikiPageInput,
+) => Promise<McpResultEnvelope<GetWikiPageData>>;
 
 export abstract class GetWikiPageHandler {
-  abstract get_wiki_page(input: GetWikiPageInput): Promise<McpResultEnvelope<GetWikiPageData>>;
+  abstract get_wiki_page(
+    input: GetWikiPageInput,
+  ): Promise<McpResultEnvelope<GetWikiPageData>>;
 }

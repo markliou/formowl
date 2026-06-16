@@ -11,11 +11,24 @@ export type JsonValue =
 export type ExtensibleString<T extends string> = T | (string & {});
 
 export type SourceSystem = ExtensibleString<
-  "openproject" | "jira" | "github_issues" | "linear" | "youtrack" | "markdown-store" | "openproject_wiki" | "chatgpt"
+  | "openproject"
+  | "jira"
+  | "github_issues"
+  | "linear"
+  | "youtrack"
+  | "markdown-store"
+  | "openproject_wiki"
+  | "chatgpt"
 >;
 
 export type SourceType = ExtensibleString<
-  "project" | "work_package" | "issue" | "wiki_page" | "markdown_page" | "chatgpt_session" | "chatgpt_message"
+  | "project"
+  | "work_package"
+  | "issue"
+  | "wiki_page"
+  | "markdown_page"
+  | "chatgpt_session"
+  | "chatgpt_message"
 >;
 
 export interface SourceRef {
@@ -40,10 +53,18 @@ export type WikiPageRef = SourceRef & {
 };
 
 export type PermissionScopeType = ExtensibleString<
-  "private_user" | "project" | "team" | "workspace" | "public" | "restricted" | "unknown"
+  | "private_user"
+  | "project"
+  | "team"
+  | "workspace"
+  | "public"
+  | "restricted"
+  | "unknown"
 >;
 
-export type PermissionVisibility = ExtensibleString<"private" | "restricted" | "public" | "unknown">;
+export type PermissionVisibility = ExtensibleString<
+  "private" | "restricted" | "public" | "unknown"
+>;
 
 export interface PermissionScope {
   readonly scope_type: PermissionScopeType;
@@ -97,14 +118,26 @@ export interface ContextPackage {
   readonly permission_scope?: PermissionScope;
 }
 
-export type WikiRevisionStatus = ExtensibleString<"draft" | "reviewed" | "published" | "archived">;
+export type WikiRevisionStatus = ExtensibleString<
+  "draft" | "reviewed" | "published" | "archived"
+>;
 
 export type WikiChangeKind = ExtensibleString<
-  "generated" | "regenerated" | "human_edit" | "source_refresh" | "publish_sync" | "restore"
+  | "generated"
+  | "regenerated"
+  | "human_edit"
+  | "source_refresh"
+  | "publish_sync"
+  | "restore"
 >;
 
 export type WikiRevisionBackendType = ExtensibleString<
-  "database" | "git" | "markdown-store" | "openproject_wiki" | "confluence" | "notion"
+  | "database"
+  | "git"
+  | "markdown-store"
+  | "openproject_wiki"
+  | "confluence"
+  | "notion"
 >;
 
 export interface WikiRevisionBackendRef {

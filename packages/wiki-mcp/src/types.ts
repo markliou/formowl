@@ -8,13 +8,13 @@ import type {
   SourceRef,
   WikiChangeKind,
   WikiPageRef,
-  WikiRevisionBackendRef
+  WikiRevisionBackendRef,
 } from "@formowl/contract";
 
 export type {
   WikiChangeKind,
   WikiRevision,
-  WikiRevisionBackendRef
+  WikiRevisionBackendRef,
 } from "@formowl/contract";
 
 export type WikiPageType =

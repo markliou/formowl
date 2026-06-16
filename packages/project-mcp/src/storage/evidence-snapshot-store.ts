@@ -2,7 +2,11 @@
 // not create another Project MCP evidence snapshot store file unless SPEC.md is
 // updated first.
 
-import type { EvidenceSnapshot, EvidenceSnapshotRef, JsonValue } from "@formowl/contract";
+import type {
+  EvidenceSnapshot,
+  EvidenceSnapshotRef,
+  JsonValue,
+} from "@formowl/contract";
 
 export interface EvidenceSnapshotWrite {
   readonly snapshot: EvidenceSnapshot;
@@ -14,6 +18,10 @@ export interface EvidenceSnapshotWrite {
 
 export interface EvidenceSnapshotStore {
   save_snapshot(write: EvidenceSnapshotWrite): Promise<EvidenceSnapshotRef>;
-  get_snapshot(evidence_snapshot_id: string): Promise<EvidenceSnapshot | undefined>;
-  get_snapshot_payload(evidence_snapshot_id: string): Promise<JsonValue | undefined>;
+  get_snapshot(
+    evidence_snapshot_id: string,
+  ): Promise<EvidenceSnapshot | undefined>;
+  get_snapshot_payload(
+    evidence_snapshot_id: string,
+  ): Promise<JsonValue | undefined>;
 }

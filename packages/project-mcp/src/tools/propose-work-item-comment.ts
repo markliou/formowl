@@ -7,11 +7,11 @@ import type { ProjectWriteProposalData } from "../types";
 import type { ProposeWorkItemCommentInput } from "./project-tools";
 
 export type ProposeWorkItemCommentTool = (
-  input: ProposeWorkItemCommentInput
+  input: ProposeWorkItemCommentInput,
 ) => Promise<McpResultEnvelope<ProjectWriteProposalData>>;
 
 export abstract class ProposeWorkItemCommentHandler {
   abstract propose_work_item_comment(
-    input: ProposeWorkItemCommentInput
+    input: ProposeWorkItemCommentInput,
   ): Promise<McpResultEnvelope<ProjectWriteProposalData>>;
 }

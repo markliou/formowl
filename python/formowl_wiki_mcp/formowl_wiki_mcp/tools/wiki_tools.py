@@ -50,7 +50,9 @@ class WikiMcpTools:
         page_id = str(page_ref.get("source_id") or page_ref.get("page_id") or "")
         draft = self.draft_store.get_draft(page_id)
         if draft is None:
-            envelope = _envelope("wiki_page", "not_found", {"page": None}, warnings=["Wiki page was not found."])
+            envelope = _envelope(
+                "wiki_page", "not_found", {"page": None}, warnings=["Wiki page was not found."]
+            )
         else:
             envelope = _envelope(
                 "wiki_page",
@@ -102,7 +104,9 @@ class WikiMcpTools:
         started = time.perf_counter()
         draft = self.draft_store.get_draft(str(input_data.get("draft_id")))
         if draft is None:
-            envelope = _envelope("wiki_draft", "not_found", {"draft": None}, warnings=["Draft was not found."])
+            envelope = _envelope(
+                "wiki_draft", "not_found", {"draft": None}, warnings=["Draft was not found."]
+            )
             self._log("update_wiki_draft", input_data, envelope, started)
             return envelope
 
@@ -110,7 +114,9 @@ class WikiMcpTools:
         if "status" in patch:
             draft["status"] = patch["status"]
             draft["frontmatter"]["status"] = patch["status"]
-            draft["frontmatter"]["review_status"] = "reviewed" if patch["status"] == "reviewed" else "pending"
+            draft["frontmatter"]["review_status"] = (
+                "reviewed" if patch["status"] == "reviewed" else "pending"
+            )
             if patch["status"] == "reviewed":
                 draft["frontmatter"]["last_reviewed"] = now_iso()
         if "title" in patch:
@@ -119,7 +125,12 @@ class WikiMcpTools:
         if "frontmatter" in patch:
             draft["frontmatter"].update(patch["frontmatter"])
         if "content" in patch:
-            draft["markdown"] = self.frontmatter_builder.serialize_frontmatter(draft["frontmatter"]) + "\n" + str(patch["content"]).strip() + "\n"
+            draft["markdown"] = (
+                self.frontmatter_builder.serialize_frontmatter(draft["frontmatter"])
+                + "\n"
+                + str(patch["content"]).strip()
+                + "\n"
+            )
             draft["markdown_hash"] = sha256_prefixed(draft["markdown"])
         draft["updated_at"] = now_iso()
         self.draft_store.save_draft(draft)
@@ -132,7 +143,9 @@ class WikiMcpTools:
             citations=draft.get("citations", []),
             permission_scope=draft.get("frontmatter", {}).get("permission_scope"),
         )
-        self._log("update_wiki_draft", input_data, envelope, started, wiki_draft_id=draft["draft_id"])
+        self._log(
+            "update_wiki_draft", input_data, envelope, started, wiki_draft_id=draft["draft_id"]
+        )
         return envelope
 
     def publish_wiki_page(self, input_data: dict[str, Any]) -> dict[str, Any]:
@@ -140,12 +153,16 @@ class WikiMcpTools:
         draft_id = str(input_data.get("draft_id"))
         draft = self.draft_store.get_draft(draft_id)
         if draft is None:
-            envelope = _envelope("publish_proposal", "not_found", {}, warnings=["Draft was not found."])
+            envelope = _envelope(
+                "publish_proposal", "not_found", {}, warnings=["Draft was not found."]
+            )
             self._log("publish_wiki_page", input_data, envelope, started)
             return envelope
 
         target = input_data.get("target") or {}
-        diff = diff_lines("", draft["markdown"], fromfile="empty", tofile=target.get("page_slug", draft_id))
+        diff = diff_lines(
+            "", draft["markdown"], fromfile="empty", tofile=target.get("page_slug", draft_id)
+        )
         proposal = {
             "proposal_id": _proposal_id("proposal_publish", draft_id, target),
             "target": target,
@@ -172,7 +189,9 @@ class WikiMcpTools:
         page_id = str(page_ref.get("source_id") or page_ref.get("page_id") or "")
         draft = self.draft_store.get_draft(page_id)
         if draft is None:
-            envelope = _envelope("wiki_snapshot", "not_found", {}, warnings=["Wiki page was not found."])
+            envelope = _envelope(
+                "wiki_snapshot", "not_found", {}, warnings=["Wiki page was not found."]
+            )
             self._log("capture_wiki_snapshot", input_data, envelope, started)
             return envelope
         snapshot = {
@@ -277,7 +296,9 @@ def _envelope(
 
 
 def _draft_id(page_type: str, title: str, context_package: dict[str, Any]) -> str:
-    return f"draft_{page_type}_{slugify(title)}_{sha256_json(context_package).split(':', 1)[1][:10]}"
+    return (
+        f"draft_{page_type}_{slugify(title)}_{sha256_json(context_package).split(':', 1)[1][:10]}"
+    )
 
 
 def _proposal_id(prefix: str, seed: str, payload: Any) -> str:

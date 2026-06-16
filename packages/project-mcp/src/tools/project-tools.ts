@@ -6,7 +6,7 @@ import type {
   McpResultEnvelope,
   ProjectRef,
   SourceRef,
-  WorkItemRef
+  WorkItemRef,
 } from "@formowl/contract";
 import type {
   ProjectStatusSummary,
@@ -15,7 +15,7 @@ import type {
   WorkItemActivity,
   WorkItemContextData,
   WorkItemRelation,
-  WorkItemSearchResult
+  WorkItemSearchResult,
 } from "../types";
 
 export interface SearchWorkItemsInput {
@@ -80,22 +80,33 @@ export interface ProposeWorkItemCommentInput {
 }
 
 export interface ProjectMcpTools {
-  search_work_items(input: SearchWorkItemsInput): Promise<McpResultEnvelope<SearchWorkItemsData>>;
-  get_work_item(input: GetWorkItemInput): Promise<McpResultEnvelope<GetWorkItemData>>;
-  get_work_item_context(input: GetWorkItemContextInput): Promise<GetWorkItemContextEnvelope>;
+  search_work_items(
+    input: SearchWorkItemsInput,
+  ): Promise<McpResultEnvelope<SearchWorkItemsData>>;
+  get_work_item(
+    input: GetWorkItemInput,
+  ): Promise<McpResultEnvelope<GetWorkItemData>>;
+  get_work_item_context(
+    input: GetWorkItemContextInput,
+  ): Promise<GetWorkItemContextEnvelope>;
   list_work_item_activities(
-    input: ListWorkItemActivitiesInput
+    input: ListWorkItemActivitiesInput,
   ): Promise<McpResultEnvelope<ListWorkItemActivitiesData>>;
   list_work_item_relations(
-    input: ListWorkItemRelationsInput
+    input: ListWorkItemRelationsInput,
   ): Promise<McpResultEnvelope<ListWorkItemRelationsData>>;
-  get_project_status(input: GetProjectStatusInput): Promise<McpResultEnvelope<ProjectStatusSummary>>;
+  get_project_status(
+    input: GetProjectStatusInput,
+  ): Promise<McpResultEnvelope<ProjectStatusSummary>>;
   propose_work_item_comment(
-    input: ProposeWorkItemCommentInput
+    input: ProposeWorkItemCommentInput,
   ): Promise<McpResultEnvelope<ProjectWriteProposalData>>;
 }
 
 export interface ProjectContextBuilder {
   build_context_markdown(data: WorkItemContextData): Promise<string>;
-  build_context_package(data: WorkItemContextData, source_refs: readonly SourceRef[]): Promise<ContextPackage>;
+  build_context_package(
+    data: WorkItemContextData,
+    source_refs: readonly SourceRef[],
+  ): Promise<ContextPackage>;
 }

@@ -6,7 +6,7 @@ import type {
   PermissionScope,
   ProjectRef,
   SourceRef,
-  WorkItemRef
+  WorkItemRef,
 } from "@formowl/contract";
 
 export interface ProjectWorkItem {

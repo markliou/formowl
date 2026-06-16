@@ -5,9 +5,11 @@ import type { McpResultEnvelope } from "@formowl/contract";
 import type { UpdateWikiDraftData, UpdateWikiDraftInput } from "./wiki-tools";
 
 export type UpdateWikiDraftTool = (
-  input: UpdateWikiDraftInput
+  input: UpdateWikiDraftInput,
 ) => Promise<McpResultEnvelope<UpdateWikiDraftData>>;
 
 export abstract class UpdateWikiDraftHandler {
-  abstract update_wiki_draft(input: UpdateWikiDraftInput): Promise<McpResultEnvelope<UpdateWikiDraftData>>;
+  abstract update_wiki_draft(
+    input: UpdateWikiDraftInput,
+  ): Promise<McpResultEnvelope<UpdateWikiDraftData>>;
 }

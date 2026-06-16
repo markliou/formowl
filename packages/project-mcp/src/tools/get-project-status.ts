@@ -6,9 +6,11 @@ import type { ProjectStatusSummary } from "../types";
 import type { GetProjectStatusInput } from "./project-tools";
 
 export type GetProjectStatusTool = (
-  input: GetProjectStatusInput
+  input: GetProjectStatusInput,
 ) => Promise<McpResultEnvelope<ProjectStatusSummary>>;
 
 export abstract class GetProjectStatusHandler {
-  abstract get_project_status(input: GetProjectStatusInput): Promise<McpResultEnvelope<ProjectStatusSummary>>;
+  abstract get_project_status(
+    input: GetProjectStatusInput,
+  ): Promise<McpResultEnvelope<ProjectStatusSummary>>;
 }

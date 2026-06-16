@@ -24,12 +24,21 @@ class MockOpenProjectAdapter:
                 [
                     str(item.get("title", "")),
                     str(item.get("description", "")),
-                    " ".join(comment.get("body", "") for comment in self._comments.get(item["source_ref"]["source_id"], [])),
+                    " ".join(
+                        comment.get("body", "")
+                        for comment in self._comments.get(item["source_ref"]["source_id"], [])
+                    ),
                 ]
             ).lower()
             if not query or query in haystack:
-                matched_fields = ["title"] if query and query in item.get("title", "").lower() else ["description"]
-                results.append({"item": deepcopy(item), "score": 1.0, "matched_fields": matched_fields})
+                matched_fields = (
+                    ["title"]
+                    if query and query in item.get("title", "").lower()
+                    else ["description"]
+                )
+                results.append(
+                    {"item": deepcopy(item), "score": 1.0, "matched_fields": matched_fields}
+                )
         return results[:limit]
 
     def get_work_item(self, source_ref: dict[str, Any]) -> dict[str, Any] | None:
@@ -43,10 +52,18 @@ class MockOpenProjectAdapter:
             return None
         return {
             "work_item": item,
-            "comments": deepcopy(self._comments.get(source_id, [])) if input_data.get("include_comments", True) else [],
-            "activities": deepcopy(self._activities.get(source_id, [])) if input_data.get("include_activities", True) else [],
-            "relations": deepcopy(self._relations.get(source_id, [])) if input_data.get("include_relations", True) else [],
-            "attachments": deepcopy(self._attachments.get(source_id, [])) if input_data.get("include_attachments", True) else [],
+            "comments": deepcopy(self._comments.get(source_id, []))
+            if input_data.get("include_comments", True)
+            else [],
+            "activities": deepcopy(self._activities.get(source_id, []))
+            if input_data.get("include_activities", True)
+            else [],
+            "relations": deepcopy(self._relations.get(source_id, []))
+            if input_data.get("include_relations", True)
+            else [],
+            "attachments": deepcopy(self._attachments.get(source_id, []))
+            if input_data.get("include_attachments", True)
+            else [],
         }
 
     def list_work_item_activities(self, input_data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -67,12 +84,16 @@ class MockOpenProjectAdapter:
             status = str(item.get("status") or "unknown")
             status_counts[status] = status_counts.get(status, 0) + 1
             source_refs.append(deepcopy(item["source_ref"]))
-            recent_updates.extend(deepcopy(self._activities.get(item["source_ref"]["source_id"], []))[:1])
+            recent_updates.extend(
+                deepcopy(self._activities.get(item["source_ref"]["source_id"], []))[:1]
+            )
         return {
             "project_ref": project_ref,
             "summary_markdown": _project_summary(status_counts),
             "status_counts": status_counts,
-            "recent_updates": recent_updates if input_data.get("include_recent_updates", True) else [],
+            "recent_updates": recent_updates
+            if input_data.get("include_recent_updates", True)
+            else [],
             "source_refs": source_refs,
         }
 

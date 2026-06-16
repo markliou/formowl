@@ -4,8 +4,12 @@
 import type { McpResultEnvelope } from "@formowl/contract";
 import type { GetWorkItemData, GetWorkItemInput } from "./project-tools";
 
-export type GetWorkItemTool = (input: GetWorkItemInput) => Promise<McpResultEnvelope<GetWorkItemData>>;
+export type GetWorkItemTool = (
+  input: GetWorkItemInput,
+) => Promise<McpResultEnvelope<GetWorkItemData>>;
 
 export abstract class GetWorkItemHandler {
-  abstract get_work_item(input: GetWorkItemInput): Promise<McpResultEnvelope<GetWorkItemData>>;
+  abstract get_work_item(
+    input: GetWorkItemInput,
+  ): Promise<McpResultEnvelope<GetWorkItemData>>;
 }

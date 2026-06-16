@@ -7,7 +7,9 @@ from formowl_contract import now_iso, sha256_json, to_plain
 
 
 class MarkdownFrontmatterBuilder:
-    def build_frontmatter(self, input_data: dict[str, Any], citations: list[dict[str, Any]]) -> dict[str, Any]:
+    def build_frontmatter(
+        self, input_data: dict[str, Any], citations: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         context_package = input_data["context_package"]
         title = str(input_data["title"])
         page_type = str(input_data["page_type"])
@@ -47,7 +49,9 @@ class MarkdownDraftRenderer:
         context_package = input_data["context_package"]
         title = str(input_data["title"])
         page_type = str(input_data["page_type"])
-        body = _body_for_page_type(page_type, title, context_package, frontmatter.get("citations", []))
+        body = _body_for_page_type(
+            page_type, title, context_package, frontmatter.get("citations", [])
+        )
         return self.frontmatter_builder.serialize_frontmatter(frontmatter) + "\n" + body
 
 
@@ -136,7 +140,9 @@ def _citation_section(citations: list[dict[str, Any]]) -> list[str]:
         summary = citation.get("summary") or "Referenced source material."
         evidence_id = citation.get("evidence_snapshot_id")
         suffix = f" Evidence: {evidence_id}." if evidence_id else ""
-        lines.append(f"- {citation.get('citation_id')}: {source_ref.get('source_system')}:{label}. {summary}.{suffix}")
+        lines.append(
+            f"- {citation.get('citation_id')}: {source_ref.get('source_system')}:{label}. {summary}.{suffix}"
+        )
     return lines
 
 
@@ -176,7 +182,28 @@ def _scalar(value: Any) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     text = str(value)
-    if text == "" or any(char in text for char in [":", "#", "{", "}", "[", "]", ",", "&", "*", "!", "|", ">", "'", '"', "%", "@", "`"]):
+    if text == "" or any(
+        char in text
+        for char in [
+            ":",
+            "#",
+            "{",
+            "}",
+            "[",
+            "]",
+            ",",
+            "&",
+            "*",
+            "!",
+            "|",
+            ">",
+            "'",
+            '"',
+            "%",
+            "@",
+            "`",
+        ]
+    ):
         escaped = text.replace('"', '\\"')
         return f'"{escaped}"'
     return text

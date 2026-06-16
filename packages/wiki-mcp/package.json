@@ -14,7 +14,7 @@
     "dist"
   ],
   "dependencies": {
-    "@formowl/contract": "workspace:*"
+    "@formowl/contract": "0.0.0"
   },
   "scripts": {
     "build": "tsc -b",

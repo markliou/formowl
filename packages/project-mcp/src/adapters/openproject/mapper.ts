@@ -2,8 +2,18 @@
 // not create another OpenProject mapper file unless SPEC.md is updated first.
 
 import type { ProjectRef, WorkItemRef } from "@formowl/contract";
-import type { ProjectStatusSummary, ProjectWorkItem, WorkItemActivity, WorkItemRelation } from "../../types";
-import type { OpenProjectRawActivity, OpenProjectRawProject, OpenProjectRawRelation, OpenProjectRawWorkPackage } from "./schemas";
+import type {
+  ProjectStatusSummary,
+  ProjectWorkItem,
+  WorkItemActivity,
+  WorkItemRelation,
+} from "../../types";
+import type {
+  OpenProjectRawActivity,
+  OpenProjectRawProject,
+  OpenProjectRawRelation,
+  OpenProjectRawWorkPackage,
+} from "./schemas";
 
 export interface OpenProjectMapper {
   to_project_ref(raw: OpenProjectRawProject): ProjectRef;

@@ -15,7 +15,9 @@ class FileDraftStore:
     def save_draft(self, draft: dict[str, Any]) -> dict[str, Any]:
         payload = to_plain(draft)
         path = self.base_dir / f"{payload['draft_id']}.json"
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+        )
         return payload
 
     def get_draft(self, draft_id: str) -> dict[str, Any] | None:
@@ -25,7 +27,10 @@ class FileDraftStore:
         return json.loads(path.read_text(encoding="utf-8"))
 
     def list_drafts(self, project: str | None = None) -> list[dict[str, Any]]:
-        drafts = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(self.base_dir.glob("*.json"))]
+        drafts = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(self.base_dir.glob("*.json"))
+        ]
         if project is None:
             return drafts
         return [draft for draft in drafts if draft.get("frontmatter", {}).get("project") == project]

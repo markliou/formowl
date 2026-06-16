@@ -8,7 +8,7 @@ import type {
   GetWorkItemContextInput,
   ListWorkItemActivitiesInput,
   ListWorkItemRelationsInput,
-  SearchWorkItemsInput
+  SearchWorkItemsInput,
 } from "../tools/project-tools";
 import type {
   ProjectStatusSummary,
@@ -16,18 +16,28 @@ import type {
   WorkItemActivity,
   WorkItemContextData,
   WorkItemRelation,
-  WorkItemSearchResult
+  WorkItemSearchResult,
 } from "../types";
 
 export interface ProjectSystemAdapter {
   readonly source_system: string;
   readonly source_instance?: string;
 
-  search_work_items(input: SearchWorkItemsInput): Promise<readonly WorkItemSearchResult[]>;
+  search_work_items(
+    input: SearchWorkItemsInput,
+  ): Promise<readonly WorkItemSearchResult[]>;
   get_work_item(source_ref: WorkItemRef): Promise<ProjectWorkItem | undefined>;
-  get_work_item_context(input: GetWorkItemContextInput): Promise<WorkItemContextData | undefined>;
-  list_work_item_activities(input: ListWorkItemActivitiesInput): Promise<readonly WorkItemActivity[]>;
-  list_work_item_relations(input: ListWorkItemRelationsInput): Promise<readonly WorkItemRelation[]>;
-  get_project_status(input: GetProjectStatusInput): Promise<ProjectStatusSummary | undefined>;
+  get_work_item_context(
+    input: GetWorkItemContextInput,
+  ): Promise<WorkItemContextData | undefined>;
+  list_work_item_activities(
+    input: ListWorkItemActivitiesInput,
+  ): Promise<readonly WorkItemActivity[]>;
+  list_work_item_relations(
+    input: ListWorkItemRelationsInput,
+  ): Promise<readonly WorkItemRelation[]>;
+  get_project_status(
+    input: GetProjectStatusInput,
+  ): Promise<ProjectStatusSummary | undefined>;
   resolve_project_ref(project_ref: ProjectRef): Promise<ProjectRef | undefined>;
 }

@@ -10,6 +10,12 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+dev = [
+  "pre-commit>=4.0",
+  "ruff==0.8.6"
+]
+
 [project.scripts]
 formowl-project-mcp = "formowl_project_mcp.server:main"
 formowl-wiki-mcp = "formowl_wiki_mcp.server:main"
@@ -27,4 +33,20 @@ pythonpath = [
   "python",
   "python/formowl_project_mcp",
   "python/formowl_wiki_mcp"
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = [
+  "python",
+  "tests"
+]
+
+[tool.ruff.lint]
+select = [
+  "E4",
+  "E7",
+  "E9",
+  "F"
 ]

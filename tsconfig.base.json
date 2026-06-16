@@ -2,15 +2,9 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@formowl/contract": [
-        "packages/formowl-contract/src/index.ts"
-      ],
-      "@formowl/project-mcp": [
-        "packages/project-mcp/src/index.ts"
-      ],
-      "@formowl/wiki-mcp": [
-        "packages/wiki-mcp/src/index.ts"
-      ]
+      "@formowl/contract": ["packages/formowl-contract/src/index.ts"],
+      "@formowl/project-mcp": ["packages/project-mcp/src/index.ts"],
+      "@formowl/wiki-mcp": ["packages/wiki-mcp/src/index.ts"]
     },
     "target": "ES2022",
     "module": "ESNext",

@@ -35,18 +35,25 @@ class FileEvidenceSnapshotStore:
         _write_json(directory / "response.json", write.get("response_payload", {}))
         normalized = str(write.get("normalized_markdown") or "")
         (directory / "normalized.md").write_text(normalized, encoding="utf-8")
-        _write_json(directory / "metadata.json", {"snapshot": snapshot, "metadata": write.get("metadata", {})})
+        _write_json(
+            directory / "metadata.json",
+            {"snapshot": snapshot, "metadata": write.get("metadata", {})},
+        )
         _write_json(directory / "snapshot.json", snapshot)
         return {"evidence_snapshot_id": snapshot_id, "storage_uri": storage_uri}
 
     def get_snapshot(self, evidence_snapshot_id: str) -> dict[str, Any] | None:
-        for path in self.base_dir.glob(f"raw/evidence/*/*/*/*/{evidence_snapshot_id}/metadata.json"):
+        for path in self.base_dir.glob(
+            f"raw/evidence/*/*/*/*/{evidence_snapshot_id}/metadata.json"
+        ):
             payload = json.loads(path.read_text(encoding="utf-8"))
             return payload.get("snapshot")
         return None
 
     def get_snapshot_payload(self, evidence_snapshot_id: str) -> dict[str, Any] | None:
-        for path in self.base_dir.glob(f"raw/evidence/*/*/*/*/{evidence_snapshot_id}/response.json"):
+        for path in self.base_dir.glob(
+            f"raw/evidence/*/*/*/*/{evidence_snapshot_id}/response.json"
+        ):
             return json.loads(path.read_text(encoding="utf-8"))
         return None
 
@@ -63,4 +70,7 @@ def _parse_datetime(value: str) -> datetime:
 
 
 def _write_json(path: Path, payload: Any) -> None:
-    path.write_text(json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    path.write_text(
+        json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )

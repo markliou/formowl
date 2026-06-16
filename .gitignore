@@ -1,6 +1,11 @@
 .formowl/
+.cache/
+.venv/
 .test-tmp/
 target/
+dist/
 __pycache__/
 *.py[cod]
+*.tsbuildinfo
 node_modules/
+.ruff_cache/

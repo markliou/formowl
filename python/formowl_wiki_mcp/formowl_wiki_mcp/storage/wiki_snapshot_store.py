@@ -15,7 +15,9 @@ class FileWikiSnapshotStore:
     def save_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         payload = to_plain(snapshot)
         path = self.base_dir / f"{payload['wiki_snapshot_id']}.json"
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
+        )
         return payload
 
     def get_snapshot(self, wiki_snapshot_id: str) -> dict[str, Any] | None:

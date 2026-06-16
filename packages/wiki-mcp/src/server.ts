@@ -2,7 +2,10 @@
 // another Wiki MCP server entrypoint unless SPEC.md is updated first.
 
 import type { McpToolDescriptor } from "@formowl/contract";
-import type { MarkdownDraftRenderer, MarkdownFrontmatterBuilder } from "./markdown/frontmatter";
+import type {
+  MarkdownDraftRenderer,
+  MarkdownFrontmatterBuilder,
+} from "./markdown/frontmatter";
 import type { ToolCallLogger } from "./observability/tool-call-logger";
 import type { DraftStore } from "./storage/draft-store";
 import type { WikiSnapshotStore } from "./storage/wiki-snapshot-store";

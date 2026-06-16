@@ -21,9 +21,15 @@ class WikiMcpServer:
         return [
             {"name": "search_wiki_pages", "description": "Search existing wiki or markdown pages."},
             {"name": "get_wiki_page", "description": "Retrieve one wiki or markdown page."},
-            {"name": "generate_wiki_draft", "description": "Generate a markdown draft from a context package."},
+            {
+                "name": "generate_wiki_draft",
+                "description": "Generate a markdown draft from a context package.",
+            },
             {"name": "update_wiki_draft", "description": "Update an existing markdown draft."},
-            {"name": "publish_wiki_page", "description": "Prepare a proposal-only wiki publishing action."},
+            {
+                "name": "publish_wiki_page",
+                "description": "Prepare a proposal-only wiki publishing action.",
+            },
             {"name": "capture_wiki_snapshot", "description": "Capture a wiki page snapshot."},
         ]
 

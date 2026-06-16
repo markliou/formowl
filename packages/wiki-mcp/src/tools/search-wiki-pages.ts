@@ -5,9 +5,11 @@ import type { McpResultEnvelope } from "@formowl/contract";
 import type { SearchWikiPagesData, SearchWikiPagesInput } from "./wiki-tools";
 
 export type SearchWikiPagesTool = (
-  input: SearchWikiPagesInput
+  input: SearchWikiPagesInput,
 ) => Promise<McpResultEnvelope<SearchWikiPagesData>>;
 
 export abstract class SearchWikiPagesHandler {
-  abstract search_wiki_pages(input: SearchWikiPagesInput): Promise<McpResultEnvelope<SearchWikiPagesData>>;
+  abstract search_wiki_pages(
+    input: SearchWikiPagesInput,
+  ): Promise<McpResultEnvelope<SearchWikiPagesData>>;
 }

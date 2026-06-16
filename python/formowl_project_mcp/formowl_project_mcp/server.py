@@ -22,11 +22,20 @@ class ProjectMcpServer:
         return [
             {"name": "search_work_items", "description": "Search work items."},
             {"name": "get_work_item", "description": "Retrieve one work item."},
-            {"name": "get_work_item_context", "description": "Retrieve LLM-ready work item context."},
-            {"name": "list_work_item_activities", "description": "Retrieve work item comments and activities."},
+            {
+                "name": "get_work_item_context",
+                "description": "Retrieve LLM-ready work item context.",
+            },
+            {
+                "name": "list_work_item_activities",
+                "description": "Retrieve work item comments and activities.",
+            },
             {"name": "list_work_item_relations", "description": "Retrieve related work items."},
             {"name": "get_project_status", "description": "Retrieve project status summary."},
-            {"name": "propose_work_item_comment", "description": "Prepare a proposal-only work item comment."},
+            {
+                "name": "propose_work_item_comment",
+                "description": "Prepare a proposal-only work item comment.",
+            },
         ]
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:

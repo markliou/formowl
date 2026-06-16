@@ -3,7 +3,13 @@ from __future__ import annotations
 import unittest
 
 import _paths  # noqa: F401
-from formowl_contract import ContextPackage, PermissionScope, SourceRef, sha256_json, validate_context_package
+from formowl_contract import (
+    ContextPackage,
+    PermissionScope,
+    SourceRef,
+    sha256_json,
+    validate_context_package,
+)
 
 
 class ContractTests(unittest.TestCase):

@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Callable
+from typing import Any
 
-from formowl_contract import ContextPackage, EvidenceSnapshot, McpResultEnvelope, now_iso, sha256_json, to_plain
+from formowl_contract import (
+    ContextPackage,
+    EvidenceSnapshot,
+    McpResultEnvelope,
+    now_iso,
+    sha256_json,
+)
 
 
 class ProjectMcpTools:
@@ -24,7 +30,9 @@ class ProjectMcpTools:
         started = time.perf_counter()
         item = self.adapter.get_work_item(input_data.get("source_ref", {}))
         if item is None:
-            envelope = _envelope("work_item", "not_found", {"work_item": None}, warnings=["Work item was not found."])
+            envelope = _envelope(
+                "work_item", "not_found", {"work_item": None}, warnings=["Work item was not found."]
+            )
         else:
             envelope = _envelope(
                 "work_item",
@@ -40,7 +48,9 @@ class ProjectMcpTools:
         started = time.perf_counter()
         context = self.adapter.get_work_item_context(input_data)
         if context is None:
-            envelope = _envelope("work_item_context", "not_found", {}, warnings=["Work item context was not found."])
+            envelope = _envelope(
+                "work_item_context", "not_found", {}, warnings=["Work item context was not found."]
+            )
             self._log("get_work_item_context", input_data, envelope, started)
             return envelope
 
@@ -125,7 +135,9 @@ class ProjectMcpTools:
         started = time.perf_counter()
         status = self.adapter.get_project_status(input_data)
         if status is None:
-            envelope = _envelope("project_status", "not_found", {}, warnings=["Project was not found."])
+            envelope = _envelope(
+                "project_status", "not_found", {}, warnings=["Project was not found."]
+            )
             self._log("get_project_status", input_data, envelope, started)
             return envelope
 
@@ -155,7 +167,9 @@ class ProjectMcpTools:
         source_ref = input_data.get("source_ref", {})
         body = str(input_data.get("body") or "")
         proposal = {
-            "proposal_id": _id("proposal_comment", source_ref.get("source_id", "unknown"), input_data),
+            "proposal_id": _id(
+                "proposal_comment", source_ref.get("source_id", "unknown"), input_data
+            ),
             "target_source_ref": source_ref,
             "diff_markdown": f"```diff\n+ {body.replace(chr(10), chr(10) + '+ ')}\n```",
             "reason": input_data.get("reason"),
@@ -251,7 +265,9 @@ def build_activities_markdown(activities: list[dict[str, Any]]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
-def _append_comment_section(lines: list[str], title: str, values: list[dict[str, Any]], body_key: str) -> None:
+def _append_comment_section(
+    lines: list[str], title: str, values: list[dict[str, Any]], body_key: str
+) -> None:
     lines.extend(["", f"## {title}", ""])
     if not values:
         lines.append("_None._")
@@ -270,7 +286,9 @@ def _append_relations(lines: list[str], relations: list[dict[str, Any]]) -> None
         return
     for relation in relations:
         target = relation.get("target_ref", {})
-        lines.append(f"- {relation.get('relation_type', 'related')}: {target.get('source_key') or target.get('source_id')}")
+        lines.append(
+            f"- {relation.get('relation_type', 'related')}: {target.get('source_key') or target.get('source_id')}"
+        )
 
 
 def _append_attachments(lines: list[str], attachments: list[dict[str, Any]]) -> None:
@@ -279,7 +297,9 @@ def _append_attachments(lines: list[str], attachments: list[dict[str, Any]]) -> 
         lines.append("_None._")
         return
     for attachment in attachments:
-        lines.append(f"- {attachment.get('file_name')} ({attachment.get('content_type', 'unknown')})")
+        lines.append(
+            f"- {attachment.get('file_name')} ({attachment.get('content_type', 'unknown')})"
+        )
 
 
 def _envelope(
