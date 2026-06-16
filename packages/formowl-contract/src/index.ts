@@ -97,6 +97,43 @@ export interface ContextPackage {
   readonly permission_scope?: PermissionScope;
 }
 
+export type WikiRevisionStatus = ExtensibleString<"draft" | "reviewed" | "published" | "archived">;
+
+export type WikiChangeKind = ExtensibleString<
+  "generated" | "regenerated" | "human_edit" | "source_refresh" | "publish_sync" | "restore"
+>;
+
+export type WikiRevisionBackendType = ExtensibleString<
+  "database" | "git" | "markdown-store" | "openproject_wiki" | "confluence" | "notion"
+>;
+
+export interface WikiRevisionBackendRef {
+  readonly type: WikiRevisionBackendType;
+  readonly id: string;
+  readonly url?: string;
+  readonly metadata?: JsonValue;
+}
+
+export interface WikiRevision {
+  readonly revision_id: string;
+  readonly page_ref?: WikiPageRef;
+  readonly draft_id?: string;
+  readonly parent_revision_id?: string;
+  readonly title: string;
+  readonly status: WikiRevisionStatus;
+  readonly change_kind: WikiChangeKind;
+  readonly markdown_hash: string;
+  readonly source_refs: readonly SourceRef[];
+  readonly evidence_snapshot_ids: readonly string[];
+  readonly citations: readonly Citation[];
+  readonly author_id?: string;
+  readonly reviewer_id?: string;
+  readonly created_at: string;
+  readonly reviewed_at?: string;
+  readonly published_at?: string;
+  readonly backend_ref?: WikiRevisionBackendRef;
+}
+
 export type McpResultStatus =
   | "ok"
   | "partial"

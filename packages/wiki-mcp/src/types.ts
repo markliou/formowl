@@ -6,7 +6,15 @@ import type {
   JsonValue,
   PermissionScope,
   SourceRef,
-  WikiPageRef
+  WikiChangeKind,
+  WikiPageRef,
+  WikiRevisionBackendRef
+} from "@formowl/contract";
+
+export type {
+  WikiChangeKind,
+  WikiRevision,
+  WikiRevisionBackendRef
 } from "@formowl/contract";
 
 export type WikiPageType =
@@ -23,6 +31,9 @@ export interface MarkdownFrontmatter {
   readonly title: string;
   readonly type: WikiPageType;
   readonly status: WikiDraftStatus;
+  readonly revision_id?: string;
+  readonly parent_revision_id?: string;
+  readonly change_kind?: WikiChangeKind;
   readonly project?: string;
   readonly owner?: string | null;
   readonly generated: boolean;
@@ -35,6 +46,7 @@ export interface MarkdownFrontmatter {
   readonly related_work_items?: readonly SourceRef[];
   readonly citations: readonly Citation[];
   readonly permission_scope?: PermissionScope;
+  readonly revision_backend?: WikiRevisionBackendRef;
 }
 
 export interface WikiDraft {
@@ -87,6 +99,7 @@ export interface WikiPublishProposalData {
   readonly target: WikiPublishTarget;
   readonly diff_markdown: string;
   readonly draft_id: string;
+  readonly revision_id?: string;
 }
 
 export interface WikiSnapshot {

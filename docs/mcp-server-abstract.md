@@ -4,6 +4,8 @@
 
 This repository currently defines the abstract boundaries for the first formowl MCP architecture.
 
+MCP service implementations should be Python-first for readability and debugging. Shared heavy or safety-sensitive core behavior should live in Rust and be called from Python through bindings.
+
 ## Packages
 
 - `@formowl/contract`
@@ -17,6 +19,13 @@ This repository currently defines the abstract boundaries for the first formowl 
   - Abstract Wiki MCP server.
   - Owns markdown draft lifecycle, frontmatter generation, wiki lookup, publishing proposals, wiki snapshots, and tool-call logging.
   - Does not depend on OpenProject internals.
+
+## Runtime Boundary
+
+- Containers are the canonical development, test, and runtime boundary.
+- Python owns MCP orchestration, adapters, workflow glue, and human-readable diagnostics.
+- Rust owns heavy computing, parsers, validators, hashing, integrity checks, and syntax-shielded core behavior.
+- Python bindings expose Rust core APIs to the MCP service layer.
 
 ## Current Non-Implementation
 

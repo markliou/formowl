@@ -1,4 +1,4 @@
-# formowl Specification
+﻿# formowl Specification
 
 ## 1. Overview
 
@@ -19,24 +19,26 @@ formowl-contract
 
 The goal is to keep project execution data and wiki knowledge artifacts decoupled, while preserving provenance, citations, and source traceability.
 
+The system must be usable by people who are not software engineers. Administrative owners, project coordinators, reviewers, and process operators should be able to work through natural-language instructions and review-oriented actions. Technical mechanisms such as Git, object storage, schemas, hashes, and revision backends must remain implementation details unless an administrator explicitly asks to inspect them.
+
 ---
 
 ## 2. Core Concept
 
 ```text id="1mhwmd"
 ChatGPT / LLM Host
-  ├─ Project MCP
-  └─ Wiki MCP
+  ?? Project MCP
+  ?? Wiki MCP
 
 Shared Contract
-  └─ formowl-contract
+  ?? formowl-contract
 ```
 
 Project MCP is responsible for project execution context.
 
 Wiki MCP is responsible for knowledge artifact creation and wiki publishing lifecycle.
 
-`formowl-contract` defines the shared data structures that allow both MCPs to exchange information without depending on each other’s internal implementation.
+`formowl-contract` defines the shared data structures that allow both MCPs to exchange information without depending on each other? internal implementation.
 
 ---
 
@@ -52,6 +54,16 @@ Wiki MCP is responsible for knowledge artifact creation and wiki publishing life
 8. Every generated knowledge artifact must preserve source references.
 9. Any external data used to generate knowledge must be traceable.
 10. Write operations must use proposal and review flows.
+11. The primary user workflow must be natural-language-first and non-technical-user-friendly.
+12. Technical governance mechanisms must be hidden behind task-oriented actions such as save draft, submit for review, compare changes, publish, refresh from sources, and restore.
+13. Wiki artifacts are versioned knowledge views derived from raw data; they are not raw truth.
+14. Regenerating a wiki artifact must create a reviewable proposal or diff, not silently overwrite reviewed or published knowledge.
+15. Git may be used as a revision backend, audit mirror, or engineering workflow, but it must not be required as the user-facing wiki workflow.
+16. Development, testing, and deployment must be container-first to maximize portability and avoid host-machine assumptions.
+17. Python and Rust are the primary implementation languages.
+18. Python is the preferred language for orchestration, MCP service glue, workflows, adapters, tests, and day-to-day debugging.
+19. Rust must own heavy computing, security-sensitive logic, parsers, validators, hash/signature work, data integrity checks, concurrency-sensitive code, and any feature whose Python implementation would expose strange, hard-to-read, or hard-to-maintain syntax.
+20. Rust core functionality should be exposed to Python through stable bindings so most contributors can read and debug the Python-facing API without editing Rust internals.
 
 ---
 
@@ -61,14 +73,10 @@ The first version should prove this workflow:
 
 ```text id="lmvw9o"
 ChatGPT
-  ↓
-Project MCP retrieves project/work item context
-  ↓
-ChatGPT passes context to Wiki MCP
-  ↓
-Wiki MCP generates a markdown/wiki draft
-  ↓
-Generated draft includes source references and evidence snapshots
+  ??Project MCP retrieves project/work item context
+  ??ChatGPT passes context to Wiki MCP
+  ??Wiki MCP generates a markdown/wiki draft
+  ??Generated draft includes source references and evidence snapshots
 ```
 
 Included:
@@ -85,6 +93,10 @@ Citation schema
 PermissionScope schema
 ContextPackage schema
 MCP tool-call logging
+Natural-language-first wiki review workflow
+Wiki revision abstraction
+Container-first development and deployment baseline
+Python/Rust implementation policy
 ```
 
 Not included in the first version:
@@ -97,6 +109,8 @@ Automatic project write-back
 Company-wide ontology
 Full permission engine
 Full raw data ingestion pipeline
+User-facing Git workflow requirements
+Host-machine-specific development requirements
 ```
 
 ---
@@ -153,6 +167,8 @@ Long-form knowledge curation
 
 Wiki MCP manages knowledge artifacts.
 
+Wiki MCP must expose wiki work as natural-language and review-oriented operations. Users should not need to understand Git, branches, commits, pull requests, storage paths, schema IDs, or hash values to create, review, update, publish, or restore wiki content.
+
 Initial target artifact format:
 
 ```text id="55bbyy"
@@ -176,12 +192,15 @@ Wiki MCP owns:
 ```text id="e8xxo9"
 Markdown draft generation
 Wiki page lookup
-Wiki draft lifecycle
+Wiki draft and revision lifecycle
 Wiki page metadata
 Citation embedding
 Frontmatter generation
 Publishing proposals
 Wiki snapshot capture
+Revisioned artifact store abstraction
+Change comparison and restore proposals
+Natural-language operation mapping
 ```
 
 Wiki MCP does not own:
@@ -192,6 +211,7 @@ Jira API details
 Project status interpretation
 Work item state mutation
 Project adapter logic
+User-facing Git operations
 ```
 
 ---
@@ -214,12 +234,13 @@ EvidenceSnapshotRef
 Citation
 PermissionScope
 ContextPackage
+WikiRevision
 MCPResultEnvelope
 ```
 
 Both MCP servers must import or implement this contract.
 
-No MCP server should depend on another MCP server’s internal types.
+No MCP server should depend on another MCP server? internal types.
 
 ---
 
@@ -407,7 +428,93 @@ unknown
 
 ---
 
-## 6.6 MCPResultEnvelope
+## 6.6 WikiRevision
+
+`WikiRevision` records one versioned state of a wiki artifact.
+
+It is a governance object for knowledge views. It does not make the wiki page a source of truth. It records which raw evidence, source references, human actions, and backend revision were involved in producing a specific version of a page.
+
+Git may be one backend for a `WikiRevision`, but it is only an implementation detail. A user-facing workflow should expose actions such as save draft, submit for review, compare changes, publish, refresh from sources, and restore.
+
+Example:
+
+```json id="wiki-revision-example"
+{
+  "revision_id": "rev_wiki_20260616_001",
+  "page_ref": {
+    "source_system": "markdown-store",
+    "source_type": "markdown_page",
+    "source_id": "adr-data-retention"
+  },
+  "parent_revision_id": "rev_wiki_20260615_001",
+  "title": "Data Retention Architecture Decision",
+  "status": "reviewed",
+  "change_kind": "source_refresh",
+  "markdown_hash": "sha256:...",
+  "source_refs": [
+    {
+      "source_system": "openproject",
+      "source_type": "work_package",
+      "source_id": "123"
+    }
+  ],
+  "evidence_snapshot_ids": [
+    "ev_project_20260616_001"
+  ],
+  "author_id": "person_admin_owner",
+  "reviewer_id": "person_process_reviewer",
+  "created_at": "2026-06-16T12:00:00+08:00",
+  "backend_ref": {
+    "type": "database",
+    "id": "wiki_revision_rows/123"
+  }
+}
+```
+
+Recommended statuses:
+
+```text id="wiki-revision-statuses"
+draft
+reviewed
+published
+archived
+```
+
+Recommended change kinds:
+
+```text id="wiki-change-kinds"
+generated
+regenerated
+human_edit
+source_refresh
+publish_sync
+restore
+```
+
+Recommended backend types:
+
+```text id="wiki-backend-types"
+database
+git
+markdown-store
+openproject_wiki
+confluence
+notion
+```
+
+Rules:
+
+```text id="wiki-revision-rules"
+Reviewed and published wiki revisions must be immutable.
+Draft revisions may be superseded, but must not overwrite reviewed or published revisions.
+Refresh from raw data must create a new draft revision and a human-readable diff.
+Restore must create a new revision that records the restored parent, not delete history.
+Backend identifiers such as git commits must not be required in user-facing workflows.
+```
+
+---
+
+## 6.7 MCPResultEnvelope
 
 All MCP tool responses should follow a shared envelope format.
 
@@ -829,6 +936,47 @@ Input:
 
 ---
 
+## 8.7 Wiki Revision Governance
+
+Wiki MCP must treat wiki revisions as governed knowledge views.
+
+The user-facing operation should be natural-language-first. The system may translate requests into structured tool calls, but users should be able to express work like:
+
+```text id="wiki-natural-language-ops"
+Update this SOP using the latest OpenProject discussion.
+Show me what changed before I approve it.
+Publish this reviewed page to the project wiki.
+Restore the previous approved version.
+Refresh this page from source data, but keep my manual notes.
+```
+
+These user actions map to technical operations behind the scenes:
+
+```text id="wiki-op-mapping"
+save draft -> create or update a draft WikiRevision
+submit for review -> mark a draft revision pending review
+compare changes -> generate a human-readable diff between revisions
+approve -> mark a revision reviewed
+publish -> create a publish proposal and record the target backend revision
+refresh from sources -> generate a new draft revision from raw evidence and show a diff
+restore -> create a new revision from a previous reviewed or published revision
+```
+
+Future Wiki MCP tools may include:
+
+```text id="wiki-future-revision-tools"
+list_wiki_revisions
+compare_wiki_revisions
+propose_wiki_refresh
+restore_wiki_revision
+```
+
+MVP implementations may model these through `generate_wiki_draft`, `update_wiki_draft`, `publish_wiki_page`, and an internal revision store.
+
+Git-specific operations such as commit, branch, pull request, merge, or rebase must not be required from normal wiki authors. If Git is used, the system should create commits or pull requests on behalf of the workflow and expose them only as optional audit details.
+
+---
+
 ## 9. Markdown Frontmatter Standard
 
 Every generated markdown page must include frontmatter.
@@ -840,6 +988,9 @@ Example:
 title: Data Retention Architecture Decision
 type: adr
 status: draft
+revision_id: rev_wiki_20260616_001
+parent_revision_id: rev_wiki_20260615_001
+change_kind: source_refresh
 project: formowl
 owner: null
 generated: true
@@ -873,6 +1024,10 @@ permission_scope:
   scope_type: project
   scope_id: formowl
   visibility: restricted
+
+revision_backend:
+  type: database
+  id: wiki_revision_rows/123
 ---
 ```
 
@@ -916,7 +1071,7 @@ User message record:
   "actor_source": "source_account",
   "source_account_id": "chatgpt:yifanliou@gmail.com",
   "timestamp": null,
-  "content": "原始發言全文",
+  "content": "???潸??冽?",
   "attachments": [],
   "authorship": {
     "message_author": "person_yifan",
@@ -938,7 +1093,7 @@ Assistant message record:
   "actor_id": "openai_chatgpt",
   "source_account_id": "chatgpt:yifanliou@gmail.com",
   "model": "unknown-or-captured-model",
-  "content": "LLM 回答全文",
+  "content": "LLM ???冽?",
   "authorship": {
     "message_author": "openai_chatgpt",
     "generated_for_account": "chatgpt:yifanliou@gmail.com",
@@ -962,8 +1117,7 @@ It may only enter an unverified import queue.
 
 ```text id="kscw3h"
 User:
-  根據 OpenProject #123 產生 ADR wiki draft。
-
+  ?寞? OpenProject #123 ?Ｙ? ADR wiki draft??
 ChatGPT:
   1. Calls Project MCP: get_work_item_context(OP #123)
   2. Receives ContextPackage
@@ -1038,62 +1192,151 @@ Did ChatGPT use Project MCP and Wiki MCP in the same workflow?
 
 ---
 
-## 13. Suggested Repository Layout
+## 13. Runtime, Language, and Container Policy
+
+FormOwl must be container-first.
+
+The canonical development, test, and deployment environment is a container image. Local host tooling may be used for convenience, but it must not become a hidden requirement for contributors or operators.
+
+Container requirements:
+
+```text id="container-policy"
+Container images must include the required Python runtime, Rust toolchain, binding build tools, and service dependencies.
+MCP servers must be runnable from containers without requiring host-installed Python, Rust, Node, TypeScript, or system libraries.
+Development containers should support repeatable local testing, linting, and binding builds.
+Production containers should prefer small runtime images and explicit dependency pinning.
+Compose or equivalent local orchestration should be available for Project MCP, Wiki MCP, raw data storage, and metadata storage when those services exist.
+```
+
+Primary implementation languages:
+
+```text id="language-policy"
+Python
+Rust
+```
+
+Python owns:
+
+```text id="python-owns"
+MCP server orchestration
+External service adapters
+Workflow logic
+Natural-language operation mapping
+Review and proposal flow glue
+Configuration loading
+Test fixtures and integration tests
+Day-to-day debugging entrypoints
+Human-readable diagnostics
+```
+
+Rust owns:
+
+```text id="rust-owns"
+Heavy computing
+Security-sensitive logic
+Parsers and canonical serializers
+Schema and policy validation cores
+Hashing, signing, and integrity checks
+Concurrent or memory-sensitive processing
+Large raw data transforms
+Diff engines when correctness or performance matters
+Sandbox-like boundaries
+Any feature whose Python implementation would expose strange, hard-to-read, or hard-to-maintain syntax
+```
+
+Syntax shielding rule:
+
+```text id="syntax-shielding-rule"
+If a Python implementation would require unusual metaprogramming, deeply nested decorators, generated code, fragile regular expressions, complex DSLs, unsafe dynamic evaluation, or other syntax that ordinary maintainers should not be expected to read and edit, that feature must be implemented behind a Rust core API.
+The Python layer should expose clear functions, classes, and typed data objects.
+Normal debugging should start from Python.
+Rust internals should be inspected only when debugging the core algorithm, safety boundary, or binding itself.
+```
+
+Python/Rust binding policy:
+
+```text id="binding-policy"
+Rust core libraries should expose stable Python bindings.
+The preferred binding stack is PyO3 plus maturin.
+Python wrappers must hide Rust memory, lifetime, ownership, and build details from normal workflow code.
+Bindings must return contract-shaped data structures or simple Python objects.
+Binding failures must produce actionable Python exceptions with enough context for non-Rust debugging.
+```
+
+This policy does not mean all difficult code belongs in Rust. Business workflows, connector logic, review state machines, and user-facing orchestration should remain in Python when the Python version is clear, debuggable, and safe enough.
+
+---
+
+## 14. Suggested Repository Layout
 
 ```text id="cf1xgs"
 formowl/
   README.md
   SPEC.md
   LICENSE
+  Containerfile
+  compose.yaml
+  pyproject.toml
+  Cargo.toml
 
-  packages/
-    formowl-contract/
-      README.md
-      schemas/
-        source-ref.schema.json
-        evidence-snapshot.schema.json
-        citation.schema.json
-        permission-scope.schema.json
-        context-package.schema.json
-        mcp-result-envelope.schema.json
-      src/
-        index.ts
+  .devcontainer/
+    devcontainer.json
 
-    project-mcp/
+  containers/
+    dev/
+      Containerfile
+    runtime/
+      Containerfile
+
+  schemas/
+    source-ref.schema.json
+    evidence-snapshot.schema.json
+    citation.schema.json
+    permission-scope.schema.json
+    context-package.schema.json
+    wiki-revision.schema.json
+    mcp-result-envelope.schema.json
+
+  python/
+    formowl_contract/
+      __init__.py
+      models.py
+
+    formowl_project_mcp/
       README.md
-      src/
-        server.ts
+      formowl_project_mcp/
+        server.py
         tools/
-          search-work-items.ts
-          get-work-item.ts
-          get-work-item-context.ts
-          list-work-item-activities.ts
-          list-work-item-relations.ts
-          get-project-status.ts
-          propose-work-item-comment.ts
+          search_work_items.py
+          get_work_item.py
+          get_work_item_context.py
+          list_work_item_activities.py
+          list_work_item_relations.py
+          get_project_status.py
+          propose_work_item_comment.py
         adapters/
           openproject/
-            client.ts
-            mapper.ts
-            schemas.ts
+            client.py
+            mapper.py
+            schemas.py
         storage/
-          evidence-snapshot-store.ts
+          evidence_snapshot_store.py
         observability/
-          logger.ts
+          logger.py
 
-    wiki-mcp/
+    formowl_wiki_mcp/
       README.md
-      src/
-        server.ts
+      formowl_wiki_mcp/
+        server.py
         tools/
-          search-wiki-pages.ts
-          get-wiki-page.ts
-          generate-wiki-draft.ts
-          update-wiki-draft.ts
-          publish-wiki-page.ts
-          capture-wiki-snapshot.ts
+          search_wiki_pages.py
+          get_wiki_page.py
+          generate_wiki_draft.py
+          update_wiki_draft.py
+          publish_wiki_page.py
+          capture_wiki_snapshot.py
         markdown/
-          frontmatter.ts
+          frontmatter.py
           templates/
             adr.md
             project-hub.md
@@ -1101,10 +1344,25 @@ formowl/
             decision-log.md
             risk-register.md
         storage/
-          draft-store.ts
-          wiki-snapshot-store.ts
+          draft_store.py
+          wiki_snapshot_store.py
         observability/
-          logger.ts
+          logger.py
+
+  crates/
+    formowl-core/
+      Cargo.toml
+      src/
+        lib.rs
+        validation/
+        hashing/
+        diff/
+
+    formowl-python-bindings/
+      Cargo.toml
+      pyproject.toml
+      src/
+        lib.rs
 
   docs/
     architecture.md
@@ -1123,12 +1381,13 @@ formowl/
     contract/
     project-mcp/
     wiki-mcp/
+    rust-core/
     integration/
 ```
 
 ---
 
-## 14. README Summary
+## 15. README Summary
 
 ```md id="3mp5w0"
 # formowl
@@ -1144,6 +1403,10 @@ Wiki MCP generates and manages markdown/wiki knowledge artifacts.
 
 Both MCPs interoperate through `formowl-contract`, which defines shared schemas for source references, evidence snapshots, citations, permission scopes, and context packages.
 
+FormOwl is container-first. The canonical development, test, and runtime environment is provided by containers.
+
+The primary implementation languages are Python and Rust. Python owns readable orchestration and debugging. Rust owns heavy computing, safety-sensitive logic, and syntactically complex core functionality exposed to Python through bindings.
+
 ## Core Principle
 
 Project systems own execution state.
@@ -1155,31 +1418,40 @@ Raw data and evidence snapshots preserve source traceability.
 
 ---
 
-## 15. Implementation Order
+## 16. Implementation Order
 
 Recommended order:
 
 ```text id="994n05"
-1. Create monorepo skeleton
+1. Create container-first monorepo skeleton
 2. Implement formowl-contract JSON schemas
-3. Implement Project MCP with mocked OpenProject data
-4. Implement EvidenceSnapshot storage
-5. Implement Wiki MCP draft generator
-6. Add markdown frontmatter provenance
-7. Add MCP tool-call logging
-8. Test Project MCP independently
-9. Test Wiki MCP independently
-10. Test Project MCP → ContextPackage → Wiki MCP workflow
-11. Add real OpenProject adapter
+3. Add Python contract models generated or validated from schemas
+4. Add Rust core crate for validation, hashing, diffing, and safety-sensitive utilities
+5. Expose Rust core to Python through bindings
+6. Implement Project MCP with mocked OpenProject data in Python
+7. Implement EvidenceSnapshot storage
+8. Implement Wiki MCP draft generator in Python
+9. Add markdown frontmatter provenance
+10. Add MCP tool-call logging
+11. Test Rust core independently
+12. Test Python bindings independently
+13. Test Project MCP independently
+14. Test Wiki MCP independently
+15. Test Project MCP to ContextPackage to Wiki MCP workflow
+16. Add real OpenProject adapter
 ```
 
 ---
 
-## 16. Acceptance Criteria
+## 17. Acceptance Criteria
 
 The first version is usable when:
 
 ```text id="8fvc4g"
+Project can be developed and tested inside a container.
+Project does not require host-installed Python, Rust, Node, or TypeScript for normal development.
+Python is the primary debugging entrypoint for MCP behavior.
+Rust core can be called from Python through bindings.
 Project MCP can return a ContextPackage for an OpenProject work package.
 Project MCP can persist an EvidenceSnapshot.
 Wiki MCP can generate a markdown draft from a ContextPackage.
@@ -1192,7 +1464,7 @@ Wiki publishing is proposal-only unless explicitly configured otherwise.
 
 ---
 
-## 17. Non-Goals
+## 18. Non-Goals
 
 ```text id="qpfu4w"
 Do not make Wiki MCP depend on OpenProject internals.
@@ -1201,11 +1473,14 @@ Do not assume ChatGPT always exposes every workspace MCP in every session.
 Do not allow automatic project-system writes without approval.
 Do not treat LLM-generated output as source of truth.
 Do not require a full knowledge graph database in the first version.
+Do not require non-engineering wiki authors to use Git or inspect backend revision IDs.
+Do not require contributors to install host-level runtimes when a container can provide them.
+Do not implement hard-to-read Python syntax when a Rust core API can hide the complexity.
 ```
 
 ---
 
-## 18. Final Architecture Statement
+## 19. Final Architecture Statement
 
 formowl uses two decoupled MCP servers:
 
@@ -1225,4 +1500,13 @@ ContextPackage
 MCPResultEnvelope
 ```
 
-The system prioritizes maintainability, provenance, and source traceability.
+The runtime policy is:
+
+```text id="runtime-policy-summary"
+Container first
+Python for readable orchestration and debugging
+Rust for heavy, safety-sensitive, or syntactically complex core logic
+Python bindings over Rust core APIs
+```
+
+The system prioritizes maintainability, portability, provenance, source traceability, and non-technical-user-friendly operation.
