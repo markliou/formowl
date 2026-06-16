@@ -7,7 +7,7 @@ import type {
   ProjectRef,
   SourceRef,
   WorkItemRef
-} from "@formoowl/contract";
+} from "@formowl/contract";
 import type {
   ProjectStatusSummary,
   ProjectWorkItem,

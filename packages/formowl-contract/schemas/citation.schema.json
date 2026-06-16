@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://formoowl.local/schemas/citation.schema.json",
+  "$id": "https://formowl.local/schemas/citation.schema.json",
   "title": "Citation",
   "description": "Abstract schema placeholder for Citation.",
   "$comment": "Future agents: continue building Citation validation in this file. Do not create a replacement schema file.",

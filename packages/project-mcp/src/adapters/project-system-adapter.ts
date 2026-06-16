@@ -2,7 +2,7 @@
 // in this file. Do not create parallel adapter abstractions unless SPEC.md is
 // updated first.
 
-import type { ProjectRef, WorkItemRef } from "@formoowl/contract";
+import type { ProjectRef, WorkItemRef } from "@formowl/contract";
 import type {
   GetProjectStatusInput,
   GetWorkItemContextInput,

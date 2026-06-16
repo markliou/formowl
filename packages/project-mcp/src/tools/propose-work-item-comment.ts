@@ -2,7 +2,7 @@
 // Do not create another work item comment proposal file unless SPEC.md is
 // updated first.
 
-import type { McpResultEnvelope } from "@formoowl/contract";
+import type { McpResultEnvelope } from "@formowl/contract";
 import type { ProjectWriteProposalData } from "../types";
 import type { ProposeWorkItemCommentInput } from "./project-tools";
 

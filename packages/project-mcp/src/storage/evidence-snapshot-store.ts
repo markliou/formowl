@@ -2,7 +2,7 @@
 // not create another Project MCP evidence snapshot store file unless SPEC.md is
 // updated first.
 
-import type { EvidenceSnapshot, EvidenceSnapshotRef, JsonValue } from "@formoowl/contract";
+import type { EvidenceSnapshot, EvidenceSnapshotRef, JsonValue } from "@formowl/contract";
 
 export interface EvidenceSnapshotWrite {
   readonly snapshot: EvidenceSnapshot;

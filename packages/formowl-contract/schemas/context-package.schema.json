@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://formoowl.local/schemas/context-package.schema.json",
+  "$id": "https://formowl.local/schemas/context-package.schema.json",
   "title": "ContextPackage",
   "description": "Abstract schema placeholder for ContextPackage.",
   "$comment": "Future agents: continue building ContextPackage validation in this file. Do not create a replacement schema file.",

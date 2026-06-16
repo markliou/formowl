@@ -7,7 +7,7 @@ import type {
   ProjectRef,
   SourceRef,
   WorkItemRef
-} from "@formoowl/contract";
+} from "@formowl/contract";
 
 export interface ProjectWorkItem {
   readonly title: string;

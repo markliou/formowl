@@ -7,7 +7,7 @@ import type {
   PermissionScope,
   SourceRef,
   WikiPageRef
-} from "@formoowl/contract";
+} from "@formowl/contract";
 
 export type WikiPageType =
   | "adr"

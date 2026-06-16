@@ -2,13 +2,13 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@formoowl/contract": [
-        "packages/formoowl-contract/src/index.ts"
+      "@formowl/contract": [
+        "packages/formowl-contract/src/index.ts"
       ],
-      "@formoowl/project-mcp": [
+      "@formowl/project-mcp": [
         "packages/project-mcp/src/index.ts"
       ],
-      "@formoowl/wiki-mcp": [
+      "@formowl/wiki-mcp": [
         "packages/wiki-mcp/src/index.ts"
       ]
     },

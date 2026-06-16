@@ -1,7 +1,7 @@
 // Future agents: implement OpenProject-to-contract mapping in this file. Do
 // not create another OpenProject mapper file unless SPEC.md is updated first.
 
-import type { ProjectRef, WorkItemRef } from "@formoowl/contract";
+import type { ProjectRef, WorkItemRef } from "@formowl/contract";
 import type { ProjectStatusSummary, ProjectWorkItem, WorkItemActivity, WorkItemRelation } from "../../types";
 import type { OpenProjectRawActivity, OpenProjectRawProject, OpenProjectRawRelation, OpenProjectRawWorkPackage } from "./schemas";
 

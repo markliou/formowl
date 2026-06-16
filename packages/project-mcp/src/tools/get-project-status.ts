@@ -1,7 +1,7 @@
 // Future agents: implement the get_project_status tool in this file. Do not
 // create another project status tool file unless SPEC.md is updated first.
 
-import type { McpResultEnvelope } from "@formoowl/contract";
+import type { McpResultEnvelope } from "@formowl/contract";
 import type { ProjectStatusSummary } from "../types";
 import type { GetProjectStatusInput } from "./project-tools";
 

@@ -1,4 +1,4 @@
-# @formoowl/wiki-mcp
+# @formowl/wiki-mcp
 
 <!-- Future agents: continue building Wiki MCP from the existing files in this package. Do not create additional parallel tool, markdown, storage, or observability files unless SPEC.md is changed first. -->
 

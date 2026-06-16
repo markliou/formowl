@@ -1,7 +1,7 @@
 // Future agents: implement wiki snapshot persistence through this file. Do not
 // create another Wiki MCP wiki snapshot store file unless SPEC.md is updated first.
 
-import type { JsonValue } from "@formoowl/contract";
+import type { JsonValue } from "@formowl/contract";
 import type { WikiSnapshot } from "../types";
 
 export interface WikiSnapshotWrite {

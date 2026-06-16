@@ -5,7 +5,7 @@ import type {
   ContextPackage,
   McpResultEnvelope,
   WikiPageRef
-} from "@formoowl/contract";
+} from "@formowl/contract";
 import type {
   WikiDraft,
   WikiDraftPatch,

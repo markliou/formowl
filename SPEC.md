@@ -1,8 +1,8 @@
-# formoowl Specification
+# formowl Specification
 
 ## 1. Overview
 
-`formoowl` is a knowledge management system designed to connect ChatGPT, project management systems, and wiki/documentation systems through MCP.
+`formowl` is a knowledge management system designed to connect ChatGPT, project management systems, and wiki/documentation systems through MCP.
 
 The first version contains two independently maintained MCP servers:
 
@@ -14,7 +14,7 @@ Wiki MCP
 They interoperate through a shared contract package:
 
 ```text id="xlg12u"
-formoowl-contract
+formowl-contract
 ```
 
 The goal is to keep project execution data and wiki knowledge artifacts decoupled, while preserving provenance, citations, and source traceability.
@@ -29,14 +29,14 @@ ChatGPT / LLM Host
   └─ Wiki MCP
 
 Shared Contract
-  └─ formoowl-contract
+  └─ formowl-contract
 ```
 
 Project MCP is responsible for project execution context.
 
 Wiki MCP is responsible for knowledge artifact creation and wiki publishing lifecycle.
 
-`formoowl-contract` defines the shared data structures that allow both MCPs to exchange information without depending on each other’s internal implementation.
+`formowl-contract` defines the shared data structures that allow both MCPs to exchange information without depending on each other’s internal implementation.
 
 ---
 
@@ -76,7 +76,7 @@ Included:
 ```text id="ny0cw0"
 Project MCP
 Wiki MCP
-formoowl-contract
+formowl-contract
 OpenProject adapter for Project MCP
 Markdown draft generation for Wiki MCP
 SourceRef schema
@@ -196,9 +196,9 @@ Project adapter logic
 
 ---
 
-## 5.3 formoowl-contract
+## 5.3 formowl-contract
 
-`formoowl-contract` is a shared schema package.
+`formowl-contract` is a shared schema package.
 
 It defines portable objects used by both Project MCP and Wiki MCP.
 
@@ -291,7 +291,7 @@ Example:
   "captured_at": "2026-06-16T12:00:00+08:00",
   "permission_scope": {
     "scope_type": "project",
-    "scope_id": "formoowl",
+    "scope_id": "formowl",
     "visibility": "restricted"
   },
   "source_refs": [
@@ -357,9 +357,9 @@ Long direct quotes should be avoided.
 ```json id="x62rtf"
 {
   "scope_type": "project",
-  "scope_id": "formoowl",
+  "scope_id": "formowl",
   "visibility": "restricted",
-  "inherited_from": "openproject:project:formoowl"
+  "inherited_from": "openproject:project:formowl"
 }
 ```
 
@@ -399,7 +399,7 @@ unknown
   "citations": [],
   "permission_scope": {
     "scope_type": "project",
-    "scope_id": "formoowl",
+    "scope_id": "formowl",
     "visibility": "restricted"
   }
 }
@@ -452,7 +452,7 @@ Input:
   "project_ref": {
     "source_system": "openproject",
     "source_type": "project",
-    "source_id": "formoowl"
+    "source_id": "formowl"
   },
   "limit": 10
 }
@@ -614,7 +614,7 @@ Input:
   "project_ref": {
     "source_system": "openproject",
     "source_type": "project",
-    "source_id": "formoowl"
+    "source_id": "formowl"
   },
   "include_recent_updates": true,
   "create_evidence_snapshot": true
@@ -674,7 +674,7 @@ Input:
 ```json id="ddp37i"
 {
   "query": "retention architecture",
-  "project": "formoowl",
+  "project": "formowl",
   "limit": 10
 }
 ```
@@ -785,7 +785,7 @@ Input:
   "draft_id": "draft_adr_001",
   "target": {
     "target_system": "openproject_wiki",
-    "project_id": "formoowl",
+    "project_id": "formowl",
     "page_slug": "data-retention-architecture"
   },
   "require_review": true
@@ -802,7 +802,7 @@ Output:
     "proposal_id": "publish_proposal_001",
     "target": {
       "target_system": "openproject_wiki",
-      "project_id": "formoowl",
+      "project_id": "formowl",
       "page_slug": "data-retention-architecture"
     },
     "diff_markdown": "..."
@@ -840,7 +840,7 @@ Example:
 title: Data Retention Architecture Decision
 type: adr
 status: draft
-project: formoowl
+project: formowl
 owner: null
 generated: true
 generated_by: chatgpt
@@ -871,7 +871,7 @@ citations:
 
 permission_scope:
   scope_type: project
-  scope_id: formoowl
+  scope_id: formowl
   visibility: restricted
 ---
 ```
@@ -1041,13 +1041,13 @@ Did ChatGPT use Project MCP and Wiki MCP in the same workflow?
 ## 13. Suggested Repository Layout
 
 ```text id="cf1xgs"
-formoowl/
+formowl/
   README.md
   SPEC.md
   LICENSE
 
   packages/
-    formoowl-contract/
+    formowl-contract/
       README.md
       schemas/
         source-ref.schema.json
@@ -1131,9 +1131,9 @@ formoowl/
 ## 14. README Summary
 
 ```md id="3mp5w0"
-# formoowl
+# formowl
 
-formoowl is a source-preserving knowledge management system built around two decoupled MCP servers:
+formowl is a source-preserving knowledge management system built around two decoupled MCP servers:
 
 - Project MCP
 - Wiki MCP
@@ -1142,7 +1142,7 @@ Project MCP retrieves project execution context from systems such as OpenProject
 
 Wiki MCP generates and manages markdown/wiki knowledge artifacts.
 
-Both MCPs interoperate through `formoowl-contract`, which defines shared schemas for source references, evidence snapshots, citations, permission scopes, and context packages.
+Both MCPs interoperate through `formowl-contract`, which defines shared schemas for source references, evidence snapshots, citations, permission scopes, and context packages.
 
 ## Core Principle
 
@@ -1161,7 +1161,7 @@ Recommended order:
 
 ```text id="994n05"
 1. Create monorepo skeleton
-2. Implement formoowl-contract JSON schemas
+2. Implement formowl-contract JSON schemas
 3. Implement Project MCP with mocked OpenProject data
 4. Implement EvidenceSnapshot storage
 5. Implement Wiki MCP draft generator
@@ -1207,7 +1207,7 @@ Do not require a full knowledge graph database in the first version.
 
 ## 18. Final Architecture Statement
 
-formoowl uses two decoupled MCP servers:
+formowl uses two decoupled MCP servers:
 
 ```text id="kbd0ln"
 Project MCP = project execution context

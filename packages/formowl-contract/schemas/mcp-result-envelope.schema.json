@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://formoowl.local/schemas/mcp-result-envelope.schema.json",
+  "$id": "https://formowl.local/schemas/mcp-result-envelope.schema.json",
   "title": "McpResultEnvelope",
   "description": "Abstract schema placeholder for MCP tool result envelopes.",
   "$comment": "Future agents: continue building MCP result envelope validation in this file. Do not create a replacement schema file.",

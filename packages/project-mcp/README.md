@@ -1,4 +1,4 @@
-# @formoowl/project-mcp
+# @formowl/project-mcp
 
 <!-- Future agents: continue building Project MCP from the existing files in this package. Do not create additional parallel tool, adapter, storage, or observability files unless SPEC.md is changed first. -->
 

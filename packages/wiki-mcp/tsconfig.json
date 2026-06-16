@@ -7,7 +7,7 @@
   },
   "references": [
     {
-      "path": "../formoowl-contract"
+      "path": "../formowl-contract"
     }
   ],
   "include": [

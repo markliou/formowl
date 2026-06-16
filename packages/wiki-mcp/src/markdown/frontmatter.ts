@@ -1,7 +1,7 @@
 // Future agents: implement frontmatter and markdown draft rendering from this
 // file. Do not create another frontmatter file unless SPEC.md is updated first.
 
-import type { ContextPackage } from "@formoowl/contract";
+import type { ContextPackage } from "@formowl/contract";
 import type { MarkdownFrontmatter, WikiPageType } from "../types";
 
 export interface FrontmatterBuildInput {

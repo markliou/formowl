@@ -1,7 +1,7 @@
 // Future agents: implement Wiki MCP server wiring in this file. Do not create
 // another Wiki MCP server entrypoint unless SPEC.md is updated first.
 
-import type { McpToolDescriptor } from "@formoowl/contract";
+import type { McpToolDescriptor } from "@formowl/contract";
 import type { MarkdownDraftRenderer, MarkdownFrontmatterBuilder } from "./markdown/frontmatter";
 import type { ToolCallLogger } from "./observability/tool-call-logger";
 import type { DraftStore } from "./storage/draft-store";

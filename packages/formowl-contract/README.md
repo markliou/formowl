@@ -1,4 +1,4 @@
-# @formoowl/contract
+# @formowl/contract
 
 <!-- Future agents: continue building the shared contract from this package and the existing files under `schemas/` and `src/`. Do not create alternate contract packages or parallel schema locations. -->
 
