@@ -149,21 +149,27 @@ They may later support candidate atoms, graph edges, wiki revisions, summaries, 
 
 A `RawResource` represents a registered source asset.
 
+Raw resources must be registered through the central FormOwl asset catalog before extraction. Extractors should receive stable identifiers such as `asset_id`, `resource_id`, `storage_backend_id`, and `object_uri`, not uncontrolled NAS paths. Raw storage locations are adapter details behind the asset and object-store layers.
+
 Example schema:
 
 ```json
 {
   "resource_id": "res_001",
+  "asset_id": "asset_001",
   "workspace_id": "ws_001",
   "project_id": "proj_001",
+  "storage_backend_id": "storage_minio_001",
   "source_type": "uploaded_file",
   "original_filename": "meeting_recording.mp4",
   "mime_type": "video/mp4",
   "storage_uri": "object://resources/res_001/original",
+  "object_uri": "object://resources/res_001/original",
   "sha256": "sha256:...",
   "size_bytes": 123456789,
   "created_at": "2026-06-17T10:00:00Z",
   "registered_by": "user_001",
+  "owner_user_id": "user_001",
   "permission_scope": "workspace"
 }
 ```
@@ -573,7 +579,58 @@ chart_description
 
 AI-generated image descriptions must be marked as model-generated and reviewable.
 
-### 4.7 Semantic metadata and candidate graph extraction
+### 4.7 Mail and PST ingestion
+
+Mail archives should be ingested through a formal asset pipeline, not by a parser directly watching and mutating folders.
+
+Recommended flow:
+
+```text
+user uploads or drops PST, OST, MSG, or EML resource
+-> Ingress API or gateway detects a stable file
+-> compute sha256 and technical metadata
+-> register immutable Asset in PostgreSQL
+-> create IngestionJob
+-> worker leases job
+-> worker copies archive to local scratch SSD
+-> parser extracts locally
+-> attachments become independent Assets
+-> email messages become Observations
+-> semantic metadata and candidate graph are generated later
+```
+
+PST, OST, MSG, and EML inputs are immutable raw assets. The parser must not directly mutate the canonical graph. It emits versioned `ExtractorRun` outputs, observations, and attachment assets.
+
+Attachments should keep occurrence links back to the source message and source archive. Email deduplication must preserve occurrence because the same message or attachment may appear in multiple folders, exports, or user mailboxes.
+
+Suggested email identity and fingerprint inputs:
+
+```text
+Internet Message-ID
+MAPI EntryID or SearchKey
+normalized subject
+sender
+sent_at
+body_hash
+body simhash
+attachment hash set
+source PST asset_id
+folder occurrence
+mailbox occurrence
+```
+
+Expected observation types:
+
+```text
+email_message
+email_thread
+email_header
+email_body_segment
+email_attachment_occurrence
+mail_folder_occurrence
+```
+
+### 4.8 Semantic metadata and candidate graph extraction
 
 Input:
 
@@ -587,6 +644,8 @@ image captions
 project issue comments
 wiki sections
 conversation logs
+email messages
+email threads
 ```
 
 Output:
@@ -645,17 +704,18 @@ The Resource Extraction Layer should select extractors based on MIME type, file 
 
 Example routing table:
 
-| Resource Type | Technical Metadata | Content Extraction | Optional Semantic Extraction |
-| --- | --- | --- | --- |
-| Image | ExifTool | OCR if text-like | Vision caption / diagram parser |
-| PDF with text | pdf parser / Docling | paragraphs, tables, sections | LLM semantic extraction |
-| Scanned PDF | pdf metadata | OCR / layout OCR | LLM semantic extraction |
-| Audio | ffprobe / MediaInfo | ASR / diarization | decision / action item extraction |
-| Video | ffprobe / MediaInfo | audio ASR, scene detection, keyframes | screen-step / scene summary extraction |
-| DOCX | document parser | paragraphs, tables, headings | LLM semantic extraction |
-| PPTX | document parser | slide text, speaker notes, images | slide-level summary |
-| CSV / XLSX | schema parser | rows, columns, sheets | table summary / entity extraction |
-| Markdown | markdown parser | sections, links, code blocks | topic / claim extraction |
+| Resource Type         | Technical Metadata             | Content Extraction                            | Optional Semantic Extraction           |
+| --------------------- | ------------------------------ | --------------------------------------------- | -------------------------------------- |
+| Image                 | ExifTool                       | OCR if text-like                              | Vision caption / diagram parser        |
+| PDF with text         | pdf parser / Docling           | paragraphs, tables, sections                  | LLM semantic extraction                |
+| Scanned PDF           | pdf metadata                   | OCR / layout OCR                              | LLM semantic extraction                |
+| Audio                 | ffprobe / MediaInfo            | ASR / diarization                             | decision / action item extraction      |
+| Video                 | ffprobe / MediaInfo            | audio ASR, scene detection, keyframes         | screen-step / scene summary extraction |
+| DOCX                  | document parser                | paragraphs, tables, headings                  | LLM semantic extraction                |
+| PPTX                  | document parser                | slide text, speaker notes, images             | slide-level summary                    |
+| CSV / XLSX            | schema parser                  | rows, columns, sheets                         | table summary / entity extraction      |
+| Markdown              | markdown parser                | sections, links, code blocks                  | topic / claim extraction               |
+| PST / OST / MSG / EML | archive hash and mail metadata | messages, folders, attachments, body segments | thread summary / entity extraction     |
 
 ---
 
@@ -686,6 +746,10 @@ byte_offset
 char_start
 char_end
 uri_fragment
+message_id
+mailbox_id
+folder_path_hash
+attachment_index
 ```
 
 ### 6.1 PDF paragraph
@@ -797,30 +861,28 @@ Instead, it should create a new `ExtractorRun` and preserve prior outputs for au
 
 Define a conceptual interface like:
 
-```rust
-trait ExtractorAdapter {
-    fn name(&self) -> &'static str;
-    fn version(&self) -> String;
-    fn supported_mime_types(&self) -> Vec<String>;
-    fn extractor_type(&self) -> ExtractorType;
-    fn extract(&self, input: ExtractionInput, policy: ExtractionPolicy) -> ExtractionResult;
-}
+```python
+class ExtractorAdapter(Protocol):
+    def name(self) -> str: ...
+    def version(self) -> str: ...
+    def supported_mime_types(self) -> list[str]: ...
+    def extractor_type(self) -> ExtractorType: ...
+    def extract(self, input: ExtractionInput, policy: ExtractionPolicy) -> ExtractionResult: ...
 ```
 
 Conceptual types:
 
-```rust
-enum ExtractorType {
-    TechnicalMetadata,
-    DocumentStructure,
-    OCR,
-    ASR,
-    SpeakerDiarization,
-    VideoSceneDetection,
-    ImageCaptioning,
-    SemanticMetadata,
-    CandidateGraph,
-}
+```text
+ExtractorType:
+  technical_metadata
+  document_structure
+  ocr
+  asr
+  speaker_diarization
+  video_scene_detection
+  image_captioning
+  semantic_metadata
+  candidate_graph
 ```
 
 The actual implementation may differ, but the specification should make the adapter boundary explicit.
@@ -832,6 +894,7 @@ The actual implementation may differ, but the specification should make the adap
 Resource Extraction may write to:
 
 ```text
+StorageBackendRegistry
 AssetStore
 ObjectStore
 ObservationStore
@@ -865,6 +928,22 @@ Observation
 ```
 
 Do not collapse resource extraction, graph governance, and wiki generation into a single pipeline. Resource Extraction creates evidence-like intermediate artifacts. It does not decide canonical truth, directly generate final wiki pages, or directly mutate the canonical knowledge graph.
+
+The canonical graph must never reference raw storage paths directly. Graph evidence should reference stable FormOwl identifiers such as:
+
+```text
+asset_id
+observation_id
+extractor_run_id
+evidence_id
+entity_id
+relation_id
+workspace_id
+user_id
+grant_id
+```
+
+Allowed retrieval locators are FormOwl-controlled identifiers such as `formowl://asset/{asset_id}` or `formowl://evidence/{evidence_id}`. Disallowed locators include NAS, SMB, NFS, WebDAV, local scratch, and raw object-store paths exposed through MCP.
 
 ---
 

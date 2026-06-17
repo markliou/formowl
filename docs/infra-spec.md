@@ -34,6 +34,23 @@ wiki citations
 MCP and ChatGPT interaction audit
 ```
 
+## Internal Deployment Assumptions
+
+The first deployment target is an internal company or lab environment, not public SaaS.
+
+Initial constraints:
+
+```text
+raw data remains inside the company or lab network
+Synology NAS may provide internal file storage behind the firewall
+public S3 is not required for Phase 0
+PostgreSQL must not use ordinary NAS or NFS storage for PGDATA
+ChatGPT must not directly reach NAS, PostgreSQL, MinIO, worker scratch paths, or raw storage endpoints
+the only ChatGPT-facing service should be a governed FormOwl MCP Gateway
+```
+
+The infrastructure should provide an S3-like object abstraction, but it does not require AWS S3. Acceptable internal backends include a native S3-compatible enterprise storage endpoint, a correctly deployed MinIO service, or a transitional internal ingress adapter. Raw NAS paths are deployment details behind FormOwl storage adapters.
+
 ## Core Infrastructure Decisions
 
 FormOwl v1 should use:
@@ -41,6 +58,7 @@ FormOwl v1 should use:
 ```text
 PostgreSQL + pgvector
 S3-compatible object storage
+StorageBackend registry
 Worker services
 Project MCP and Wiki MCP services
 Container-first runtime
@@ -58,7 +76,7 @@ Graph databases, dedicated vector databases, full-text search clusters, and even
 
 Containers are the canonical development, test, and deployment boundary.
 
-Infrastructure must not require contributors or operators to install host-level Python, Rust, Node, TypeScript, OCR libraries, media tools, database clients, or extractor dependencies when a container can provide them.
+Infrastructure must not require contributors or operators to install host-level Python, OCR libraries, media tools, database clients, or extractor dependencies when a container can provide them.
 
 Local development should be runnable through Compose or an equivalent local orchestrator.
 
@@ -107,6 +125,14 @@ pgcrypto or equivalent UUID/hash helpers when useful
 
 PostgreSQL must support transactions, foreign keys, unique constraints, partial indexes, upserts, JSONB metadata, full-text search where useful, audit records, concurrent workers, and migrations.
 
+PostgreSQL storage policy:
+
+```text
+use local SSD, NVMe, or reliable block storage
+do not place PGDATA on ordinary NAS, SMB, WebDAV, or NFS-mounted storage
+back up PostgreSQL independently from raw object storage
+```
+
 ### Object Store
 
 Object storage owns large immutable or derived byte artifacts:
@@ -141,6 +167,21 @@ retention status
 
 The preferred implementation is MinIO or another S3-compatible object store for local and team deployments.
 
+MinIO should be treated as an internal object service, not as a thin unsafe wrapper over ordinary NAS or NFS paths. FormOwl code should depend on `ObjectStore` and `StorageBackend` interfaces, not scattered raw Synology, SMB, NFS, or filesystem paths.
+
+Disallowed ChatGPT-facing exposure:
+
+```text
+Synology DSM
+SMB
+NFS
+WebDAV
+NAS raw paths
+MinIO admin console
+PostgreSQL
+raw object storage endpoint without FormOwl authorization
+```
+
 ### Worker Services
 
 Workers own heavy or asynchronous backend work:
@@ -166,6 +207,33 @@ selective reprocessing
 Workers must be idempotent. Each job should record inputs, extractor versions, configuration hashes, pipeline versions, outputs, logs, status, retries, and failure reason.
 
 For v1, PostgreSQL job tables may be the coordination mechanism. A dedicated queue or streaming platform should be added only when job volume or operational requirements justify it.
+
+Workers should process registered assets by `asset_id` and `object_uri`. Large files should be copied to local scratch SSD before parsing instead of being parsed directly from NAS-mounted paths as the normal runtime model.
+
+Worker scheduling should be storage-aware when raw data is distributed:
+
+```text
+asset_id
+storage_backend_id
+file size
+media type
+required extractor
+required hardware class
+preferred worker locality
+```
+
+Workers should declare:
+
+```text
+allowed_storage_backends
+available scratch space
+CPU class
+GPU availability
+network locality
+extractor capabilities
+```
+
+GPU is an optional worker accelerator, not a control-plane requirement. Mail and PST ingestion are primarily CPU, disk I/O, memory, local scratch, and parser-stability workloads. GPU workers should be scheduled separately for ASR, diarization, image understanding, video analysis, local embedding models, rerankers, or local LLM graph candidate generation.
 
 ### MCP Services
 
@@ -196,15 +264,32 @@ decide permissions outside FormOwl policy
 store user graph preferences in ChatGPT memory as source of truth
 ```
 
+ChatGPT-facing MCP access must be routed through a FormOwl MCP Gateway or an equivalent governed service. Internal services such as Synology NAS, PostgreSQL, object storage, workers, and scratch directories remain internal-only.
+
+MCP Gateway responsibilities:
+
+```text
+enforce session identity
+enforce workspace, grant, and permission checks
+return minimal snippets by default
+redact when required
+create and resolve access requests
+log every tool call
+never expose raw NAS paths
+never allow arbitrary file reads
+```
+
 ## Storage Boundaries
 
 ```text
+StorageBackendRegistry -> physical storage backend metadata and health
 AssetStore -> raw resource metadata and object references
 ObjectStore -> raw and derived binary or large structured artifacts
 ObservationStore -> extracted observations and semantic metadata
 CandidateGraphStore -> uncommitted candidate atoms and relations
 CanonicalGraphStore -> canonical atoms, entities, relations, lifecycle events, and graph revisions
 UserGraphStore -> user-specific graph scopes, preferences, subscriptions, and revisions
+FusionStore -> match candidates, resolution proposals, evidence links, effective graph views, and merge decisions
 WikiStore -> wiki drafts, revisions, snapshots, projection specs, and publish proposals
 VectorStore -> pgvector embeddings for semantic retrieval
 JobStore -> ingestion, extraction, embedding, projection, and rebuild job state
@@ -212,6 +297,46 @@ AuditStore -> MCP tool calls, review decisions, evidence access, and graph commi
 ```
 
 These may initially share a PostgreSQL database and object store. The boundary is logical first. Physical separation can come later.
+
+## Storage Backend Registry
+
+FormOwl should maintain a central `StorageBackend` registry so physical storage can be distributed without fragmenting knowledge identity.
+
+Recommended `StorageBackend` fields:
+
+```text
+storage_backend_id
+type: synology_smb | synology_nfs | s3_compatible | minio | local_fs | ingress_only
+display_name
+internal_endpoint
+root_prefix
+access_mode: read_only | read_write | ingress_only
+trust_level
+workspace_scope
+health_status
+bandwidth_class
+latency_class
+allowed_workers
+```
+
+Recommended `Asset` storage fields:
+
+```text
+asset_id
+storage_backend_id
+object_uri
+content_hash
+file_size
+mime_type
+created_at
+registered_at
+owner_user_id
+workspace_id
+permission_scope
+lifecycle_state
+```
+
+All files that participate in extraction, graph construction, search, or wiki projection must first be registered as assets. Unregistered storage is invisible to the knowledge graph.
 
 ## Infrastructure State Model
 
@@ -414,6 +539,25 @@ cancelled -> review item was withdrawn before decision
 ```
 
 Review decisions should record actor, policy, reason, source object ids, and created output ids.
+
+### Fusion Decision State
+
+Applies to cross-scope entity matching, access overlays, and canonical merge decisions.
+
+```text
+fusion_candidate_state:
+  proposed -> candidate was generated by deterministic, fuzzy, probabilistic, semantic, or manual matching
+  needs_access -> candidate may require another owner's private graph or evidence
+  access_requested -> an AccessRequest exists
+  overlay_granted -> a Grant allows a temporary effective view
+  merge_review_pending -> canonical merge is awaiting explicit governance review
+  merged_in_scope -> canonical merge was approved inside a target scope
+  rejected -> candidate was rejected
+  revoked -> grant or visibility was revoked
+  expired -> candidate or grant expired
+```
+
+Matching, access overlay, and canonical merge must not share a single overloaded status. They are separate governed transitions with separate audit records.
 
 ### Canonical Graph State
 
@@ -773,6 +917,32 @@ Permission scopes must be recorded on source assets, observations, candidate gra
 
 ChatGPT and external clients must not receive direct database credentials.
 
+Phase 0 internal beta may use manual trusted identity selection, but authorization and audit models must still exist from the beginning. Minimum identity and collaboration records:
+
+```text
+User
+SessionIdentity
+WorkspaceMember
+AccessRequest
+Grant
+AuditLog
+```
+
+For Phase 0, users may manually select their FormOwl identity at session start. The selected identity becomes `actor_user_id` for MCP calls. This is not production authentication, and it must sit behind an `AuthProvider` interface so SSO, OIDC, SAML, or external tenant auth can replace it later.
+
+Raw data access should be scoped, not all-or-nothing. Grant scopes should support:
+
+```text
+answer_only
+graph_snippet
+evidence_snippet
+one_time_raw_asset_access
+session_access
+asset_scoped_access
+query_scoped_access
+project_scoped_access
+```
+
 Every MCP tool call should record:
 
 ```text
@@ -783,6 +953,7 @@ input parameters
 evidence accessed
 output citations
 permission scope
+grant id when applicable
 timestamp
 result status
 ```
@@ -815,6 +986,9 @@ audit of evidence access
 hash verification for stored objects
 backup encryption where supported
 no public object URLs by default
+no direct NAS path exposure through MCP
+no arbitrary MCP file reads
+no direct PostgreSQL, MinIO admin, SMB, NFS, or WebDAV exposure to ChatGPT
 ```
 
 Signed URLs or temporary object access should be issued only through permission-checked backend paths.

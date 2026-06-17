@@ -4,19 +4,19 @@
 
 This repository currently defines the abstract boundaries for the first FormOwl MCP services inside the larger multimodal knowledge pipeline.
 
-MCP service implementations should be Python-first for readability and debugging. Shared heavy or safety-sensitive core behavior should live in Rust and be called from Python through bindings.
+MCP service implementations are Python-first for readability and debugging. Phase 0 service behavior, hashing helpers, diff helpers, and validation glue are implemented in Python.
 
 ## Packages
 
-- `@formowl/contract`
+- `formowl_contract`
   - Shared portable contract objects.
   - Currently owns `SourceRef`, `EvidenceSnapshot`, `Citation`, `PermissionScope`, `ContextPackage`, `WikiRevision`, `McpResultEnvelope`, and MCP tool-call log events.
   - Target contract scope also includes assets, observations, candidate graph objects, canonical graph objects, user graph revisions, projection specs, ingestion jobs, and extractor runs.
-- `@formowl/project-mcp`
+- `formowl_project_mcp`
   - Abstract Project MCP server.
   - Owns project/work-item tools, project-system adapter boundaries, evidence snapshot storage, and tool-call logging.
   - Does not generate wiki pages.
-- `@formowl/wiki-mcp`
+- `formowl_wiki_mcp`
   - Abstract Wiki MCP server.
   - Owns markdown draft lifecycle, frontmatter generation, wiki lookup, publishing proposals, wiki snapshots, and tool-call logging.
   - Does not depend on OpenProject internals.
@@ -25,8 +25,7 @@ MCP service implementations should be Python-first for readability and debugging
 
 - Containers are the canonical development, test, and runtime boundary.
 - Python owns MCP orchestration, adapters, workflow glue, and human-readable diagnostics.
-- Rust owns heavy computing, parsers, validators, hashing, integrity checks, and syntax-shielded core behavior.
-- Python bindings expose Rust core APIs to the MCP service layer.
+- Additional runtime languages must not be introduced without a concrete need and a specification update.
 
 ## Current Non-Implementation
 
@@ -57,7 +56,7 @@ LLM host
   -> Draft store / publish proposal
 ```
 
-Project and Wiki MCP packages only exchange data through `@formowl/contract`.
+Project and Wiki MCP packages only exchange data through `formowl_contract`.
 
 ## Target Pipeline Flow
 

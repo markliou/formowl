@@ -10,8 +10,6 @@ TEST_TMP_ROOT.mkdir(exist_ok=True)
 
 for relative in [
     "python",
-    "python/formowl_project_mcp",
-    "python/formowl_wiki_mcp",
 ]:
     path = str(ROOT / relative)
     if path not in sys.path:

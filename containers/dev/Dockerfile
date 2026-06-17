@@ -1,24 +1,15 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.13-slim AS python-runtime
-FROM node:22-bookworm-slim AS node-runtime
-FROM rust:1-trixie
+FROM python:3.13-slim
 
 ARG GITLEAKS_VERSION=8.24.2
 ARG TARGETARCH
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH=/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin \
-    PYTHONPATH=/workspace/python:/workspace/python/formowl_project_mcp:/workspace/python/formowl_wiki_mcp
+    PYTHONPATH=/workspace/python
 
 WORKDIR /workspace
-
-COPY --from=python-runtime /usr/local /usr/local
-COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
-COPY --from=node-runtime /usr/local/bin/npm /usr/local/bin/npm
-COPY --from=node-runtime /usr/local/bin/npx /usr/local/bin/npx
-COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \

@@ -1,9 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://formowl.local/schemas/evidence-snapshot.schema.json",
-  "title": "EvidenceSnapshot",
-  "description": "Abstract schema placeholder for EvidenceSnapshot.",
-  "$comment": "Future agents: continue building EvidenceSnapshot validation in this file. Do not create a replacement schema file.",
-  "type": "object",
-  "additionalProperties": true
-}

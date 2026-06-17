@@ -1,9 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://formowl.local/schemas/permission-scope.schema.json",
-  "title": "PermissionScope",
-  "description": "Abstract schema placeholder for PermissionScope.",
-  "$comment": "Future agents: continue building PermissionScope validation in this file. Do not create a replacement schema file.",
-  "type": "object",
-  "additionalProperties": true
-}

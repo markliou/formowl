@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
-import hashlib
 import json
 from typing import Any, Literal
+
+from formowl_core import sha256_prefixed
 
 JsonValue = Any
 McpResultStatus = Literal[
@@ -46,8 +47,7 @@ def canonical_json(value: Any) -> str:
 
 
 def sha256_json(value: Any) -> str:
-    payload = canonical_json(value).encode("utf-8")
-    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+    return sha256_prefixed(canonical_json(value))
 
 
 def _require_mapping(value: Any, name: str) -> dict[str, Any]:

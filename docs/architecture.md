@@ -6,6 +6,15 @@ FormOwl uses a container-first architecture and a graph-governed knowledge pipel
 
 The canonical development, test, and deployment environment is a container. Host-installed runtimes are optional conveniences, not required assumptions.
 
+The central identity rule is:
+
+```text
+Physical storage may be distributed.
+Knowledge identity must be centralized.
+```
+
+Raw bytes may live on multiple internal storage backends, including Synology volumes, NAS shares, S3-compatible object storage, MinIO, or controlled ingress folders. Any file that participates in extraction, graph construction, search, or wiki projection must first be registered in the central FormOwl asset catalog. The knowledge graph references stable FormOwl identifiers, not raw storage paths.
+
 ## Target Knowledge Pipeline
 
 ```text
@@ -58,14 +67,28 @@ JobStore -> ingestion and extraction job status
 
 Project MCP and Wiki MCP are current service boundaries inside this larger architecture. Future ingestion and graph services should share contracts with them instead of depending on their internals.
 
-## Language Boundaries
+## Internal Storage and Deployment Boundary
 
-Python is the default language for MCP orchestration, adapters, workflow glue, review flows, test fixtures, and day-to-day debugging.
+The first deployment target is an internal company or lab environment. Raw data should remain inside the trusted network. Synology NAS, PostgreSQL, MinIO or other object storage, worker scratch directories, and raw file paths must not be exposed directly to ChatGPT or the public internet.
 
-Rust owns heavy computing, safety-sensitive logic, parsers, canonical serializers, validation cores, hashing, integrity checks, concurrent processing, large raw-data transforms, and any feature whose Python implementation would expose strange or hard-to-maintain syntax.
+PostgreSQL is the source of truth for metadata, governance, job state, permissions, audit, and graph state. It should run on local SSD, NVMe, or reliable block storage, not ordinary NAS or NFS-mounted storage. NAS and object storage are appropriate for raw files, large derived artifacts, backups, snapshots, and retention.
 
-Rust core functionality should be exposed to Python through stable bindings. Normal contributors should interact with clear Python APIs unless they are working on a core algorithm, safety boundary, or binding implementation.
+Workers should process registered assets by `asset_id` and `object_uri`. Large files should be copied to local scratch before parsing. Worker scheduling may be storage-aware, but storage locality is a performance concern; it must not fragment knowledge identity.
+
+## Identity and Collaborative Graphs
+
+For the internal closed beta, FormOwl may use a manual trusted internal identity mode: a user selects their FormOwl identity at MCP session start, and the selected identity becomes the `actor_user_id` for tool calls and audit records. This is a temporary identity facade, not a production authentication model.
+
+Stable `user_id`, `workspace_id`, asset ownership, access requests, grants, and audit logs must exist from the beginning so the authentication provider can later be replaced by company SSO, OIDC, SAML, or another provider without replacing authorization and provenance.
+
+Cross-user graph collaboration should use permissioned overlays and grants. Another user's private graph must not be silently merged into the requester graph. Shared answers, graph snippets, evidence snippets, and raw asset access should each have explicit scope, provenance, and audit records.
+
+## Language Boundary
+
+Python is the implementation language for Phase 0. It owns MCP orchestration, adapters, workflow glue, review flows, test fixtures, hashing helpers, diff helpers, validation glue, and day-to-day debugging.
+
+Additional runtime languages must not be introduced unless a concrete parser, validator, large-data transform, or safety boundary requires them and `SPEC.md` is updated first.
 
 ## Syntax Shielding
 
-When Python code would require unusual metaprogramming, deeply nested decorators, generated code, fragile regular expressions, complex DSLs, or unsafe dynamic evaluation, the complexity belongs behind a Rust core API.
+When Python code would require unusual metaprogramming, deeply nested decorators, generated code, fragile regular expressions, complex DSLs, or unsafe dynamic evaluation, the complexity belongs behind a clear Python API boundary. A systems-language backend can be introduced later only with a concrete need and a specification update.

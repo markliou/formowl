@@ -1,8 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://formowl.local/schemas/wiki-revision.schema.json",
-  "title": "WikiRevision",
-  "description": "Abstract schema placeholder for WikiRevision.",
-  "$comment": "Future agents: continue building WikiRevision validation in this file. Do not create a replacement schema file.",
-  "type": "object"
-}

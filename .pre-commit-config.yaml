@@ -9,10 +9,7 @@ exclude: |
   (?x)^(
     \.formowl/|
     \.test-tmp/|
-    node_modules/|
-    target/|
-    .*/dist/|
-    .*\.tsbuildinfo$
+    .*/dist/
   )
 
 repos:
@@ -93,44 +90,9 @@ repos:
         pass_filenames: false
         files: ^(python|tests|scripts)/.*\.py$
 
-      - id: prettier-style
-        name: TypeScript/JSON/YAML/Markdown style check
-        entry: python scripts/precommit_checks.py run prettier --check --ignore-unknown .devcontainer .pre-commit-config.yaml compose.yaml docs examples package.json package-lock.json packages README.md tsconfig.base.json tsconfig.typecheck.json
-        language: system
-        pass_filenames: false
-        files: ^(\.devcontainer/|\.pre-commit-config\.yaml|compose\.yaml|docs/|examples/|package\.json|package-lock\.json|packages/|README\.md|tsconfig\.base\.json|tsconfig\.typecheck\.json).*
-
-      - id: typescript-typecheck
-        name: TypeScript type check
-        entry: python scripts/precommit_checks.py run npm run typecheck
-        language: system
-        pass_filenames: false
-        files: ^(package\.json|package-lock\.json|packages/.+\.(json|ts)|tsconfig\.base\.json|tsconfig\.typecheck\.json)$
-
       - id: python-tests
         name: Python unit tests
         entry: python -m unittest discover -s tests
         language: system
         pass_filenames: false
         files: ^(python|tests)/.+\.py$
-
-      - id: rust-format
-        name: Rust format check
-        entry: python scripts/precommit_checks.py run cargo fmt --all -- --check
-        language: system
-        pass_filenames: false
-        files: ^(Cargo\.lock|Cargo\.toml|crates/.*)$
-
-      - id: rust-check
-        name: Rust check
-        entry: python scripts/precommit_checks.py run cargo check --workspace --locked
-        language: system
-        pass_filenames: false
-        files: ^(Cargo\.lock|Cargo\.toml|crates/.*)$
-
-      - id: rust-clippy
-        name: Rust clippy check
-        entry: python scripts/precommit_checks.py run cargo clippy --workspace --all-targets --locked -- -D warnings
-        language: system
-        pass_filenames: false
-        files: ^(Cargo\.lock|Cargo\.toml|crates/.*)$

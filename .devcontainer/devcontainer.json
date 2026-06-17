@@ -6,8 +6,8 @@
   },
   "workspaceFolder": "/workspace",
   "remoteEnv": {
-    "PYTHONPATH": "/workspace/python:/workspace/python/formowl_project_mcp:/workspace/python/formowl_wiki_mcp",
+    "PYTHONPATH": "/workspace/python",
     "FORMOWL_DATA_DIR": "/workspace/.formowl/data"
   },
-  "postCreateCommand": "python -m pip install -e \".[dev]\" && npm install && pre-commit install && python -m unittest discover -s tests"
+  "postCreateCommand": "python -m pip install -e \".[dev]\" && pre-commit install && python -m unittest discover -s tests"
 }

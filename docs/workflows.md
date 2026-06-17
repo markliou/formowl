@@ -6,7 +6,7 @@ FormOwl workflows must be natural-language-first and usable by non-technical pro
 
 Technical systems such as Git, object storage, schema validation, source hashes, and external wiki revision APIs may support the workflow, but they must not be required concepts in the normal user interface.
 
-Engineering workflows should also preserve readability. Python is the first debugging layer for MCP behavior. Rust core code is used when correctness, performance, safety, or syntax shielding requires it, and it should be accessed through clear Python bindings.
+Engineering workflows should also preserve readability. Python is the first debugging layer for MCP behavior, hashing helpers, diff helpers, validation glue, and service orchestration.
 
 The target workflow is pipeline-first:
 
@@ -55,7 +55,7 @@ persist raw evidence snapshots
 calculate markdown and response hashes
 record backend revision IDs
 optionally mirror reviewed or published revisions to Git
-call Rust core APIs through Python bindings for validation, hashing, diffing, or syntax-shielded logic
+call Python helper APIs for validation, hashing, diffing, or syntax-shielded logic
 ```
 
 ## Multimodal Resource to Wiki Projection
@@ -88,3 +88,14 @@ project a wiki draft from that graph revision
 ```
 
 External tools and LLMs can help create candidates, but they do not approve canonical graph changes on their own.
+
+## Scope-Aware Graph Fusion
+
+```text
+candidate matching proposes same-as or related-to candidates
+  -> access overlay decides whether the requester may inspect another scope's graph/evidence/raw data
+  -> governance review decides whether a canonical merge should happen inside a target scope
+  -> merge decisions record target scope, evidence, approver, conflict notes, and audit events
+```
+
+Matching does not grant access. Access does not merge graph state. Canonical merge does not grant raw asset access.

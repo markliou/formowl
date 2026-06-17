@@ -89,10 +89,15 @@ Resource extraction and graph assembly are responsible for converting raw resour
 24. Project MCP, Wiki MCP, ingestion tools, and graph assembly tools must remain independently maintainable.
 25. Integration between components must happen through shared schemas, not direct dependencies.
 26. Development, testing, and deployment must be container-first to maximize portability and avoid host-machine assumptions.
-27. Python and Rust are the primary implementation languages.
-28. Python is the preferred language for orchestration, MCP service glue, workflows, adapters, tests, and day-to-day debugging.
-29. Rust must own heavy computing, security-sensitive logic, parsers, validators, hash/signature work, data integrity checks, concurrency-sensitive code, and any feature whose Python implementation would expose strange, hard-to-read, or hard-to-maintain syntax.
-30. Rust core functionality should be exposed to Python through stable bindings so most contributors can read and debug the Python-facing API without editing Rust internals.
+27. Python is the implementation language for Phase 0.
+28. Python owns MCP service glue, workflows, adapters, tests, hashing helpers, diff helpers, and day-to-day debugging.
+29. Additional systems languages must not be introduced unless a concrete parser, validator, large-data transform, or safety boundary requires them.
+30. If a future system language is introduced, it must be hidden behind clear Python APIs and documented as a specific implementation boundary rather than a default architectural premise.
+31. Physical storage may be distributed, but knowledge identity must be centralized.
+32. Raw storage paths, NAS endpoints, PostgreSQL, object-store admin endpoints, worker scratch directories, and local filesystem paths must not be exposed through ChatGPT-facing MCP tools.
+33. Files must be registered as FormOwl assets before they participate in extraction, search, graph construction, or wiki projection.
+34. Phase 0 internal deployments may use manual trusted actor selection, but stable users, workspaces, grants, and audit records must exist from the beginning.
+35. Cross-user graph collaboration must use permissioned graph overlays and grants, not silent graph merging.
 
 ---
 
@@ -125,7 +130,7 @@ MCP tool-call logging
 Natural-language-first wiki review workflow
 Wiki revision abstraction
 Container-first development and deployment baseline
-Python/Rust implementation policy
+Python-only Phase 0 implementation policy
 ```
 
 Target architecture capabilities to add:
@@ -162,6 +167,18 @@ Host-machine-specific development requirements
 ```
 
 This section is an implementation status boundary, not a product boundary. The product architecture is the full resource extraction, graph assembly, user graph, and wiki projection pipeline.
+
+Current implementation alignment notes:
+
+```text
+The Python Project MCP and Wiki MCP modules are runnable prototypes that use a JSON-line request/response protocol. They are MCP-shaped service boundaries, but they are not yet a standards-compliant MCP JSON-RPC transport.
+
+The earlier TypeScript workspace has been removed by architecture decision. The canonical runnable contract model is the Python `formowl_contract` package.
+
+The earlier Rust core and Python binding scaffold has been removed by architecture decision. Current hashing and diff helpers are pure Python utilities under `formowl_core`.
+
+The Python packages now use a single `python/` package root so package discovery, test paths, and local PYTHONPATH setup do not need per-package roots.
+```
 
 ---
 
@@ -292,14 +309,22 @@ MCPResultEnvelope
 Target graph and ingestion objects:
 
 ```text
+StorageBackend
 Asset
+AssetOccurrence
 Observation
 SemanticMetadata
 CandidateAtom
 CandidateRelation
+FusionCandidate
+EntityResolutionProposal
+EvidenceLink
 CanonicalAtom
 CanonicalEntity
 CanonicalRelation
+ScopeAwareCanonicalGraph
+EffectiveGraphView
+MergeDecision
 AtomGranularityPolicy
 AtomLifecycleEvent
 EntityResolutionEvent
@@ -309,6 +334,12 @@ UserKnowledgeGraphRevision
 WikiProjectionSpec
 IngestionJob
 ExtractorRun
+User
+SessionIdentity
+WorkspaceMember
+AccessRequest
+Grant
+AuditLog
 ```
 
 Both MCP servers must import or implement this contract.
@@ -331,6 +362,7 @@ video
 image
 document
 text
+mail
 project data
 conversation
 wiki source
@@ -340,6 +372,7 @@ Resource extraction owns:
 
 ```text
 asset registration
+storage backend registration
 extractor selection
 observation creation
 extractor metadata capture
@@ -358,6 +391,8 @@ wiki page generation
 ```
 
 All extractor output must remain derived data until reviewed or committed through the graph assembly workflow.
+
+Resource extraction must run from registered assets and object references, not from arbitrary storage paths. Raw storage locations are implementation details behind `StorageBackend`, `AssetStore`, and `ObjectStore`.
 
 ---
 
@@ -392,6 +427,20 @@ graph revision lineage
 
 Graph assembly must treat external extractor and LLM graph outputs as proposals. It must not trust them as canonical graph state.
 
+Canonical graph state is scope-aware. A canonical entity or relation may be canonical within an owner graph, workspace graph, project graph, customer graph, or grant-scoped shared fragment without being globally canonical across every FormOwl scope.
+
+Cross-scope fusion must not default to permanent merge. The default output of cross-scope fusion should be an equivalence proposal, same-as candidate, related-to candidate, overlay grant, or temporary effective view. A stronger canonical merge across scopes requires explicit governance, owner or maintainer approval where applicable, evidence review, permission inheritance review, revocation behavior review, and audit logging.
+
+Entity matching, access overlay, and canonical merge are separate stages:
+
+```text
+A match proposal does not imply data access.
+Data access does not imply canonical merge.
+Canonical merge does not automatically grant raw data access.
+```
+
+Graph assembly may generate match proposals from deterministic keys, fuzzy matching, probabilistic linkage, semantic similarity, or manual hints, but those proposals must not expose private evidence or mutate canonical graph state. Access overlays use `AccessRequest`, `Grant`, permission scope, visibility scope, expiration, access count, and audit policy. Canonical merges are stronger operations that change graph state inside a target scope and must record a merge decision.
+
 ---
 
 ## 5.6 Governance and Policy Layer
@@ -423,6 +472,51 @@ which candidates require human review
 which graph granularity different users or tasks should receive
 how wiki artifacts are projected from graph views
 ```
+
+---
+
+## 5.7 Storage, Deployment, and Worker Layer
+
+The Storage, Deployment, and Worker Layer keeps physical storage flexible while preserving centralized knowledge identity.
+
+For internal company or lab deployments, raw data may remain on Synology NAS, internal object storage, MinIO, or controlled ingress folders behind the firewall. Public AWS S3 is not required for Phase 0. The required abstraction is an S3-like object interface and a central storage backend registry, not a specific public-cloud provider.
+
+The layer owns:
+
+```text
+StorageBackend registry
+Asset registration
+ObjectStore adapters
+ingress adapters
+storage health tracking
+worker locality metadata
+local scratch policy
+GPU worker capability metadata
+backup and retention placement
+```
+
+PostgreSQL remains the source of truth for metadata, governance, permissions, audit, job state, and graph state. It should run on local SSD, NVMe, or reliable block storage, not ordinary NAS, SMB, WebDAV, or NFS-mounted storage.
+
+Workers process registered assets by `asset_id` and `object_uri`. Large files should be copied to local scratch before parsing. Worker locality affects performance and scheduling, but it must not fragment graph identity.
+
+## 5.8 Identity, Access, and MCP Gateway Layer
+
+For the internal closed beta, FormOwl may use Manual Trusted Internal identity mode. A user selects their FormOwl identity at MCP session start, and that selected identity becomes the `actor_user_id` for MCP calls and audit records.
+
+This is not production authentication. It is allowed only for trusted internal company or lab deployments and must sit behind an `AuthProvider` interface so company SSO, OIDC, SAML, or another provider can replace it later.
+
+Even in Phase 0, FormOwl must model:
+
+```text
+User
+SessionIdentity
+WorkspaceMember
+AccessRequest
+Grant
+AuditLog
+```
+
+Cross-user graph collaboration is implemented through permissioned effective graph views, not silent graph merges. Sharing levels should include answer-only, graph snippet, evidence snippet, and controlled raw asset access. Raw access must use FormOwl locators such as `formowl://asset/{asset_id}` and must be checked by the MCP Gateway and Retrieval Gateway before any content is returned.
 
 ---
 
@@ -596,9 +690,7 @@ unknown
       "source_id": "123"
     }
   ],
-  "evidence_snapshot_ids": [
-    "ev_project_20260616_001"
-  ],
+  "evidence_snapshot_ids": ["ev_project_20260616_001"],
   "citations": [],
   "permission_scope": {
     "scope_type": "project",
@@ -640,9 +732,7 @@ Example:
       "source_id": "123"
     }
   ],
-  "evidence_snapshot_ids": [
-    "ev_project_20260616_001"
-  ],
+  "evidence_snapshot_ids": ["ev_project_20260616_001"],
   "author_id": "person_admin_owner",
   "reviewer_id": "person_process_reviewer",
   "created_at": "2026-06-16T12:00:00+08:00",
@@ -724,6 +814,127 @@ permission_denied
 pending_review
 error
 ```
+
+---
+
+## 6.8 StorageBackend and Asset
+
+`StorageBackend` describes a physical or logical storage backend that may hold raw or derived bytes.
+
+Recommended fields:
+
+```text
+storage_backend_id
+type: synology_smb | synology_nfs | s3_compatible | minio | local_fs | ingress_only
+display_name
+internal_endpoint
+root_prefix
+access_mode: read_only | read_write | ingress_only
+trust_level
+workspace_scope
+health_status
+bandwidth_class
+latency_class
+allowed_workers
+```
+
+`Asset` describes a registered raw resource. It is the stable identity used by extraction, graph, search, and wiki projection layers.
+
+Recommended fields:
+
+```text
+asset_id
+storage_backend_id
+object_uri
+content_hash
+file_size
+mime_type
+created_at
+registered_at
+owner_user_id
+workspace_id
+permission_scope
+lifecycle_state
+```
+
+The canonical graph must not reference raw storage paths. It should reference `asset_id`, `observation_id`, `extractor_run_id`, `evidence_id`, `entity_id`, `relation_id`, `workspace_id`, `user_id`, and `grant_id` where applicable.
+
+## 6.9 Identity, AccessRequest, Grant, and AuditLog
+
+Minimum Phase 0 identity objects:
+
+```text
+User
+- user_id
+- display_name
+- email optional for Phase 0
+- status: active | disabled
+- created_at
+
+SessionIdentity
+- session_id
+- selected_user_id
+- selected_at
+- selection_method: manual_trusted_internal
+
+WorkspaceMember
+- workspace_id
+- user_id
+- role: owner | member | viewer
+```
+
+Access governance objects:
+
+```text
+AccessRequest
+- request_id
+- requester_user_id
+- owner_user_id
+- requested_scope_type
+- requested_scope_id
+- requested_access_level
+- reason
+- status: pending | approved | denied | expired
+- created_at
+- resolved_at
+
+Grant
+- grant_id
+- owner_user_id
+- grantee_user_id
+- scope_type
+- scope_id
+- permission
+- expires_at
+- max_access_count optional
+- revoked_at
+
+AuditLog
+- audit_log_id
+- actor_user_id
+- action
+- target_type
+- target_id
+- grant_id optional
+- session_id
+- timestamp
+```
+
+Authentication must be replaceable:
+
+```text
+AuthProvider
+- authenticate(request): AuthenticatedIdentity
+- resolve_user(identity): User
+```
+
+Phase 0 provider:
+
+```text
+ManualTrustedInternalAuthProvider
+```
+
+Later providers may include company SSO, Google Workspace OIDC, Microsoft Entra OIDC, SAML, or external tenant providers. Authorization, grants, provenance, and audit must not depend on the Phase 0 authentication facade.
 
 ---
 
@@ -844,9 +1055,7 @@ Output:
         "source_id": "123"
       }
     ],
-    "evidence_snapshot_ids": [
-      "ev_project_20260616_001"
-    ],
+    "evidence_snapshot_ids": ["ev_project_20260616_001"],
     "citations": []
   }
 }
@@ -1008,9 +1217,7 @@ Input:
         "source_id": "123"
       }
     ],
-    "evidence_snapshot_ids": [
-      "ev_project_20260616_001"
-    ],
+    "evidence_snapshot_ids": ["ev_project_20260616_001"],
     "citations": []
   }
 }
@@ -1034,9 +1241,7 @@ Output:
       "source_id": "123"
     }
   ],
-  "evidence_snapshot_ids": [
-    "ev_project_20260616_001"
-  ],
+  "evidence_snapshot_ids": ["ev_project_20260616_001"],
   "citations": []
 }
 ```
@@ -1315,6 +1520,24 @@ Canonical atoms are not a company-wide ontology. They are source-grounded parts 
 
 Canonical graph commits should be explicit events. A commit should record which candidates were accepted, changed, split, merged, or rejected; which policies were used; who or what approved the change; and which graph revision was created.
 
+Canonical graph state is scoped. The following scopes may each have their own canonical state:
+
+```text
+owner graph
+workspace graph
+project graph
+customer graph
+grant-scoped shared graph fragment
+```
+
+Design rule:
+
+```text
+Canonical within a scope does not mean canonical across all scopes.
+```
+
+For example, `Client X` may be canonical inside User B's owner graph while only being a same-as candidate, related-to candidate, or temporary overlay inside a workspace or grant-scoped view. Cross-scope canonical merge is allowed only through an explicit governance workflow.
+
 ## 9.3 Atom Granularity Rules
 
 The system must avoid both extremes:
@@ -1429,11 +1652,35 @@ normalized string match
 embedding similarity
 graph neighborhood similarity
 type compatibility checks
+RapidFuzz-style fuzzy string similarity
+pgvector semantic similarity
+Splink-style probabilistic record linkage for structured records
 LLM-assisted adjudication for ambiguous cases
 human review for low-confidence merges
 ```
 
-Entity resolution must not rely only on LLM generation. It must record an `EntityResolutionEvent` when a candidate entity is merged, rejected, aliased, split, or deferred for review.
+Entity resolution must not rely only on LLM generation. It must record an `EntityResolutionEvent` or `EntityResolutionProposal` when a candidate entity is matched, rejected, aliased, split, deferred for review, or proposed as equivalent across scopes.
+
+Entity matching must not grant access by itself. A match proposal such as `A.CustomerX may be the same as B.ClientX` may produce a `FusionCandidate`, `same_as_candidate`, `related_to_candidate`, score breakdown, and evidence links, but it must not reveal B's private evidence or raw data to A.
+
+Access overlay is a separate stage. It decides whether a requester may see another scope's graph fragment, evidence snippet, or raw asset by using `AccessRequest`, `Grant`, `permission_scope`, `visibility_scope`, expiration, access count, and audit policy.
+
+Canonical merge is a third stage. It changes canonical graph state within a target owner, workspace, project, or customer scope and should record:
+
+```text
+merge_decision_id
+target_scope_type
+target_scope_id
+left_entity_id
+right_entity_id
+reviewer_user_id
+approval_reason
+evidence_ids
+conflict_notes
+created_at
+```
+
+A canonical merge must never be an accidental side effect of search, matching, or temporary sharing.
 
 Relation resolution decides whether a candidate relation should enter the canonical graph.
 
@@ -1570,11 +1817,54 @@ These fields are required when a draft is generated from graph-aware inputs. Dra
 
 Publishing a user graph-derived wiki artifact to a project, team, or public wiki must follow the same review and proposal flow as other wiki revisions. Private user notes must not be published unless the user explicitly includes them and permissions allow it.
 
+## 9.7.1 Knowledge Graph Fusion Implementation Policy
+
+FormOwl v1 does not adopt a single end-to-end knowledge graph fusion framework. The product-level fusion workflow must preserve ownership, permission scope, grants, audit logs, evidence lineage, and revocation behavior, so algorithmic packages can only generate candidates.
+
+Core v1 fusion flow:
+
+```text
+registered assets
+-> extractor runs
+-> observations / semantic metadata
+-> candidate entities and relations
+-> fusion candidates
+-> access overlay or governance review
+-> scope-aware canonical state or temporary effective view
+```
+
+Recommended v1 implementation components:
+
+```text
+PostgreSQL:
+  source of truth for assets, observations, graph state, permissions, grants, and audit records
+
+pgvector:
+  semantic candidate retrieval for entity descriptions, document sections, email summaries, and graph nodes
+
+RapidFuzz:
+  deterministic fuzzy string matching for names, organizations, projects, email subjects, and aliases
+
+Splink:
+  probabilistic record linkage for structured entities such as people, organizations, customers, projects, and contacts
+
+Sentence Transformers or local embedding models:
+  local semantic embeddings when raw or sensitive content should not leave the lab network
+
+NetworkX:
+  temporary worker-side graph analysis, connected component inspection, candidate cluster analysis, and graph traversal prototypes
+```
+
+NetworkX is not the production graph database. PyKEEN, OpenEA, and RDFLib are deferred or optional research/export components, not v1 core dependencies.
+
+Algorithmic packages may generate `FusionCandidate`, `EntityResolutionProposal`, and `EvidenceLink` records, but they must never mutate the canonical graph directly.
+
 ## 9.8 Storage and Tool Boundaries
 
 The system should maintain separate stores for separate responsibilities:
 
 ```text
+StorageBackendRegistry -> physical storage backend metadata and health
 AssetStore -> raw resource metadata
 ObjectStore -> raw binary files
 ObservationStore -> extracted observations
@@ -1585,6 +1875,8 @@ WikiStore -> wiki pages, drafts, revisions, and publish metadata
 VectorStore -> embeddings for similarity search
 JobStore -> ingestion and extraction jobs
 ```
+
+All files that participate in extraction, graph construction, search, or wiki projection must first be registered in the central FormOwl catalog. Distributed physical storage does not imply distributed graph identity.
 
 External tools may be used for media parsing, OCR, ASR, speaker diarization, scene detection, document parsing, candidate graph extraction, graph visualization, and graph-assisted retrieval.
 
@@ -1623,9 +1915,13 @@ CandidateGraph
 
 MCP is an orchestration interface, not the core data processing engine. Heavy extraction jobs should run in FormOwl backend services, with MCP tools used to create jobs, inspect status, review candidates, and trigger approved commits.
 
+ChatGPT-facing MCP tools must go through a governed FormOwl MCP Gateway. Internal services such as Synology NAS, PostgreSQL, MinIO or other object storage, workers, and raw scratch paths must not be exposed directly.
+
 Recommended future MCP tools include:
 
 ```text
+select_actor
+whoami
 upload_asset_reference
 create_ingestion_job
 get_ingestion_job
@@ -1636,7 +1932,29 @@ resolve_entity_candidate
 commit_candidates_to_graph
 get_entity
 search_graph
+query_effective_graph
+search_assets
+search_mail
+fetch_email_thread
+fetch_evidence_snippet
+create_access_request
+list_pending_access_requests
+approve_access_request
+deny_access_request
+revoke_grant
 generate_wiki_page
+```
+
+Disallowed MCP tool shapes include:
+
+```text
+list_nas_folder(path)
+read_file(path)
+open_smb_path(path)
+download_raw_pst(path)
+mount_share()
+run_parser_on_path(path)
+query_postgres_raw(sql)
 ```
 
 ## 9.9 Current Implementation Boundary
@@ -1926,21 +2244,22 @@ The canonical development, test, and deployment environment is a container image
 Container requirements:
 
 ```text id="container-policy"
-Container images must include the required Python runtime, Rust toolchain, binding build tools, and service dependencies.
-MCP servers must be runnable from containers without requiring host-installed Python, Rust, Node, TypeScript, or system libraries.
-Development containers should support repeatable local testing, linting, and binding builds.
+Container images must include the required Python runtime and service dependencies.
+MCP servers must be runnable from containers without requiring host-installed Python or system libraries.
+Development containers should support repeatable local testing and linting.
 Production containers should prefer small runtime images and explicit dependency pinning.
 Compose or equivalent local orchestration should be available for Project MCP, Wiki MCP, raw data storage, and metadata storage when those services exist.
 ```
 
-Primary implementation languages:
+Implementation language:
 
 ```text id="language-policy"
 Python
-Rust
 ```
 
-Python owns:
+TypeScript is not a runtime implementation language for this repository. The prior TypeScript workspace, package metadata, tsconfig files, and typecheck hooks have been removed. Future agents should not recreate TypeScript packages unless the language policy is explicitly changed first.
+
+Python owns all Phase 0 implementation:
 
 ```text id="python-owns"
 MCP server orchestration
@@ -1952,43 +2271,37 @@ Configuration loading
 Test fixtures and integration tests
 Day-to-day debugging entrypoints
 Human-readable diagnostics
+Hashing helpers
+Diff helpers
+Validation glue
 ```
 
-Rust owns:
+Future systems-language use is optional and must be justified by a concrete implementation boundary:
 
-```text id="rust-owns"
-Heavy computing
-Security-sensitive logic
-Parsers and canonical serializers
-Schema and policy validation cores
-Hashing, signing, and integrity checks
-Concurrent or memory-sensitive processing
-Large raw data transforms
-Diff engines when correctness or performance matters
-Sandbox-like boundaries
-Any feature whose Python implementation would expose strange, hard-to-read, or hard-to-maintain syntax
+```text id="future-systems-language-criteria"
+large binary parsers
+memory-sensitive transforms
+high-throughput local media processing
+cryptographic signing or verification beyond standard-library hashing
+sandbox-like safety boundaries
+validated performance bottlenecks that Python cannot reasonably handle
 ```
 
 Syntax shielding rule:
 
 ```text id="syntax-shielding-rule"
-If a Python implementation would require unusual metaprogramming, deeply nested decorators, generated code, fragile regular expressions, complex DSLs, unsafe dynamic evaluation, or other syntax that ordinary maintainers should not be expected to read and edit, that feature must be implemented behind a Rust core API.
+If a Python implementation would require unusual metaprogramming, deeply nested decorators, generated code, fragile regular expressions, complex DSLs, unsafe dynamic evaluation, or other syntax that ordinary maintainers should not be expected to read and edit, the implementation should be hidden behind a clear Python API. A systems-language backend may be introduced later only if there is a concrete need.
 The Python layer should expose clear functions, classes, and typed data objects.
 Normal debugging should start from Python.
-Rust internals should be inspected only when debugging the core algorithm, safety boundary, or binding itself.
 ```
 
-Python/Rust binding policy:
+Removed language stacks:
 
-```text id="binding-policy"
-Rust core libraries should expose stable Python bindings.
-The preferred binding stack is PyO3 plus maturin.
-Python wrappers must hide Rust memory, lifetime, ownership, and build details from normal workflow code.
-Bindings must return contract-shaped data structures or simple Python objects.
-Binding failures must produce actionable Python exceptions with enough context for non-Rust debugging.
+```text id="removed-language-stacks"
+TypeScript workspace removed.
+Rust workspace and Python native binding scaffold removed.
+Current formowl_core helpers are pure Python.
 ```
-
-This policy does not mean all difficult code belongs in Rust. Business workflows, connector logic, review state machines, and user-facing orchestration should remain in Python when the Python version is clear, debuggable, and safe enough.
 
 ---
 
@@ -2003,7 +2316,6 @@ formowl/
   Containerfile
   compose.yaml
   pyproject.toml
-  Cargo.toml
 
   .devcontainer/
     devcontainer.json
@@ -2046,86 +2358,67 @@ formowl/
       models.py
 
     formowl_ingestion/
-      README.md
-      formowl_ingestion/
-        assets.py
-        extraction.py
-        jobs.py
-        observations.py
-        extractors/
-        storage/
+      __init__.py
+      assets.py
+      extraction.py
+      jobs.py
+      observations.py
+      extractors/
+      storage/
 
     formowl_graph/
-      README.md
-      formowl_graph/
-        candidates.py
-        canonical.py
-        policies.py
-        resolution.py
-        user_graphs.py
-        storage/
+      __init__.py
+      candidates.py
+      canonical.py
+      policies.py
+      resolution.py
+      user_graphs.py
+      storage/
 
     formowl_project_mcp/
-      README.md
-      formowl_project_mcp/
-        server.py
-        tools/
-          search_work_items.py
-          get_work_item.py
-          get_work_item_context.py
-          list_work_item_activities.py
-          list_work_item_relations.py
-          get_project_status.py
-          propose_work_item_comment.py
-        adapters/
-          openproject/
-            client.py
-            mapper.py
-            schemas.py
-        storage/
-          evidence_snapshot_store.py
-        observability/
-          logger.py
+      __init__.py
+      server.py
+      tools/
+        search_work_items.py
+        get_work_item.py
+        get_work_item_context.py
+        list_work_item_activities.py
+        list_work_item_relations.py
+        get_project_status.py
+        propose_work_item_comment.py
+      adapters/
+        openproject/
+          client.py
+          mapper.py
+          schemas.py
+      storage/
+        evidence_snapshot_store.py
+      observability/
+        logger.py
 
     formowl_wiki_mcp/
-      README.md
-      formowl_wiki_mcp/
-        server.py
-        tools/
-          search_wiki_pages.py
-          get_wiki_page.py
-          generate_wiki_draft.py
-          update_wiki_draft.py
-          publish_wiki_page.py
-          capture_wiki_snapshot.py
-        markdown/
-          frontmatter.py
-          templates/
-            adr.md
-            project-hub.md
-            meeting-notes.md
-            decision-log.md
-            risk-register.md
-        storage/
-          draft_store.py
-          wiki_snapshot_store.py
-        observability/
-          logger.py
-
-  crates/
-    formowl-core/
-      Cargo.toml
-      src/
-        lib.rs
-        validation/
-        hashing/
-        diff/
-
-    formowl-python-bindings/
-      Cargo.toml
-      pyproject.toml
-      src/
-        lib.rs
+      __init__.py
+      server.py
+      tools/
+        search_wiki_pages.py
+        get_wiki_page.py
+        generate_wiki_draft.py
+        update_wiki_draft.py
+        publish_wiki_page.py
+        capture_wiki_snapshot.py
+      markdown/
+        frontmatter.py
+        templates/
+          adr.md
+          project-hub.md
+          meeting-notes.md
+          decision-log.md
+          risk-register.md
+      storage/
+        draft_store.py
+        wiki_snapshot_store.py
+      observability/
+        logger.py
 
   docs/
     architecture.md
@@ -2144,7 +2437,6 @@ formowl/
     contract/
     project-mcp/
     wiki-mcp/
-    rust-core/
     integration/
 ```
 
@@ -2152,7 +2444,7 @@ formowl/
 
 ## 16. README Summary
 
-```md id="3mp5w0"
+````md id="3mp5w0"
 # formowl
 
 formowl is a source-preserving, graph-governed knowledge management system that turns raw resources into governed wiki views:
@@ -2165,6 +2457,7 @@ Raw Resources
   -> User Knowledge Graph
   -> Wiki Projection / WikiRevision
 ```
+````
 
 The current repository starts with two decoupled MCP servers:
 
@@ -2179,7 +2472,7 @@ Both MCPs interoperate through `formowl-contract`, which currently defines share
 
 FormOwl is container-first. The canonical development, test, and runtime environment is provided by containers.
 
-The primary implementation languages are Python and Rust. Python owns readable orchestration and debugging. Rust owns heavy computing, safety-sensitive logic, and syntactically complex core functionality exposed to Python through bindings.
+The implementation language for Phase 0 is Python. Python owns readable orchestration, debugging, hashing helpers, diff helpers, validation glue, and service behavior.
 
 ## Core Principle
 
@@ -2188,7 +2481,8 @@ Project systems own execution state.
 Wiki systems own published knowledge views.
 
 Raw resources do not directly become final wiki pages. They first become observations, candidate graph proposals, governed canonical graph commits, user graph revisions, and projection-spec-driven wiki revisions.
-```
+
+````
 
 ---
 
@@ -2200,42 +2494,51 @@ Recommended order:
 1. Create container-first monorepo skeleton
 2. Implement formowl-contract JSON schemas
 3. Add Python contract models generated or validated from schemas
-4. Add Rust core crate for validation, hashing, diffing, and safety-sensitive utilities
-5. Expose Rust core to Python through bindings
-6. Implement Project MCP with mocked OpenProject data in Python
-7. Implement EvidenceSnapshot storage
-8. Implement Wiki MCP draft generator in Python
-9. Add markdown frontmatter provenance
-10. Add MCP tool-call logging
-11. Test Rust core independently
-12. Test Python bindings independently
-13. Test Project MCP independently
-14. Test Wiki MCP independently
-15. Test Project MCP to ContextPackage to Wiki MCP workflow
-16. Add real OpenProject adapter
-```
+4. Implement Project MCP with mocked OpenProject data in Python
+5. Implement EvidenceSnapshot storage
+6. Implement Wiki MCP draft generator in Python
+7. Add markdown frontmatter provenance
+8. Add MCP tool-call logging
+9. Test Project MCP independently
+10. Test Wiki MCP independently
+11. Test Project MCP to ContextPackage to Wiki MCP workflow
+12. Add real OpenProject adapter
+````
 
 Pipeline extension order:
 
 ```text id="pipeline-extension-order"
-1. Define Asset, Observation, SemanticMetadata, IngestionJob, and ExtractorRun contract schemas
-2. Add an AssetStore, ObjectStore, ObservationStore, and JobStore
-3. Implement resource extraction for project data, markdown/wiki pages, ChatGPT sessions, and document blocks
-4. Add audio/video/image extractors behind the same Observation contract
-5. Define CandidateAtom, CandidateRelation, and ExternalGraphImport contract schemas
-6. Implement candidate graph extraction and preview from observations
-7. Define CanonicalAtom, CanonicalEntity, CanonicalRelation, and CanonicalGraphRevision contract schemas
-8. Define ExtractionPolicy, AtomGranularityPolicy, EntityResolutionPolicy, RelationResolutionPolicy, LifecyclePolicy, and WikiProjectionPolicy
-9. Implement granularity policy enforcement, entity resolution, and relation resolution
-10. Define AtomLifecycleEvent, EntityResolutionEvent, and RelationResolutionEvent mappings
-11. Implement reviewed canonical graph commits with provenance
-12. Define UserGraphProfile, UserGraphAssemblyPolicy, and UserKnowledgeGraphRevision contract schemas
-13. Implement user graph assembly policies and revision history
-14. Define WikiProjectionSpec and add graph lineage fields to markdown frontmatter
-15. Implement projection-spec-driven wiki generation from user graph revisions
-16. Implement usage-signal collection for split and merge proposals
-17. Implement reviewed atom split, merge, archive, deprecate, supersede, and equivalence workflows
-18. Add vector search and graph storage once the contract and review workflows stabilize
+1. Define StorageBackend, Asset, Observation, SemanticMetadata, IngestionJob, and ExtractorRun contract schemas
+2. Add StorageBackendRegistry, AssetStore, ObjectStore, ObservationStore, and JobStore
+3. Define User, SessionIdentity, WorkspaceMember, AccessRequest, Grant, AuditLog, and AuthProvider contracts
+4. Implement Phase 0 ManualTrustedInternalAuthProvider for trusted internal deployment
+5. Implement resource extraction for project data, markdown/wiki pages, ChatGPT sessions, document blocks, and mail archives
+6. Add audio/video/image extractors behind the same Observation contract
+7. Add PST/mail ingestion as Asset -> IngestionJob -> ExtractorRun -> Observation, with attachments as independent Assets
+8. Define CandidateAtom, CandidateRelation, and ExternalGraphImport contract schemas
+9. Implement candidate graph extraction and preview from observations
+10. Define CanonicalAtom, CanonicalEntity, CanonicalRelation, and CanonicalGraphRevision contract schemas
+11. Define ExtractionPolicy, AtomGranularityPolicy, EntityResolutionPolicy, RelationResolutionPolicy, LifecyclePolicy, and WikiProjectionPolicy
+12. Implement granularity policy enforcement, entity resolution, and relation resolution
+13. Define AtomLifecycleEvent, EntityResolutionEvent, and RelationResolutionEvent mappings
+14. Implement reviewed canonical graph commits with provenance
+15. Define UserGraphProfile, UserGraphAssemblyPolicy, and UserKnowledgeGraphRevision contract schemas
+16. Implement user graph assembly policies, permissioned overlays, grants, and revision history
+17. Define FusionCandidate, EntityResolutionProposal, EvidenceLink, EffectiveGraphView, ScopeAwareCanonicalGraph, and MergeDecision contracts
+18. Implement matching, access overlay, and canonical merge as separate governed workflows
+19. Define WikiProjectionSpec and add graph lineage fields to markdown frontmatter
+20. Implement projection-spec-driven wiki generation from user graph revisions
+21. Implement controlled Retrieval Gateway access for evidence snippets and raw assets
+22. Implement usage-signal collection for split and merge proposals
+23. Implement reviewed atom split, merge, archive, deprecate, supersede, and equivalence workflows
+24. Add vector search and graph storage once the contract and review workflows stabilize
+```
+
+Implementation alignment cleanup order:
+
+```text
+1. Replace the JSON-line MCP-shaped prototype transport with standards-compliant MCP JSON-RPC over stdio or implement a compatibility gateway.
+2. Add real graph fusion contracts and workflows for matching, access overlay, and canonical merge.
 ```
 
 ---
@@ -2246,9 +2549,8 @@ The current implementation is usable when:
 
 ```text id="8fvc4g"
 Project can be developed and tested inside a container.
-Project does not require host-installed Python, Rust, Node, or TypeScript for normal development.
+Project does not require host-installed Python for normal development.
 Python is the primary debugging entrypoint for MCP behavior.
-Rust core can be called from Python through bindings.
 Project MCP can return a ContextPackage for an OpenProject work package.
 Project MCP can persist an EvidenceSnapshot.
 Wiki MCP can generate a markdown draft from a ContextPackage.
@@ -2262,16 +2564,23 @@ Wiki publishing is proposal-only unless explicitly configured otherwise.
 The target pipeline is usable when:
 
 ```text
+Physical storage can be distributed across registered storage backends without fragmenting graph identity.
 Raw resources can be registered as assets with permission scope and source lineage.
 Resource extractors can create observations with location metadata and extractor runs.
+Mail and PST ingestion can preserve archive, message, attachment, and occurrence identity.
 Semantic metadata can produce candidate atoms and relations without committing them as truth.
 Candidate graph previews can be reviewed, split, merged, rejected, or committed.
 Entity and relation resolution events are recorded for canonical graph changes.
 Canonical atoms, entities, relations, and lifecycle mappings remain resolvable across revisions.
 User graph revisions can assemble different valid views from the same canonical graph.
+Cross-user graph sharing uses AccessRequest, Grant, permissioned overlays, and audit logs.
+Entity matching can generate same-as or related-to candidates without granting access.
+Access overlays can expose approved fragments without merging canonical graph state.
+Canonical merges are explicit governed events within a target scope.
 WikiProjectionSpec can generate reviewable wiki drafts from user graph revisions.
 Wiki revisions preserve graph lineage, source refs, evidence snapshots, citations, and generator metadata.
 External tools cannot directly mutate canonical graph state.
+ChatGPT-facing MCP tools cannot expose raw NAS paths, arbitrary file reads, raw SQL, or object-store admin endpoints.
 ```
 
 ---
@@ -2293,7 +2602,15 @@ Do not collapse user knowledge graph state into WikiRevision.
 Do not silently rewrite canonical atoms based only on one user's behavior.
 Do not require non-engineering wiki authors to use Git or inspect backend revision IDs.
 Do not require contributors to install host-level runtimes when a container can provide them.
-Do not implement hard-to-read Python syntax when a Rust core API can hide the complexity.
+Do not expose Synology NAS, SMB, NFS, WebDAV, MinIO admin, PostgreSQL, raw object storage, or worker scratch paths directly to ChatGPT.
+Do not build the canonical graph from raw storage paths.
+Do not treat Phase 0 manual identity selection as production authentication.
+Do not silently merge another user's private graph into the requester's graph.
+Do not grant raw asset access without FormOwl permission checks, grant scope, and audit.
+Do not treat entity matching as data access.
+Do not treat data access as canonical merge.
+Do not treat canonical merge as raw asset access.
+Do not introduce TypeScript, Rust, or another runtime language without changing this specification first.
 ```
 
 ---
@@ -2333,20 +2650,23 @@ Graph and wiki work must preserve this separation:
 
 ```text id="final-graph-boundary-summary"
 Raw resources, assets, evidence snapshots, and citations remain source-of-truth and locator layers.
+Physical storage may be distributed, but FormOwl asset and graph identity are centralized.
 Observations and semantic metadata are extracted intermediate data.
 Candidate graphs are reviewable proposals.
 Canonical atoms, entities, and relations are reusable governed graph parts.
+Canonical graph state is scope-aware; canonical within a scope does not mean canonical across all scopes.
 User knowledge graphs are versioned assemblies for roles, tasks, permissions, and preferred granularity.
 Wiki revisions are governed output artifacts generated through projection specs and review flows.
+MCP exposes governed semantic operations, not raw storage, raw SQL, or arbitrary file access.
 ```
 
 The runtime policy is:
 
 ```text id="runtime-policy-summary"
 Container first
-Python for readable orchestration and debugging
-Rust for heavy, safety-sensitive, or syntactically complex core logic
-Python bindings over Rust core APIs
+Python-only Phase 0
+Pure Python formowl_core helpers
+Additional runtime languages require explicit specification changes
 ```
 
 The system prioritizes maintainability, portability, provenance, source traceability, and non-technical-user-friendly operation.
