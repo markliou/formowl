@@ -101,21 +101,21 @@ Why this is first:
     `python/formowl_contract/__init__.py`
   - Proof: model round-trip tests pass and `to_dict()` validates required
     fields.
-- [ ] Add deterministic id/hash helpers for resource contracts.
+- [x] Add deterministic id/hash helpers for resource contracts.
   - Owner paths: `python/formowl_contract/`, `python/formowl_core/`
   - Proof: repeated construction from the same payload yields stable ids and
     hashes.
-- [ ] Add validators for the new resource contracts.
+- [x] Add validators for the new resource contracts.
   - Owner paths: `python/formowl_contract/models.py`
   - Proof: malformed assets, runs, and observations raise
     `ContractValidationError`.
-- [ ] Add contract tests for the resource spine.
+- [x] Add contract tests for the resource spine.
   - Owner paths: `tests/test_resource_contract.py`
   - Proof: new tests pass with existing tests.
 
 ### Slice 1B: Local Storage Backend
 
-- [ ] Add `formowl_ingestion` package skeleton following `SPEC.md`.
+- [x] Add `formowl_ingestion` package skeleton following `SPEC.md`.
   - Owner paths: `python/formowl_ingestion/__init__.py`,
     `python/formowl_ingestion/assets.py`,
     `python/formowl_ingestion/jobs.py`,

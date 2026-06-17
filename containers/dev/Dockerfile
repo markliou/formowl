@@ -11,8 +11,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /workspace
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list; \
+    fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl git \
     && case "${TARGETARCH:-amd64}" in \
         amd64) gitleaks_arch="x64" ;; \
         arm64) gitleaks_arch="arm64" ;; \
@@ -22,5 +28,9 @@ RUN apt-get update \
     && tar -xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks \
     && chmod +x /usr/local/bin/gitleaks \
     && rm -rf /var/lib/apt/lists/* /tmp/gitleaks.tar.gz
+
+RUN python -m pip install --no-cache-dir \
+    "pre-commit>=4.0" \
+    "ruff==0.8.6"
 
 CMD ["bash"]

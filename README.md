@@ -74,27 +74,25 @@ Build the dev container image:
 docker build -f containers/dev/Dockerfile -t formowl-dev:local .
 ```
 
-Run tests on a host with Python available:
-
-```sh
-PYTHONPATH=python python -m unittest discover -s tests
-```
-
 Run tests inside the dev container:
 
 ```sh
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python -m unittest discover -s tests"
 ```
 
-Install and run pre-commit checks:
+Run lint and formatting checks inside the dev container:
 
 ```sh
-python -m pip install -e ".[dev]"
-pre-commit install
-pre-commit run --all-files
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "ruff check python tests scripts && ruff format --check python tests scripts"
 ```
 
-The pre-commit suite checks credentials/secrets, merge conflict markers, large files, text whitespace, Python/JSON/TOML syntax, Python lint/format with Ruff, and Python unit tests. Run it in the dev container, or install the Python dev dependencies on the host.
+Install and run pre-commit checks from inside the dev container:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "pre-commit run --all-files"
+```
+
+The pre-commit suite checks credentials/secrets, merge conflict markers, large files, text whitespace, Python/JSON/TOML syntax, Python lint/format with Ruff, and Python unit tests. Host-side Python may be used for quick local inspection, but container results are the completion baseline.
 
 The default commit-time secret checks include the lightweight local credential scanner and Gitleaks. For a deeper audit, run the manual secret scans:
 
@@ -103,14 +101,7 @@ pre-commit run gitleaks-history --hook-stage manual
 pre-commit run trufflehog-history --hook-stage manual
 ```
 
-The dev container installs Gitleaks for commit-time scanning. Outside the dev container, the Gitleaks and TruffleHog hooks run the official Docker images through the local Docker daemon, so no host-level scanner package install is required. TruffleHog remains manual because it is heavier; this repo runs it with verification disabled so the scan stays local.
-
-On Windows PowerShell, use semicolon-separated `PYTHONPATH` values for host-side Python:
-
-```powershell
-$env:PYTHONPATH='python'
-python -m unittest discover -s tests
-```
+The dev container installs Gitleaks for commit-time scanning. TruffleHog remains manual because it is heavier; this repo runs it with verification disabled so the scan stays local.
 
 ## MCP JSON Line Entry Points
 

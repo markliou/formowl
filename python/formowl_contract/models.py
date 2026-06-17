@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import json
 from typing import Any, Literal
 
-from formowl_core import sha256_prefixed
+from formowl_core import sha256_prefixed, sha256_prefixed_id
 
 JsonValue = Any
 McpResultStatus = Literal[
@@ -16,8 +16,10 @@ McpResultStatus = Literal[
     "pending_review",
     "error",
 ]
-JobStatus = Literal["pending", "running", "succeeded", "failed", "cancelled"]
-ExtractorRunStatus = Literal["pending", "running", "succeeded", "failed", "cancelled"]
+JOB_STATUS_VALUES = ("pending", "running", "succeeded", "failed", "cancelled")
+EXTRACTOR_RUN_STATUS_VALUES = JOB_STATUS_VALUES
+JobStatus = Literal[*JOB_STATUS_VALUES]
+ExtractorRunStatus = Literal[*EXTRACTOR_RUN_STATUS_VALUES]
 
 
 class ContractValidationError(ValueError):
@@ -52,6 +54,181 @@ def sha256_json(value: Any) -> str:
     return sha256_prefixed(canonical_json(value))
 
 
+def stable_resource_contract_hash(contract_name: str, payload: Any) -> str:
+    if not contract_name:
+        raise ContractValidationError("contract_name is required")
+    return sha256_json({"contract_name": contract_name, "payload": payload})
+
+
+def stable_resource_contract_id(prefix: str, contract_name: str, payload: Any) -> str:
+    if not contract_name:
+        raise ContractValidationError("contract_name is required")
+    return sha256_prefixed_id(
+        prefix,
+        canonical_json({"contract_name": contract_name, "payload": payload}),
+    )
+
+
+def stable_storage_backend_id(
+    *,
+    backend_type: str,
+    workspace_scope: str,
+    root_prefix: str | None = None,
+    display_name: str | None = None,
+) -> str:
+    return stable_resource_contract_id(
+        "storage",
+        "StorageBackend",
+        {
+            "type": backend_type,
+            "workspace_scope": workspace_scope,
+            "root_prefix": root_prefix,
+            "display_name": display_name,
+        },
+    )
+
+
+def stable_asset_id(
+    *,
+    storage_backend_id: str,
+    object_uri: str,
+    content_hash: str,
+    workspace_id: str,
+    source_ref: SourceRef | dict[str, Any] | None = None,
+) -> str:
+    return stable_resource_contract_id(
+        "asset",
+        "Asset",
+        {
+            "storage_backend_id": storage_backend_id,
+            "object_uri": object_uri,
+            "content_hash": content_hash,
+            "workspace_id": workspace_id,
+            "source_ref": source_ref,
+        },
+    )
+
+
+def stable_asset_metadata_hash(
+    *,
+    asset_id: str,
+    metadata_type: str,
+    metadata: dict[str, JsonValue],
+    extractor_run_id: str | None = None,
+) -> str:
+    return stable_resource_contract_hash(
+        "AssetMetadata",
+        {
+            "asset_id": asset_id,
+            "metadata_type": metadata_type,
+            "metadata": metadata,
+            "extractor_run_id": extractor_run_id,
+        },
+    )
+
+
+def stable_ingestion_job_id(
+    *,
+    asset_id: str,
+    requested_by: str,
+    workspace_id: str,
+    extractor_names: list[str] | tuple[str, ...],
+    config_hash: str | None = None,
+) -> str:
+    return stable_resource_contract_id(
+        "job",
+        "IngestionJob",
+        {
+            "asset_id": asset_id,
+            "requested_by": requested_by,
+            "workspace_id": workspace_id,
+            "extractor_names": list(extractor_names),
+            "config_hash": config_hash,
+        },
+    )
+
+
+def stable_extractor_run_id(
+    *,
+    asset_id: str,
+    extractor_name: str,
+    extractor_version: str,
+    extractor_type: str,
+    input_hash: str,
+    config_hash: str,
+    model_name: str | None = None,
+    model_version: str | None = None,
+    prompt_hash: str | None = None,
+) -> str:
+    return stable_resource_contract_id(
+        "run",
+        "ExtractorRun",
+        {
+            "asset_id": asset_id,
+            "extractor_name": extractor_name,
+            "extractor_version": extractor_version,
+            "extractor_type": extractor_type,
+            "input_hash": input_hash,
+            "config_hash": config_hash,
+            "model_name": model_name,
+            "model_version": model_version,
+            "prompt_hash": prompt_hash,
+        },
+    )
+
+
+def stable_observation_id(
+    *,
+    extractor_run_id: str,
+    observation_type: str,
+    modality: str,
+    location: dict[str, JsonValue],
+    asset_id: str | None = None,
+    evidence_snapshot_id: str | None = None,
+    text: str | None = None,
+    caption: str | None = None,
+    payload: dict[str, JsonValue] | None = None,
+    extracted_value: JsonValue | None = None,
+) -> str:
+    if _is_missing_optional_id(asset_id) and _is_missing_optional_id(evidence_snapshot_id):
+        raise ContractValidationError("Observation id requires asset_id or evidence_snapshot_id")
+    return stable_resource_contract_id(
+        "obs",
+        "Observation",
+        {
+            "asset_id": asset_id,
+            "evidence_snapshot_id": evidence_snapshot_id,
+            "extractor_run_id": extractor_run_id,
+            "observation_type": observation_type,
+            "modality": modality,
+            "location": location,
+            "text": text,
+            "caption": caption,
+            "payload": payload,
+            "extracted_value": extracted_value,
+        },
+    )
+
+
+def stable_semantic_metadata_id(
+    *,
+    source_observation_ids: list[str] | tuple[str, ...],
+    metadata_type: str,
+    value: dict[str, JsonValue],
+    extractor_run_id: str,
+) -> str:
+    return stable_resource_contract_id(
+        "sem",
+        "SemanticMetadata",
+        {
+            "source_observation_ids": list(source_observation_ids),
+            "metadata_type": metadata_type,
+            "value": value,
+            "extractor_run_id": extractor_run_id,
+        },
+    )
+
+
 def _require_mapping(value: Any, name: str) -> dict[str, Any]:
     if is_dataclass(value):
         value = to_plain(value)
@@ -64,6 +241,24 @@ def _require_fields(value: dict[str, Any], fields: tuple[str, ...], name: str) -
     missing = [field for field in fields if value.get(field) in (None, "")]
     if missing:
         raise ContractValidationError(f"{name} missing required field(s): {', '.join(missing)}")
+
+
+def _is_missing_optional_id(value: Any) -> bool:
+    return value is None or value == ""
+
+
+def _validate_string_list(
+    value: Any,
+    field_name: str,
+    *,
+    allow_empty: bool = True,
+) -> None:
+    if not isinstance(value, list):
+        raise ContractValidationError(f"{field_name} must be a list")
+    if not allow_empty and not value:
+        raise ContractValidationError(f"{field_name} cannot be empty")
+    if not all(isinstance(item, str) for item in value):
+        raise ContractValidationError(f"{field_name} entries must be strings")
 
 
 @dataclass(frozen=True)
@@ -483,8 +678,10 @@ def validate_context_package(value: Any) -> dict[str, Any]:
         raise ContractValidationError("ContextPackage.source_refs must be a list")
     for source_ref in context_package.get("source_refs", []):
         validate_source_ref(source_ref)
-    if not isinstance(context_package.get("evidence_snapshot_ids", []), list):
-        raise ContractValidationError("ContextPackage.evidence_snapshot_ids must be a list")
+    _validate_string_list(
+        context_package.get("evidence_snapshot_ids", []),
+        "ContextPackage.evidence_snapshot_ids",
+    )
     if not isinstance(context_package.get("citations", []), list):
         raise ContractValidationError("ContextPackage.citations must be a list")
     return context_package
@@ -511,8 +708,7 @@ def validate_storage_backend(value: Any) -> dict[str, Any]:
         ),
         "StorageBackend",
     )
-    if not isinstance(backend.get("allowed_workers", []), list):
-        raise ContractValidationError("StorageBackend.allowed_workers must be a list")
+    _validate_string_list(backend.get("allowed_workers", []), "StorageBackend.allowed_workers")
     return backend
 
 
@@ -567,12 +763,11 @@ def validate_ingestion_job(value: Any) -> dict[str, Any]:
         ),
         "IngestionJob",
     )
-    if job["status"] not in ("pending", "running", "succeeded", "failed", "cancelled"):
+    if job["status"] not in JOB_STATUS_VALUES:
         raise ContractValidationError("IngestionJob.status is not supported")
     validate_permission_scope(job["permission_scope"])
     for field_name in ("extractor_names", "extractor_run_ids", "observation_ids"):
-        if not isinstance(job.get(field_name, []), list):
-            raise ContractValidationError(f"IngestionJob.{field_name} must be a list")
+        _validate_string_list(job.get(field_name, []), f"IngestionJob.{field_name}")
     return job
 
 
@@ -593,11 +788,10 @@ def validate_extractor_run(value: Any) -> dict[str, Any]:
         ),
         "ExtractorRun",
     )
-    if run["status"] not in ("pending", "running", "succeeded", "failed", "cancelled"):
+    if run["status"] not in EXTRACTOR_RUN_STATUS_VALUES:
         raise ContractValidationError("ExtractorRun.status is not supported")
     for field_name in ("warnings", "errors"):
-        if not isinstance(run.get(field_name, []), list):
-            raise ContractValidationError(f"ExtractorRun.{field_name} must be a list")
+        _validate_string_list(run.get(field_name, []), f"ExtractorRun.{field_name}")
     return run
 
 
@@ -617,7 +811,9 @@ def validate_observation(value: Any) -> dict[str, Any]:
         ),
         "Observation",
     )
-    if not observation.get("asset_id") and not observation.get("evidence_snapshot_id"):
+    if _is_missing_optional_id(observation.get("asset_id")) and _is_missing_optional_id(
+        observation.get("evidence_snapshot_id")
+    ):
         raise ContractValidationError("Observation requires asset_id or evidence_snapshot_id")
     if not isinstance(observation["location"], dict):
         raise ContractValidationError("Observation.location must be an object")
@@ -646,10 +842,11 @@ def validate_semantic_metadata(value: Any) -> dict[str, Any]:
         ),
         "SemanticMetadata",
     )
-    if not isinstance(metadata["source_observation_ids"], list):
-        raise ContractValidationError("SemanticMetadata.source_observation_ids must be a list")
-    if not metadata["source_observation_ids"]:
-        raise ContractValidationError("SemanticMetadata.source_observation_ids cannot be empty")
+    _validate_string_list(
+        metadata["source_observation_ids"],
+        "SemanticMetadata.source_observation_ids",
+        allow_empty=False,
+    )
     if not isinstance(metadata["value"], dict):
         raise ContractValidationError("SemanticMetadata.value must be an object")
     if not isinstance(metadata["confidence"], (int, float)):
