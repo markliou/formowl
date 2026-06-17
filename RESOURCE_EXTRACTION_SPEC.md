@@ -1,0 +1,938 @@
+# Resource Extraction Specification
+
+## 1. Purpose
+
+The Resource Extraction Layer converts uploaded or registered resources into governed intermediate representations.
+
+It should produce:
+
+```text
+RawResource
+AssetMetadata
+ExtractorRun
+Observation
+SemanticMetadata
+CandidateAtom
+ExtractionWarning
+ExtractionError
+```
+
+The Resource Extraction Layer must not directly write to:
+
+```text
+CanonicalGraphStore
+UserKnowledgeGraph
+WikiRevision
+```
+
+Instead, it should write to intermediate stores such as:
+
+```text
+AssetStore
+ObjectStore
+ObservationStore
+SemanticMetadataStore
+CandidateAtomStore
+ExternalGraphImportStore
+ExtractorRunStore
+JobStore
+```
+
+The purpose of this layer is to make multimedia resources searchable, citeable, reviewable, and reusable by downstream graph and wiki systems.
+
+FormOwl does not intend to train neural networks. The goal is an extractor-adapter pipeline that can use existing parsers, OCR engines, ASR tools, vision models, and LLM-based structured extraction tools when needed. Neural-network-based tools may be used as replaceable external extractors, but they are not FormOwl's core source of truth.
+
+---
+
+## 2. Design Principles
+
+### 2.1 Raw resources are the source of truth
+
+Raw files must be preserved.
+
+Derived metadata, observations, transcripts, OCR blocks, captions, summaries, and graph candidates are all secondary artifacts.
+
+Every derived artifact must retain a reference back to the raw resource.
+
+### 2.2 Extractors are replaceable adapters
+
+FormOwl should not hard-code one vendor, model, or parser.
+
+Each extraction tool should be wrapped as an `ExtractorAdapter`.
+
+Example adapters:
+
+```text
+exiftool_metadata_extractor
+mediainfo_metadata_extractor
+ffprobe_metadata_extractor
+docling_document_extractor
+unstructured_document_extractor
+tesseract_ocr_extractor
+paddleocr_ocr_extractor
+whisperx_asr_extractor
+pyscenedetect_video_scene_extractor
+llm_semantic_metadata_extractor
+llm_candidate_graph_extractor
+```
+
+### 2.3 Deterministic extraction and semantic extraction are separate
+
+Technical metadata extraction should be deterministic whenever possible.
+
+Examples:
+
+```text
+file size
+mime type
+sha256 hash
+codec
+duration
+resolution
+EXIF
+page count
+document structure
+```
+
+Semantic extraction may use AI or LLM-based tools.
+
+Examples:
+
+```text
+image description
+speech transcript
+speaker diarization
+entity extraction
+relation extraction
+claim extraction
+decision extraction
+action item extraction
+risk extraction
+requirement extraction
+candidate graph extraction
+```
+
+### 2.4 Extractor provenance is mandatory
+
+Every extraction output must include:
+
+```text
+resource_id
+extractor_name
+extractor_version
+extractor_type
+run_id
+started_at
+completed_at
+input_hash
+config_hash
+model_name, if applicable
+model_version, if applicable
+prompt_hash, if applicable
+confidence, if applicable
+warnings
+errors
+location metadata
+```
+
+### 2.5 Observations are not canonical knowledge
+
+Observations are evidence-like intermediate records.
+
+They may later support candidate atoms, graph edges, wiki revisions, summaries, or retrieval results, but they are not the canonical knowledge graph.
+
+---
+
+## 3. Core Data Model
+
+### 3.1 RawResource
+
+A `RawResource` represents a registered source asset.
+
+Example schema:
+
+```json
+{
+  "resource_id": "res_001",
+  "workspace_id": "ws_001",
+  "project_id": "proj_001",
+  "source_type": "uploaded_file",
+  "original_filename": "meeting_recording.mp4",
+  "mime_type": "video/mp4",
+  "storage_uri": "object://resources/res_001/original",
+  "sha256": "sha256:...",
+  "size_bytes": 123456789,
+  "created_at": "2026-06-17T10:00:00Z",
+  "registered_by": "user_001",
+  "permission_scope": "workspace"
+}
+```
+
+### 3.2 AssetMetadata
+
+`AssetMetadata` stores technical metadata that can usually be extracted without neural-network-based tools.
+
+Example schema:
+
+```json
+{
+  "resource_id": "res_001",
+  "metadata_type": "technical",
+  "mime_type": "video/mp4",
+  "duration_sec": 3120.5,
+  "width": 1920,
+  "height": 1080,
+  "codec": "h264",
+  "audio_codec": "aac",
+  "bitrate": 4800000,
+  "frame_rate": 30,
+  "extractor_run_id": "run_001"
+}
+```
+
+### 3.3 ExtractorRun
+
+An `ExtractorRun` records one execution of one extractor.
+
+Example schema:
+
+```json
+{
+  "run_id": "run_001",
+  "resource_id": "res_001",
+  "extractor_name": "ffprobe_metadata_extractor",
+  "extractor_version": "0.1.0",
+  "extractor_type": "technical_metadata",
+  "input_hash": "sha256:...",
+  "config_hash": "sha256:...",
+  "started_at": "2026-06-17T10:01:00Z",
+  "completed_at": "2026-06-17T10:01:02Z",
+  "status": "succeeded",
+  "warnings": [],
+  "errors": []
+}
+```
+
+### 3.4 Observation
+
+An `Observation` is a citeable extracted unit from a raw resource.
+
+Examples:
+
+```text
+document paragraph
+PDF page block
+OCR block
+table
+image region
+transcript segment
+speaker segment
+video scene
+keyframe caption
+wiki section
+project issue comment
+```
+
+Example schema:
+
+```json
+{
+  "observation_id": "obs_001",
+  "resource_id": "res_001",
+  "extractor_run_id": "run_002",
+  "observation_type": "transcript_segment",
+  "modality": "audio",
+  "text": "We decided not to use a graph database in the first version.",
+  "location": {
+    "start_sec": 312.4,
+    "end_sec": 319.8,
+    "speaker": "speaker_02"
+  },
+  "confidence": 0.91,
+  "permission_scope": "workspace",
+  "created_at": "2026-06-17T10:05:00Z"
+}
+```
+
+### 3.5 SemanticMetadata
+
+`SemanticMetadata` stores structured meaning extracted from one or more observations.
+
+Examples:
+
+```text
+entity
+relation
+claim
+decision
+action item
+risk
+requirement
+deadline
+owner
+topic
+dependency
+open question
+```
+
+Example schema:
+
+```json
+{
+  "semantic_metadata_id": "sem_001",
+  "source_observation_ids": ["obs_001", "obs_002"],
+  "metadata_type": "decision",
+  "value": {
+    "decision": "Do not use a graph database in the first MVP.",
+    "rationale": "Per-user small graphs and frequent rebuilds are better handled with pgvector and lightweight graph reconstruction."
+  },
+  "confidence": 0.78,
+  "extractor_run_id": "run_003",
+  "requires_review": true
+}
+```
+
+### 3.6 CandidateAtom
+
+A `CandidateAtom` is a possible graph atom generated from observations or semantic metadata.
+
+It must not be considered canonical until reviewed and committed by the graph governance pipeline.
+
+Example schema:
+
+```json
+{
+  "candidate_atom_id": "catom_001",
+  "source_observation_ids": ["obs_001"],
+  "atom_type": "decision",
+  "label": "Avoid graph database in MVP",
+  "properties": {
+    "reason": "Small per-user graphs and rebuild frequency make pgvector more appropriate initially."
+  },
+  "confidence": 0.74,
+  "extractor_run_id": "run_004",
+  "status": "pending_review"
+}
+```
+
+---
+
+## 4. Extractor Categories and Recommended Tools
+
+### 4.1 File registration and technical metadata
+
+Purpose:
+
+```text
+file name
+mime type
+file size
+sha256 hash
+created_at
+modified_at
+duration
+codec
+resolution
+bitrate
+EXIF
+IPTC
+XMP
+container metadata
+```
+
+Recommended tools:
+
+```text
+libmagic / file
+SHA-256 hashing
+ExifTool
+MediaInfo
+ffprobe / FFmpeg
+```
+
+These tools do not require LLMs or neural-network inference.
+
+### 4.2 Document parsing
+
+Target formats:
+
+```text
+PDF
+DOCX
+PPTX
+HTML
+Markdown
+CSV
+Excel
+plain text
+scanned PDF
+```
+
+Recommended tools:
+
+```text
+Docling
+Unstructured
+Apache Tika
+PyMuPDF
+pdfplumber
+python-docx
+python-pptx
+openpyxl
+```
+
+Expected observation types:
+
+```text
+document_title
+heading
+paragraph
+table
+list_item
+page_block
+section
+footnote
+caption
+formula
+embedded_image
+```
+
+Document extraction should preserve locators:
+
+```text
+page number
+section heading
+paragraph index
+table index
+cell coordinate
+bounding box, if available
+```
+
+### 4.3 OCR and image text extraction
+
+Target resources:
+
+```text
+scanned PDF
+image with text
+screenshot
+whiteboard photo
+presentation screenshot
+video keyframe
+```
+
+Recommended tools:
+
+```text
+Tesseract
+PaddleOCR
+EasyOCR
+Docling OCR pipeline
+cloud OCR adapter, optional
+```
+
+Expected observation types:
+
+```text
+ocr_block
+ocr_line
+ocr_word
+image_text_region
+```
+
+Example location metadata:
+
+```json
+{
+  "page": 3,
+  "bbox": [120, 80, 640, 180]
+}
+```
+
+### 4.4 Audio transcription and speaker metadata
+
+Target resources:
+
+```text
+meeting recording
+voice memo
+podcast
+interview
+call recording
+video extracted audio
+```
+
+Recommended tools:
+
+```text
+FFmpeg
+WhisperX
+Whisper
+faster-whisper
+pyannote.audio
+```
+
+Expected observation types:
+
+```text
+transcript_segment
+speaker_segment
+word_timestamp
+audio_event
+```
+
+Example location metadata:
+
+```json
+{
+  "start_sec": 312.4,
+  "end_sec": 319.8,
+  "speaker": "speaker_02"
+}
+```
+
+### 4.5 Video scene extraction
+
+Target resources:
+
+```text
+meeting video
+screen recording
+demo video
+lecture video
+field recording
+```
+
+Recommended tools:
+
+```text
+FFmpeg
+ffprobe
+MediaInfo
+PySceneDetect
+OCR on keyframes
+vision model / multimodal LLM, optional
+```
+
+Expected pipeline:
+
+```text
+video file
+-> technical metadata
+-> audio track extraction
+-> ASR / diarization
+-> scene detection
+-> keyframe extraction
+-> OCR on keyframes
+-> optional visual description
+-> semantic metadata
+```
+
+Expected observation types:
+
+```text
+video_scene
+keyframe
+keyframe_ocr_block
+visual_caption
+screen_step
+demo_action
+```
+
+### 4.6 Image semantic metadata
+
+Target resources:
+
+```text
+photo
+diagram
+chart
+screenshot
+whiteboard image
+scanned note
+```
+
+Recommended tools:
+
+```text
+ExifTool
+OCR tools
+vision model adapter, optional
+multimodal LLM adapter, optional
+```
+
+Expected observation types:
+
+```text
+image_metadata
+image_text_region
+visual_caption
+diagram_element
+chart_description
+```
+
+AI-generated image descriptions must be marked as model-generated and reviewable.
+
+### 4.7 Semantic metadata and candidate graph extraction
+
+Input:
+
+```text
+transcript segments
+OCR blocks
+document paragraphs
+tables
+video scenes
+image captions
+project issue comments
+wiki sections
+conversation logs
+```
+
+Output:
+
+```text
+entities
+relations
+claims
+decisions
+action items
+risks
+requirements
+deadlines
+owners
+topics
+dependencies
+open questions
+candidate atoms
+candidate graph edges
+```
+
+Possible tools:
+
+```text
+LLM structured extraction
+LangChain LLMGraphTransformer
+LlamaIndex PropertyGraphIndex
+Neo4j LLM Graph Builder
+GraphRAG-style extraction tools
+rule-based extractor
+NER model
+relation extraction model
+```
+
+These tools may write only to:
+
+```text
+SemanticMetadataStore
+CandidateAtomStore
+ExternalGraphImportStore
+```
+
+They must not directly write to:
+
+```text
+CanonicalGraphStore
+UserKnowledgeGraph
+WikiRevision
+```
+
+---
+
+## 5. Extractor Routing
+
+The Resource Extraction Layer should select extractors based on MIME type, file extension, workspace policy, project policy, resource size, and user permissions.
+
+Example routing table:
+
+| Resource Type | Technical Metadata | Content Extraction | Optional Semantic Extraction |
+| --- | --- | --- | --- |
+| Image | ExifTool | OCR if text-like | Vision caption / diagram parser |
+| PDF with text | pdf parser / Docling | paragraphs, tables, sections | LLM semantic extraction |
+| Scanned PDF | pdf metadata | OCR / layout OCR | LLM semantic extraction |
+| Audio | ffprobe / MediaInfo | ASR / diarization | decision / action item extraction |
+| Video | ffprobe / MediaInfo | audio ASR, scene detection, keyframes | screen-step / scene summary extraction |
+| DOCX | document parser | paragraphs, tables, headings | LLM semantic extraction |
+| PPTX | document parser | slide text, speaker notes, images | slide-level summary |
+| CSV / XLSX | schema parser | rows, columns, sheets | table summary / entity extraction |
+| Markdown | markdown parser | sections, links, code blocks | topic / claim extraction |
+
+---
+
+## 6. Location Metadata Standard
+
+Every observation should include the most precise locator possible.
+
+Supported locator fields:
+
+```text
+page
+section
+heading_path
+paragraph_index
+table_index
+row_index
+column_index
+bbox
+start_sec
+end_sec
+frame_index
+timestamp_sec
+speaker
+slide_index
+sheet
+cell_address
+byte_offset
+char_start
+char_end
+uri_fragment
+```
+
+### 6.1 PDF paragraph
+
+```json
+{
+  "page": 5,
+  "paragraph_index": 12,
+  "bbox": [80, 320, 510, 390]
+}
+```
+
+### 6.2 Audio transcript
+
+```json
+{
+  "start_sec": 51.2,
+  "end_sec": 68.9,
+  "speaker": "speaker_01"
+}
+```
+
+### 6.3 Spreadsheet cell
+
+```json
+{
+  "sheet": "Budget",
+  "cell_address": "D12"
+}
+```
+
+### 6.4 Video keyframe
+
+```json
+{
+  "timestamp_sec": 120.5,
+  "frame_index": 3615,
+  "bbox": [200, 100, 800, 500]
+}
+```
+
+---
+
+## 7. Confidence, Warnings, and Review
+
+Every extractor output should support:
+
+```text
+confidence
+requires_review
+warnings
+errors
+```
+
+Examples of warnings:
+
+```text
+ocr_low_confidence
+asr_low_confidence
+speaker_diarization_uncertain
+model_generated_description_requires_review
+unsupported_file_type
+partial_extraction
+large_file_truncated
+password_protected_document
+embedded_media_skipped
+table_structure_uncertain
+```
+
+Generated semantic metadata should usually default to:
+
+```json
+{
+  "requires_review": true
+}
+```
+
+Technical metadata from deterministic tools may default to:
+
+```json
+{
+  "requires_review": false
+}
+```
+
+---
+
+## 8. Re-extraction Policy
+
+Re-extraction should be possible when:
+
+```text
+extractor version changes
+model version changes
+extraction config changes
+workspace policy changes
+resource content hash changes
+user requests regeneration
+downstream graph policy changes
+```
+
+The system should not overwrite previous extraction runs by default.
+
+Instead, it should create a new `ExtractorRun` and preserve prior outputs for auditability and diffing.
+
+---
+
+## 9. Adapter Interface
+
+Define a conceptual interface like:
+
+```rust
+trait ExtractorAdapter {
+    fn name(&self) -> &'static str;
+    fn version(&self) -> String;
+    fn supported_mime_types(&self) -> Vec<String>;
+    fn extractor_type(&self) -> ExtractorType;
+    fn extract(&self, input: ExtractionInput, policy: ExtractionPolicy) -> ExtractionResult;
+}
+```
+
+Conceptual types:
+
+```rust
+enum ExtractorType {
+    TechnicalMetadata,
+    DocumentStructure,
+    OCR,
+    ASR,
+    SpeakerDiarization,
+    VideoSceneDetection,
+    ImageCaptioning,
+    SemanticMetadata,
+    CandidateGraph,
+}
+```
+
+The actual implementation may differ, but the specification should make the adapter boundary explicit.
+
+---
+
+## 10. Storage Boundary
+
+Resource Extraction may write to:
+
+```text
+AssetStore
+ObjectStore
+ObservationStore
+SemanticMetadataStore
+CandidateAtomStore
+ExternalGraphImportStore
+ExtractorRunStore
+JobStore
+```
+
+Resource Extraction must not directly write to:
+
+```text
+CanonicalGraphStore
+UserKnowledgeGraph
+WikiRevision
+```
+
+Downstream conversion should follow this path:
+
+```text
+Observation
+-> SemanticMetadata
+-> CandidateAtom / CandidateGraph
+-> GranularityPolicyEngine
+-> EntityResolver
+-> RelationResolver
+-> CanonicalGraphCommit
+-> UserKnowledgeGraph projection
+-> Wiki projection
+```
+
+Do not collapse resource extraction, graph governance, and wiki generation into a single pipeline. Resource Extraction creates evidence-like intermediate artifacts. It does not decide canonical truth, directly generate final wiki pages, or directly mutate the canonical knowledge graph.
+
+---
+
+## 11. MVP Recommendation
+
+The first implementation should focus on a minimal but extensible extractor stack.
+
+Recommended MVP stack:
+
+```text
+Asset / technical metadata:
+  - libmagic
+  - sha256 hashing
+  - ExifTool
+  - MediaInfo
+  - ffprobe / FFmpeg
+
+Document:
+  - Docling
+  - Unstructured
+  - PyMuPDF or pdfplumber as fallback
+
+OCR:
+  - Tesseract or PaddleOCR
+  - Docling OCR path for PDFs/images
+
+Audio:
+  - FFmpeg
+  - WhisperX
+
+Video:
+  - FFmpeg
+  - MediaInfo
+  - PySceneDetect
+  - OCR on keyframes
+
+Semantic metadata:
+  - LLM structured extraction adapter
+  - later: LangChain LLMGraphTransformer / LlamaIndex PropertyGraphIndex / Neo4j LLM Graph Builder
+
+Storage:
+  - AssetStore
+  - ObjectStore
+  - ObservationStore
+  - SemanticMetadataStore
+  - CandidateAtomStore
+  - ExtractorRunStore
+  - JobStore
+```
+
+---
+
+## 12. Acceptance Criteria
+
+The Resource Extraction implementation is aligned with this specification when:
+
+```text
+RESOURCE_EXTRACTION_SPEC.md exists.
+It clearly states that FormOwl does not train neural networks.
+It explains that neural-network-based tools may be used only as replaceable external extractors.
+It defines the difference between raw resources, technical metadata, observations, semantic metadata, candidate atoms, and canonical graph state.
+It lists recommended tools for file metadata, document parsing, OCR, ASR, speaker diarization, video scene detection, and semantic extraction.
+It defines extractor provenance requirements.
+It defines locator metadata standards.
+It defines confidence, warning, error, and review behavior.
+It defines re-extraction policy.
+It defines storage boundaries.
+It prevents Resource Extraction from writing directly to CanonicalGraphStore, UserKnowledgeGraph, or WikiRevision.
+SPEC.md references this file.
+README.md references this file where repository documentation is listed or summarized.
+```
