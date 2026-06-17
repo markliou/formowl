@@ -137,20 +137,20 @@ Why this is first:
 
 ### Slice 1C: Deterministic Text Extractor
 
-- [ ] Define an `ExtractorAdapter` protocol and extraction input/result objects.
+- [x] Define an `ExtractorAdapter` protocol and extraction input/result objects.
   - Owner paths: `python/formowl_ingestion/extraction.py`
   - Proof: a simple adapter can declare name, version, supported MIME types, and
     extractor type.
-- [ ] Implement a deterministic plain-text/markdown observation extractor.
+- [x] Implement a deterministic plain-text/markdown observation extractor.
   - Owner paths: `python/formowl_ingestion/extractors/`
   - Proof: a `.txt` or `.md` asset produces observations with line-range
     locators, source refs, extractor run id, and confidence.
-- [ ] Keep semantic metadata extraction separate from deterministic observation
+- [x] Keep semantic metadata extraction separate from deterministic observation
   extraction.
   - Owner paths: `python/formowl_ingestion/extractors/`
   - Proof: text extraction does not create candidate atoms or canonical graph
     records.
-- [ ] Add re-extraction behavior that creates a new `ExtractorRun`.
+- [x] Add re-extraction behavior that creates a new `ExtractorRun`.
   - Owner paths: `python/formowl_ingestion/extraction.py`,
     `python/formowl_ingestion/storage/`
   - Proof: rerunning the same extractor preserves the old run and writes a new
