@@ -52,6 +52,20 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - Different users can assemble different user knowledge graph revisions from the same canonical graph.
 - Wiki revisions are governed output artifacts with citations, evidence snapshots, graph lineage, and review state.
 
+## Specifications
+
+- `SPEC.md` - the main product and architecture specification, including the knowledge graph and wiki projection model.
+- `RESOURCE_EXTRACTION_SPEC.md` - extractor routing, observation and semantic metadata schemas, provenance requirements, and adapter boundaries.
+- `docs/architecture.md` - system architecture, knowledge pipeline, and language/storage boundaries.
+- `docs/infra-spec.md` - infrastructure, storage backends, workers, and the infrastructure state model.
+- `docs/provenance.md` - provenance and source-traceability model.
+- `docs/workflows.md` - end-to-end workflow examples.
+- `docs/mcp-boundaries.md` - what MCP tools may and may not do.
+- `docs/mcp-server-abstract.md` - abstract responsibilities of the Project and Wiki MCP servers.
+- `docs/wiki-draft-schema.md` - wiki draft and frontmatter schema.
+- `docs/openproject-adapter.md` - OpenProject adapter mapping.
+- `docs/implementation-task-breakdown.md` - shared implementation checklist for contributors and agents.
+
 ## Development
 
 Build the dev container image:
