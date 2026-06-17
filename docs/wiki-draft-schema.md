@@ -51,6 +51,7 @@ included_atom_ids:
   - atom_001
   - atom_002
 atom_graph_revision_id: atom_graph_rev_20260616_001
+ontology_revision_id: ontology_rev_workspace_formowl_20260616_001
 atom_extraction_policy_id: atom_extraction_policy_v3
 atom_granularity_policy_id: atom_granularity_policy_v2
 user_graph_revision_id: user_graph_rev_person_yifan_20260616_001

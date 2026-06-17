@@ -49,6 +49,12 @@ ChatGPT must not directly reach NAS, PostgreSQL, MinIO, worker scratch paths, or
 the only ChatGPT-facing service should be a governed FormOwl MCP Gateway
 ```
 
+## User Surface and Backend Control Plane
+
+Normal users should not switch into backend control planes during FormOwl workflows. ChatGPT, structured MCP task cards, and embedded or session-bound FormOwl task surfaces are the user-facing layer. NAS consoles, object-store consoles, database tools, parser settings, worker queues, bucket names, volumes, and raw paths are operator or backend concerns.
+
+This is both a usability and infrastructure safety requirement. Backend choices must be made by FormOwl policies and services so the system can validate inputs, enforce permissions, preserve audit records, select stable storage routes, and keep parser execution reproducible.
+
 The infrastructure should provide an S3-like object abstraction, but it does not require AWS S3. Acceptable internal backends include a native S3-compatible enterprise storage endpoint, a correctly deployed MinIO service, or a transitional internal ingress adapter. Raw NAS paths are deployment details behind FormOwl storage adapters.
 
 ## Core Infrastructure Decisions
@@ -234,6 +240,8 @@ extractor capabilities
 ```
 
 GPU is an optional worker accelerator, not a control-plane requirement. Mail and PST ingestion are primarily CPU, disk I/O, memory, local scratch, and parser-stability workloads. GPU workers should be scheduled separately for ASR, diarization, image understanding, video analysis, local embedding models, rerankers, or local LLM graph candidate generation.
+
+Scoped ontology and type-resolution work follows the same boundary. The control plane, MCP Gateway, PostgreSQL, pgvector queries, type compatibility checks, lexical matching, and graph validation should run on CPU. Embedding generation for type candidates is an asynchronous worker job, not inline in an MCP request. GPU acceleration is optional for high-volume multilingual embedding generation, ASR, diarization, image/video understanding, and local LLM candidate generation; it is not required to host the MCP server or query path.
 
 ### MCP Services
 

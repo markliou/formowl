@@ -8,6 +8,14 @@ Project MCP and Wiki MCP are current MCP services. Future ingestion and graph se
 
 For ChatGPT-facing deployments, MCP should expose semantic and governed operations, not infrastructure. The public or tunnel-exposed service is a FormOwl MCP Gateway. Synology NAS, PostgreSQL, MinIO or other object storage, worker services, raw file paths, and scratch directories remain internal-only.
 
+## Single Task Surface Rule
+
+ChatGPT-facing MCP tools should keep users in one task-oriented surface. The preferred surface is the ChatGPT conversation with structured task cards, inline actions, or embedded FormOwl widgets. If a separate page is required in Phase 0, it must be a narrow session-bound continuation of the current MCP task.
+
+MCP tools should hide backend operation choices from normal users. They should not ask users to select storage backends, buckets, NAS paths, parser paths, worker queues, extractor implementations, database records, or job internals. The gateway and backend policies choose those details and record the decision for audit.
+
+This boundary improves security and stability by reducing unvalidated inputs, accidental data exposure, path confusion, parser mismatch, and unaudited local files.
+
 ## Current Boundaries
 
 ```text
@@ -26,6 +34,12 @@ Recommended future MCP tools:
 ```text
 select_actor
 whoami
+capture_current_chatgpt_session
+create_upload_session
+get_upload_session
+prepare_upload_source
+get_upload_task_card
+complete_upload_session
 upload_asset_reference
 create_ingestion_job
 get_ingestion_job
@@ -34,6 +48,13 @@ extract_graph_candidates
 preview_graph_candidates
 resolve_entity_candidate
 commit_candidates_to_graph
+list_types
+get_type
+propose_type
+propose_type_alias
+resolve_type_candidate
+commit_types
+propose_type_alignment
 get_entity
 search_graph
 query_effective_graph
@@ -50,6 +71,64 @@ generate_wiki_page
 ```
 
 These tools should expose reviewable operations. They should not let a client or external extractor directly mutate canonical graph state.
+
+`upload_asset_reference` must not bypass `UploadSession` intent capture for normal user uploads. It is reserved for controlled imports, migration adapters, or trusted backend references that still create asset, permission, and audit records.
+
+`capture_current_chatgpt_session` is a convenience shortcut for the current ChatGPT conversation. It may skip the visible upload surface, but it must not skip identity, permission scope, source account metadata, asset registration, ingestion job creation, or audit.
+
+## Upload Session Boundary
+
+User-initiated uploads must be represented as task-oriented `UploadSession` workflows, not infrastructure browsing workflows.
+
+ChatGPT-facing MCP tools may:
+
+```text
+create an UploadSession from user intent and scope
+return a structured upload task card
+return an inline upload action, embedded widget, or internal upload link bound to exactly one UploadSession
+guide source preparation for a declared ingestion profile
+inspect upload and processing status
+create ingestion jobs after FormOwl registers the uploaded asset
+```
+
+ChatGPT-facing MCP tools must not:
+
+```text
+ask the user to choose NAS folders, buckets, volumes, or parser paths
+ask the user to choose worker queues, parser implementations, or object-store locations
+expose raw storage backend names unless needed for operator diagnostics
+turn the upload surface into a generic file manager
+accept arbitrary file paths from the user's machine as source-of-truth locators
+give source preparation instructions that are detached from an UploadSession
+```
+
+The upload surface is a controlled FormOwl surface. It may receive bytes from the user, but storage routing, object placement, asset registration, parser selection, ingestion job creation, and graph integration remain backend responsibilities.
+
+## ChatGPT Session Capture Shortcut Boundary
+
+ChatGPT-facing MCP tools may provide a one-step "save this conversation" action for frequent use. This action is modeled as a capture shortcut over the same governed ingestion pipeline.
+
+The shortcut may:
+
+```text
+capture the current ChatGPT session
+return a capture task card
+store the session dump as an internal source artifact
+register the source artifact as an Asset / RawResource
+create the normal ingestion or extraction job
+show processing status in the current conversation
+```
+
+The shortcut must not:
+
+```text
+create an untracked local export
+ask the user to choose a raw_folder or resource folder
+expose object-store or filesystem paths
+turn ChatGPT memory into the source of truth
+skip source account and actor attribution
+skip asset registration, permission scope, or audit
+```
 
 ## Phase 0 Identity Boundary
 

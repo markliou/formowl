@@ -1473,10 +1473,15 @@ CanonicalRelation
 CanonicalGraphRevision
 CandidateAtom
 CandidateRelation
+TypeDefinition
+TypeAlias
+TypeMapping
+TypeAlignmentCandidate
 Observation
 SemanticMetadata
 ExtractionPolicy
 AtomGranularityPolicy
+OntologyPolicy
 AtomLifecycleEvent
 EntityResolutionEvent
 RelationResolutionEvent
@@ -1518,7 +1523,7 @@ metadata
 
 Canonical atoms are not a company-wide ontology. They are source-grounded parts that can later be organized into many graphs. A canonical graph may include atoms, entities, and relations, but the presence of a canonical graph object must still be traceable to evidence, a committed candidate, or an explicit human modeling action.
 
-Canonical graph commits should be explicit events. A commit should record which candidates were accepted, changed, split, merged, or rejected; which policies were used; who or what approved the change; and which graph revision was created.
+Canonical graph commits should be explicit events. A commit should record which candidates were accepted, changed, split, merged, or rejected; which policies were used; which `ontology_revision_id` and atom graph revision were used for type-sensitive resolution; who or what approved the change; and which graph revision was created.
 
 Canonical graph state is scoped. The following scopes may each have their own canonical state:
 
@@ -1712,6 +1717,137 @@ This allows the decision to carry metadata, lifecycle state, sources, confidence
 
 Relation resolution must record a `RelationResolutionEvent` when a candidate relation is accepted, rejected, converted into an atom, superseded, or deferred for review.
 
+## 9.5.1 Scoped Emergent Ontology
+
+FormOwl must not adopt a top-down company-wide ontology, but entity resolution, relation resolution, and wiki projection still require a type system. The type system is governed knowledge about types. It reuses the same candidate to governance to canonical pipeline as atoms, entities, and relations.
+
+Design principles:
+
+```text
+The ontology is bottom-up and emergent, not a top-down global schema.
+Type knowledge is governed exactly like atom knowledge: candidate -> governance -> canonical.
+Types are scoped. A type may be canonical within one scope and only a candidate in another.
+Types are versioned. Resolution decisions must be reproducible against a type revision.
+Deterministic and statistical tools generate type candidates; an LLM only adjudicates ambiguity.
+Nothing an LLM produces is committed automatically; it enters the candidate type store.
+```
+
+The type model has three tiers:
+
+```text
+Core types -> closed, small, stable; changed only by updating this specification.
+Extension types -> open, scoped, candidate; extractors, LLMs, or users may propose them.
+Promoted types -> governed extension types that are canonical within a scope and mapped to a core type.
+```
+
+Resolution behavior by tier:
+
+```text
+Core types -> the only hard gate for type compatibility checks.
+Extension types -> soft signals and weights only; they never gate resolution.
+Promoted types -> participate through their mapping to a core type.
+```
+
+The closed core starts with a minimal, domain-neutral set. Labels may align loosely to schema.org for interoperability, but the core stays small and closed. FormOwl must not import a large upper ontology in v1.
+
+Entity core supertypes:
+
+```text
+Person
+Organization
+Project
+Artifact
+Document
+Event
+Concept
+Location
+```
+
+Relation supertypes should reuse the reified relation model above. For example, a decision is modeled as a `Decision` node with source, lifecycle, confidence, and review metadata rather than only as a `DECIDED` edge. Atom types reuse the canonical atom type seed in section 9.2.
+
+Type compatibility is evaluated on the core supertype lattice, not on exact type strings. Finer extension or promoted types contribute match weight, but never a hard veto. Two mentions are type-incompatible only when their core supertypes are incompatible.
+
+Type knowledge is stored as governed objects:
+
+```text
+TypeDefinition -> a type concept: core, extension, or promoted
+TypeAlias -> an alternate label for a type
+TypeMapping -> a mapping from a promoted or extension type to a core supertype
+TypeAlignmentCandidate -> a proposed equivalence between types across scopes
+```
+
+A future `TypeDefinition` should carry at least:
+
+```text
+type_id
+tier
+core_supertype_id
+pref_label
+alt_labels
+broader_type_ids
+narrower_type_ids
+related_type_ids
+scope
+status
+source_observation_ids
+source_candidate_ids
+confidence
+ontology_revision_id
+created_at
+```
+
+Type lifecycle changes must use mappings, not destructive edits:
+
+```text
+split_into
+merged_into
+supersedes
+deprecated_by
+equivalent_to
+derived_from
+```
+
+Old type ids must remain resolvable for any committed atom, relation, wiki revision, or citation that referenced them.
+
+The type vocabulary uses a lightweight SKOS-style shape: `pref_label`, `alt_labels`, and `broader` / `narrower` / `related` links. PostgreSQL remains the source of truth for the vocabulary. `alt_labels` also support entity resolution alias matching. RDFLib and standard SKOS files are optional export and interchange concerns only. FormOwl does not adopt OWL, RDFS formal reasoning, or a triplestore for v1.
+
+Cross-scope type alignment follows the same separation as entity fusion:
+
+```text
+A type alignment proposal does not imply data access.
+Data access does not imply a canonical type merge.
+A canonical type merge changes type state within a target scope and must be governed.
+```
+
+For example, "Scope A Customer may be the same as Scope B Client" produces a `TypeAlignmentCandidate` with a score breakdown and evidence links. It must not auto-merge and must not expose a private scope's evidence.
+
+Canonical graph commits must pin an `ontology_revision_id` alongside the atom graph revision when type compatibility influenced resolution. Graph-derived wiki frontmatter must record `ontology_revision_id` when types influenced the draft.
+
+The ontology mechanism follows the deterministic-first policy from section 9.7.1. An LLM is the last-resort adjudicator and a candidate generator for new type labels, never the primary mechanism.
+
+Recommended implementation policy:
+
+```text
+Vocabulary storage and representation -> PostgreSQL relational tables in SKOS shape.
+Label normalization and alias matching -> Unicode normalization and RapidFuzz-style matching.
+Core supertype classification -> rules and gazetteers first, then NER labels, then pgvector similarity against core-type prototypes.
+Hierarchy suggestions -> embedding similarity, lexical overlap, and worker-side graph analysis.
+Cross-scope type alignment -> embedding plus lexical candidates, then governance review.
+Type-graph validation -> application code, database constraints, and pydantic schemas.
+LLM role -> adjudicate low-confidence ambiguity and propose candidate labels only.
+```
+
+Heavy ontology alignment frameworks such as LogMap, AgreementMakerLight, and OAEI-style tooling are deferred. v1 uses lexical and embedding candidate generation with human or policy review.
+
+The governed, versioned type system also supports later training tasks without adding a new structure:
+
+```text
+Versioned promoted types provide an auditable label taxonomy.
+alt_labels provide an alias and normalization dataset.
+TypeAlignmentCandidate decisions provide a record-linkage training signal.
+Outputs of trained type classifiers remain candidates and never mutate canonical type state directly.
+```
+
 ## 9.6 User Knowledge Graphs
 
 Each user may have one or more user knowledge graphs.
@@ -1806,6 +1942,7 @@ included_atom_ids:
   - atom_001
   - atom_002
 atom_graph_revision_id: atom_graph_rev_20260616_001
+ontology_revision_id: ontology_rev_workspace_formowl_20260616_001
 atom_extraction_policy_id: atom_extraction_policy_v3
 atom_granularity_policy_id: atom_granularity_policy_v2
 user_graph_revision_id: user_graph_rev_person_yifan_20260616_001
@@ -1857,7 +1994,7 @@ NetworkX:
 
 NetworkX is not the production graph database. PyKEEN, OpenEA, and RDFLib are deferred or optional research/export components, not v1 core dependencies.
 
-Algorithmic packages may generate `FusionCandidate`, `EntityResolutionProposal`, and `EvidenceLink` records, but they must never mutate the canonical graph directly.
+Algorithmic packages may generate `FusionCandidate`, `EntityResolutionProposal`, `TypeAlignmentCandidate`, and `EvidenceLink` records, but they must never mutate the canonical graph or canonical type state directly.
 
 ## 9.8 Storage and Tool Boundaries
 
@@ -1917,11 +2054,49 @@ MCP is an orchestration interface, not the core data processing engine. Heavy ex
 
 ChatGPT-facing MCP tools must go through a governed FormOwl MCP Gateway. Internal services such as Synology NAS, PostgreSQL, MinIO or other object storage, workers, and raw scratch paths must not be exposed directly.
 
+Normal users should stay in a single task-oriented surface whenever possible. ChatGPT, structured MCP task cards, inline actions, and embedded or session-bound FormOwl task surfaces are the user-facing layer. Backend control planes are not part of normal usage.
+
+Hiding backend operations is both a usability rule and a safety rule. Storage routing, parser choice, worker scheduling, object placement, asset registration, permission checks, and graph integration are FormOwl responsibilities, not user decisions.
+
+User-initiated uploads must begin with an `UploadSession`. The UploadSession captures intent before file transfer begins:
+
+```text
+selected user
+owner scope
+workspace scope
+project scope
+customer scope
+intended asset type
+ingestion profile
+visibility scope
+upload expiration
+source preparation state
+processing status
+```
+
+The physical storage backend is selected by FormOwl according to storage routing policy. Users see the business and knowledge scope of the upload, not NAS folders, buckets, volumes, parser-specific paths, worker queues, or object-store locations.
+
+Source preparation guidance must remain attached to an UploadSession. For example, guided PST preparation may teach the user how to export a PST, OST, MSG, or EML file, but the guidance must not leave the user with an untracked local file and no corresponding FormOwl upload task.
+
+The required principle is:
+
+```text
+Source preparation produces a file.
+UploadSession determines where and how that file enters FormOwl.
+Storage routing, parser execution, asset registration, and graph integration are handled by FormOwl.
+```
+
 Recommended future MCP tools include:
 
 ```text
 select_actor
 whoami
+capture_current_chatgpt_session
+create_upload_session
+get_upload_session
+prepare_upload_source
+get_upload_task_card
+complete_upload_session
 upload_asset_reference
 create_ingestion_job
 get_ingestion_job
@@ -1930,6 +2105,13 @@ extract_graph_candidates
 preview_graph_candidates
 resolve_entity_candidate
 commit_candidates_to_graph
+list_types
+get_type
+propose_type
+propose_type_alias
+resolve_type_candidate
+commit_types
+propose_type_alignment
 get_entity
 search_graph
 query_effective_graph
@@ -1955,7 +2137,14 @@ download_raw_pst(path)
 mount_share()
 run_parser_on_path(path)
 query_postgres_raw(sql)
+choose_storage_backend(name)
+choose_parser_path(path)
+choose_worker_queue(name)
 ```
+
+`upload_asset_reference` must not bypass UploadSession intent capture for normal user uploads. It is reserved for controlled imports, migration adapters, or trusted backend references that still create asset, permission, and audit records.
+
+`capture_current_chatgpt_session` is a convenience shortcut, not a separate ingestion backbone. It should capture the current ChatGPT conversation into a governed ChatGPT session artifact with selected user, workspace scope, permission scope, source account metadata, capture method, and audit records. After capture, it must still register an Asset or RawResource and create the normal ingestion or extraction job path.
 
 ## 9.9 Current Implementation Boundary
 
@@ -2046,6 +2235,37 @@ revision_backend:
 ChatGPT session capture uses the same provenance model.
 
 A captured ChatGPT session must include source account metadata.
+
+### ChatGPT Session Capture Shortcut
+
+Because ChatGPT is the primary discussion surface, FormOwl should provide a small shortcut for the common action "save this conversation into FormOwl." This shortcut is allowed for convenience, but it must not become a parallel ingestion backbone.
+
+The shortcut should behave as:
+
+```text
+User asks ChatGPT to save the current session
+  -> MCP Gateway calls capture_current_chatgpt_session
+  -> FormOwl creates a ChatGPT session capture record
+  -> FormOwl stores the session dump as an internal raw artifact
+  -> FormOwl registers the dump as an Asset / RawResource
+  -> FormOwl creates the normal IngestionJob / ExtractorRun path
+```
+
+The shortcut may skip a visible upload page because the source is already the current ChatGPT session. It must not skip identity, scope, permission, provenance, asset registration, storage routing, or audit.
+
+The shortcut output should be a task card that shows:
+
+```text
+capture ID
+selected user
+workspace / project / customer scope
+visibility scope
+source account status
+capture method
+processing status
+```
+
+The stored session dump should be treated as a source artifact. `raw_folder` or any object-store locator is an internal storage locator, not a user-selected destination.
 
 Minimum capture metadata:
 
@@ -2572,6 +2792,9 @@ Semantic metadata can produce candidate atoms and relations without committing t
 Candidate graph previews can be reviewed, split, merged, rejected, or committed.
 Entity and relation resolution events are recorded for canonical graph changes.
 Canonical atoms, entities, relations, and lifecycle mappings remain resolvable across revisions.
+The type system has a closed core, scoped extension types, governed promoted types, and versioned ontology revisions.
+Type compatibility checks hard-depend only on the closed core supertype lattice.
+Cross-scope type alignment is a governed candidate, never an automatic merge, and never leaks a private scope's evidence.
 User graph revisions can assemble different valid views from the same canonical graph.
 Cross-user graph sharing uses AccessRequest, Grant, permissioned overlays, and audit logs.
 Entity matching can generate same-as or related-to candidates without granting access.
@@ -2579,8 +2802,11 @@ Access overlays can expose approved fragments without merging canonical graph st
 Canonical merges are explicit governed events within a target scope.
 WikiProjectionSpec can generate reviewable wiki drafts from user graph revisions.
 Wiki revisions preserve graph lineage, source refs, evidence snapshots, citations, and generator metadata.
+Canonical graph commits and graph-derived wiki frontmatter pin ontology_revision_id when type resolution influenced the result.
 External tools cannot directly mutate canonical graph state.
+External tools and LLMs cannot directly mutate canonical type state.
 ChatGPT-facing MCP tools cannot expose raw NAS paths, arbitrary file reads, raw SQL, or object-store admin endpoints.
+User-initiated uploads start with an UploadSession and do not require users to choose storage backends, buckets, parser paths, or worker queues.
 ```
 
 ---
@@ -2598,12 +2824,17 @@ Do not treat transcript chunks, OCR blocks, PDF paragraphs, or issue comments as
 Do not generate final wiki pages directly from raw resources without observation, graph, projection, and review boundaries.
 Do not require a full knowledge graph database before the graph contracts and workflows are stable.
 Do not treat a canonical atom graph as a company-wide ontology.
+Do not create a standalone ontology subsystem outside the candidate -> canonical governance pipeline.
+Do not import a large upper ontology, OWL reasoner, or triplestore into v1.
+Do not let LLM-generated type labels mutate canonical type state directly.
 Do not collapse user knowledge graph state into WikiRevision.
 Do not silently rewrite canonical atoms based only on one user's behavior.
 Do not require non-engineering wiki authors to use Git or inspect backend revision IDs.
 Do not require contributors to install host-level runtimes when a container can provide them.
 Do not expose Synology NAS, SMB, NFS, WebDAV, MinIO admin, PostgreSQL, raw object storage, or worker scratch paths directly to ChatGPT.
 Do not build the canonical graph from raw storage paths.
+Do not make normal users switch into backend control planes, storage browsers, parser configuration screens, or worker queues.
+Do not let source preparation guidance produce untracked local files without an UploadSession.
 Do not treat Phase 0 manual identity selection as production authentication.
 Do not silently merge another user's private graph into the requester's graph.
 Do not grant raw asset access without FormOwl permission checks, grant scope, and audit.
@@ -2657,16 +2888,4 @@ Canonical atoms, entities, and relations are reusable governed graph parts.
 Canonical graph state is scope-aware; canonical within a scope does not mean canonical across all scopes.
 User knowledge graphs are versioned assemblies for roles, tasks, permissions, and preferred granularity.
 Wiki revisions are governed output artifacts generated through projection specs and review flows.
-MCP exposes governed semantic operations, not raw storage, raw SQL, or arbitrary file access.
-```
-
-The runtime policy is:
-
-```text id="runtime-policy-summary"
-Container first
-Python-only Phase 0
-Pure Python formowl_core helpers
-Additional runtime languages require explicit specification changes
-```
-
-The system prioritizes maintainability, portability, provenance, source traceability, and non-technical-user-friendly operation.
+MCP exposes governed semantic operations, not raw storage, raw 

@@ -6,6 +6,10 @@ FormOwl workflows must be natural-language-first and usable by non-technical pro
 
 Technical systems such as Git, object storage, schema validation, source hashes, and external wiki revision APIs may support the workflow, but they must not be required concepts in the normal user interface.
 
+The preferred user experience is a single conversational task surface. Users should stay in ChatGPT or an embedded FormOwl task surface whenever possible. If Phase 0 requires a separate upload page, that page is a narrow continuation of the current task, not a backend console, storage browser, or generic file manager.
+
+Hiding backend operations is both a usability rule and a safety rule. The fewer backend controls exposed to the user, the less likely the system is to receive unstable paths, wrong storage choices, mismatched parser settings, accidental permission leaks, or unaudited source files.
+
 Engineering workflows should also preserve readability. Python is the first debugging layer for MCP behavior, hashing helpers, diff helpers, validation glue, and service orchestration.
 
 The target workflow is pipeline-first:
@@ -20,6 +24,132 @@ Raw resource
 ```
 
 Users should experience this as task-oriented review work, not as manual graph maintenance.
+
+## Guided Upload and Source Preparation Flow
+
+FormOwl users normally interact with the system through ChatGPT and the FormOwl MCP server. Users must not be required to switch into backend tools or manually choose NAS folders, storage backends, buckets, volumes, queues, parser-specific paths, or extractor settings during normal usage.
+
+All user-initiated uploads must begin with an `UploadSession`. The session captures intent before file transfer begins:
+
+```text
+selected user
+owner scope
+workspace scope
+project scope
+customer scope
+intended asset type
+ingestion profile
+visibility scope
+upload expiration
+source preparation state
+processing status
+```
+
+The physical storage backend is selected by FormOwl according to storage routing policy. Users see the business and knowledge scope of the upload, not the physical storage placement.
+
+### Upload UX
+
+FormOwl should provide a task-oriented upload experience that keeps the user inside the current conversational workflow as much as possible.
+
+In Phase 0, the MCP server may return a structured upload task card and an internal FormOwl upload surface link. In later phases, the upload task should be represented as an embedded ChatGPT app or widget. The link or widget is not a separate backend interface; it is a session-bound continuation of the current task.
+
+The upload card should show:
+
+```text
+upload session ID
+current user
+owner scope
+workspace / project / customer scope
+asset type
+ingestion profile
+visibility scope
+status
+inline upload action or session-bound upload link
+```
+
+The upload surface must not behave as a generic file manager. It must be bound to a single `UploadSession` and should only allow files compatible with the declared ingestion profile.
+
+### Source Preparation Guidance
+
+Some source artifacts require user preparation before upload. For example, mail ingestion may require the user to export a PST, OST, MSG, or EML file from an email client.
+
+When a user wants to upload data but does not know how to produce the required source artifact, FormOwl should guide the user through a source-specific preparation flow.
+
+For mail ingestion, FormOwl should support guided PST preparation. The assistant may ask which mail client or account type the user is using, then provide step-by-step instructions. The guidance must remain attached to the `UploadSession` so the exported file has a known owner, scope, ingestion profile, and visibility policy before upload.
+
+The assistant must not give generic instructions that leave the user with an untracked local file and no corresponding FormOwl upload task.
+
+### Required Principle
+
+```text
+Source preparation produces a file.
+UploadSession determines where and how that file enters FormOwl.
+Storage routing, parser execution, asset registration, and graph integration are handled by FormOwl, not by the user.
+```
+
+### Upload Flow
+
+```mermaid
+sequenceDiagram
+  actor User
+  participant ChatGPT as "ChatGPT / LLM Host"
+  participant Gateway as "FormOwl MCP Gateway"
+  participant UploadSurface as "Embedded upload surface or portal"
+  participant Router as "Storage Routing Policy"
+  participant AssetStore as "AssetStore"
+  participant ObjectStore as "ObjectStore"
+  participant JobStore as "JobStore"
+
+  User->>ChatGPT: I want to upload source material
+  ChatGPT->>Gateway: create_upload_session(intent and scope)
+  Gateway-->>ChatGPT: Upload task card with inline action or session-bound link
+  ChatGPT-->>User: Show upload task and preparation guidance
+  User->>UploadSurface: Upload prepared file for this UploadSession
+  UploadSurface->>Router: Select storage backend from policy
+  UploadSurface->>ObjectStore: Store bytes through FormOwl-controlled backend
+  UploadSurface->>AssetStore: Register asset and source occurrence
+  UploadSurface->>JobStore: Create ingestion or extraction job
+  UploadSurface-->>ChatGPT: Return upload and processing status
+  ChatGPT-->>User: Show task status in the same conversation
+```
+
+## ChatGPT Session Capture Shortcut
+
+Because ChatGPT is the primary discussion surface, FormOwl should provide a small convenience shortcut for saving the current conversation as a source artifact. This is a frequent workflow shortcut, not a separate ingestion backbone.
+
+The user experience should be:
+
+```text
+User: Save this conversation into FormOwl.
+ChatGPT -> MCP Gateway: capture_current_chatgpt_session(scope and visibility)
+MCP Gateway -> FormOwl backend: create capture record, store session dump, register asset, create ingestion job
+ChatGPT: shows a capture task card and processing status
+```
+
+The shortcut may avoid a visible upload page because the source artifact is the current ChatGPT session. It must still record selected user, workspace or project scope, source account metadata, visibility, capture method, storage locator, asset registration, ingestion job, and audit event.
+
+The capture task card should show:
+
+```text
+capture ID
+selected user
+workspace / project / customer scope
+visibility scope
+source account status
+capture method
+processing status
+```
+
+The shortcut must not expose raw storage folders, object-store paths, or backend controls. After capture, the session follows the normal pipeline:
+
+```text
+ChatGPT session dump
+  -> Asset / RawResource
+  -> IngestionJob / ExtractorRun
+  -> Observations
+  -> CandidateGraph
+  -> governed graph / wiki projection
+```
 
 ## Project Context to Wiki Revision
 
