@@ -1,6 +1,6 @@
 # formowl
 
-<!-- Future agents: continue building from the files listed in the SPEC.md Suggested Repository Layout section. Do not create parallel replacement files unless the specification is updated first. -->
+<!-- Future agents: read AGENTS.md first, then use docs/implementation-task-breakdown.md as the shared checklist. Continue building from the SPEC.md Suggested Repository Layout section and do not create parallel replacement files unless the specification is updated first. -->
 
 formowl is a source-preserving, graph-governed knowledge management system. Its target architecture turns multimodal resources, project execution data, conversations, and wiki/documentation systems into governed knowledge views.
 
