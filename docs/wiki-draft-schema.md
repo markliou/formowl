@@ -2,7 +2,7 @@
 
 <!-- Future agents: continue building wiki draft schema documentation in this file. Do not create another wiki draft schema document unless SPEC.md is updated first. -->
 
-Wiki drafts and published wiki pages are versioned knowledge views derived from raw data.
+Wiki drafts and published wiki pages are versioned knowledge views derived from raw data, observations, candidate graph review, canonical graph state, user graph revisions, and manual edits.
 
 The wiki workflow must be usable by non-technical users. Normal authors should work through natural-language and review-oriented actions such as save draft, submit for review, compare changes, approve, publish, refresh from sources, and restore. Git, database rows, object storage paths, hashes, and external wiki revision IDs are backend details.
 
@@ -14,18 +14,42 @@ The wiki workflow must be usable by non-technical users. Normal authors should w
 4. Regenerating or refreshing a page must create a new draft revision and a diff.
 5. Restoring a page must create a new revision; it must not delete history.
 6. Git may be used as a backend or audit mirror, but it must not be the required user-facing workflow.
-7. Wiki revisions are output artifacts; they are not the user's full personal knowledge graph.
-8. Future graph-aware wiki drafts should preserve links to canonical atom and user graph revisions when available.
+7. Wiki revisions are output artifacts; they are not the user's full knowledge graph.
+8. Raw resources should not directly generate final wiki pages; graph-aware wiki drafts should come from a `WikiProjectionSpec` applied to a context package or user graph revision.
+9. Graph-aware wiki drafts should preserve links to canonical atom and user graph revisions when available.
 
-## Personal Graph Boundary
+## WikiProjectionSpec Boundary
 
-The full model is defined in `SPEC.md` under `Personal Knowledge Graph and Canonical Atom Model`.
+Graph-aware wiki generation should be controlled by a projection spec rather than free-form generation.
 
-Wiki drafts may eventually be generated from a canonical atom graph or a user's personal graph. That does not make the wiki draft itself the graph. A `WikiRevision` remains a governed markdown or wiki artifact with provenance, review state, and publishing metadata.
+A projection spec should define:
 
-Future frontmatter may include optional graph lineage fields:
+```text
+projection_id
+page_type
+target entity, topic, query, or source context
+section list
+section source such as entity_summary, graph_query, graph_neighbors, source_observations, or manual_notes
+filters such as atom_type, relation_type, status, confidence, permission_scope, and time window
+generator policy
+review requirements
+```
+
+The projection spec selects what should appear in the wiki view. `WikiRevision` records the output of applying that spec, including source refs, evidence snapshots, citations, graph lineage, generator metadata, and review state.
+
+## User Graph Boundary
+
+The full model is defined in `SPEC.md` under `Multimodal Knowledge Graph and Wiki Projection Model`.
+
+Wiki drafts may be generated from a canonical atom graph or a user's graph. That does not make the wiki draft itself the graph. A `WikiRevision` remains a governed markdown or wiki artifact with provenance, review state, and publishing metadata.
+
+Graph-aware frontmatter may include optional lineage fields:
 
 ```yaml
+projection_spec_id: artifact_page_projection_v1
+included_atom_ids:
+  - atom_001
+  - atom_002
 atom_graph_revision_id: atom_graph_rev_20260616_001
 atom_extraction_policy_id: atom_extraction_policy_v3
 atom_granularity_policy_id: atom_granularity_policy_v2
@@ -34,7 +58,7 @@ graph_profile_id: graph_profile_person_yifan_research_detail
 assembly_policy_id: assembly_policy_method_fine_intro_coarse
 ```
 
-These fields are not required for the first version. The first version must preserve enough `source_refs`, `evidence_snapshot_ids`, and `citations` for later atom extraction and personal graph assembly.
+These fields are required only when the draft is generated from graph-aware inputs. The current Project MCP to Wiki MCP flow must still preserve enough `source_refs`, `evidence_snapshot_ids`, and `citations` for later observation extraction, atom extraction, candidate graph review, and user graph assembly.
 
 ## Adaptive Granularity Boundary
 
@@ -52,7 +76,7 @@ equivalent_to
 derived_from
 ```
 
-User behavior may suggest that atoms should be split or merged, but it must not silently rewrite canonical atoms for everyone. User-specific behavior should first affect a personal assembly policy or create a reviewable canonical graph change proposal.
+User behavior may suggest that atoms should be split or merged, but it must not silently rewrite canonical atoms for everyone. User-specific behavior should first affect a user graph assembly policy or create a reviewable canonical graph change proposal.
 
 ## Revision Metadata
 

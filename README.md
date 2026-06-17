@@ -2,7 +2,21 @@
 
 <!-- Future agents: continue building from the files listed in the SPEC.md Suggested Repository Layout section. Do not create parallel replacement files unless the specification is updated first. -->
 
-formowl is a source-preserving knowledge management system built around two decoupled MCP servers:
+formowl is a source-preserving, graph-governed knowledge management system. Its target architecture turns multimodal resources, project execution data, conversations, and wiki/documentation systems into governed knowledge views.
+
+Target pipeline:
+
+```text
+Raw Resources
+  -> Resource Extraction
+  -> Observation / Semantic Metadata
+  -> Candidate Graph
+  -> Governed Canonical Knowledge Graph
+  -> User Knowledge Graph
+  -> Wiki Projection / WikiRevision
+```
+
+The current repository starts with two decoupled MCP servers:
 
 - Project MCP
 - Wiki MCP
@@ -11,7 +25,9 @@ Project MCP retrieves project execution context from systems such as OpenProject
 
 Wiki MCP generates and manages markdown/wiki knowledge artifacts.
 
-Both MCPs interoperate through `formowl_contract`.
+Both MCPs interoperate through `formowl_contract`. They are the first concrete entrypoints for source retrieval, evidence preservation, draft generation, and revision governance; they are not the full product boundary.
+
+Future pipeline layers add asset ingestion, observation extraction, candidate graph review, canonical graph commits, user graph assembly policies, and projection-spec-driven wiki generation.
 
 FormOwl is container-first. Development, testing, and deployment should run from Dockerfile-managed containers so the project does not depend on host-installed runtimes.
 
@@ -19,13 +35,22 @@ The primary implementation languages are Python and Rust. Python is the readable
 
 Rust core functionality is exposed to Python through the `formowl_core` API. The initial binding scaffold uses a dependency-free C ABI plus `ctypes`, with a Python fallback for local debugging when the native library has not been built yet.
 
-## Current MVP
+## Current Implementation
 
 - Python contract models for source references, permission scopes, evidence snapshots, context packages, wiki revisions, and MCP result envelopes.
 - Project MCP with a mocked OpenProject adapter, evidence snapshot file storage, context package generation, and proposal-only work item comments.
 - Wiki MCP with markdown draft generation, frontmatter provenance, draft storage, wiki snapshot capture, and proposal-only publishing.
 - Rust `formowl-core` crate for hashing, newline normalization, and simple diff utilities.
 - Dockerfile-managed dev/runtime containers and `.devcontainer/devcontainer.json`.
+
+## Architecture Direction
+
+- Raw resources never directly become final wiki pages.
+- Extractors produce observations and semantic metadata.
+- Candidate atoms and relations are reviewed before canonical graph commit.
+- Atom granularity, entity resolution, relation resolution, lifecycle changes, and wiki projection are governed by explicit policies.
+- Different users can assemble different user knowledge graph revisions from the same canonical graph.
+- Wiki revisions are governed output artifacts with citations, evidence snapshots, graph lineage, and review state.
 
 ## Development
 

@@ -2,9 +2,61 @@
 
 <!-- Future agents: continue building the system architecture documentation in this file. Do not create another architecture document unless SPEC.md is updated first. -->
 
-FormOwl uses a container-first architecture.
+FormOwl uses a container-first architecture and a graph-governed knowledge pipeline.
 
 The canonical development, test, and deployment environment is a container. Host-installed runtimes are optional conveniences, not required assumptions.
+
+## Target Knowledge Pipeline
+
+```text
+Raw Resources
+  -> Resource Extraction Layer
+  -> Observation Store
+  -> Candidate Graph
+  -> Governed Canonical Graph
+  -> User Knowledge Graph
+  -> Wiki Projection Layer
+  -> WikiRevision
+```
+
+Raw resources include project system records, wiki pages, ChatGPT conversations, markdown, PDFs, office documents, images, audio, video, screenshots, and other captured files.
+
+The pipeline rule is strict: raw resources do not directly become final wiki pages. They first become observations and semantic metadata, then candidate graph objects, then governed canonical graph state, then user-specific graph views, and only then projected wiki revisions.
+
+## Governance Layer
+
+Governance crosses every stage of the pipeline.
+
+Policy objects should include:
+
+```text
+ExtractionPolicy
+AtomGranularityPolicy
+OntologyPolicy
+EntityResolutionPolicy
+RelationResolutionPolicy
+LifecyclePolicy
+UserGraphAssemblyPolicy
+WikiProjectionPolicy
+```
+
+External extractors and LLM graph tools may create observations, candidate atoms, candidate relations, or external graph imports. They must not directly mutate canonical graph state.
+
+## Store Boundaries
+
+```text
+AssetStore -> raw resource metadata
+ObjectStore -> raw binary files
+ObservationStore -> extracted observations
+CandidateAtomStore -> uncommitted candidate atoms and relations
+CanonicalGraphStore -> canonical atoms, entities, relations, lifecycle events, and graph revisions
+UserGraphStore -> user-specific graph revisions
+WikiStore -> wiki drafts, revisions, snapshots, and publish proposals
+VectorStore -> embeddings for similarity search
+JobStore -> ingestion and extraction job status
+```
+
+Project MCP and Wiki MCP are current service boundaries inside this larger architecture. Future ingestion and graph services should share contracts with them instead of depending on their internals.
 
 ## Language Boundaries
 

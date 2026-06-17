@@ -2,7 +2,7 @@
 
 <!-- Future agents: continue maintaining MCP server abstract notes in this file. Do not create another MCP server abstract document unless SPEC.md is updated first. -->
 
-This repository currently defines the abstract boundaries for the first formowl MCP architecture.
+This repository currently defines the abstract boundaries for the first FormOwl MCP services inside the larger multimodal knowledge pipeline.
 
 MCP service implementations should be Python-first for readability and debugging. Shared heavy or safety-sensitive core behavior should live in Rust and be called from Python through bindings.
 
@@ -10,7 +10,8 @@ MCP service implementations should be Python-first for readability and debugging
 
 - `@formowl/contract`
   - Shared portable contract objects.
-  - Owns `SourceRef`, `EvidenceSnapshot`, `Citation`, `PermissionScope`, `ContextPackage`, `McpResultEnvelope`, and MCP tool-call log events.
+  - Currently owns `SourceRef`, `EvidenceSnapshot`, `Citation`, `PermissionScope`, `ContextPackage`, `WikiRevision`, `McpResultEnvelope`, and MCP tool-call log events.
+  - Target contract scope also includes assets, observations, candidate graph objects, canonical graph objects, user graph revisions, projection specs, ingestion jobs, and extractor runs.
 - `@formowl/project-mcp`
   - Abstract Project MCP server.
   - Owns project/work-item tools, project-system adapter boundaries, evidence snapshot storage, and tool-call logging.
@@ -38,6 +39,11 @@ The current code intentionally does not include:
 - File, database, or object-storage persistence.
 - Approval workflow execution.
 - Automatic wiki publishing or project write-back.
+- Multimodal asset ingestion.
+- Observation extraction.
+- Candidate graph extraction and review.
+- Canonical graph commit storage.
+- User graph assembly.
 
 ## Abstract Flow
 
@@ -52,3 +58,19 @@ LLM host
 ```
 
 Project and Wiki MCP packages only exchange data through `@formowl/contract`.
+
+## Target Pipeline Flow
+
+```text
+LLM host or UI
+  -> MCP orchestration tools
+  -> ingestion jobs
+  -> observations
+  -> candidate graph preview
+  -> governed canonical graph commit
+  -> user graph revision
+  -> wiki projection
+  -> WikiRevision review and publish proposal
+```
+
+MCP services may coordinate this flow, but extraction, graph resolution, indexing, and canonical commits remain backend responsibilities with policy checks and review records.
