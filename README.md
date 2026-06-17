@@ -84,6 +84,15 @@ pre-commit run --all-files
 
 The pre-commit suite checks credentials/secrets, merge conflict markers, large files, text whitespace, Python/JSON/TOML syntax, Python lint/format with Ruff, TypeScript/JSON/YAML/Markdown style with Prettier, TypeScript typecheck, Python unit tests, and Rust `fmt`/`check`/`clippy`. Run it in the dev container, or install Rust with `cargo`, `rustfmt`, and `clippy` on the host. On Windows PowerShell, use `npm.cmd install` if `npm.ps1` is blocked by execution policy.
 
+The default commit-time secret checks include the lightweight local credential scanner and Gitleaks. For a deeper audit, run the manual secret scans:
+
+```sh
+pre-commit run gitleaks-history --hook-stage manual
+pre-commit run trufflehog-history --hook-stage manual
+```
+
+The dev container installs Gitleaks for commit-time scanning. Outside the dev container, the Gitleaks and TruffleHog hooks run the official Docker images through the local Docker daemon, so no host-level scanner package install is required. TruffleHog remains manual because it is heavier; this repo runs it with verification disabled so the scan stays local.
+
 On Windows PowerShell, use semicolon-separated `PYTHONPATH` values for host-side Python:
 
 ```powershell

@@ -24,6 +24,26 @@ repos:
         language: system
         types: [text]
 
+      - id: gitleaks-staged
+        name: Gitleaks staged secret scan
+        entry: python scripts/precommit_checks.py gitleaks-staged
+        language: system
+        pass_filenames: false
+
+      - id: gitleaks-history
+        name: Gitleaks full-history secret scan
+        entry: python scripts/precommit_checks.py gitleaks-history
+        language: system
+        pass_filenames: false
+        stages: [manual]
+
+      - id: trufflehog-history
+        name: TruffleHog full-history secret scan
+        entry: python scripts/precommit_checks.py trufflehog-history
+        language: system
+        pass_filenames: false
+        stages: [manual]
+
       - id: merge-conflict-check
         name: Merge conflict marker check
         entry: python scripts/precommit_checks.py conflicts

@@ -13,6 +13,8 @@ from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_FILE_SIZE_BYTES = 1024 * 1024
+GITLEAKS_IMAGE = "ghcr.io/gitleaks/gitleaks:v8.24.2"
+TRUFFLEHOG_IMAGE = "trufflesecurity/trufflehog:3.95.5"
 
 SKIP_DIRS = {
     ".git",
@@ -87,11 +89,14 @@ def main() -> int:
     commands: dict[str, Callable[[list[str]], int]] = {
         "conflicts": check_conflicts,
         "credentials": check_credentials,
+        "gitleaks-history": run_gitleaks_history,
+        "gitleaks-staged": run_gitleaks_staged,
         "json-syntax": check_json_syntax,
         "large-files": check_large_files,
         "python-syntax": check_python_syntax,
         "run": run_external,
         "text-style": check_text_style,
+        "trufflehog-history": run_trufflehog_history,
         "toml-syntax": check_toml_syntax,
     }
 
@@ -266,14 +271,91 @@ def run_external(args: list[str]) -> int:
 
     executable = resolve_executable(args[0])
     if executable is None:
-        print(
-            f"Required tool '{args[0]}' was not found. Install it or run this hook in the devcontainer.",
-            file=sys.stderr,
-        )
+        print(missing_tool_message(args[0]), file=sys.stderr)
         return 1
 
     completed = subprocess.run([executable, *args[1:]], cwd=ROOT, check=False)
     return completed.returncode
+
+
+def run_gitleaks_staged(args: list[str]) -> int:
+    if args:
+        print("gitleaks-staged does not accept arguments", file=sys.stderr)
+        return 2
+    return run_gitleaks(["git", "--pre-commit", "--redact", "--staged", "--verbose"])
+
+
+def run_gitleaks_history(args: list[str]) -> int:
+    if args:
+        print("gitleaks-history does not accept arguments", file=sys.stderr)
+        return 2
+    return run_gitleaks(["git", "--redact", "--verbose", "."])
+
+
+def run_gitleaks(args: list[str]) -> int:
+    gitleaks = resolve_executable("gitleaks")
+    if gitleaks is not None and running_in_container():
+        return subprocess.run([gitleaks, *args], cwd=ROOT, check=False).returncode
+    return run_docker_image(GITLEAKS_IMAGE, args)
+
+
+def run_trufflehog_history(args: list[str]) -> int:
+    if args:
+        print("trufflehog-history does not accept arguments", file=sys.stderr)
+        return 2
+    command = [
+        "git",
+        "file:///workspace",
+        "--no-verification",
+        "--results=unverified,unknown",
+        "--fail",
+        "--trust-local-git-config",
+    ]
+    return run_docker_image(TRUFFLEHOG_IMAGE, command)
+
+
+def running_in_container() -> bool:
+    return Path("/.dockerenv").exists() or bool(os.environ.get("REMOTE_CONTAINERS"))
+
+
+def run_docker_image(image: str, args: list[str]) -> int:
+    docker = resolve_executable("docker")
+    if docker is None:
+        print(
+            f"Required tool 'docker' was not found. Run this hook in the devcontainer "
+            f"or on a host with Docker available for image {image}.",
+            file=sys.stderr,
+        )
+        return 1
+
+    command = [
+        docker,
+        "run",
+        "--rm",
+        "-v",
+        f"{ROOT}:/workspace",
+        "-w",
+        "/workspace",
+        image,
+        *args,
+    ]
+    return subprocess.run(command, cwd=ROOT, check=False).returncode
+
+
+def missing_tool_message(command: str) -> str:
+    if command == "trufflehog":
+        return (
+            "Required tool 'trufflehog' was not found. Run the Docker-backed "
+            "trufflehog-history hook instead of requiring a host install."
+        )
+    if command == "gitleaks":
+        return (
+            "Required tool 'gitleaks' was not found. Run the Docker-backed "
+            "gitleaks hooks instead of requiring a host install."
+        )
+    return (
+        f"Required tool '{command}' was not found. Install it or run this hook in the devcontainer."
+    )
 
 
 def resolve_executable(command: str) -> str | None:
