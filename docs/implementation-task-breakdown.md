@@ -122,15 +122,15 @@ Why this is first:
     `python/formowl_ingestion/observations.py`,
     `python/formowl_ingestion/storage/`
   - Proof: package imports cleanly.
-- [ ] Implement a file-backed `StorageBackendRegistry`.
+- [x] Implement a file-backed `StorageBackendRegistry`.
   - Owner paths: `python/formowl_ingestion/storage/`
   - Proof: tests can register and resolve a local backend without exposing raw
     paths through MCP envelopes.
-- [ ] Implement a file-backed `ObjectStore` for copied local bytes.
+- [x] Implement a file-backed `ObjectStore` for copied local bytes.
   - Owner paths: `python/formowl_ingestion/storage/`
   - Proof: content hash verification passes and stored objects use FormOwl
     locators.
-- [ ] Implement `AssetStore`, `JobStore`, `ExtractorRunStore`, and
+- [x] Implement `AssetStore`, `JobStore`, `ExtractorRunStore`, and
   `ObservationStore`.
   - Owner paths: `python/formowl_ingestion/storage/`
   - Proof: create/get/list tests cover persisted JSON records.

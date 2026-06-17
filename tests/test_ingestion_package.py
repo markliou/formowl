@@ -17,7 +17,18 @@ class IngestionPackageTests(unittest.TestCase):
         self.assertEqual(assets.__all__, [])
         self.assertEqual(jobs.__all__, [])
         self.assertEqual(observations.__all__, [])
-        self.assertEqual(storage.__all__, [])
+        self.assertEqual(
+            storage.__all__,
+            [
+                "AssetStore",
+                "ExtractorRunStore",
+                "FileObjectStore",
+                "JobStore",
+                "ObservationStore",
+                "StoredObject",
+                "StorageBackendRegistry",
+            ],
+        )
 
 
 if __name__ == "__main__":
