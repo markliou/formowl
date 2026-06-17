@@ -47,6 +47,7 @@ Rust core functionality is exposed to Python through the `formowl_core` API. The
 
 - Raw resources never directly become final wiki pages.
 - Extractors produce observations and semantic metadata.
+- Implementation-level extractor routing, metadata schemas, provenance requirements, and adapter boundaries are specified in `RESOURCE_EXTRACTION_SPEC.md`.
 - Candidate atoms and relations are reviewed before canonical graph commit.
 - Atom granularity, entity resolution, relation resolution, lifecycle changes, and wiki projection are governed by explicit policies.
 - Different users can assemble different user knowledge graph revisions from the same canonical graph.

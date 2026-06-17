@@ -321,6 +321,8 @@ No MCP server should depend on another MCP server's internal types.
 
 The Resource Extraction Layer converts raw resources into observations and semantic metadata.
 
+For implementation-level details of multimedia extraction, extractor routing, observation schemas, semantic metadata schemas, and adapter boundaries, see `RESOURCE_EXTRACTION_SPEC.md`.
+
 Supported resource families should include:
 
 ```text
@@ -1996,6 +1998,7 @@ This policy does not mean all difficult code belongs in Rust. Business workflows
 formowl/
   README.md
   SPEC.md
+  RESOURCE_EXTRACTION_SPEC.md
   LICENSE
   Containerfile
   compose.yaml
