@@ -95,7 +95,7 @@ Why this is first:
 
 ### Slice 1A: Resource Contract Models
 
-- [ ] Add contract dataclasses for `StorageBackend`, `Asset`, `AssetMetadata`,
+- [x] Add contract dataclasses for `StorageBackend`, `Asset`, `AssetMetadata`,
   `IngestionJob`, `ExtractorRun`, `Observation`, and `SemanticMetadata`.
   - Owner paths: `python/formowl_contract/models.py`,
     `python/formowl_contract/__init__.py`
