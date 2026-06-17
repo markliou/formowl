@@ -1,7 +1,9 @@
 # Agent Instructions
 
-This repository is built from the FormOwl specification. Before changing code,
-read these files in order:
+This repository is built from the FormOwl specification. At the start of every
+new agent session, and again after any context compaction, resume, or long
+interruption, read this file first. Before changing code, read these files in
+order:
 
 1. `docs/implementation-task-breakdown.md`
 2. `SPEC.md`
@@ -12,6 +14,10 @@ Use `docs/implementation-task-breakdown.md` as the shared work board.
 
 ## Working Rules
 
+- Treat these instructions as session startup requirements, not one-time
+  background context. If a session has already started and you are unsure
+  whether the files above were read in the current context, read them again
+  before editing.
 - Pick one unchecked task or the task explicitly assigned by the user.
 - Stay inside the listed owner paths when possible.
 - Do not create parallel replacement modules, schemas, or documents when the
@@ -24,6 +30,13 @@ Use `docs/implementation-task-breakdown.md` as the shared work board.
   complete.
 - If a task is partially done, leave it unchecked and add a short note in the
   task breakdown file.
+- Use the dev container as the canonical development and verification
+  environment. Host commands may be used only for quick inspection or as clearly
+  labeled supplemental checks; do not report host-only results as completion
+  evidence.
+- If a required test, linter, or helper is missing from the dev container, treat
+  that as a container/tooling bug to fix or document before reporting the task
+  complete.
 
 ## Current Starting Point
 
@@ -50,5 +63,6 @@ Asset
 Run the existing Python tests before reporting completion:
 
 ```sh
-PYTHONPATH=python python -m unittest discover -s tests
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
+  python -m unittest discover -s tests
 ```

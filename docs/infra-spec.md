@@ -235,6 +235,8 @@ allowed_storage_backends
 available scratch space
 CPU class
 GPU availability
+GPU architecture and compute capability
+tensor core availability
 network locality
 extractor capabilities
 ```
@@ -242,6 +244,32 @@ extractor capabilities
 GPU is an optional worker accelerator, not a control-plane requirement. Mail and PST ingestion are primarily CPU, disk I/O, memory, local scratch, and parser-stability workloads. GPU workers should be scheduled separately for ASR, diarization, image understanding, video analysis, local embedding models, rerankers, or local LLM graph candidate generation.
 
 Scoped ontology and type-resolution work follows the same boundary. The control plane, MCP Gateway, PostgreSQL, pgvector queries, type compatibility checks, lexical matching, and graph validation should run on CPU. Embedding generation for type candidates is an asynchronous worker job, not inline in an MCP request. GPU acceleration is optional for high-volume multilingual embedding generation, ASR, diarization, image/video understanding, and local LLM candidate generation; it is not required to host the MCP server or query path.
+
+GPU worker hardware tiers must be explicit because accelerated adapters have different floors:
+
+```text
+Open-source adapters (PyTorch, ONNX Runtime, llama.cpp, faster-whisper, PaddleOCR):
+  run on older consumer GPUs without Tensor Cores, including Pascal-class cards such as the
+  GTX 1080 Ti (compute capability 6.1). Suitable for embedding generation, reranking, OCR,
+  ASR, and small quantized local LLM candidate generation.
+
+NVIDIA NIM / NeMo Retriever adapters:
+  require Tensor Core GPUs (Turing at the floor, Ampere or newer in practice) and NVIDIA AI
+  Enterprise licensing. They are an optional accelerated adapter family, deferred until
+  suitable hardware and licensing exist.
+```
+
+Accelerated adapter policy:
+
+```text
+Self-hosted open-source adapters on internal GPU workers are the first accelerated path, so
+  raw and sensitive content stays inside the network.
+NVIDIA NIM adapters are optional and replaceable. When adopted, restricted or private assets
+  must use self-hosted or on-prem NIM endpoints; hosted NVIDIA endpoints are allowed only for
+  public or explicitly exportable content.
+The scheduler must route NIM-requiring jobs only to workers that declare a compatible GPU
+  architecture and tensor core availability.
+```
 
 ### MCP Services
 

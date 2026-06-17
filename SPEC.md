@@ -2888,4 +2888,4 @@ Canonical atoms, entities, and relations are reusable governed graph parts.
 Canonical graph state is scope-aware; canonical within a scope does not mean canonical across all scopes.
 User knowledge graphs are versioned assemblies for roles, tasks, permissions, and preferred granularity.
 Wiki revisions are governed output artifacts generated through projection specs and review flows.
-MCP exposes governed semantic operations, not raw storage, raw 
+MCP exposes governed semantic operations, not raw storage, raw
