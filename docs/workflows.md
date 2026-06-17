@@ -25,6 +25,33 @@ Raw resource
 
 Users should experience this as task-oriented review work, not as manual graph maintenance.
 
+## Minimal Local Ingestion Workflow
+
+The current Slice 1 workflow is a deterministic internal path for trusted local
+tests. It proves the resource extraction spine before real upload sessions,
+workers, OCR, audio, video, graph fusion, or external storage adapters exist.
+
+```text
+trusted local file or text payload
+  -> register_asset_from_local_file
+  -> FileObjectStore copy under a registered local backend
+  -> AssetStore record with FormOwl object locator, hash, source ref, and permission scope
+  -> create_ingestion_job
+  -> run_ingestion_job
+  -> PlainTextObservationExtractor
+  -> ExtractorRunStore and ObservationStore records
+  -> build_context_package_from_text_observations
+  -> existing Wiki MCP generate_wiki_draft
+```
+
+This path is intentionally narrow:
+
+- It supports deterministic plain text and markdown extraction only.
+- It uses FormOwl locators such as `formowl://object/...` in records and does not expose raw local paths through generated context or wiki drafts.
+- It creates observations and citation locators with asset, extractor run, and observation IDs.
+- It does not create semantic metadata, candidate atoms, canonical graph records, user graph revisions, or wiki revisions.
+- Failed local extractor runs leave the ingestion job in `failed` status with an error and without observation records.
+
 ## Guided Upload and Source Preparation Flow
 
 FormOwl users normally interact with the system through ChatGPT and the FormOwl MCP server. Users must not be required to switch into backend tools or manually choose NAS folders, storage backends, buckets, volumes, queues, parser-specific paths, or extractor settings during normal usage.

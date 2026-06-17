@@ -158,38 +158,38 @@ Why this is first:
 
 ### Slice 1D: Minimal Ingestion Workflow
 
-- [ ] Implement `register_asset_from_local_file()` for trusted internal tests.
+- [x] Implement `register_asset_from_local_file()` for trusted internal tests.
   - Owner paths: `python/formowl_ingestion/assets.py`
   - Proof: asset registration records technical metadata, hash, source ref,
     permission scope, and a FormOwl locator.
-- [ ] Implement `create_ingestion_job()` and `run_ingestion_job()` for local
+- [x] Implement `create_ingestion_job()` and `run_ingestion_job()` for local
   deterministic extractors.
   - Owner paths: `python/formowl_ingestion/jobs.py`
   - Proof: job status moves through pending/running/succeeded/failed and links
     to extractor runs and observations.
-- [ ] Add an integration test for Asset -> Job -> Run -> Observation.
+- [x] Add an integration test for Asset -> Job -> Run -> Observation.
   - Owner paths: `tests/test_ingestion_workflow.py`
   - Proof: end-to-end test passes and records remain queryable after process
     restart.
-- [ ] Document the small core workflow.
+- [x] Document the small core workflow.
   - Owner paths: `docs/workflows.md`, this file
   - Proof: docs mention the local deterministic ingestion path and any
     intentional limitations.
 
 ### Slice 1E: Observation to Wiki Draft Bridge
 
-- [ ] Add a narrow helper that builds a `ContextPackage` from selected text
+- [x] Add a narrow helper that builds a `ContextPackage` from selected text
   observations.
   - Owner paths: `python/formowl_ingestion/observations.py`,
     `python/formowl_contract/`
   - Proof: the context package includes source refs, asset ids, extractor run
     ids, observation ids, citations, and permission scope.
-- [ ] Add an integration test for text asset -> observations -> context package
+- [x] Add an integration test for text asset -> observations -> context package
   -> existing Wiki MCP draft.
   - Owner paths: `tests/test_ingestion_to_wiki_workflow.py`
   - Proof: generated markdown includes the source title/content, citation
     lineage, and evidence/observation references without reading raw paths.
-- [ ] Keep this bridge reviewable and non-canonical.
+- [x] Keep this bridge reviewable and non-canonical.
   - Owner paths: `python/formowl_ingestion/`, `python/formowl_wiki_mcp/`
   - Proof: the bridge does not create `CandidateAtom`, `CanonicalAtom`,
     `WikiRevision`, or graph commit records.

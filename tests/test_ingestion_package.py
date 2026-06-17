@@ -14,7 +14,7 @@ class IngestionPackageTests(unittest.TestCase):
             formowl_ingestion.__all__,
             ["assets", "extraction", "extractors", "jobs", "observations", "storage"],
         )
-        self.assertEqual(assets.__all__, [])
+        self.assertEqual(assets.__all__, ["register_asset_from_local_file"])
         self.assertEqual(
             extraction.__all__,
             [
@@ -27,8 +27,8 @@ class IngestionPackageTests(unittest.TestCase):
             ],
         )
         self.assertEqual(extractors.__all__, ["PlainTextObservationExtractor"])
-        self.assertEqual(jobs.__all__, [])
-        self.assertEqual(observations.__all__, [])
+        self.assertEqual(jobs.__all__, ["create_ingestion_job", "run_ingestion_job"])
+        self.assertEqual(observations.__all__, ["build_context_package_from_text_observations"])
         self.assertEqual(
             storage.__all__,
             [
