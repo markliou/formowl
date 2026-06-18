@@ -7,7 +7,7 @@ from typing import Any, Callable, Generic, TypeVar
 
 from formowl_contract import CandidateAtom, CandidateRelation, SemanticMetadata, to_plain
 
-_SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
+_SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 T = TypeVar("T")
 
 

@@ -67,12 +67,14 @@ class GraphRecordStoreTests(unittest.TestCase):
         )
 
         graph_root = temp_dir / "graph"
-        directory_names = {child.name for child in graph_root.iterdir() if child.is_dir()}
+        top_level_entries = {child.name for child in graph_root.iterdir()}
         self.assertEqual(
-            directory_names,
+            top_level_entries,
             {"semantic-metadata", "candidate-atoms", "candidate-relations"},
         )
-        self.assertFalse(any("canonical" in name for name in directory_names))
+        self.assertTrue(all((graph_root / name).is_dir() for name in top_level_entries))
+        graph_paths = [path.relative_to(graph_root).as_posix() for path in graph_root.rglob("*")]
+        self.assertFalse(any("canonical" in path for path in graph_paths))
 
     def test_create_accepts_dict_payloads_and_validates_contracts(self) -> None:
         temp_dir = _paths.fresh_test_dir("graph-record-stores-dict-validation")
@@ -159,6 +161,154 @@ class GraphRecordStoreTests(unittest.TestCase):
                     store.create(invalid_record)
                 self.assertEqual(store.list(), [])
 
+    def test_stores_reject_path_like_graph_reference_ids_without_partial_writes(self) -> None:
+        temp_dir = _paths.fresh_test_dir("graph-record-stores-path-like-provenance")
+        records = _valid_graph_records()
+        invalid_cases = [
+            (
+                SemanticMetadataStore,
+                _with_field(
+                    records.semantic_metadata.to_dict(),
+                    "source_observation_ids",
+                    ["../obs"],
+                ),
+            ),
+            (
+                SemanticMetadataStore,
+                _with_field(records.semantic_metadata.to_dict(), "extractor_run_id", "../run"),
+            ),
+            (
+                CandidateAtomStore,
+                _with_field(
+                    records.candidate_atom.to_dict(),
+                    "source_observation_ids",
+                    [r"C:\raw\obs"],
+                ),
+            ),
+            (
+                CandidateAtomStore,
+                _with_field(
+                    records.candidate_atom.to_dict(),
+                    "source_semantic_metadata_ids",
+                    ["smb://nas/share/sem"],
+                ),
+            ),
+            (
+                CandidateAtomStore,
+                _with_field(records.candidate_atom.to_dict(), "extractor_run_id", r"C:\raw\run"),
+            ),
+            (
+                CandidateRelationStore,
+                _with_field(
+                    records.candidate_relation.to_dict(),
+                    "source_observation_ids",
+                    ["obs/path"],
+                ),
+            ),
+            (
+                CandidateRelationStore,
+                _with_field(
+                    records.candidate_relation.to_dict(),
+                    "source_semantic_metadata_ids",
+                    ["formowl://asset/sem"],
+                ),
+            ),
+            (
+                CandidateRelationStore,
+                _with_field(
+                    records.candidate_relation.to_dict(),
+                    "source_candidate_atom_id",
+                    "../catom",
+                ),
+            ),
+            (
+                CandidateRelationStore,
+                _with_field(
+                    records.candidate_relation.to_dict(),
+                    "target_candidate_atom_id",
+                    r"C:\raw\catom",
+                ),
+            ),
+            (
+                CandidateRelationStore,
+                _with_field(
+                    records.candidate_relation.to_dict(),
+                    "extractor_run_id",
+                    "formowl://asset/run",
+                ),
+            ),
+        ]
+
+        for store_type, invalid_payload in invalid_cases:
+            store = store_type(temp_dir)
+            with self.subTest(store_type=store_type.__name__, payload=invalid_payload):
+                with self.assertRaises(ContractValidationError):
+                    store.create(invalid_payload)
+                self.assertEqual(store.list(), [])
+                self.assertEqual(list((temp_dir / "graph").rglob("*.json")), [])
+
+    def test_stores_reject_malformed_separatorless_graph_reference_ids(self) -> None:
+        temp_dir = _paths.fresh_test_dir("graph-record-stores-malformed-provenance")
+        records = _valid_graph_records()
+        invalid_cases = [
+            (
+                SemanticMetadataStore,
+                _with_field(records.semantic_metadata.to_dict(), "source_observation_ids", [".."]),
+            ),
+            (
+                SemanticMetadataStore,
+                _with_field(records.semantic_metadata.to_dict(), "extractor_run_id", "run id"),
+            ),
+            (
+                CandidateAtomStore,
+                _with_field(records.candidate_atom.to_dict(), "source_observation_ids", ["obs id"]),
+            ),
+            (
+                CandidateAtomStore,
+                _with_field(
+                    records.candidate_atom.to_dict(),
+                    "source_semantic_metadata_ids",
+                    ["sem:001"],
+                ),
+            ),
+            (
+                CandidateAtomStore,
+                _with_field(records.candidate_atom.to_dict(), "extractor_run_id", "C:raw"),
+            ),
+            (
+                CandidateRelationStore,
+                _with_field(records.candidate_relation.to_dict(), "source_observation_ids", ["obs id"]),
+            ),
+            (
+                CandidateRelationStore,
+                _with_field(
+                    records.candidate_relation.to_dict(),
+                    "source_semantic_metadata_ids",
+                    ["sem:001"],
+                ),
+            ),
+            (
+                CandidateRelationStore,
+                _with_field(records.candidate_relation.to_dict(), "source_candidate_atom_id", ".."),
+            ),
+            (
+                CandidateRelationStore,
+                _with_field(records.candidate_relation.to_dict(), "target_candidate_atom_id", "catom id"),
+            ),
+            (
+                CandidateRelationStore,
+                _with_field(records.candidate_relation.to_dict(), "extractor_run_id", "C:raw"),
+            ),
+        ]
+
+        for store_type, invalid_payload in invalid_cases:
+            store = store_type(temp_dir)
+            with self.subTest(store_type=store_type.__name__, payload=invalid_payload):
+                with self.assertRaises(ContractValidationError):
+                    store.create(invalid_payload)
+                self.assertEqual(store.list(), [])
+                self.assertEqual(list((temp_dir / "graph").rglob("*.json")), [])
+
     def test_stores_reject_unsafe_record_ids_without_partial_writes(self) -> None:
         temp_dir = _paths.fresh_test_dir("graph-record-stores-safe-ids")
         records = _valid_graph_records()
@@ -168,12 +318,36 @@ class GraphRecordStoreTests(unittest.TestCase):
                 replace(records.semantic_metadata, semantic_metadata_id="../sem_escape"),
             ),
             (
+                SemanticMetadataStore,
+                replace(records.semantic_metadata, semantic_metadata_id="."),
+            ),
+            (
+                SemanticMetadataStore,
+                replace(records.semantic_metadata, semantic_metadata_id=".."),
+            ),
+            (
                 CandidateAtomStore,
                 replace(records.candidate_atom, candidate_atom_id="../catom_escape"),
             ),
             (
+                CandidateAtomStore,
+                replace(records.candidate_atom, candidate_atom_id="."),
+            ),
+            (
+                CandidateAtomStore,
+                replace(records.candidate_atom, candidate_atom_id=".."),
+            ),
+            (
                 CandidateRelationStore,
                 replace(records.candidate_relation, candidate_relation_id="../crel_escape"),
+            ),
+            (
+                CandidateRelationStore,
+                replace(records.candidate_relation, candidate_relation_id="."),
+            ),
+            (
+                CandidateRelationStore,
+                replace(records.candidate_relation, candidate_relation_id=".."),
             ),
         ]
 
@@ -185,6 +359,7 @@ class GraphRecordStoreTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     store.get("../escape")
                 self.assertEqual(store.list(), [])
+                self.assertEqual(list((temp_dir / "graph").rglob("*.json")), [])
 
     def test_missing_records_return_none(self) -> None:
         temp_dir = _paths.fresh_test_dir("graph-record-stores-missing")
@@ -205,6 +380,12 @@ class _GraphRecords:
         self.semantic_metadata = semantic_metadata
         self.candidate_atom = candidate_atom
         self.candidate_relation = candidate_relation
+
+
+def _with_field(payload: dict[str, object], field_name: str, value: object) -> dict[str, object]:
+    updated = dict(payload)
+    updated[field_name] = value
+    return updated
 
 
 def _valid_graph_records() -> _GraphRecords:

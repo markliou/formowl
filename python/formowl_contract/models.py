@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 import json
+import re
 from typing import Any, Literal
 
 from formowl_core import sha256_prefixed, sha256_prefixed_id
@@ -40,6 +41,7 @@ WorkspaceMemberRole = Literal[*WORKSPACE_MEMBER_ROLE_VALUES]
 AccessRequestStatus = Literal[*ACCESS_REQUEST_STATUS_VALUES]
 UploadSessionStatus = Literal[*UPLOAD_SESSION_STATUS_VALUES]
 CandidateStatus = Literal[*CANDIDATE_STATUS_VALUES]
+_GRAPH_REFERENCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 class ContractValidationError(ValueError):
@@ -407,9 +409,16 @@ def _validate_provenance_id_list(
     allow_empty: bool = True,
 ) -> None:
     _validate_string_list(value, field_name, allow_empty=allow_empty)
-    # Empty provenance ids are not resolvable, so reject them before stores persist proposals.
-    if any(not item for item in value):
-        raise ContractValidationError(f"{field_name} entries must be non-empty strings")
+    for item in value:
+        _validate_graph_reference_id(item, f"{field_name} entry")
+
+
+def _validate_graph_reference_id(value: Any, field_name: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ContractValidationError(f"{field_name} must be a non-empty string")
+    # Graph lineage stores stable record ids only; paths and locators belong behind retrieval APIs.
+    if not _GRAPH_REFERENCE_ID.fullmatch(value):
+        raise ContractValidationError(f"{field_name} must be a stable record id")
 
 
 def _validate_confidence(value: Any, field_name: str) -> None:
@@ -1453,6 +1462,7 @@ def validate_observation(value: Any) -> dict[str, Any]:
         ("asset_id", "evidence_snapshot_id", "text", "caption"),
         "Observation",
     )
+    _validate_iso_timestamp(observation["created_at"], "Observation.created_at")
     if _is_missing_optional_id(observation.get("asset_id")) and _is_missing_optional_id(
         observation.get("evidence_snapshot_id")
     ):
@@ -1487,6 +1497,14 @@ def validate_semantic_metadata(value: Any) -> dict[str, Any]:
         "SemanticMetadata",
     )
     _validate_optional_string_fields(metadata, ("created_at",), "SemanticMetadata")
+    _validate_graph_reference_id(
+        metadata["semantic_metadata_id"],
+        "SemanticMetadata.semantic_metadata_id",
+    )
+    _validate_graph_reference_id(
+        metadata["extractor_run_id"],
+        "SemanticMetadata.extractor_run_id",
+    )
     _validate_provenance_id_list(
         metadata["source_observation_ids"],
         "SemanticMetadata.source_observation_ids",
@@ -1523,6 +1541,8 @@ def validate_candidate_atom(value: Any) -> dict[str, Any]:
         "CandidateAtom",
     )
     _validate_optional_string_fields(atom, ("created_at",), "CandidateAtom")
+    _validate_optional_iso_timestamp_fields(atom, ("created_at",), "CandidateAtom")
+    _validate_graph_reference_id(atom["candidate_atom_id"], "CandidateAtom.candidate_atom_id")
     _validate_candidate_common(atom, "CandidateAtom")
     _validate_provenance_id_list(
         atom.get("source_semantic_metadata_ids", []),
@@ -1562,6 +1582,19 @@ def validate_candidate_relation(value: Any) -> dict[str, Any]:
         "CandidateRelation",
     )
     _validate_optional_string_fields(relation, ("created_at",), "CandidateRelation")
+    _validate_optional_iso_timestamp_fields(relation, ("created_at",), "CandidateRelation")
+    _validate_graph_reference_id(
+        relation["candidate_relation_id"],
+        "CandidateRelation.candidate_relation_id",
+    )
+    _validate_graph_reference_id(
+        relation["source_candidate_atom_id"],
+        "CandidateRelation.source_candidate_atom_id",
+    )
+    _validate_graph_reference_id(
+        relation["target_candidate_atom_id"],
+        "CandidateRelation.target_candidate_atom_id",
+    )
     _validate_candidate_common(relation, "CandidateRelation")
     _validate_provenance_id_list(
         relation.get("source_semantic_metadata_ids", []),
@@ -1605,6 +1638,7 @@ def validate_external_graph_import(value: Any) -> dict[str, Any]:
 
 
 def _validate_candidate_common(candidate: dict[str, Any], name: str) -> None:
+    _validate_graph_reference_id(candidate["extractor_run_id"], f"{name}.extractor_run_id")
     _validate_provenance_id_list(
         candidate["source_observation_ids"],
         f"{name}.source_observation_ids",

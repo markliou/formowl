@@ -637,7 +637,7 @@ These groups can be split across multiple agents after Slice 1 is stable.
     OK. `Turing` and `Lovelace` agreed after re-review; dev-container
     verification is still required before checking this item.
 
-- [ ] Implement `SemanticMetadataStore`, `CandidateAtomStore`, and
+- [x] Implement `SemanticMetadataStore`, `CandidateAtomStore`, and
   `CandidateRelationStore`.
   - Owner paths: `python/formowl_graph/storage/` or
     `python/formowl_ingestion/storage/`
@@ -645,26 +645,210 @@ These groups can be split across multiple agents after Slice 1 is stable.
   - Note: implemented file-backed graph proposal stores under
     `python/formowl_graph/storage/`; `tests/test_graph_record_stores.py`
     covers create/get/list, dict validation, safe ids, restart persistence, and
-    verifies canonical graph collections are not created. Canonical
-    dev-container unittest ran 104 tests OK, and coverage passed at 87%.
-    Pending item-specific reviewer gate. First reviewer blockers were fixed by
+    verifies canonical graph collections are not created. First reviewer blockers were fixed by
     adding malformed dict-payload no-partial-write assertions, empty provenance
-    id rejection, and exact proposal-only graph directory assertions. Host
-    supplemental unittest ran 105 tests OK; canonical dev-container
-    verification is still required before completion.
+    id rejection, path-like graph reference id rejection including extractor run
+    lineage, stable graph-reference id grammar, exact proposal-only graph
+    directory assertions, and no-json side-effect checks for rejected malformed
+    and unsafe ids. Reviewer gate passed 9/9. Canonical dev-container unittest
+    ran 107 tests OK; canonical coverage passed with 87% total coverage.
   - Reviewer gate target: 9 effective read-only reviewers.
-  - Effective reviewer count: 2/9.
-  - Reviewer agreement count: 2/9.
+  - Effective reviewer count: 9/9.
+  - Reviewer agreement count: 9/9.
   - Reviewers with blocking findings: none.
   - Non-counted agents: none.
-  - Active reviewers: Tesla, Rawls.
-- [ ] Add a deterministic candidate extraction adapter for simple text fixtures.
+  - Active reviewers: none.
+- [x] Add a deterministic candidate extraction adapter for simple text fixtures.
   - Owner paths: `python/formowl_graph/candidates.py`
   - Proof: candidates are reviewable proposals and never canonical truth.
-- [ ] Add candidate preview tooling.
+  - Test checklist:
+    - [x] Deterministic text fixture markers create stable `pending_review`
+      `CandidateAtom` proposals with source observation and extractor run
+      provenance.
+    - [x] Candidate extraction skips unsupported or empty fixture text without
+      persisting partial candidate records.
+    - [x] Candidate extraction rejects malformed observation lineage before
+      candidate store writes.
+    - [x] Tests assert candidate extraction does not create semantic metadata,
+      canonical graph records, wiki revisions, or raw-path-facing state.
+  - Note: implementation and host-side supplemental tests are in place;
+    `python -m unittest discover -s tests -p test_candidate_extraction.py` ran
+    10 tests OK and `python -m unittest discover -s tests` ran 117 tests OK.
+    Initial reviewer blockers for source extractor-run lineage, raw
+    path/locator leakage, malformed `created_at`, ID determinism across
+    timestamps, and unmarked text handling have been fixed for re-review.
+    Noether's follow-up blocker for non-ISO `created_at` strings was fixed by
+    ISO timestamp validation and focused coverage.
+    Confucius blockers for direct-store malformed candidate timestamps and raw
+    path/locator marker labels were fixed with contract validation and
+    no-write tests.
+    Hegel/Singer blockers for source observation timestamps, punctuation-wrapped
+    POSIX marker paths, and dict-payload candidate timestamp bypasses were fixed
+    for re-review.
+    Lorentz's blocker for later raw marker failures leaving earlier candidates
+    partially persisted was fixed with a focused no-write test.
+    Carson's blocker for generic absolute POSIX raw paths in marker labels was
+    fixed by generic absolute-path detection and focused cases such as
+    `/etc/passwd` and `/root/secret.txt`. Reviewer gate passed 9/9. Canonical
+    dev-container unittest ran 121 tests OK; canonical coverage passed with 87%
+    total coverage. Dev-container ruff check and format check passed for the new
+    candidate extraction files.
+  - Reviewer gate target: 9 effective read-only reviewers.
+  - Effective reviewer count: 9/9.
+  - Reviewer agreement count: 9/9.
+  - Reviewers with blocking findings: none.
+  - Non-counted agents: none.
+  - Active reviewers: none.
+- [x] Add candidate preview tooling.
   - Owner paths: `python/formowl_graph/`, optional MCP boundary
   - Proof: preview output includes warnings, confidence, provenance, and review
     actions.
+  - Test checklist:
+    - [x] Candidate atom previews include confidence, provenance, warnings, and
+      review actions without mutating proposal stores.
+    - [x] Candidate relation previews include endpoint lineage, confidence,
+      warnings, and review actions without canonical graph side effects.
+    - [x] Preview filters return only requested candidates and reject malformed
+      filter ids without leaking raw paths or partial preview output.
+    - [x] Preview output rejects raw path or internal locator values from
+      labels, properties, and warning text.
+  - Note: implementation, README documentation, focused tests, and reviewer
+    blocker fixes are complete. Reviewer gate passed 9/9. Canonical
+    dev-container unittest ran 127 tests OK; canonical coverage passed with 88%
+    total coverage. Dev-container ruff check and format check passed for the
+    new candidate preview files.
+  - Reviewer gate target: 9 effective read-only reviewers.
+  - Effective reviewer count: 9/9 (`Meitner`, `Gibbs`, `Boole`, `Kant`,
+    `Pauli`, `Aristotle`, `Hilbert`, `Lovelace`, `Linnaeus`).
+  - Reviewer agreement count: 9/9 (`Meitner`, `Gibbs`, `Boole`, `Kant`,
+    `Pauli`, `Aristotle`, `Hilbert`, `Lovelace`, `Linnaeus`).
+  - Reviewers with blocking findings: none.
+  - Non-counted agents: none.
+  - Active reviewers: none.
+- [x] Fix Gibbs blocker: candidate preview relation filter negative paths must
+  be independently covered.
+  - Owner paths: `python/formowl_graph/preview.py`,
+    `tests/test_candidate_preview.py`
+  - Proof: selected relation filters, missing relation warnings, malformed
+    `candidate_relation_ids`, and relation filters without a relation store are
+    asserted.
+  - Note: implementation, Gibbs/Meitner re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Gibbs blocker: candidate relation preview must warn for missing
+  source endpoints.
+  - Owner paths: `python/formowl_graph/preview.py`,
+    `tests/test_candidate_preview.py`
+  - Proof: relation preview emits exact `source_candidate_atom_not_found`
+    warnings when the source atom is missing.
+  - Note: implementation, Gibbs re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Gibbs blocker: closed candidate review states must have explicit
+  preview warnings and actions.
+  - Owner paths: `python/formowl_graph/preview.py`,
+    `tests/test_candidate_preview.py`
+  - Proof: approved, rejected, or deferred atom/relation previews expose
+    `reopen_review` and `status_not_pending_review:<status>`.
+  - Note: implementation, Gibbs/Meitner re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Gibbs blocker: preview redaction failures must not echo raw paths or
+  internal locators in errors.
+  - Owner paths: `python/formowl_graph/preview.py`,
+    `tests/test_candidate_preview.py`
+  - Proof: raised `ContractValidationError` messages omit raw path and locator
+    values.
+  - Note: implementation, Gibbs re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Gibbs follow-up blocker: filtered preview no-mutation assertions must
+  snapshot state before preview calls.
+  - Owner paths: `tests/test_candidate_preview.py`
+  - Proof: graph JSON state is captured immediately after fixture persistence
+    and compared after successful and invalid filtered preview calls.
+  - Note: implementation, Gibbs re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Gibbs follow-up blocker: malformed filter errors must not echo raw
+  path or locator input.
+  - Owner paths: `tests/test_candidate_preview.py`
+  - Proof: atom and relation invalid-filter exceptions omit submitted raw
+    filter values.
+  - Note: implementation, Gibbs re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Kant blocker: candidate preview filters must reject bare strings,
+  bytes, and non-sequence values.
+  - Owner paths: `python/formowl_graph/preview.py`,
+    `tests/test_candidate_preview.py`
+  - Proof: atom and relation filters reject bare `str`, `bytes`, and
+    non-sequence values without graph mutations or raw-value echo.
+  - Note: implementation, Boole/Kant re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Kant blocker: preview redaction must inspect property keys as well as
+  values.
+  - Owner paths: `python/formowl_graph/preview.py`,
+    `tests/test_candidate_preview.py`
+  - Proof: atom and relation properties with raw path or internal locator keys
+    fail preview without raw-key echo or graph mutations.
+  - Note: implementation, Kant re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Boole blocker: preview redaction must reject obvious relative raw
+  file references.
+  - Owner paths: `python/formowl_graph/preview.py`,
+    `tests/test_candidate_preview.py`
+  - Proof: relative POSIX paths and Windows-style relative paths in labels or
+    properties fail preview without raw-value echo or graph mutations.
+  - Note: implementation, Boole re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Pauli blocker: preview redaction must reject Windows dot-relative
+  file references.
+  - Owner paths: `python/formowl_graph/preview.py`,
+    `tests/test_candidate_preview.py`
+  - Proof: `.\\customer-secret.pdf` and `..\\customer-secret.pdf` fail preview
+    without raw-value echo or graph mutations.
+  - Note: implementation, Pauli re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Pauli blocker: closed-status preview tests must assert no graph
+  mutation.
+  - Owner paths: `tests/test_candidate_preview.py`
+  - Proof: approved, rejected, and deferred preview scenarios snapshot graph
+    state before preview and assert unchanged state plus no canonical side
+    effects.
+  - Note: implementation, Pauli/Aristotle re-review, and canonical
+    dev-container verification passed.
+- [x] Fix Aristotle blocker: preview redaction must reject extensionless
+  relative raw file references.
+  - Owner paths: `python/formowl_graph/preview.py`,
+    `tests/test_candidate_preview.py`
+  - Proof: extensionless `docs/secrets` and `scratch\\secret` fail preview
+    without raw-value echo or graph mutations.
+  - Note: implementation, Aristotle re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Aristotle blocker: preview no-mutation assertions must include
+  non-JSON graph side effects.
+  - Owner paths: `tests/test_candidate_preview.py`
+  - Proof: preview tests compare all graph-relative paths and file contents,
+    not only `*.json` payloads.
+  - Note: implementation, Aristotle re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Lovelace blocker: preview redaction must reject POSIX single-file
+  dot-relative references.
+  - Owner paths: `python/formowl_graph/preview.py`,
+    `tests/test_candidate_preview.py`
+  - Proof: `./customer-secret.pdf`, `../customer-secret.pdf`, `./secrets`, and
+    `../secrets` fail preview without raw-value echo or graph mutations.
+  - Note: implementation, Lovelace re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Hilbert blocker: preview warning text must be redacted like labels
+  and properties.
+  - Owner paths: `tests/test_candidate_preview.py`
+  - Proof: top-level and item warning text containing internal locators or
+    relative paths fail `to_dict()` without raw-value echo.
+  - Note: implementation, Hilbert re-review, and canonical dev-container
+    verification passed.
+- [x] Fix Hilbert blocker: preview warning assertions must be exact enough to
+  catch bogus or missing items.
+  - Owner paths: `tests/test_candidate_preview.py`
+  - Proof: atom, relation, and closed-status preview tests assert exact warning
+    sets/lists and expected candidate ids.
+  - Note: implementation, Hilbert/Linnaeus re-review, and canonical
+    dev-container verification passed.
 
 ### Governance and Canonical Graph
 

@@ -50,6 +50,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - File-backed vector and optional graph projection stores for derived retrieval
   indexes; stale vector results still require the same permission and grant
   checks as ready results.
+- Deterministic text-fixture candidate extraction that turns marked observations into reviewable candidate atom proposals.
+- Candidate preview tooling that exposes review actions, warnings, confidence, and provenance without committing canonical graph state.
 - Project MCP with a mocked OpenProject adapter, evidence snapshot file storage, context package generation, and proposal-only work item comments.
 - Wiki MCP with markdown draft generation, frontmatter provenance, draft storage, wiki snapshot capture, and proposal-only publishing.
 - Dockerfile-managed dev/runtime containers and `.devcontainer/devcontainer.json`.
