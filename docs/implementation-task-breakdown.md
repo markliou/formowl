@@ -755,10 +755,23 @@ These groups can be split across multiple agents after Slice 1 is stable.
   - Owner paths: storage modules, migrations
   - Proof: tests run against file stores and database stores through the same
     interfaces.
-- [ ] Add vector and optional graph storage after candidate review workflows
+- [x] Add vector and optional graph storage after candidate review workflows
   stabilize.
   - Owner paths: graph/index modules
   - Proof: stale vectors cannot bypass permission checks.
+  - Note: implemented file-backed `formowl_graph.index` vector and optional
+    graph projection stores with safe ids, payload validation, persistence,
+    stale vector state, cosine search, and grant-filtered retrieval. Focused
+    dev-container graph-index unittest ran 7 tests OK; Ruff passed; canonical
+    dev-container unittest ran 112 tests OK; coverage passed at 87%. The
+    item-specific 9-reviewer gate passed.
+  - Reviewer gate target: 9 effective read-only reviewers.
+  - Effective reviewer count: 9/9.
+  - Reviewer agreement count: 9/9 (`Aquinas`, `Fermat`, `Hilbert`,
+    `Kierkegaard`, `Lagrange`, `Nietzsche`, `Kant`, `Copernicus`, `Feynman`).
+  - Reviewers with blocking findings: none.
+  - Non-counted agents: none.
+  - Active reviewers: none.
 
 ## Agent Dispatch Notes
 
