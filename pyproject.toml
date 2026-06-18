@@ -12,6 +12,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
+  "coverage[toml]>=7.6",
   "pre-commit>=4.0",
   "ruff==0.8.6"
 ]
@@ -26,6 +27,17 @@ where = ["python"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["python"]
+
+[tool.coverage.run]
+branch = true
+source = [
+  "python"
+]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = false
 
 [tool.ruff]
 line-length = 100

@@ -5,7 +5,14 @@ from pathlib import Path
 import re
 from typing import Any, Callable, Generic, TypeVar
 
-from formowl_contract import Asset, ExtractorRun, IngestionJob, Observation, to_plain
+from formowl_contract import (
+    Asset,
+    ExtractorRun,
+    IngestionJob,
+    Observation,
+    UploadSession,
+    to_plain,
+)
 
 _SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 T = TypeVar("T")
@@ -42,6 +49,9 @@ class _JsonRecordStore(Generic[T]):
 
     def list(self) -> list[T]:
         return [self.factory(_read_json(path)) for path in sorted(self.base_dir.glob("*.json"))]
+
+    def validate_record_id(self, record_id: str) -> None:
+        self._record_path(record_id)
 
     def _validate(self, record: T | dict[str, Any]) -> T:
         if isinstance(record, dict):
@@ -131,6 +141,29 @@ class ObservationStore:
         return self._store.get(observation_id)
 
     def list(self) -> list[Observation]:
+        return self._store.list()
+
+    def validate_observation_id(self, observation_id: str) -> None:
+        self._store.validate_record_id(observation_id)
+
+
+class UploadSessionStore:
+    def __init__(self, base_dir: str | Path) -> None:
+        self._store = _JsonRecordStore[UploadSession](
+            base_dir,
+            collection="upload-sessions",
+            id_field="upload_session_id",
+            factory=UploadSession.from_dict,
+            serializer=lambda value: value.to_dict(),
+        )
+
+    def create(self, upload_session: UploadSession | dict[str, Any]) -> UploadSession:
+        return self._store.create(upload_session)
+
+    def get(self, upload_session_id: str) -> UploadSession | None:
+        return self._store.get(upload_session_id)
+
+    def list(self) -> list[UploadSession]:
         return self._store.list()
 
 

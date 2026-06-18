@@ -38,6 +38,15 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 ## Current Implementation
 
 - Python contract models for source references, permission scopes, evidence snapshots, context packages, wiki revisions, and MCP result envelopes.
+- Phase 0 identity, access request, grant, audit log, and upload session contract models.
+- Manual trusted internal actor selection for Phase 0 tests; this is not production authentication.
+- File-backed audit logs for actor selection, asset registration, ingestion job creation, evidence fetches, permission denials, and upload session creation.
+- Controlled `upload_asset_reference` imports for trusted backend references that still create asset, permission, and audit records.
+- ChatGPT session capture helper that turns the current conversation into a registered asset and ingestion job.
+- Deterministic file technical metadata extractor for file size, MIME type, content hash, and FormOwl object locator observations.
+- Deterministic fixture adapters for document structure, OCR text, audio transcripts, video scene/keyframe observations, and mail/archive observations.
+- Candidate graph contract models for `CandidateAtom`, `CandidateRelation`, and `ExternalGraphImport` proposal records.
+- File-backed proposal stores for semantic metadata, candidate atoms, and candidate relations.
 - Project MCP with a mocked OpenProject adapter, evidence snapshot file storage, context package generation, and proposal-only work item comments.
 - Wiki MCP with markdown draft generation, frontmatter provenance, draft storage, wiki snapshot capture, and proposal-only publishing.
 - Dockerfile-managed dev/runtime containers and `.devcontainer/devcontainer.json`.
@@ -80,11 +89,27 @@ Run tests inside the dev container:
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python -m unittest discover -s tests"
 ```
 
+Run tests with coverage inside the dev container:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "coverage run -m unittest discover -s tests && coverage report"
+```
+
+The coverage report enforces the minimum threshold configured in
+`pyproject.toml`.
+
 Run lint and formatting checks inside the dev container:
 
 ```sh
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "ruff check python tests scripts && ruff format --check python tests scripts"
 ```
+
+## Repository Skills
+
+Reusable Codex workflow skills live under `skills/`. To use the current strict
+test hardening workflow on another host, copy or symlink
+`skills/harden-completed-slice-tests` into `$CODEX_HOME/skills/` before starting
+Codex. When `CODEX_HOME` is unset, use `~/.codex/skills/`.
 
 Install and run pre-commit checks from inside the dev container:
 

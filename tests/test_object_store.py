@@ -95,6 +95,100 @@ class FileObjectStoreTests(unittest.TestCase):
 
         self.assertEqual(list((temp_dir / "object-root").glob("objects/**/*")), [])
 
+    def test_malformed_object_uris_do_not_resolve_or_echo_raw_paths(self) -> None:
+        temp_dir = _paths.fresh_test_dir("object-store-malformed-uri")
+        registry = StorageBackendRegistry(temp_dir)
+        registry.register_local_backend(
+            temp_dir / "object-root",
+            workspace_scope="workspace_formowl",
+        )
+        store = FileObjectStore(registry)
+        raw_path = str((temp_dir / "secret" / "payload.bin").resolve())
+        malformed_uris = [
+            raw_path,
+            "file:///tmp/payload.bin",
+            "formowl://object/storage_local_001/../" + ("0" * 64),
+            "formowl://object/storage_local_001/workspace_formowl/not-a-sha",
+            "formowl://object/storage_local_001/workspace_formowl/" + ("0" * 64) + "/extra",
+        ]
+
+        for object_uri in malformed_uris:
+            with self.subTest(object_uri=object_uri):
+                self.assertIsNone(store.get_object(object_uri))
+                self.assertIsNone(store.resolve_object_path(object_uri))
+                self.assertFalse(store.verify_object(object_uri))
+                envelope = store.object_mcp_envelope(object_uri)
+                self.assertEqual(envelope["status"], "not_found")
+                self.assertNotIn("object_uri", envelope["data"])
+                self.assertNotIn(raw_path, json.dumps(envelope, sort_keys=True))
+
+    def test_not_found_envelope_keeps_safe_formowl_locator_for_missing_object(self) -> None:
+        temp_dir = _paths.fresh_test_dir("object-store-safe-not-found")
+        registry = StorageBackendRegistry(temp_dir)
+        backend = registry.register_local_backend(
+            temp_dir / "object-root",
+            workspace_scope="workspace_formowl",
+        )
+        store = FileObjectStore(registry)
+        missing_uri = f"formowl://object/{backend.storage_backend_id}/workspace_formowl/{'0' * 64}"
+
+        envelope = store.object_mcp_envelope(missing_uri)
+
+        self.assertEqual(envelope["status"], "not_found")
+        self.assertEqual(envelope["data"], {"object_uri": missing_uri})
+        self.assertIsNone(store.resolve_object_path(missing_uri))
+        self.assertFalse(store.verify_object(missing_uri))
+
+    def test_unsafe_object_locator_segments_fail_before_payload_write(self) -> None:
+        temp_dir = _paths.fresh_test_dir("object-store-unsafe-segments")
+        source_path = temp_dir / "incoming" / "note.txt"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text("original bytes\n", encoding="utf-8")
+
+        registry = StorageBackendRegistry(temp_dir)
+        backend = registry.register_local_backend(
+            temp_dir / "object-root",
+            workspace_scope="workspace_formowl",
+        )
+        store = FileObjectStore(registry)
+        unsafe_cases = [
+            {"storage_backend_id": "../escape", "workspace_id": "workspace_formowl"},
+            {"storage_backend_id": "..", "workspace_id": "workspace_formowl"},
+            {"storage_backend_id": backend.storage_backend_id, "workspace_id": "../escape"},
+            {"storage_backend_id": backend.storage_backend_id, "workspace_id": ".."},
+        ]
+
+        for kwargs in unsafe_cases:
+            with self.subTest(**kwargs):
+                with self.assertRaises(ValueError):
+                    store.copy_local_file(source_path, **kwargs)
+
+        self.assertEqual(list((temp_dir / "object-root").glob("objects/**/*")), [])
+
+    def test_rejects_path_like_original_filename_before_payload_write(self) -> None:
+        temp_dir = _paths.fresh_test_dir("object-store-original-filename-path")
+        source_path = temp_dir / "incoming" / "note.txt"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text("original bytes\n", encoding="utf-8")
+
+        registry = StorageBackendRegistry(temp_dir)
+        backend = registry.register_local_backend(
+            temp_dir / "object-root",
+            workspace_scope="workspace_formowl",
+        )
+        store = FileObjectStore(registry)
+
+        with self.assertRaises(ValueError):
+            store.copy_local_file(
+                source_path,
+                storage_backend_id=backend.storage_backend_id,
+                workspace_id="workspace_formowl",
+                original_filename=str(source_path.resolve()),
+            )
+
+        self.assertEqual(list((temp_dir / "object-root").glob("objects/**/payload.bin")), [])
+        self.assertEqual(list((temp_dir / "object-root").glob("objects/**/metadata.json")), [])
+
 
 if __name__ == "__main__":
     unittest.main()

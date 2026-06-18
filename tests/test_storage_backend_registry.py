@@ -4,7 +4,7 @@ import json
 import unittest
 
 import _paths  # noqa: F401
-from formowl_contract import StorageBackend
+from formowl_contract import ContractValidationError, StorageBackend
 from formowl_ingestion.storage import StorageBackendRegistry
 
 
@@ -100,6 +100,33 @@ class StorageBackendRegistryTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         self.assertEqual(raw_record["private"]["internal_endpoint"], backend.internal_endpoint)
+
+    def test_register_backend_rejects_raw_path_root_prefix_before_public_record(self) -> None:
+        temp_dir = _paths.fresh_test_dir("storage-backend-registry-raw-root-prefix")
+        registry = StorageBackendRegistry(temp_dir)
+        backend = StorageBackend(
+            storage_backend_id="storage_raw_root_prefix",
+            type="local_fs",
+            display_name="Local raw root prefix",
+            access_mode="read_only",
+            trust_level="trusted_internal",
+            workspace_scope="workspace_formowl",
+            health_status="healthy",
+            root_prefix=str((temp_dir / "private-root").resolve()),
+        )
+
+        with self.assertRaises(ContractValidationError):
+            registry.register_backend(backend)
+
+        self.assertIsNone(registry.get_backend("storage_raw_root_prefix"))
+        self.assertFalse(
+            (
+                temp_dir
+                / "ingestion"
+                / "storage-backends"
+                / "storage_raw_root_prefix.json"
+            ).exists()
+        )
 
 
 if __name__ == "__main__":

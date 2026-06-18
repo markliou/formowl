@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import unittest
 
 import _paths  # noqa: F401
-from formowl_contract import PermissionScope, SourceRef
+from formowl_contract import (
+    ContractValidationError,
+    Observation,
+    PermissionScope,
+    SourceRef,
+    stable_observation_id,
+)
 from formowl_ingestion.assets import register_asset_from_local_file
 from formowl_ingestion.extraction import ExtractionInput, ExtractionResult
 from formowl_ingestion.extractors import PlainTextObservationExtractor
@@ -154,6 +161,440 @@ class IngestionWorkflowTests(unittest.TestCase):
         self.assertEqual(context.observation_store.list(), [])
         self.assertEqual(context.job_store.get(job.ingestion_job_id).to_dict(), failed.to_dict())
 
+    def test_failed_extractor_result_does_not_link_unpersisted_observations(self) -> None:
+        context = _WorkflowContext.create(
+            "ingestion-workflow-failed-result-observation-lineage",
+            filename="notes.txt",
+            content="The adapter will report an error with an observation.\n",
+        )
+        asset = register_asset_from_local_file(
+            context.source_path,
+            object_store=context.object_store,
+            asset_store=context.asset_store,
+            storage_backend_id=context.storage_backend_id,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            permission_scope=context.permission_scope,
+            source_ref=context.source_ref,
+            mime_type="text/plain",
+            created_at="2026-06-17T10:00:00+00:00",
+            registered_at="2026-06-17T10:00:00+00:00",
+        )
+        adapter = _ErrorResultTextExtractor()
+        job = create_ingestion_job(
+            asset=asset,
+            job_store=context.job_store,
+            requested_by="user_yifan",
+            extractor_adapters=[adapter],
+            created_at="2026-06-17T10:00:00+00:00",
+        )
+
+        failed = run_ingestion_job(
+            ingestion_job_id=job.ingestion_job_id,
+            asset_store=context.asset_store,
+            job_store=context.job_store,
+            object_store=context.object_store,
+            extractor_run_store=context.run_store,
+            observation_store=context.observation_store,
+            extractor_adapters=[adapter],
+            started_at="2026-06-17T10:01:00+00:00",
+            completed_at="2026-06-17T10:01:00+00:00",
+        )
+
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(failed.error, "adapter_reported_error")
+        self.assertEqual(len(failed.extractor_run_ids), 1)
+        self.assertEqual(failed.observation_ids, [])
+        self.assertEqual(context.observation_store.list(), [])
+        self.assertEqual(context.run_store.get(failed.extractor_run_ids[0]).status, "failed")
+
+    def test_adapter_exception_failed_job_links_persisted_failed_run(self) -> None:
+        context = _WorkflowContext.create(
+            "ingestion-workflow-exception-run-lineage",
+            filename="notes.txt",
+            content="The adapter exception should still leave auditable run lineage.\n",
+        )
+        asset = register_asset_from_local_file(
+            context.source_path,
+            object_store=context.object_store,
+            asset_store=context.asset_store,
+            storage_backend_id=context.storage_backend_id,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            permission_scope=context.permission_scope,
+            source_ref=context.source_ref,
+            mime_type="text/plain",
+            created_at="2026-06-17T10:00:00+00:00",
+            registered_at="2026-06-17T10:00:00+00:00",
+        )
+        adapter = _ExplodingTextExtractor()
+        job = create_ingestion_job(
+            asset=asset,
+            job_store=context.job_store,
+            requested_by="user_yifan",
+            extractor_adapters=[adapter],
+            created_at="2026-06-17T10:00:00+00:00",
+        )
+
+        failed = run_ingestion_job(
+            ingestion_job_id=job.ingestion_job_id,
+            asset_store=context.asset_store,
+            job_store=context.job_store,
+            object_store=context.object_store,
+            extractor_run_store=context.run_store,
+            observation_store=context.observation_store,
+            extractor_adapters=[adapter],
+            started_at="2026-06-17T10:01:00+00:00",
+            completed_at="2026-06-17T10:01:00+00:00",
+        )
+
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(failed.error, "fixture exception after run setup")
+        self.assertEqual(len(failed.extractor_run_ids), 1)
+        self.assertEqual(failed.observation_ids, [])
+        failed_run = context.run_store.get(failed.extractor_run_ids[0])
+        self.assertIsNotNone(failed_run)
+        self.assertEqual(failed_run.status, "failed")
+        self.assertEqual(failed_run.errors, ["fixture exception after run setup"])
+        self.assertEqual(context.observation_store.list(), [])
+
+        restarted_jobs = JobStore(context.temp_dir)
+        restarted_runs = ExtractorRunStore(context.temp_dir)
+        self.assertEqual(
+            restarted_jobs.get(job.ingestion_job_id).to_dict(),
+            failed.to_dict(),
+        )
+        self.assertEqual(
+            restarted_runs.get(failed.extractor_run_ids[0]).to_dict(),
+            failed_run.to_dict(),
+        )
+
+    def test_run_ingestion_job_rejects_non_pending_job_without_new_records(self) -> None:
+        # Each non-pending state must fail before run/observation stores can change.
+        for status in ("running", "succeeded", "failed"):
+            with self.subTest(status=status):
+                context = _WorkflowContext.create(
+                    f"ingestion-workflow-non-pending-job-{status}",
+                    filename="notes.txt",
+                    content="Already completed jobs must not rerun.\n",
+                )
+                asset = register_asset_from_local_file(
+                    context.source_path,
+                    object_store=context.object_store,
+                    asset_store=context.asset_store,
+                    storage_backend_id=context.storage_backend_id,
+                    workspace_id="workspace_formowl",
+                    owner_user_id="user_yifan",
+                    permission_scope=context.permission_scope,
+                    source_ref=context.source_ref,
+                    mime_type="text/plain",
+                    created_at="2026-06-17T10:00:00+00:00",
+                    registered_at="2026-06-17T10:00:00+00:00",
+                )
+                pending = create_ingestion_job(
+                    asset=asset,
+                    job_store=context.job_store,
+                    requested_by="user_yifan",
+                    extractor_adapters=[PlainTextObservationExtractor()],
+                    created_at="2026-06-17T10:00:00+00:00",
+                )
+                non_pending = context.job_store.create(
+                    replace(
+                        pending,
+                        status=status,  # type: ignore[arg-type]
+                        started_at="2026-06-17T10:01:00+00:00",
+                        completed_at=(
+                            "2026-06-17T10:01:00+00:00" if status != "running" else None
+                        ),
+                        error="previous failure" if status == "failed" else None,
+                    )
+                )
+
+                with self.assertRaisesRegex(ValueError, "must be pending"):
+                    run_ingestion_job(
+                        ingestion_job_id=non_pending.ingestion_job_id,
+                        asset_store=context.asset_store,
+                        job_store=context.job_store,
+                        object_store=context.object_store,
+                        extractor_run_store=context.run_store,
+                        observation_store=context.observation_store,
+                        extractor_adapters=[PlainTextObservationExtractor()],
+                        started_at="2026-06-17T10:02:00+00:00",
+                        completed_at="2026-06-17T10:02:00+00:00",
+                    )
+
+                self.assertEqual(
+                    context.job_store.get(non_pending.ingestion_job_id).to_dict(),
+                    non_pending.to_dict(),
+                )
+                self.assertEqual(context.run_store.list(), [])
+                self.assertEqual(context.observation_store.list(), [])
+
+    def test_run_ingestion_job_rejects_empty_timestamps_without_new_records(self) -> None:
+        invalid_cases = [
+            ("started_at", {"started_at": "", "completed_at": "2026-06-17T10:02:00+00:00"}),
+            ("completed_at", {"started_at": "2026-06-17T10:02:00+00:00", "completed_at": ""}),
+            (
+                "started_at",
+                {
+                    "started_at": "not-a-timestamp",
+                    "completed_at": "2026-06-17T10:02:00+00:00",
+                },
+            ),
+            (
+                "completed_at",
+                {
+                    "started_at": "2026-06-17T10:02:00+00:00",
+                    "completed_at": "not-a-timestamp",
+                },
+            ),
+        ]
+
+        for field_name, timestamp_kwargs in invalid_cases:
+            with self.subTest(field_name=field_name):
+                context = _WorkflowContext.create(
+                    f"ingestion-workflow-empty-{field_name}",
+                    filename="notes.txt",
+                    content="Empty execution timestamps must fail before job mutation.\n",
+                )
+                asset = register_asset_from_local_file(
+                    context.source_path,
+                    object_store=context.object_store,
+                    asset_store=context.asset_store,
+                    storage_backend_id=context.storage_backend_id,
+                    workspace_id="workspace_formowl",
+                    owner_user_id="user_yifan",
+                    permission_scope=context.permission_scope,
+                    source_ref=context.source_ref,
+                    mime_type="text/plain",
+                    created_at="2026-06-17T10:00:00+00:00",
+                    registered_at="2026-06-17T10:00:00+00:00",
+                )
+                job = create_ingestion_job(
+                    asset=asset,
+                    job_store=context.job_store,
+                    requested_by="user_yifan",
+                    extractor_adapters=[PlainTextObservationExtractor()],
+                    created_at="2026-06-17T10:00:00+00:00",
+                )
+
+                with self.assertRaisesRegex(ContractValidationError, field_name):
+                    run_ingestion_job(
+                        ingestion_job_id=job.ingestion_job_id,
+                        asset_store=context.asset_store,
+                        job_store=context.job_store,
+                        object_store=context.object_store,
+                        extractor_run_store=context.run_store,
+                        observation_store=context.observation_store,
+                        extractor_adapters=[PlainTextObservationExtractor()],
+                        **timestamp_kwargs,
+                    )
+
+                self.assertEqual(
+                    context.job_store.get(job.ingestion_job_id).to_dict(),
+                    job.to_dict(),
+                )
+                self.assertEqual(context.run_store.list(), [])
+                self.assertEqual(context.observation_store.list(), [])
+
+    def test_run_ingestion_job_rejects_duplicate_adapters_without_job_mutation(self) -> None:
+        context = _WorkflowContext.create(
+            "ingestion-workflow-duplicate-adapters",
+            filename="notes.txt",
+            content="Duplicate adapters must fail before the job starts running.\n",
+        )
+        asset = register_asset_from_local_file(
+            context.source_path,
+            object_store=context.object_store,
+            asset_store=context.asset_store,
+            storage_backend_id=context.storage_backend_id,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            permission_scope=context.permission_scope,
+            source_ref=context.source_ref,
+            mime_type="text/plain",
+            created_at="2026-06-17T10:00:00+00:00",
+            registered_at="2026-06-17T10:00:00+00:00",
+        )
+        job = create_ingestion_job(
+            asset=asset,
+            job_store=context.job_store,
+            requested_by="user_yifan",
+            extractor_names=["plain_text_extractor"],
+            created_at="2026-06-17T10:00:00+00:00",
+        )
+
+        with self.assertRaisesRegex(ValueError, "duplicate extractor adapter name"):
+            run_ingestion_job(
+                ingestion_job_id=job.ingestion_job_id,
+                asset_store=context.asset_store,
+                job_store=context.job_store,
+                object_store=context.object_store,
+                extractor_run_store=context.run_store,
+                observation_store=context.observation_store,
+                extractor_adapters=[
+                    PlainTextObservationExtractor(),
+                    PlainTextObservationExtractor(),
+                ],
+                started_at="2026-06-17T10:02:00+00:00",
+                completed_at="2026-06-17T10:02:00+00:00",
+            )
+
+        self.assertEqual(
+            context.job_store.get(job.ingestion_job_id).to_dict(),
+            job.to_dict(),
+        )
+        self.assertEqual(context.run_store.list(), [])
+        self.assertEqual(context.observation_store.list(), [])
+
+    def test_create_ingestion_job_rejects_malformed_extractor_names_without_job(self) -> None:
+        context = _WorkflowContext.create(
+            "ingestion-workflow-malformed-extractor-names",
+            filename="notes.txt",
+            content="Malformed extractor names must not create jobs.\n",
+        )
+        asset = register_asset_from_local_file(
+            context.source_path,
+            object_store=context.object_store,
+            asset_store=context.asset_store,
+            storage_backend_id=context.storage_backend_id,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            permission_scope=context.permission_scope,
+            source_ref=context.source_ref,
+            mime_type="text/plain",
+            created_at="2026-06-17T10:00:00+00:00",
+            registered_at="2026-06-17T10:00:00+00:00",
+        )
+        invalid_cases = [
+            "plain_text_extractor",
+            [""],
+            ["plain_text_extractor", ""],
+            ["plain_text_extractor", 123],
+            ["plain_text_extractor", "plain_text_extractor"],
+        ]
+
+        for extractor_names in invalid_cases:
+            with self.subTest(extractor_names=extractor_names):
+                with self.assertRaisesRegex(ValueError, "extractor names"):
+                    create_ingestion_job(
+                        asset=asset,
+                        job_store=context.job_store,
+                        requested_by="user_yifan",
+                        extractor_names=extractor_names,  # type: ignore[list-item]
+                        created_at="2026-06-17T10:00:00+00:00",
+                    )
+
+        self.assertEqual(context.job_store.list(), [])
+
+    def test_multi_extractor_failure_preserves_only_successful_persisted_observations(
+        self,
+    ) -> None:
+        context = _WorkflowContext.create(
+            "ingestion-workflow-multi-extractor-partial-failure",
+            filename="notes.txt",
+            content="The first extractor succeeds before the second fails.\n",
+        )
+        asset = register_asset_from_local_file(
+            context.source_path,
+            object_store=context.object_store,
+            asset_store=context.asset_store,
+            storage_backend_id=context.storage_backend_id,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            permission_scope=context.permission_scope,
+            source_ref=context.source_ref,
+            mime_type="text/plain",
+            created_at="2026-06-17T10:00:00+00:00",
+            registered_at="2026-06-17T10:00:00+00:00",
+        )
+        failing_adapter = _ErrorResultTextExtractor()
+        job = create_ingestion_job(
+            asset=asset,
+            job_store=context.job_store,
+            requested_by="user_yifan",
+            extractor_names=["plain_text_extractor", failing_adapter.name()],
+            created_at="2026-06-17T10:00:00+00:00",
+        )
+
+        failed = run_ingestion_job(
+            ingestion_job_id=job.ingestion_job_id,
+            asset_store=context.asset_store,
+            job_store=context.job_store,
+            object_store=context.object_store,
+            extractor_run_store=context.run_store,
+            observation_store=context.observation_store,
+            extractor_adapters=[PlainTextObservationExtractor(), failing_adapter],
+            started_at="2026-06-17T10:01:00+00:00",
+            completed_at="2026-06-17T10:01:00+00:00",
+        )
+
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(failed.error, "adapter_reported_error")
+        self.assertEqual(len(failed.extractor_run_ids), 2)
+        self.assertEqual(len(failed.observation_ids), 1)
+        self.assertEqual(
+            [observation.observation_id for observation in context.observation_store.list()],
+            failed.observation_ids,
+        )
+        self.assertCountEqual(
+            [run.status for run in context.run_store.list()],
+            ["succeeded", "failed"],
+        )
+
+    def test_multi_extractor_missing_adapter_preserves_only_prior_success(self) -> None:
+        context = _WorkflowContext.create(
+            "ingestion-workflow-missing-second-extractor",
+            filename="notes.txt",
+            content="The first extractor succeeds before adapter resolution fails.\n",
+        )
+        asset = register_asset_from_local_file(
+            context.source_path,
+            object_store=context.object_store,
+            asset_store=context.asset_store,
+            storage_backend_id=context.storage_backend_id,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            permission_scope=context.permission_scope,
+            source_ref=context.source_ref,
+            mime_type="text/plain",
+            created_at="2026-06-17T10:00:00+00:00",
+            registered_at="2026-06-17T10:00:00+00:00",
+        )
+        job = create_ingestion_job(
+            asset=asset,
+            job_store=context.job_store,
+            requested_by="user_yifan",
+            extractor_names=["plain_text_extractor", "missing_extractor"],
+            created_at="2026-06-17T10:00:00+00:00",
+        )
+
+        failed = run_ingestion_job(
+            ingestion_job_id=job.ingestion_job_id,
+            asset_store=context.asset_store,
+            job_store=context.job_store,
+            object_store=context.object_store,
+            extractor_run_store=context.run_store,
+            observation_store=context.observation_store,
+            extractor_adapters=[PlainTextObservationExtractor()],
+            started_at="2026-06-17T10:01:00+00:00",
+            completed_at="2026-06-17T10:01:00+00:00",
+        )
+
+        self.assertEqual(failed.status, "failed")
+        self.assertIn("adapter was not provided", failed.error)
+        self.assertEqual(len(failed.extractor_run_ids), 1)
+        self.assertEqual(len(failed.observation_ids), 1)
+        self.assertEqual(
+            [observation.observation_id for observation in context.observation_store.list()],
+            failed.observation_ids,
+        )
+        # Missing adapters do not create synthetic runs; only the prior success remains.
+        self.assertEqual(
+            [run.status for run in context.run_store.list()],
+            ["succeeded"],
+        )
+
 
 class _RecordingTextExtractor(PlainTextObservationExtractor):
     def __init__(self, job_store: JobStore, ingestion_job_id: str) -> None:
@@ -166,6 +607,43 @@ class _RecordingTextExtractor(PlainTextObservationExtractor):
         job = self.job_store.get(self.ingestion_job_id)
         self.seen_job_statuses.append(job.status if job is not None else "missing")
         return super().extract(extraction_input)
+
+
+class _ErrorResultTextExtractor(PlainTextObservationExtractor):
+    def name(self) -> str:
+        return "error_result_text_extractor"
+
+    def extract(self, extraction_input: ExtractionInput) -> ExtractionResult:
+        text = "This failed observation must not be linked from the job."
+        location = {"line_start": 1, "line_end": 1}
+        observation = Observation(
+            observation_id=stable_observation_id(
+                asset_id=extraction_input.asset.asset_id,
+                extractor_run_id=extraction_input.extractor_run_id,
+                observation_type="paragraph",
+                modality="text",
+                location=location,
+                text=text,
+            ),
+            asset_id=extraction_input.asset.asset_id,
+            extractor_run_id=extraction_input.extractor_run_id,
+            observation_type="paragraph",
+            modality="text",
+            text=text,
+            location=location,
+            confidence=1.0,
+            permission_scope=extraction_input.asset.permission_scope,
+            created_at=extraction_input.created_at,
+        )
+        return ExtractionResult(observations=[observation], errors=["adapter_reported_error"])
+
+
+class _ExplodingTextExtractor(PlainTextObservationExtractor):
+    def name(self) -> str:
+        return "exploding_text_extractor"
+
+    def extract(self, extraction_input: ExtractionInput) -> ExtractionResult:
+        raise RuntimeError("fixture exception after run setup")
 
 
 class _WorkflowContext:

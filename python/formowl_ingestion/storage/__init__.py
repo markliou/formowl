@@ -2,7 +2,7 @@
 
 from .backends import StorageBackendRegistry
 from .objects import FileObjectStore, StoredObject
-from .records import AssetStore, ExtractorRunStore, JobStore, ObservationStore
+from .records import AssetStore, ExtractorRunStore, JobStore, ObservationStore, UploadSessionStore
 
 __all__ = [
     "AssetStore",
@@ -12,4 +12,5 @@ __all__ = [
     "ObservationStore",
     "StoredObject",
     "StorageBackendRegistry",
+    "UploadSessionStore",
 ]
