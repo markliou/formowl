@@ -19,6 +19,9 @@ Use `docs/implementation-task-breakdown.md` as the shared work board.
   whether the files above were read in the current context, read them again
   before editing.
 - Pick one unchecked task or the task explicitly assigned by the user.
+- Repo-scoped Codex skills live under `.agents/skills/`. If the user names a
+  repo-local skill that is not visible in the active `@skills` list, check
+  `.agents/skills/<skill-name>/SKILL.md` before declaring it unavailable.
 - Stay inside the listed owner paths when possible.
 - Do not create parallel replacement modules, schemas, or documents when the
   specification already names an expected path.

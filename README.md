@@ -106,10 +106,15 @@ docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "ru
 
 ## Repository Skills
 
-Reusable Codex workflow skills live under `skills/`. To use the current strict
-test hardening workflow on another host, copy or symlink
-`skills/harden-completed-slice-tests` into `$CODEX_HOME/skills/` before starting
-Codex. When `CODEX_HOME` is unset, use `~/.codex/skills/`.
+Reusable Codex workflow skills live under `.agents/skills/` so Codex can
+discover them as repo-scoped skills when launched from this repository. The
+current strict test hardening workflow is available as
+`$harden-completed-slice-tests` from
+`.agents/skills/harden-completed-slice-tests`.
+
+To use the same skill on another host, copy the repository with its `.agents`
+directory intact, start a new Codex session from the repo, and confirm the skill
+appears in `/skills`.
 
 Install and run pre-commit checks from inside the dev container:
 
