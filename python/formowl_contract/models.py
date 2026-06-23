@@ -42,6 +42,12 @@ AccessRequestStatus = Literal[*ACCESS_REQUEST_STATUS_VALUES]
 UploadSessionStatus = Literal[*UPLOAD_SESSION_STATUS_VALUES]
 CandidateStatus = Literal[*CANDIDATE_STATUS_VALUES]
 _GRAPH_REFERENCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_RAW_PUBLIC_REFERENCE_PATTERNS = (
+    re.compile(r"[A-Za-z]:[\\/]"),
+    re.compile(r"(^|[\s'\"])/(srv|home|tmp|var|mnt|opt|root)/", re.IGNORECASE),
+    re.compile(r"\b(file|smb|nfs|postgres|postgresql|mysql|sqlite)://", re.IGNORECASE),
+    re.compile(r"\b(select|with|copy|insert|update|delete|drop|alter)\b\s+", re.IGNORECASE),
+)
 
 
 class ContractValidationError(ValueError):
@@ -341,6 +347,31 @@ def stable_upload_session_id(
     )
 
 
+def stable_wiki_projection_spec_id(
+    *,
+    projection_kind: str,
+    graph_revision_id: str,
+    ontology_revision_id: str,
+    title: str,
+    source_refs: list[SourceRef | dict[str, Any]] | tuple[SourceRef | dict[str, Any], ...],
+    evidence_snapshot_ids: list[str] | tuple[str, ...],
+    citation_behavior: str,
+) -> str:
+    return stable_resource_contract_id(
+        "projection",
+        "WikiProjectionSpec",
+        {
+            "projection_kind": projection_kind,
+            "graph_revision_id": graph_revision_id,
+            "ontology_revision_id": ontology_revision_id,
+            "title": title,
+            "source_refs": list(source_refs),
+            "evidence_snapshot_ids": list(evidence_snapshot_ids),
+            "citation_behavior": citation_behavior,
+        },
+    )
+
+
 def _require_mapping(value: Any, name: str) -> dict[str, Any]:
     if is_dataclass(value):
         value = to_plain(value)
@@ -450,6 +481,24 @@ def _validate_optional_iso_timestamp_fields(
 def _validate_formowl_locator(value: str, field_name: str) -> None:
     if not value.startswith("formowl://"):
         raise ContractValidationError(f"{field_name} must be a FormOwl locator")
+
+
+def _validate_no_raw_public_reference(value: Any, field_name: str) -> None:
+    if isinstance(value, str):
+        for pattern in _RAW_PUBLIC_REFERENCE_PATTERNS:
+            if pattern.search(value):
+                raise ContractValidationError(
+                    f"{field_name} must not contain raw paths, SQL, or private locators"
+                )
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _validate_no_raw_public_reference(str(key), field_name)
+            _validate_no_raw_public_reference(item, field_name)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _validate_no_raw_public_reference(item, field_name)
 
 
 @dataclass(frozen=True)
@@ -562,9 +611,62 @@ class WikiRevision:
     reviewed_at: str | None = None
     published_at: str | None = None
     backend_ref: dict[str, Any] | None = None
+    projection_spec_id: str | None = None
+    graph_revision_id: str | None = None
+    ontology_revision_id: str | None = None
+    user_graph_revision_id: str | None = None
+    graph_view_hash: str | None = None
+    evidence_snapshot_refs: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return to_plain(self)
+
+
+@dataclass(frozen=True)
+class WikiProjectionSpec:
+    projection_spec_id: str
+    projection_kind: str
+    title: str
+    graph_revision_id: str
+    ontology_revision_id: str
+    source_refs: list[SourceRef | dict[str, Any]]
+    evidence_snapshot_ids: list[str]
+    citation_behavior: str
+    redaction_policy: str
+    created_by: str
+    created_at: str
+    projection_rules: dict[str, JsonValue] = field(default_factory=dict)
+    user_graph_revision_id: str | None = None
+    permission_scope: PermissionScope | dict[str, Any] | None = None
+    draft_target: dict[str, JsonValue] | None = None
+    include_private_evidence: bool = False
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "WikiProjectionSpec":
+        spec = validate_wiki_projection_spec(value)
+        return cls(
+            projection_spec_id=str(spec["projection_spec_id"]),
+            projection_kind=str(spec["projection_kind"]),
+            title=str(spec["title"]),
+            graph_revision_id=str(spec["graph_revision_id"]),
+            ontology_revision_id=str(spec["ontology_revision_id"]),
+            source_refs=list(spec["source_refs"]),
+            evidence_snapshot_ids=list(spec["evidence_snapshot_ids"]),
+            citation_behavior=str(spec["citation_behavior"]),
+            redaction_policy=str(spec["redaction_policy"]),
+            created_by=str(spec["created_by"]),
+            created_at=str(spec["created_at"]),
+            projection_rules=dict(spec.get("projection_rules", {})),
+            user_graph_revision_id=spec.get("user_graph_revision_id"),
+            permission_scope=spec.get("permission_scope"),
+            draft_target=spec.get("draft_target"),
+            include_private_evidence=bool(spec.get("include_private_evidence", False)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data = to_plain(self)
+        validate_wiki_projection_spec(data)
+        return data
 
 
 @dataclass(frozen=True)
@@ -1228,6 +1330,98 @@ def validate_context_package(value: Any) -> dict[str, Any]:
     if not isinstance(context_package.get("citations", []), list):
         raise ContractValidationError("ContextPackage.citations must be a list")
     return context_package
+
+
+def validate_wiki_projection_spec(value: Any) -> dict[str, Any]:
+    spec = _require_mapping(value, "WikiProjectionSpec")
+    _require_fields(
+        spec,
+        (
+            "projection_spec_id",
+            "projection_kind",
+            "title",
+            "graph_revision_id",
+            "ontology_revision_id",
+            "source_refs",
+            "evidence_snapshot_ids",
+            "citation_behavior",
+            "redaction_policy",
+            "created_by",
+            "created_at",
+        ),
+        "WikiProjectionSpec",
+    )
+    _validate_string_fields(
+        spec,
+        (
+            "projection_spec_id",
+            "projection_kind",
+            "title",
+            "graph_revision_id",
+            "ontology_revision_id",
+            "citation_behavior",
+            "redaction_policy",
+            "created_by",
+            "created_at",
+        ),
+        "WikiProjectionSpec",
+    )
+    _validate_optional_string_fields(
+        spec,
+        ("user_graph_revision_id",),
+        "WikiProjectionSpec",
+    )
+    _validate_graph_reference_id(
+        spec["projection_spec_id"],
+        "WikiProjectionSpec.projection_spec_id",
+    )
+    _validate_graph_reference_id(
+        spec["graph_revision_id"],
+        "WikiProjectionSpec.graph_revision_id",
+    )
+    _validate_graph_reference_id(
+        spec["ontology_revision_id"],
+        "WikiProjectionSpec.ontology_revision_id",
+    )
+    if spec.get("user_graph_revision_id") is not None:
+        _validate_graph_reference_id(
+            spec["user_graph_revision_id"],
+            "WikiProjectionSpec.user_graph_revision_id",
+        )
+    _validate_iso_timestamp(spec["created_at"], "WikiProjectionSpec.created_at")
+    if not isinstance(spec["source_refs"], list) or not spec["source_refs"]:
+        raise ContractValidationError("WikiProjectionSpec.source_refs must be a non-empty list")
+    for source_ref in spec["source_refs"]:
+        validate_source_ref(source_ref)
+    _validate_provenance_id_list(
+        spec["evidence_snapshot_ids"],
+        "WikiProjectionSpec.evidence_snapshot_ids",
+        allow_empty=False,
+    )
+    if not isinstance(spec.get("projection_rules", {}), dict):
+        raise ContractValidationError("WikiProjectionSpec.projection_rules must be an object")
+    if spec.get("permission_scope") is not None:
+        validate_permission_scope(spec["permission_scope"])
+    if spec.get("draft_target") is not None and not isinstance(spec["draft_target"], dict):
+        raise ContractValidationError("WikiProjectionSpec.draft_target must be an object")
+    if not isinstance(spec.get("include_private_evidence", False), bool):
+        raise ContractValidationError("WikiProjectionSpec.include_private_evidence must be boolean")
+    if spec.get("include_private_evidence", False):
+        raise ContractValidationError(
+            "WikiProjectionSpec.include_private_evidence must stay false for public projection"
+        )
+    _validate_no_raw_public_reference(
+        {
+            "title": spec["title"],
+            "projection_kind": spec["projection_kind"],
+            "citation_behavior": spec["citation_behavior"],
+            "redaction_policy": spec["redaction_policy"],
+            "projection_rules": spec.get("projection_rules", {}),
+            "draft_target": spec.get("draft_target") or {},
+        },
+        "WikiProjectionSpec",
+    )
+    return spec
 
 
 def validate_permission_scope(value: Any) -> dict[str, Any]:

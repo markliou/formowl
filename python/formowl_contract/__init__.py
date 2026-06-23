@@ -23,6 +23,7 @@ from .models import (
     User,
     WorkspaceMember,
     WikiRevision,
+    WikiProjectionSpec,
     ContractValidationError,
     from_plain,
     now_iso,
@@ -40,6 +41,7 @@ from .models import (
     stable_semantic_metadata_id,
     stable_storage_backend_id,
     stable_upload_session_id,
+    stable_wiki_projection_spec_id,
     to_plain,
     validate_asset,
     validate_asset_metadata,
@@ -61,6 +63,7 @@ from .models import (
     validate_upload_session,
     validate_user,
     validate_workspace_member,
+    validate_wiki_projection_spec,
 )
 
 __all__ = [
@@ -89,6 +92,7 @@ __all__ = [
     "User",
     "WorkspaceMember",
     "WikiRevision",
+    "WikiProjectionSpec",
     "from_plain",
     "now_iso",
     "sha256_json",
@@ -105,6 +109,7 @@ __all__ = [
     "stable_semantic_metadata_id",
     "stable_storage_backend_id",
     "stable_upload_session_id",
+    "stable_wiki_projection_spec_id",
     "to_plain",
     "validate_asset",
     "validate_asset_metadata",
@@ -126,4 +131,5 @@ __all__ = [
     "validate_upload_session",
     "validate_user",
     "validate_workspace_member",
+    "validate_wiki_projection_spec",
 ]

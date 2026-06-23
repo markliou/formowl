@@ -25,6 +25,10 @@ class WikiMcpServer:
                 "name": "generate_wiki_draft",
                 "description": "Generate a markdown draft from a context package.",
             },
+            {
+                "name": "generate_wiki_draft_from_graph_view",
+                "description": "Generate a markdown draft from a WikiProjectionSpec and visible graph view.",
+            },
             {"name": "update_wiki_draft", "description": "Update an existing markdown draft."},
             {
                 "name": "publish_wiki_page",

@@ -50,6 +50,44 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - File-backed vector and optional graph projection stores for derived retrieval
   indexes; stale vector results still require the same permission and grant
   checks as ready results.
+- PostgreSQL/pgvector production-adapter contract slice with redacted
+  connection config, migration manifest, repository/unit-of-work interfaces,
+  migration replay runner, pgvector repository boundary, permission-filtered
+  SQL builders, a locked pgvector live-smoke harness, and negative raw-path/SQL
+  leak tests. A locked live PostgreSQL transaction-rollback smoke validates the
+  metadata-store migration's partial-failure rollback behavior for graph and
+  audit rows. This is not end-to-end PostgreSQL/pgvector production adapter
+  readiness.
+- Candidate-only graph resolution helpers that produce fusion proposals,
+  score breakdowns, ontology revision pins, clerical review items, and
+  permission-aware human review queue exports without granting raw access or
+  committing canonical graph merges.
+- Optional graph-adapter manifests for RapidFuzz and Splink integration
+  boundaries; RapidFuzz and Splink package-adapter bindings remain
+  candidate-only and do not run by default unless the optional `graph-adapters`
+  extra is installed. A narrow container smoke harness can exercise both
+  package bindings as candidate-only outputs with no raw access or canonical
+  graph writes, but this is not production entity-resolution adapter readiness.
+- A locked production adapter stack smoke harness can compose the current
+  file-backed retrieval gateway, semantic MCP gateway facade, RapidFuzz/Splink
+  candidate-only package bindings, clerical-review packet export, and
+  graph-derived wiki projection in the dev container. It is synthetic adapter
+  boundary evidence only; it does not claim production readiness, enterprise
+  entity-resolution quality, completed human review, raw asset access, or
+  canonical graph commits.
+- ChatGPT-facing semantic gateway helpers with public tool schemas, safe error
+  envelopes, proposal-only review/draft stubs, and bans on direct database,
+  filesystem, raw SQL, worker-internal, and canonical mutation tools.
+- Semantic MCP JSON-RPC compatibility gateway for `initialize`, `tools/list`,
+  and `tools/call`, with session context, hash-only leak transcripts, and
+  containerized smoke coverage. This is not an end-to-end production adapter
+  claim.
+- `WikiProjectionSpec` contract objects that pin graph revision, ontology
+  revision, source references, evidence snapshots, citation behavior, and
+  redaction policy before graph-aware wiki drafts are generated.
+- Projection-spec-driven Wiki MCP draft generation for visible graph views,
+  preserving graph/ontology/user-graph lineage in frontmatter and creating
+  refresh diffs without publishing pages.
 - Deterministic text-fixture candidate extraction that turns marked observations into reviewable candidate atom proposals.
 - Candidate preview tooling that exposes review actions, warnings, confidence, and provenance without committing canonical graph state.
 - Project MCP with a mocked OpenProject adapter, evidence snapshot file storage, context package generation, and proposal-only work item comments.

@@ -879,24 +879,55 @@ These groups can be split across multiple agents after Slice 1 is stable.
 - [ ] Add access overlay and grant-aware effective graph view.
   - Owner paths: `python/formowl_graph/`, auth/access modules
   - Proof: private evidence is not leaked without a grant.
-- [ ] Add entity matching separate from data access and canonical merge.
+- [x] Add entity matching separate from data access and canonical merge.
   - Owner paths: `python/formowl_graph/resolution.py`
   - Proof: match proposals do not grant raw asset or evidence access.
+  - Note: implemented candidate-only lexical and structured-linkage-compatible
+    fusion proposal surfaces under `python/formowl_graph/resolution.py`.
+    Tests cover threshold/config hashes, ontology revision pins, false-merge
+    type gates, private-pair redaction, requester-visible rendering that omits
+    hidden endpoints, clerical review queue creation, permission-aware human
+    clerical review queue export, and forbidden
+    canonical-merge/raw-asset-read guards. RapidFuzz now has an optional
+    package-adapter manifest/binding surface and Splink has both a
+    model-config manifest boundary and optional package-adapter binding surface.
+    A locked main-repo container smoke now exercises both optional package
+    bindings as candidate-only outputs without canonical graph writes or raw
+    access. A separate locked adapter-stack smoke composes retrieval, semantic
+    gateway dispatch, RapidFuzz/Splink candidate-only outputs, clerical-review
+    packet export, and graph-derived wiki projection in the dev container. The
+    human review export is a packet handoff only; RapidFuzz still lacks
+    human-reviewed false-merge labels, and these smokes are not completed
+    RapidFuzz/Splink production adapter readiness.
 
 ### Wiki Projection
 
-- [ ] Add `WikiProjectionSpec` contract.
+- [x] Add `WikiProjectionSpec` contract.
   - Owner paths: `python/formowl_contract/`, `docs/wiki-draft-schema.md`
   - Proof: projection specs include graph revision, ontology revision, source
     refs, evidence snapshots, and citation behavior.
-- [ ] Implement projection-spec-driven draft generation.
+  - Note: implemented `WikiProjectionSpec`,
+    `stable_wiki_projection_spec_id`, contract validation, focused tests, and
+    docs. Public specs reject private-evidence inclusion, raw paths, SQL, and
+    private locators. Projection-spec-driven draft generation is still a
+    separate unchecked task.
+- [x] Implement projection-spec-driven draft generation.
   - Owner paths: `python/formowl_wiki_mcp/`, `python/formowl_graph/`
   - Proof: graph-derived drafts preserve graph lineage in frontmatter.
-- [ ] Extend `WikiRevision` lineage fields.
+  - Note: implemented `generate_wiki_draft_from_graph_view` plus
+    `formowl_wiki_mcp.projection`. Tests cover visible-evidence-only graph
+    views, ontology revision pins, source/evidence lineage, draft-not-publish
+    behavior, diff-on-refresh, hidden evidence rejection, raw private evidence
+    rejection, and graph/ontology revision mismatch rejection.
+- [x] Extend `WikiRevision` lineage fields.
   - Owner paths: `python/formowl_contract/`,
     `python/formowl_wiki_mcp/markdown/`
   - Proof: wiki revisions can point back to user graph revisions and projection
     specs.
+  - Note: `WikiRevision` now carries optional `projection_spec_id`,
+    `graph_revision_id`, `ontology_revision_id`, `user_graph_revision_id`,
+    `graph_view_hash`, and `evidence_snapshot_refs`; focused contract tests
+    cover these lineage fields.
 
 ### Real Project and Wiki Integrations
 
@@ -909,6 +940,11 @@ These groups can be split across multiple agents after Slice 1 is stable.
 - [ ] Add retrieval gateway for evidence snippets and raw assets.
   - Owner paths: gateway/retrieval modules
   - Proof: retrieval uses FormOwl locators and permission checks, not raw paths.
+  - Note: partial implementation now exists in `python/formowl_retrieval/` with
+    dev-container tests covering grant checks, revocation, answer-only,
+    evidence-snippet, raw-asset explicit-grant mode, audit records, and public
+    payload redaction. Leave unchecked until the full raw asset locator flow and
+    production adapter path are complete.
 
 ### MCP Transport and Gateway
 
@@ -916,10 +952,22 @@ These groups can be split across multiple agents after Slice 1 is stable.
   over stdio or a compatibility gateway.
   - Owner paths: MCP server modules and gateway package
   - Proof: existing tool behavior is preserved through transport tests.
-- [ ] Add ChatGPT-facing MCP Gateway tools for semantic workflows.
+  - Note: semantic gateway compatibility now exists in
+    `python/formowl_gateway/jsonrpc.py` with tests for JSON-RPC 2.0
+    `initialize`, `tools/list`, `tools/call`, session context, and hash-only
+    leak transcripts. A semantic gateway container smoke helper is covered by
+    dev-container tests. Leave unchecked until Project/Wiki MCP behavior is
+    preserved through the transport.
+- [x] Add ChatGPT-facing MCP Gateway tools for semantic workflows.
   - Owner paths: gateway package, docs
   - Proof: gateway does not expose NAS paths, object-store admin operations,
     arbitrary file reads, raw SQL, or worker internals.
+  - Note: implemented `python/formowl_gateway/` with public semantic tool
+    schemas, safe error envelopes, proposal-only review/draft stubs, safe
+    handler validation, direct database/filesystem/canonical mutation bans, and
+    tool-call log records. JSON-RPC compatibility now exists for the semantic
+    gateway, but this still does not replace every JSON-line MCP prototype or
+    close end-to-end production adapter readiness.
 - [ ] Add tool schemas and error envelopes for upload, ingestion, observation,
   candidate graph, access, and wiki projection workflows.
   - Owner paths: gateway package, `python/formowl_contract/`
@@ -939,6 +987,18 @@ These groups can be split across multiple agents after Slice 1 is stable.
   - Owner paths: storage modules, migrations
   - Proof: tests run against file stores and database stores through the same
     interfaces.
+  - Note: a PostgreSQL/pgvector adapter-contract slice now exists under
+    `python/formowl_graph/storage/postgres.py`,
+    `python/formowl_graph/storage/migrations/`, and
+    `python/formowl_graph/index/pgvector.py`. Tests cover redacted connection
+    config, migration manifest/replay, repository/unit-of-work statement
+    ordering, rollback facade behavior, permission SQL builders, pgvector query
+    builders, pgvector repository upsert/search execution over the connection
+    protocol, a locked pgvector live-smoke harness under `scripts/`, a locked
+    PostgreSQL transaction-rollback live-smoke harness, and raw-path/SQL leak
+    guards. Leave this unchecked until the remaining container-backed
+    repository tests and the production end-to-end adapter path pass through
+    the same interfaces.
 - [x] Add vector and optional graph storage after candidate review workflows
   stabilize.
   - Owner paths: graph/index modules

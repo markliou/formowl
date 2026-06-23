@@ -16,6 +16,10 @@ dev = [
   "pre-commit>=4.0",
   "ruff==0.8.6"
 ]
+graph-adapters = [
+  "rapidfuzz>=3.14,<4",
+  "splink>=4,<5"
+]
 
 [project.scripts]
 formowl-project-mcp = "formowl_project_mcp.server:main"
