@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 from io import StringIO
 
@@ -136,6 +136,49 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
         self.assertFalse(payload["authority"]["promotes_evidence"])
         self.assertFalse(payload["authority"]["writes_canonical_packets"])
         self.assertFalse(payload["authority"]["counts_as_acceptance_gate"])
+
+    def test_check_mode_passes_when_tracked_guide_is_current(self) -> None:
+        with redirect_stdout(StringIO()):
+            guide.main(["--output", "work_packets/test_remaining_real_evidence_operator_guide.md"])
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            result = guide.main(
+                [
+                    "--output",
+                    "work_packets/test_remaining_real_evidence_operator_guide.md",
+                    "--check",
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["check"]["exists"])
+        self.assertTrue(payload["check"]["up_to_date"])
+        self.assertFalse(payload["authority"]["accepts_evidence"])
+        self.assertFalse(payload["authority"]["writes_canonical_packets"])
+
+    def test_check_mode_fails_without_rewriting_stale_guide(self) -> None:
+        self.output.write_text("stale operator guide\n", encoding="utf-8")
+        before = self.output.read_text(encoding="utf-8")
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            result = guide.main(
+                [
+                    "--output",
+                    "work_packets/test_remaining_real_evidence_operator_guide.md",
+                    "--check",
+                ]
+            )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(self.output.read_text(encoding="utf-8"), before)
+        payload = json.loads(stdout.getvalue())
+        self.assertTrue(payload["check"]["exists"])
+        self.assertFalse(payload["check"]["up_to_date"])
+        self.assertIn("operator guide is stale", stderr.getvalue())
 
     def test_guide_does_not_introduce_forbidden_authority_claims_from_report(self) -> None:
         report = work_orders.build_report()

@@ -1208,6 +1208,15 @@ These groups can be split across multiple agents after Slice 1 is stable.
     main repo unittest 252 OK, and main KG acceptance state unchanged. This
     improves real-evidence collection handoff only; broad KG-eval still reports
     `overall_passed=false` with the same four failed real-evidence gates.
+  - 2026-06-27 operator-guide sync-check checkpoint: the operator guide
+    generator now supports `--check`, and the tracked guide documents that
+    command so future sessions can fail fast when guide content drifts from
+    current work orders. Focused tests cover up-to-date and stale-guide cases,
+    including stale failure without rewriting. Dev-container verification
+    passed: guide `--check`, focused operator-guide unittest 8 OK, full KG-eval
+    unittest 404 OK, changed-file Ruff check and format check, refreshed broad
+    KG-eval reports, main repo unittest 252 OK, and main KG acceptance state
+    unchanged. This still does not close any broad real-evidence gate.
 
 ### Real Project and Wiki Integrations
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -280,6 +281,12 @@ def build_guide(report: dict[str, Any] | None = None) -> str:
             "python3 real_evidence_operator_guide.py",
             "```",
             "",
+            "Check whether the tracked guide is current with:",
+            "",
+            "```sh",
+            "python3 real_evidence_operator_guide.py --check",
+            "```",
+            "",
             "Then rerun the authoritative KG-eval validators. This guide remains",
             "operator guidance only.",
             "",
@@ -307,27 +314,39 @@ def main(argv: list[str] | None = None) -> int:
         default=str(DEFAULT_OUTPUT_PATH.relative_to(ROOT)),
         help="work_packets-relative markdown output path",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="exit nonzero if the generated guide differs from the output file",
+    )
     args = parser.parse_args(argv)
     output_path = safe_output_path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     guide = build_guide()
+    status = {
+        "artifact_id": "kg_real_evidence_operator_guide_v1",
+        "output": str(output_path.relative_to(ROOT)),
+        "authority": {
+            "accepts_evidence": False,
+            "promotes_evidence": False,
+            "writes_canonical_packets": False,
+            "counts_as_acceptance_gate": False,
+        },
+    }
+    if args.check:
+        current = output_path.read_text(encoding="utf-8") if output_path.exists() else None
+        status["check"] = {
+            "mode": "check",
+            "exists": output_path.exists(),
+            "up_to_date": current == guide,
+        }
+        print(json.dumps(status, indent=2, sort_keys=True))
+        if current != guide:
+            print("operator guide is stale; rerun real_evidence_operator_guide.py", file=sys.stderr)
+            return 1
+        return 0
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(guide, encoding="utf-8")
-    print(
-        json.dumps(
-            {
-                "artifact_id": "kg_real_evidence_operator_guide_v1",
-                "output": str(output_path.relative_to(ROOT)),
-                "authority": {
-                    "accepts_evidence": False,
-                    "promotes_evidence": False,
-                    "writes_canonical_packets": False,
-                    "counts_as_acceptance_gate": False,
-                },
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
+    print(json.dumps(status, indent=2, sort_keys=True))
     return 0
 
 

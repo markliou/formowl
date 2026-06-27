@@ -227,3 +227,12 @@ status in each role's goal file and task completion in
   (`passed_with_explicit_limits`; strict fails only on known limits). The full
   KG objective is still active and broad KG-eval remains `overall_passed=false`
   with the same four failed real-evidence gates.
+- 2026-06-27 operator-guide sync check: added `--check` mode to
+  `.formowl/kg-eval/real_evidence_operator_guide.py`, and the tracked guide now
+  documents `python3 real_evidence_operator_guide.py --check`. The focused
+  tests cover both an up-to-date guide and a stale guide that fails without
+  being rewritten. Dev-container verification passed: guide `--check`, focused
+  operator-guide unittest 8 OK, full KG-eval unittest 404 OK, changed-file Ruff
+  check and format check, refreshed broad KG-eval reports, main repo unittest
+  252 OK, and main KG acceptance state remains unchanged. Broad KG-eval is
+  still `overall_passed=false` with the same four failed real-evidence gates.

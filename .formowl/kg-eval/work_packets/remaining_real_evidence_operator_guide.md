@@ -637,5 +637,11 @@ Regenerate this guide from current work orders with:
 python3 real_evidence_operator_guide.py
 ```
 
+Check whether the tracked guide is current with:
+
+```sh
+python3 real_evidence_operator_guide.py --check
+```
+
 Then rerun the authoritative KG-eval validators. This guide remains
 operator guidance only.

@@ -559,3 +559,15 @@ exact command and write scope.
   `production_adapter_readiness`/`latency_scalability_enterprise_claims`
   limits. Broad KG-eval remains `overall_passed=false` with the same four
   failed real-evidence gates.
+- 2026-06-27 operator-guide sync checkpoint: added `--check` mode to
+  `.formowl/kg-eval/real_evidence_operator_guide.py` so CI or future agents can
+  fail fast when the tracked guide drifts from current work orders. The tracked
+  guide now documents the check command. Focused operator-guide unittest now
+  covers current-guide success and stale-guide failure without rewriting stale
+  content. Dev-container verification passed: `python
+  real_evidence_operator_guide.py --check`, focused operator-guide unittest 8
+  OK, full KG-eval unittest 404 OK, changed-file Ruff check and format check,
+  refreshed broad KG-eval reports, main repo unittest 252 OK, default main KG
+  acceptance `passed_with_explicit_limits`, and strict main KG acceptance still
+  failed only on the known limits. Broad KG-eval remains
+  `overall_passed=false` with the same four failed real-evidence gates.

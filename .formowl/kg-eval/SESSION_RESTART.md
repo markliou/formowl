@@ -54,9 +54,13 @@ Latest completed local slice, updated 2026-06-27:
   - `production_adapter_paths`
 - The guide is non-authoritative: it accepts no evidence, promotes no packets,
   writes no canonical input packets, and does not count as an acceptance gate.
+- `python3 real_evidence_operator_guide.py --check` verifies that the tracked
+  guide is current with the generated work-order state and fails without
+  rewriting stale guide content.
 - Dev-container verification passed after adding the guide:
-  - focused operator-guide unittest 6 OK
-  - full KG-eval unittest 402 OK
+  - guide `--check`
+  - focused operator-guide unittest 8 OK
+  - full KG-eval unittest 404 OK
   - changed-file Ruff check and format-check
   - refreshed broad KG-eval reports
   - main repo unittest 252 OK
