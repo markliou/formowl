@@ -389,3 +389,31 @@ model.
   4 failed gates for `fair_external_baseline_comparison`,
   `annotation_adjudication_protocol`, `multimodal_semantic_validation`, and
   `production_adapter_paths`.
+- 2026-06-27 fair-baseline response-intake checkpoint: candidate-only
+  `fair_baseline_response_intake.py` is implemented and wired into
+  `real_evidence_collection_work_orders.py` for
+  `fair_external_baseline_comparison`. It seals operator-supplied response JSON
+  into candidate artifacts under `inputs/fair_baseline_real/<operator-run-id>`,
+  can write a candidate assembly manifest under `work_packets/`, records
+  response/candidate/artifact custody hashes, rejects raw/internal/template
+  payloads, symlinks, unsafe output roots, overwrite attempts, and promotion
+  arguments, and does not write
+  `inputs/fair_external_baseline_run_packet.json`. Initial GPT reviewer
+  blockers for unreceipted manifest hashes, post-write assembler failures,
+  parent-file partial writes, and production-shaped test cleanup were fixed by
+  custody-hashing the optional manifest, rolling back any intake-created files
+  on assembler/custody-write failure, preflighting output parent directories,
+  and moving tests under a test-marked real-root parent. Dev-container
+  verification passed: KG-eval unittest 372 OK, main repo unittest 252 OK,
+  changed-file Ruff check and format-check passed, and
+  `kg_total_acceptance_suite.py`,
+  `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+  `real_evidence_collection_work_orders.py` were refreshed in the dev
+  container. Broad KG-eval remains `overall_passed=false` with the same 8
+  passed gates and 4 failed real-evidence gates; work orders are synchronized
+  and non-authoritative with 4 collection work orders. Reviewer gate state:
+  GPT/Codex reviewers `Poincare`, `Popper`, and `Carson` returned
+  `RELEASE_DECISION: AGREE` after blocker fixes. Antigravity Gemini reviewers
+  are blocked at 0/3 because tenant policy rejected both the code/diff bounded
+  packet and a materially safer closed-book bounded summary through real
+  `agy`; no workaround or alternate external channel was attempted.

@@ -1128,6 +1128,20 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `results/`, local long-form handoff history, operator real artifact roots,
     and canonical real evidence packets remain ignored. The item stays
     unchecked because the four broad real-evidence gates still fail.
+  - 2026-06-27 fair-baseline response-intake note: candidate-only intake is
+    implemented for `fair_external_baseline_comparison` and wired into the
+    collection work orders. It can seal operator-supplied fair-baseline
+    response JSON into candidate artifacts and custody receipts without writing
+    the canonical fair-baseline packet or changing acceptance state.
+    Reviewer blockers for manifest custody hashing, post-write assembler
+    failures, parent-file partial writes, and production-shaped test cleanup
+    were fixed. Dev-container KG-eval unittest ran 372 tests OK; main repo
+    unittest ran 252 tests OK; changed-file Ruff check and format-check passed;
+    refreshed broad KG-eval reports still show `overall_passed=false`, 8
+    passed gates, and 4 failed gates. GPT/Codex reviewer gate is 3/3 agreed
+    after blocker fixes. Antigravity Gemini reviewer gate is blocked at 0/3 by
+    tenant policy rejection of both code/diff and closed-book bounded `agy`
+    packets; no external-channel workaround was attempted.
 
 ### Real Project and Wiki Integrations
 

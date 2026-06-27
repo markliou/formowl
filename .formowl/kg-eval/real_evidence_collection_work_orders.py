@@ -42,6 +42,12 @@ ENTERPRISE_RESPONSE_INTAKE_OUTPUT_DIR = "inputs/enterprise_multimodal_real/OPERA
 ENTERPRISE_RESPONSE_INTAKE_MANIFEST_OUTPUT = (
     "work_packets/multimodal_semantic_validation_candidate_manifest.json"
 )
+FAIR_RESPONSE_INTAKE_WORK_PACKET = "work_packets/fair_baseline_run_work_packet_preview.json"
+FAIR_RESPONSE_PACKET_PLACEHOLDER = "OPERATOR_FAIR_BASELINE_RESPONSE_PACKET_JSON"
+FAIR_RESPONSE_INTAKE_OUTPUT_DIR = "inputs/fair_baseline_real/OPERATOR_RUN_ID"
+FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT = (
+    "work_packets/fair_external_baseline_comparison_candidate_manifest.json"
+)
 ACCEPTANCE_SHAPED_STATES = {
     "pass",
     "passed",
@@ -109,6 +115,14 @@ def _common_commands(row: dict[str, Any], gate_config: dict[str, Any]) -> dict[s
     if generator:
         commands["generate_non_evidence_assembly_manifest_scaffold"] = (
             f"python3 {generator} --output {manifest_path}"
+        )
+    if row["gate_id"] == "fair_external_baseline_comparison":
+        commands["seal_fair_baseline_responses_into_candidate_artifacts"] = (
+            "python3 fair_baseline_response_intake.py "
+            f"--work-packet {FAIR_RESPONSE_INTAKE_WORK_PACKET} "
+            f"--response-packet {FAIR_RESPONSE_PACKET_PLACEHOLDER} "
+            f"--output-dir {FAIR_RESPONSE_INTAKE_OUTPUT_DIR} "
+            f"--assembly-manifest-output {FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT}"
         )
     if row["gate_id"] == "annotation_adjudication_protocol":
         commands["seal_human_responses_into_candidate_artifacts"] = (
@@ -182,6 +196,26 @@ def _fair_tasks(row: dict[str, Any]) -> dict[str, Any]:
         "graph_quality_validation": _copy_list(row, "required_graph_quality_evidence"),
         "permission_probe_evidence": _copy_list(row, "required_permission_probe_evidence"),
         "run_artifact_content_contract": _copy_list(row, "required_run_artifact_content_contract"),
+        "response_packet_contract": {
+            "response_packet_type": "fair_baseline_response_intake_v1",
+            "response_packet_placeholder": FAIR_RESPONSE_PACKET_PLACEHOLDER,
+            "work_packet_path": FAIR_RESPONSE_INTAKE_WORK_PACKET,
+            "candidate_output_dir": FAIR_RESPONSE_INTAKE_OUTPUT_DIR,
+            "assembly_manifest_output": FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT,
+            "writes_canonical_packet": False,
+            "canonical_packet_not_written": row["input_packet"],
+            "promotes_evidence": False,
+            "counts_as_acceptance_gate": False,
+            "required_controls": [
+                "operator supplied real package run artifacts for every baseline",
+                "operator supplied non-synthetic run environment",
+                "operator supplied human answer-quality adjudication",
+                "operator supplied graph-quality validation",
+                "operator supplied permission probes for every baseline",
+                "candidate packet validates before any manual governance promotion",
+                "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+            ],
+        },
     }
 
 

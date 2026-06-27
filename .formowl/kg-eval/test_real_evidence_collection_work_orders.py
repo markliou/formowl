@@ -317,6 +317,41 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             "package_lock_artifact artifact_type == fair_baseline_package_lock_v1",
             fair["operator_tasks"]["run_artifact_content_contract"],
         )
+        fair_response_contract = fair["operator_tasks"]["response_packet_contract"]
+        self.assertEqual(
+            fair_response_contract["response_packet_type"], "fair_baseline_response_intake_v1"
+        )
+        self.assertEqual(
+            fair_response_contract["response_packet_placeholder"],
+            work_orders.FAIR_RESPONSE_PACKET_PLACEHOLDER,
+        )
+        self.assertEqual(
+            fair_response_contract["work_packet_path"],
+            work_orders.FAIR_RESPONSE_INTAKE_WORK_PACKET,
+        )
+        self.assertEqual(
+            fair_response_contract["candidate_output_dir"],
+            work_orders.FAIR_RESPONSE_INTAKE_OUTPUT_DIR,
+        )
+        self.assertEqual(
+            fair_response_contract["assembly_manifest_output"],
+            work_orders.FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT,
+        )
+        self.assertFalse(fair_response_contract["writes_canonical_packet"])
+        self.assertEqual(
+            fair_response_contract["canonical_packet_not_written"],
+            fair["canonical_input_packet"],
+        )
+        self.assertFalse(fair_response_contract["promotes_evidence"])
+        self.assertFalse(fair_response_contract["counts_as_acceptance_gate"])
+        self.assertIn(
+            "operator supplied real package run artifacts for every baseline",
+            fair_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+            fair_response_contract["required_controls"],
+        )
 
         human = self._order(report, "annotation_adjudication_protocol")
         human_checklist = checklist_by_gate["annotation_adjudication_protocol"]
@@ -498,8 +533,43 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
                     self.assertNotIn("--promote", command)
                     self.assertNotIn(" cp ", f" {command} ")
                     self.assertNotIn(" mv ", f" {command} ")
-                    self.assertNotIn("> inputs/", command)
-                    self.assertNotIn(">> inputs/", command)
+                self.assertNotIn("> inputs/", command)
+                self.assertNotIn(">> inputs/", command)
+
+    def test_fair_work_order_includes_candidate_only_response_intake_command(self) -> None:
+        report = work_orders.build_report()
+        fair = self._order(report, "fair_external_baseline_comparison")
+
+        command = fair["commands"]["seal_fair_baseline_responses_into_candidate_artifacts"]
+
+        self.assertIn("python3 fair_baseline_response_intake.py", command)
+        self.assertIn(f"--work-packet {work_orders.FAIR_RESPONSE_INTAKE_WORK_PACKET}", command)
+        self.assertIn(
+            f"--response-packet {work_orders.FAIR_RESPONSE_PACKET_PLACEHOLDER}",
+            command,
+        )
+        self.assertNotIn("<", command)
+        self.assertNotIn(">", command)
+        self.assertIn(f"--output-dir {work_orders.FAIR_RESPONSE_INTAKE_OUTPUT_DIR}", command)
+        self.assertTrue(
+            work_orders.FAIR_RESPONSE_INTAKE_OUTPUT_DIR.startswith(f"{fair['real_artifact_root']}/")
+        )
+        self.assertNotIn(fair["canonical_input_packet"], command)
+        self.assertIn(
+            f"--assembly-manifest-output {work_orders.FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT}",
+            command,
+        )
+        self.assertTrue(
+            work_orders.FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT.startswith("work_packets/")
+        )
+        self.assertNotIn(
+            fair["real_artifact_root"], work_orders.FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT
+        )
+        self.assertNotIn("--promote", command)
+        self.assertFalse(fair["work_order_authority"]["accepts_evidence"])
+        self.assertFalse(fair["work_order_authority"]["promotes_evidence"])
+        self.assertFalse(fair["work_order_authority"]["writes_canonical_packet"])
+        self.assertFalse(fair["work_order_authority"]["counts_as_acceptance_gate"])
 
     def test_human_work_order_includes_candidate_only_response_intake_command(self) -> None:
         report = work_orders.build_report()

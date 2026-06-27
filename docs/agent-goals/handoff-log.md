@@ -107,3 +107,19 @@ status in each role's goal file and task completion in
   sandbox/tenant data-egress policy, and no workaround was attempted. The full
   KG real-evidence objective remains active with the same four failed broad
   gates.
+- 2026-06-27 fair-baseline response-intake progress: added a candidate-only
+  fair external-baseline response intake path and work-order command. The new
+  intake writes only candidate artifacts under
+  `inputs/fair_baseline_real/<operator-run-id>` and optional candidate
+  manifests under `work_packets/`, records custody hashes, rejects unsafe
+  payloads/paths/overwrites/symlinks, and never writes the canonical fair
+  baseline packet. GPT reviewer blockers for manifest custody hashing,
+  post-write assembler failures, parent-file partial writes, and
+  production-shaped test cleanup were fixed. Dev-container KG-eval unittest ran
+  372 tests OK; main repo unittest ran 252 tests OK; changed-file Ruff check
+  and format-check passed; KG-eval acceptance/preflight/work-order reports were
+  refreshed and remain blocked/synchronized with the same four failed broad
+  gates. GPT/Codex reviewers `Poincare`, `Popper`, and `Carson` agreed after
+  blocker fixes. Antigravity Gemini review is blocked at 0/3 because tenant
+  policy rejected both a code/diff bounded packet and a closed-book bounded
+  summary through real `agy`; no workaround was attempted.
