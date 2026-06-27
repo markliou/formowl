@@ -807,3 +807,31 @@ Reviewer cost-control rules:
   5 proved and 4 incomplete requirements; all four real roots have no files
   and the four canonical broad packets remain absent. GPT/Codex reviewers
   `Confucius`, `Mendel`, and `Leibniz` returned `RELEASE_DECISION: AGREE`.
+- 2026-06-28 canonical broad-packet path guard checkpoint: the four broad
+  real-evidence validators now reject canonical input packet filesystem
+  aliases before parsing. `fair_external_baseline_run_validator.py`,
+  `human_annotation_adjudication_validator.py`,
+  `enterprise_multimodal_validation_validator.py`, and
+  `production_adapter_path_validator.py` reject direct symlinks, hardlink
+  aliases (`st_nlink > 1`), and non-regular packet paths. The blocker is
+  propagated through `validate_packet()` so reports stay failed with
+  claim-boundary flags false. Added
+  `.formowl/kg-eval/test_canonical_evidence_packet_path_guards.py` covering
+  symlink, hardlink, and directory packet paths for all four validators; the
+  helper preserves a pre-existing directory packet path instead of deleting it
+  during cleanup. This slice reads no response-packet contents, writes no
+  candidate artifacts, promotes no evidence, writes no canonical packets, and
+  does not count as an acceptance gate. Verification passed: host focused
+  validator unittest 107 OK; dev-container focused validator unittest 107 OK;
+  full KG-eval unittest 426 OK; main repo unittest 252 OK; full Ruff check and
+  format-check; operator guide `--check`; submission template
+  `--check-template`; refreshed broad reports; and default main KG acceptance
+  `passed_with_explicit_limits`. Strict main KG acceptance still exits nonzero
+  only for known limits. Broad KG-eval remains incomplete with
+  `overall_passed=false`, 8 passed gates, and the same four failed
+  real-evidence gates; all four real roots remain empty and all four
+  canonical broad packets remain absent. GPT/Codex reviewer gate passed 3/3:
+  `Nietzsche`, `Bacon`, and `Copernicus`; `Nietzsche` initially blocked on
+  destructive directory cleanup in the test helper, then agreed after the
+  helper and directory coverage were fixed. A mistakenly spawned no-op
+  `Averroes` reviewer is not counted.

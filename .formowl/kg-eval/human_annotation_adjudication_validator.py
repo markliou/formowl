@@ -204,6 +204,12 @@ def load_input_packet() -> dict[str, Any]:
         return {"__input_packet_error": "human annotation results packet symlink not accepted"}
     if not PACKET_PATH.exists():
         return {}
+    if not PACKET_PATH.is_file():
+        return {"__input_packet_error": "human annotation results packet is not a file"}
+    if PACKET_PATH.stat().st_nlink > 1:
+        return {
+            "__input_packet_error": ("human annotation results packet hardlink alias not accepted")
+        }
     loaded = json.loads(PACKET_PATH.read_text(encoding="utf-8"))
     return loaded if isinstance(loaded, dict) else {}
 

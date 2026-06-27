@@ -414,8 +414,18 @@ def load_artifact(
 
 
 def load_input_packet() -> dict[str, Any]:
+    if PACKET_PATH.is_symlink():
+        return {"__input_packet_error": ("production adapter evidence packet symlink not accepted")}
     if not PACKET_PATH.exists():
         return {}
+    if not PACKET_PATH.is_file():
+        return {"__input_packet_error": "production adapter evidence packet is not a file"}
+    if PACKET_PATH.stat().st_nlink > 1:
+        return {
+            "__input_packet_error": (
+                "production adapter evidence packet hardlink alias not accepted"
+            )
+        }
     loaded = json.loads(PACKET_PATH.read_text(encoding="utf-8"))
     return loaded if isinstance(loaded, dict) else {}
 
@@ -816,6 +826,8 @@ def validate_packet(
     allow_test_artifacts: bool = False,
 ) -> list[str]:
     blockers: list[str] = []
+    if isinstance(packet.get("__input_packet_error"), str):
+        return [packet["__input_packet_error"]]
     if not packet:
         return [
             "production adapter evidence packet missing",

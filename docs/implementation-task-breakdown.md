@@ -1370,6 +1370,26 @@ These groups can be split across multiple agents after Slice 1 is stable.
     GPT/Codex reviewers `Dirac`, `Zeno`, and `Hypatia` agreed; Hypatia's
     guide-warning assertion suggestion was implemented and re-reviewed with
     final `AGREE`.
+  - 2026-06-28 canonical broad-packet path guard checkpoint: the four broad
+    real-evidence validators now reject symlinked canonical packets,
+    hardlink-alias canonical packets, and non-regular canonical packet paths
+    before parsing. Added
+    `.formowl/kg-eval/test_canonical_evidence_packet_path_guards.py` covering
+    symlink, hardlink, and directory packet paths for fair baseline, human
+    annotation, enterprise multimodal, and production adapter validators. This
+    accepts no evidence, writes no candidate artifacts, promotes no packets,
+    writes no canonical broad packets, and does not count as an acceptance
+    gate. Verification passed: host focused validator unittest 107 OK;
+    dev-container focused validator unittest 107 OK; full KG-eval unittest
+    426 OK; main repo unittest 252 OK; full Ruff check and format-check;
+    guide/template checks; refreshed broad reports; and default main KG
+    acceptance `passed_with_explicit_limits`. Strict main KG acceptance still
+    exits nonzero only for known limits. Broad KG-eval remains
+    `overall_passed=false`, 8 passed gates, and the same four failed broad
+    real-evidence gates, so this work-board item remains unchecked.
+    GPT/Codex reviewers `Nietzsche`, `Bacon`, and `Copernicus` agreed after
+    `Nietzsche`'s blocker about destructive directory cleanup in the new test
+    helper was fixed. A no-op `Averroes` spawn is not counted.
 
 ### Real Project and Wiki Integrations
 

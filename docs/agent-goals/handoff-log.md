@@ -473,3 +473,23 @@ status in each role's goal file and task completion in
   only for known limits. Broad KG-eval remains incomplete with the same four
   failed real-evidence gates. GPT/Codex reviewers `Confucius`, `Mendel`, and
   `Leibniz` returned `RELEASE_DECISION: AGREE`.
+- Canonical broad-packet path guard: the four broad real-evidence validators
+  now reject direct symlinks, hardlink aliases (`st_nlink > 1`), and
+  non-regular canonical input packet paths before JSON parsing. The blocker
+  propagates through `validate_packet()` so reports remain failed and
+  claim-boundary flags stay false. Added
+  `.formowl/kg-eval/test_canonical_evidence_packet_path_guards.py` for
+  symlink, hardlink, and directory packet paths across fair baseline, human
+  annotation, enterprise multimodal, and production adapter validators. This
+  is acceptance hardening only: it accepts no evidence, writes no candidate
+  artifacts, promotes no packets, writes no canonical broad packets, and
+  changes no broad gate status. Verification passed: host focused validator
+  unittest 107 OK; dev-container focused validator unittest 107 OK; full
+  KG-eval unittest 426 OK; main repo unittest 252 OK; full Ruff check and
+  format-check; operator guide `--check`; submission template
+  `--check-template`; refreshed broad reports; and default main KG acceptance
+  `passed_with_explicit_limits`. Strict main KG acceptance still exits
+  nonzero only for known limits. Broad KG-eval remains incomplete with the
+  same four failed real-evidence gates and empty real roots. GPT/Codex
+  reviewer gate passed 3/3: `Nietzsche`, `Bacon`, and `Copernicus`; a no-op
+  `Averroes` spawn is not counted.

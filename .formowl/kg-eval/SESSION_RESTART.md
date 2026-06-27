@@ -39,11 +39,11 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
-Current execution checkpoint, updated 2026-06-28 after `27ff851`:
+Current execution checkpoint, updated 2026-06-28 after canonical packet path
+guard hardening:
 
-- Local Git state was clean at `27ff851`
-  (`Harden KG submission manifest input guard`) on `complete-slice-1`.
-  `git status -sb` showed the branch matched `origin/complete-slice-1`.
+- Local Git state before commit has the canonical packet path guard slice
+  staged for review on `complete-slice-1`.
 - Dev-container KG-eval commands rerun against current state:
   - `python kg_total_acceptance_suite.py`
   - `python kg_objective_completion_audit.py`
@@ -60,7 +60,7 @@ Current execution checkpoint, updated 2026-06-28 after `27ff851`:
   - `ruff format --check python tests scripts .formowl/kg-eval`
 - Verification result:
   - KG-eval reports exited 0.
-  - KG-eval unittest ran 421 tests OK.
+  - KG-eval unittest ran 426 tests OK.
   - Operator guide check and submission-template check exited 0.
   - Main repo unittest ran 252 tests OK.
   - Default main KG acceptance remains `passed_with_explicit_limits`.
@@ -68,8 +68,7 @@ Current execution checkpoint, updated 2026-06-28 after `27ff851`:
     `production_adapter_readiness` failed and
     `latency_scalability_enterprise_claims` blocked.
   - Full Ruff lint passed.
-  - Follow-up format cleanup passed full Ruff format-check:
-    `200 files already formatted`.
+  - Full Ruff format-check passed: `201 files already formatted`.
 - Refreshed broad KG-eval remains incomplete:
   `overall_passed=false`, `passed_gate_count=8`, `failed_gate_count=4`.
   Failed gates remain exactly:
@@ -88,6 +87,49 @@ Current execution checkpoint, updated 2026-06-28 after `27ff851`:
 - No completion claim is supported.
 
 Latest local implementation slice, updated 2026-06-28:
+
+- The four broad real-evidence validators now reject canonical input packet
+  filesystem aliases before JSON parsing:
+  `fair_external_baseline_run_validator.py`,
+  `human_annotation_adjudication_validator.py`,
+  `enterprise_multimodal_validation_validator.py`, and
+  `production_adapter_path_validator.py`.
+- Canonical packet inputs reject direct symlinks, hardlink aliases
+  (`st_nlink > 1`), and non-regular files. The blocker is propagated through
+  `validate_packet()` so reports remain failed with all claim-boundary flags
+  false.
+- Added `test_canonical_evidence_packet_path_guards.py`, covering symlink,
+  hardlink, and directory canonical packet paths for all four validators. The
+  test helper now preserves any pre-existing directory at a canonical packet
+  path instead of deleting it during cleanup.
+- This slice reads no response packet contents beyond the canonical packet
+  path check, writes no candidate artifacts, promotes no evidence, writes no
+  canonical packets, and counts as no acceptance gate.
+- Verification passed:
+  - host focused validator unittest 107 OK
+  - dev-container focused validator unittest 107 OK
+  - dev-container full KG-eval unittest 426 OK
+  - dev-container main repo unittest 252 OK
+  - dev-container full Ruff check and format-check
+  - dev-container guide `--check`
+  - dev-container submission template `--check-template`
+  - refreshed broad KG-eval reports
+  - default main KG acceptance `passed_with_explicit_limits`
+  - strict main KG acceptance still exits nonzero only for known limits:
+    `production_adapter_readiness` and
+    `latency_scalability_enterprise_claims`
+- Broad KG-eval remains incomplete: `overall_passed=false`, 8 passed gates,
+  and the same four failed real-evidence gates. Objective audit remains
+  `objective_complete=false`, with 5 proved and 4 incomplete requirements.
+  All four real roots still have no files, and the four canonical broad
+  packets remain absent.
+- GPT/Codex reviewer gate passed 3/3: `Nietzsche`, `Bacon`, and
+  `Copernicus`. `Nietzsche` initially blocked on destructive directory cleanup
+  in the test helper; the helper was fixed, directory coverage was added, and
+  `Nietzsche` re-reviewed with `RELEASE_DECISION: AGREE`. A mistakenly spawned
+  no-op reviewer `Averroes` is not counted.
+
+Previous local implementation slice, updated 2026-06-28:
 
 - Operator submission-manifest preflight now rejects hardlink aliases for the
   operator-filled `--manifest` input and for required
