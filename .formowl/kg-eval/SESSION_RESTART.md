@@ -39,6 +39,45 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
+Current execution checkpoint, updated 2026-06-28:
+
+- `git fetch origin` found no newer commit beyond
+  `63df752` (`Document agy MCP route disablement`) on `complete-slice-1`.
+  The branch matched `origin/complete-slice-1`.
+- Dev-container KG-eval commands rerun against current state:
+  - `python kg_total_acceptance_suite.py`
+  - `python kg_objective_completion_audit.py`
+  - `python real_evidence_preflight.py`
+  - `python real_evidence_collection_work_orders.py`
+  - `python -m unittest discover -s . -p 'test_*.py'`
+  - `python real_evidence_operator_guide.py --check`
+  - `python real_evidence_submission_manifest.py --check-template`
+- Dev-container main-repo commands rerun against current state:
+  - `python -m unittest discover -s tests`
+  - `python scripts/kg_research_acceptance_suite.py`
+  - `python scripts/kg_research_acceptance_suite.py --strict`
+- Verification result:
+  - KG-eval reports exited 0.
+  - KG-eval unittest ran 421 tests OK.
+  - Operator guide check and submission-template check exited 0.
+  - Main repo unittest ran 252 tests OK.
+  - Default main KG acceptance remains `passed_with_explicit_limits`.
+  - Strict main KG acceptance still exits nonzero for known limits:
+    `production_adapter_readiness` failed and
+    `latency_scalability_enterprise_claims` blocked.
+- Refreshed broad KG-eval remains incomplete:
+  `overall_passed=false`, `passed_gate_count=8`, `failed_gate_count=4`.
+  Failed gates remain exactly:
+  `fair_external_baseline_comparison`,
+  `annotation_adjudication_protocol`,
+  `multimodal_semantic_validation`, and `production_adapter_paths`.
+- Objective audit remains `objective_complete=false`, with 5 proved
+  requirements and 4 incomplete requirements.
+- Real-evidence preflight reports all four remaining gates blocked:
+  fair baseline has 5 blockers, human annotation has 3, multimodal has 4, and
+  production adapter has 4.
+- No completion claim is supported.
+
 Latest local implementation slice, updated 2026-06-28:
 
 - Candidate intake execution-plan emission added to

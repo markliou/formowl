@@ -373,3 +373,22 @@ status in each role's goal file and task completion in
   user explicitly re-enables it after policy, platform, or MCP configuration
   changes. This policy checkpoint does not change broad KG-eval acceptance:
   `overall_passed=false` with the same four failed real-evidence gates.
+- Current-state execution after user request: `git fetch origin` found no
+  newer commit beyond `63df752` (`Document agy MCP route disablement`) on
+  `complete-slice-1`, and the branch matched `origin/complete-slice-1`.
+  Codex reran the broad KG-eval and main-repo verification in the dev
+  container: `kg_total_acceptance_suite.py`,
+  `kg_objective_completion_audit.py`, `real_evidence_preflight.py`,
+  `real_evidence_collection_work_orders.py`, full KG-eval unittest, operator
+  guide `--check`, submission template `--check-template`, main repo unittest,
+  default main KG acceptance, and strict main KG acceptance. KG-eval reports
+  exited 0; KG-eval unittest ran 421 tests OK; guide/template checks exited 0;
+  main repo unittest ran 252 tests OK; default main KG acceptance remains
+  `passed_with_explicit_limits`; strict main KG acceptance still exits nonzero
+  only for known limits. Broad KG-eval remains incomplete with
+  `overall_passed=false`, 8 passed gates, and 4 failed gates:
+  `fair_external_baseline_comparison`,
+  `annotation_adjudication_protocol`,
+  `multimodal_semantic_validation`, and `production_adapter_paths`. Objective
+  audit remains `objective_complete=false`, with 5 proved and 4 incomplete
+  requirements. No completion claim is supported.
