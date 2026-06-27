@@ -466,6 +466,10 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             "intake custody receipt binds response packet, candidate packet, and artifact hashes",
             enterprise_response_contract["required_controls"],
         )
+        self.assertIn(
+            "intake custody receipt binds optional assembly manifest hash when emitted",
+            enterprise_response_contract["required_controls"],
+        )
 
         production = self._order(report, "production_adapter_paths")
         production_checklist = checklist_by_gate["production_adapter_paths"]

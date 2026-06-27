@@ -442,3 +442,27 @@ model.
   execution by tenant policy as external data disclosure to an untrusted
   reviewer service, even with user authorization. No packet was sent, no Gemini
   reviewer ran, and no workaround or alternate external channel was attempted.
+- 2026-06-27 enterprise-multimodal response-intake hardening checkpoint:
+  candidate-only `enterprise_multimodal_response_intake.py` is hardened for
+  `multimodal_semantic_validation` and remains wired into the collection work
+  orders. It seals operator-supplied enterprise multimodal response JSON into
+  candidate artifacts under
+  `inputs/enterprise_multimodal_real/<operator-run-id>` and optional candidate
+  manifests under `work_packets/`, records response/candidate/artifact,
+  custody, and optional manifest hashes, rejects unsupported top-level fields,
+  unsafe roots, nested default output dirs, sandbox/test paths by default,
+  symlinks, overwrites, parent-file collisions, raw/internal/template payload
+  values, raw/internal field names, and promotion arguments, and never writes
+  `inputs/enterprise_multimodal_validation_packet.json`. Reviewer blockers for
+  normal `OSError` rollback, after-open serialization/write partial files, and
+  raw/internal field-name rejection were fixed. Dev-container verification
+  passed: changed-file Ruff check and format-check, focused KG-eval unittest
+  35 OK, full KG-eval unittest 396 OK, main repo unittest 252 OK, and refreshed
+  broad KG-eval reports. Broad KG-eval remains `overall_passed=false`, with 8
+  passed gates and the same 4 failed real-evidence gates. GPT/Codex reviewers
+  `Aristotle`, `Huygens`, and `Lovelace` returned `RELEASE_DECISION: AGREE`
+  after blocker fixes. Antigravity Gemini review is blocked at 0/3 because a
+  bounded read-only `agy` review-packet attempt was rejected before execution
+  by tenant policy as external data disclosure to an untrusted reviewer service;
+  no packet was sent, no Gemini reviewer ran, and no workaround or alternate
+  external channel was attempted.

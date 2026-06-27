@@ -1164,6 +1164,26 @@ These groups can be split across multiple agents after Slice 1 is stable.
     data disclosure to an untrusted reviewer service; no packet was sent and
     no workaround was attempted. Do not check this broad objective complete
     from this candidate-only intake slice.
+  - 2026-06-27 enterprise-multimodal response-intake hardening checkpoint:
+    candidate-only intake for `multimodal_semantic_validation` is hardened
+    without changing broad acceptance state. It writes only candidate artifacts
+    under `inputs/enterprise_multimodal_real/<operator-run-id>` and optional
+    candidate manifests under `work_packets/`, records response/candidate,
+    artifact, custody, and manifest hashes, rejects unsafe/nested/sandbox paths,
+    symlinks, overwrites, parent-file collisions, unsupported top-level fields,
+    raw/internal/template payload values, raw/internal field names, and
+    promotion arguments, and never writes
+    `inputs/enterprise_multimodal_validation_packet.json`. Reviewer blockers
+    for raw/internal field names and after-open write/serialization partial
+    files were fixed. Dev-container verification passed: focused KG-eval
+    unittest 35 OK, full KG-eval unittest 396 OK, main repo unittest 252 OK,
+    changed-file Ruff check and format-check, and refreshed broad reports still
+    show `overall_passed=false`, 8 passed gates, and 4 failed gates. GPT/Codex
+    reviewer gate is 3/3 agreed after blocker fixes. Antigravity Gemini review
+    is blocked at 0/3 because tenant policy rejected a bounded read-only `agy`
+    review-packet attempt before execution as external data disclosure; no
+    packet was sent and no workaround was attempted. Do not check this broad
+    objective complete from this candidate-only intake hardening slice.
 
 ### Real Project and Wiki Integrations
 

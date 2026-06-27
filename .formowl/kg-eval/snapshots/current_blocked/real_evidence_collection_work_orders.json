@@ -8,7 +8,7 @@
     "Use validate-only command guidance from this report.",
     "Do not claim production readiness, top-tier validation, or completed human work from work orders."
   ],
-  "report_sha256": "0408c77000ad5605c188131735213af889450d9a1f0652f6c96a74e3eb0e529e",
+  "report_sha256": "f67f4834225dcdadc4c94a7ada3e357677e966c926866ab298150c6c12dce2b8",
   "source_checklist": "remaining_evidence_checklist.json",
   "source_preflight": "results/real_evidence_preflight.json",
   "summary": {
@@ -155,6 +155,7 @@
         "rerun_preflight": "python3 real_evidence_preflight.py",
         "rerun_total_acceptance": "python3 kg_total_acceptance_suite.py",
         "run_gate_validator_after_manual_packet_review": "python3 fair_external_baseline_run_validator.py",
+        "seal_fair_baseline_responses_into_candidate_artifacts": "python3 fair_baseline_response_intake.py --work-packet work_packets/fair_baseline_run_work_packet_preview.json --response-packet OPERATOR_FAIR_BASELINE_RESPONSE_PACKET_JSON --output-dir inputs/fair_baseline_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/fair_external_baseline_comparison_candidate_manifest.json",
         "validate_candidate_packet": "python3 fair_external_baseline_packet_assembler.py --assembly-manifest work_orders/fair_external_baseline_comparison_assembly_manifest.json --validate"
       },
       "current_blockers": [
@@ -290,6 +291,26 @@
           "private_leak_count == 0",
           "raw_asset_access_count == 0"
         ],
+        "response_packet_contract": {
+          "assembly_manifest_output": "work_packets/fair_external_baseline_comparison_candidate_manifest.json",
+          "candidate_output_dir": "inputs/fair_baseline_real/OPERATOR_RUN_ID",
+          "canonical_packet_not_written": "inputs/fair_external_baseline_run_packet.json",
+          "counts_as_acceptance_gate": false,
+          "promotes_evidence": false,
+          "required_controls": [
+            "operator supplied real package run artifacts for every baseline",
+            "operator supplied non-synthetic run environment",
+            "operator supplied human answer-quality adjudication",
+            "operator supplied graph-quality validation",
+            "operator supplied permission probes for every baseline",
+            "candidate packet validates before any manual governance promotion",
+            "intake custody receipt binds response packet, candidate packet, and artifact hashes"
+          ],
+          "response_packet_placeholder": "OPERATOR_FAIR_BASELINE_RESPONSE_PACKET_JSON",
+          "response_packet_type": "fair_baseline_response_intake_v1",
+          "work_packet_path": "work_packets/fair_baseline_run_work_packet_preview.json",
+          "writes_canonical_packet": false
+        },
         "run_artifact_content_contract": [
           "package_lock_artifact artifact_type == fair_baseline_package_lock_v1",
           "config_artifact artifact_type == fair_baseline_config_v1",
@@ -561,7 +582,8 @@
             "operator supplied business decision review artifact",
             "operator supplied permission probe artifact",
             "candidate packet validates before any manual governance promotion",
-            "intake custody receipt binds response packet, candidate packet, and artifact hashes"
+            "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+            "intake custody receipt binds optional assembly manifest hash when emitted"
           ],
           "response_packet_placeholder": "OPERATOR_ENTERPRISE_RESPONSE_PACKET_JSON",
           "response_packet_type": "enterprise_multimodal_response_intake_v1",
@@ -626,6 +648,7 @@
         "rerun_preflight": "python3 real_evidence_preflight.py",
         "rerun_total_acceptance": "python3 kg_total_acceptance_suite.py",
         "run_gate_validator_after_manual_packet_review": "python3 production_adapter_path_validator.py",
+        "seal_production_adapter_responses_into_candidate_artifacts": "python3 production_adapter_response_intake.py --work-packet work_packets/production_adapter_collection_packet_preview.json --response-packet OPERATOR_PRODUCTION_ADAPTER_RESPONSE_PACKET_JSON --output-dir inputs/production_adapter_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/production_adapter_paths_candidate_manifest.json",
         "validate_candidate_packet": "python3 production_adapter_packet_assembler.py --assembly-manifest work_orders/production_adapter_paths_assembly_manifest.json --validate"
       },
       "current_blockers": [
@@ -750,7 +773,28 @@
           "rapidfuzz_candidate_adapter",
           "splink_candidate_adapter",
           "wiki_projection_adapter"
-        ]
+        ],
+        "response_packet_contract": {
+          "assembly_manifest_output": "work_packets/production_adapter_paths_candidate_manifest.json",
+          "candidate_output_dir": "inputs/production_adapter_real/OPERATOR_RUN_ID",
+          "canonical_packet_not_written": "inputs/production_adapter_evidence_packet.json",
+          "counts_as_acceptance_gate": false,
+          "promotes_evidence": false,
+          "required_controls": [
+            "operator supplied non-synthetic deployment manifest",
+            "operator supplied component artifacts for every required adapter",
+            "operator supplied human-reviewed false-merge labels for candidate adapters",
+            "operator supplied audit trail with every required action",
+            "operator supplied permission probe artifact",
+            "operator supplied rollback smoke artifact",
+            "candidate packet validates before any manual governance promotion",
+            "intake custody receipt binds response packet, candidate packet, and artifact hashes"
+          ],
+          "response_packet_placeholder": "OPERATOR_PRODUCTION_ADAPTER_RESPONSE_PACKET_JSON",
+          "response_packet_type": "production_adapter_response_intake_v1",
+          "work_packet_path": "work_packets/production_adapter_collection_packet_preview.json",
+          "writes_canonical_packet": false
+        }
       },
       "preflight_snapshot": {
         "current_total_gate_state": "blocked",

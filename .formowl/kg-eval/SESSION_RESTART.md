@@ -41,6 +41,43 @@ This snapshot supersedes older "latest work" notes below when they conflict.
 
 Latest completed local slice, updated 2026-06-27:
 
+- Enterprise multimodal response intake is hardened and wired into
+  `real_evidence_collection_work_orders.py` as a candidate-only command for
+  `multimodal_semantic_validation`.
+- `enterprise_multimodal_response_intake.py` writes only candidate artifacts
+  under `inputs/enterprise_multimodal_real/<operator-run-id>` and optional
+  candidate manifests under `work_packets/`.
+- The intake records response packet, candidate packet, artifact, custody, and
+  optional manifest hashes; rejects unsupported top-level response fields,
+  unsafe roots, nested default output dirs, sandbox/test paths by default,
+  symlinks, overwrites, parent-file collisions, raw/internal/template payload
+  values, raw/internal field names, and promotion arguments; and never writes
+  `inputs/enterprise_multimodal_validation_packet.json`.
+- It rolls back intake-created artifacts and optional manifests on assembler,
+  validation, custody, serialization, or write failures, including failures
+  after exclusive create/open.
+- Dev-container verification after reviewer fixes passed:
+  - changed-file Ruff check and format-check
+  - focused KG-eval unittest 35 OK
+  - full KG-eval unittest 396 OK
+  - main repo unittest 252 OK
+  - refreshed `kg_total_acceptance_suite.py`,
+    `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+    `real_evidence_collection_work_orders.py`
+- Broad KG-eval remains `overall_passed=false`, with 8 passed gates and the
+  same 4 failed gates. This slice does not make
+  `multimodal_semantic_validation` pass.
+- GPT/Codex reviewers `Aristotle`, `Huygens`, and `Lovelace` returned
+  `RELEASE_DECISION: AGREE` after blocker fixes for OSError/TypeError
+  partial-write rollback and raw/internal field-name rejection.
+- Antigravity Gemini review is blocked at 0/3: `agy --version` and
+  `agy models` succeeded, but a bounded read-only review-packet attempt
+  through real `agy` was rejected before execution by tenant policy as
+  external data disclosure to an untrusted reviewer service, even with user
+  authorization. No packet was sent and no workaround was attempted.
+
+Previous completed local slice, updated 2026-06-27:
+
 - Production adapter response intake is implemented and wired into
   `real_evidence_collection_work_orders.py` as a candidate-only command for
   `production_adapter_paths`.

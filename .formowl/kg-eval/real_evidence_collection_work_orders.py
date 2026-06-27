@@ -290,6 +290,7 @@ def _enterprise_tasks(row: dict[str, Any]) -> dict[str, Any]:
                 "operator supplied permission probe artifact",
                 "candidate packet validates before any manual governance promotion",
                 "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+                "intake custody receipt binds optional assembly manifest hash when emitted",
             ],
         },
         "per_modality_rows": [

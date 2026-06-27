@@ -145,3 +145,22 @@ status in each role's goal file and task completion in
   tenant policy as external data disclosure to an untrusted reviewer service,
   even with user authorization. No packet was sent and no workaround was
   attempted.
+- 2026-06-27 enterprise-multimodal response-intake hardening progress:
+  hardened the candidate-only enterprise multimodal response intake path for
+  `multimodal_semantic_validation`. The intake now rejects unsupported
+  top-level response fields, unsafe/nested/sandbox output dirs, symlinks,
+  overwrites, parent-file collisions, raw/internal/template payload values,
+  raw/internal field names, and promotion arguments; it writes only candidate
+  artifacts under `inputs/enterprise_multimodal_real/<operator-run-id>` plus
+  optional work-packet manifests, custody-hashes the optional manifest, and
+  rolls back intake-created files on assembler, validation, custody,
+  serialization, or write failures including after exclusive create/open.
+  Dev-container verification passed: focused KG-eval 35 OK, full KG-eval
+  396 OK, main repo 252 OK, changed-file Ruff check and format-check, and
+  refreshed broad reports still show `overall_passed=false` with the same four
+  failed gates. GPT/Codex reviewers `Aristotle`, `Huygens`, and `Lovelace`
+  agreed after blocker fixes. Antigravity Gemini review is blocked at 0/3:
+  `agy --version` and `agy models` succeeded, but a bounded read-only
+  review-packet attempt was rejected before execution by tenant policy as
+  external data disclosure to an untrusted reviewer service. No packet was
+  sent and no workaround was attempted.

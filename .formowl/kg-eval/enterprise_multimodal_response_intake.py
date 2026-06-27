@@ -30,6 +30,12 @@ ARTIFACT_FILENAMES = {
     "business_decision_review_artifact": "business_decision_review.json",
     "permission_probe_artifact": "permission_probe.json",
 }
+RESPONSE_PACKET_ALLOWED_FIELDS = {
+    "response_packet_type",
+    "operator_run_id",
+    "validation_artifacts",
+    *ARTIFACT_FILENAMES,
+}
 CUSTODY_RECEIPT_FILENAME = "response_custody_receipt.json"
 
 
@@ -77,6 +83,9 @@ def _ensure_safe_identifier(value: object, field_name: str) -> str:
 def _is_test_or_sandbox_path_parts(parts: tuple[str, ...]) -> bool:
     return any(
         part == "assembler_test"
+        or part == "sandbox"
+        or part.startswith("sandbox_")
+        or part.endswith("_sandbox")
         or part.startswith("test_")
         or part.endswith("_test")
         or part.startswith("preflight_test")
@@ -103,6 +112,10 @@ def safe_real_output_dir(path_value: str, *, allow_test_artifacts: bool = False)
         raise IntakeError("output_dir must not use template paths")
     if not allow_test_artifacts and _is_test_or_sandbox_path_parts(real_root_relative_parts):
         raise IntakeError("output_dir must not use test or sandbox paths")
+    if not allow_test_artifacts and len(real_root_relative_parts) != 1:
+        raise IntakeError(
+            f"output_dir must be exactly {validator.REAL_ARTIFACT_ROOT}/<operator_run_id>"
+        )
     current = ROOT
     for part in path.parts:
         current = current / part
@@ -150,13 +163,58 @@ def _write_json(path: Path, payload: object) -> None:
     _reject_symlink_components(path, "intake output")
     path.parent.mkdir(parents=True, exist_ok=True)
     _reject_symlink_components(path, "intake output")
+    created = False
     try:
         with path.open("x", encoding="utf-8") as handle:
+            created = True
             handle.write(_artifact_json_text(payload))
     except FileExistsError as exc:
         raise IntakeError(
             f"intake output would overwrite existing artifact: {_relative_artifact_path(path)}"
         ) from exc
+    except Exception as exc:
+        if created:
+            try:
+                if path.is_symlink() or path.is_file():
+                    path.unlink()
+            except FileNotFoundError:
+                pass
+        raise IntakeError(f"intake output write failed: {_relative_artifact_path(path)}") from exc
+
+
+def _cleanup_created_outputs(created_paths: list[Path], output_path: Path) -> None:
+    for path in reversed(created_paths):
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+        except FileNotFoundError:
+            pass
+    output_dirs = {
+        path.parent
+        for path in created_paths
+        if path.parent == output_path or output_path in path.parents
+    }
+    output_dirs.add(output_path)
+    for path in sorted(output_dirs, key=lambda item: len(item.parts), reverse=True):
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+
+
+def _ensure_parent_dirs_available(paths: dict[str, Path]) -> None:
+    for path in paths.values():
+        try:
+            rel_parent = path.parent.relative_to(ROOT)
+        except ValueError as exc:
+            raise IntakeError("intake output parent escapes workspace") from exc
+        current = ROOT
+        for part in rel_parent.parts:
+            current = current / part
+            if current.is_symlink():
+                raise IntakeError("intake output parent symlinks are not accepted")
+            if current.exists() and not current.is_dir():
+                raise IntakeError("intake output parent must be a directory")
 
 
 def _ensure_no_overwrite(paths: dict[str, Path]) -> None:
@@ -192,6 +250,23 @@ def _validated_work_packet(work_packet: dict[str, Any]) -> None:
             raise IntakeError(f"work packet {field} must be false")
 
 
+def _validate_response_packet_fields(response_packet: dict[str, Any]) -> None:
+    unsupported = sorted(set(response_packet) - RESPONSE_PACKET_ALLOWED_FIELDS)
+    if unsupported:
+        raise IntakeError("response packet has unsupported fields: " + ", ".join(unsupported))
+
+
+def _reject_raw_internal_fields(payload: Any, *, label: str) -> None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if isinstance(key, str) and key in validator.FORBIDDEN_SOURCE_FIELDS:
+                raise IntakeError(f"{label} contains raw/internal artifact field: {key}")
+            _reject_raw_internal_fields(value, label=label)
+    elif isinstance(payload, list):
+        for value in payload:
+            _reject_raw_internal_fields(value, label=label)
+
+
 def _artifact_payload(response_packet: dict[str, Any], field: str) -> dict[str, Any]:
     payload = response_packet.get(field)
     if not isinstance(payload, dict):
@@ -201,6 +276,7 @@ def _artifact_payload(response_packet: dict[str, Any], field: str) -> dict[str, 
         assembler.reject_raw_internal_payload(payload, label=field)
     except assembler.AssemblyError as exc:
         raise IntakeError(str(exc)) from exc
+    _reject_raw_internal_fields(payload, label=field)
     return payload
 
 
@@ -228,6 +304,7 @@ def _validation_payloads(response_packet: dict[str, Any]) -> list[dict[str, Any]
             assembler.reject_raw_internal_payload(artifact, label="validation artifact")
         except assembler.AssemblyError as exc:
             raise IntakeError(str(exc)) from exc
+        _reject_raw_internal_fields(artifact, label="validation artifact")
         by_modality[modality] = artifact
     missing = sorted(set(validator.REQUIRED_MODALITIES) - set(by_modality))
     if missing:
@@ -247,27 +324,20 @@ def _planned_paths(output_dir: Path, validation_payloads: list[dict[str, Any]]) 
     return paths
 
 
-def _written_artifact_receipts(
-    planned_paths: dict[str, Path],
-    validation_payloads: list[dict[str, Any]],
-) -> list[dict[str, str]]:
-    receipts = [
-        {
-            "field": field,
-            "path": _artifact_ref(planned_paths[field]),
-            "sha256": validator.sha256_file(planned_paths[field]) or "",
+def _artifact_receipts(paths: dict[str, Path]) -> list[dict[str, str]]:
+    receipts = []
+    for key, path in sorted(paths.items()):
+        if key == "response_custody_receipt":
+            continue
+        row: dict[str, str] = {
+            "field": key,
+            "path": _artifact_ref(path),
+            "sha256": validator.sha256_file(path) or "",
         }
-        for field in ARTIFACT_FILENAMES
-    ]
-    receipts.extend(
-        {
-            "field": "validation_artifact",
-            "modality": row["modality"],
-            "path": _artifact_ref(planned_paths[f"validation::{row['modality']}"]),
-            "sha256": validator.sha256_file(planned_paths[f"validation::{row['modality']}"]) or "",
-        }
-        for row in validation_payloads
-    )
+        if key.startswith("validation::"):
+            row["modality"] = key.split("::", 1)[1]
+            row["artifact_field"] = "validation_artifact"
+        receipts.append(row)
     return receipts
 
 
@@ -282,6 +352,7 @@ def build_intake_artifacts(
     _validated_work_packet(work_packet)
     if response_packet.get("response_packet_type") != "enterprise_multimodal_response_intake_v1":
         raise IntakeError("response packet type mismatch")
+    _validate_response_packet_fields(response_packet)
     run_id = _ensure_safe_identifier(response_packet.get("operator_run_id"), "operator_run_id")
     output_path = safe_real_output_dir(output_dir, allow_test_artifacts=allow_test_artifacts)
     if output_path.name != run_id:
@@ -314,9 +385,7 @@ def build_intake_artifacts(
     if assembly_manifest_path is not None:
         planned_paths["assembly_manifest"] = assembly_manifest_path
     _ensure_no_overwrite(planned_paths)
-
-    for key, payload in payloads.items():
-        _write_json(planned_paths[key], payload)
+    _ensure_parent_dirs_available(planned_paths)
 
     assembly_manifest = {
         "artifact_id": "enterprise_multimodal_validation_packet_v1",
@@ -346,17 +415,29 @@ def build_intake_artifacts(
             "supports_raw_asset_access_claim": False,
         },
     }
-    if assembly_manifest_path is not None:
-        _write_json(assembly_manifest_path, assembly_manifest)
+    created_paths: list[Path] = []
+    try:
+        for key, payload in payloads.items():
+            _write_json(planned_paths[key], payload)
+            created_paths.append(planned_paths[key])
+        if assembly_manifest_path is not None:
+            _write_json(assembly_manifest_path, assembly_manifest)
+            created_paths.append(assembly_manifest_path)
 
-    packet = assembler.assemble_packet(
-        **assembly_manifest,
-        allow_test_artifacts=allow_test_artifacts,
-    )
-    validation_report = assembler.validate_candidate(
-        packet,
-        allow_test_artifacts=allow_test_artifacts,
-    )
+        packet = assembler.assemble_packet(
+            **assembly_manifest,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        validation_report = assembler.validate_candidate(
+            packet,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+    except (assembler.AssemblyError, IntakeError, OSError) as exc:
+        _cleanup_created_outputs(created_paths, output_path)
+        if isinstance(exc, IntakeError):
+            raise
+        raise IntakeError(str(exc)) from exc
+
     validation_summary = {
         "candidate_packet_validator_passed": validation_report.get("passed") is True,
         "blocker_count": len(validation_report.get("blockers", []))
@@ -378,8 +459,11 @@ def build_intake_artifacts(
             "candidate_packet_validator_passed"
         ],
         "blocker_count": validation_summary["blocker_count"],
-        "written_artifacts": _written_artifact_receipts(planned_paths, validation_payloads),
+        "written_artifacts": _artifact_receipts(planned_paths),
         "assembly_manifest_output": str(assembly_manifest_path.relative_to(ROOT))
+        if assembly_manifest_path is not None
+        else None,
+        "assembly_manifest_sha256": validator.sha256_file(assembly_manifest_path)
         if assembly_manifest_path is not None
         else None,
         "writes_canonical_packet": False,
@@ -395,7 +479,14 @@ def build_intake_artifacts(
             "supports_top_tier_scientific_validation_claim": False,
         },
     }
-    _write_json(planned_paths["response_custody_receipt"], custody_receipt)
+    try:
+        _write_json(planned_paths["response_custody_receipt"], custody_receipt)
+        created_paths.append(planned_paths["response_custody_receipt"])
+    except (IntakeError, OSError) as exc:
+        _cleanup_created_outputs(created_paths, output_path)
+        if isinstance(exc, IntakeError):
+            raise
+        raise IntakeError(str(exc)) from exc
     custody_receipt_sha = validator.sha256_file(planned_paths["response_custody_receipt"]) or ""
     return {
         "intake_packet_type": "enterprise_multimodal_response_intake_result_v1",
@@ -409,6 +500,9 @@ def build_intake_artifacts(
         "custody_receipt_sha256": custody_receipt_sha,
         "assembly_manifest": assembly_manifest,
         "assembly_manifest_output": str(assembly_manifest_path.relative_to(ROOT))
+        if assembly_manifest_path is not None
+        else None,
+        "assembly_manifest_sha256": validator.sha256_file(assembly_manifest_path)
         if assembly_manifest_path is not None
         else None,
         "candidate_packet_sha256": candidate_packet_sha,
@@ -447,6 +541,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--assembly-manifest-output",
         help="optional safe relative output path under work_packets/",
     )
+    parser.add_argument("--allow-test-artifacts", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
@@ -457,6 +552,7 @@ def main() -> int:
         response_packet=load_json_file(Path(args.response_packet)),
         output_dir=args.output_dir,
         assembly_manifest_output=args.assembly_manifest_output,
+        allow_test_artifacts=args.allow_test_artifacts,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
