@@ -204,11 +204,12 @@ docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "ru
 Reusable Codex workflow skills live under `.agents/skills/` so Codex can
 discover them as repo-scoped skills when launched from this repository.
 Available repo skills include `$harden-completed-slice-tests` for strict
-completed-slice test hardening and `$use-agy-antigravity` for invoking the
-local Antigravity `agy` CLI while preserving FormOwl graph-governance gates.
-The canonical tracked Antigravity skill file is
+completed-slice test hardening and `$use-agy-antigravity` for the historical
+Antigravity `agy` workflow and current disablement rules. The canonical
+tracked Antigravity skill file is
 `.agents/skills/use-agy-antigravity/SKILL.md`; keep KG `agy` authorization,
-reviewer, and bounded write-delegation rules there so they travel with Git.
+reviewer, bounded write-delegation, MCP-route probe, and disablement notes
+there so they travel with Git.
 
 To use the same skill on another host, copy the repository with its `.agents`
 directory intact, start a new Codex session from the repo, and confirm the skill

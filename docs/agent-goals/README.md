@@ -25,8 +25,9 @@ completion. Git records the mergeable engineering state.
   the FormOwl System Backbone Agent.
 - `handoff-log.md` - short chronological notes for cross-session and
   cross-machine handoffs.
-- `reviewer-gate.md` - default 6-reviewer gate with 3 Codex/GPT reviewers and
-  3 Antigravity Gemini reviewers through the local `agy` CLI.
+- `reviewer-gate.md` - default 3-reviewer gate with Codex/GPT reviewers.
+  Antigravity/Gemini through `agy` is disabled by default unless the user
+  explicitly re-enables it after the local policy or platform state changes.
 
 ## Update Protocol
 
@@ -56,9 +57,11 @@ state, and canonical dev-container verification are aligned.
 ## Reviewer Gate
 
 Use `docs/agent-goals/reviewer-gate.md` as the default review rule for future
-completed slices. The current default is 6 effective read-only reviewers: 3
-Codex/GPT reviewers and 3 Antigravity Gemini reviewers called through the real
-local `agy` CLI.
+completed slices. The current default is 3 effective read-only Codex/GPT
+reviewers. `agy` is not part of the default gate because repeated bounded
+FormOwl KG packets were rejected before execution, and a 2026-06-28 MCP route
+probe found no Codex-exposed Antigravity/agy MCP tool or configured
+Antigravity MCP server.
 
 ## Safety Rules
 

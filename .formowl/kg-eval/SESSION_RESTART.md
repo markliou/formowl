@@ -81,6 +81,20 @@ Latest local implementation slice, updated 2026-06-28:
   before execution by tenant policy as private repository-derived disclosure to
   an untrusted external reviewer service. No packet was sent and no workaround
   was attempted.
+- Agy MCP route test, updated 2026-06-28: Codex tool discovery exposes no
+  Antigravity/`agy` MCP tool; Codex config has no Antigravity MCP server;
+  Antigravity global `mcp_config.json` is empty; this repo has no
+  `.agents/mcp_config.json`; `agy --help` has no MCP server subcommand;
+  `agy plugin list` has no imported plugins; and a no-repository-content
+  `agy --new-project --print "/mcp"` probe from `/tmp` returned general MCP
+  configuration guidance rather than an active server/tool list. Current
+  conclusion: Antigravity can use MCP tools inside Antigravity sessions, but
+  Codex currently has no MCP path to call Antigravity/`agy`.
+- Default reviewer gate, updated 2026-06-28: use 3 Codex/GPT reviewers for
+  newly completed slices unless the user explicitly changes the gate. Do not
+  ask for Antigravity bounded-review authorization, and do not use `agy`
+  reviewer/write delegation by default unless the user explicitly re-enables it
+  after policy, platform, or MCP configuration changes.
 
 Previous execution checkpoint, updated 2026-06-28:
 

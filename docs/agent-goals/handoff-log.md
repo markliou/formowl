@@ -56,11 +56,12 @@ status in each role's goal file and task completion in
   Overall gate remains 3/6 because Antigravity Gemini reviewer calls through
   `agy` were rejected for external model data-egress risk and require explicit
   user approval before retrying.
-- Added an upfront authorization rule for future KG goal resumes: if the
-  reviewer gate is expected to need Antigravity Gemini reviewers through `agy`,
-  ask the user at the start for bounded external review-packet approval before
-  doing long-running local work. This rule is recorded in the `use-agy`
-  repo-local skill, the KG goal file, the reviewer gate, and the work board.
+- Historical upfront authorization rule for KG goal resumes: if the reviewer
+  gate was expected to need Antigravity Gemini reviewers through `agy`, ask the
+  user at the start for bounded external review-packet approval before doing
+  long-running local work. This rule is superseded by the 2026-06-28 agy MCP
+  route and gate-policy checkpoint below; ordinary KG resumes should not ask
+  for Antigravity authorization unless the user explicitly re-enables `agy`.
 - Added a compact-friendly execution rule for the KG goal: checkpoint durable
   state more often than usual, especially after reviewer attempts, blockers,
   verification results, and acceptance-status changes, so future compaction or
@@ -357,3 +358,18 @@ status in each role's goal file and task completion in
   closed-book `agy` reviewer packet before execution as private
   repository-derived disclosure to an untrusted external reviewer service; no
   packet was sent and no workaround was attempted.
+- Agy MCP route and gate-policy checkpoint: at the user's request, Codex tested
+  whether Antigravity/`agy` can be reached through MCP. Current Codex tool
+  discovery exposes no Antigravity/`agy` MCP tool; Codex config has no
+  Antigravity MCP server; Antigravity global `mcp_config.json` is empty; this
+  repo has no `.agents/mcp_config.json`; `agy --help` exposes no MCP server
+  subcommand; `agy plugin list` shows no imported plugins; and a
+  no-repository-content `agy --new-project --print "/mcp"` probe from `/tmp`
+  returned general MCP configuration guidance rather than an active server/tool
+  list. Conclusion: Antigravity can use MCP tools inside its own session, but
+  this Codex environment currently has no MCP path for Codex to call
+  Antigravity/`agy`. The default FormOwl KG reviewer gate is now 3 Codex/GPT
+  reviewers only, and `agy` reviewer/write delegation is disabled unless the
+  user explicitly re-enables it after policy, platform, or MCP configuration
+  changes. This policy checkpoint does not change broad KG-eval acceptance:
+  `overall_passed=false` with the same four failed real-evidence gates.

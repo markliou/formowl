@@ -1087,10 +1087,12 @@ These groups can be split across multiple agents after Slice 1 is stable.
     count; `Ada` timed out without a decision and does not count; `Ada-Retry`
     attempted to inspect repository files instead of staying within the
     bounded packet and was aborted/timed out, so it does not count.
-  - Resume note: future sessions should ask the user at the start of this goal
-    for explicit Antigravity Gemini bounded-review authorization before doing
-    long-running local work, because the remaining reviewer gate needs external
-    `agy` reviewer calls.
+  - Historical resume note: future sessions were previously told to ask the
+    user at the start of this goal for explicit Antigravity Gemini
+    bounded-review authorization. That rule is superseded by the 2026-06-28
+    gate-policy checkpoint below: `agy` is disabled by default for FormOwl KG
+    reviewer gates unless the user explicitly re-enables it after policy,
+    platform, or MCP configuration changes.
   - Active reviewers: none.
   - Canonical verification: changed-file Ruff check and format check passed;
     focused dev-container ontology contract unittest ran 4 tests OK; focused
@@ -1334,6 +1336,21 @@ These groups can be split across multiple agents after Slice 1 is stable.
     Antigravity Gemini remains blocked at 0/3 because tenant policy rejected a
     bounded closed-book `agy` reviewer packet before execution. No packet was
     sent and no workaround was attempted.
+  - 2026-06-28 agy MCP route and gate-policy checkpoint: Codex tested whether
+    Antigravity/`agy` can be reached through MCP. Current Codex tool discovery
+    exposes no Antigravity/`agy` MCP tool; Codex config has no Antigravity MCP
+    server; Antigravity global `mcp_config.json` is empty; this repo has no
+    `.agents/mcp_config.json`; `agy --help` exposes no MCP server subcommand;
+    `agy plugin list` shows no imported plugins; and a no-repository-content
+    `agy --new-project --print "/mcp"` probe from `/tmp` returned general MCP
+    configuration guidance rather than an active server/tool list. Current
+    conclusion: Antigravity can use MCP tools inside its own session, but this
+    Codex environment has no MCP path for Codex to call Antigravity/`agy`. The
+    default reviewer gate is now 3 Codex/GPT reviewers only, and `agy`
+    reviewer/write delegation is disabled unless the user explicitly
+    re-enables it after policy, platform, or MCP configuration changes. This
+    policy checkpoint does not change broad KG-eval acceptance; the item stays
+    unchecked with the same four failed real-evidence gates.
 
 ### Real Project and Wiki Integrations
 
