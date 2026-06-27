@@ -68,6 +68,9 @@ python3 real_evidence_submission_manifest.py --manifest work_packets/OPERATOR_FI
 Do not pass generated `*_candidate_manifest.json` files or intake-plan
 JSON files back into `--manifest`; those are downstream non-evidence
 outputs, not operator-filled submission manifests.
+Do not hardlink operator-filled manifests or response packets to
+templates, fixtures, canonical packets, generated candidate manifests,
+or other files. The preflight rejects hardlink aliases.
 
 Optionally emit a non-evidence intake execution plan from the validated manifest:
 

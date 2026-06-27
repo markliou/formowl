@@ -352,6 +352,17 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         with self.assertRaisesRegex(submission_manifest.ManifestError, "symlink components"):
             submission_manifest.safe_manifest_input(str(symlink_path.relative_to(ROOT)))
 
+    def test_cli_manifest_input_rejects_hardlink_alias(self) -> None:
+        target = self.write_operator_manifest("operatorpreflight_unitcase_target.json")
+        hardlink_path = ROOT / "work_packets" / "operatorpreflight_unitcase_hardlink.json"
+        if hardlink_path.exists() or hardlink_path.is_symlink():
+            hardlink_path.unlink()
+        hardlink_path.hardlink_to(target)
+        self.created_manifest_paths.append(hardlink_path)
+
+        with self.assertRaisesRegex(submission_manifest.ManifestError, "hardlink aliases"):
+            submission_manifest.safe_manifest_input(str(hardlink_path.relative_to(ROOT)))
+
     def test_work_packet_gitignore_keeps_operator_outputs_untracked(self) -> None:
         ignore_lines = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
 
@@ -458,6 +469,16 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
 
         self.assertFalse(report["valid"])
         self.assertTrue(any("symlink components" in blocker for blocker in report["blockers"]))
+
+    def test_manifest_rejects_hardlink_alias_response_packet(self) -> None:
+        hardlink_response = self.response_paths[0]
+        hardlink_response.unlink()
+        hardlink_response.hardlink_to(TEMPLATE_PATH)
+
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+
+        self.assertFalse(report["valid"])
+        self.assertTrue(any("hardlink aliases" in blocker for blocker in report["blockers"]))
 
     def test_manifest_rejects_promotion_or_extra_control_fields(self) -> None:
         payload = self.valid_manifest()

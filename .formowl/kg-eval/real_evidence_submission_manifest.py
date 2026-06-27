@@ -247,6 +247,19 @@ def _safe_work_packets_path(value: object, field_name: str) -> tuple[Path | None
     return path, blockers
 
 
+def _existing_regular_file_blockers(path: Path, field_name: str) -> list[str]:
+    full_path = ROOT / path
+    if not full_path.is_file():
+        return [f"{field_name} file is missing"]
+    try:
+        link_count = full_path.stat().st_nlink
+    except OSError:
+        return [f"{field_name} file metadata could not be inspected"]
+    if link_count > 1:
+        return [f"{field_name} hardlink aliases are not accepted"]
+    return []
+
+
 def _safe_identifier(value: object, field_name: str) -> tuple[str | None, list[str]]:
     if not isinstance(value, str) or not value.strip():
         return None, [f"{field_name} must be a non-empty string"]
@@ -347,8 +360,13 @@ def _validate_submission(
                     f"{expected.gate_id}: response_packet filename must be "
                     f"{OPERATOR_RESPONSE_PACKET_FILENAME}"
                 )
-        if require_existing_response_packets and not (ROOT / response_path).is_file():
-            blockers.append(f"{expected.gate_id}: response_packet file is missing")
+        if require_existing_response_packets:
+            blockers.extend(
+                _existing_regular_file_blockers(
+                    response_path,
+                    f"{expected.gate_id}: response_packet",
+                )
+            )
 
     manifest_path, manifest_blockers = _safe_work_packets_path(
         submission.get("assembly_manifest_output"),
@@ -583,6 +601,7 @@ def safe_manifest_input(path_value: object) -> Path:
         blockers.append("manifest input must not use generated candidate-manifest naming")
     if lowered_name.endswith("_intake_plan.json"):
         blockers.append("manifest input must not use generated intake-plan naming")
+    blockers.extend(_existing_regular_file_blockers(path, "manifest input"))
     if blockers:
         raise ManifestError("; ".join(blockers))
     return ROOT / path

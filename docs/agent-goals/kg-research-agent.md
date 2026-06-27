@@ -787,3 +787,23 @@ Reviewer cost-control rules:
   are present. Work-board unchecked engineering item count remains 9: 1
   KG-owned full real-evidence objective and 8 System Backbone/product-infra
   items. No goal completion claim is supported.
+- 2026-06-28 submission-manifest hardlink-alias guard checkpoint:
+  `real_evidence_submission_manifest.py --manifest` now rejects hardlink
+  aliases for the operator-filled manifest input and required
+  `response_packet` files before candidate intake. The check inspects only
+  regular-file existence and link count; it still does not read response packet
+  contents, write candidate artifacts, promote evidence, write canonical
+  packets, or count as an acceptance gate. The tracked operator guide documents
+  the hardlink boundary, and focused tests cover hardlink-alias manifest input,
+  hardlink-alias response packets, and the guide warning. Verification passed:
+  host focused submission/guide unittest 26 OK; dev-container focused
+  submission/guide unittest 26 OK; guide `--check`; submission template
+  `--check-template`; full KG-eval unittest 423 OK; main repo unittest 252 OK;
+  full Ruff check and format-check; refreshed broad reports; and default main
+  KG acceptance `passed_with_explicit_limits`. Strict main KG acceptance still
+  exits nonzero only for known limits. Broad KG-eval remains incomplete:
+  `overall_passed=false`, 8 passed gates, and the same four failed
+  real-evidence gates; objective audit remains `objective_complete=false` with
+  5 proved and 4 incomplete requirements; all four real roots have no files
+  and the four canonical broad packets remain absent. GPT/Codex reviewers
+  `Confucius`, `Mendel`, and `Leibniz` returned `RELEASE_DECISION: AGREE`.

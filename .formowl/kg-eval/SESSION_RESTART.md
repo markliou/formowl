@@ -89,6 +89,38 @@ Current execution checkpoint, updated 2026-06-28 after `27ff851`:
 
 Latest local implementation slice, updated 2026-06-28:
 
+- Operator submission-manifest preflight now rejects hardlink aliases for the
+  operator-filled `--manifest` input and for required
+  `response_packet` files. Existing file checks inspect only regular-file
+  existence and link count; they still do not read response packet contents.
+- The tracked operator guide now warns that hardlinked operator manifests or
+  response packets are rejected.
+- Focused tests cover hardlink-alias manifest input and response packet
+  rejection, and assert the guide warning stays present.
+- This slice writes no candidate artifacts, promotes no evidence, writes no
+  canonical packets, and counts as no acceptance gate.
+- Verification passed:
+  - host focused submission/guide unittest 26 OK
+  - dev-container focused submission/guide unittest 26 OK
+  - dev-container guide `--check`
+  - dev-container submission template `--check-template`
+  - dev-container full KG-eval unittest 423 OK
+  - dev-container main repo unittest 252 OK
+  - dev-container full Ruff check and format-check
+  - refreshed broad KG-eval reports
+  - default main KG acceptance `passed_with_explicit_limits`
+  - strict main KG acceptance still exits nonzero only for known limits:
+    `production_adapter_readiness` and `latency_scalability_enterprise_claims`
+- Broad KG-eval remains incomplete: `overall_passed=false`, 8 passed gates,
+  and the same four failed real-evidence gates. Objective audit remains
+  `objective_complete=false`, with 5 proved and 4 incomplete requirements.
+  All four real roots still have no files, and the four canonical broad
+  packets remain absent.
+- GPT/Codex reviewers `Confucius`, `Mendel`, and `Leibniz` returned
+  `RELEASE_DECISION: AGREE`.
+
+Previous local implementation slice, updated 2026-06-28:
+
 - Operator submission-manifest input hardening now rejects generated
   `*_candidate_manifest.json` and `*_intake_plan.json` files as `--manifest`
   inputs. Those files are downstream non-evidence outputs and must not be fed
