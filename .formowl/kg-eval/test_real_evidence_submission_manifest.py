@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 import real_evidence_submission_manifest as submission_manifest
@@ -35,8 +37,17 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             rel_path: (ROOT / rel_path).read_bytes() if (ROOT / rel_path).exists() else None
             for rel_path in submission_manifest.CANONICAL_INPUT_PACKETS
         }
+        self.before_candidate_manifests = {
+            expected.assembly_manifest_output: (
+                (ROOT / expected.assembly_manifest_output).read_bytes()
+                if (ROOT / expected.assembly_manifest_output).exists()
+                else None
+            )
+            for expected in submission_manifest.EXPECTED_SUBMISSIONS
+        }
         self.response_paths = []
         self.created_manifest_paths: list[Path] = []
+        self.created_plan_paths: list[Path] = []
         for expected in submission_manifest.EXPECTED_SUBMISSIONS:
             run_id = self.operator_run_id(expected)
             path = ROOT / expected.response_packet_for(run_id)
@@ -52,6 +63,9 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             )
 
     def tearDown(self) -> None:
+        for path in self.created_plan_paths:
+            if path.exists() or path.is_symlink():
+                path.unlink()
         for path in self.created_manifest_paths:
             if path.exists() or path.is_symlink():
                 path.unlink()
@@ -70,6 +84,12 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             )
             self.assertEqual(current, before)
         for rel_path, before in self.before_canonical_packets.items():
+            path = ROOT / rel_path
+            if before is None:
+                self.assertFalse(path.exists())
+            else:
+                self.assertEqual(path.read_bytes(), before)
+        for rel_path, before in self.before_candidate_manifests.items():
             path = ROOT / rel_path
             if before is None:
                 self.assertFalse(path.exists())
@@ -135,6 +155,43 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             self.assertNotIn("--promote", command)
             self.assertNotIn("--allow-test-artifacts", command)
 
+    def test_valid_manifest_builds_non_evidence_intake_execution_plan(self) -> None:
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        plan_output = ROOT / "work_packets" / "operatorpreflight_unitcase_intake_plan.json"
+
+        plan = submission_manifest.build_intake_plan(
+            report,
+            manifest_path=manifest_path,
+            plan_output=plan_output,
+        )
+
+        self.assertEqual(plan["artifact_id"], "kg_real_evidence_candidate_intake_plan_v1")
+        self.assertEqual(plan["manifest"], str(manifest_path.relative_to(ROOT)))
+        self.assertEqual(plan["plan_output"], str(plan_output.relative_to(ROOT)))
+        self.assertFalse(plan["authority"]["writes_candidate_artifacts"])
+        self.assertFalse(plan["authority"]["writes_canonical_packets"])
+        self.assertEqual(len(plan["execution_plan"]), 4)
+        for expected, row in zip(
+            submission_manifest.EXPECTED_SUBMISSIONS,
+            plan["execution_plan"],
+            strict=True,
+        ):
+            self.assertEqual(row["gate_id"], expected.gate_id)
+            self.assertEqual(row["work_packet"], expected.work_packet_path)
+            self.assertEqual(row["canonical_packet_not_written"], expected.canonical_packet)
+            self.assertTrue(row["execution_effects"]["reads_response_packet_contents"])
+            self.assertTrue(row["execution_effects"]["writes_candidate_artifacts"])
+            self.assertFalse(row["execution_effects"]["writes_canonical_packets"])
+            self.assertFalse(row["execution_effects"]["promotes_evidence"])
+            self.assertFalse(row["execution_effects"]["counts_as_acceptance_gate"])
+            self.assertEqual(row["argv"][0], "python3")
+            self.assertEqual(row["argv"][1], expected.intake_script)
+            self.assertIn("--response-packet", row["argv"])
+            self.assertIn("--assembly-manifest-output", row["argv"])
+            self.assertNotIn("--promote", row["argv"])
+            self.assertNotIn("--allow-test-artifacts", row["argv"])
+
     def test_template_is_tracked_but_rejected_as_real_submission_manifest(self) -> None:
         template = submission_manifest.build_template()
         report = submission_manifest.validate_manifest(
@@ -190,6 +247,97 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             with self.subTest(rejected=rejected):
                 with self.assertRaises(submission_manifest.ManifestError):
                     submission_manifest.safe_manifest_input(rejected)
+
+    def test_intake_plan_output_is_restricted_to_ignored_operator_work_packet(self) -> None:
+        accepted = ROOT / "work_packets" / "operatorpreflight_unitcase_intake_plan.json"
+        if accepted.exists() or accepted.is_symlink():
+            accepted.unlink()
+        self.created_plan_paths.append(accepted)
+
+        self.assertEqual(
+            submission_manifest.safe_intake_plan_output(str(accepted.relative_to(ROOT))),
+            accepted,
+        )
+
+        rejected_paths = [
+            "/tmp/intake_plan.json",
+            "./work_packets/intake_plan.json",
+            "results/intake_plan.json",
+            "inputs/intake_plan.json",
+            "work_packets/fair_baseline_run_work_packet_preview.json",
+            "work_packets/fair_external_baseline_comparison_candidate_manifest.json",
+            "work_packets/intake_plan.template.json",
+            "work_packets/intake_plan_preview.json",
+            "work_packets/intake_plan.txt",
+        ]
+        for rejected in rejected_paths:
+            with self.subTest(rejected=rejected):
+                with self.assertRaises(submission_manifest.ManifestError):
+                    submission_manifest.safe_intake_plan_output(rejected)
+
+        accepted.write_text("already present\n", encoding="utf-8")
+        with self.assertRaisesRegex(submission_manifest.ManifestError, "already exists"):
+            submission_manifest.safe_intake_plan_output(str(accepted.relative_to(ROOT)))
+
+    def test_cli_emit_intake_plan_writes_no_real_or_canonical_artifacts(self) -> None:
+        manifest_path = self.write_operator_manifest()
+        plan_path = ROOT / "work_packets" / "operatorpreflight_unitcase_cli_intake_plan.json"
+        if plan_path.exists() or plan_path.is_symlink():
+            plan_path.unlink()
+        self.created_plan_paths.append(plan_path)
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            status = submission_manifest.main(
+                [
+                    "--manifest",
+                    str(manifest_path.relative_to(ROOT)),
+                    "--emit-intake-plan",
+                    str(plan_path.relative_to(ROOT)),
+                ]
+            )
+
+        self.assertEqual(status, 0)
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        printed = json.loads(stdout.getvalue())
+        self.assertEqual(printed, plan)
+        self.assertEqual(plan["artifact_id"], "kg_real_evidence_candidate_intake_plan_v1")
+        self.assertEqual(len(plan["execution_plan"]), 4)
+        self.assertFalse(plan["authority"]["writes_candidate_artifacts"])
+        self.assertFalse(plan["authority"]["writes_canonical_packets"])
+
+    def test_invalid_manifest_emit_intake_plan_writes_no_plan_file(self) -> None:
+        manifest_path = self.write_operator_manifest(
+            "operatorpreflight_unitcase_invalid_manifest.json"
+        )
+        payload = self.valid_manifest()
+        submissions = payload["submissions"]
+        assert isinstance(submissions, list)
+        submissions[0]["response_packet_type"] = "wrong_packet_type"
+        write_json(manifest_path, payload)
+        plan_path = ROOT / "work_packets" / "operatorpreflight_unitcase_invalid_plan.json"
+        if plan_path.exists() or plan_path.is_symlink():
+            plan_path.unlink()
+        self.created_plan_paths.append(plan_path)
+        stdout = StringIO()
+
+        with redirect_stdout(stdout):
+            status = submission_manifest.main(
+                [
+                    "--manifest",
+                    str(manifest_path.relative_to(ROOT)),
+                    "--emit-intake-plan",
+                    str(plan_path.relative_to(ROOT)),
+                ]
+            )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(plan_path.exists())
+        printed = json.loads(stdout.getvalue())
+        self.assertFalse(printed["valid"])
+        self.assertTrue(
+            any("response_packet_type mismatch" in blocker for blocker in printed["blockers"])
+        )
 
     def test_cli_manifest_input_rejects_symlinked_operator_manifest(self) -> None:
         target = self.write_operator_manifest("operatorpreflight_unitcase_target.json")

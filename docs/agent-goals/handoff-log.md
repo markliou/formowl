@@ -335,3 +335,25 @@ status in each role's goal file and task completion in
   `multimodal_semantic_validation`, and `production_adapter_paths`.
   `inputs/*_real` contains zero files and the four canonical broad packets are
   absent. No completion claim is supported.
+- Candidate intake execution-plan slice: `real_evidence_submission_manifest.py`
+  can now emit a non-evidence candidate intake execution plan from a validated
+  operator-filled submission manifest using `--emit-intake-plan`. The plan is
+  restricted to safe ignored `work_packets/*.json` outputs, records exact
+  candidate-only intake argv/commands, executes nothing, reads no response
+  packet contents during planning, writes no candidate artifacts, writes no
+  canonical packets, promotes no evidence, and counts as no acceptance gate.
+  The operator guide documents the optional plan step. Tests now assert no
+  changes to real roots, canonical broad packets, or
+  `work_packets/*_candidate_manifest.json`, and invalid-manifest plan emission
+  writes no plan file. Dev-container verification passed: focused
+  submission/guide unittest 24 OK, full KG-eval unittest 421 OK, main repo
+  unittest 252 OK, changed-file Ruff check and format check, guide/template
+  checks, refreshed broad reports, and default main KG acceptance
+  `passed_with_explicit_limits`; strict still exits nonzero only for known
+  limits. Broad KG-eval remains incomplete with the same 4 failed gates.
+  GPT/Codex reviewers `Boole`, `Maxwell`, and `Avicenna` agreed after Boole's
+  blocker was fixed and Maxwell's hardening note was implemented. Antigravity
+  Gemini review is blocked at 0/3 because tenant policy rejected a bounded
+  closed-book `agy` reviewer packet before execution as private
+  repository-derived disclosure to an untrusted external reviewer service; no
+  packet was sent and no workaround was attempted.

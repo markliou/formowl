@@ -110,6 +110,17 @@ def _submission_manifest_section() -> list[str]:
         "work_packets/OPERATOR_FILLED_SUBMISSION_MANIFEST.json",
         "```",
         "",
+        "Optionally emit a non-evidence intake execution plan from the validated manifest:",
+        "",
+        "```sh",
+        "python3 real_evidence_submission_manifest.py --manifest "
+        "work_packets/OPERATOR_FILLED_SUBMISSION_MANIFEST.json "
+        "--emit-intake-plan work_packets/OPERATOR_INTAKE_PLAN.json",
+        "```",
+        "",
+        "The intake plan is ignored by Git and does not execute commands. Review it before",
+        "running any listed candidate-only intake command.",
+        "",
     ]
 
 

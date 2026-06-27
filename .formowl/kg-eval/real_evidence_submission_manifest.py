@@ -60,6 +60,7 @@ SUBMISSION_ALLOWED_FIELDS = {
     "output_dir",
     "assembly_manifest_output",
 }
+INTAKE_PLAN_ALLOWED_SUFFIX = ".json"
 
 
 @dataclass(frozen=True)
@@ -443,6 +444,101 @@ def validate_manifest(
     }
 
 
+def safe_intake_plan_output(path_value: object) -> Path:
+    path, blockers = _safe_work_packets_path(path_value, "intake plan output")
+    if path is None:
+        raise ManifestError("; ".join(blockers))
+    if path.suffix != INTAKE_PLAN_ALLOWED_SUFFIX:
+        blockers.append("intake plan output must be a JSON file")
+    if path.name.endswith(".template.json"):
+        blockers.append("intake plan output must not use template naming")
+    if path.name.endswith("_preview.json"):
+        blockers.append("intake plan output must not use tracked preview-packet naming")
+    if path.name.endswith("_candidate_manifest.json"):
+        blockers.append("intake plan output must not overwrite candidate manifests")
+    tracked_work_packets = {
+        DEFAULT_TEMPLATE_OUTPUT.relative_to(ROOT),
+        *(Path(row.work_packet_path) for row in EXPECTED_SUBMISSIONS),
+        *(Path(row.assembly_manifest_output) for row in EXPECTED_SUBMISSIONS),
+    }
+    if path in tracked_work_packets:
+        blockers.append("intake plan output must not overwrite tracked work packets")
+    output = ROOT / path
+    if output.exists() or output.is_symlink():
+        blockers.append("intake plan output already exists")
+    if blockers:
+        raise ManifestError("; ".join(blockers))
+    return output
+
+
+def build_intake_plan(
+    validation_report: dict[str, Any],
+    *,
+    manifest_path: Path,
+    plan_output: Path | None = None,
+) -> dict[str, Any]:
+    if not validation_report.get("valid"):
+        raise ManifestError("cannot build an intake plan from an invalid submission manifest")
+    validated = validation_report.get("validated_submissions")
+    if not isinstance(validated, list) or len(validated) != len(EXPECTED_SUBMISSIONS):
+        raise ManifestError("validated submission rows are incomplete")
+    plan_rows: list[dict[str, Any]] = []
+    for index, row in enumerate(validated, start=1):
+        if not isinstance(row, dict):
+            raise ManifestError("validated submission row is malformed")
+        expected = EXPECTED_BY_GATE[row["gate_id"]]
+        argv = [
+            "python3",
+            expected.intake_script,
+            "--work-packet",
+            expected.work_packet_path,
+            "--response-packet",
+            row["response_packet"],
+            "--output-dir",
+            row["output_dir"],
+            "--assembly-manifest-output",
+            row["assembly_manifest_output"],
+        ]
+        plan_rows.append(
+            {
+                "sequence": index,
+                "gate_id": row["gate_id"],
+                "operator_run_id": row["operator_run_id"],
+                "response_packet": row["response_packet"],
+                "response_packet_type": row["response_packet_type"],
+                "work_packet": expected.work_packet_path,
+                "output_dir": row["output_dir"],
+                "assembly_manifest_output": row["assembly_manifest_output"],
+                "canonical_packet_not_written": row["canonical_packet_not_written"],
+                "argv": argv,
+                "command": row["intake_command"],
+                "execution_effects": {
+                    "reads_response_packet_contents": True,
+                    "writes_candidate_artifacts": True,
+                    "writes_canonical_packets": False,
+                    "promotes_evidence": False,
+                    "counts_as_acceptance_gate": False,
+                },
+            }
+        )
+    return {
+        "artifact_id": "kg_real_evidence_candidate_intake_plan_v1",
+        "manifest": str(manifest_path.relative_to(ROOT)),
+        "plan_output": str(plan_output.relative_to(ROOT)) if plan_output else None,
+        "valid_manifest": True,
+        "authority": {
+            "accepts_evidence": False,
+            "promotes_evidence": False,
+            "writes_candidate_artifacts": False,
+            "writes_canonical_packets": False,
+            "counts_as_acceptance_gate": False,
+        },
+        "execution_required": "operator must explicitly run the listed intake commands",
+        "execution_plan": plan_rows,
+        "intake_commands": [row["command"] for row in plan_rows],
+    }
+
+
 def safe_template_output(path_value: str) -> Path:
     if not isinstance(path_value, str) or not path_value.strip():
         raise ManifestError("template output must be a non-empty string")
@@ -490,6 +586,13 @@ def safe_manifest_input(path_value: object) -> Path:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", help="operator submission manifest JSON to validate")
+    parser.add_argument(
+        "--emit-intake-plan",
+        help=(
+            "write a non-evidence candidate-only intake execution plan under "
+            "work_packets/ after manifest validation"
+        ),
+    )
     parser.add_argument(
         "--emit-template",
         action="store_true",
@@ -569,6 +672,17 @@ def main(argv: list[str] | None = None) -> int:
         load_json_file(manifest_path),
         require_existing_response_packets=not args.no_require_existing_response_packets,
     )
+    if args.emit_intake_plan:
+        plan_output = safe_intake_plan_output(args.emit_intake_plan)
+        if not report["valid"]:
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 1
+        plan = build_intake_plan(report, manifest_path=manifest_path, plan_output=plan_output)
+        plan_output.parent.mkdir(parents=True, exist_ok=True)
+        with plan_output.open("x", encoding="utf-8") as handle:
+            handle.write(_json_text(plan))
+        print(json.dumps(plan, indent=2, sort_keys=True))
+        return 0
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["valid"] else 1
 

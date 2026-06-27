@@ -39,7 +39,50 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
-Latest execution checkpoint, updated 2026-06-28:
+Latest local implementation slice, updated 2026-06-28:
+
+- Candidate intake execution-plan emission added to
+  `real_evidence_submission_manifest.py`.
+- `--emit-intake-plan work_packets/OPERATOR_INTAKE_PLAN.json` validates an
+  operator-filled submission manifest and writes a non-evidence plan listing
+  the exact four candidate-only response intake commands.
+- The plan command itself does not execute intake, does not read response
+  packet contents, writes no candidate artifacts, writes no canonical packets,
+  promotes no evidence, and counts as no acceptance gate.
+- Plan output is restricted to safe ignored `work_packets/*.json` paths and
+  rejects templates, tracked preview packets, candidate manifests, tracked work
+  packets, symlinks, non-JSON names, raw/absolute/dot paths, and existing
+  outputs.
+- Tests now snapshot real roots, canonical broad packets, and
+  `work_packets/*_candidate_manifest.json` so plan emission cannot silently
+  create candidate or canonical artifacts. Invalid-manifest plan emission
+  exits without writing a plan file.
+- The tracked operator guide documents the optional plan step and states that
+  the plan is ignored by Git and does not execute commands.
+- Dev-container verification passed:
+  - focused submission/guide unittest 24 OK
+  - full KG-eval unittest 421 OK
+  - main repo unittest 252 OK
+  - changed-file Ruff check and format check
+  - operator guide `--check`
+  - submission template `--check-template`
+  - refreshed broad KG-eval reports
+  - default main KG acceptance `passed_with_explicit_limits`
+  - strict main KG acceptance still exits nonzero only for known limits:
+    `production_adapter_readiness` and `latency_scalability_enterprise_claims`
+- Broad KG-eval remains `overall_passed=false`, 8 passed gates, and the same
+  four failed broad real-evidence gates.
+- GPT/Codex reviewers `Boole`, `Maxwell`, and `Avicenna` returned
+  `RELEASE_DECISION: AGREE` after Boole's candidate-manifest no-write coverage
+  blocker was fixed and Maxwell's invalid-manifest no-plan-file hardening note
+  was implemented.
+- Antigravity Gemini review is blocked at 0/3: `agy --version` and
+  `agy models` succeeded, but a bounded closed-book summary packet was rejected
+  before execution by tenant policy as private repository-derived disclosure to
+  an untrusted external reviewer service. No packet was sent and no workaround
+  was attempted.
+
+Previous execution checkpoint, updated 2026-06-28:
 
 - `git fetch origin` found no newer `complete-slice-1` commit beyond
   `f3ba5f8` (`Route KG candidate validation to intake manifests`), and the

@@ -55,6 +55,8 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
         self.assertIn("## Submission Manifest Preflight", text)
         self.assertIn("real_evidence_submission_manifest.py --check-template", text)
         self.assertIn("real_evidence_submission_manifest.py --manifest", text)
+        self.assertIn("--emit-intake-plan", text)
+        self.assertIn("work_packets/OPERATOR_INTAKE_PLAN.json", text)
         self.assertIn(
             "work_packets/remaining_real_evidence_submission_manifest.template.json",
             text,

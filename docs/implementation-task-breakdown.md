@@ -1312,6 +1312,28 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `objective_complete=false`, with 5 proved requirements and 4 incomplete
     requirements; all four `inputs/*_real` roots have zero files and the four
     canonical broad packets are absent. The work-board item stays unchecked.
+  - 2026-06-28 candidate intake execution-plan checkpoint:
+    `real_evidence_submission_manifest.py --emit-intake-plan` now writes a
+    non-evidence candidate-only intake execution plan under safe ignored
+    `work_packets/*.json` after validating an operator-filled manifest. The
+    plan records exact argv/commands for the four response-intake helpers but
+    executes no commands, reads no response packet contents while planning,
+    writes no candidate artifacts, writes no canonical packets, promotes no
+    evidence, and does not count as an acceptance gate. The operator guide
+    documents the optional plan step. Tests assert plan emission leaves real
+    roots, canonical broad packets, and `work_packets/*_candidate_manifest.json`
+    absent or byte-identical, and invalid manifests write no plan file.
+    Dev-container verification passed: focused submission/guide unittest
+    24 OK, full KG-eval unittest 421 OK, main repo unittest 252 OK,
+    changed-file Ruff check and format check, guide/template checks, refreshed
+    broad reports, and default main KG acceptance
+    `passed_with_explicit_limits`; strict still exits nonzero only for known
+    limits. Broad KG-eval remains `overall_passed=false` with the same four
+    failed broad real-evidence gates, so this work-board item remains
+    unchecked. GPT/Codex reviewers `Boole`, `Maxwell`, and `Avicenna` agreed;
+    Antigravity Gemini remains blocked at 0/3 because tenant policy rejected a
+    bounded closed-book `agy` reviewer packet before execution. No packet was
+    sent and no workaround was attempted.
 
 ### Real Project and Wiki Integrations
 

@@ -672,3 +672,31 @@ exact command and write scope.
   requirements and 4 incomplete requirements. Preflight reports all four
   `inputs/*_real` roots have zero files, no candidate artifacts, and the four
   canonical broad packets remain absent. No goal completion claim is supported.
+- 2026-06-28 candidate intake execution-plan checkpoint:
+  `real_evidence_submission_manifest.py --emit-intake-plan` now turns a
+  validated operator-filled submission manifest into an ignored, non-evidence
+  `work_packets/*.json` intake plan. The plan records exact candidate-only
+  response-intake argv/commands for the four remaining gates, but the planning
+  command itself executes no intake, reads no response packet contents, writes
+  no candidate artifacts, writes no canonical packets, promotes no evidence,
+  and counts as no acceptance gate. Output guards reject templates, tracked
+  preview packets, candidate manifests, tracked work packets, symlinks,
+  non-JSON names, unsafe paths, and existing outputs. Tests now snapshot real
+  roots, canonical broad packets, and `work_packets/*_candidate_manifest.json`
+  and cover invalid-manifest plan emission without writing a plan. The operator
+  guide documents the optional plan step. Dev-container verification passed:
+  focused submission/guide unittest 24 OK, full KG-eval unittest 421 OK, main
+  repo unittest 252 OK, changed-file Ruff check and format check, operator
+  guide `--check`, submission template `--check-template`, refreshed broad
+  reports, default main KG acceptance `passed_with_explicit_limits`, and strict
+  main KG acceptance still exits nonzero only for known limits. Broad KG-eval
+  remains `overall_passed=false`, 8 passed gates, and the same 4 failed broad
+  real-evidence gates. GPT/Codex reviewers `Boole`, `Maxwell`, and `Avicenna`
+  returned `RELEASE_DECISION: AGREE` after Boole's candidate-manifest
+  no-write blocker was fixed and Maxwell's invalid-manifest no-plan-file
+  hardening note was implemented. Antigravity Gemini review is blocked at 0/3:
+  local `agy` availability succeeded, but the bounded closed-book summary
+  reviewer packet was rejected before execution by tenant policy as private
+  repository-derived disclosure to an untrusted external reviewer service. No
+  packet was sent and no workaround or alternate external channel was
+  attempted.
