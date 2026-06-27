@@ -5,7 +5,37 @@ from .candidates import (
     DeterministicTextCandidateExtractor,
     extract_and_store_candidates,
 )
+from .canonical import (
+    CanonicalCommitPolicyPins,
+    CanonicalCommitResult,
+    commit_reviewed_candidates_to_canonical_graph,
+)
+from .lifecycle import (
+    CanonicalLifecycleEvent,
+    CanonicalLifecycleResolution,
+    CanonicalLifecycleStore,
+    record_canonical_lifecycle_event,
+    resolve_canonical_lifecycle_id,
+)
+from .ontology import (
+    TypeCompatibilityDecision,
+    core_supertypes_compatible,
+    propose_type_alignment_candidate,
+)
 from .preview import CandidatePreviewItem, CandidatePreviewResult, preview_candidates
+from .research_acceptance import (
+    AcceptanceItem,
+    KGResearchAcceptanceReport,
+    report_to_json,
+    run_kg_research_acceptance_suite,
+)
+from .policies import (
+    PolicyContract,
+    policy_contract_hash,
+    policy_kind,
+    policy_version_ref,
+    require_active_policy,
+)
 from .resolution import (
     ClericalReviewItem,
     EvidenceLink,
@@ -31,35 +61,65 @@ from .resolution import (
     render_visible_fusion_candidates,
     splink_model_config_manifest_bound_to_main_repo,
 )
+from .user_graphs import (
+    AccessRequiredScope,
+    EffectiveGraphView,
+    assemble_effective_graph_view,
+    requester_has_effective_graph_view_access,
+)
 
 __all__ = [
+    "AccessRequiredScope",
+    "AcceptanceItem",
     "CandidateExtractionResult",
     "CandidatePreviewItem",
     "CandidatePreviewResult",
+    "CanonicalCommitPolicyPins",
+    "CanonicalCommitResult",
+    "CanonicalLifecycleEvent",
+    "CanonicalLifecycleResolution",
+    "CanonicalLifecycleStore",
     "ClericalReviewItem",
     "DeterministicTextCandidateExtractor",
+    "EffectiveGraphView",
     "EvidenceLink",
     "FusionCandidate",
+    "KGResearchAcceptanceReport",
     "LexicalFusionCandidateGenerator",
     "NormalizationTrace",
     "PackageAdapterManifest",
+    "PolicyContract",
     "RapidFuzzPackageCandidateGenerator",
     "ResolutionPolicy",
     "ResolutionRecord",
     "SplinkPackageCandidateGenerator",
     "StructuredLinkageCandidateGenerator",
+    "TypeCompatibilityDecision",
+    "assemble_effective_graph_view",
     "build_clerical_review_queue",
     "canonical_merge",
+    "commit_reviewed_candidates_to_canonical_graph",
+    "core_supertypes_compatible",
     "extract_and_store_candidates",
     "generate_lexical_fusion_candidates",
     "generate_structured_linkage_candidates",
     "human_clerical_review_queue_export",
     "no_raw_access_grant",
     "preview_candidates",
+    "policy_contract_hash",
+    "policy_kind",
+    "policy_version_ref",
+    "propose_type_alignment_candidate",
     "rapid_fuzz_package_version_and_manifest_hash_in_main_repo",
     "raw_asset_read",
+    "record_canonical_lifecycle_event",
+    "report_to_json",
     "real_rapid_fuzz_package_adapter_binding",
     "real_splink_package_adapter_binding",
     "render_visible_fusion_candidates",
+    "require_active_policy",
+    "requester_has_effective_graph_view_access",
+    "resolve_canonical_lifecycle_id",
+    "run_kg_research_acceptance_suite",
     "splink_model_config_manifest_bound_to_main_repo",
 ]

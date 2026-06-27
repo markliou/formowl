@@ -6,11 +6,28 @@ interruption, read this file first. Before changing code, read these files in
 order:
 
 1. `docs/implementation-task-breakdown.md`
-2. `SPEC.md`
-3. `RESOURCE_EXTRACTION_SPEC.md`
-4. `README.md`
+2. `docs/agent-roles.md`
+3. `docs/agent-goals/README.md`
+4. The active role's goal file under `docs/agent-goals/`
+5. `docs/agent-goals/handoff-log.md`
+6. `docs/agent-goals/reviewer-gate.md`
+7. `SPEC.md`
+8. `RESOURCE_EXTRACTION_SPEC.md`
+9. `README.md`
 
-Use `docs/implementation-task-breakdown.md` as the shared work board.
+Use `docs/implementation-task-breakdown.md` as the shared work board. Use
+`docs/agent-goals/` as the durable cross-session and cross-machine goal
+registry.
+
+## Active Agent Role
+
+This thread's Codex agent is the Knowledge Graph Research Agent. The durable
+role split is documented in `docs/agent-roles.md`.
+
+Prioritize knowledge graph, ontology, graph fusion, canonical graph governance,
+lifecycle, user graph, graph-derived wiki semantics, and research-evaluation
+work. Leave broad system backbone work to the FormOwl System Backbone Agent
+unless the user explicitly assigns it here.
 
 ## Working Rules
 
@@ -19,6 +36,9 @@ Use `docs/implementation-task-breakdown.md` as the shared work board.
   whether the files above were read in the current context, read them again
   before editing.
 - Pick one unchecked task or the task explicitly assigned by the user.
+- Treat session-local goal state as temporary. If a goal must survive a new
+  session, a different computer, or a manual merge, record it in
+  `docs/agent-goals/`.
 - Repo-scoped Codex skills live under `.agents/skills/`. If the user names a
   repo-local skill that is not visible in the active `@skills` list, check
   `.agents/skills/<skill-name>/SKILL.md` before declaring it unavailable.
@@ -33,6 +53,10 @@ Use `docs/implementation-task-breakdown.md` as the shared work board.
   complete.
 - If a task is partially done, leave it unchecked and add a short note in the
   task breakdown file.
+- Before pausing, handing work to another agent, or resuming a long-running
+  goal, update the relevant `docs/agent-goals/*.md` file and append a concise
+  note to `docs/agent-goals/handoff-log.md` when the change affects another
+  agent or future session.
 - Use the dev container as the canonical development and verification
   environment. Host commands may be used only for quick inspection or as clearly
   labeled supplemental checks; do not report host-only results as completion

@@ -57,9 +57,15 @@ effective reviewers have explicitly agreed.
 
 When the user has configured a reviewer count for ongoing work, apply that gate
 to every newly completed implementation item before calling it complete. The
-default gate in this repository is the user-requested 9 effective read-only
-reviewers unless the user changes it. Do not carry over approvals from a
-previous item; each item gets its own reviewer count and findings.
+default gate in this repository is 6 effective read-only reviewers unless the
+user changes it for a specific slice: 3 Codex/GPT reviewers and 3 Antigravity
+Gemini reviewers through the real local `agy` CLI. Do not substitute Codex
+`multi_agent_v1`, a GPT model override, or an "agy folder" GPT substitute for
+the Antigravity Gemini reviewers. Do not carry over approvals from a previous
+item; each item gets its own reviewer count and findings.
+
+Use `docs/agent-goals/reviewer-gate.md` for the current repository reviewer
+composition, Antigravity authorization, and reviewer output format.
 
 Use `references/reviewer-prompt.md` for reviewer instructions and
 `references/work-board-pattern.md` for gate bookkeeping.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use agy Antigravity"
+  short_description: "Delegate work through Antigravity CLI"
+  default_prompt: "Use $use-agy-antigravity to ask Gemini 3.5 Flash High to discuss the next implementation step."

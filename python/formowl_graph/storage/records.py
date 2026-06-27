@@ -5,7 +5,17 @@ from pathlib import Path
 import re
 from typing import Any, Callable, Generic, TypeVar
 
-from formowl_contract import CandidateAtom, CandidateRelation, SemanticMetadata, to_plain
+from formowl_contract import (
+    CandidateAtom,
+    CandidateRelation,
+    CanonicalAtom,
+    CanonicalEntity,
+    CanonicalGraphRevision,
+    CanonicalRelation,
+    ContractValidationError,
+    SemanticMetadata,
+    to_plain,
+)
 
 _SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 T = TypeVar("T")
@@ -130,6 +140,112 @@ class CandidateRelationStore:
 
     def validate_candidate_relation_id(self, candidate_relation_id: str) -> None:
         self._store.validate_record_id(candidate_relation_id)
+
+
+class CanonicalGraphStore:
+    """File-backed canonical graph store behind the reviewed commit workflow.
+
+    The public surface intentionally has no generic ``create`` methods. Canonical
+    records are persisted through ``formowl_graph.canonical`` after review and
+    policy validation.
+    """
+
+    def __init__(self, base_dir: str | Path) -> None:
+        self._atom_store = _JsonGraphRecordStore[CanonicalAtom](
+            base_dir,
+            collection="canonical-atoms",
+            id_field="canonical_atom_id",
+            factory=CanonicalAtom.from_dict,
+            serializer=lambda value: value.to_dict(),
+        )
+        self._entity_store = _JsonGraphRecordStore[CanonicalEntity](
+            base_dir,
+            collection="canonical-entities",
+            id_field="canonical_entity_id",
+            factory=CanonicalEntity.from_dict,
+            serializer=lambda value: value.to_dict(),
+        )
+        self._relation_store = _JsonGraphRecordStore[CanonicalRelation](
+            base_dir,
+            collection="canonical-relations",
+            id_field="canonical_relation_id",
+            factory=CanonicalRelation.from_dict,
+            serializer=lambda value: value.to_dict(),
+        )
+        self._revision_store = _JsonGraphRecordStore[CanonicalGraphRevision](
+            base_dir,
+            collection="canonical-graph-revisions",
+            id_field="canonical_graph_revision_id",
+            factory=CanonicalGraphRevision.from_dict,
+            serializer=lambda value: value.to_dict(),
+        )
+
+    def get_atom(self, canonical_atom_id: str) -> CanonicalAtom | None:
+        return self._atom_store.get(canonical_atom_id)
+
+    def list_atoms(self) -> list[CanonicalAtom]:
+        return self._atom_store.list()
+
+    def get_entity(self, canonical_entity_id: str) -> CanonicalEntity | None:
+        return self._entity_store.get(canonical_entity_id)
+
+    def list_entities(self) -> list[CanonicalEntity]:
+        return self._entity_store.list()
+
+    def get_relation(self, canonical_relation_id: str) -> CanonicalRelation | None:
+        return self._relation_store.get(canonical_relation_id)
+
+    def list_relations(self) -> list[CanonicalRelation]:
+        return self._relation_store.list()
+
+    def get_revision(self, canonical_graph_revision_id: str) -> CanonicalGraphRevision | None:
+        return self._revision_store.get(canonical_graph_revision_id)
+
+    def list_revisions(self) -> list[CanonicalGraphRevision]:
+        return self._revision_store.list()
+
+    def _persist_reviewed_commit(
+        self,
+        *,
+        atoms: list[CanonicalAtom],
+        entities: list[CanonicalEntity],
+        relations: list[CanonicalRelation],
+        revision: CanonicalGraphRevision,
+    ) -> None:
+        prepared: list[tuple[Path, dict[str, Any], bytes | None]] = []
+        for store, records in (
+            (self._atom_store, atoms),
+            (self._entity_store, entities),
+            (self._relation_store, relations),
+            (self._revision_store, [revision]),
+        ):
+            for record in records:
+                # Validate the full contract and safe record path before writing
+                # anything, so governance failures do not leave partial commits.
+                validated = store._validate(record)
+                payload = store.serializer(validated)
+                path = store._record_path(str(payload[store.id_field]))
+                original = path.read_bytes() if path.exists() else None
+                if original is not None and json.loads(original.decode("utf-8")) != to_plain(
+                    payload
+                ):
+                    raise ContractValidationError(
+                        "canonical record already exists with different lineage"
+                    )
+                prepared.append((path, payload, original))
+
+        written: list[tuple[Path, bytes | None]] = []
+        try:
+            for path, payload, original in prepared:
+                _write_json(path, payload)
+                written.append((path, original))
+        except Exception:
+            for path, original in reversed(written):
+                if original is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(original)
+            raise
 
 
 def _read_json(path: Path) -> dict[str, Any]:

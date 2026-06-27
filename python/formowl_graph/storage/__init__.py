@@ -1,6 +1,11 @@
 """Stores and production-facing storage contracts for graph records."""
 
-from .records import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
+from .records import (
+    CandidateAtomStore,
+    CandidateRelationStore,
+    CanonicalGraphStore,
+    SemanticMetadataStore,
+)
 from .postgres import (
     CanonicalCommitProposal,
     PostgreSQLConnectionConfig,
@@ -22,6 +27,7 @@ from .postgres import (
 __all__ = [
     "CandidateAtomStore",
     "CandidateRelationStore",
+    "CanonicalGraphStore",
     "CanonicalCommitProposal",
     "PostgreSQLConnectionConfig",
     "PostgreSQLMigrationRunner",

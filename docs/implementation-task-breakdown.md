@@ -11,6 +11,10 @@ Future agents should update this file as work lands:
 - Do not create parallel replacement modules when `SPEC.md` already defines a path.
 - Prefer small vertical slices that prove one data flow end to end.
 
+Durable long-running agent objectives live under `docs/agent-goals/`. This work
+board records task completion; it is not a substitute for role goal and handoff
+state.
+
 ## Status Legend
 
 - `[x]` complete in the current repository.
@@ -852,33 +856,132 @@ These groups can be split across multiple agents after Slice 1 is stable.
 
 ### Governance and Canonical Graph
 
-- [ ] Add contract models for `CanonicalAtom`, `CanonicalEntity`,
+- [x] Add contract models for `CanonicalAtom`, `CanonicalEntity`,
   `CanonicalRelation`, and `CanonicalGraphRevision`.
   - Owner paths: `python/formowl_contract/`, `python/formowl_graph/`
   - Proof: canonical ids remain stable across revisions.
-- [ ] Add policy contracts for extraction, atom granularity, entity resolution,
+  - Note: implemented contract dataclasses, validators, stable id helpers, and
+    package exports under `python/formowl_contract/`. Focused tests cover
+    round-trip serialization, malformed lineage/status/hash cases, and stable
+    canonical atom/entity/relation ids across graph revisions. Canonical
+    dev-container unittest ran 208 tests OK.
+- [x] Add policy contracts for extraction, atom granularity, entity resolution,
   relation resolution, lifecycle, and wiki projection.
   - Owner paths: `python/formowl_contract/`, `python/formowl_graph/policies.py`
   - Proof: policies serialize with versioned ids.
-- [ ] Implement reviewed canonical graph commit workflow.
+  - Note: implemented `ExtractionPolicy`, `AtomGranularityPolicy`,
+    `EntityResolutionPolicy`, `RelationResolutionPolicy`, `LifecyclePolicy`,
+    and `WikiProjectionPolicy` contracts with validators, versioned
+    `stable_policy_id`, package exports, and graph-layer policy reference/hash
+    helpers. Focused policy tests cover round-trip serialization, versioned id
+    stability, active/kind checks, and malformed rule/id/raw-reference inputs.
+    Canonical dev-container unittest ran 211 tests OK.
+- [x] Implement reviewed canonical graph commit workflow.
   - Owner paths: `python/formowl_graph/canonical.py`,
     `python/formowl_graph/resolution.py`
   - Proof: only governed backend code can create canonical commits.
-- [ ] Add lifecycle events for split, merge, archive, deprecate, supersede, and
+  - Note: implemented `commit_reviewed_candidates_to_canonical_graph` and
+    `CanonicalGraphStore` as a governed backend path. Focused tests prove only
+    approved candidates can commit, ontology and policy pins plus review
+    decisions are required, candidate/observation/source/evidence/citation
+    lineage is preserved, relation endpoints must resolve, duplicate canonical
+    relation IDs cannot overwrite lineage within or across commits, raw
+    internal locators are rejected, failed writes roll back canonical side
+    effects, and no user graph or wiki revision state is created. Bernoulli
+    performed read-only re-review and returned `RELEASE_DECISION: AGREE`.
+    Canonical dev-container verification passed: `ruff check` and
+    `ruff format --check` on changed files, focused canonical workflow unittest
+    ran 10 tests OK, and full `python -m unittest discover -s tests` ran 221
+    tests OK.
+- [x] Add lifecycle events for split, merge, archive, deprecate, supersede, and
   equivalence.
   - Owner paths: `python/formowl_graph/`
   - Proof: previous atom/entity/relation ids remain resolvable.
+  - Note: implemented `CanonicalLifecycleEvent`,
+    `CanonicalLifecycleResolution`, `CanonicalLifecycleStore`,
+    `record_canonical_lifecycle_event`, and
+    `resolve_canonical_lifecycle_id` under `python/formowl_graph/lifecycle.py`.
+    Lifecycle events are mapping records only; they do not rewrite canonical
+    atoms, entities, relations, user graphs, or wiki revisions. Focused tests
+    cover the full atom/entity/relation by split/merge/archive/deprecate/
+    supersede/equivalence matrix, multi-hop split-to-merge resolution,
+    explicit graph revision, ontology revision, lifecycle policy, review
+    decision, creator, and timestamp requirements, duplicate previous/target
+    ids, generated event-id collisions, cycles, public serialization
+    validation, raw/internal locator rejection without safe slash-prose false
+    positives, full no-write snapshots on failures, restart persistence, and a
+    lifecycle-only state allowlist. Canonical dev-container verification
+    passed: `ruff check` and `ruff format --check` on lifecycle files, focused
+    lifecycle unittest ran 8 tests OK, and full
+    `python -m unittest discover -s tests` ran 229 tests OK.
+  - Reviewer gate target: 9 effective read-only reviewers.
+  - Effective reviewer count: 9/9.
+  - Reviewer agreement count: 9/9 (`Gibbs`, `Dewey`, `Meitner`, `Pasteur`,
+    `Russell`, `Helmholtz`, `Averroes`, `Chandrasekhar`, `Ramanujan`).
+  - Reviewers with blocking findings: none after re-review.
+  - Non-counted agents: `Hume` found initial blockers and agreed before later
+    final-version raw-redaction changes, so he is retained as blocker history
+    but not counted in the final 9/9 gate.
+  - Active reviewers: none.
 
 ### User Graphs and Collaboration
 
-- [ ] Add `UserGraphProfile`, `UserGraphAssemblyPolicy`, and
+- [x] Add `UserGraphProfile`, `UserGraphAssemblyPolicy`, and
   `UserKnowledgeGraphRevision` contracts.
   - Owner paths: `python/formowl_contract/`, `python/formowl_graph/user_graphs.py`
   - Proof: two users can assemble different valid graph views from the same
     canonical graph fixtures.
-- [ ] Add access overlay and grant-aware effective graph view.
+  - Note: initial contract implementation and focused tests are in place under
+    `python/formowl_contract/models.py`, `python/formowl_contract/__init__.py`,
+    and `tests/test_user_graph_contract.py`. Tests cover round-trip
+    serialization, stable user graph ids including view-defining exclusions,
+    user-authored atoms, private note ids, source refs, evidence snapshot ids,
+    and permission scope, two different user views from the same canonical graph
+    revision, owner-scope binding, permission scope, provenance, malformed graph
+    content, duplicate and overlapping membership lists, raw/internal reference
+    rejection, side-effect claim guards for grants, raw assets, access overlays,
+    graph-store mutation, canonical graph mutation, canonical merges, and wiki
+    revisions, and safe slash prose. Host supplemental focused unittest ran 3
+    tests OK and host full unittest ran 232 tests OK. Canonical dev-container
+    Ruff format/check/format-check passed, focused user graph unittest ran 3
+    tests OK, and full dev-container unittest ran 232 tests OK. Final
+    read-only reviewer gate passed 9/9 after blocker fixes and final delta
+    re-review.
+  - Reviewer gate target: 9 effective read-only reviewers.
+  - Effective reviewer count: 9/9.
+  - Reviewer agreement count: 9/9 (`Avicenna`, `Hegel`, `Confucius`,
+    `Maxwell`, `Noether`, `Zeno`, `Feynman`, `Faraday`, `Turing`).
+  - Reviewers with blocking findings: none after re-review.
+  - Non-counted agents: none.
+  - Active reviewers: none.
+- [x] Add access overlay and grant-aware effective graph view.
   - Owner paths: `python/formowl_graph/`, auth/access modules
   - Proof: private evidence is not leaked without a grant.
+  - Note: implementation and focused tests are in place under
+    `python/formowl_graph/user_graphs.py`, `python/formowl_graph/__init__.py`,
+    and `tests/test_effective_graph_view.py`. The slice assembles an in-memory
+    `EffectiveGraphView` from a `UserKnowledgeGraphRevision` and graph
+    projection records, exposes private graph fragments only with graph-level
+    grants, rejects answer-only/evidence/raw-asset grants as graph-view access,
+    returns access-required scope summaries without private node labels/source
+    ids, rejects raw scope ids and unsafe visibility/grant ids without echoing
+    them, gates access to private user graph revisions before scanning
+    projection records, rejects raw/evidence/internal locators in visible
+    graph-view payloads, and makes no graph-store, canonical, user-graph,
+    raw-asset, or wiki writes. Host supplemental focused unittest ran 6 tests
+    OK and host full unittest ran 238 tests OK. Canonical dev-container focused
+    effective graph view unittest ran 6 tests OK, full dev-container unittest
+    ran 238 tests OK, full dev-container Ruff check passed, and changed-file
+    dev-container Ruff format check passed. Full-repo Ruff format check is
+    blocked by unrelated pre-existing formatting drift outside this slice.
+  - Reviewer gate target: 9 effective read-only reviewers.
+  - Effective reviewer count: 9/9.
+  - Reviewer agreement count: 9/9 (`Einstein`, `Singer`, `Pascal`,
+    `Epicurus`, `Euler`, `Hypatia`, `Banach`, `Herschel`, `Nash`).
+  - Reviewers with blocking findings: none after re-review. Initial blockers
+    from `Banach`, `Herschel`, and `Nash` were fixed before final agreement.
+  - Non-counted agents: none.
+  - Active reviewers: none.
 - [x] Add entity matching separate from data access and canonical merge.
   - Owner paths: `python/formowl_graph/resolution.py`
   - Proof: match proposals do not grant raw asset or evidence access.
@@ -928,6 +1031,46 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `graph_revision_id`, `ontology_revision_id`, `user_graph_revision_id`,
     `graph_view_hash`, and `evidence_snapshot_refs`; focused contract tests
     cover these lineage fields.
+
+### KG Research Evaluation and Acceptance
+
+- [ ] Add scoped ontology/type governance contracts and KG research acceptance
+  suite.
+  - Owner paths: `python/formowl_contract/`, `python/formowl_graph/`,
+    `scripts/`, `tests/`, `docs/`
+  - Proof: type definitions keep core, extension, promoted, mapping, alias, and
+    alignment candidate state separate; alignment candidates remain
+    review-required and cannot grant access or write canonical type state; the
+    acceptance suite reports literature, ontology, multi-user fusion,
+    multimodal fixtures, human review, production adapter boundary, metrics,
+    ablations, and explicit failed/blocked readiness claims.
+  - Note: implementation, docs, focused dev-container ontology tests, focused
+    dev-container acceptance tests, and default acceptance script are in place.
+    Reviewer blockers for direct `score_breakdown` validation, unexpected
+    acceptance failures, and concrete error-analysis evidence have been fixed.
+    Full canonical dev-container unittest passed. Leave unchecked until the
+    configured 6-reviewer gate passes.
+  - Reviewer gate target: 6 effective read-only reviewers: 3 Codex/GPT and 3
+    Antigravity Gemini through `agy`.
+  - Effective reviewer count: 3/6.
+  - Reviewer agreement count: 3/6 (`Kuhn`, `Goodall`, `Pasteur`).
+  - Reviewers with blocking findings: none after re-review.
+  - Non-counted agents: `Raman` found initial blockers and was replaced for
+    re-review after being closed; Antigravity Gemini attempts were rejected by
+    sandbox policy for external model data-egress risk and do not count.
+  - Resume note: future sessions should ask the user at the start of this goal
+    for explicit Antigravity Gemini bounded-review authorization before doing
+    long-running local work, because the remaining reviewer gate needs external
+    `agy` reviewer calls.
+  - Active reviewers: none.
+  - Canonical verification: changed-file Ruff check and format check passed;
+    focused dev-container ontology contract unittest ran 4 tests OK; focused
+    KG research acceptance unittest ran 4 tests OK; full dev-container
+    `python -m unittest discover -s tests` ran 246 tests OK; default
+    `python scripts/kg_research_acceptance_suite.py` reports expected
+    `production_adapter_readiness` failed and
+    `latency_scalability_enterprise_claims` blocked with no unexpected failed
+    or blocked items.
 
 ### Real Project and Wiki Integrations
 
@@ -1019,14 +1162,38 @@ These groups can be split across multiple agents after Slice 1 is stable.
 
 ## Agent Dispatch Notes
 
-Recommended first dispatch after this planning file:
+Current long-running agent tracks are defined in `docs/agent-roles.md`.
 
-1. Contract agent: Slice 1A only.
-2. Storage agent: Slice 1B only, starting after 1A contracts exist.
-3. Extractor agent: Slice 1C only, starting after 1A and enough of 1B exist.
-4. Workflow/test agent: Slice 1D only, integrating the prior slices.
-5. Wiki bridge agent: Slice 1E only, after observations are persisted and
-   queryable.
+The Knowledge Graph Research Agent owns graph and ontology research work:
 
-Avoid parallel edits to `python/formowl_contract/models.py` until Slice 1A is
-done, because most later slices depend on those public contracts.
+- Candidate graph extraction, preview, and review semantics.
+- Ontology/type governance and scoped type alignment.
+- Atom granularity policy, entity resolution, relation resolution, and graph
+  fusion behavior.
+- Reviewed canonical graph commits and lifecycle events.
+- User graph profiles, assembly policies, effective graph views, and
+  grant-aware graph overlays.
+- Graph-derived wiki projection semantics and graph lineage.
+- Evaluation harnesses, baselines, ablations, error analysis, and
+  reproducibility evidence for top-tier research review.
+
+The FormOwl System Backbone Agent owns product and infrastructure work:
+
+- MCP transport, gateway plumbing, tool schemas, and safe error envelopes.
+- Project MCP and Wiki MCP service/adaptor integration.
+- Upload sessions, storage backend registry configuration, object stores,
+  worker boundaries, and database-backed stores.
+- Runtime configuration, containers, migrations, observability, and production
+  adapter boundaries.
+- Retrieval service plumbing that exposes only governed FormOwl locators and
+  permission-checked snippets or raw assets.
+
+When a task crosses both tracks, use a contract-first handoff: the KG Research
+Agent defines graph/ontology contracts and behavioral tests, and the System
+Backbone Agent implements service, storage, transport, or adapter plumbing
+behind those contracts.
+
+The earlier Slice 1A-1E dispatch is complete and retained in the checked task
+history above. Future agents should choose the next unchecked task only if it
+belongs to their active role, unless the user explicitly assigns cross-role
+work.
