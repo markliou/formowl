@@ -1,0 +1,802 @@
+{
+  "artifact_id": "kg_real_evidence_collection_work_orders_v1",
+  "global_safety_invariants": [
+    "Do not copy templates into canonical inputs.",
+    "Do not use inputs/test_* fixtures as real evidence.",
+    "Do not store assembly manifests under inputs/*_real.",
+    "Do not expose raw filesystem, NAS, object-store, database, or worker paths.",
+    "Use validate-only command guidance from this report.",
+    "Do not claim production readiness, top-tier validation, or completed human work from work orders."
+  ],
+  "report_sha256": "0408c77000ad5605c188131735213af889450d9a1f0652f6c96a74e3eb0e529e",
+  "source_checklist": "remaining_evidence_checklist.json",
+  "source_preflight": "results/real_evidence_preflight.json",
+  "summary": {
+    "checklist_sync_status": "synchronized",
+    "gate_status_sha256": "596eef5f887952b4e4666f7e6b970a9199d8d3148a630cd4491ac53f0faeca1a",
+    "preflight_blocked_gate_ids": [
+      "fair_external_baseline_comparison",
+      "annotation_adjudication_protocol",
+      "multimodal_semantic_validation",
+      "production_adapter_paths"
+    ],
+    "preflight_state": "blocked",
+    "total_acceptance_state": "blocked",
+    "work_order_count": 4,
+    "work_order_gate_ids": [
+      "fair_external_baseline_comparison",
+      "annotation_adjudication_protocol",
+      "multimodal_semantic_validation",
+      "production_adapter_paths"
+    ]
+  },
+  "sync": {
+    "candidate_work_order_gate_ids": [
+      "fair_external_baseline_comparison",
+      "annotation_adjudication_protocol",
+      "multimodal_semantic_validation",
+      "production_adapter_paths"
+    ],
+    "candidate_work_order_gate_ids_match_checklist_remaining_gates": true,
+    "candidate_work_order_gate_ids_match_preflight_blocked_gates": true,
+    "checklist_present": true,
+    "checklist_remaining_gate_ids": [
+      "fair_external_baseline_comparison",
+      "annotation_adjudication_protocol",
+      "multimodal_semantic_validation",
+      "production_adapter_paths"
+    ],
+    "checklist_remaining_gate_ids_match_expected_gates": true,
+    "checklist_remaining_gate_ids_match_preflight_blocked_gates": true,
+    "checklist_sync_status": "synchronized",
+    "normal_work_orders_withheld": false,
+    "per_gate_preflight_contract": {
+      "details": {
+        "annotation_adjudication_protocol": {
+          "checks": {
+            "current_absence_visible": true,
+            "current_total_gate_state_blocked": true,
+            "packet_state_present": true,
+            "packet_surface_is_object": true,
+            "real_root_candidate_artifact_count_is_int": true,
+            "real_root_file_count_is_int": true,
+            "real_root_ready_is_bool": true,
+            "real_root_scan_is_object": true,
+            "validator_status_blocked": true
+          },
+          "status": "valid"
+        },
+        "fair_external_baseline_comparison": {
+          "checks": {
+            "current_absence_visible": true,
+            "current_total_gate_state_blocked": true,
+            "packet_state_present": true,
+            "packet_surface_is_object": true,
+            "real_root_candidate_artifact_count_is_int": true,
+            "real_root_file_count_is_int": true,
+            "real_root_ready_is_bool": true,
+            "real_root_scan_is_object": true,
+            "validator_status_blocked": true
+          },
+          "status": "valid"
+        },
+        "multimodal_semantic_validation": {
+          "checks": {
+            "current_absence_visible": true,
+            "current_total_gate_state_blocked": true,
+            "packet_state_present": true,
+            "packet_surface_is_object": true,
+            "real_root_candidate_artifact_count_is_int": true,
+            "real_root_file_count_is_int": true,
+            "real_root_ready_is_bool": true,
+            "real_root_scan_is_object": true,
+            "validator_status_blocked": true
+          },
+          "status": "valid"
+        },
+        "production_adapter_paths": {
+          "checks": {
+            "current_absence_visible": true,
+            "current_total_gate_state_blocked": true,
+            "packet_state_present": true,
+            "packet_surface_is_object": true,
+            "real_root_candidate_artifact_count_is_int": true,
+            "real_root_file_count_is_int": true,
+            "real_root_ready_is_bool": true,
+            "real_root_scan_is_object": true,
+            "validator_status_blocked": true
+          },
+          "status": "valid"
+        }
+      },
+      "expected_gate_ids": [
+        "fair_external_baseline_comparison",
+        "annotation_adjudication_protocol",
+        "multimodal_semantic_validation",
+        "production_adapter_paths"
+      ],
+      "row_gate_ids": [
+        "fair_external_baseline_comparison",
+        "annotation_adjudication_protocol",
+        "multimodal_semantic_validation",
+        "production_adapter_paths"
+      ],
+      "valid": true
+    },
+    "per_gate_preflight_contract_valid": true,
+    "preflight_blocked_gate_ids": [
+      "fair_external_baseline_comparison",
+      "annotation_adjudication_protocol",
+      "multimodal_semantic_validation",
+      "production_adapter_paths"
+    ],
+    "preflight_state": "blocked",
+    "status": "synchronized"
+  },
+  "work_order_authority": {
+    "accepts_evidence": false,
+    "counts_as_acceptance_gate": false,
+    "promotes_evidence": false,
+    "replaces_authoritative_validators": false,
+    "writes_assembly_manifests": false,
+    "writes_canonical_packets": false
+  },
+  "work_order_state": "collection_blocked_until_real_evidence_exists",
+  "work_orders": [
+    {
+      "assembler_module": "fair_external_baseline_packet_assembler.py",
+      "canonical_input_packet": "inputs/fair_external_baseline_run_packet.json",
+      "collection_status": "missing_real_artifacts_and_packet",
+      "commands": {
+        "assembly_manifest_path": "work_orders/fair_external_baseline_comparison_assembly_manifest.json",
+        "generate_non_evidence_assembly_manifest_scaffold": "python3 fair_external_baseline_assembly_manifest_generator.py --output work_orders/fair_external_baseline_comparison_assembly_manifest.json",
+        "operator_followup_after_validation": "manual governance approval is required outside this work-order generator before any canonical packet update can affect acceptance",
+        "rerun_objective_audit": "python3 kg_objective_completion_audit.py",
+        "rerun_preflight": "python3 real_evidence_preflight.py",
+        "rerun_total_acceptance": "python3 kg_total_acceptance_suite.py",
+        "run_gate_validator_after_manual_packet_review": "python3 fair_external_baseline_run_validator.py",
+        "validate_candidate_packet": "python3 fair_external_baseline_packet_assembler.py --assembly-manifest work_orders/fair_external_baseline_comparison_assembly_manifest.json --validate"
+      },
+      "current_blockers": [
+        "fair external baseline run packet missing",
+        "real Microsoft GraphRAG/LightRAG/HippoRAG package runs are not present",
+        "human answer-quality adjudication packet is not present",
+        "graph-quality validation packet is not present",
+        "permission leak probe results are not present"
+      ],
+      "gate_id": "fair_external_baseline_comparison",
+      "operator_tasks": {
+        "baseline_package_runs": [
+          {
+            "baseline_id": "microsoft_graphrag",
+            "minimum_controls": [
+              "real_package_execution == true",
+              "mock_or_dry_run == false",
+              "synthetic_corpus == false",
+              "package_source_url matches locked baseline reference",
+              "source_ids match locked literature protocol references",
+              "config artifact content binds fairness policy fields"
+            ],
+            "required_artifact_fields": [
+              "package_lock_artifact",
+              "config_artifact",
+              "index_build_log_artifact",
+              "query_run_log_artifact",
+              "answer_output_artifact",
+              "graph_output_artifact",
+              "permission_probe_artifact"
+            ],
+            "required_equalized_hashes": [
+              "corpus_export_sha256",
+              "prompt_set_sha256",
+              "evaluation_question_set_sha256",
+              "access_policy_sha256",
+              "completion_model_budget_sha256",
+              "embedding_model_budget_sha256",
+              "ontology_mapping_sha256"
+            ],
+            "required_source_ids": [
+              "microsoft_graphrag_paper",
+              "microsoft_graphrag_repo",
+              "microsoft_graphrag_docs"
+            ]
+          },
+          {
+            "baseline_id": "lightrag",
+            "minimum_controls": [
+              "real_package_execution == true",
+              "mock_or_dry_run == false",
+              "synthetic_corpus == false",
+              "package_source_url matches locked baseline reference",
+              "source_ids match locked literature protocol references",
+              "config artifact content binds fairness policy fields"
+            ],
+            "required_artifact_fields": [
+              "package_lock_artifact",
+              "config_artifact",
+              "index_build_log_artifact",
+              "query_run_log_artifact",
+              "answer_output_artifact",
+              "graph_output_artifact",
+              "permission_probe_artifact"
+            ],
+            "required_equalized_hashes": [
+              "corpus_export_sha256",
+              "prompt_set_sha256",
+              "evaluation_question_set_sha256",
+              "access_policy_sha256",
+              "completion_model_budget_sha256",
+              "embedding_model_budget_sha256",
+              "ontology_mapping_sha256"
+            ],
+            "required_source_ids": [
+              "lightrag_paper",
+              "lightrag_repo"
+            ]
+          },
+          {
+            "baseline_id": "hipporag",
+            "minimum_controls": [
+              "real_package_execution == true",
+              "mock_or_dry_run == false",
+              "synthetic_corpus == false",
+              "package_source_url matches locked baseline reference",
+              "source_ids match locked literature protocol references",
+              "config artifact content binds fairness policy fields"
+            ],
+            "required_artifact_fields": [
+              "package_lock_artifact",
+              "config_artifact",
+              "index_build_log_artifact",
+              "query_run_log_artifact",
+              "answer_output_artifact",
+              "graph_output_artifact",
+              "permission_probe_artifact"
+            ],
+            "required_equalized_hashes": [
+              "corpus_export_sha256",
+              "prompt_set_sha256",
+              "evaluation_question_set_sha256",
+              "access_policy_sha256",
+              "completion_model_budget_sha256",
+              "embedding_model_budget_sha256",
+              "ontology_mapping_sha256"
+            ],
+            "required_source_ids": [
+              "hipporag_paper",
+              "hipporag2_paper",
+              "hipporag_repo"
+            ]
+          }
+        ],
+        "graph_quality_validation": [
+          "human-reviewed graph-quality rows for every baseline",
+          "positive reviewed entity count",
+          "positive reviewed relation count"
+        ],
+        "human_answer_adjudication": [
+          "human_answer_adjudication_results_v1",
+          "at least two distinct human independent first-pass reviewers",
+          "sealed submissions",
+          "adjudicator id",
+          "final adjudication hash",
+          "custody receipt hash"
+        ],
+        "permission_probe_evidence": [
+          "revoked_grant_content_denied",
+          "private_content_not_returned",
+          "raw_asset_access_denied",
+          "entity_match_does_not_grant_access",
+          "private_leak_count == 0",
+          "raw_asset_access_count == 0"
+        ],
+        "run_artifact_content_contract": [
+          "package_lock_artifact artifact_type == fair_baseline_package_lock_v1",
+          "config_artifact artifact_type == fair_baseline_config_v1",
+          "index_build_log_artifact artifact_type == fair_baseline_index_build_log_v1",
+          "query_run_log_artifact artifact_type == fair_baseline_query_run_log_v1",
+          "answer_output_artifact artifact_type == fair_baseline_answer_output_v1",
+          "graph_output_artifact artifact_type == fair_baseline_graph_output_v1",
+          "permission_probe_artifact artifact_type == fair_baseline_permission_probe_v1",
+          "every run artifact binds baseline_id, source_lock_sha256, source_ids, package_source_url, package_version, real_package_execution, mock_or_dry_run, synthetic_corpus, uses_mocked_llm_or_retrieval, and run_manifest_sha256"
+        ],
+        "source_lock": {
+          "per_baseline_source_ids_required": true,
+          "required_source_lock_sha256": "addba921e9cc4ebc4ded09b26d23a25a29aeba4f0e15e4dacb711f29dcedb2da"
+        }
+      },
+      "preflight_snapshot": {
+        "current_total_gate_state": "blocked",
+        "packet_state": "missing",
+        "real_root_candidate_artifact_count": 0,
+        "real_root_file_count": 0,
+        "root_ready": false,
+        "validator_status": "blocked"
+      },
+      "real_artifact_root": "inputs/fair_baseline_real",
+      "required_evidence_kind": "non_synthetic_external_baseline_run",
+      "required_packet_artifact_id": "fair_external_baseline_run_packet_v1",
+      "requirement_id": "fair_external_baseline_validation",
+      "safety": {
+        "assembly_manifest_must_not_live_under_real_artifact_root": true,
+        "canonical_packet_must_be_created_only_by_assembler": "inputs/fair_external_baseline_run_packet.json",
+        "forbidden_sources": [
+          "templates/",
+          "inputs/test_*",
+          "results/",
+          "symlinks",
+          "malformed JSON",
+          "raw filesystem paths",
+          "NAS/SMB/NFS/WebDAV paths",
+          "object-store or database URIs",
+          "worker scratch paths",
+          "lost /tmp artifacts"
+        ],
+        "operator_must_not_claim": [
+          "production_ready",
+          "top_tier_scientific_validation",
+          "unreviewed_business_judgment",
+          "unreviewed_canonical_merge"
+        ],
+        "real_artifacts_must_live_under": "inputs/fair_baseline_real"
+      },
+      "validator_module": "fair_external_baseline_run_validator.py",
+      "work_order_authority": {
+        "accepts_evidence": false,
+        "counts_as_acceptance_gate": false,
+        "promotes_evidence": false,
+        "writes_assembly_manifest": false,
+        "writes_canonical_packet": false
+      },
+      "work_order_id": "collect_fair_external_baseline_comparison"
+    },
+    {
+      "assembler_module": "human_annotation_packet_assembler.py",
+      "canonical_input_packet": "inputs/human_annotation_results_v1.json",
+      "collection_status": "missing_real_artifacts_and_packet",
+      "commands": {
+        "assembly_manifest_path": "work_orders/annotation_adjudication_protocol_assembly_manifest.json",
+        "generate_non_evidence_assembly_manifest_scaffold": "python3 human_annotation_assembly_manifest_generator.py --output work_orders/annotation_adjudication_protocol_assembly_manifest.json",
+        "operator_followup_after_validation": "manual governance approval is required outside this work-order generator before any canonical packet update can affect acceptance",
+        "rerun_objective_audit": "python3 kg_objective_completion_audit.py",
+        "rerun_preflight": "python3 real_evidence_preflight.py",
+        "rerun_total_acceptance": "python3 kg_total_acceptance_suite.py",
+        "run_gate_validator_after_manual_packet_review": "python3 human_annotation_adjudication_validator.py",
+        "seal_human_responses_into_candidate_artifacts": "python3 human_annotation_response_intake.py --work-packet work_packets/human_annotation_work_packet_preview.json --response-packet OPERATOR_RESPONSE_PACKET_JSON --output-dir inputs/human_annotation_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/annotation_adjudication_protocol_candidate_manifest.json",
+        "validate_candidate_packet": "python3 human_annotation_packet_assembler.py --assembly-manifest work_orders/annotation_adjudication_protocol_assembly_manifest.json --validate"
+      },
+      "current_blockers": [
+        "human annotation results packet missing",
+        "two independent first-pass human submissions are not present",
+        "adjudication-open receipt, final adjudication, confusion matrix, and custody receipt are not present"
+      ],
+      "gate_id": "annotation_adjudication_protocol",
+      "operator_tasks": {
+        "custody_controls": [
+          "two independent first-pass submissions are sealed before adjudication",
+          "adjudicator is human and distinct from first-pass reviewers",
+          "confusion matrix is derived from sealed submissions and final adjudication",
+          "custody receipt binds every artifact hash"
+        ],
+        "human_controls": [
+          "two independent first-pass human reviewers",
+          "sealed first-pass submissions",
+          "human adjudicator distinct from first-pass reviewers",
+          "adjudication opened after first-pass seal",
+          "adjudication exactly covers sealed disagreement set",
+          "confusion matrix derived from first-pass consensus and final adjudication",
+          "custody receipt binds manifest, work orders, submissions, adjudication, and confusion matrix"
+        ],
+        "required_artifacts": [
+          "manifest_artifact",
+          "work_orders_artifact",
+          "at least two first_pass_submission_artifacts",
+          "adjudication_artifact",
+          "confusion_matrix_artifact",
+          "custody_receipt_artifact"
+        ],
+        "response_packet_contract": {
+          "assembly_manifest_output": "work_packets/annotation_adjudication_protocol_candidate_manifest.json",
+          "candidate_output_dir": "inputs/human_annotation_real/OPERATOR_RUN_ID",
+          "canonical_packet_not_written": "inputs/human_annotation_results_v1.json",
+          "counts_as_acceptance_gate": false,
+          "promotes_evidence": false,
+          "required_controls": [
+            "two independent first-pass human reviewer submissions",
+            "human adjudicator distinct from first-pass reviewers",
+            "at least one first-pass disagreement",
+            "adjudication rows exactly cover disagreed items",
+            "generated_by_llm == false for every submission and adjudication row",
+            "template_source is null for every submission and adjudication row"
+          ],
+          "response_packet_placeholder": "OPERATOR_RESPONSE_PACKET_JSON",
+          "response_packet_type": "human_annotation_response_intake_v1",
+          "work_packet_path": "work_packets/human_annotation_work_packet_preview.json",
+          "writes_canonical_packet": false
+        }
+      },
+      "preflight_snapshot": {
+        "current_total_gate_state": "blocked",
+        "packet_state": "missing",
+        "real_root_candidate_artifact_count": 0,
+        "real_root_file_count": 0,
+        "root_ready": false,
+        "validator_status": "blocked"
+      },
+      "real_artifact_root": "inputs/human_annotation_real",
+      "required_evidence_kind": "real_human_annotation_adjudication",
+      "required_packet_artifact_id": "human_annotation_results_v1",
+      "requirement_id": "human_annotation_adjudication_protocol",
+      "safety": {
+        "assembly_manifest_must_not_live_under_real_artifact_root": true,
+        "canonical_packet_must_be_created_only_by_assembler": "inputs/human_annotation_results_v1.json",
+        "forbidden_sources": [
+          "templates/",
+          "inputs/test_*",
+          "results/",
+          "symlinks",
+          "malformed JSON",
+          "raw filesystem paths",
+          "NAS/SMB/NFS/WebDAV paths",
+          "object-store or database URIs",
+          "worker scratch paths",
+          "lost /tmp artifacts"
+        ],
+        "operator_must_not_claim": [
+          "synthetic_label_generation",
+          "template_as_human_evidence",
+          "production_ready",
+          "top_tier_scientific_validation"
+        ],
+        "real_artifacts_must_live_under": "inputs/human_annotation_real"
+      },
+      "validator_module": "human_annotation_adjudication_validator.py",
+      "work_order_authority": {
+        "accepts_evidence": false,
+        "counts_as_acceptance_gate": false,
+        "promotes_evidence": false,
+        "writes_assembly_manifest": false,
+        "writes_canonical_packet": false
+      },
+      "work_order_id": "collect_annotation_adjudication_protocol"
+    },
+    {
+      "assembler_module": "enterprise_multimodal_packet_assembler.py",
+      "canonical_input_packet": "inputs/enterprise_multimodal_validation_packet.json",
+      "collection_status": "missing_real_artifacts_and_packet",
+      "commands": {
+        "assembly_manifest_path": "work_orders/multimodal_semantic_validation_assembly_manifest.json",
+        "generate_non_evidence_assembly_manifest_scaffold": "python3 enterprise_multimodal_assembly_manifest_generator.py --output work_orders/multimodal_semantic_validation_assembly_manifest.json",
+        "operator_followup_after_validation": "manual governance approval is required outside this work-order generator before any canonical packet update can affect acceptance",
+        "rerun_objective_audit": "python3 kg_objective_completion_audit.py",
+        "rerun_preflight": "python3 real_evidence_preflight.py",
+        "rerun_total_acceptance": "python3 kg_total_acceptance_suite.py",
+        "run_gate_validator_after_manual_packet_review": "python3 enterprise_multimodal_validation_validator.py",
+        "seal_enterprise_responses_into_candidate_artifacts": "python3 enterprise_multimodal_response_intake.py --work-packet work_packets/enterprise_multimodal_collection_packet_preview.json --response-packet OPERATOR_ENTERPRISE_RESPONSE_PACKET_JSON --output-dir inputs/enterprise_multimodal_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/multimodal_semantic_validation_candidate_manifest.json",
+        "validate_candidate_packet": "python3 enterprise_multimodal_packet_assembler.py --assembly-manifest work_orders/multimodal_semantic_validation_assembly_manifest.json --validate"
+      },
+      "current_blockers": [
+        "enterprise multimodal validation packet missing",
+        "real enterprise multimodal pilot manifest is not present",
+        "enterprise spreadsheet/mail/meeting/video validation packets are not present",
+        "multimodal human adjudication and cross-modal permission leak probe are not present"
+      ],
+      "gate_id": "multimodal_semantic_validation",
+      "operator_tasks": {
+        "controls": [
+          "real enterprise pilot manifest",
+          "no synthetic/demo source rows",
+          "no text-proxy-only source rows",
+          "FormOwl locator bound to asset id",
+          "validation rows bound to source asset hashes",
+          "human adjudication covers every validation row exactly",
+          "business decision review is human-reviewed and non-autonomous",
+          "permission probe denies revoked grants, private content, raw asset access, and entity-match-as-access"
+        ],
+        "per_modality_rows": [
+          {
+            "minimum_controls": [
+              "real enterprise source row",
+              "not synthetic or demo",
+              "not text-proxy-only",
+              "FormOwl locator bound to asset id",
+              "validation row bound to source asset hash"
+            ],
+            "modality": "spreadsheet"
+          },
+          {
+            "minimum_controls": [
+              "real enterprise source row",
+              "not synthetic or demo",
+              "not text-proxy-only",
+              "FormOwl locator bound to asset id",
+              "validation row bound to source asset hash"
+            ],
+            "modality": "mail"
+          },
+          {
+            "minimum_controls": [
+              "real enterprise source row",
+              "not synthetic or demo",
+              "not text-proxy-only",
+              "FormOwl locator bound to asset id",
+              "validation row bound to source asset hash"
+            ],
+            "modality": "meeting_audio"
+          },
+          {
+            "minimum_controls": [
+              "real enterprise source row",
+              "not synthetic or demo",
+              "not text-proxy-only",
+              "FormOwl locator bound to asset id",
+              "validation row bound to source asset hash"
+            ],
+            "modality": "video_ocr"
+          }
+        ],
+        "required_artifacts": [
+          "pilot_manifest_artifact",
+          "validation_artifacts for every modality",
+          "human_adjudication_artifact",
+          "business_decision_review_artifact",
+          "permission_probe_artifact"
+        ],
+        "required_modalities": [
+          "spreadsheet",
+          "mail",
+          "meeting_audio",
+          "video_ocr"
+        ],
+        "response_packet_contract": {
+          "assembly_manifest_output": "work_packets/multimodal_semantic_validation_candidate_manifest.json",
+          "candidate_output_dir": "inputs/enterprise_multimodal_real/OPERATOR_RUN_ID",
+          "canonical_packet_not_written": "inputs/enterprise_multimodal_validation_packet.json",
+          "counts_as_acceptance_gate": false,
+          "promotes_evidence": false,
+          "required_controls": [
+            "operator supplied pilot manifest artifact",
+            "operator supplied validation artifacts for every required modality",
+            "operator supplied human adjudication artifact",
+            "operator supplied business decision review artifact",
+            "operator supplied permission probe artifact",
+            "candidate packet validates before any manual governance promotion",
+            "intake custody receipt binds response packet, candidate packet, and artifact hashes"
+          ],
+          "response_packet_placeholder": "OPERATOR_ENTERPRISE_RESPONSE_PACKET_JSON",
+          "response_packet_type": "enterprise_multimodal_response_intake_v1",
+          "work_packet_path": "work_packets/enterprise_multimodal_collection_packet_preview.json",
+          "writes_canonical_packet": false
+        }
+      },
+      "preflight_snapshot": {
+        "current_total_gate_state": "blocked",
+        "packet_state": "missing",
+        "real_root_candidate_artifact_count": 0,
+        "real_root_file_count": 0,
+        "root_ready": false,
+        "validator_status": "blocked"
+      },
+      "real_artifact_root": "inputs/enterprise_multimodal_real",
+      "required_evidence_kind": "real_enterprise_multimodal_validation",
+      "required_packet_artifact_id": "enterprise_multimodal_validation_packet_v1",
+      "requirement_id": "multimodal_enterprise_validation",
+      "safety": {
+        "assembly_manifest_must_not_live_under_real_artifact_root": true,
+        "canonical_packet_must_be_created_only_by_assembler": "inputs/enterprise_multimodal_validation_packet.json",
+        "forbidden_sources": [
+          "templates/",
+          "inputs/test_*",
+          "results/",
+          "symlinks",
+          "malformed JSON",
+          "raw filesystem paths",
+          "NAS/SMB/NFS/WebDAV paths",
+          "object-store or database URIs",
+          "worker scratch paths",
+          "lost /tmp artifacts"
+        ],
+        "operator_must_not_claim": [
+          "financial_advice_or_autonomous_business_judgment",
+          "production_ready",
+          "top_tier_scientific_validation",
+          "raw_asset_access"
+        ],
+        "real_artifacts_must_live_under": "inputs/enterprise_multimodal_real"
+      },
+      "validator_module": "enterprise_multimodal_validation_validator.py",
+      "work_order_authority": {
+        "accepts_evidence": false,
+        "counts_as_acceptance_gate": false,
+        "promotes_evidence": false,
+        "writes_assembly_manifest": false,
+        "writes_canonical_packet": false
+      },
+      "work_order_id": "collect_multimodal_semantic_validation"
+    },
+    {
+      "assembler_module": "production_adapter_packet_assembler.py",
+      "canonical_input_packet": "inputs/production_adapter_evidence_packet.json",
+      "collection_status": "missing_real_artifacts_and_packet",
+      "commands": {
+        "assembly_manifest_path": "work_orders/production_adapter_paths_assembly_manifest.json",
+        "generate_non_evidence_assembly_manifest_scaffold": "python3 production_adapter_assembly_manifest_generator.py --output work_orders/production_adapter_paths_assembly_manifest.json",
+        "operator_followup_after_validation": "manual governance approval is required outside this work-order generator before any canonical packet update can affect acceptance",
+        "rerun_objective_audit": "python3 kg_objective_completion_audit.py",
+        "rerun_preflight": "python3 real_evidence_preflight.py",
+        "rerun_total_acceptance": "python3 kg_total_acceptance_suite.py",
+        "run_gate_validator_after_manual_packet_review": "python3 production_adapter_path_validator.py",
+        "validate_candidate_packet": "python3 production_adapter_packet_assembler.py --assembly-manifest work_orders/production_adapter_paths_assembly_manifest.json --validate"
+      },
+      "current_blockers": [
+        "production adapter evidence packet missing",
+        "non-synthetic production deployment validation is not present",
+        "human-reviewed false-merge labels are not present",
+        "permission probes, rollback smoke, and production audit artifacts are not present"
+      ],
+      "gate_id": "production_adapter_paths",
+      "operator_tasks": {
+        "controls": [
+          "non-synthetic human-approved deployment manifest",
+          "manifest adapter stack digest bound to component artifacts",
+          "permission filters enabled on every adapter component",
+          "canonical writes disabled on adapter evidence path",
+          "human-reviewed false-merge labels for RapidFuzz and Splink",
+          "one request id, one resource ref, and one policy id across audit rows",
+          "revoked grant audit row binds grant_state == revoked",
+          "deny guards for private candidates, entity match without grant, raw asset reads, and canonical merge without review",
+          "wiki projection remains draft-only",
+          "rollback smoke verifies migration rollback, partial-failure rollback, append-only audit, and idempotent retry",
+          "no raw/internal values, including driver-qualified database URIs"
+        ],
+        "per_component_rows": [
+          {
+            "component_id": "postgres_metadata_store",
+            "minimum_controls": [
+              "non_synthetic_deployment == true",
+              "synthetic_or_demo == false",
+              "permission_filter_enabled == true",
+              "raw_path_exposed == false",
+              "canonical_write_enabled == false"
+            ]
+          },
+          {
+            "component_id": "pgvector_index",
+            "minimum_controls": [
+              "non_synthetic_deployment == true",
+              "synthetic_or_demo == false",
+              "permission_filter_enabled == true",
+              "raw_path_exposed == false",
+              "canonical_write_enabled == false"
+            ]
+          },
+          {
+            "component_id": "retrieval_gateway",
+            "minimum_controls": [
+              "non_synthetic_deployment == true",
+              "synthetic_or_demo == false",
+              "permission_filter_enabled == true",
+              "raw_path_exposed == false",
+              "canonical_write_enabled == false"
+            ]
+          },
+          {
+            "component_id": "semantic_gateway",
+            "minimum_controls": [
+              "non_synthetic_deployment == true",
+              "synthetic_or_demo == false",
+              "permission_filter_enabled == true",
+              "raw_path_exposed == false",
+              "canonical_write_enabled == false"
+            ]
+          },
+          {
+            "component_id": "rapidfuzz_candidate_adapter",
+            "minimum_controls": [
+              "non_synthetic_deployment == true",
+              "synthetic_or_demo == false",
+              "permission_filter_enabled == true",
+              "raw_path_exposed == false",
+              "canonical_write_enabled == false"
+            ]
+          },
+          {
+            "component_id": "splink_candidate_adapter",
+            "minimum_controls": [
+              "non_synthetic_deployment == true",
+              "synthetic_or_demo == false",
+              "permission_filter_enabled == true",
+              "raw_path_exposed == false",
+              "canonical_write_enabled == false"
+            ]
+          },
+          {
+            "component_id": "wiki_projection_adapter",
+            "minimum_controls": [
+              "non_synthetic_deployment == true",
+              "synthetic_or_demo == false",
+              "permission_filter_enabled == true",
+              "raw_path_exposed == false",
+              "canonical_write_enabled == false"
+            ]
+          }
+        ],
+        "required_artifacts": [
+          "deployment_manifest_artifact",
+          "adapter_artifacts for every required component",
+          "human_false_merge_label_artifact",
+          "audit_trail_artifact",
+          "permission_probe_artifact",
+          "rollback_smoke_artifact"
+        ],
+        "required_audit_actions": [
+          "deploy_started",
+          "migration_applied",
+          "grant_check_before_content",
+          "revoked_grant_blocks_content",
+          "private_candidate_redacted",
+          "entity_match_without_grant_denied",
+          "raw_asset_read_guard_rejected",
+          "canonical_merge_guard_rejected",
+          "wiki_projection_draft_not_published",
+          "rollback_smoke_completed",
+          "deploy_completed"
+        ],
+        "required_components": [
+          "postgres_metadata_store",
+          "pgvector_index",
+          "retrieval_gateway",
+          "semantic_gateway",
+          "rapidfuzz_candidate_adapter",
+          "splink_candidate_adapter",
+          "wiki_projection_adapter"
+        ]
+      },
+      "preflight_snapshot": {
+        "current_total_gate_state": "blocked",
+        "packet_state": "missing",
+        "real_root_candidate_artifact_count": 0,
+        "real_root_file_count": 0,
+        "root_ready": false,
+        "validator_status": "blocked"
+      },
+      "real_artifact_root": "inputs/production_adapter_real",
+      "required_evidence_kind": "non_synthetic_production_adapter_validation",
+      "required_packet_artifact_id": "production_adapter_evidence_packet_v1",
+      "requirement_id": "production_adapter_gate",
+      "safety": {
+        "assembly_manifest_must_not_live_under_real_artifact_root": true,
+        "canonical_packet_must_be_created_only_by_assembler": "inputs/production_adapter_evidence_packet.json",
+        "forbidden_sources": [
+          "templates/",
+          "inputs/test_*",
+          "results/",
+          "symlinks",
+          "malformed JSON",
+          "raw filesystem paths",
+          "NAS/SMB/NFS/WebDAV paths",
+          "object-store or database URIs",
+          "worker scratch paths",
+          "lost /tmp artifacts"
+        ],
+        "operator_must_not_claim": [
+          "full_product_production_ready",
+          "top_tier_scientific_validation",
+          "canonical_write",
+          "raw_access"
+        ],
+        "real_artifacts_must_live_under": "inputs/production_adapter_real"
+      },
+      "validator_module": "production_adapter_path_validator.py",
+      "work_order_authority": {
+        "accepts_evidence": false,
+        "counts_as_acceptance_gate": false,
+        "promotes_evidence": false,
+        "writes_assembly_manifest": false,
+        "writes_canonical_packet": false
+      },
+      "work_order_id": "collect_production_adapter_paths"
+    }
+  ],
+  "workspace": "/workspace/.formowl/kg-eval"
+}

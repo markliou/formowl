@@ -1,0 +1,14 @@
+{
+  "artifact_type": "production_adapter_component_artifact_v1",
+  "canonical_write_enabled": false,
+  "component_id": "wiki_projection_adapter",
+  "component_kind": "adapter_boundary",
+  "config_sha256": "0000000000000000000000000000000000000000000000000000000000000024",
+  "deployment_id": "deploy_prod_adapter_001",
+  "non_synthetic_deployment": true,
+  "package_or_image_sha256": "0000000000000000000000000000000000000000000000000000000000000010",
+  "permission_filter_enabled": true,
+  "policy_sha256": "0000000000000000000000000000000000000000000000000000000000000038",
+  "raw_path_exposed": false,
+  "synthetic_or_demo": false
+}

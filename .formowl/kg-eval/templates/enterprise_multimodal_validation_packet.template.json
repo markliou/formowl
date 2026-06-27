@@ -1,0 +1,26 @@
+{
+  "template_only": true,
+  "do_not_submit_as_evidence": true,
+  "artifact_id": "enterprise_multimodal_validation_packet_v1",
+  "evidence_kind": "real_enterprise_multimodal_validation",
+  "recovered_after_tmp_loss": false,
+  "pilot_manifest_artifact": "inputs/path-to-real-pilot-manifest.json",
+  "pilot_manifest_artifact_sha256": "fill-with-real-sha256",
+  "validation_artifacts": [],
+  "human_adjudication_artifact": "inputs/path-to-real-human-adjudication.json",
+  "human_adjudication_artifact_sha256": "fill-with-real-sha256",
+  "business_decision_review_artifact": "inputs/path-to-real-business-review.json",
+  "business_decision_review_artifact_sha256": "fill-with-real-sha256",
+  "permission_probe_artifact": "inputs/path-to-real-permission-probe.json",
+  "permission_probe_artifact_sha256": "fill-with-real-sha256",
+  "claim_boundary": {
+    "supports_real_enterprise_multimodal_claim": false,
+    "supports_multimodal_human_adjudication_completed_claim": false,
+    "supports_cross_modal_permission_probe_claim": false,
+    "supports_business_decision_review_claim": false,
+    "supports_financial_advice_or_autonomous_business_judgment_claim": false,
+    "supports_production_ready_claim": false,
+    "supports_top_tier_scientific_validation_claim": false,
+    "supports_raw_asset_access_claim": false
+  }
+}

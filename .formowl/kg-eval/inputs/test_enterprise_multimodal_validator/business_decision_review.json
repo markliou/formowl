@@ -1,0 +1,21 @@
+{
+  "adjudication_artifact_sha256": "48f984a0cdcd0e9ee81cada0c8104ca05f7f9cb3eba23574c1ca7babbee9d4de",
+  "artifact_type": "enterprise_business_decision_review_v1",
+  "autonomous_business_judgment": false,
+  "decision_rows": [
+    {
+      "autonomous_business_judgment": false,
+      "decision_candidate_id": "decision_invoice_payment_review",
+      "requires_human_review": true,
+      "row_sha256": "f1ae18da0c1f69a8afa470a3a89b4cfcdb519fe32e8443a26e56c3db4339d2be",
+      "source_validation_ids": [
+        "val_spreadsheet_001",
+        "val_mail_001",
+        "val_meeting_audio_001",
+        "val_video_ocr_001"
+      ]
+    }
+  ],
+  "financial_advice_or_execution": false,
+  "human_reviewed": true
+}

@@ -876,7 +876,7 @@ These groups can be split across multiple agents after Slice 1 is stable.
     helpers. Focused policy tests cover round-trip serialization, versioned id
     stability, active/kind checks, and malformed rule/id/raw-reference inputs.
     Canonical dev-container unittest ran 211 tests OK.
-- [x] Implement reviewed canonical graph commit workflow.
+- [ ] Implement reviewed canonical graph commit workflow.
   - Owner paths: `python/formowl_graph/canonical.py`,
     `python/formowl_graph/resolution.py`
   - Proof: only governed backend code can create canonical commits.
@@ -893,6 +893,13 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `ruff format --check` on changed files, focused canonical workflow unittest
     ran 10 tests OK, and full `python -m unittest discover -s tests` ran 221
     tests OK.
+  - Return note: 2026-06-27 KG review found this slice is not complete. The
+    current commit workflow creates a child `CanonicalGraphRevision` from only
+    the newly committed candidate atoms/relations instead of carrying parent
+    revision graph membership forward, and candidate relations can only resolve
+    to atoms included in the same commit. Rework must prove incremental commits
+    preserve prior graph membership and can safely relate to existing canonical
+    endpoints without lineage overwrite or partial writes.
 - [x] Add lifecycle events for split, merge, archive, deprecate, supersede, and
   equivalence.
   - Owner paths: `python/formowl_graph/`
@@ -1079,6 +1086,30 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `passed_with_explicit_limits`, focused KG acceptance tests ran 4 OK,
     focused ontology tests ran 4 OK, and full dev-container unittest ran
     246 tests OK.
+
+- [ ] Complete the full KG real-evidence objective across sessions.
+  - Owner paths: `docs/agent-goals/`, `.formowl/kg-eval/`, KG-owned graph,
+    ontology, evaluation, and test files.
+  - Proof: `.formowl/kg-eval/results/kg_total_acceptance_snapshot.json`
+    reports `overall_passed=true`; no broad real-evidence gate remains failed;
+    `scripts/kg_research_acceptance_suite.py --strict` passes in the dev
+    container; canonical dev-container KG-eval and main-repo tests pass; and the
+    configured reviewer gate passes for every newly completed slice.
+  - Current failed broad gates:
+    `fair_external_baseline_comparison`,
+    `annotation_adjudication_protocol`,
+    `multimodal_semantic_validation`, and `production_adapter_paths`.
+  - Note: the checked item above is only the scoped ontology and
+    method/acceptance-harness slice. It does not prove fair external baseline
+    execution, real human adjudication, real enterprise multimodal validation,
+    production adapter evidence, or production latency/scalability.
+  - Portability note: on 2026-06-27, the sanitized `.formowl/kg-eval` harness,
+    restart note, fixtures, templates, work orders, preview packets, and
+    non-authoritative blocked-state snapshots were made git-trackable so
+    another session can reproduce the stricter broad gate. Runtime generated
+    `results/`, local long-form handoff history, operator real artifact roots,
+    and canonical real evidence packets remain ignored. The item stays
+    unchecked because the four broad real-evidence gates still fail.
 
 ### Real Project and Wiki Integrations
 

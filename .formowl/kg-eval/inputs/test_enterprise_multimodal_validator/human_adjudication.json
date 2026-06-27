@@ -1,0 +1,47 @@
+{
+  "artifact_type": "enterprise_multimodal_human_adjudication_v1",
+  "completed": true,
+  "reviewer_id": "human_multimodal_reviewer",
+  "reviewer_type": "human",
+  "rows": [
+    {
+      "adjudication_id": "adj_val_spreadsheet_001",
+      "final_label": "accepted",
+      "modality": "spreadsheet",
+      "row_sha256": "e11c7fb299abe5838ccf4bd62af0b8f9fe4782f4c0f9a3d533200797459ec656",
+      "validation_id": "val_spreadsheet_001",
+      "validation_row_sha256": "6d951a82cfd1ebea47800f58e96afdbaf7cd1a40755d7e31459445be9359cc24"
+    },
+    {
+      "adjudication_id": "adj_val_mail_001",
+      "final_label": "accepted",
+      "modality": "mail",
+      "row_sha256": "5ef3c4a90ce8b28ef22df309dd8d53355b2871dcf97dad3291cda5cceaaafbe9",
+      "validation_id": "val_mail_001",
+      "validation_row_sha256": "8087a921d8aa6b6e5351e4032b3f666fac5e4d4b07b5a52c0811bd2db8b2423e"
+    },
+    {
+      "adjudication_id": "adj_val_meeting_audio_001",
+      "final_label": "accepted",
+      "modality": "meeting_audio",
+      "row_sha256": "48b647697d5f1dcc2f3a2ad6716c6cf9903b0b69fe6a40c87d2f5ecdd6df2c0a",
+      "validation_id": "val_meeting_audio_001",
+      "validation_row_sha256": "6d8ebb575689676280f3dee52fc03d7828da3018e21d3bebaf9b667b43b77a00"
+    },
+    {
+      "adjudication_id": "adj_val_video_ocr_001",
+      "final_label": "accepted",
+      "modality": "video_ocr",
+      "row_sha256": "2e2ce5a05d2c204d8a315c06c6b90f8499f7a432c4e24dca5334567f368c2ced",
+      "validation_id": "val_video_ocr_001",
+      "validation_row_sha256": "883448ed460be4ca0ddbe3c627a203d432f1c1ce83da4c51785d47f0a39342ac"
+    }
+  ],
+  "synthetic_or_agent_generated": false,
+  "validation_artifact_sha256s": [
+    "577bd1e6eb91a01c7bd24d0a949a39701f950fb0984faf737cc951bdd1adc664",
+    "7528ff6d68230196fdb31aa5e21821fc209caad29eccc6cce928e1cacd2373ff",
+    "754cb4598ba139468cb67552d6063b371116f005481539b43946ba14e8d7c68d",
+    "d50901305effae548ef00a0e1d18512ff95e83db6a02550ac674be24380582db"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "adjudication_artifact_sha256": "0cd07273238e88fbf4d4f1cf991ebc6d9e5064f264ee389f83d5492e44a3a579",
+  "artifact_type": "annotation_custody_receipt_v1",
+  "complete": true,
+  "confusion_matrix_artifact_sha256": "bef58febc49ff74e30d368e0d2dc27b14e36708e20c61ff0fcf26d407f0cac64",
+  "custody_receipt_sha256": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+  "first_pass_submission_artifact_sha256s": [
+    "31cd4f88b42308a2420daef9faa667f71e84e30def31c910be67fe8ebecbda57",
+    "e27ce3f603b82c76359cc5e6a94cfd3b2369ea43f324884e46e3436eac38b8b4"
+  ],
+  "human_packet_complete": true,
+  "manifest_artifact_sha256": "7aad5a0ed8f894059b6983bc1447514f2a30cc5d8f4c3cafd5c57f1759e385d5",
+  "work_orders_artifact_sha256": "df1dc0f1ff1ed00f326df48f65a56d75a9ad22673170e49a082ba0fe5e198c33"
+}

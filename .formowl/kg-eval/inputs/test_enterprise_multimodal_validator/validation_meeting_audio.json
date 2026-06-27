@@ -1,0 +1,18 @@
+{
+  "artifact_type": "enterprise_multimodal_validation_rows_v1",
+  "modality": "meeting_audio",
+  "rows": [
+    {
+      "candidate_id": "cand_meeting_audio_001",
+      "extractor_run_id": "run_meeting_audio_001",
+      "human_adjudicated": true,
+      "modality": "meeting_audio",
+      "observation_id": "obs_meeting_audio_001",
+      "row_sha256": "6d8ebb575689676280f3dee52fc03d7828da3018e21d3bebaf9b667b43b77a00",
+      "source_asset_sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+      "source_id": "src_meeting_audio_001",
+      "task": "meeting_audio_semantic_validation",
+      "validation_id": "val_meeting_audio_001"
+    }
+  ]
+}

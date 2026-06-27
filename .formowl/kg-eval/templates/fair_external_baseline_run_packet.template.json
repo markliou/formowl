@@ -1,0 +1,26 @@
+{
+  "template_only": true,
+  "do_not_submit_as_evidence": true,
+  "artifact_id": "fair_external_baseline_run_packet_v1",
+  "evidence_kind": "non_synthetic_external_baseline_run",
+  "recovered_after_tmp_loss": false,
+  "run_environment": {
+    "non_synthetic_benchmark_context": "fill-with-real-run-evidence",
+    "uses_real_external_packages": "fill-with-real-run-evidence",
+    "uses_mocked_llm_or_retrieval": "must-be-false",
+    "container_image_digest_sha256": "fill-with-real-sha256",
+    "run_manifest_sha256": "fill-with-real-sha256"
+  },
+  "source_lock_sha256": "fill-with-literature-source-lock-sha256",
+  "baseline_runs": [],
+  "human_answer_adjudication": {},
+  "graph_quality_validation": {},
+  "permission_probes": [],
+  "claim_boundary": {
+    "supports_fair_external_baseline_comparison_claim": false,
+    "supports_production_ready_claim": false,
+    "supports_top_tier_scientific_validation_claim": false,
+    "supports_unreviewed_business_judgment_claim": false,
+    "supports_unreviewed_canonical_merge_claim": false
+  }
+}

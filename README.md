@@ -181,6 +181,18 @@ Use `--strict` when the command should fail on any failed or blocked acceptance
 item. The default command exits successfully while clearly marking known limits
 such as production adapter readiness and enterprise latency/scalability.
 
+The stricter broad KG real-evidence harness lives under `.formowl/kg-eval`.
+Its code, fixtures, templates, work orders, preview packets, restart note, and
+non-authoritative blocked-state snapshots are tracked so the blocked broad
+gates are reproducible across sessions. Runtime `results/`, operator-supplied
+real evidence under `inputs/*_real/`, and canonical real evidence packets
+remain ignored unless a future governed evidence process explicitly decides
+otherwise.
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace/.formowl/kg-eval formowl-dev:local bash -c "python kg_total_acceptance_suite.py && python real_evidence_preflight.py"
+```
+
 Run lint and formatting checks inside the dev container:
 
 ```sh

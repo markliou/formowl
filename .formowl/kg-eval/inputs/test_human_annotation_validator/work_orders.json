@@ -1,0 +1,45 @@
+{
+  "artifact_type": "human_annotation_work_orders_v1",
+  "work_orders": [
+    {
+      "item_id": "ann_item_invoice_001",
+      "manifest_row_sha256": "cb886b7552209ed178652d28039a6a0998b6da4bbd6db6c97f6d3a65ddd97242",
+      "reviewer_id": "human_reviewer_alpha",
+      "role": "first_pass",
+      "row_sha256": "7e9b293d576da1c44aae4499905aaeab7f6fdff3f426c9840490a8527d1f0b61",
+      "work_order_id": "wo_alpha_invoice"
+    },
+    {
+      "item_id": "ann_item_invoice_001",
+      "manifest_row_sha256": "cb886b7552209ed178652d28039a6a0998b6da4bbd6db6c97f6d3a65ddd97242",
+      "reviewer_id": "human_reviewer_beta",
+      "role": "first_pass",
+      "row_sha256": "a1a525d44af4569ea410245f03366edf13a278c419b9ff07a384cc14ecd93f8e",
+      "work_order_id": "wo_beta_invoice"
+    },
+    {
+      "item_id": "ann_item_decision_001",
+      "manifest_row_sha256": "f90dc78ac09fc6b993fe89ab47d451754ab66eba5728dcc84080d0127dbf3edc",
+      "reviewer_id": "human_reviewer_alpha",
+      "role": "first_pass",
+      "row_sha256": "ad608cfa86dcd9b802b5543cf0003075f903d8f67fa2899712acb66cb5becef1",
+      "work_order_id": "wo_alpha_decision"
+    },
+    {
+      "item_id": "ann_item_decision_001",
+      "manifest_row_sha256": "f90dc78ac09fc6b993fe89ab47d451754ab66eba5728dcc84080d0127dbf3edc",
+      "reviewer_id": "human_reviewer_beta",
+      "role": "first_pass",
+      "row_sha256": "1c77250e1a98e61b6694104d4da62df3e722627a377c192bd28fec0202d13a97",
+      "work_order_id": "wo_beta_decision"
+    },
+    {
+      "item_id": "ann_item_decision_001",
+      "manifest_row_sha256": "f90dc78ac09fc6b993fe89ab47d451754ab66eba5728dcc84080d0127dbf3edc",
+      "reviewer_id": "human_adjudicator_gamma",
+      "role": "adjudicator",
+      "row_sha256": "33aae385c2bce56b3be7d0583f66064d0d3b43818b2b63c7f01e11fd01125451",
+      "work_order_id": "wo_gamma_decision"
+    }
+  ]
+}

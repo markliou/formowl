@@ -1,0 +1,34 @@
+{
+  "artifact_type": "human_first_pass_submission_v1",
+  "generated_by_llm": false,
+  "independent_first_pass": true,
+  "reviewer_id": "human_reviewer_beta",
+  "reviewer_type": "human",
+  "rows": [
+    {
+      "generated_by_llm": false,
+      "item_id": "ann_item_invoice_001",
+      "label": "supported",
+      "manifest_row_sha256": "cb886b7552209ed178652d28039a6a0998b6da4bbd6db6c97f6d3a65ddd97242",
+      "reviewer_id": "human_reviewer_beta",
+      "row_sha256": "dc0151bcd4d2ff29804d9f3a5390178a4263aa8d2a7a17b01d496671985df61e",
+      "submission_id": "beta_invoice",
+      "template_source": null,
+      "work_order_id": "wo_beta_invoice"
+    },
+    {
+      "generated_by_llm": false,
+      "item_id": "ann_item_decision_001",
+      "label": "needs_review",
+      "manifest_row_sha256": "f90dc78ac09fc6b993fe89ab47d451754ab66eba5728dcc84080d0127dbf3edc",
+      "reviewer_id": "human_reviewer_beta",
+      "row_sha256": "dfe16074660311153c96d1fa2c22ec1e9f1ef5e13f5b92661b7ca9d95ae8a4fd",
+      "submission_id": "beta_decision",
+      "template_source": null,
+      "work_order_id": "wo_beta_decision"
+    }
+  ],
+  "sealed": true,
+  "submission_set_sha256": "cb06f1ced80b611fff9f7a15df4652536b1ee46d23775e6aba432e27c6909f6e",
+  "template_source": null
+}

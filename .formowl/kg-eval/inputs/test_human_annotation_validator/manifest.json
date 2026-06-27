@@ -1,0 +1,23 @@
+{
+  "annotation_task_id": "kg_eval_annotation_v1",
+  "artifact_type": "human_annotation_manifest_v1",
+  "item_count": 2,
+  "items": [
+    {
+      "consensus_label": "supported",
+      "item_id": "ann_item_invoice_001",
+      "row_sha256": "cb886b7552209ed178652d28039a6a0998b6da4bbd6db6c97f6d3a65ddd97242",
+      "source_observation_id": "obs_mail_invoice_001",
+      "source_ref": "formowl://observation/obs_mail_invoice_001",
+      "task_id": "evidence_supported_claim"
+    },
+    {
+      "consensus_label": "needs_review",
+      "item_id": "ann_item_decision_001",
+      "row_sha256": "f90dc78ac09fc6b993fe89ab47d451754ab66eba5728dcc84080d0127dbf3edc",
+      "source_observation_id": "obs_meeting_segment_004",
+      "source_ref": "formowl://observation/obs_meeting_segment_004",
+      "task_id": "business_decision_candidate"
+    }
+  ]
+}

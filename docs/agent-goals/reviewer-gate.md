@@ -12,6 +12,38 @@ Reviewer composition:
 - 3 Codex/GPT reviewers.
 - 3 Antigravity Gemini reviewers through the local `agy` CLI.
 
+## Cost Control And Staging
+
+Reviewer cost is part of the engineering budget. Do not spend reviewer calls to
+discover issues the implementing agent can find locally.
+
+Default sequence:
+
+1. Run a self-audit against the slice's claim boundary, negative-path tests,
+   no-partial-write behavior, raw/internal leak guards, and canonical
+   non-mutation guarantees.
+2. Run focused host checks only as quick feedback.
+3. Run the required canonical dev-container focused checks.
+4. Ask the first Codex/GPT reviewers for code/test blockers.
+5. Fix any blocker and return to the same reviewer before expanding the pool.
+6. Send a compact bounded packet to Antigravity Gemini reviewers through
+   `agy` for independent method, governance, and adversarial critique.
+7. Only after blockers are closed, fill the remaining reviewer count.
+
+Use narrow reviewer packets:
+
+- Include changed file paths, relevant excerpts, claim boundaries, test
+  summaries, and verification commands/results.
+- Exclude unrelated repository history and large generated outputs.
+- Exclude secrets, credentials, raw private source payloads, raw backend paths,
+  NAS/object-store admin endpoints, raw SQL, worker scratch paths, and
+  unrelated private data.
+
+If a slice is only documentation or planning, the gate still applies when that
+document will be used as a durable completion or handoff authority. Reviewers
+should then focus on scope, status honesty, omitted acceptance gates, and
+whether the next agent can execute the plan without chat memory.
+
 Antigravity Gemini reviewers must be called through the real Antigravity CLI,
 not through Codex `multi_agent_v1`, not through a GPT model override, and not
 through any "agy folder" GPT substitute.

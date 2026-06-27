@@ -1,0 +1,51 @@
+{
+  "adapter_artifacts": [
+    {
+      "artifact": "inputs/production_adapter_real/fill-with-real-postgres_metadata_store-adapter-artifact.json",
+      "component_id": "postgres_metadata_store"
+    },
+    {
+      "artifact": "inputs/production_adapter_real/fill-with-real-pgvector_index-adapter-artifact.json",
+      "component_id": "pgvector_index"
+    },
+    {
+      "artifact": "inputs/production_adapter_real/fill-with-real-retrieval_gateway-adapter-artifact.json",
+      "component_id": "retrieval_gateway"
+    },
+    {
+      "artifact": "inputs/production_adapter_real/fill-with-real-semantic_gateway-adapter-artifact.json",
+      "component_id": "semantic_gateway"
+    },
+    {
+      "artifact": "inputs/production_adapter_real/fill-with-real-rapidfuzz_candidate_adapter-adapter-artifact.json",
+      "component_id": "rapidfuzz_candidate_adapter"
+    },
+    {
+      "artifact": "inputs/production_adapter_real/fill-with-real-splink_candidate_adapter-adapter-artifact.json",
+      "component_id": "splink_candidate_adapter"
+    },
+    {
+      "artifact": "inputs/production_adapter_real/fill-with-real-wiki_projection_adapter-adapter-artifact.json",
+      "component_id": "wiki_projection_adapter"
+    }
+  ],
+  "artifact_id": "production_adapter_evidence_packet_v1",
+  "audit_trail_artifact": "inputs/production_adapter_real/fill-with-real-audit-trail.json",
+  "claim_boundary": {
+    "supports_canonical_write_claim": false,
+    "supports_full_product_production_ready_claim": false,
+    "supports_human_reviewed_false_merge_labels_claim": false,
+    "supports_non_synthetic_deployment_claim": false,
+    "supports_permission_probe_claim": false,
+    "supports_production_adapter_paths_claim": false,
+    "supports_raw_access_claim": false,
+    "supports_rollback_smoke_claim": false,
+    "supports_top_tier_scientific_validation_claim": false
+  },
+  "deployment_manifest_artifact": "inputs/production_adapter_real/fill-with-real-deployment-manifest.json",
+  "evidence_kind": "non_synthetic_production_adapter_validation",
+  "human_false_merge_label_artifact": "inputs/production_adapter_real/fill-with-real-human-false-merge-labels.json",
+  "permission_probe_artifact": "inputs/production_adapter_real/fill-with-real-permission-probe.json",
+  "recovered_after_tmp_loss": false,
+  "rollback_smoke_artifact": "inputs/production_adapter_real/fill-with-real-rollback-smoke.json"
+}

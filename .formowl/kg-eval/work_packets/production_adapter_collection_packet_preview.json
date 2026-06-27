@@ -1,0 +1,287 @@
+{
+  "artifact_boundary": {
+    "counts_as_acceptance_gate": false,
+    "creates_audit_events": false,
+    "creates_component_evidence": false,
+    "creates_deployment_manifest": false,
+    "creates_human_label_results": false,
+    "creates_permission_probe_results": false,
+    "creates_rollback_smoke_results": false,
+    "touches_real_evidence_root": false,
+    "writes_assembly_manifest": false,
+    "writes_canonical_packet": false
+  },
+  "audit_collection_plan": {
+    "audit_action_rows": [
+      {
+        "audit_action_name": "deploy_started",
+        "collection_task_id": "collect_audit_00_deploy_started",
+        "expected_control_outcome": "allow",
+        "expected_sequence": 0,
+        "row_sha256": "8d7e698741f0cac14f72d31fca1464bf454c7845c3c2f1b6cdbe2db21fb5bd10"
+      },
+      {
+        "audit_action_name": "migration_applied",
+        "collection_task_id": "collect_audit_01_migration_applied",
+        "expected_control_outcome": "allow",
+        "expected_sequence": 1,
+        "row_sha256": "e96d5a0c4483f1b0a3ef60fdf9f3ab898ef533208a9271bd6342931746d6d95b"
+      },
+      {
+        "audit_action_name": "grant_check_before_content",
+        "collection_task_id": "collect_audit_02_grant_check_before_content",
+        "expected_control_outcome": "allow",
+        "expected_sequence": 2,
+        "row_sha256": "f61d08668eb178175dec7c7f81669ebd53e209e1fb3b03fc3258bc3438e781fb"
+      },
+      {
+        "audit_action_name": "revoked_grant_blocks_content",
+        "collection_task_id": "collect_audit_03_revoked_grant_blocks_content",
+        "expected_control_outcome": "deny",
+        "expected_sequence": 3,
+        "required_guard_review": "explicit_denial_with_reason",
+        "row_sha256": "0c015edef2018b665d7c2e63dc7f83c03db2e95bf9ed699e5f04563e7c1fe02d"
+      },
+      {
+        "audit_action_name": "private_candidate_redacted",
+        "collection_task_id": "collect_audit_04_private_candidate_redacted",
+        "expected_control_outcome": "deny",
+        "expected_sequence": 4,
+        "required_guard_review": "explicit_denial_with_reason",
+        "row_sha256": "2730e076f9519f3a01ee88622718c0b8c4c4588c54916d930f7cad9f2cbe5c2f"
+      },
+      {
+        "audit_action_name": "entity_match_without_grant_denied",
+        "collection_task_id": "collect_audit_05_entity_match_without_grant_denied",
+        "expected_control_outcome": "deny",
+        "expected_sequence": 5,
+        "required_guard_review": "explicit_denial_with_reason",
+        "row_sha256": "733c0a3b8e918ede7cbe67e7282daf19ad77b1292d47e2b34be9b20f71b24f84"
+      },
+      {
+        "audit_action_name": "raw_asset_read_guard_rejected",
+        "collection_task_id": "collect_audit_06_raw_asset_read_guard_rejected",
+        "expected_control_outcome": "deny",
+        "expected_sequence": 6,
+        "required_guard_review": "explicit_denial_with_reason",
+        "row_sha256": "9b8cff90c27e7b2d1dd62a86ed5c9f0254e6dd577ff29d55cd6a5dd8f28d5f58"
+      },
+      {
+        "audit_action_name": "canonical_merge_guard_rejected",
+        "collection_task_id": "collect_audit_07_canonical_merge_guard_rejected",
+        "expected_control_outcome": "deny",
+        "expected_sequence": 7,
+        "required_guard_review": "explicit_denial_with_reason",
+        "row_sha256": "ef82a043bd94992906cbe48cd08934c7bbacb9f1a0b689b47462c708c48bd36d"
+      },
+      {
+        "audit_action_name": "wiki_projection_draft_not_published",
+        "collection_task_id": "collect_audit_08_wiki_projection_draft_not_published",
+        "expected_control_outcome": "allow",
+        "expected_sequence": 8,
+        "required_guard_review": "draft_only_projection",
+        "row_sha256": "85bc3dc2a015c97bf54b34cdc8b437316a20ea510f1c39a9aa9f47c95430e06f"
+      },
+      {
+        "audit_action_name": "rollback_smoke_completed",
+        "collection_task_id": "collect_audit_09_rollback_smoke_completed",
+        "expected_control_outcome": "allow",
+        "expected_sequence": 9,
+        "required_guard_review": "rollback_verified",
+        "row_sha256": "c6742865bdd89519fbbc4d0b84830db1237012e4e5ad8995f2d444804ae95c19"
+      },
+      {
+        "audit_action_name": "deploy_completed",
+        "collection_task_id": "collect_audit_10_deploy_completed",
+        "expected_control_outcome": "allow",
+        "expected_sequence": 10,
+        "row_sha256": "0ceea2af94f5d5c2c9110660734dc46951aeeb0053bf5b912a4356aa055cf0f3"
+      }
+    ],
+    "later_real_packet_requirements": [
+      "audit rows must bind one request, one resource reference, and one policy",
+      "audit rows must preserve the required action order",
+      "deny guards must include denial reasons",
+      "revoked grant audit must bind revoked grant state",
+      "wiki projection must remain draft-only"
+    ],
+    "plan_type": "production_adapter_audit_collection_plan_v1",
+    "required_action_count": 11
+  },
+  "canonical_packet_not_written": "inputs/production_adapter_evidence_packet.json",
+  "component_collection_plan": {
+    "component_rows": [
+      {
+        "collection_task_id": "collect_postgres_metadata_store",
+        "component_key": "postgres_metadata_store",
+        "component_kind": "metadata_store",
+        "minimum_collection_checks": [
+          "capture package or image digest outside this packet",
+          "capture configuration digest outside this packet",
+          "capture policy digest outside this packet",
+          "verify permission filtering before content return",
+          "verify canonical graph writes stay disabled on evidence path",
+          "verify no raw internal endpoint or path appears in public artifacts"
+        ],
+        "row_sha256": "e44673263898a9e55ca9b40a26180f08454e154a7f3be059c38f3925d8aa8d52"
+      },
+      {
+        "collection_task_id": "collect_pgvector_index",
+        "component_key": "pgvector_index",
+        "component_kind": "vector_index",
+        "minimum_collection_checks": [
+          "capture package or image digest outside this packet",
+          "capture configuration digest outside this packet",
+          "capture policy digest outside this packet",
+          "verify permission filtering before content return",
+          "verify canonical graph writes stay disabled on evidence path",
+          "verify no raw internal endpoint or path appears in public artifacts"
+        ],
+        "row_sha256": "49a4ba11a10509243059aebdf65c5304b8de77038a8653101637e2b2614e0a26"
+      },
+      {
+        "collection_task_id": "collect_retrieval_gateway",
+        "component_key": "retrieval_gateway",
+        "component_kind": "access_checked_retrieval",
+        "minimum_collection_checks": [
+          "capture package or image digest outside this packet",
+          "capture configuration digest outside this packet",
+          "capture policy digest outside this packet",
+          "verify permission filtering before content return",
+          "verify canonical graph writes stay disabled on evidence path",
+          "verify no raw internal endpoint or path appears in public artifacts"
+        ],
+        "row_sha256": "7de2f935d914807671454780bec97536cded436fe7bc0abd7d80d8994a5befe0"
+      },
+      {
+        "collection_task_id": "collect_semantic_gateway",
+        "component_key": "semantic_gateway",
+        "component_kind": "mcp_semantic_gateway",
+        "minimum_collection_checks": [
+          "capture package or image digest outside this packet",
+          "capture configuration digest outside this packet",
+          "capture policy digest outside this packet",
+          "verify permission filtering before content return",
+          "verify canonical graph writes stay disabled on evidence path",
+          "verify no raw internal endpoint or path appears in public artifacts"
+        ],
+        "row_sha256": "85f39e5af3e2e29ba2d804993c6545ba13b7a9804b6452f190e587c74bbf9f21"
+      },
+      {
+        "collection_task_id": "collect_rapidfuzz_candidate_adapter",
+        "component_key": "rapidfuzz_candidate_adapter",
+        "component_kind": "candidate_entity_linkage",
+        "minimum_collection_checks": [
+          "capture package or image digest outside this packet",
+          "capture configuration digest outside this packet",
+          "capture policy digest outside this packet",
+          "verify permission filtering before content return",
+          "verify canonical graph writes stay disabled on evidence path",
+          "verify no raw internal endpoint or path appears in public artifacts"
+        ],
+        "row_sha256": "e9051fbdda1c7df742d36a0560627c930be17a2c185229d8d4f4251126fc14e9"
+      },
+      {
+        "collection_task_id": "collect_splink_candidate_adapter",
+        "component_key": "splink_candidate_adapter",
+        "component_kind": "candidate_record_linkage",
+        "minimum_collection_checks": [
+          "capture package or image digest outside this packet",
+          "capture configuration digest outside this packet",
+          "capture policy digest outside this packet",
+          "verify permission filtering before content return",
+          "verify canonical graph writes stay disabled on evidence path",
+          "verify no raw internal endpoint or path appears in public artifacts"
+        ],
+        "row_sha256": "5e086f2482360ac7fbe5101ba156c434528e98ba599d3d791a06deb5999a7b12"
+      },
+      {
+        "collection_task_id": "collect_wiki_projection_adapter",
+        "component_key": "wiki_projection_adapter",
+        "component_kind": "draft_only_projection",
+        "minimum_collection_checks": [
+          "capture package or image digest outside this packet",
+          "capture configuration digest outside this packet",
+          "capture policy digest outside this packet",
+          "verify permission filtering before content return",
+          "verify canonical graph writes stay disabled on evidence path",
+          "verify no raw internal endpoint or path appears in public artifacts"
+        ],
+        "row_sha256": "758b1269913791c5b64848581849c45e08563301a6994b68de0407282c9401da"
+      }
+    ],
+    "later_real_packet_requirements": [
+      "deployment must be human-approved and non-synthetic",
+      "component artifacts must cover every required adapter exactly once",
+      "adapter stack digest must bind every component artifact",
+      "component evidence must not expose raw paths or backend connection strings"
+    ],
+    "plan_type": "production_adapter_component_collection_plan_v1",
+    "required_component_count": 7
+  },
+  "evidence_state": "non_evidence",
+  "forbidden_output_roots": [
+    "inputs/production_adapter_real/",
+    "inputs/test_*",
+    "results/",
+    "templates/"
+  ],
+  "real_evidence_root_not_written": "inputs/production_adapter_real",
+  "review_probe_collection_plan": {
+    "false_merge_review_rows": [
+      {
+        "adapter_key": "rapidfuzz_candidate_adapter",
+        "collection_task_id": "collect_false_merge_review_rapidfuzz_candidate_adapter",
+        "minimum_review_checks": [
+          "collect human reviewer identity outside this packet",
+          "bind candidate-pair digest outside this packet",
+          "bind two source-candidate digests outside this packet",
+          "ensure review is human and not agent-generated"
+        ],
+        "row_sha256": "bfa4ad42d233562f31e5ec4c9a4dd5acafe3177aecbe12d3346fd6e2f58c266a"
+      },
+      {
+        "adapter_key": "splink_candidate_adapter",
+        "collection_task_id": "collect_false_merge_review_splink_candidate_adapter",
+        "minimum_review_checks": [
+          "collect human reviewer identity outside this packet",
+          "bind candidate-pair digest outside this packet",
+          "bind two source-candidate digests outside this packet",
+          "ensure review is human and not agent-generated"
+        ],
+        "row_sha256": "198d0ab92bf6f46ab880ee9aa43664839c464c64c4c79f3e867987441310e773"
+      }
+    ],
+    "later_real_packet_requirements": [
+      "false-merge labels must be human-reviewed for RapidFuzz and Splink adapters",
+      "permission probes must cover every required component",
+      "rollback smoke must be tied to the same deployment evidence"
+    ],
+    "permission_probe_checks": [
+      "revoked grant content denied",
+      "private content not returned",
+      "raw asset access denied",
+      "entity match does not grant access",
+      "canonical merge without review denied",
+      "private leak count remains zero",
+      "raw asset access count remains zero",
+      "entity match access count remains zero",
+      "canonical write count remains zero"
+    ],
+    "plan_type": "production_adapter_review_probe_collection_plan_v1",
+    "rollback_smoke_checks": [
+      "migration rollback verified",
+      "partial failure rollback verified",
+      "audit append-only behavior verified",
+      "idempotent retry verified"
+    ]
+  },
+  "safe_output_root": "work_packets/",
+  "validator_expectation": {
+    "authoritative_validator_must_be_run_separately": true,
+    "this_packet_is_sufficient_for_production_adapter_gate": false
+  },
+  "work_packet_sha256": "71f8d98552807681ab51c53856ed3ea32f6bcabd4854c8156370e06c3f0b47a6",
+  "work_packet_state": "operator_assignment_only",
+  "work_packet_type": "production_adapter_collection_packet_preview_v1"
+}

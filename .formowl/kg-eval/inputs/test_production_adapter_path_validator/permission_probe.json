@@ -1,0 +1,23 @@
+{
+  "artifact_type": "production_adapter_permission_probe_v1",
+  "canonical_merge_without_review_denied": true,
+  "canonical_write_count": 0,
+  "completed": true,
+  "component_ids": [
+    "pgvector_index",
+    "postgres_metadata_store",
+    "rapidfuzz_candidate_adapter",
+    "retrieval_gateway",
+    "semantic_gateway",
+    "splink_candidate_adapter",
+    "wiki_projection_adapter"
+  ],
+  "deployment_id": "deploy_prod_adapter_001",
+  "entity_match_access_count": 0,
+  "entity_match_does_not_grant_access": true,
+  "private_content_not_returned": true,
+  "private_leak_count": 0,
+  "raw_asset_access_count": 0,
+  "raw_asset_access_denied": true,
+  "revoked_grant_content_denied": true
+}

@@ -1,0 +1,342 @@
+{
+  "artifact_id": "kg_total_acceptance_snapshot_recovery_v1",
+  "gates": [
+    {
+      "blockers": [],
+      "claim": "Recent external KG/GraphRAG literature and baseline selection are source-backed and mapped to FormOwl comparison axes without claiming real package execution.",
+      "evidence": {
+        "artifact": "results/external_literature_baseline_protocol_recovery.json",
+        "claim_boundary": {
+          "supports_baseline_selection_rationale_claim": true,
+          "supports_external_recent_literature_comparison_claim": true,
+          "supports_fair_external_baseline_run_claim": false,
+          "supports_human_adjudicated_answer_quality_claim": false,
+          "supports_production_ready_claim": false,
+          "supports_real_package_execution_claim": false,
+          "supports_top_tier_scientific_validation_claim": false
+        },
+        "metrics": {
+          "baseline_count": 3,
+          "comparison_axis_count": 9,
+          "required_baseline_count": 3,
+          "required_source_count": 9,
+          "source_count": 10
+        },
+        "protocol_sha256": "0037b52fd538d14a0673499c85edd702e44039e08efafdc87459edfecefbafd3"
+      },
+      "gate_id": "external_recent_literature_baseline_protocol",
+      "passed": true
+    },
+    {
+      "blockers": [],
+      "claim": "Config artifacts are parsed and content-bound so self-handicapped external baselines cannot pass by hash-only artifact references.",
+      "evidence": {
+        "artifact": "results/external_baseline_coverage_matrix.json",
+        "artifact_id": "external_baseline_coverage_matrix_recovery_v1",
+        "broad_fair_baseline_claim": false,
+        "current_input_missing_keeps_gate_red": true
+      },
+      "gate_id": "fair_baseline_config_artifact_content_binding",
+      "passed": true
+    },
+    {
+      "blockers": [],
+      "claim": "Scoped ontology/type governance is revision-pinned, shape-checked, and review-gated in a deterministic recovery fixture.",
+      "evidence": {
+        "artifact": "results/scoped_ontology_integration_recovery.json",
+        "claim_boundary": {
+          "supports_company_wide_ontology_claim": false,
+          "supports_llm_direct_type_commit_claim": false,
+          "supports_owl_reasoner_claim": false,
+          "supports_production_ready_claim": false,
+          "supports_scoped_ontology_integration_method_claim": true,
+          "supports_top_tier_scientific_validation_claim": false,
+          "supports_unreviewed_cross_scope_type_merge_claim": false
+        },
+        "metrics": {
+          "candidate_type_row_count": 2,
+          "core_type_count": 7,
+          "schema_violation_count": 0,
+          "scoped_extension_type_count": 1,
+          "typed_relation_row_count": 2
+        },
+        "ontology_revision_id": "ontology_rev_workspace_finance_ops_001"
+      },
+      "gate_id": "scoped_ontology_integration_method",
+      "passed": true
+    },
+    {
+      "blockers": [],
+      "claim": "Different-user KG fusion is candidate-only, permissioned, revocation-aware, and conflict-surfacing in a deterministic recovery fixture.",
+      "evidence": {
+        "artifact": "results/user_graph_fusion_recovery.json",
+        "claim_boundary": {
+          "supports_different_user_kg_fusion_method_claim": true,
+          "supports_full_automatic_kg_merge_claim": false,
+          "supports_production_kg_fusion_claim": false,
+          "supports_raw_data_fusion_without_grants_claim": false,
+          "supports_top_tier_scientific_validation_claim": false,
+          "supports_unreviewed_cross_user_merge_claim": false
+        },
+        "metrics": {
+          "canonical_merge_execution_count": 0,
+          "cross_user_edge_leak_count": 0,
+          "distinct_user_count": 2,
+          "fusion_candidate_count": 1,
+          "fusion_conflict_count": 1,
+          "private_atom_leak_count": 0,
+          "user_graph_revision_count": 2
+        }
+      },
+      "gate_id": "different_user_kg_fusion_method",
+      "passed": true
+    },
+    {
+      "blockers": [],
+      "claim": "Human annotation/adjudication protocol controls are structurally validated while real-human completion claims remain false.",
+      "evidence": {
+        "artifact": "results/annotation_protocol_recovery.json",
+        "claim_boundary": {
+          "supports_annotation_protocol_controls_claim": true,
+          "supports_human_adjudication_completed_claim": false,
+          "supports_human_annotation_completed_claim": false,
+          "supports_production_ready_claim": false,
+          "supports_synthetic_label_generation_claim": false,
+          "supports_template_as_human_evidence_claim": false,
+          "supports_top_tier_scientific_validation_claim": false
+        },
+        "metrics": {
+          "adjudication_row_count": 1,
+          "disagreement_count": 1,
+          "distinct_first_pass_reviewer_count": 2,
+          "first_pass_row_count": 4,
+          "manifest_item_count": 2,
+          "protocol_controls_passed": true,
+          "real_human_packet_present": false
+        }
+      },
+      "gate_id": "annotation_protocol_controls_recovery",
+      "passed": true
+    },
+    {
+      "blockers": [],
+      "claim": "Multimodal enterprise validation controls cover spreadsheet, mail, meeting audio, video OCR, business-decision review, and permission probes without claiming real enterprise validation.",
+      "evidence": {
+        "artifact": "results/multimodal_enterprise_recovery.json",
+        "claim_boundary": {
+          "supports_financial_advice_or_autonomous_business_judgment_claim": false,
+          "supports_multimodal_control_fixture_claim": true,
+          "supports_multimodal_human_adjudication_completed_claim": false,
+          "supports_production_ready_claim": false,
+          "supports_real_enterprise_multimodal_claim": false,
+          "supports_top_tier_scientific_validation_claim": false
+        },
+        "metrics": {
+          "business_decision_row_count": 1,
+          "covered_modality_count": 4,
+          "cross_modal_private_leak_count": 0,
+          "human_adjudication_packet_present": false,
+          "real_enterprise_pilot_present": false,
+          "source_artifact_count": 4,
+          "validation_row_count": 4
+        }
+      },
+      "gate_id": "multimodal_enterprise_controls_recovery",
+      "passed": true
+    },
+    {
+      "blockers": [],
+      "claim": "Production adapter control fixture validates required audit controls while production/deployment/human-label claims remain false.",
+      "evidence": {
+        "artifact": "results/production_adapter_recovery.json",
+        "claim_boundary": {
+          "supports_canonical_write_claim": false,
+          "supports_human_reviewed_false_merge_labels_claim": false,
+          "supports_non_synthetic_deployment_claim": false,
+          "supports_production_adapter_control_fixture_claim": true,
+          "supports_production_ready_claim": false,
+          "supports_raw_access_claim": false
+        },
+        "metrics": {
+          "audit_event_count": 8,
+          "human_reviewed_false_merge_labels_present": false,
+          "non_synthetic_deployment_present": false,
+          "required_audit_action_count": 8
+        }
+      },
+      "gate_id": "production_adapter_controls_recovery",
+      "passed": true
+    },
+    {
+      "blockers": [
+        "fair external baseline run packet missing",
+        "real Microsoft GraphRAG/LightRAG/HippoRAG package runs are not present",
+        "human answer-quality adjudication packet is not present",
+        "graph-quality validation packet is not present",
+        "permission leak probe results are not present"
+      ],
+      "claim": "Fair external baseline comparison has real Microsoft GraphRAG/LightRAG/HippoRAG runs, human answer adjudication, graph-quality validation, and permission probes.",
+      "evidence": {
+        "artifact": "results/fair_external_baseline_run_validator.json",
+        "claim_boundary": {
+          "supports_fair_external_baseline_comparison_claim": false,
+          "supports_graph_quality_validation_claim": false,
+          "supports_human_adjudicated_answer_quality_claim": false,
+          "supports_permission_probe_claim": false,
+          "supports_production_ready_claim": false,
+          "supports_real_package_execution_claim": false,
+          "supports_top_tier_scientific_validation_claim": false
+        },
+        "expected_source_lock_sha256": "addba921e9cc4ebc4ded09b26d23a25a29aeba4f0e15e4dacb711f29dcedb2da",
+        "input_packet": "inputs/fair_external_baseline_run_packet.json",
+        "metrics": {
+          "baseline_run_count": 0,
+          "graph_quality_validation_present": false,
+          "human_answer_adjudication_present": false,
+          "permission_probe_count": 0,
+          "required_baseline_count": 3,
+          "run_artifact_content_validation_required": true,
+          "source_lock_bound": false
+        },
+        "packet_sha256": null
+      },
+      "gate_id": "fair_external_baseline_comparison",
+      "passed": false
+    },
+    {
+      "blockers": [
+        "human annotation results packet missing",
+        "two independent first-pass human submissions are not present",
+        "adjudication-open receipt, final adjudication, confusion matrix, and custody receipt are not present"
+      ],
+      "claim": "Real human annotation/adjudication packet has two independent first-pass submissions, final adjudication, confusion matrix, and custody receipt.",
+      "evidence": {
+        "artifact": "results/human_annotation_adjudication_validator.json",
+        "claim_boundary": {
+          "supports_confusion_matrix_claim": false,
+          "supports_custody_receipt_claim": false,
+          "supports_human_adjudication_completed_claim": false,
+          "supports_human_annotation_completed_claim": false,
+          "supports_production_ready_claim": false,
+          "supports_synthetic_label_generation_claim": false,
+          "supports_template_as_human_evidence_claim": false,
+          "supports_top_tier_scientific_validation_claim": false
+        },
+        "input_packet": "inputs/human_annotation_results_v1.json",
+        "metrics": {
+          "adjudication_artifact_present": false,
+          "confusion_matrix_artifact_present": false,
+          "custody_receipt_artifact_present": false,
+          "first_pass_submission_artifact_count": 0,
+          "manifest_artifact_present": false
+        },
+        "packet_sha256": null
+      },
+      "gate_id": "annotation_adjudication_protocol",
+      "passed": false
+    },
+    {
+      "blockers": [
+        "enterprise multimodal validation packet missing",
+        "real enterprise multimodal pilot manifest is not present",
+        "enterprise spreadsheet/mail/meeting/video validation packets are not present",
+        "multimodal human adjudication and cross-modal permission leak probe are not present"
+      ],
+      "claim": "Real enterprise multimodal validation has spreadsheet, mail, meeting audio, and video OCR evidence, human adjudication, business-decision review, and cross-modal permission probes.",
+      "evidence": {
+        "artifact": "results/enterprise_multimodal_validation_validator.json",
+        "claim_boundary": {
+          "supports_business_decision_review_claim": false,
+          "supports_cross_modal_permission_probe_claim": false,
+          "supports_financial_advice_or_autonomous_business_judgment_claim": false,
+          "supports_multimodal_human_adjudication_completed_claim": false,
+          "supports_production_ready_claim": false,
+          "supports_raw_asset_access_claim": false,
+          "supports_real_enterprise_multimodal_claim": false,
+          "supports_top_tier_scientific_validation_claim": false
+        },
+        "input_packet": "inputs/enterprise_multimodal_validation_packet.json",
+        "metrics": {
+          "business_decision_review_present": false,
+          "human_adjudication_present": false,
+          "permission_probe_present": false,
+          "pilot_manifest_present": false,
+          "required_modality_count": 4,
+          "validation_artifact_count": 0
+        },
+        "packet_sha256": null
+      },
+      "gate_id": "multimodal_semantic_validation",
+      "passed": false
+    },
+    {
+      "blockers": [
+        "production adapter evidence packet missing",
+        "non-synthetic production deployment validation is not present",
+        "human-reviewed false-merge labels are not present",
+        "permission probes, rollback smoke, and production audit artifacts are not present"
+      ],
+      "claim": "Production adapter path has non-synthetic deployment validation, human-reviewed false-merge labels, permission probes, audit trail, and rollback smoke evidence.",
+      "evidence": {
+        "artifact": "results/production_adapter_path_validator.json",
+        "claim_boundary": {
+          "supports_canonical_write_claim": false,
+          "supports_full_product_production_ready_claim": false,
+          "supports_human_reviewed_false_merge_labels_claim": false,
+          "supports_non_synthetic_deployment_claim": false,
+          "supports_permission_probe_claim": false,
+          "supports_production_adapter_paths_claim": false,
+          "supports_raw_access_claim": false,
+          "supports_rollback_smoke_claim": false,
+          "supports_top_tier_scientific_validation_claim": false
+        },
+        "input_packet": "inputs/production_adapter_evidence_packet.json",
+        "metrics": {
+          "adapter_artifact_count": 0,
+          "audit_trail_artifact_present": false,
+          "deployment_manifest_present": false,
+          "human_false_merge_label_artifact_present": false,
+          "permission_probe_artifact_present": false,
+          "required_component_count": 7,
+          "rollback_smoke_artifact_present": false
+        },
+        "packet_sha256": null
+      },
+      "gate_id": "production_adapter_paths",
+      "passed": false
+    },
+    {
+      "blockers": [],
+      "claim": "Recovered suite rejects production, top-tier, unreviewed business judgment, unsupervised truth, and cross-user raw fusion claims.",
+      "evidence": {
+        "supports_goal_complete_claim": false,
+        "supports_production_ready_claim": false,
+        "supports_top_tier_scientific_validation_claim": false,
+        "supports_unreviewed_business_judgment_claim": false,
+        "supports_unreviewed_cross_user_merge_claim": false,
+        "supports_unsupervised_company_truth_kg_claim": false
+      },
+      "gate_id": "overclaim_guard",
+      "passed": true
+    }
+  ],
+  "summary": {
+    "failed_gate_count": 4,
+    "failed_gate_ids": [
+      "fair_external_baseline_comparison",
+      "annotation_adjudication_protocol",
+      "multimodal_semantic_validation",
+      "production_adapter_paths"
+    ],
+    "gate_status_sha256": "596eef5f887952b4e4666f7e6b970a9199d8d3148a630cd4491ac53f0faeca1a",
+    "historical_failed_gate_ids_before_tmp_loss": [
+      "fair_external_baseline_comparison",
+      "annotation_adjudication_protocol",
+      "multimodal_semantic_validation",
+      "production_adapter_paths"
+    ],
+    "overall_passed": false,
+    "passed_gate_count": 8
+  },
+  "workspace": "/workspace/.formowl/kg-eval"
+}
