@@ -195,3 +195,20 @@ status in each role's goal file and task completion in
   review-packet attempt was rejected before execution by tenant policy as
   external data disclosure to an untrusted reviewer service. No packet was
   sent and no workaround was attempted.
+- 2026-06-27 current-state re-execution: after the user asked to execute the
+  original agent's latest state, Codex reran the broad KG-eval and main-repo
+  verification in the dev container without local code changes. Refreshed
+  commands: `kg_total_acceptance_suite.py`,
+  `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+  `real_evidence_collection_work_orders.py`. Dev-container KG-eval unittest
+  ran 396 tests OK, and main repo unittest ran 252 tests OK. Main-repo KG
+  research acceptance default remains `passed_with_explicit_limits`; strict
+  mode still fails only on the known `production_adapter_readiness` failed
+  item and `latency_scalability_enterprise_claims` blocked item. Broad
+  KG-eval remains incomplete: `overall_passed=false`, 8 passed gates, and the
+  same 4 failed real-evidence gates
+  (`fair_external_baseline_comparison`,
+  `annotation_adjudication_protocol`,
+  `multimodal_semantic_validation`, and `production_adapter_paths`). Preflight
+  reports `inputs/*_real` roots exist but currently contain zero real or
+  candidate artifacts, and all four canonical input packets are missing.

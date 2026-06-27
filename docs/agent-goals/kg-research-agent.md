@@ -521,3 +521,22 @@ exact command and write scope.
   by tenant policy as external data disclosure to an untrusted reviewer service;
   no packet was sent, no Gemini reviewer ran, and no workaround or alternate
   external channel was attempted.
+- 2026-06-27 current-state re-execution checkpoint: after the user asked to
+  execute the original agent's latest state, the dev-container verification was
+  rerun without local code changes. `kg_total_acceptance_suite.py`,
+  `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+  `real_evidence_collection_work_orders.py` all ran in the dev container.
+  Dev-container KG-eval unittest ran 396 tests OK, and main repo unittest ran
+  252 tests OK. Default main-repo KG research acceptance still reports
+  `passed_with_explicit_limits`; strict mode still exits nonzero only for the
+  known `production_adapter_readiness` failed item and
+  `latency_scalability_enterprise_claims` blocked item, with no unexpected
+  failed or blocked requirement ids. Broad KG-eval remains
+  `overall_passed=false`: the same four real-evidence gates are blocked by
+  missing real artifacts and missing canonical input packets under
+  `inputs/fair_external_baseline_run_packet.json`,
+  `inputs/human_annotation_results_v1.json`,
+  `inputs/enterprise_multimodal_validation_packet.json`, and
+  `inputs/production_adapter_evidence_packet.json`. `inputs/*_real` roots are
+  present but currently contain zero real or candidate artifacts according to
+  preflight. The overall KG goal remains `active`.
