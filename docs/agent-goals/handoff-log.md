@@ -123,3 +123,25 @@ status in each role's goal file and task completion in
   blocker fixes. Antigravity Gemini review is blocked at 0/3 because tenant
   policy rejected both a code/diff bounded packet and a closed-book bounded
   summary through real `agy`; no workaround was attempted.
+- 2026-06-27 production-adapter response-intake progress: added a
+  candidate-only production adapter response intake path and work-order
+  command. The new intake writes only candidate artifacts under
+  `inputs/production_adapter_real/<operator-run-id>` and optional candidate
+  manifests under `work_packets/`, records custody hashes, rejects unsafe
+  payloads/paths/overwrites/symlinks/parent-file collisions and
+  duplicate/missing adapter components, and never writes
+  `inputs/production_adapter_evidence_packet.json`. Dev-container verification
+  passed so far: KG-eval focused 27 OK, KG-eval full 383 OK, main repo 252 OK,
+  changed-file Ruff check and format-check passed, and refreshed reports still
+  show `overall_passed=false` with the same four failed broad gates. GPT/Codex
+  reviewers `Gauss`, `Archimedes`, and `Noether` returned blockers for
+  sandbox/nested output-dir rejection, top-level response field allowlisting,
+  missing-component coverage, and work-order side-effect snapshots; the fixes
+  passed dev-container focused 30 OK, full KG-eval 386 OK, main repo 252 OK,
+  changed-file Ruff check and format-check, and all three reviewers returned
+  `RELEASE_DECISION: AGREE`. Antigravity Gemini review is blocked at 0/3:
+  `agy --version` and `agy models` succeeded, but three bounded read-only
+  review-packet attempts through real `agy` were rejected before execution by
+  tenant policy as external data disclosure to an untrusted reviewer service,
+  even with user authorization. No packet was sent and no workaround was
+  attempted.

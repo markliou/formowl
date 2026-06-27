@@ -42,6 +42,14 @@ ENTERPRISE_RESPONSE_INTAKE_OUTPUT_DIR = "inputs/enterprise_multimodal_real/OPERA
 ENTERPRISE_RESPONSE_INTAKE_MANIFEST_OUTPUT = (
     "work_packets/multimodal_semantic_validation_candidate_manifest.json"
 )
+PRODUCTION_RESPONSE_INTAKE_WORK_PACKET = (
+    "work_packets/production_adapter_collection_packet_preview.json"
+)
+PRODUCTION_RESPONSE_PACKET_PLACEHOLDER = "OPERATOR_PRODUCTION_ADAPTER_RESPONSE_PACKET_JSON"
+PRODUCTION_RESPONSE_INTAKE_OUTPUT_DIR = "inputs/production_adapter_real/OPERATOR_RUN_ID"
+PRODUCTION_RESPONSE_INTAKE_MANIFEST_OUTPUT = (
+    "work_packets/production_adapter_paths_candidate_manifest.json"
+)
 FAIR_RESPONSE_INTAKE_WORK_PACKET = "work_packets/fair_baseline_run_work_packet_preview.json"
 FAIR_RESPONSE_PACKET_PLACEHOLDER = "OPERATOR_FAIR_BASELINE_RESPONSE_PACKET_JSON"
 FAIR_RESPONSE_INTAKE_OUTPUT_DIR = "inputs/fair_baseline_real/OPERATOR_RUN_ID"
@@ -139,6 +147,14 @@ def _common_commands(row: dict[str, Any], gate_config: dict[str, Any]) -> dict[s
             f"--response-packet {ENTERPRISE_RESPONSE_PACKET_PLACEHOLDER} "
             f"--output-dir {ENTERPRISE_RESPONSE_INTAKE_OUTPUT_DIR} "
             f"--assembly-manifest-output {ENTERPRISE_RESPONSE_INTAKE_MANIFEST_OUTPUT}"
+        )
+    if row["gate_id"] == "production_adapter_paths":
+        commands["seal_production_adapter_responses_into_candidate_artifacts"] = (
+            "python3 production_adapter_response_intake.py "
+            f"--work-packet {PRODUCTION_RESPONSE_INTAKE_WORK_PACKET} "
+            f"--response-packet {PRODUCTION_RESPONSE_PACKET_PLACEHOLDER} "
+            f"--output-dir {PRODUCTION_RESPONSE_INTAKE_OUTPUT_DIR} "
+            f"--assembly-manifest-output {PRODUCTION_RESPONSE_INTAKE_MANIFEST_OUTPUT}"
         )
     return commands
 
@@ -298,6 +314,27 @@ def _production_tasks(row: dict[str, Any]) -> dict[str, Any]:
         "required_artifacts": _copy_list(row, "required_artifacts"),
         "required_audit_actions": _copy_list(row, "required_audit_actions"),
         "controls": _copy_list(row, "required_controls"),
+        "response_packet_contract": {
+            "response_packet_type": "production_adapter_response_intake_v1",
+            "response_packet_placeholder": PRODUCTION_RESPONSE_PACKET_PLACEHOLDER,
+            "work_packet_path": PRODUCTION_RESPONSE_INTAKE_WORK_PACKET,
+            "candidate_output_dir": PRODUCTION_RESPONSE_INTAKE_OUTPUT_DIR,
+            "assembly_manifest_output": PRODUCTION_RESPONSE_INTAKE_MANIFEST_OUTPUT,
+            "writes_canonical_packet": False,
+            "canonical_packet_not_written": row["input_packet"],
+            "promotes_evidence": False,
+            "counts_as_acceptance_gate": False,
+            "required_controls": [
+                "operator supplied non-synthetic deployment manifest",
+                "operator supplied component artifacts for every required adapter",
+                "operator supplied human-reviewed false-merge labels for candidate adapters",
+                "operator supplied audit trail with every required action",
+                "operator supplied permission probe artifact",
+                "operator supplied rollback smoke artifact",
+                "candidate packet validates before any manual governance promotion",
+                "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+            ],
+        },
         "per_component_rows": [
             {
                 "component_id": component_id,

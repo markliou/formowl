@@ -417,3 +417,28 @@ model.
   are blocked at 0/3 because tenant policy rejected both the code/diff bounded
   packet and a materially safer closed-book bounded summary through real
   `agy`; no workaround or alternate external channel was attempted.
+- 2026-06-27 production-adapter response-intake checkpoint: candidate-only
+  `production_adapter_response_intake.py` is implemented and wired into
+  `real_evidence_collection_work_orders.py` for `production_adapter_paths`.
+  It seals operator-supplied response JSON into candidate artifacts under
+  `inputs/production_adapter_real/<operator-run-id>`, can write a candidate
+  assembly manifest under `work_packets/`, records response/candidate/artifact
+  and optional manifest custody hashes, rejects unsafe output roots,
+  symlinks, overwrites, parent-file collisions, raw/internal/template payloads,
+  duplicate/missing adapter components, and promotion arguments, and does not
+  write `inputs/production_adapter_evidence_packet.json`. Dev-container
+  verification passed so far: changed-file Ruff check and format-check,
+  focused KG-eval unittest 27 OK, full KG-eval unittest 383 OK, main repo
+  unittest 252 OK, and refreshed broad KG-eval reports. Broad KG-eval remains
+  `overall_passed=false` with 8 passed gates and the same 4 failed
+  real-evidence gates. GPT/Codex reviewer gate for this slice is 3/3 agreed:
+  `Gauss`, `Archimedes`, and `Noether` initially found blockers for sandbox
+  and nested output-dir acceptance, unsupported top-level response fields, a
+  missing required-component regression test, and incomplete work-order side
+  effect snapshots; those blockers were fixed and all three returned
+  `RELEASE_DECISION: AGREE`. Antigravity Gemini reviewer gate is blocked at
+  0/3: `agy --version` and `agy models` succeeded, but three bounded
+  read-only review-packet attempts through real `agy` were rejected before
+  execution by tenant policy as external data disclosure to an untrusted
+  reviewer service, even with user authorization. No packet was sent, no Gemini
+  reviewer ran, and no workaround or alternate external channel was attempted.

@@ -39,6 +39,39 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
+Latest completed local slice, updated 2026-06-27:
+
+- Production adapter response intake is implemented and wired into
+  `real_evidence_collection_work_orders.py` as a candidate-only command for
+  `production_adapter_paths`.
+- `production_adapter_response_intake.py` writes only candidate artifacts under
+  `inputs/production_adapter_real/<operator-run-id>` and optional candidate
+  manifests under `work_packets/`.
+- The intake records response packet, candidate packet, artifact, custody, and
+  optional manifest hashes; rejects unsafe roots, nested default output dirs,
+  sandbox/test paths by default, symlinks, overwrites, parent-file collisions,
+  raw/internal/template payloads, unsupported top-level response fields,
+  duplicate/missing adapter components, and promotion arguments; and never
+  writes `inputs/production_adapter_evidence_packet.json`.
+- Dev-container verification after reviewer fixes passed:
+  - changed-file Ruff check and format-check
+  - focused KG-eval unittest 30 OK
+  - full KG-eval unittest 386 OK
+  - main repo unittest 252 OK
+  - refreshed `kg_total_acceptance_suite.py`,
+    `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+    `real_evidence_collection_work_orders.py`
+- Broad KG-eval remains `overall_passed=false`, with 8 passed gates and the
+  same 4 failed gates. This slice does not make `production_adapter_paths`
+  pass.
+- GPT/Codex reviewers `Gauss`, `Archimedes`, and `Noether` returned
+  `RELEASE_DECISION: AGREE` after blocker fixes.
+- Antigravity Gemini review is blocked at 0/3: `agy --version` and
+  `agy models` succeeded, but three bounded read-only review-packet attempts
+  through real `agy` were rejected before execution by tenant policy as
+  external data disclosure to an untrusted reviewer service, even with user
+  authorization. No packet was sent and no workaround was attempted.
+
 Latest completed hardening stop point, updated 2026-06-26:
 
 - Human annotation response intake is implemented and wired into

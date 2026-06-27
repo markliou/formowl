@@ -46,6 +46,23 @@ def snapshot_files(paths: list[Path]) -> dict[Path, bytes | None]:
     return {path: path.read_bytes() if path.exists() else None for path in paths}
 
 
+def snapshot_tree(root: Path) -> dict[Path, bytes | str]:
+    if not root.exists():
+        return {root: "<missing>"}
+    snapshot: dict[Path, bytes | str] = {root: "<dir>"}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if path.is_symlink():
+            snapshot[relative] = f"<symlink:{path.readlink()}>"
+        elif path.is_file():
+            snapshot[relative] = path.read_bytes()
+        elif path.is_dir():
+            snapshot[relative] = "<dir>"
+        else:
+            snapshot[relative] = "<other>"
+    return snapshot
+
+
 def load_json(path: Path) -> dict:
     loaded = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(loaded, dict)
@@ -471,6 +488,42 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             [row["component_id"] for row in production["operator_tasks"]["per_component_rows"]],
             production_checklist["required_components"],
         )
+        production_response_contract = production["operator_tasks"]["response_packet_contract"]
+        self.assertEqual(
+            production_response_contract["response_packet_type"],
+            "production_adapter_response_intake_v1",
+        )
+        self.assertEqual(
+            production_response_contract["response_packet_placeholder"],
+            work_orders.PRODUCTION_RESPONSE_PACKET_PLACEHOLDER,
+        )
+        self.assertEqual(
+            production_response_contract["work_packet_path"],
+            work_orders.PRODUCTION_RESPONSE_INTAKE_WORK_PACKET,
+        )
+        self.assertEqual(
+            production_response_contract["candidate_output_dir"],
+            work_orders.PRODUCTION_RESPONSE_INTAKE_OUTPUT_DIR,
+        )
+        self.assertEqual(
+            production_response_contract["assembly_manifest_output"],
+            work_orders.PRODUCTION_RESPONSE_INTAKE_MANIFEST_OUTPUT,
+        )
+        self.assertFalse(production_response_contract["writes_canonical_packet"])
+        self.assertEqual(
+            production_response_contract["canonical_packet_not_written"],
+            production["canonical_input_packet"],
+        )
+        self.assertFalse(production_response_contract["promotes_evidence"])
+        self.assertFalse(production_response_contract["counts_as_acceptance_gate"])
+        self.assertIn(
+            "operator supplied component artifacts for every required adapter",
+            production_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+            production_response_contract["required_controls"],
+        )
 
         for gate_id, checklist_row in checklist_by_gate.items():
             order_blob = json.dumps(self._order(report, gate_id), sort_keys=True)
@@ -649,6 +702,49 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertFalse(enterprise["work_order_authority"]["writes_canonical_packet"])
         self.assertFalse(enterprise["work_order_authority"]["counts_as_acceptance_gate"])
 
+    def test_production_work_order_includes_candidate_only_response_intake_command(self) -> None:
+        report = work_orders.build_report()
+        production = self._order(report, "production_adapter_paths")
+
+        command = production["commands"][
+            "seal_production_adapter_responses_into_candidate_artifacts"
+        ]
+
+        self.assertIn("python3 production_adapter_response_intake.py", command)
+        self.assertIn(
+            f"--work-packet {work_orders.PRODUCTION_RESPONSE_INTAKE_WORK_PACKET}",
+            command,
+        )
+        self.assertIn(
+            f"--response-packet {work_orders.PRODUCTION_RESPONSE_PACKET_PLACEHOLDER}",
+            command,
+        )
+        self.assertNotIn("<", command)
+        self.assertNotIn(">", command)
+        self.assertIn(f"--output-dir {work_orders.PRODUCTION_RESPONSE_INTAKE_OUTPUT_DIR}", command)
+        self.assertTrue(
+            work_orders.PRODUCTION_RESPONSE_INTAKE_OUTPUT_DIR.startswith(
+                f"{production['real_artifact_root']}/"
+            )
+        )
+        self.assertNotIn(production["canonical_input_packet"], command)
+        self.assertIn(
+            f"--assembly-manifest-output {work_orders.PRODUCTION_RESPONSE_INTAKE_MANIFEST_OUTPUT}",
+            command,
+        )
+        self.assertTrue(
+            work_orders.PRODUCTION_RESPONSE_INTAKE_MANIFEST_OUTPUT.startswith("work_packets/")
+        )
+        self.assertNotIn(
+            production["real_artifact_root"],
+            work_orders.PRODUCTION_RESPONSE_INTAKE_MANIFEST_OUTPUT,
+        )
+        self.assertNotIn("--promote", command)
+        self.assertFalse(production["work_order_authority"]["accepts_evidence"])
+        self.assertFalse(production["work_order_authority"]["promotes_evidence"])
+        self.assertFalse(production["work_order_authority"]["writes_canonical_packet"])
+        self.assertFalse(production["work_order_authority"]["counts_as_acceptance_gate"])
+
     def test_cli_does_not_accept_evidence_or_promotion_arguments(self) -> None:
         before = work_orders.OUTPUT_PATH.read_bytes() if work_orders.OUTPUT_PATH.exists() else None
         protected_paths = [
@@ -722,6 +818,8 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             *self.template_paths,
         ]
         protected_before = snapshot_files(protected_paths)
+        work_orders_dir_before = snapshot_tree(work_orders.ROOT / "work_orders")
+        work_packets_dir_before = snapshot_tree(work_orders.ROOT / "work_packets")
         roots_before = {
             gate_id: sorted(
                 path.relative_to(work_orders.ROOT) for path in gate["real_root"].rglob("*")
@@ -741,6 +839,8 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertEqual(output["artifact_id"], "kg_real_evidence_collection_work_orders_v1")
         self.assertEqual(roots_after, roots_before)
         self.assertEqual(snapshot_files(protected_paths), protected_before)
+        self.assertEqual(snapshot_tree(work_orders.ROOT / "work_orders"), work_orders_dir_before)
+        self.assertEqual(snapshot_tree(work_orders.ROOT / "work_packets"), work_packets_dir_before)
         self.assertNotEqual(work_orders.OUTPUT_PATH.read_bytes(), b"")
 
 

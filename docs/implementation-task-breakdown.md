@@ -1142,6 +1142,28 @@ These groups can be split across multiple agents after Slice 1 is stable.
     after blocker fixes. Antigravity Gemini reviewer gate is blocked at 0/3 by
     tenant policy rejection of both code/diff and closed-book bounded `agy`
     packets; no external-channel workaround was attempted.
+  - 2026-06-27 production-adapter response-intake checkpoint:
+    candidate-only intake is implemented for `production_adapter_paths` and
+    wired into the collection work orders. It can seal operator-supplied
+    production-adapter response JSON into candidate artifacts under
+    `inputs/production_adapter_real/<operator-run-id>` and optional candidate
+    manifests under `work_packets/`, records response/candidate/artifact and
+    manifest custody hashes, rejects unsafe paths, symlinks, overwrites,
+    parent-file collisions, raw/internal/template payloads, duplicate/missing
+    adapter components, and promotion arguments, and never writes
+    `inputs/production_adapter_evidence_packet.json`. Dev-container
+    verification passed so far: changed-file Ruff check and format-check,
+    focused KG-eval unittest 27 OK, full KG-eval unittest 383 OK, main repo
+    unittest 252 OK, and refreshed broad KG-eval reports still show
+    `overall_passed=false`, 8 passed gates, and 4 failed gates. GPT/Codex
+    reviewer gate is 3/3 agreed after fixes for sandbox/nested output-dir
+    rejection, top-level response field allowlisting, missing-component test
+    coverage, and work-order side-effect snapshots. Antigravity Gemini review
+    is blocked at 0/3 because tenant policy rejected three bounded
+    read-only `agy` review-packet attempts before execution as external
+    data disclosure to an untrusted reviewer service; no packet was sent and
+    no workaround was attempted. Do not check this broad objective complete
+    from this candidate-only intake slice.
 
 ### Real Project and Wiki Integrations
 
