@@ -65,6 +65,10 @@ Validate the operator-filled submission manifest before intake:
 python3 real_evidence_submission_manifest.py --manifest work_packets/OPERATOR_FILLED_SUBMISSION_MANIFEST.json
 ```
 
+Do not pass generated `*_candidate_manifest.json` files or intake-plan
+JSON files back into `--manifest`; those are downstream non-evidence
+outputs, not operator-filled submission manifests.
+
 Optionally emit a non-evidence intake execution plan from the validated manifest:
 
 ```sh

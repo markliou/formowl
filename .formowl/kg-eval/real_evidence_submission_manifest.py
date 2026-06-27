@@ -574,10 +574,15 @@ def safe_manifest_input(path_value: object) -> Path:
         raise ManifestError("; ".join(blockers))
     if path.suffix != ".json":
         blockers.append("manifest input must be a JSON file")
+    lowered_name = path.name.lower()
     if path.name.endswith(".template.json") or path == DEFAULT_TEMPLATE_OUTPUT.relative_to(ROOT):
         blockers.append("manifest input must be an operator-filled manifest, not a template")
     if path.name.endswith("_preview.json"):
         blockers.append("manifest input must not use tracked preview-packet naming")
+    if lowered_name.endswith("_candidate_manifest.json"):
+        blockers.append("manifest input must not use generated candidate-manifest naming")
+    if lowered_name.endswith("_intake_plan.json"):
+        blockers.append("manifest input must not use generated intake-plan naming")
     if blockers:
         raise ManifestError("; ".join(blockers))
     return ROOT / path

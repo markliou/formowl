@@ -57,6 +57,8 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
         self.assertIn("real_evidence_submission_manifest.py --manifest", text)
         self.assertIn("--emit-intake-plan", text)
         self.assertIn("work_packets/OPERATOR_INTAKE_PLAN.json", text)
+        self.assertIn("Do not pass generated `*_candidate_manifest.json` files", text)
+        self.assertIn("not operator-filled submission manifests", text)
         self.assertIn(
             "work_packets/remaining_real_evidence_submission_manifest.template.json",
             text,

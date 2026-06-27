@@ -239,6 +239,8 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             "work_packets/../work_packets/operator_manifest.json",
             "work_packets/./operator_manifest.json",
             "work_packets/operator_submission_preview.json",
+            "work_packets/fair_external_baseline_comparison_candidate_manifest.json",
+            "work_packets/OPERATOR_INTAKE_PLAN.json",
             "work_packets/remaining_real_evidence_submission_manifest.template.json",
             "work_packets/templates/operator_manifest.json",
             "work_packets/operator_manifest.txt",

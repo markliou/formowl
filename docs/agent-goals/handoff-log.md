@@ -424,3 +424,18 @@ status in each role's goal file and task completion in
   strict main KG acceptance still exits nonzero only for known limits. This was
   format-only cleanup and does not change broad KG acceptance:
   `overall_passed=false` with the same four failed real-evidence gates.
+- Operator submission-manifest input hardening: `--manifest` now rejects
+  generated `*_candidate_manifest.json` and `*_intake_plan.json` paths so
+  downstream non-evidence outputs cannot be mistaken for operator-filled
+  submission manifests. The operator guide documents this boundary, and tests
+  cover the rejected names and guide warning. This does not accept evidence,
+  write candidate artifacts, promote canonical packets, or change acceptance
+  state. Verification passed: host focused submission/guide unittest 24 OK,
+  dev-container focused submission/guide unittest 24 OK, guide/template
+  checks, full KG-eval unittest 421 OK, main repo unittest 252 OK, full Ruff
+  check and format-check, refreshed broad reports, and default main KG
+  acceptance `passed_with_explicit_limits`; strict still exits nonzero only
+  for known limits. Broad KG-eval remains `overall_passed=false` with the same
+  four failed real-evidence gates. GPT/Codex reviewers `Dirac`, `Zeno`, and
+  `Hypatia` agreed; Hypatia re-reviewed the final test-only assertion with
+  `RELEASE_DECISION: AGREE`.

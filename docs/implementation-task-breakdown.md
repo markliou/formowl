@@ -1351,6 +1351,25 @@ These groups can be split across multiple agents after Slice 1 is stable.
     re-enables it after policy, platform, or MCP configuration changes. This
     policy checkpoint does not change broad KG-eval acceptance; the item stays
     unchecked with the same four failed real-evidence gates.
+  - 2026-06-28 operator submission-manifest input hardening checkpoint:
+    `real_evidence_submission_manifest.py --manifest` now rejects generated
+    `*_candidate_manifest.json` and `*_intake_plan.json` files so downstream
+    non-evidence outputs cannot be passed back as operator-filled submission
+    manifests. The tracked operator guide documents this boundary, and focused
+    tests cover the rejected names and guide warning. This slice writes no
+    candidate artifacts, promotes no evidence, writes no canonical packets,
+    and does not count as an acceptance gate. Verification passed: host
+    focused submission/guide unittest 24 OK; dev-container focused
+    submission/guide unittest 24 OK; guide/template checks; full KG-eval
+    unittest 421 OK; main repo unittest 252 OK; full Ruff check and
+    format-check; refreshed broad reports; and default main KG acceptance
+    `passed_with_explicit_limits`. Strict main KG acceptance still exits
+    nonzero only for known limits. Broad KG-eval remains
+    `overall_passed=false`, 8 passed gates, and the same four failed broad
+    real-evidence gates, so this work-board item remains unchecked.
+    GPT/Codex reviewers `Dirac`, `Zeno`, and `Hypatia` agreed; Hypatia's
+    guide-warning assertion suggestion was implemented and re-reviewed with
+    final `AGREE`.
 
 ### Real Project and Wiki Integrations
 

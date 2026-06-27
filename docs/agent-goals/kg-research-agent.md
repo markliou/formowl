@@ -742,3 +742,24 @@ Reviewer cost-control rules:
   no evidence packets, wrote no real artifacts, and changed no acceptance gate:
   broad KG-eval remains `overall_passed=false` with the same four failed
   real-evidence gates.
+- 2026-06-28 operator submission-manifest input hardening checkpoint:
+  `real_evidence_submission_manifest.py --manifest` now rejects generated
+  `*_candidate_manifest.json` and `*_intake_plan.json` files so downstream
+  non-evidence outputs cannot be fed back as operator-filled submission
+  manifests. The tracked operator guide documents that boundary, and focused
+  tests cover both rejected names plus the guide warning. This slice reads no
+  response packet contents, writes no candidate artifacts, promotes no
+  evidence, writes no canonical packets, and counts as no acceptance gate.
+  Verification passed: host focused submission/guide unittest 24 OK,
+  dev-container focused submission/guide unittest 24 OK, guide `--check`,
+  submission template `--check-template`, full KG-eval unittest 421 OK, main
+  repo unittest 252 OK, full Ruff check and format-check, refreshed broad
+  reports, and default main KG acceptance `passed_with_explicit_limits`.
+  Strict main KG acceptance still exits nonzero only for known limits. Broad
+  KG-eval remains incomplete with `overall_passed=false`, 8 passed gates, and
+  the same four failed real-evidence gates; objective audit remains
+  `objective_complete=false` with 5 proved and 4 incomplete requirements; all
+  four real roots have no files and the four canonical broad packets remain
+  absent. GPT/Codex reviewers `Dirac`, `Zeno`, and `Hypatia` returned
+  `RELEASE_DECISION: AGREE`; Hypatia's non-blocking guide-warning assertion
+  suggestion was implemented and re-reviewed with final `AGREE`.

@@ -87,6 +87,40 @@ Current execution checkpoint, updated 2026-06-28:
 
 Latest local implementation slice, updated 2026-06-28:
 
+- Operator submission-manifest input hardening now rejects generated
+  `*_candidate_manifest.json` and `*_intake_plan.json` files as `--manifest`
+  inputs. Those files are downstream non-evidence outputs and must not be fed
+  back as operator-filled submission manifests.
+- The tracked operator guide now warns operators not to pass candidate
+  manifests or intake plans to `--manifest`.
+- Focused tests cover both rejected names and assert the guide warning stays
+  present.
+- This slice reads no response packet contents, writes no candidate artifacts,
+  promotes no evidence, writes no canonical packets, and counts as no
+  acceptance gate.
+- Verification passed:
+  - host focused submission/guide unittest 24 OK
+  - dev-container focused submission/guide unittest 24 OK
+  - dev-container guide `--check`
+  - dev-container submission template `--check-template`
+  - dev-container full KG-eval unittest 421 OK
+  - dev-container main repo unittest 252 OK
+  - dev-container full Ruff check and format-check
+  - refreshed broad KG-eval reports
+  - default main KG acceptance `passed_with_explicit_limits`
+  - strict main KG acceptance still exits nonzero only for known limits:
+    `production_adapter_readiness` and `latency_scalability_enterprise_claims`
+- Broad KG-eval remains incomplete: `overall_passed=false`, 8 passed gates,
+  and the same four failed real-evidence gates. Objective audit remains
+  `objective_complete=false`, with 5 proved and 4 incomplete requirements.
+  All four real roots still have no files, and the four canonical broad
+  packets remain absent.
+- GPT/Codex reviewers `Dirac`, `Zeno`, and `Hypatia` returned
+  `RELEASE_DECISION: AGREE`. Hypatia's non-blocking guide-warning assertion
+  suggestion was implemented and re-reviewed with final `AGREE`.
+
+Previous local implementation slice, updated 2026-06-28:
+
 - Follow-up format cleanup removed the pre-existing full Ruff format drift in
   33 Python/test/script files. This was a mechanical formatting cleanup only:
   it did not create evidence packets, did not write real artifacts, and did
