@@ -39,6 +39,10 @@ submission manifest template with the operator response-packet paths,
 operator run ids, candidate output dirs, and work-packet manifest
 outputs. Put each response packet directly under the matching ignored
 `inputs/*_real/<operator_run_id>/operator_response_packet.json` path.
+Operator-filled submission manifests and generated candidate manifests
+under `work_packets/` are intentionally ignored by Git; keep the
+tracked template, preview packets, and this guide as the portable
+non-evidence handoff.
 The preflight validates path and command contracts only; it does not
 read response packet contents, write candidate artifacts, promote
 evidence, or write canonical packets.

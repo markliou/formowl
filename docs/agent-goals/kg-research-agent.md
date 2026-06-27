@@ -606,3 +606,30 @@ exact command and write scope.
   channel was attempted. Codex/GPT reviewers `Dalton`, `Galileo`, `Volta`, and
   `Feynman` returned `RELEASE_DECISION: AGREE`; Dalton's non-blocking
   template-output narrowing suggestion was implemented with a regression test.
+- 2026-06-28 submission-manifest CLI and work-packet tracking hardening
+  checkpoint: `real_evidence_submission_manifest.py --manifest` now validates
+  the operator-filled manifest path before reading it. The path must be a safe
+  repo-relative JSON file under `work_packets/`; templates, tracked
+  preview-packet naming, absolute/raw/dot-segment paths, non-work-packet
+  paths, and symlink components are rejected. `.gitignore` no longer
+  re-includes arbitrary `work_packets/*.json` or `*_preview.json`; only the
+  four fixed preview packets, the tracked submission template, and the tracked
+  operator guide remain portable. The operator guide now states that
+  operator-filled manifests and generated candidate manifests under
+  `work_packets/` are intentionally ignored. This slice reads no response
+  packet contents, writes no candidate artifacts, promotes no evidence, writes
+  no canonical input packets, and does not count as an acceptance gate.
+  Dev-container verification passed: submission template `--check-template`,
+  operator guide `--check`, focused submission/guide unittest 20 OK, full
+  KG-eval unittest 416 OK, main repo unittest 252 OK, changed-file Ruff check
+  and format check, refreshed broad reports, and default main KG acceptance
+  `passed_with_explicit_limits`. Broad KG-eval remains `overall_passed=false`,
+  8 passed gates, and the same four failed broad real-evidence gates;
+  `inputs/*_real` has no files and the four canonical broad packets remain
+  absent. GPT/Codex reviewers `Godel`, `Gibbs`, and `Ohm` returned
+  `RELEASE_DECISION: AGREE` after blockers for dot-segment normalization and
+  broad `*_preview.json` tracking were fixed. Antigravity bounded write
+  delegation was attempted with `.formowl/kg-eval` as the write scope but was
+  rejected before execution by tenant policy as private repository disclosure
+  to an untrusted external Antigravity service; no packet was sent and no
+  workaround or alternate external channel was attempted.

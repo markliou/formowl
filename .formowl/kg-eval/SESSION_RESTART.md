@@ -41,6 +41,44 @@ This snapshot supersedes older "latest work" notes below when they conflict.
 
 Latest completed local slice, updated 2026-06-27:
 
+- Submission-manifest CLI/work-packet tracking hardening completed on
+  2026-06-28.
+- `real_evidence_submission_manifest.py --manifest` validates the
+  operator-filled manifest path before reading it. Accepted manifests must be
+  safe repo-relative JSON files under `work_packets/`; templates, tracked
+  preview-packet naming, absolute/raw/dot-segment paths, non-work-packet
+  paths, and symlink components are rejected.
+- `.gitignore` ignores arbitrary operator-generated `work_packets/*.json`
+  outputs and only re-includes the four fixed preview packets, the tracked
+  submission template, and the tracked operator guide.
+- The operator guide states that operator-filled submission manifests and
+  generated candidate manifests under `work_packets/` are intentionally
+  ignored.
+- This slice reads no response packet contents, writes no candidate artifacts,
+  promotes no evidence, writes no canonical packets, and does not count as an
+  acceptance gate.
+- Dev-container verification passed:
+  - submission template `--check-template`
+  - operator guide `--check`
+  - focused submission/guide unittest 20 OK
+  - full KG-eval unittest 416 OK
+  - main repo unittest 252 OK
+  - changed-file Ruff check and format check
+  - refreshed broad KG-eval reports
+  - main KG acceptance unchanged: default `passed_with_explicit_limits`
+- Broad KG-eval remains `overall_passed=false`, with 8 passed gates and the
+  same four failed real-evidence gates. `inputs/*_real` has no files and the
+  four canonical broad packets remain absent.
+- GPT/Codex reviewers `Godel`, `Gibbs`, and `Ohm` returned
+  `RELEASE_DECISION: AGREE` after blockers for dot-segment normalization and
+  broad `*_preview.json` tracking were fixed.
+- Antigravity bounded write delegation was attempted with `.formowl/kg-eval`
+  as the write scope, but tenant policy rejected it before execution as
+  private repository disclosure to an untrusted external Antigravity service.
+  No packet was sent and no workaround was attempted.
+
+Previous completed local slice, updated 2026-06-27:
+
 - A tracked operator submission-manifest preflight now exists at
   `real_evidence_submission_manifest.py`.
 - The tracked non-evidence template is

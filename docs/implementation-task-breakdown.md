@@ -1247,6 +1247,35 @@ These groups can be split across multiple agents after Slice 1 is stable.
     Codex/GPT reviewers `Dalton`, `Galileo`, `Volta`, and `Feynman` returned
     `RELEASE_DECISION: AGREE`; Dalton's non-blocking template-output narrowing
     suggestion was implemented with a regression test.
+  - 2026-06-28 submission-manifest CLI and work-packet tracking hardening
+    checkpoint: `real_evidence_submission_manifest.py --manifest` now
+    validates the operator manifest path before reading it. Operator-filled
+    manifests must be safe repo-relative JSON files under `work_packets/`, may
+    not be templates or tracked preview-packet names, and raw schemes,
+    backslashes, absolute paths, empty/dot path segments, non-work-packet
+    paths, and symlink components are rejected. `.gitignore` now ignores
+    arbitrary operator-generated `work_packets/*.json` outputs and only
+    re-includes the four fixed preview packets, the tracked submission
+    template, and the tracked operator guide, so candidate manifests and
+    operator-filled manifests are not accidentally made portable evidence.
+    The guide documents that operator-filled manifests and generated candidate
+    manifests under `work_packets/` are intentionally ignored. This slice
+    reads no response packet contents, writes no candidate artifacts, promotes
+    no evidence, writes no canonical packets, and does not count as an
+    acceptance gate. Dev-container verification passed: submission template
+    `--check-template`, operator guide `--check`, focused submission/guide
+    unittest 20 OK, full KG-eval unittest 416 OK, main repo unittest 252 OK,
+    changed-file Ruff check and format check, refreshed broad reports, and
+    default main KG acceptance `passed_with_explicit_limits`. Broad KG-eval
+    remains `overall_passed=false`, 8 passed gates, and the same four failed
+    broad real-evidence gates; `inputs/*_real` has no files and the four
+    canonical broad packets remain absent. GPT/Codex reviewers `Godel`,
+    `Gibbs`, and `Ohm` returned `RELEASE_DECISION: AGREE` after blockers for
+    dot-segment normalization and broad `*_preview.json` tracking were fixed.
+    Antigravity write delegation was attempted with a bounded `.formowl/kg-eval`
+    scope but rejected before execution by tenant policy as private repository
+    disclosure to an untrusted external Antigravity service; no packet was
+    sent and no workaround was attempted.
 
 ### Real Project and Wiki Integrations
 

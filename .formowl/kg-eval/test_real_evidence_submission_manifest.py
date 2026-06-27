@@ -11,6 +11,7 @@ import real_evidence_submission_manifest as submission_manifest
 
 
 ROOT = submission_manifest.ROOT
+REPO_ROOT = ROOT.parents[1]
 TEMPLATE_PATH = submission_manifest.DEFAULT_TEMPLATE_OUTPUT
 
 
@@ -35,6 +36,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             for rel_path in submission_manifest.CANONICAL_INPUT_PACKETS
         }
         self.response_paths = []
+        self.created_manifest_paths: list[Path] = []
         for expected in submission_manifest.EXPECTED_SUBMISSIONS:
             run_id = self.operator_run_id(expected)
             path = ROOT / expected.response_packet_for(run_id)
@@ -50,6 +52,9 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             )
 
     def tearDown(self) -> None:
+        for path in self.created_manifest_paths:
+            if path.exists() or path.is_symlink():
+                path.unlink()
         for path in self.response_paths:
             if path.exists() or path.is_symlink():
                 path.unlink()
@@ -96,6 +101,16 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
                 for expected in submission_manifest.EXPECTED_SUBMISSIONS
             ],
         }
+
+    def write_operator_manifest(
+        self, name: str = "operatorpreflight_unitcase_manifest.json"
+    ) -> Path:
+        path = ROOT / "work_packets" / name
+        if path.exists() or path.is_symlink():
+            path.unlink()
+        write_json(path, self.valid_manifest())
+        self.created_manifest_paths.append(path)
+        return path
 
     def test_valid_manifest_returns_candidate_only_intake_commands(self) -> None:
         report = submission_manifest.validate_manifest(self.valid_manifest())
@@ -150,6 +165,74 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             "tracked submission manifest template path",
         ):
             submission_manifest.safe_template_output("work_packets/operator_manifest.json")
+
+    def test_cli_manifest_input_is_restricted_to_safe_operator_work_packet(self) -> None:
+        manifest_path = self.write_operator_manifest()
+
+        self.assertEqual(
+            submission_manifest.safe_manifest_input(str(manifest_path.relative_to(ROOT))),
+            manifest_path,
+        )
+
+        rejected_paths = [
+            "/tmp/operator_manifest.json",
+            "./work_packets/operator_manifest.json",
+            "results/operator_manifest.json",
+            "inputs/operator_manifest.json",
+            "work_packets/../work_packets/operator_manifest.json",
+            "work_packets/./operator_manifest.json",
+            "work_packets/operator_submission_preview.json",
+            "work_packets/remaining_real_evidence_submission_manifest.template.json",
+            "work_packets/templates/operator_manifest.json",
+            "work_packets/operator_manifest.txt",
+        ]
+        for rejected in rejected_paths:
+            with self.subTest(rejected=rejected):
+                with self.assertRaises(submission_manifest.ManifestError):
+                    submission_manifest.safe_manifest_input(rejected)
+
+    def test_cli_manifest_input_rejects_symlinked_operator_manifest(self) -> None:
+        target = self.write_operator_manifest("operatorpreflight_unitcase_target.json")
+        symlink_path = ROOT / "work_packets" / "operatorpreflight_unitcase_symlink.json"
+        if symlink_path.exists() or symlink_path.is_symlink():
+            symlink_path.unlink()
+        symlink_path.symlink_to(target.name)
+        self.created_manifest_paths.append(symlink_path)
+
+        with self.assertRaisesRegex(submission_manifest.ManifestError, "symlink components"):
+            submission_manifest.safe_manifest_input(str(symlink_path.relative_to(ROOT)))
+
+    def test_work_packet_gitignore_keeps_operator_outputs_untracked(self) -> None:
+        ignore_lines = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+
+        self.assertIn(".formowl/kg-eval/work_packets/*", ignore_lines)
+        self.assertNotIn("!.formowl/kg-eval/work_packets/*.json", ignore_lines)
+        self.assertNotIn("!.formowl/kg-eval/work_packets/*.md", ignore_lines)
+        self.assertNotIn("!.formowl/kg-eval/work_packets/*_preview.json", ignore_lines)
+        self.assertIn(
+            "!.formowl/kg-eval/work_packets/fair_baseline_run_work_packet_preview.json",
+            ignore_lines,
+        )
+        self.assertIn(
+            "!.formowl/kg-eval/work_packets/human_annotation_work_packet_preview.json",
+            ignore_lines,
+        )
+        self.assertIn(
+            "!.formowl/kg-eval/work_packets/enterprise_multimodal_collection_packet_preview.json",
+            ignore_lines,
+        )
+        self.assertIn(
+            "!.formowl/kg-eval/work_packets/production_adapter_collection_packet_preview.json",
+            ignore_lines,
+        )
+        self.assertIn(
+            "!.formowl/kg-eval/work_packets/remaining_real_evidence_submission_manifest.template.json",
+            ignore_lines,
+        )
+        self.assertIn(
+            "!.formowl/kg-eval/work_packets/remaining_real_evidence_operator_guide.md",
+            ignore_lines,
+        )
 
     def test_manifest_requires_exact_remaining_gate_order_and_types(self) -> None:
         payload = self.valid_manifest()

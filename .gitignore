@@ -19,8 +19,12 @@
 !.formowl/kg-eval/work_orders/*.json
 !.formowl/kg-eval/work_packets/
 .formowl/kg-eval/work_packets/*
-!.formowl/kg-eval/work_packets/*.json
-!.formowl/kg-eval/work_packets/*.md
+!.formowl/kg-eval/work_packets/fair_baseline_run_work_packet_preview.json
+!.formowl/kg-eval/work_packets/human_annotation_work_packet_preview.json
+!.formowl/kg-eval/work_packets/enterprise_multimodal_collection_packet_preview.json
+!.formowl/kg-eval/work_packets/production_adapter_collection_packet_preview.json
+!.formowl/kg-eval/work_packets/remaining_real_evidence_submission_manifest.template.json
+!.formowl/kg-eval/work_packets/remaining_real_evidence_operator_guide.md
 .formowl/kg-eval/inputs/*_real/
 .formowl/kg-eval/inputs/*_real/**
 .formowl/kg-eval/inputs/fair_external_baseline_run_packet.json

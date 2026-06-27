@@ -268,3 +268,34 @@ status in each role's goal file and task completion in
   attempted. Codex/GPT reviewers `Dalton`, `Galileo`, `Volta`, and `Feynman`
   returned `RELEASE_DECISION: AGREE`; Dalton's non-blocking template-output
   narrowing suggestion was implemented with a regression test.
+
+## 2026-06-28
+
+- Submission-manifest CLI/work-packet tracking hardening: `--manifest` now
+  validates the operator-filled manifest path before reading it and accepts
+  only safe repo-relative JSON files under `work_packets/`; templates,
+  tracked preview-packet names, absolute/raw/dot-segment paths,
+  non-work-packet paths, and symlink components are rejected. `.gitignore` now
+  ignores arbitrary operator-generated `work_packets/*.json` outputs and only
+  re-includes the four fixed preview packets, the tracked submission template,
+  and the tracked operator guide. The guide states that operator-filled
+  manifests and generated candidate manifests under `work_packets/` are
+  intentionally ignored. This is operator-flow hardening only: it reads no
+  response contents, writes no candidate artifacts, promotes no evidence,
+  writes no canonical packets, and does not count as an acceptance gate.
+  Dev-container verification passed: submission template check, guide check,
+  focused submission/guide unittest 20 OK, full KG-eval unittest 416 OK, main
+  repo unittest 252 OK, changed-file Ruff check and format check, refreshed
+  broad reports, and default main KG acceptance
+  `passed_with_explicit_limits`. Broad KG-eval remains incomplete:
+  `overall_passed=false`, 8 passed gates, and 4 failed gates
+  (`fair_external_baseline_comparison`,
+  `annotation_adjudication_protocol`,
+  `multimodal_semantic_validation`, and `production_adapter_paths`);
+  `inputs/*_real` contains no files and the four canonical broad packets are
+  absent. GPT/Codex reviewers `Godel`, `Gibbs`, and `Ohm` agreed after
+  blockers for dot-segment normalization and broad `*_preview.json` tracking
+  were fixed. A bounded `agy` write-delegation attempt for `.formowl/kg-eval`
+  was rejected before execution by tenant policy as private repository
+  disclosure to an untrusted external Antigravity service; no packet was sent
+  and no workaround was attempted.

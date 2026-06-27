@@ -205,6 +205,9 @@ def _safe_relative_path(value: object, field_name: str) -> tuple[Path | None, li
         return None, [f"{field_name} must be a non-empty string"]
     if _forbidden_marker(value):
         blockers.append(f"{field_name} must be a safe repo-relative path")
+    raw_parts = tuple(value.split("/"))
+    if any(part in {"", ".", ".."} for part in raw_parts):
+        blockers.append(f"{field_name} must not use empty or dot path segments")
     path = Path(value)
     if path.is_absolute() or "." in path.parts or ".." in path.parts:
         blockers.append(f"{field_name} must not be absolute or use dot segments")
@@ -469,6 +472,21 @@ def safe_template_output(path_value: str) -> Path:
     return ROOT / path
 
 
+def safe_manifest_input(path_value: object) -> Path:
+    path, blockers = _safe_work_packets_path(path_value, "manifest input")
+    if path is None:
+        raise ManifestError("; ".join(blockers))
+    if path.suffix != ".json":
+        blockers.append("manifest input must be a JSON file")
+    if path.name.endswith(".template.json") or path == DEFAULT_TEMPLATE_OUTPUT.relative_to(ROOT):
+        blockers.append("manifest input must be an operator-filled manifest, not a template")
+    if path.name.endswith("_preview.json"):
+        blockers.append("manifest input must not use tracked preview-packet naming")
+    if blockers:
+        raise ManifestError("; ".join(blockers))
+    return ROOT / path
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", help="operator submission manifest JSON to validate")
@@ -546,8 +564,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if not args.manifest:
         raise ManifestError("either --manifest, --emit-template, or --check-template is required")
+    manifest_path = safe_manifest_input(args.manifest)
     report = validate_manifest(
-        load_json_file(Path(args.manifest)),
+        load_json_file(manifest_path),
         require_existing_response_packets=not args.no_require_existing_response_packets,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
