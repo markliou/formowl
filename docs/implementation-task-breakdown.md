@@ -1468,6 +1468,21 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `Heisenberg`. All three suggested direct hardlink coverage for emitted
     candidate manifests; the test was added and `Einstein` re-reviewed the
     final delta with `RELEASE_DECISION: AGREE`.
+  - 2026-06-28 intake-plan output path-hardening checkpoint:
+    `real_evidence_submission_manifest.py --emit-intake-plan` now rejects
+    nested `work_packets/...` outputs; intake plans must be safe direct
+    children of `work_packets/`, matching the ignored operator work-packet
+    surface used by candidate-validation reports. Focused regression coverage
+    was added. Verification passed: host focused submission-manifest unittest
+    40 OK; dev-container focused submission-manifest unittest 40 OK; full
+    KG-eval unittest 450 OK; main repo unittest 252 OK; refreshed broad
+    reports; guide/template checks; full Ruff check/format-check; default KG
+    acceptance `passed_with_explicit_limits`; strict KG acceptance exits 1
+    only for known limits. Broad KG-eval remains `overall_passed=false` with
+    the same four failed real-evidence gates, so this work-board item remains
+    unchecked. Reviewer gate passed 3/3: `Anscombe` agreed on engineering path
+    safety, `Epicurus` agreed on governance and non-evidence boundaries, and
+    `Ptolemy` agreed on durable docs/status honesty.
 
 ### Real Project and Wiki Integrations
 

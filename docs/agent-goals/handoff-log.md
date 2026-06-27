@@ -573,3 +573,17 @@ status in each role's goal file and task completion in
   `Cicero` agreed after nested-path and partial-write blockers were fixed;
   `Boyle` agreed after missing-durable-doc and stale-checkpoint blockers were
   fixed. Reviewer gate passed 3/3. A no-op `McClintock` spawn is not counted.
+- Intake-plan output path hardening: `real_evidence_submission_manifest.py
+  --emit-intake-plan` now rejects nested `work_packets/...` output paths.
+  Intake plans must be safe direct children of `work_packets/`, matching the
+  ignored operator work-packet surface used by candidate-validation reports.
+  Focused regression coverage was added. Verification passed: host focused
+  submission-manifest unittest 40 OK; dev-container focused
+  submission-manifest unittest 40 OK; full KG-eval unittest 450 OK; main repo
+  unittest 252 OK; refreshed broad reports; guide/template checks; full Ruff
+  check/format-check; default KG acceptance `passed_with_explicit_limits`;
+  strict KG acceptance exits 1 only for known limits. Broad KG-eval remains
+  incomplete with the same four failed real-evidence gates, empty real roots,
+  and absent canonical packets. Reviewer gate passed 3/3: `Anscombe` agreed
+  on engineering path safety, `Epicurus` agreed on governance and non-evidence
+  boundaries, and `Ptolemy` agreed on durable docs/status honesty.

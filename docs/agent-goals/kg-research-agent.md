@@ -956,3 +956,25 @@ Reviewer cost-control rules:
   final report writes were fixed; `Boyle` returned `RELEASE_DECISION: AGREE`
   after blockers for missing durable docs and stale checkpoint text were fixed.
   Reviewer gate passed 3/3. A mistaken no-op `McClintock` spawn is not counted.
+- 2026-06-28 intake-plan output path-hardening checkpoint:
+  `real_evidence_submission_manifest.py --emit-intake-plan` now rejects nested
+  `work_packets/...` output paths; intake plans must be safe direct children of
+  `work_packets/`, matching the ignored operator work-packet surface used by
+  candidate-validation reports. Focused regression coverage was added to
+  `test_real_evidence_submission_manifest.py`. This slice writes no candidate
+  artifacts, promotes no evidence, writes no canonical broad packets, and does
+  not count as acceptance. Verification passed: host focused
+  `test_real_evidence_submission_manifest.py` 40 OK; dev-container focused
+  submission-manifest test 40 OK; dev-container full KG-eval unittest 450 OK;
+  dev-container main repo unittest 252 OK; refreshed broad reports; operator
+  guide `--check`; submission template `--check-template`; default main KG
+  acceptance `passed_with_explicit_limits`; strict main KG acceptance exits 1
+  only for known limits `production_adapter_readiness` and
+  `latency_scalability_enterprise_claims`; full Ruff check and format-check
+  passed. Broad KG-eval remains incomplete with `overall_passed=false`, 8
+  passed gates, and the same four failed real-evidence gates; objective audit
+  remains `objective_complete=false` with 5 proved and 4 incomplete
+  requirements; all four real roots are empty and all four canonical broad
+  packets are absent. Reviewer gate passed 3/3: `Anscombe` agreed on
+  engineering path safety, `Epicurus` agreed on governance and non-evidence
+  boundaries, and `Ptolemy` agreed on durable docs/status honesty.

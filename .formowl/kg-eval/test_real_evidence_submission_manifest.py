@@ -606,6 +606,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             "work_packets/fair_external_baseline_comparison_candidate_manifest.json",
             "work_packets/intake_plan.template.json",
             "work_packets/intake_plan_preview.json",
+            "work_packets/nested/operatorpreflight_unitcase_intake_plan.json",
             "work_packets/intake_plan.txt",
         ]
         for rejected in rejected_paths:

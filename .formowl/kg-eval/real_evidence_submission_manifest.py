@@ -484,6 +484,8 @@ def safe_intake_plan_output(path_value: object) -> Path:
     path, blockers = _safe_work_packets_path(path_value, "intake plan output")
     if path is None:
         raise ManifestError("; ".join(blockers))
+    if len(path.parts) != 2:
+        blockers.append("intake plan output must be directly under work_packets/")
     if path.suffix != INTAKE_PLAN_ALLOWED_SUFFIX:
         blockers.append("intake plan output must be a JSON file")
     if path.name.endswith(".template.json"):

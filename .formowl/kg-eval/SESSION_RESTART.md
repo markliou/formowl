@@ -39,23 +39,16 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
-Current execution checkpoint, updated 2026-06-28 after candidate-validation
-report output hardening:
+Current execution checkpoint, updated 2026-06-28 after intake-plan output path
+hardening:
 
-- Local Git state before commit has the candidate-validation report output
-  slice staged for review on `complete-slice-1`.
-- `real_evidence_submission_manifest.py --validate-candidate-manifests` can
-  optionally persist the validate-only result with
-  `--emit-candidate-validation-report` to an ignored non-evidence
-  `work_packets/*_candidate_validation_report.json` review aid.
-- The report output must be a direct child of `work_packets/`, cannot use
-  template/preview/candidate-manifest/intake-plan/tracked names, cannot
-  overwrite an existing file, and is written through a same-directory
-  temporary file plus atomic no-overwrite link so interrupted writes leave no
-  final partial JSON report.
-- Invalid operator manifests and missing emitted candidate manifests do not
-  write a report. Failed assembler validation after preflight may write a
-  failure report for manual governance review only.
+- Local Git state has an intake-plan output path guard slice staged for review
+  on `complete-slice-1`.
+- `real_evidence_submission_manifest.py --emit-intake-plan` now rejects nested
+  `work_packets/...` output paths; intake plans must be safe direct children of
+  `work_packets/`, matching the ignored operator work-packet surface used by
+  candidate-validation reports.
+- Focused tests now cover nested intake-plan output rejection.
 - This slice writes no candidate artifacts, promotes no evidence, writes no
   canonical broad packets, and does not count as acceptance.
 - Dev-container KG-eval commands rerun against current state:
@@ -75,7 +68,8 @@ report output hardening:
 - Verification result:
   - KG-eval reports exited 0.
   - KG-eval unittest ran 450 tests OK.
-  - Focused submission/guide unittest ran 48 tests OK.
+  - Focused `test_real_evidence_submission_manifest.py` ran 40 tests OK in the
+    dev container.
   - Operator guide check and submission-template check exited 0.
   - Main repo unittest ran 252 tests OK.
   - Default main KG acceptance remains `passed_with_explicit_limits`.
@@ -99,10 +93,9 @@ report output hardening:
   absent, and preflight reports no packet or artifact hazards.
 - Work-board unchecked engineering item count remains 9: 1 KG-owned full
   real-evidence objective and 8 System Backbone/product-infra items.
-- Reviewer gate passed 3/3: `Turing` agreed; `Cicero` agreed after nested-path
-  and partial-write blockers were fixed; `Boyle` agreed after
-  missing-durable-doc and stale-checkpoint blockers were fixed. A mistaken
-  no-op `McClintock` spawn is not counted.
+- Reviewer gate passed 3/3: `Anscombe` agreed on engineering path safety,
+  `Epicurus` agreed on governance and non-evidence boundaries, and `Ptolemy`
+  agreed on durable docs/status honesty.
 - No completion claim is supported.
 
 Previous local implementation slice, updated 2026-06-28 after candidate-intake
