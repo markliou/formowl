@@ -15,6 +15,43 @@ This repo-local skill lives at `.agents/skills/use-agy-antigravity/SKILL.md`.
 Keep the FormOwl `agy` workflow here so it is available after a normal git
 clone on another machine.
 
+## Clone-Portable Location
+
+This is the canonical FormOwl Antigravity skill. Do not replace it with a
+machine-local copy under `~/.codex/skills` unless the user explicitly asks for a
+personal override. Future agents should update this tracked repo path:
+
+```text
+.agents/skills/use-agy-antigravity/SKILL.md
+```
+
+After a normal `git clone` that includes `.agents/`, start Codex from the repo
+root and confirm `$use-agy-antigravity` appears in `/skills`. If it does not,
+read this tracked `SKILL.md` directly before using `agy`.
+
+## FormOwl KG Resume Checklist
+
+At the start of every FormOwl Knowledge Graph goal resume, before long-running
+local work:
+
+1. Read `AGENTS.md`, the KG goal file, reviewer gate, and current
+   `.formowl/kg-eval/SESSION_RESTART.md`.
+2. If the work is likely to need Antigravity reviewers, ask for bounded
+   Antigravity review-packet authorization in the first user-facing update
+   unless the current user message already grants it.
+3. If standing scoped authorization is already recorded in this skill and the
+   current user has not revoked it, local work may continue while that
+   authorization is fresh in the repo state. Do not postpone the permission
+   issue until after implementation and verification.
+4. Runtime sandbox escalation is separate. When executing `agy`, request
+   `require_escalated` with a concise justification because the CLI may need
+   external model access, local sockets, and Antigravity log/cache writes.
+5. If approval review, tenant policy, or Antigravity rejects the disclosure,
+   record the blocker in `docs/agent-goals/kg-research-agent.md`,
+   `docs/agent-goals/handoff-log.md`, and any affected work-board note. Do not
+   bypass it through a broader packet, another external channel, a GPT
+   substitute, or an "agy folder" substitute.
+
 ## Quick Start
 
 For a FormOwl Knowledge Graph goal start or resume that is likely to require

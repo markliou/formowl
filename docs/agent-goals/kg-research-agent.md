@@ -571,3 +571,38 @@ exact command and write scope.
   acceptance `passed_with_explicit_limits`, and strict main KG acceptance still
   failed only on the known limits. Broad KG-eval remains
   `overall_passed=false` with the same four failed real-evidence gates.
+- 2026-06-27 submission-manifest preflight and skill-portability checkpoint:
+  added `.formowl/kg-eval/real_evidence_submission_manifest.py`,
+  `.formowl/kg-eval/test_real_evidence_submission_manifest.py`, and the tracked
+  non-evidence template
+  `.formowl/kg-eval/work_packets/remaining_real_evidence_submission_manifest.template.json`.
+  The tool validates an operator-filled submission manifest before any
+  candidate-only intake command runs, checking the exact four remaining gate
+  ids, response packet types, response paths directly under the matching
+  ignored `inputs/*_real/<operator_run_id>/` run directory, safe operator run
+  ids, real-root output dirs, work-packet manifest outputs, and
+  non-authoritative claim boundary. It reads no response-packet contents,
+  writes no candidate artifacts, promotes no evidence, writes no canonical
+  input packets, and does not count as an acceptance gate. The tracked operator
+  guide now includes the preflight commands. The repo-local
+  `$use-agy-antigravity` skill at `.agents/skills/use-agy-antigravity/SKILL.md`
+  is explicitly the git-clone-portable home for KG `agy` authorization,
+  reviewer, and bounded write-delegation rules. Template emit/check is
+  restricted to the tracked `.template.json` path so it cannot overwrite
+  arbitrary `work_packets/*.json` manifests. Dev-container verification
+  passed: submission template `--check-template`, guide `--check`, focused
+  submission/guide unittest 17 OK, full KG-eval unittest 413 OK, changed-file
+  Ruff check and format check, refreshed broad KG-eval reports, main repo
+  unittest 252 OK, and default main KG acceptance
+  `passed_with_explicit_limits`; strict mode still fails only on the known
+  `production_adapter_readiness` failed item and
+  `latency_scalability_enterprise_claims` blocked item. Broad KG-eval remains
+  `overall_passed=false`, 8 passed gates, and the same four failed broad
+  real-evidence gates. Antigravity Gemini review for this slice is blocked at
+  0/3: a bounded read-only `agy` reviewer packet containing only relevant
+  paths, summaries, verification results, and claim boundaries was rejected
+  before execution by tenant policy as external disclosure to an untrusted
+  reviewer service. No packet was sent and no workaround or alternate external
+  channel was attempted. Codex/GPT reviewers `Dalton`, `Galileo`, `Volta`, and
+  `Feynman` returned `RELEASE_DECISION: AGREE`; Dalton's non-blocking
+  template-output narrowing suggestion was implemented with a regression test.

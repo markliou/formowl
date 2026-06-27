@@ -236,3 +236,35 @@ status in each role's goal file and task completion in
   check and format check, refreshed broad KG-eval reports, main repo unittest
   252 OK, and main KG acceptance state remains unchanged. Broad KG-eval is
   still `overall_passed=false` with the same four failed real-evidence gates.
+- 2026-06-27 submission-manifest preflight and skill-portability progress:
+  added `.formowl/kg-eval/real_evidence_submission_manifest.py`, focused tests,
+  and the tracked non-evidence template
+  `.formowl/kg-eval/work_packets/remaining_real_evidence_submission_manifest.template.json`.
+  The operator guide now tells future operators to run
+  `python3 real_evidence_submission_manifest.py --check-template` and validate
+  an operator-filled manifest before running candidate-only intake commands.
+  This preflight checks response paths directly under the matching ignored
+  `inputs/*_real/<operator_run_id>/` run directory, run ids, response packet
+  types, output dirs, and non-authoritative claim boundaries only; it reads no
+  response-packet contents, writes no candidate artifacts, promotes no
+  evidence, and writes no canonical input packets. The repo-local
+  `$use-agy-antigravity` skill was
+  updated in `.agents/skills/use-agy-antigravity/SKILL.md` so the KG `agy`
+  authorization/reviewer/write-delegation workflow is explicitly portable after
+  git clone. Template emit/check is restricted to the tracked `.template.json`
+  path so it cannot overwrite arbitrary `work_packets/*.json` manifests.
+  Dev-container verification passed: submission template check, operator guide
+  check, focused submission/guide unittest 17 OK, full KG-eval unittest
+  413 OK, changed-file Ruff check and format check, refreshed broad reports,
+  main repo unittest 252 OK, and default KG acceptance
+  `passed_with_explicit_limits`; strict still fails only on known limits. The
+  full KG objective remains active and broad KG-eval is still
+  `overall_passed=false` with the same four failed real-evidence gates.
+  Antigravity Gemini review for this slice is blocked at 0/3: a bounded
+  read-only `agy` reviewer packet containing only relevant paths, summaries,
+  verification results, and claim boundaries was rejected before execution by
+  tenant policy as external disclosure to an untrusted reviewer service. No
+  packet was sent and no workaround or alternate external channel was
+  attempted. Codex/GPT reviewers `Dalton`, `Galileo`, `Volta`, and `Feynman`
+  returned `RELEASE_DECISION: AGREE`; Dalton's non-blocking template-output
+  narrowing suggestion was implemented with a regression test.

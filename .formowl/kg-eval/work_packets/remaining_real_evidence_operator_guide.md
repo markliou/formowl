@@ -32,6 +32,35 @@ Blocked gate ids:
 - multimodal_semantic_validation
 - production_adapter_paths
 
+## Submission Manifest Preflight
+
+Before running any candidate-only intake command, fill a copy of the
+submission manifest template with the operator response-packet paths,
+operator run ids, candidate output dirs, and work-packet manifest
+outputs. Put each response packet directly under the matching ignored
+`inputs/*_real/<operator_run_id>/operator_response_packet.json` path.
+The preflight validates path and command contracts only; it does not
+read response packet contents, write candidate artifacts, promote
+evidence, or write canonical packets.
+
+Tracked non-evidence template:
+
+```text
+work_packets/remaining_real_evidence_submission_manifest.template.json
+```
+
+Check that the tracked template is current:
+
+```sh
+python3 real_evidence_submission_manifest.py --check-template
+```
+
+Validate the operator-filled submission manifest before intake:
+
+```sh
+python3 real_evidence_submission_manifest.py --manifest work_packets/OPERATOR_FILLED_SUBMISSION_MANIFEST.json
+```
+
 ## fair_external_baseline_comparison
 
 - work order id: collect_fair_external_baseline_comparison

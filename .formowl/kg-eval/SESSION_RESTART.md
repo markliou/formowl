@@ -41,6 +41,54 @@ This snapshot supersedes older "latest work" notes below when they conflict.
 
 Latest completed local slice, updated 2026-06-27:
 
+- A tracked operator submission-manifest preflight now exists at
+  `real_evidence_submission_manifest.py`.
+- The tracked non-evidence template is
+  `work_packets/remaining_real_evidence_submission_manifest.template.json`.
+- Operators should fill a copy of that template, then run:
+  - `python3 real_evidence_submission_manifest.py --check-template`
+  - `python3 real_evidence_submission_manifest.py --manifest
+    work_packets/OPERATOR_FILLED_SUBMISSION_MANIFEST.json`
+- The preflight validates exact gate ids, response packet types, response
+  paths directly under the matching ignored
+  `inputs/*_real/<operator_run_id>/` run directory, operator run ids,
+  candidate-only output dirs, work-packet manifest outputs, and
+  non-authoritative claim boundaries before any intake command writes.
+- It reads no response-packet contents, writes no candidate artifacts, promotes
+  no evidence, writes no canonical input packets, and does not count as an
+  acceptance gate.
+- The operator guide now includes this submission-manifest preflight step.
+- Template emit/check is now restricted to the tracked template path
+  `work_packets/remaining_real_evidence_submission_manifest.template.json`, so
+  it cannot overwrite arbitrary `work_packets/*.json` manifests.
+- The repo-local `$use-agy-antigravity` skill was updated at
+  `.agents/skills/use-agy-antigravity/SKILL.md` so the KG `agy`
+  authorization/reviewer/bounded-write workflow is explicitly portable after
+  git clone.
+- Dev-container verification passed:
+  - submission template `--check-template`
+  - operator guide `--check`
+  - focused submission/guide unittest 17 OK
+  - full KG-eval unittest 413 OK
+  - changed-file Ruff check and format-check
+  - refreshed broad KG-eval reports
+  - main repo unittest 252 OK
+  - main KG acceptance unchanged: default `passed_with_explicit_limits`;
+    strict fails only on known limits
+- Broad KG-eval remains `overall_passed=false`, with 8 passed gates and the
+  same four failed real-evidence gates.
+- Codex/GPT reviewers `Dalton`, `Galileo`, `Volta`, and `Feynman` returned
+  `RELEASE_DECISION: AGREE` with no blocking findings; Dalton's non-blocking
+  template-output narrowing suggestion was implemented with a regression test.
+- Antigravity Gemini review for this slice is blocked at 0/3: a bounded
+  read-only `agy` reviewer packet containing only relevant paths, summaries,
+  verification results, and claim boundaries was rejected before execution by
+  tenant policy as external disclosure to an untrusted reviewer service. No
+  packet was sent and no workaround or alternate external channel was
+  attempted.
+
+Previous completed local slice, updated 2026-06-27:
+
 - A tracked operator-facing guide for the remaining four broad real-evidence
   gates now exists at
   `work_packets/remaining_real_evidence_operator_guide.md`.

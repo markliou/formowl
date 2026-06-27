@@ -52,6 +52,13 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
         self.assertIn("promotes evidence: False", text)
         self.assertIn("writes canonical packets: False", text)
         self.assertIn("counts as acceptance gate: False", text)
+        self.assertIn("## Submission Manifest Preflight", text)
+        self.assertIn("real_evidence_submission_manifest.py --check-template", text)
+        self.assertIn("real_evidence_submission_manifest.py --manifest", text)
+        self.assertIn(
+            "work_packets/remaining_real_evidence_submission_manifest.template.json",
+            text,
+        )
         self.assertNotIn("--promote", text)
         self.assertNotIn("supports_", text)
         self.assertNotIn("overall_passed=true", text)
@@ -101,6 +108,7 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
 
         self.assertIn("## Guide Withheld", text)
         self.assertIn("not synchronized", text)
+        self.assertIn("## Submission Manifest Preflight", text)
         self.assertNotIn("Candidate-only intake command:", text)
 
     def test_output_path_is_limited_to_work_packets_markdown(self) -> None:

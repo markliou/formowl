@@ -1,4 +1,4 @@
 interface:
   display_name: "Use agy Antigravity"
-  short_description: "Delegate work through Antigravity CLI"
-  default_prompt: "Use $use-agy-antigravity to ask Gemini 3.5 Flash High to discuss the next implementation step."
+  short_description: "Delegate review or bounded writes via agy"
+  default_prompt: "Use $use-agy-antigravity to run a bounded FormOwl KG reviewer or write-delegation task through agy."
