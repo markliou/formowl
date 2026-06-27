@@ -1,6 +1,6 @@
 ---
 name: use-agy-antigravity
-description: Use when Codex must call the local Antigravity CLI `agy` for non-GPT model delegation, discussion, critique, or implementation help, especially Gemini 3.5 Flash High. Applies to checking available Antigravity models, running `agy --model ... --print ...`, asking upfront for FormOwl KG goal reviewer data-egress authorization, preserving FormOwl repository boundaries while using external agents, and enforcing the original knowledge-graph algorithm acceptance gates before treating delegated output as useful.
+description: Use when Codex must call the local Antigravity CLI `agy` for non-GPT model delegation, discussion, critique, reviewer gates, or bounded implementation writing, especially Gemini 3.5 Flash High. Applies to checking available Antigravity models, running `agy --model ... --print ...`, using `--new-project --add-dir` for task-local write delegation, asking upfront for FormOwl KG goal reviewer data-egress authorization, preserving FormOwl repository boundaries while using external agents, and enforcing the original knowledge-graph algorithm acceptance gates before treating delegated output as useful.
 ---
 
 # Use Agy Antigravity
@@ -10,6 +10,10 @@ description: Use when Codex must call the local Antigravity CLI `agy` for non-GP
 Use the local `agy` CLI when the user asks for Antigravity, Gemini,
 Claude-through-Antigravity, or "gpt之外的工具". Do not substitute Codex
 `multi_agent_v1` for Antigravity unless the user explicitly changes the target.
+
+This repo-local skill lives at `.agents/skills/use-agy-antigravity/SKILL.md`.
+Keep the FormOwl `agy` workflow here so it is available after a normal git
+clone on another machine.
 
 ## Quick Start
 
@@ -32,6 +36,72 @@ admin endpoints, raw SQL, worker scratch paths, or unrelated private data.
 This is separate from command escalation. The skill records the workflow, but
 it cannot bypass sandbox approval for running `agy` or approval review for
 external data disclosure.
+
+## Standing FormOwl KG Authorization
+
+The user has given standing scoped authorization for this repository's
+Knowledge Graph goal reviewer gate:
+
+- Codex may run the local `agy` CLI, including `agy --version`, `agy models`,
+  and `agy --model "Gemini 3.5 Flash (High)" --print ... --print-timeout 5m`,
+  with sandbox escalation when required.
+- Codex may send bounded read-only review packets to Antigravity/Gemini
+  reviewers for FormOwl KG reviewer gates.
+- Allowed packet content is limited to relevant repo-relative file paths,
+  design summaries, test summaries, verification results, claim boundaries,
+  and necessary non-sensitive code or documentation excerpts.
+- Forbidden packet content includes secrets, credentials, tokens, private keys,
+  raw private source payloads, raw backend paths, NAS or object-store admin
+  endpoints, raw SQL, database dumps, worker scratch paths, local filesystem
+  internals, and unrelated private data.
+- If `agy` runs for a long time, confirm the process is still active and wait
+  for completion instead of treating silence as a review result.
+- If sandbox, approval review, tenant policy, or Antigravity rejects the
+  external disclosure before execution, record the reviewer-gate blocker in
+  the KG goal/work-board state. Do not bypass it with a broader packet,
+  another external channel, Codex `multi_agent_v1`, a GPT model override, or
+  an "agy folder" substitute.
+
+## Bounded Write Delegation
+
+The user also allows Codex to delegate bounded implementation work to
+Antigravity when it will reduce Codex token use. Treat this as permission to
+ask `agy` to edit files only inside an explicit, task-local write scope.
+
+Rules for write delegation:
+
+- State the exact owned files or directories before invoking `agy`.
+- Use `--new-project --add-dir <smallest-scope>` for repo or workspace writes.
+  A plain one-shot `--add-dir` may not give Antigravity an active writable
+  workspace.
+- Tell Antigravity that other agents may be editing the repository and it must
+  not revert unrelated changes.
+- Ask for small, reviewable patches plus the tests it expects Codex to run.
+- Codex must inspect the diff, run the relevant dev-container checks, and own
+  the final commit. Antigravity output is never accepted without local
+  verification.
+- Do not allow Antigravity to promote real-evidence packets, write canonical
+  KG/type/user-graph/wiki state, relax acceptance gates, change secrets, or
+  broaden external disclosure.
+- Do not use `--dangerously-skip-permissions` unless the user explicitly
+  approves that exact command and write scope.
+
+Observed tests on 2026-06-27:
+
+- `agy --version` and `agy models` work, and `Gemini 3.5 Flash (High)` is
+  available.
+- A minimal bounded FormOwl KG read-only reviewer packet was rejected before
+  execution by tenant policy as external disclosure to an untrusted reviewer
+  service. No packet was sent; do not retry the same packet shape unless policy
+  or platform configuration changes.
+- A write test with plain `--add-dir .` did not write to the intended empty
+  workspace and instead used Antigravity scratch. Do not count that as a
+  successful bounded repository write.
+- A strict write test that forbade scratch correctly returned
+  `current_workspace_write_unavailable`.
+- A write test with `--new-project --add-dir .` successfully wrote the
+  requested file into the intended empty workspace. Use this form for future
+  bounded write delegation, then verify the local diff yourself.
 
 Verify the CLI and model names first:
 
@@ -90,7 +160,9 @@ that risk for the exact operation.
 ## Reviewer Use
 
 The user authorized Antigravity `agy` reviewer use on 2026-06-27 for FormOwl
-review gates. Use the real local Antigravity CLI, for example:
+review gates. The standing scoped authorization above remains the default for
+future FormOwl KG goal resumes unless the user revokes or narrows it. Use the
+real local Antigravity CLI, for example:
 
 ```bash
 agy --model "Gemini 3.5 Flash (High)" --print "<review prompt>" --print-timeout 5m

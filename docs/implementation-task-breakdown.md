@@ -1184,6 +1184,16 @@ These groups can be split across multiple agents after Slice 1 is stable.
     review-packet attempt before execution as external data disclosure; no
     packet was sent and no workaround was attempted. Do not check this broad
     objective complete from this candidate-only intake hardening slice.
+  - 2026-06-27 agy skill portability and write-delegation checkpoint:
+    repo-local skill `.agents/skills/use-agy-antigravity/SKILL.md` is the
+    durable, git-clone-portable home for Antigravity usage rules. Standing
+    scoped authorization and bounded write delegation are recorded there and in
+    `docs/agent-goals/`. Local `agy` availability works, but bounded read-only
+    FormOwl KG reviewer packets are still rejected before execution by tenant
+    policy as external disclosure to an untrusted reviewer service. For bounded
+    write delegation, future agents should use
+    `--new-project --add-dir <smallest-scope>` and Codex must inspect diffs and
+    run dev-container checks before accepting Antigravity output.
 
 ### Real Project and Wiki Integrations
 

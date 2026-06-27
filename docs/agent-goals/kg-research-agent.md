@@ -285,6 +285,32 @@ worker scratch paths, and unrelated private data. Running `agy` is a separate
 sandbox-escalation permission from sending that bounded packet to an external
 model.
 
+The user has also provided standing scoped authorization for this KG goal:
+Codex may run `agy --version`, `agy models`, and
+`agy --model "Gemini 3.5 Flash (High)" --print ... --print-timeout 5m` with
+sandbox escalation when required, and may send bounded read-only review packets
+containing only relevant repo-relative paths, design/test summaries,
+verification results, claim boundaries, and non-sensitive code or documentation
+excerpts. The authorization excludes secrets, credentials, raw private source
+payloads, raw backend paths, NAS/object-store admin endpoints, raw SQL,
+database dumps, worker scratch paths, local filesystem internals, and unrelated
+private data. If `agy` is slow, confirm it is still running and wait; if tenant
+policy or sandbox approval rejects the external disclosure before execution,
+record the reviewer-gate blocker and do not use alternate external channels or
+substitute reviewers.
+
+The user additionally permits bounded Antigravity write delegation to save
+Codex token budget. Each `agy` write task must name the exact owned files or
+directories, use the smallest practical workspace, avoid unrelated changes, and
+return a patch that Codex inspects and verifies. Use
+`--new-project --add-dir <smallest-scope>` for bounded writes; observed testing
+showed that plain one-shot `--add-dir` may not provide an active writable
+workspace. Antigravity must not promote canonical real-evidence packets, mutate
+canonical KG/type/user-graph/wiki state outside the task, relax acceptance
+gates, change secrets, or broaden external disclosure. Do not use
+`--dangerously-skip-permissions` without a separate explicit approval for the
+exact command and write scope.
+
 ## Current Handoff Notes
 
 - This file records the durable goal imported from session
@@ -324,6 +350,35 @@ model.
   conserve token budget. Use short, durable checkpoints in this file, the work
   board, and the handoff log so future compact/resume cycles recover state
   without large chat history.
+- 2026-06-27 agy authorization checkpoint: the user requested that the
+  Antigravity/Gemini reviewer permission problem be handled before continuing
+  KG implementation. Standing scoped authorization is now recorded in the
+  repo-local `use-agy-antigravity` skill, this goal file, and
+  `docs/agent-goals/reviewer-gate.md`: Codex may run the local `agy` CLI with
+  sandbox escalation and may send bounded read-only FormOwl KG reviewer
+  packets, while still excluding secrets, credentials, raw private source
+  payloads, raw backend paths, NAS/object-store admin endpoints, raw SQL,
+  database dumps, worker scratch paths, local filesystem internals, and
+  unrelated private data. If `agy` is slow, confirm it is still running and
+  wait; if external-disclosure approval or tenant policy rejects execution,
+  record the blocker and do not bypass it.
+- 2026-06-27 bounded-write delegation checkpoint: the user also authorized
+  Codex to ask Antigravity to write bounded code/docs slices to save Codex
+  token budget. Future invocations must name exact owned files or directories,
+  keep the workspace minimal, avoid unrelated changes, and leave Codex
+  responsible for diff inspection, dev-container verification, durable docs,
+  and final commit. Do not use `--dangerously-skip-permissions` without a
+  separate exact approval.
+- 2026-06-27 agy policy/write test result: local `agy` availability works
+  (`agy --version` returned `1.0.13`, and `agy models` listed
+  `Gemini 3.5 Flash (High)`). A minimal bounded FormOwl KG read-only reviewer
+  packet was rejected before execution by tenant policy as external disclosure
+  to an untrusted reviewer service; no packet was sent and no workaround was
+  attempted. For write delegation, plain one-shot `--add-dir` was not reliable
+  for intended workspace writes, but `--new-project --add-dir` successfully
+  wrote to an empty intended workspace. Future bounded write delegation should
+  use `--new-project --add-dir <smallest-scope>` and must be verified by Codex
+  through local diff inspection and dev-container checks.
 - 2026-06-27 method-slice checkpoint: current-state verification passed in the
   dev container: default KG research acceptance suite returned
   `passed_with_explicit_limits` with only expected

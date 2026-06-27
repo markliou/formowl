@@ -7,6 +7,37 @@ status in each role's goal file and task completion in
 ## 2026-06-27
 
 - Created durable goal registry under `docs/agent-goals/`.
+- Agy authorization checkpoint: before continuing KG implementation, the user
+  asked to resolve the Antigravity/Gemini reviewer permission issue. Standing
+  scoped authorization is now recorded in the repo-local
+  `use-agy-antigravity` skill, `docs/agent-goals/reviewer-gate.md`, and
+  `docs/agent-goals/kg-research-agent.md`. Codex may run the local `agy` CLI
+  with sandbox escalation and may send bounded read-only FormOwl KG reviewer
+  packets containing only relevant repo-relative paths, design/test summaries,
+  verification results, claim boundaries, and non-sensitive code/docs excerpts.
+  The authorization excludes secrets, credentials, raw private source payloads,
+  raw backend paths, NAS/object-store admin endpoints, raw SQL, database dumps,
+  worker scratch paths, local filesystem internals, and unrelated private data.
+  If `agy` is slow, confirm it is still running and wait; if tenant policy or
+  approval review rejects external disclosure before execution, record the gate
+  blocker and do not bypass it with alternate channels or substitute reviewers.
+- Bounded Antigravity write-delegation checkpoint: the user also authorized
+  Codex to ask Antigravity to write bounded implementation slices to save Codex
+  token budget. Future invocations must state exact owned files/directories,
+  keep the workspace minimal, avoid unrelated changes, and leave Codex
+  responsible for diff inspection, canonical dev-container verification,
+  durable docs, and final commit. Do not use
+  `--dangerously-skip-permissions` without separate exact approval.
+- Agy policy/write test result: local `agy` availability works
+  (`agy --version` returned `1.0.13`, and `agy models` listed
+  `Gemini 3.5 Flash (High)`). A minimal bounded FormOwl KG read-only reviewer
+  packet was rejected before execution by tenant policy as external disclosure
+  to an untrusted reviewer service; no packet was sent and no workaround was
+  attempted. Plain one-shot `--add-dir` was not reliable for intended
+  workspace writes, while `--new-project --add-dir` successfully wrote to an
+  empty intended workspace. Future bounded write delegation should use
+  `--new-project --add-dir <smallest-scope>` and Codex must verify local diff
+  and tests before accepting Antigravity output.
 - Imported the Knowledge Graph Research Agent goal from session
   `019eda5f-7dd6-74a2-ac56-4f84e5d58560` into
   `docs/agent-goals/kg-research-agent.md`.

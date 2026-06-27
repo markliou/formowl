@@ -73,6 +73,63 @@ admin endpoints, worker scratch paths, or unrelated private data.
 If a review requires broader external disclosure than a bounded review packet,
 ask the user for fresh approval.
 
+### Standing Scoped Authorization
+
+For FormOwl Knowledge Graph goal reviewer gates, the user has explicitly
+authorized Codex to:
+
+- Run the local `agy` CLI with sandbox escalation when needed, including
+  `agy --version`, `agy models`, and
+  `agy --model "Gemini 3.5 Flash (High)" --print ... --print-timeout 5m`.
+- Send bounded read-only review packets to Antigravity/Gemini reviewers.
+
+Allowed packet contents are limited to relevant repo-relative file paths,
+design summaries, test summaries, verification results, claim boundaries, and
+necessary non-sensitive code or documentation excerpts.
+
+Forbidden packet contents remain secrets, credentials, tokens, private keys,
+raw private source payloads, raw backend paths, NAS or object-store admin
+endpoints, raw SQL, database dumps, worker scratch paths, local filesystem
+internals, or unrelated private data.
+
+If `agy` is slow, confirm the process is still running and wait for completion.
+Do not treat silence as an approval or a completed review. If sandbox approval
+review, tenant policy, or Antigravity rejects the external disclosure before
+execution, record the gate as blocked in the relevant goal file and work-board
+note. Do not bypass the blocker through a broader packet, another external
+channel, Codex `multi_agent_v1`, a GPT model override, or an "agy folder"
+substitute.
+
+### Bounded Write Delegation
+
+The user also permits Codex to ask Antigravity to write code or docs for
+bounded implementation tasks when this saves Codex token budget. This is not a
+blanket repository write grant. Each invocation must state the exact owned
+files or directories, keep the write scope task-local, and avoid unrelated
+changes.
+
+Use `--new-project --add-dir <smallest-scope>` for bounded write delegation.
+Observed testing showed that plain one-shot `--add-dir` may not create an
+active writable workspace, while `--new-project --add-dir` can write to the
+intended added workspace. Codex must verify the resulting local diff instead of
+trusting Antigravity's text summary alone.
+
+Codex remains responsible for inspecting Antigravity's diff, running the
+relevant canonical dev-container checks, updating durable FormOwl docs, and
+making the final commit. Antigravity must not promote canonical real-evidence
+packets, mutate canonical KG/type/user-graph/wiki state outside the assigned
+task, relax acceptance gates, change secrets, or broaden external disclosure.
+Do not use `--dangerously-skip-permissions` unless the user explicitly approves
+that exact command and write scope.
+
+Observed 2026-06-27 policy/write tests: `agy --version` returned `1.0.13`,
+and `agy models` listed `Gemini 3.5 Flash (High)`. A minimal bounded FormOwl KG
+read-only reviewer packet was rejected before execution by tenant policy as
+external data disclosure to an untrusted reviewer service. No packet was sent.
+For writing, plain `--add-dir` was not sufficient for reliable bounded
+workspace writes; `--new-project --add-dir` successfully wrote to an empty
+intended workspace and must be paired with local diff verification.
+
 ### Upfront Authorization Rule
 
 When starting or resuming a Knowledge Graph Research Agent goal that is likely
