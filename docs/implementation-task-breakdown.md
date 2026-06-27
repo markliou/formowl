@@ -1034,7 +1034,7 @@ These groups can be split across multiple agents after Slice 1 is stable.
 
 ### KG Research Evaluation and Acceptance
 
-- [ ] Add scoped ontology/type governance contracts and KG research acceptance
+- [x] Add scoped ontology/type governance contracts and KG research acceptance
   suite.
   - Owner paths: `python/formowl_contract/`, `python/formowl_graph/`,
     `scripts/`, `tests/`, `docs/`
@@ -1048,16 +1048,20 @@ These groups can be split across multiple agents after Slice 1 is stable.
     dev-container acceptance tests, and default acceptance script are in place.
     Reviewer blockers for direct `score_breakdown` validation, unexpected
     acceptance failures, and concrete error-analysis evidence have been fixed.
-    Full canonical dev-container unittest passed. Leave unchecked until the
-    configured 6-reviewer gate passes.
+    Full canonical dev-container unittest passed, and the configured
+    6-reviewer gate passed.
   - Reviewer gate target: 6 effective read-only reviewers: 3 Codex/GPT and 3
     Antigravity Gemini through `agy`.
-  - Effective reviewer count: 3/6.
-  - Reviewer agreement count: 3/6 (`Kuhn`, `Goodall`, `Pasteur`).
+  - Effective reviewer count: 6/6.
+  - Reviewer agreement count: 6/6 (`Kuhn`, `Goodall`, `Pasteur`,
+    `Ada-Sandbox`, `Lamport-Sandbox`, `Curie-Sandbox`).
   - Reviewers with blocking findings: none after re-review.
   - Non-counted agents: `Raman` found initial blockers and was replaced for
-    re-review after being closed; Antigravity Gemini attempts were rejected by
-    sandbox policy for external model data-egress risk and do not count.
+    re-review after being closed; initial Antigravity Gemini attempts were
+    rejected by sandbox policy for external model data-egress risk and do not
+    count; `Ada` timed out without a decision and does not count; `Ada-Retry`
+    attempted to inspect repository files instead of staying within the
+    bounded packet and was aborted/timed out, so it does not count.
   - Resume note: future sessions should ask the user at the start of this goal
     for explicit Antigravity Gemini bounded-review authorization before doing
     long-running local work, because the remaining reviewer gate needs external
@@ -1070,7 +1074,11 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `python scripts/kg_research_acceptance_suite.py` reports expected
     `production_adapter_readiness` failed and
     `latency_scalability_enterprise_claims` blocked with no unexpected failed
-    or blocked items.
+    or blocked items. On 2026-06-27, current-state re-verification passed:
+    default KG research acceptance suite returned
+    `passed_with_explicit_limits`, focused KG acceptance tests ran 4 OK,
+    focused ontology tests ran 4 OK, and full dev-container unittest ran
+    246 tests OK.
 
 ### Real Project and Wiki Integrations
 

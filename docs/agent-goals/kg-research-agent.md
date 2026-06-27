@@ -16,7 +16,7 @@ and a total acceptance suite that clearly marks passed and failed items.
 
 Historical source: Codex session `019eda5f-7dd6-74a2-ac56-4f84e5d58560`.
 
-Status: `active`
+Status: `complete`
 
 ## Context Budget Rule
 
@@ -166,12 +166,14 @@ model.
   `production_adapter_readiness` as failed and
   `latency_scalability_enterprise_claims` as blocked, with no unexpected
   failed or blocked items.
-- Reviewer gate status for the KG research acceptance slice is 3/6: GPT/Codex
-  reviewers `Kuhn`, `Goodall`, and `Pasteur` agreed after blocker fixes.
-  `Raman` found initial blockers and was replaced for re-review after being
-  closed. Antigravity Gemini reviewers are not complete because `agy` review
-  attempts were rejected for external model data-egress risk; user approval is
-  required before sending any bounded review packet to Gemini through `agy`.
+- Reviewer gate status for the KG research acceptance slice is complete at
+  6/6. GPT/Codex reviewers `Kuhn`, `Goodall`, and `Pasteur` agreed after
+  blocker fixes. Antigravity Gemini reviewers `Ada-Sandbox`,
+  `Lamport-Sandbox`, and `Curie-Sandbox` agreed through the real local `agy`
+  CLI using sandboxed, closed-book, bounded review packets authorized by the
+  user. `Raman` found initial blockers and was replaced for re-review after
+  being closed. Initial Antigravity attempts rejected by sandbox policy, the
+  `Ada` timeout, and the aborted/timed-out `Ada-Retry` run do not count.
 - 2026-06-27 update: the user requested that future resumes of this goal ask
   for Antigravity Gemini bounded-review authorization at the start of the run,
   not after local work is complete. Treat this as the first action before
@@ -180,3 +182,11 @@ model.
   conserve token budget. Use short, durable checkpoints in this file, the work
   board, and the handoff log so future compact/resume cycles recover state
   without large chat history.
+- 2026-06-27 completion checkpoint: current-state verification passed in the
+  dev container: default KG research acceptance suite returned
+  `passed_with_explicit_limits` with only expected
+  `production_adapter_readiness` failed and
+  `latency_scalability_enterprise_claims` blocked; focused KG acceptance tests
+  ran 4 OK; focused ontology tests ran 4 OK; full
+  `python -m unittest discover -s tests` ran 246 tests OK. The work-board KG
+  Research Evaluation and Acceptance item is checked complete.

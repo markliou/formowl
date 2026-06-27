@@ -34,3 +34,11 @@ status in each role's goal file and task completion in
   state more often than usual, especially after reviewer attempts, blockers,
   verification results, and acceptance-status changes, so future compaction or
   resume cycles do not depend on long chat history.
+- Completed the KG research acceptance goal. Current-state dev-container
+  verification passed: default KG research acceptance suite returned
+  `passed_with_explicit_limits` with only expected failed/blocked items,
+  focused KG acceptance tests ran 4 OK, focused ontology tests ran 4 OK, and
+  full unittest ran 246 OK. Reviewer gate passed 6/6:
+  `Kuhn`, `Goodall`, `Pasteur`, `Ada-Sandbox`, `Lamport-Sandbox`, and
+  `Curie-Sandbox`. The KG Research Evaluation and Acceptance work-board item is
+  now checked complete.
