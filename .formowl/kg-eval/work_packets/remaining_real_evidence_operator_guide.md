@@ -81,6 +81,21 @@ python3 real_evidence_submission_manifest.py --manifest work_packets/OPERATOR_FI
 The intake plan is ignored by Git and does not execute commands. Review it before
 running any listed candidate-only intake command.
 
+After reviewing the validated manifest and optional plan, the same manifest
+can execute the four candidate-only intake commands through the controlled
+runner:
+
+```sh
+python3 real_evidence_submission_manifest.py --manifest work_packets/OPERATOR_FILLED_SUBMISSION_MANIFEST.json --execute-candidate-intakes
+```
+
+This execution mode reads operator response-packet contents and writes
+candidate artifacts plus generated candidate manifests only. It stops on
+the first failed intake, never passes a promotion flag, never writes canonical
+input packets, and still does not count as an acceptance gate. Candidate
+artifacts from earlier successful intake commands remain for operator
+review and are not automatically promoted or rolled back by this runner.
+
 ## fair_external_baseline_comparison
 
 - work order id: collect_fair_external_baseline_comparison

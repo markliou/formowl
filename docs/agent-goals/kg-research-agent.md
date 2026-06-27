@@ -863,3 +863,33 @@ Reviewer cost-control rules:
   no-validator-run coverage. Both blockers were fixed and re-reviewed with
   final `RELEASE_DECISION: AGREE`. A mistakenly spawned no-op `Laplace` agent
   is not counted.
+- 2026-06-28 candidate-intake execution runner checkpoint:
+  `real_evidence_submission_manifest.py` now has an explicit
+  `--execute-candidate-intakes` mode for operator-filled submission manifests.
+  It validates the manifest first, requires existing response packets, rejects
+  path-only execution mode, builds fixed argv for the four existing
+  candidate-only intake helpers, runs them with `subprocess.run` and no shell,
+  stops on the first failed intake, reports partial-execution policy, and
+  never passes promotion flags. This execution mode may read operator response
+  packet contents and write candidate artifacts through the existing intake
+  helpers; it does not promote evidence, write canonical input packets, or
+  count as an acceptance gate. The operator guide documents the runner and
+  states that candidate artifacts from successful earlier intakes remain for
+  operator review rather than being automatically promoted or rolled back.
+  Verification passed: host focused submission/guide unittest 33 OK;
+  dev-container focused submission/guide unittest 33 OK; dev-container full
+  KG-eval unittest 435 OK; dev-container main repo unittest 252 OK; operator
+  guide `--check`; submission template `--check-template`; changed-file Ruff
+  check and format-check; refreshed `kg_total_acceptance_suite.py` and
+  `real_evidence_preflight.py`; default main KG acceptance
+  `passed_with_explicit_limits`; strict main KG acceptance still exits nonzero
+  only for known limits. Broad KG-eval remains incomplete:
+  `overall_passed=false`, 8 passed gates, and the same four failed
+  real-evidence gates; all four real roots are empty and canonical broad
+  packets are absent. GPT/Codex reviewer gate passed 3/3 with `Nash`, `Pauli`,
+  and `Locke`. `Hegel` found a claim-honesty blocker in the module
+  docstring/help text; it was fixed with focused assertions and re-reviewed by
+  replacement reviewer `Locke` because the original Hegel agent could not
+  accept follow-up input. Non-counted agents: `Pascal` no-op accidental spawn,
+  `Sagan`/`Bernoulli`/`Arendt` accidentally shut down before decisions, and
+  `Hegel` as blocker-only without final re-review.

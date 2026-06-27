@@ -86,6 +86,50 @@ guard hardening:
   real-evidence objective and 8 System Backbone/product-infra items.
 - No completion claim is supported.
 
+Latest local implementation slice, updated 2026-06-28 after candidate-intake
+execution runner hardening:
+
+- `real_evidence_submission_manifest.py` now supports explicit
+  `--execute-candidate-intakes` for a validated operator-filled submission
+  manifest.
+- The runner validates the manifest first, requires existing response packets,
+  rejects path-only execution mode, builds fixed argv for the four existing
+  candidate-only intake helpers, runs them with `subprocess.run` and no shell,
+  stops on the first failed intake, and reports partial-execution policy.
+- This execution mode may read operator response packet contents and write
+  candidate artifacts through the existing intake helpers. It never passes
+  promotion flags, promotes evidence, writes canonical broad packets, or counts
+  as an acceptance gate.
+- Candidate artifacts from earlier successful intake commands remain for
+  operator review; this runner does not automatically promote or roll them
+  back.
+- The tracked operator guide documents the controlled runner and states that
+  manual governance plus validator acceptance remain required before any broad
+  gate can pass.
+- Verification passed:
+  - host focused submission/guide unittest 33 OK
+  - dev-container focused submission/guide unittest 33 OK
+  - dev-container full KG-eval unittest 435 OK
+  - dev-container main repo unittest 252 OK
+  - dev-container operator guide `--check`
+  - dev-container submission template `--check-template`
+  - dev-container changed-file Ruff check and format-check
+  - refreshed `kg_total_acceptance_suite.py` and `real_evidence_preflight.py`
+  - default main KG acceptance `passed_with_explicit_limits`
+  - strict main KG acceptance still exits nonzero only for known limits:
+    `production_adapter_readiness` and
+    `latency_scalability_enterprise_claims`
+- Broad KG-eval remains incomplete: `overall_passed=false`, 8 passed gates,
+  and the same four failed real-evidence gates. All four real roots remain
+  empty and the four canonical broad packets remain absent.
+- GPT/Codex reviewer gate passed 3/3 with `Nash`, `Pauli`, and `Locke`.
+  `Hegel` found a blocker in the module docstring/help claim boundary; it was
+  fixed with focused assertions and re-reviewed by replacement reviewer
+  `Locke` because the original Hegel agent could not accept follow-up input.
+  Non-counted agents: `Pascal` was a no-op accidental spawn; `Sagan`,
+  `Bernoulli`, and `Arendt` were accidentally shut down before returning
+  decisions; `Hegel` is blocker-only without final re-review.
+
 Latest local implementation slice, updated 2026-06-28 after preflight
 canonical packet path-hazard hardening:
 

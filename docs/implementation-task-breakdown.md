@@ -1413,6 +1413,33 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `Rawls` after `Beauvoir`'s total/audit refresh blocker and `Dewey`'s
     test-cleanup / no-validator-run blockers were fixed and re-reviewed. A
     mistakenly spawned no-op `Laplace` agent is not counted.
+  - 2026-06-28 candidate-intake execution runner checkpoint:
+    `real_evidence_submission_manifest.py` now supports explicit
+    `--execute-candidate-intakes` from a validated operator-filled submission
+    manifest. The runner builds argv from the already validated manifest,
+    invokes existing candidate-only intake helpers with `subprocess.run` and
+    no shell, requires existing response packets, rejects path-only execution
+    mode, stops on the first failed intake, and reports partial-execution
+    policy. It may read operator response packet contents and write candidate
+    artifacts through the existing intake helpers; it never passes promotion
+    flags, writes canonical packets, or counts as an acceptance gate. The
+    tracked operator guide documents the controlled runner and still states
+    manual governance plus validator acceptance are required before any broad
+    gate can pass. Verification passed: host focused submission/guide unittest
+    33 OK; dev-container focused submission/guide unittest 33 OK; full KG-eval
+    unittest 435 OK; main repo unittest 252 OK; guide/template checks; changed
+    file Ruff check and format-check; refreshed total acceptance and
+    preflight; default main KG acceptance `passed_with_explicit_limits`; strict
+    main KG acceptance still exits nonzero only for known limits. Broad KG-eval
+    remains `overall_passed=false`, 8 passed gates, and the same four failed
+    broad real-evidence gates, so this work-board item remains unchecked.
+    GPT/Codex reviewer gate passed 3/3 with `Nash`, `Pauli`, and `Locke`.
+    `Hegel` found a blocker in the module docstring/help claim boundary; it
+    was fixed with focused assertions and re-reviewed by replacement reviewer
+    `Locke` because the original Hegel agent could not accept follow-up input.
+    Non-counted agents: `Pascal` was a no-op accidental spawn; `Sagan`,
+    `Bernoulli`, and `Arendt` were accidentally shut down before returning a
+    decision; `Hegel` blocked but did not provide a final re-review decision.
 
 ### Real Project and Wiki Integrations
 

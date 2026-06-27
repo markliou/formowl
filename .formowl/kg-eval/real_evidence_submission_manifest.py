@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Validate operator submission manifests for remaining KG evidence.
+"""Validate and optionally execute remaining KG evidence candidate intake.
 
-This helper checks that operator response-packet paths and candidate-only
-intake destinations are safe before running any intake command. It does not
-read response packet contents, write candidate artifacts, promote evidence, or
-write canonical input packets.
+Validation and plan modes check that operator response-packet paths and
+candidate-only intake destinations are safe before intake. Those modes do not
+read response packet contents or write candidate artifacts.
+
+The explicit ``--execute-candidate-intakes`` mode reads response packet contents
+and writes candidate artifacts by running the existing candidate-only intake
+helpers. No mode promotes evidence or writes canonical input packets.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -557,6 +561,101 @@ def build_intake_plan(
     }
 
 
+def _json_summary(stdout: str) -> dict[str, Any]:
+    try:
+        loaded = json.loads(stdout)
+    except json.JSONDecodeError:
+        return {
+            "json_stdout": False,
+            "stdout_line_count": len([line for line in stdout.splitlines() if line.strip()]),
+        }
+    if not isinstance(loaded, dict):
+        return {"json_stdout": True, "stdout_type": type(loaded).__name__}
+    return {
+        "json_stdout": True,
+        "artifact_id": loaded.get("artifact_id"),
+        "valid": loaded.get("valid"),
+        "passed": loaded.get("passed"),
+        "status": loaded.get("status"),
+    }
+
+
+def execute_candidate_intakes(
+    validation_report: dict[str, Any],
+    *,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    plan = build_intake_plan(validation_report, manifest_path=manifest_path)
+    execution_results: list[dict[str, Any]] = []
+    overall_success = True
+    for row in plan["execution_plan"]:
+        if not isinstance(row, dict):
+            raise ManifestError("intake execution plan row is malformed")
+        argv = row.get("argv")
+        if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+            raise ManifestError("intake execution argv is malformed")
+        completed = subprocess.run(
+            argv,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        success = completed.returncode == 0
+        overall_success = overall_success and success
+        execution_results.append(
+            {
+                "sequence": row["sequence"],
+                "gate_id": row["gate_id"],
+                "operator_run_id": row["operator_run_id"],
+                "output_dir": row["output_dir"],
+                "assembly_manifest_output": row["assembly_manifest_output"],
+                "canonical_packet_not_written": row["canonical_packet_not_written"],
+                "argv": argv,
+                "exit_code": completed.returncode,
+                "status": "succeeded" if success else "failed",
+                "stdout_summary": _json_summary(completed.stdout),
+                "stderr_line_count": len(
+                    [line for line in completed.stderr.splitlines() if line.strip()]
+                ),
+            }
+        )
+        if not success:
+            break
+    return {
+        "artifact_id": "kg_real_evidence_candidate_intake_execution_v1",
+        "manifest": str(manifest_path.relative_to(ROOT)),
+        "valid_manifest": True,
+        "overall_success": overall_success,
+        "stopped_after_failure": not overall_success,
+        "executed_gate_count": len(execution_results),
+        "authority": {
+            "accepts_evidence": False,
+            "promotes_evidence": False,
+            "writes_candidate_artifacts": True,
+            "writes_canonical_packets": False,
+            "counts_as_acceptance_gate": False,
+        },
+        "execution_effects": {
+            "reads_response_packet_contents": True,
+            "writes_candidate_artifacts": True,
+            "writes_canonical_packets": False,
+            "promotes_evidence": False,
+            "counts_as_acceptance_gate": False,
+        },
+        "partial_execution_policy": (
+            "execution stops on the first failed intake; candidate artifacts written by "
+            "earlier successful intake commands remain for operator review and are not "
+            "promoted or treated as acceptance evidence by this runner"
+        ),
+        "execution_results": execution_results,
+        "next_step": (
+            "validate emitted candidate manifests and perform manual governance review before "
+            "any canonical packet can affect acceptance"
+        ),
+    }
+
+
 def safe_template_output(path_value: str) -> Path:
     if not isinstance(path_value, str) or not path_value.strip():
         raise ManifestError("template output must be a non-empty string")
@@ -615,6 +714,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "write a non-evidence candidate-only intake execution plan under "
             "work_packets/ after manifest validation"
+        ),
+    )
+    parser.add_argument(
+        "--execute-candidate-intakes",
+        action="store_true",
+        help=(
+            "execute the candidate-only response-intake commands from a validated manifest; "
+            "writes candidate artifacts but never canonical packets"
         ),
     )
     parser.add_argument(
@@ -691,11 +798,24 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if not args.manifest:
         raise ManifestError("either --manifest, --emit-template, or --check-template is required")
+    if args.emit_intake_plan and args.execute_candidate_intakes:
+        raise ManifestError(
+            "--emit-intake-plan and --execute-candidate-intakes are mutually exclusive"
+        )
+    if args.execute_candidate_intakes and args.no_require_existing_response_packets:
+        raise ManifestError("--execute-candidate-intakes requires existing response packets")
     manifest_path = safe_manifest_input(args.manifest)
     report = validate_manifest(
         load_json_file(manifest_path),
         require_existing_response_packets=not args.no_require_existing_response_packets,
     )
+    if args.execute_candidate_intakes:
+        if not report["valid"]:
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 1
+        execution = execute_candidate_intakes(report, manifest_path=manifest_path)
+        print(json.dumps(execution, indent=2, sort_keys=True))
+        return 0 if execution["overall_success"] else 1
     if args.emit_intake_plan:
         plan_output = safe_intake_plan_output(args.emit_intake_plan)
         if not report["valid"]:

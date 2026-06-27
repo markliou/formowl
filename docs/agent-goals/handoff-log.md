@@ -509,3 +509,23 @@ status in each role's goal file and task completion in
   `Beauvoir`'s total/audit refresh blocker and `Dewey`'s test-cleanup /
   no-validator-run blockers were fixed and re-reviewed. A mistakenly spawned
   no-op `Laplace` agent is not counted.
+- Candidate-intake execution runner: `real_evidence_submission_manifest.py`
+  now supports explicit `--execute-candidate-intakes` for a validated
+  operator-filled submission manifest. It uses fixed manifest-derived argv,
+  runs existing candidate-only intake helpers without a shell, requires
+  existing response packets, rejects path-only execution mode, stops on first
+  failed intake, and reports that successful earlier candidate artifacts remain
+  for operator review. This runner can read operator response contents and
+  write candidate artifacts, but it does not promote evidence, pass promotion
+  flags, write canonical broad packets, or count as acceptance. The tracked
+  operator guide documents the command and claim boundary. Verification
+  passed: focused dev-container submission/guide unittest 33 OK, full KG-eval
+  unittest 435 OK, main repo unittest 252 OK, guide/template checks,
+  changed-file Ruff check and format-check, refreshed total/preflight reports,
+  and default main KG acceptance `passed_with_explicit_limits`; strict still
+  exits nonzero only for known limits. Broad KG-eval remains incomplete with
+  the same four failed real-evidence gates and empty real roots. Reviewer gate
+  passed 3/3 with `Nash`, `Pauli`, and `Locke`; `Hegel`'s docstring/help
+  blocker was fixed and re-reviewed by replacement reviewer `Locke`.
+  Non-counted agents: `Pascal`, `Sagan`, `Bernoulli`, `Arendt`, and blocker-only
+  `Hegel`.
