@@ -75,6 +75,14 @@ class CanonicalCommitResult:
         }
 
 
+@dataclass(frozen=True)
+class _ParentGraphState:
+    canonical_atom_ids: list[str] = field(default_factory=list)
+    canonical_entity_ids: list[str] = field(default_factory=list)
+    canonical_relation_ids: list[str] = field(default_factory=list)
+    atom_id_by_candidate_id: dict[str, str] = field(default_factory=dict)
+
+
 def commit_reviewed_candidates_to_canonical_graph(
     *,
     candidate_atom_store: CandidateAtomStore,
@@ -98,12 +106,14 @@ def commit_reviewed_candidates_to_canonical_graph(
     """Commit approved candidate graph records through the governed backend path."""
 
     created_at = created_at or now_iso()
-    atom_ids = _validate_id_sequence(candidate_atom_ids, "candidate_atom_ids", allow_empty=False)
+    atom_ids = _validate_id_sequence(candidate_atom_ids, "candidate_atom_ids", allow_empty=True)
     relation_ids = _validate_id_sequence(
         candidate_relation_ids,
         "candidate_relation_ids",
         allow_empty=True,
     )
+    if not atom_ids and not relation_ids:
+        raise ContractValidationError("canonical commit requires candidate atoms or relations")
     review_ids = _validate_id_sequence(
         review_decision_ids,
         "review_decision_ids",
@@ -116,6 +126,12 @@ def commit_reviewed_candidates_to_canonical_graph(
     if parent_revision_id is not None:
         _validate_record_id(parent_revision_id, "parent_revision_id")
     policy_ids = policy_pins.policy_ids()
+    parent_state = _load_parent_graph_state(
+        canonical_graph_store,
+        parent_revision_id=parent_revision_id,
+        scope_type=scope_type,
+        scope_id=scope_id,
+    )
 
     metadata = {
         "workflow": "reviewed_canonical_graph_commit_v1",
@@ -169,6 +185,10 @@ def commit_reviewed_candidates_to_canonical_graph(
         candidate.candidate_atom_id: canonical_atom.canonical_atom_id
         for candidate, canonical_atom in zip(candidate_atoms, canonical_atoms, strict=True)
     }
+    atom_id_by_candidate_id = _merge_candidate_atom_resolution(
+        parent_state.atom_id_by_candidate_id,
+        atom_id_by_candidate_id,
+    )
 
     canonical_relations = [
         _canonical_relation_from_candidate(
@@ -201,6 +221,21 @@ def commit_reviewed_candidates_to_canonical_graph(
         [relation.canonical_relation_id for relation in canonical_relations],
         "canonical relation ids",
     )
+    revision_atom_ids = _merge_graph_membership(
+        parent_state.canonical_atom_ids,
+        [atom.canonical_atom_id for atom in canonical_atoms],
+        "canonical atom ids",
+    )
+    revision_entity_ids = _merge_graph_membership(
+        parent_state.canonical_entity_ids,
+        [],
+        "canonical entity ids",
+    )
+    revision_relation_ids = _merge_graph_membership(
+        parent_state.canonical_relation_ids,
+        [relation.canonical_relation_id for relation in canonical_relations],
+        "canonical relation ids",
+    )
 
     revision = CanonicalGraphRevision.from_dict(
         {
@@ -208,11 +243,9 @@ def commit_reviewed_candidates_to_canonical_graph(
                 scope_type=scope_type,
                 scope_id=scope_id,
                 ontology_revision_id=ontology_revision_id,
-                canonical_atom_ids=sorted(atom.canonical_atom_id for atom in canonical_atoms),
-                canonical_entity_ids=[],
-                canonical_relation_ids=sorted(
-                    relation.canonical_relation_id for relation in canonical_relations
-                ),
+                canonical_atom_ids=revision_atom_ids,
+                canonical_entity_ids=revision_entity_ids,
+                canonical_relation_ids=revision_relation_ids,
                 created_at=created_at,
                 parent_revision_id=parent_revision_id,
             ),
@@ -220,11 +253,9 @@ def commit_reviewed_candidates_to_canonical_graph(
             "scope_id": scope_id,
             "ontology_revision_id": ontology_revision_id,
             "status": "committed",
-            "canonical_atom_ids": sorted(atom.canonical_atom_id for atom in canonical_atoms),
-            "canonical_entity_ids": [],
-            "canonical_relation_ids": sorted(
-                relation.canonical_relation_id for relation in canonical_relations
-            ),
+            "canonical_atom_ids": revision_atom_ids,
+            "canonical_entity_ids": revision_entity_ids,
+            "canonical_relation_ids": revision_relation_ids,
             "created_at": created_at,
             "created_by": created_by,
             "parent_revision_id": parent_revision_id,
@@ -249,6 +280,89 @@ def commit_reviewed_candidates_to_canonical_graph(
         revision=revision,
     )
     return result
+
+
+def _load_parent_graph_state(
+    canonical_graph_store: CanonicalGraphStore,
+    *,
+    parent_revision_id: str | None,
+    scope_type: str,
+    scope_id: str,
+) -> _ParentGraphState:
+    if parent_revision_id is None:
+        return _ParentGraphState()
+    parent = canonical_graph_store.get_revision(parent_revision_id)
+    if parent is None:
+        raise ContractValidationError("parent canonical graph revision is missing")
+    if parent.scope_type != scope_type or parent.scope_id != scope_id:
+        raise ContractValidationError("parent canonical graph revision scope mismatch")
+    if parent.status != "committed":
+        raise ContractValidationError("parent canonical graph revision is not committed")
+
+    atom_id_by_candidate_id: dict[str, str] = {}
+    for atom_id in parent.canonical_atom_ids:
+        atom = canonical_graph_store.get_atom(atom_id)
+        if atom is None:
+            raise ContractValidationError("parent canonical graph atom is missing")
+        if atom.scope_type != scope_type or atom.scope_id != scope_id:
+            raise ContractValidationError("parent canonical atom scope mismatch")
+        for candidate_id in atom.source_candidate_atom_ids:
+            existing = atom_id_by_candidate_id.get(candidate_id)
+            if existing is not None and existing != atom.canonical_atom_id:
+                raise ContractValidationError("parent candidate atom mapping is ambiguous")
+            atom_id_by_candidate_id[candidate_id] = atom.canonical_atom_id
+
+    for entity_id in parent.canonical_entity_ids:
+        entity = canonical_graph_store.get_entity(entity_id)
+        if entity is None:
+            raise ContractValidationError("parent canonical graph entity is missing")
+        if entity.scope_type != scope_type or entity.scope_id != scope_id:
+            raise ContractValidationError("parent canonical entity scope mismatch")
+
+    parent_member_ids = set(parent.canonical_atom_ids) | set(parent.canonical_entity_ids)
+    for relation_id in parent.canonical_relation_ids:
+        relation = canonical_graph_store.get_relation(relation_id)
+        if relation is None:
+            raise ContractValidationError("parent canonical graph relation is missing")
+        if relation.scope_type != scope_type or relation.scope_id != scope_id:
+            raise ContractValidationError("parent canonical relation scope mismatch")
+        if (
+            relation.source_id not in parent_member_ids
+            or relation.target_id not in parent_member_ids
+        ):
+            raise ContractValidationError(
+                "parent canonical relation endpoint is not a revision member"
+            )
+
+    return _ParentGraphState(
+        canonical_atom_ids=list(parent.canonical_atom_ids),
+        canonical_entity_ids=list(parent.canonical_entity_ids),
+        canonical_relation_ids=list(parent.canonical_relation_ids),
+        atom_id_by_candidate_id=atom_id_by_candidate_id,
+    )
+
+
+def _merge_candidate_atom_resolution(
+    parent_mapping: Mapping[str, str],
+    new_mapping: Mapping[str, str],
+) -> dict[str, str]:
+    merged = dict(parent_mapping)
+    for candidate_id, atom_id in new_mapping.items():
+        existing = merged.get(candidate_id)
+        if existing is not None and existing != atom_id:
+            raise ContractValidationError("candidate atom already resolves to canonical atom")
+        merged[candidate_id] = atom_id
+    return merged
+
+
+def _merge_graph_membership(
+    parent_ids: Sequence[str],
+    new_ids: Sequence[str],
+    field_name: str,
+) -> list[str]:
+    merged = list(parent_ids) + list(new_ids)
+    _validate_unique_canonical_ids(merged, field_name)
+    return sorted(merged)
 
 
 def _canonical_atom_from_candidate(

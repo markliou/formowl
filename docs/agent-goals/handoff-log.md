@@ -88,3 +88,22 @@ status in each role's goal file and task completion in
   non-authoritative blocked snapshots while excluding runtime results,
   operator real roots, canonical evidence packets, and local long-form handoff
   history.
+- 2026-06-27 canonical commit rework result: reviewed canonical graph commit
+  workflow rework completed. Child graph revisions now preserve same-scope
+  committed parent atom/entity/relation membership, relation commits can
+  resolve endpoints through parent/current candidate-to-canonical atom mappings,
+  relation-only commits require reviewed relations with resolvable endpoints,
+  empty commits are rejected, and corrupt parent relation endpoints are rejected
+  before child writes. Dev-container verification passed: changed-file Ruff
+  check and format check, focused canonical workflow unittest 16 OK, full main
+  repo unittest 252 OK, default KG acceptance `passed_with_explicit_limits`,
+  strict KG acceptance failed only on the known expected failed/blocked items,
+  and KG-eval unittest 360 OK. GPT/Codex reviewers `Kuhn-GPT`,
+  `Goodall-GPT`, and `Pasteur-GPT` agreed on the final diff after Pasteur's
+  parent entity/relation membership test-coverage blocker was fixed.
+  Antigravity Gemini reviewers `Lamport-Sandbox`, `Ada-Sandbox`, and
+  `Curie-Sandbox` agreed through real `agy` on the implementation diff; a
+  later attempt to send the test-only final diff to `agy` was blocked by
+  sandbox/tenant data-egress policy, and no workaround was attempted. The full
+  KG real-evidence objective remains active with the same four failed broad
+  gates.

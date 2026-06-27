@@ -57,10 +57,12 @@ reported.
 - The `Complete KG research acceptance gate` completion claim is rejected for
   the full KG objective. The stricter broad acceptance state is still
   `overall_passed=false` with the four failed real-evidence gates listed above.
-- The reviewed canonical graph commit workflow is returned for rework. It must
-  demonstrate incremental graph revisions that retain parent revision atoms,
-  entities, and relations, and relation commits that can resolve against
-  existing canonical endpoints under governance.
+- The reviewed canonical graph commit workflow was returned for rework and the
+  rework slice was completed on 2026-06-27. It now demonstrates incremental
+  graph revisions that retain parent revision atoms, entities, and relations,
+  and relation commits that can resolve against existing canonical endpoints
+  under governance. This does not change the broad real-evidence acceptance
+  state.
 - Portability rework started on 2026-06-27: `.gitignore` now allows the
   sanitized `.formowl/kg-eval` harness, restart note, fixtures, templates, work
   orders, work-packet previews, and non-authoritative blocked-state snapshots
@@ -363,3 +365,27 @@ model.
   packets, and long local handoff history, and tracks only fixtures plus
   non-authoritative blocked snapshots. No reviewer approval changes the broad
   KG completion state.
+- 2026-06-27 canonical commit rework checkpoint: reviewed canonical graph commit
+  workflow rework is complete. `commit_reviewed_candidates_to_canonical_graph`
+  now carries same-scope committed parent graph membership forward, reconstructs
+  parent candidate-to-canonical atom resolution for child relation commits,
+  supports reviewed relation-only commits when endpoints resolve through the
+  parent/current mapping, rejects empty commits, rejects corrupt parent relation
+  endpoints before child writes, and still persists only through the governed
+  canonical store path. Dev-container verification passed: changed-file Ruff
+  check and format check, focused canonical workflow unittest 16 OK, full main
+  repo unittest 252 OK, default KG acceptance `passed_with_explicit_limits`,
+  strict KG acceptance failed only on the known expected
+  `production_adapter_readiness` failed and
+  `latency_scalability_enterprise_claims` blocked items, and KG-eval unittest
+  360 OK. Reviewer state: GPT/Codex `Kuhn-GPT`, `Goodall-GPT`, and
+  `Pasteur-GPT` agreed on the final diff after Pasteur's blocker about
+  parent entity/relation membership test coverage was fixed. Antigravity
+  Gemini `Lamport-Sandbox`, `Ada-Sandbox`, and `Curie-Sandbox` agreed through
+  real `agy` on the implementation diff; an attempted final re-review after
+  the test-only blocker fix was rejected by sandbox/tenant data-egress policy,
+  and no workaround was attempted. The broad KG objective remains `active`:
+  `.formowl/kg-eval` still reports `overall_passed=false`, 8 passed gates, and
+  4 failed gates for `fair_external_baseline_comparison`,
+  `annotation_adjudication_protocol`, `multimodal_semantic_validation`, and
+  `production_adapter_paths`.

@@ -876,7 +876,7 @@ These groups can be split across multiple agents after Slice 1 is stable.
     helpers. Focused policy tests cover round-trip serialization, versioned id
     stability, active/kind checks, and malformed rule/id/raw-reference inputs.
     Canonical dev-container unittest ran 211 tests OK.
-- [ ] Implement reviewed canonical graph commit workflow.
+- [x] Implement reviewed canonical graph commit workflow.
   - Owner paths: `python/formowl_graph/canonical.py`,
     `python/formowl_graph/resolution.py`
   - Proof: only governed backend code can create canonical commits.
@@ -900,6 +900,24 @@ These groups can be split across multiple agents after Slice 1 is stable.
     to atoms included in the same commit. Rework must prove incremental commits
     preserve prior graph membership and can safely relate to existing canonical
     endpoints without lineage overwrite or partial writes.
+  - Rework note: 2026-06-27 rework completed. Child canonical graph revisions
+    now load and validate same-scope committed parent revision state, retain
+    parent atom/entity/relation membership, allow reviewed relation-only commits
+    to resolve endpoints through parent candidate-to-canonical atom mappings,
+    reject empty commits, reject corrupt parent relation endpoints, and keep
+    all persistence behind `_persist_reviewed_commit`. Dev-container
+    verification passed: changed-file Ruff check and format check, focused
+    canonical workflow unittest ran 16 tests OK, full unittest ran 252 tests OK,
+    default KG acceptance returned `passed_with_explicit_limits`, strict KG
+    acceptance failed only on the known `production_adapter_readiness` failed
+    and `latency_scalability_enterprise_claims` blocked items, and KG-eval
+    unittest ran 360 tests OK. Reviewer gate for this rework slice: GPT/Codex
+    reviewers `Kuhn-GPT`, `Goodall-GPT`, and `Pasteur-GPT` agreed after
+    Pasteur's test-coverage blocker was fixed; Antigravity Gemini reviewers
+    `Lamport-Sandbox`, `Ada-Sandbox`, and `Curie-Sandbox` agreed on the
+    implementation diff through `agy`. A later attempt to send the test-only
+    final diff to `agy` was blocked by sandbox/tenant data-egress policy, so no
+    workaround was attempted.
 - [x] Add lifecycle events for split, merge, archive, deprecate, supersede, and
   equivalence.
   - Owner paths: `python/formowl_graph/`
