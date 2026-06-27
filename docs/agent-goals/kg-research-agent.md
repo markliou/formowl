@@ -540,3 +540,22 @@ exact command and write scope.
   `inputs/production_adapter_evidence_packet.json`. `inputs/*_real` roots are
   present but currently contain zero real or candidate artifacts according to
   preflight. The overall KG goal remains `active`.
+- 2026-06-27 operator-guide checkpoint: added
+  `.formowl/kg-eval/real_evidence_operator_guide.py`,
+  `.formowl/kg-eval/test_real_evidence_operator_guide.py`, and the tracked
+  generated guide
+  `.formowl/kg-eval/work_packets/remaining_real_evidence_operator_guide.md`.
+  The guide is generated from `real_evidence_collection_work_orders.py` and
+  gives operators a human-readable checklist for the four remaining
+  real-evidence gates, including current blockers, required artifacts,
+  candidate-only intake commands, validation commands, and safety boundaries.
+  It is explicitly non-authoritative: it accepts no evidence, promotes no
+  packets, writes no canonical input packets, and does not count as an
+  acceptance gate. Dev-container verification passed: focused operator-guide
+  unittest 6 OK, full KG-eval unittest 402 OK, changed-file Ruff check and
+  format check, refreshed broad KG-eval reports, main repo unittest 252 OK,
+  default main KG acceptance `passed_with_explicit_limits`, and strict main KG
+  acceptance still failed only on the known
+  `production_adapter_readiness`/`latency_scalability_enterprise_claims`
+  limits. Broad KG-eval remains `overall_passed=false` with the same four
+  failed real-evidence gates.

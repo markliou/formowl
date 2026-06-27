@@ -212,3 +212,18 @@ status in each role's goal file and task completion in
   `multimodal_semantic_validation`, and `production_adapter_paths`). Preflight
   reports `inputs/*_real` roots exist but currently contain zero real or
   candidate artifacts, and all four canonical input packets are missing.
+- 2026-06-27 operator-guide progress: added a generated, tracked human-readable
+  guide for collecting the remaining broad KG real-evidence packets at
+  `.formowl/kg-eval/work_packets/remaining_real_evidence_operator_guide.md`.
+  The generator is `.formowl/kg-eval/real_evidence_operator_guide.py` and is
+  sourced only from the non-authoritative work-order report. It lists blockers,
+  required artifacts, candidate-only intake commands, validation commands, and
+  safety boundaries for all four remaining gates, while explicitly accepting
+  no evidence, promoting no packets, writing no canonical packets, and counting
+  as no acceptance gate. Verification passed in the dev container: focused
+  operator-guide unittest 6 OK, full KG-eval unittest 402 OK, changed-file Ruff
+  check and format check, refreshed broad KG-eval reports, main repo unittest
+  252 OK, and main KG acceptance remains unchanged
+  (`passed_with_explicit_limits`; strict fails only on known limits). The full
+  KG objective is still active and broad KG-eval remains `overall_passed=false`
+  with the same four failed real-evidence gates.

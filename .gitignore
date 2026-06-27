@@ -20,6 +20,7 @@
 !.formowl/kg-eval/work_packets/
 .formowl/kg-eval/work_packets/*
 !.formowl/kg-eval/work_packets/*.json
+!.formowl/kg-eval/work_packets/*.md
 .formowl/kg-eval/inputs/*_real/
 .formowl/kg-eval/inputs/*_real/**
 .formowl/kg-eval/inputs/fair_external_baseline_run_packet.json
