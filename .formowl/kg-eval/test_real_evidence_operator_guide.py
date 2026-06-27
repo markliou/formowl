@@ -78,10 +78,16 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
                 self.assertIn(response_contract["candidate_output_dir"], text)
                 self.assertIn(response_contract["assembly_manifest_output"], text)
                 self.assertIn(
+                    f"--assembly-manifest {response_contract['assembly_manifest_output']} --validate",
+                    text,
+                )
+                self.assertIn(
                     response_contract["canonical_packet_not_written"],
                     text,
                 )
                 self.assertIn("Candidate-only intake command:", text)
+                self.assertIn("Optional non-evidence scaffold command:", text)
+                self.assertIn("Candidate manifest emitted by intake:", text)
                 self.assertIn("Validation sequence after candidate artifacts exist:", text)
 
     def test_guide_is_sourced_from_work_order_report(self) -> None:

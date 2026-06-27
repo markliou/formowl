@@ -56,6 +56,12 @@ FAIR_RESPONSE_INTAKE_OUTPUT_DIR = "inputs/fair_baseline_real/OPERATOR_RUN_ID"
 FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT = (
     "work_packets/fair_external_baseline_comparison_candidate_manifest.json"
 )
+RESPONSE_INTAKE_MANIFEST_OUTPUTS = {
+    "fair_external_baseline_comparison": FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT,
+    "annotation_adjudication_protocol": HUMAN_RESPONSE_INTAKE_MANIFEST_OUTPUT,
+    "multimodal_semantic_validation": ENTERPRISE_RESPONSE_INTAKE_MANIFEST_OUTPUT,
+    "production_adapter_paths": PRODUCTION_RESPONSE_INTAKE_MANIFEST_OUTPUT,
+}
 ACCEPTANCE_SHAPED_STATES = {
     "pass",
     "passed",
@@ -107,9 +113,13 @@ def _common_commands(row: dict[str, Any], gate_config: dict[str, Any]) -> dict[s
     assembler = gate_config["assembler_module"]
     validator = row["validator_module"]
     manifest_path = f"work_orders/{row['gate_id']}_assembly_manifest.json"
+    candidate_manifest_path = RESPONSE_INTAKE_MANIFEST_OUTPUTS[row["gate_id"]]
     commands = {
         "assembly_manifest_path": manifest_path,
-        "validate_candidate_packet": f"python3 {assembler} --assembly-manifest {manifest_path} --validate",
+        "candidate_manifest_path": candidate_manifest_path,
+        "validate_candidate_packet": (
+            f"python3 {assembler} --assembly-manifest {candidate_manifest_path} --validate"
+        ),
         "run_gate_validator_after_manual_packet_review": f"python3 {validator}",
         "rerun_total_acceptance": "python3 kg_total_acceptance_suite.py",
         "rerun_objective_audit": "python3 kg_objective_completion_audit.py",

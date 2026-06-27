@@ -633,3 +633,24 @@ exact command and write scope.
   rejected before execution by tenant policy as private repository disclosure
   to an untrusted external Antigravity service; no packet was sent and no
   workaround or alternate external channel was attempted.
+- 2026-06-28 candidate-manifest validation guidance checkpoint: collection
+  work orders and the tracked operator guide now direct post-intake validation
+  at the candidate manifests emitted by response intake under
+  `work_packets/*_candidate_manifest.json`, not the non-evidence scaffold
+  manifests under `work_orders/`. Scaffold generation remains documented only
+  as optional shape inspection. `_common_commands` now fails closed if a gate
+  has no response-intake candidate manifest mapping, instead of falling back to
+  scaffold-backed validation. This slice writes no candidate artifacts,
+  promotes no evidence, writes no canonical packets, and does not count as an
+  acceptance gate. Dev-container verification passed: operator guide
+  `--check`, focused work-order/guide unittest 26 OK, full KG-eval unittest
+  417 OK, main repo unittest 252 OK, changed-file Ruff check and format check,
+  refreshed broad reports, and default main KG acceptance
+  `passed_with_explicit_limits`. Broad KG-eval remains `overall_passed=false`,
+  8 passed gates, and the same four failed broad real-evidence gates;
+  `inputs/*_real` has no files and the four canonical broad packets remain
+  absent. GPT/Codex reviewers `Bohr`, `Euler`, and `Lorentz` returned
+  `RELEASE_DECISION: AGREE` after Lorentz's blocker about scaffold fallback
+  was fixed. Antigravity review/write delegation remains blocked by tenant
+  policy for bounded FormOwl KG repository disclosure; no packet was sent and
+  no workaround or alternate external channel was attempted.

@@ -41,6 +41,35 @@ This snapshot supersedes older "latest work" notes below when they conflict.
 
 Latest completed local slice, updated 2026-06-27:
 
+- Candidate-manifest validation guidance completed on 2026-06-28.
+- `real_evidence_collection_work_orders.py` and the tracked operator guide now
+  validate the candidate manifests emitted by response intake under
+  `work_packets/*_candidate_manifest.json`.
+- `work_orders/*_assembly_manifest.json` generation remains documented only as
+  optional non-evidence scaffold inspection.
+- `_common_commands` fails closed if a remaining gate lacks a response-intake
+  candidate manifest mapping instead of falling back to scaffold validation.
+- This slice writes no candidate artifacts, promotes no evidence, writes no
+  canonical packets, and does not count as an acceptance gate.
+- Dev-container verification passed:
+  - operator guide `--check`
+  - focused work-order/guide unittest 26 OK
+  - full KG-eval unittest 417 OK
+  - main repo unittest 252 OK
+  - changed-file Ruff check and format check
+  - refreshed broad KG-eval reports
+  - main KG acceptance unchanged: default `passed_with_explicit_limits`
+- Broad KG-eval remains `overall_passed=false`, with 8 passed gates and the
+  same four failed real-evidence gates. `inputs/*_real` has no files and the
+  four canonical broad packets remain absent.
+- GPT/Codex reviewers `Bohr`, `Euler`, and `Lorentz` returned
+  `RELEASE_DECISION: AGREE` after Lorentz's scaffold-fallback blocker was
+  fixed.
+- Antigravity remains blocked by tenant policy for bounded FormOwl KG
+  repository disclosure; no packet was sent and no workaround was attempted.
+
+Previous completed local slice, updated 2026-06-28:
+
 - Submission-manifest CLI/work-packet tracking hardening completed on
   2026-06-28.
 - `real_evidence_submission_manifest.py --manifest` validates the

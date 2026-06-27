@@ -554,7 +554,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertNotEqual(baseline["work_orders"], changed["work_orders"])
         self.assertNotEqual(baseline["report_sha256"], changed["report_sha256"])
 
-    def test_commands_use_work_order_manifests_and_do_not_point_manifests_into_real_roots(
+    def test_commands_validate_intake_candidate_manifests_and_keep_scaffolds_non_evidence(
         self,
     ) -> None:
         report = work_orders.build_report()
@@ -564,7 +564,22 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
                 commands = row["commands"]
                 self.assertTrue(commands["assembly_manifest_path"].startswith("work_orders/"))
                 self.assertNotIn(row["real_artifact_root"], commands["assembly_manifest_path"])
+                self.assertEqual(
+                    commands["candidate_manifest_path"],
+                    work_orders.RESPONSE_INTAKE_MANIFEST_OUTPUTS[row["gate_id"]],
+                )
+                self.assertTrue(commands["candidate_manifest_path"].startswith("work_packets/"))
+                self.assertTrue(
+                    commands["candidate_manifest_path"].endswith("_candidate_manifest.json")
+                )
+                self.assertNotIn(row["real_artifact_root"], commands["candidate_manifest_path"])
                 self.assertIn(row["assembler_module"], commands["validate_candidate_packet"])
+                self.assertIn(
+                    commands["candidate_manifest_path"], commands["validate_candidate_packet"]
+                )
+                self.assertNotIn(
+                    commands["assembly_manifest_path"], commands["validate_candidate_packet"]
+                )
                 self.assertIn("--validate", commands["validate_candidate_packet"])
                 self.assertNotIn("--promote", commands["validate_candidate_packet"])
                 self.assertNotIn("promote_candidate_packet_after_validator_passes", commands)
@@ -590,8 +605,25 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
                     self.assertNotIn("--promote", command)
                     self.assertNotIn(" cp ", f" {command} ")
                     self.assertNotIn(" mv ", f" {command} ")
-                self.assertNotIn("> inputs/", command)
-                self.assertNotIn(">> inputs/", command)
+                    self.assertNotIn("> inputs/", command)
+                    self.assertNotIn(">> inputs/", command)
+
+    def test_missing_response_intake_manifest_mapping_fails_closed(self) -> None:
+        report = work_orders.build_report()
+        fair = self._order(report, "fair_external_baseline_comparison")
+        mapping = dict(work_orders.RESPONSE_INTAKE_MANIFEST_OUTPUTS)
+        mapping.pop("fair_external_baseline_comparison")
+        original = work_orders.RESPONSE_INTAKE_MANIFEST_OUTPUTS
+
+        try:
+            work_orders.RESPONSE_INTAKE_MANIFEST_OUTPUTS = mapping
+            with self.assertRaises(KeyError):
+                work_orders._common_commands(
+                    fair,
+                    preflight.EXPECTED_GATES["fair_external_baseline_comparison"],
+                )
+        finally:
+            work_orders.RESPONSE_INTAKE_MANIFEST_OUTPUTS = original
 
     def test_fair_work_order_includes_candidate_only_response_intake_command(self) -> None:
         report = work_orders.build_report()

@@ -215,6 +215,31 @@ def _commands_section(order: dict[str, Any]) -> list[str]:
         lines.extend(_command_block(seal_commands[0]))
     else:
         lines.append("- no candidate intake command is available")
+    scaffold_command = commands.get("generate_non_evidence_assembly_manifest_scaffold")
+    if isinstance(scaffold_command, str):
+        lines.extend(
+            [
+                "",
+                "Optional non-evidence scaffold command:",
+                "",
+                "Use this only to inspect the expected assembly-manifest shape.",
+                "It is not the candidate manifest emitted by response intake.",
+                "",
+            ]
+        )
+        lines.extend(_command_block(scaffold_command))
+    candidate_manifest_path = commands.get("candidate_manifest_path")
+    if isinstance(candidate_manifest_path, str):
+        lines.extend(
+            [
+                "",
+                "Candidate manifest emitted by intake:",
+                "",
+                "```text",
+                candidate_manifest_path,
+                "```",
+            ]
+        )
     lines.extend(
         [
             "",
@@ -223,7 +248,6 @@ def _commands_section(order: dict[str, Any]) -> list[str]:
         ]
     )
     for key in (
-        "generate_non_evidence_assembly_manifest_scaffold",
         "validate_candidate_packet",
         "run_gate_validator_after_manual_packet_review",
         "rerun_total_acceptance",

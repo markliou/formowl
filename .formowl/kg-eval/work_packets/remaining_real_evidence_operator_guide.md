@@ -1,7 +1,7 @@
 # Remaining KG Real-Evidence Operator Guide
 
 Source report: `kg_real_evidence_collection_work_orders_v1`
-Source report sha256: `f67f4834225dcdadc4c94a7ada3e357677e966c926866ab298150c6c12dce2b8`
+Source report sha256: `860e78a297b61e7c5c4613a76a6a860ebcd353c9509c6fcbf57fea9bfee3435e`
 
 ## Authority Boundary
 
@@ -191,16 +191,26 @@ a unique operator run id. This command writes only candidate artifacts.
 python3 fair_baseline_response_intake.py --work-packet work_packets/fair_baseline_run_work_packet_preview.json --response-packet OPERATOR_FAIR_BASELINE_RESPONSE_PACKET_JSON --output-dir inputs/fair_baseline_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/fair_external_baseline_comparison_candidate_manifest.json
 ```
 
-Validation sequence after candidate artifacts exist:
+Optional non-evidence scaffold command:
 
-generate_non_evidence_assembly_manifest_scaffold:
+Use this only to inspect the expected assembly-manifest shape.
+It is not the candidate manifest emitted by response intake.
+
 ```sh
 python3 fair_external_baseline_assembly_manifest_generator.py --output work_orders/fair_external_baseline_comparison_assembly_manifest.json
 ```
 
+Candidate manifest emitted by intake:
+
+```text
+work_packets/fair_external_baseline_comparison_candidate_manifest.json
+```
+
+Validation sequence after candidate artifacts exist:
+
 validate_candidate_packet:
 ```sh
-python3 fair_external_baseline_packet_assembler.py --assembly-manifest work_orders/fair_external_baseline_comparison_assembly_manifest.json --validate
+python3 fair_external_baseline_packet_assembler.py --assembly-manifest work_packets/fair_external_baseline_comparison_candidate_manifest.json --validate
 ```
 
 run_gate_validator_after_manual_packet_review:
@@ -320,16 +330,26 @@ a unique operator run id. This command writes only candidate artifacts.
 python3 human_annotation_response_intake.py --work-packet work_packets/human_annotation_work_packet_preview.json --response-packet OPERATOR_RESPONSE_PACKET_JSON --output-dir inputs/human_annotation_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/annotation_adjudication_protocol_candidate_manifest.json
 ```
 
-Validation sequence after candidate artifacts exist:
+Optional non-evidence scaffold command:
 
-generate_non_evidence_assembly_manifest_scaffold:
+Use this only to inspect the expected assembly-manifest shape.
+It is not the candidate manifest emitted by response intake.
+
 ```sh
 python3 human_annotation_assembly_manifest_generator.py --output work_orders/annotation_adjudication_protocol_assembly_manifest.json
 ```
 
+Candidate manifest emitted by intake:
+
+```text
+work_packets/annotation_adjudication_protocol_candidate_manifest.json
+```
+
+Validation sequence after candidate artifacts exist:
+
 validate_candidate_packet:
 ```sh
-python3 human_annotation_packet_assembler.py --assembly-manifest work_orders/annotation_adjudication_protocol_assembly_manifest.json --validate
+python3 human_annotation_packet_assembler.py --assembly-manifest work_packets/annotation_adjudication_protocol_candidate_manifest.json --validate
 ```
 
 run_gate_validator_after_manual_packet_review:
@@ -452,16 +472,26 @@ a unique operator run id. This command writes only candidate artifacts.
 python3 enterprise_multimodal_response_intake.py --work-packet work_packets/enterprise_multimodal_collection_packet_preview.json --response-packet OPERATOR_ENTERPRISE_RESPONSE_PACKET_JSON --output-dir inputs/enterprise_multimodal_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/multimodal_semantic_validation_candidate_manifest.json
 ```
 
-Validation sequence after candidate artifacts exist:
+Optional non-evidence scaffold command:
 
-generate_non_evidence_assembly_manifest_scaffold:
+Use this only to inspect the expected assembly-manifest shape.
+It is not the candidate manifest emitted by response intake.
+
 ```sh
 python3 enterprise_multimodal_assembly_manifest_generator.py --output work_orders/multimodal_semantic_validation_assembly_manifest.json
 ```
 
+Candidate manifest emitted by intake:
+
+```text
+work_packets/multimodal_semantic_validation_candidate_manifest.json
+```
+
+Validation sequence after candidate artifacts exist:
+
 validate_candidate_packet:
 ```sh
-python3 enterprise_multimodal_packet_assembler.py --assembly-manifest work_orders/multimodal_semantic_validation_assembly_manifest.json --validate
+python3 enterprise_multimodal_packet_assembler.py --assembly-manifest work_packets/multimodal_semantic_validation_candidate_manifest.json --validate
 ```
 
 run_gate_validator_after_manual_packet_review:
@@ -603,16 +633,26 @@ a unique operator run id. This command writes only candidate artifacts.
 python3 production_adapter_response_intake.py --work-packet work_packets/production_adapter_collection_packet_preview.json --response-packet OPERATOR_PRODUCTION_ADAPTER_RESPONSE_PACKET_JSON --output-dir inputs/production_adapter_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/production_adapter_paths_candidate_manifest.json
 ```
 
-Validation sequence after candidate artifacts exist:
+Optional non-evidence scaffold command:
 
-generate_non_evidence_assembly_manifest_scaffold:
+Use this only to inspect the expected assembly-manifest shape.
+It is not the candidate manifest emitted by response intake.
+
 ```sh
 python3 production_adapter_assembly_manifest_generator.py --output work_orders/production_adapter_paths_assembly_manifest.json
 ```
 
+Candidate manifest emitted by intake:
+
+```text
+work_packets/production_adapter_paths_candidate_manifest.json
+```
+
+Validation sequence after candidate artifacts exist:
+
 validate_candidate_packet:
 ```sh
-python3 production_adapter_packet_assembler.py --assembly-manifest work_orders/production_adapter_paths_assembly_manifest.json --validate
+python3 production_adapter_packet_assembler.py --assembly-manifest work_packets/production_adapter_paths_candidate_manifest.json --validate
 ```
 
 run_gate_validator_after_manual_packet_review:
