@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -131,7 +132,13 @@ def sha256_json(payload: object) -> str:
 
 
 def sha256_file(path: Path) -> str | None:
-    if not path.exists():
+    if path.is_symlink() or not path.exists():
+        return None
+    try:
+        metadata = path.stat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(metadata.st_mode):
         return None
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -146,11 +153,29 @@ def load_json(path: Path) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def read_json_object_status(path: Path) -> tuple[dict[str, Any], str | None]:
-    if not path.exists():
-        return {}, None
+def canonical_packet_path_status(path: Path) -> tuple[str | None, str | None]:
     if path.is_symlink():
-        return {}, "canonical input packet is a symlink"
+        return "symlink_rejected", "canonical input packet is a symlink"
+    if not path.exists():
+        return None, None
+    try:
+        metadata = path.stat()
+    except OSError as exc:
+        return (
+            "metadata_unreadable",
+            f"canonical input packet metadata unreadable: {exc.__class__.__name__}",
+        )
+    if not stat.S_ISREG(metadata.st_mode):
+        return "non_regular_rejected", "canonical input packet is not a file"
+    if metadata.st_nlink > 1:
+        return "hardlink_rejected", "canonical input packet hardlink alias not accepted"
+    return None, None
+
+
+def read_json_object_status(path: Path) -> tuple[dict[str, Any], str | None]:
+    _, path_error = canonical_packet_path_status(path)
+    if path_error is not None or not path.exists():
+        return {}, path_error
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -318,14 +343,29 @@ def scan_test_fixture_inputs() -> dict[str, Any]:
     }
 
 
-def template_rejection_report(gate: dict[str, Any]) -> dict[str, Any]:
+def template_rejection_report(
+    gate: dict[str, Any], *, skip_validator: bool = False
+) -> dict[str, Any]:
     template_path = gate["template"]
-    validator = gate["validator"]
     template_payload = load_json(template_path)
-    validator_report = validator.build_report(template_payload)
     template_rel = (
         str(template_path.relative_to(ROOT)) if template_path.exists() else gate["template_rel"]
     )
+    if skip_validator:
+        return {
+            "template_path": template_rel,
+            "template_exists": template_path.exists(),
+            "template_contains_non_evidence_markers": all(
+                template_payload.get(marker) is True for marker in TEMPLATE_MARKERS
+            ),
+            "template_outside_canonical_input_path": template_rel != gate["input_packet_rel"],
+            "template_validator_status": "skipped_due_to_canonical_packet_path_hazard",
+            "template_rejected_by_validator": False,
+            "template_validator_blockers": [
+                "template validator skipped due to canonical packet path hazard"
+            ],
+        }
+    validator_report = gate["validator"].build_report(template_payload)
     return {
         "template_path": template_rel,
         "template_exists": template_path.exists(),
@@ -341,7 +381,7 @@ def template_rejection_report(gate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def safe_validator_report(gate: dict[str, Any]) -> dict[str, Any]:
+def safe_validator_report(gate: dict[str, Any], *, skip_validator: bool = False) -> dict[str, Any]:
     packet_path = gate["input_packet"]
     _, packet_error = read_json_object_status(packet_path)
     if packet_error is not None:
@@ -350,6 +390,14 @@ def safe_validator_report(gate: dict[str, Any]) -> dict[str, Any]:
             "blockers": [packet_error],
             "metrics": {},
             "validator_error": packet_error,
+        }
+    if skip_validator:
+        message = "validator skipped due to canonical packet path hazard"
+        return {
+            "passed": False,
+            "blockers": [message],
+            "metrics": {},
+            "validator_error": message,
         }
     try:
         report = gate["validator"].build_report()
@@ -483,7 +531,10 @@ def packet_surface_report(
 ) -> dict[str, Any]:
     packet_path = gate["input_packet"]
     packet_payload, packet_error = read_json_object_status(packet_path)
-    packet_text_scan = _scan_text(packet_path) if packet_path.exists() else {}
+    path_state, _ = canonical_packet_path_status(packet_path)
+    packet_text_scan = (
+        _scan_text(packet_path) if packet_path.exists() and packet_error is None else {}
+    )
     checklist_row = checklist_row_for_gate(gate_id)
     expected_artifact_id = checklist_row.get("required_packet_artifact_id")
     expected_evidence_kind = checklist_row.get("required_evidence_kind")
@@ -494,10 +545,10 @@ def packet_surface_report(
         and packet_payload.get("evidence_kind") == expected_evidence_kind
     )
     validator_clear = validator_report.get("passed") is True
-    if not packet_path.exists():
+    if path_state is not None:
+        packet_state = path_state
+    elif not packet_path.exists():
         packet_state = "missing"
-    elif packet_path.is_symlink():
-        packet_state = "symlink_rejected"
     elif packet_error is not None or not json_object:
         packet_state = "invalid_json_or_non_object"
     elif packet_has_identity and not validator_clear:
@@ -512,11 +563,13 @@ def packet_surface_report(
     return {
         "input_packet": gate["input_packet_rel"],
         "present": packet_path.exists(),
-        "sha256": sha256_file(packet_path),
+        "sha256": sha256_file(packet_path) if path_state is None else None,
         "json_object": json_object,
         "packet_state": packet_state,
         "packet_error": packet_error,
         "symlink_rejected": packet_path.is_symlink(),
+        "hardlink_rejected": packet_state == "hardlink_rejected",
+        "non_regular_rejected": packet_state == "non_regular_rejected",
         "partial_packet": packet_state == "partial",
         "has_expected_artifact_id": json_object
         and packet_payload.get("artifact_id") == expected_artifact_id,
@@ -552,13 +605,17 @@ def collection_state(
 
 
 def gate_preflight_report(
-    gate_id: str, checklist_row: dict[str, Any], total_gate: dict[str, Any]
+    gate_id: str,
+    checklist_row: dict[str, Any],
+    total_gate: dict[str, Any],
+    *,
+    skip_validators: bool = False,
 ) -> dict[str, Any]:
     gate = EXPECTED_GATES[gate_id]
-    validator_report = safe_validator_report(gate)
+    validator_report = safe_validator_report(gate, skip_validator=skip_validators)
     real_root_scan = scan_real_root(gate["real_root"])
     packet_report = packet_surface_report(gate_id, gate, validator_report)
-    template_report = template_rejection_report(gate)
+    template_report = template_rejection_report(gate, skip_validator=skip_validators)
     validator_clear = validator_report.get("passed") is True
     return {
         "gate_id": gate_id,
@@ -594,21 +651,43 @@ def gate_preflight_report(
     }
 
 
+def canonical_packet_path_hazards() -> dict[str, dict[str, str]]:
+    hazards: dict[str, dict[str, str]] = {}
+    for gate_id, gate in EXPECTED_GATES.items():
+        packet_state, packet_error = canonical_packet_path_status(gate["input_packet"])
+        if packet_state is not None and packet_error is not None:
+            hazards[gate_id] = {
+                "packet_state": packet_state,
+                "packet_error": packet_error,
+                "input_packet": gate["input_packet_rel"],
+            }
+    return hazards
+
+
 def build_report() -> dict[str, Any]:
-    try:
-        total_report = total_suite.build_report()
-        total_error = None
-    except Exception as exc:
+    packet_path_hazards = canonical_packet_path_hazards()
+    if packet_path_hazards:
         total_report = load_json(RESULTS / "kg_total_acceptance_snapshot.json")
-        total_error = f"{exc.__class__.__name__}: {exc}"
+        total_error = "skipped total acceptance refresh due to canonical packet path hazard"
+    else:
+        try:
+            total_report = total_suite.build_report()
+            total_error = None
+        except Exception as exc:
+            total_report = load_json(RESULTS / "kg_total_acceptance_snapshot.json")
+            total_error = f"{exc.__class__.__name__}: {exc}"
     if not total_report:
         total_report = {"summary": {"failed_gate_ids": [], "overall_passed": False}, "gates": []}
-    try:
-        audit_report = objective_audit.build_report()
-        audit_error = None
-    except Exception as exc:
+    if packet_path_hazards:
         audit_report = load_json(RESULTS / "kg_objective_completion_audit.json")
-        audit_error = f"{exc.__class__.__name__}: {exc}"
+        audit_error = "skipped objective audit refresh due to canonical packet path hazard"
+    else:
+        try:
+            audit_report = objective_audit.build_report()
+            audit_error = None
+        except Exception as exc:
+            audit_report = load_json(RESULTS / "kg_objective_completion_audit.json")
+            audit_error = f"{exc.__class__.__name__}: {exc}"
     if not audit_report:
         audit_report = {"audit_sha256": None}
     summary = total_report["summary"]
@@ -638,7 +717,10 @@ def build_report() -> dict[str, Any]:
 
     gate_reports = [
         gate_preflight_report(
-            gate_id, checklist_rows.get(gate_id, {}), total_gates.get(gate_id, {})
+            gate_id,
+            checklist_rows.get(gate_id, {}),
+            total_gates.get(gate_id, {}),
+            skip_validators=bool(packet_path_hazards),
         )
         for gate_id in expected_gate_ids
     ]
@@ -690,6 +772,7 @@ def build_report() -> dict[str, Any]:
             "counts_as_acceptance_gate": False,
             "replaces_authoritative_validators": False,
         },
+        "canonical_packet_path_hazards": packet_path_hazards,
         "summary": {
             "validator_clear_gate_count": len(validator_clear_gate_ids),
             "validator_clear_gate_ids": validator_clear_gate_ids,

@@ -86,6 +86,48 @@ guard hardening:
   real-evidence objective and 8 System Backbone/product-infra items.
 - No completion claim is supported.
 
+Latest local implementation slice, updated 2026-06-28 after preflight
+canonical packet path-hazard hardening:
+
+- `real_evidence_preflight.py` now detects symlink, hardlink, and non-regular
+  canonical packet paths before refreshing total acceptance, objective audit,
+  or per-gate validators.
+- If any canonical packet path hazard exists, preflight reports
+  `canonical_packet_path_hazards`, skips the total/audit/validator refreshes,
+  leaves broad gates blocked, and avoids reading or hashing the alias packet
+  path.
+- `test_real_evidence_preflight.py` covers symlink, hardlink, and non-regular
+  canonical packet hazards, no-validator-run behavior under hazards,
+  packet-surface state, and cleanup that preserves pre-existing packet paths.
+- This slice accepts no evidence, writes no candidate artifacts, promotes no
+  packets, writes no canonical broad packets, and does not count as an
+  acceptance gate.
+- Verification passed:
+  - dev-container focused preflight unittest 17 OK
+  - dev-container full KG-eval unittest 428 OK
+  - dev-container main repo unittest 252 OK
+  - dev-container full Ruff check and format-check
+  - dev-container `real_evidence_operator_guide.py --check`
+  - dev-container `real_evidence_submission_manifest.py --check-template`
+  - refreshed broad reports:
+    `kg_total_acceptance_suite.py`, `kg_objective_completion_audit.py`,
+    `real_evidence_preflight.py`, and
+    `real_evidence_collection_work_orders.py`
+  - default main KG acceptance `passed_with_explicit_limits`
+  - strict main KG acceptance still exits nonzero only for known limits:
+    `production_adapter_readiness` and
+    `latency_scalability_enterprise_claims`
+- Broad KG-eval remains incomplete: `overall_passed=false`, 8 passed gates,
+  and the same four failed real-evidence gates. Objective audit remains
+  `objective_complete=false`; all four real roots have no files, and the four
+  canonical broad packets remain absent.
+- GPT/Codex reviewer gate passed 3/3: `Beauvoir`, `Dewey`, and `Rawls`.
+  `Beauvoir` initially blocked on total/audit refresh running before preflight
+  path-hazard handling; `Dewey` initially blocked on unsafe direct canonical
+  test writes and incomplete no-validator-run coverage. Both blockers were
+  fixed and re-reviewed with final `RELEASE_DECISION: AGREE`. A mistakenly
+  spawned no-op `Laplace` agent is not counted.
+
 Latest local implementation slice, updated 2026-06-28:
 
 - The four broad real-evidence validators now reject canonical input packet

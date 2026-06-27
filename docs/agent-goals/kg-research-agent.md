@@ -835,3 +835,31 @@ Reviewer cost-control rules:
   destructive directory cleanup in the test helper, then agreed after the
   helper and directory coverage were fixed. A mistakenly spawned no-op
   `Averroes` reviewer is not counted.
+- 2026-06-28 preflight canonical packet path-hazard checkpoint:
+  `real_evidence_preflight.py` now detects symlink, hardlink, and non-regular
+  canonical packet paths before refreshing broad acceptance or objective-audit
+  reports. When such a hazard exists, preflight reports
+  `canonical_packet_path_hazards`, skips total/audit/gate validator refreshes,
+  leaves the affected gates blocked, and avoids reading or hashing the alias.
+  Focused tests cover symlink, hardlink, and non-regular packet hazards,
+  no-validator-run behavior under hazards, packet-surface state, and cleanup
+  that preserves pre-existing packet paths. Verification passed in the dev
+  container: focused
+  preflight unittest 17 OK; full KG-eval unittest 428 OK; main repo unittest
+  252 OK; full Ruff check and format-check; refreshed
+  `kg_total_acceptance_suite.py`, `kg_objective_completion_audit.py`,
+  `real_evidence_preflight.py`, `real_evidence_collection_work_orders.py`;
+  operator guide `--check`; submission template `--check-template`; and
+  default main KG acceptance `passed_with_explicit_limits`. Strict main KG
+  acceptance still exits nonzero only for the known
+  `production_adapter_readiness` failed item and
+  `latency_scalability_enterprise_claims` blocked item. Broad KG-eval remains
+  incomplete with `overall_passed=false`, 8 passed gates, and the same four
+  failed real-evidence gates; all four real roots are empty and all four
+  canonical broad packets are absent. GPT/Codex reviewer gate passed 3/3:
+  `Beauvoir`, `Dewey`, and `Rawls`. `Beauvoir` initially blocked on
+  total/audit refresh running before preflight path-hazard handling; `Dewey`
+  initially blocked on unsafe direct canonical test writes and incomplete
+  no-validator-run coverage. Both blockers were fixed and re-reviewed with
+  final `RELEASE_DECISION: AGREE`. A mistakenly spawned no-op `Laplace` agent
+  is not counted.

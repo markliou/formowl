@@ -493,3 +493,19 @@ status in each role's goal file and task completion in
   same four failed real-evidence gates and empty real roots. GPT/Codex
   reviewer gate passed 3/3: `Nietzsche`, `Bacon`, and `Copernicus`; a no-op
   `Averroes` spawn is not counted.
+- Preflight canonical packet path-hazard guard: `real_evidence_preflight.py`
+  now detects symlink, hardlink, and non-regular canonical packet paths before
+  refreshing total acceptance, objective audit, or per-gate validators. It
+  reports `canonical_packet_path_hazards`, leaves the preflight blocked, skips
+  validator refreshes under hazards, and avoids reading or hashing alias packet
+  paths. Dev-container verification passed: focused preflight unittest 17 OK,
+  full KG-eval unittest 428 OK, main repo unittest 252 OK, full Ruff
+  check/format-check, refreshed broad reports, operator guide `--check`,
+  submission template `--check-template`, and default main KG acceptance
+  `passed_with_explicit_limits`; strict main KG acceptance still exits nonzero
+  only for known limits. Broad KG-eval remains incomplete with the same four
+  failed real-evidence gates, empty real roots, and absent canonical packets.
+  GPT/Codex reviewer gate passed 3/3: `Beauvoir`, `Dewey`, and `Rawls` after
+  `Beauvoir`'s total/audit refresh blocker and `Dewey`'s test-cleanup /
+  no-validator-run blockers were fixed and re-reviewed. A mistakenly spawned
+  no-op `Laplace` agent is not counted.

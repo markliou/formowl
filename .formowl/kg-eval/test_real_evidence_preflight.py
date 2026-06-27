@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import unittest
-from contextlib import redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from collections.abc import Iterator
 from unittest import mock
 
 import real_evidence_preflight as preflight
@@ -16,6 +18,39 @@ import test_human_annotation_adjudication_validator as human_fixtures
 
 
 CANONICAL_PACKETS = [gate["input_packet"] for gate in preflight.EXPECTED_GATES.values()]
+
+
+def remove_packet_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+    elif path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+
+
+class PacketPathState:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.was_symlink = path.is_symlink()
+        self.symlink_target = path.readlink() if self.was_symlink else None
+        self.was_file = path.exists() and path.is_file() and not self.was_symlink
+        self.file_bytes = path.read_bytes() if self.was_file else None
+        self.was_dir = path.exists() and path.is_dir() and not self.was_symlink
+
+    def clear_for_test(self) -> None:
+        if self.was_dir:
+            raise AssertionError(f"refusing to replace directory: {self.path}")
+        remove_packet_path(self.path)
+
+    def restore(self) -> None:
+        if self.was_dir:
+            return
+        remove_packet_path(self.path)
+        if self.was_symlink:
+            assert self.symlink_target is not None
+            self.path.symlink_to(self.symlink_target)
+        elif self.file_bytes is not None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_bytes(self.file_bytes)
 
 
 def nested_keys(payload: object) -> set[str]:
@@ -33,9 +68,7 @@ def nested_keys(payload: object) -> set[str]:
 
 class RealEvidencePreflightTest(unittest.TestCase):
     def setUp(self) -> None:
-        self._saved_packets: dict[Path, bytes | None] = {
-            path: path.read_bytes() if path.exists() else None for path in CANONICAL_PACKETS
-        }
+        self._saved_packets = [PacketPathState(path) for path in CANONICAL_PACKETS]
         self._saved_checklist = preflight.CHECKLIST_PATH.read_bytes()
         for gate in preflight.EXPECTED_GATES.values():
             shutil.rmtree(gate["real_root"] / "preflight_test", ignore_errors=True)
@@ -45,12 +78,8 @@ class RealEvidencePreflightTest(unittest.TestCase):
         shutil.rmtree(preflight.INPUTS / "test_preflight_fixture_inputs", ignore_errors=True)
 
     def tearDown(self) -> None:
-        for path, content in self._saved_packets.items():
-            if content is None:
-                path.unlink(missing_ok=True)
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(content)
+        for state in self._saved_packets:
+            state.restore()
         preflight.CHECKLIST_PATH.write_bytes(self._saved_checklist)
         for gate in preflight.EXPECTED_GATES.values():
             shutil.rmtree(gate["real_root"] / "preflight_test", ignore_errors=True)
@@ -60,11 +89,49 @@ class RealEvidencePreflightTest(unittest.TestCase):
         shutil.rmtree(preflight.INPUTS / "test_preflight_fixture_inputs", ignore_errors=True)
 
     def _write_json(self, path: Path, payload: object) -> None:
+        if path in CANONICAL_PACKETS:
+            self._saved_packet_state(path).clear_for_test()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     def _gate(self, report: dict, gate_id: str) -> dict:
         return {row["gate_id"]: row for row in report["gates"]}[gate_id]
+
+    def _saved_packet_state(self, path: Path) -> PacketPathState:
+        for state in self._saved_packets:
+            if state.path == path:
+                return state
+        raise AssertionError(f"packet state not captured: {path}")
+
+    def _validator_no_run_patches(self) -> list[object]:
+        patches = [
+            mock.patch.object(
+                preflight.total_suite,
+                "build_report",
+                side_effect=AssertionError("total suite should not run"),
+            ),
+            mock.patch.object(
+                preflight.objective_audit,
+                "build_report",
+                side_effect=AssertionError("objective audit should not run"),
+            ),
+        ]
+        patches.extend(
+            mock.patch.object(
+                gate["validator"],
+                "build_report",
+                side_effect=AssertionError("gate validator should not run"),
+            )
+            for gate in preflight.EXPECTED_GATES.values()
+        )
+        return patches
+
+    @contextmanager
+    def _patches_started(self, patches: list[object]) -> Iterator[None]:
+        with ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+            yield
 
     def test_missing_real_packets_keep_preflight_blocked_and_match_total_snapshot(self) -> None:
         report = preflight.build_report()
@@ -254,7 +321,7 @@ class RealEvidencePreflightTest(unittest.TestCase):
 
     def test_malformed_canonical_packet_json_is_reported_without_crashing(self) -> None:
         gate = preflight.EXPECTED_GATES["annotation_adjudication_protocol"]
-        gate["input_packet"].parent.mkdir(parents=True, exist_ok=True)
+        self._saved_packet_state(gate["input_packet"]).clear_for_test()
         gate["input_packet"].write_text("{not-json", encoding="utf-8")
 
         report = preflight.build_report()
@@ -271,21 +338,131 @@ class RealEvidencePreflightTest(unittest.TestCase):
 
     def test_symlinked_canonical_packet_is_rejected_before_validator_can_accept_it(self) -> None:
         gate = preflight.EXPECTED_GATES["annotation_adjudication_protocol"]
+        state = self._saved_packet_state(gate["input_packet"])
         nearby_packet = gate["real_root"] / "assembler_test" / "promoted_packet.json"
         self._write_json(nearby_packet, human_fixtures.valid_packet())
         shutil.rmtree(gate["real_root"] / "validator_fixture", ignore_errors=True)
-        gate["input_packet"].unlink(missing_ok=True)
+        state.clear_for_test()
         gate["input_packet"].symlink_to(nearby_packet)
 
-        report = preflight.build_report()
+        with self._patches_started(self._validator_no_run_patches()):
+            report = preflight.build_report()
         row = self._gate(report, "annotation_adjudication_protocol")
 
         self.assertEqual(report["preflight_state"], "blocked")
+        self.assertEqual(
+            report["canonical_packet_path_hazards"]["annotation_adjudication_protocol"],
+            {
+                "input_packet": "inputs/human_annotation_results_v1.json",
+                "packet_error": "canonical input packet is a symlink",
+                "packet_state": "symlink_rejected",
+            },
+        )
+        self.assertEqual(
+            report["summary"]["total_acceptance_report_error"],
+            "skipped total acceptance refresh due to canonical packet path hazard",
+        )
+        self.assertEqual(
+            report["summary"]["objective_audit_report_error"],
+            "skipped objective audit refresh due to canonical packet path hazard",
+        )
         self.assertEqual(row["validator_status"], "blocked")
         self.assertEqual(row["packet_surface"]["packet_state"], "symlink_rejected")
         self.assertTrue(row["packet_surface"]["symlink_rejected"])
+        self.assertIsNone(row["packet_surface"]["sha256"])
         self.assertEqual(row["collection_state"], "validator_failed_canonical_packet")
         self.assertIn("canonical input packet is a symlink", row["validator_blockers"])
+        self.assertNotEqual(row["collection_state"], "canonical_packet_validator_clear")
+
+    def test_hardlinked_canonical_packet_is_rejected_before_validator_can_accept_it(self) -> None:
+        gate = preflight.EXPECTED_GATES["annotation_adjudication_protocol"]
+        state = self._saved_packet_state(gate["input_packet"])
+        nearby_packet = gate["real_root"] / "assembler_test" / "promoted_packet.json"
+        self._write_json(nearby_packet, human_fixtures.valid_packet())
+        shutil.rmtree(gate["real_root"] / "validator_fixture", ignore_errors=True)
+        state.clear_for_test()
+        os.link(nearby_packet, gate["input_packet"])
+
+        with mock.patch.object(
+            gate["validator"],
+            "build_report",
+            side_effect=AssertionError("validator should not run"),
+        ):
+            validator_report = preflight.safe_validator_report(gate)
+
+        with self._patches_started(self._validator_no_run_patches()):
+            report = preflight.build_report()
+        row = self._gate(report, "annotation_adjudication_protocol")
+
+        self.assertFalse(validator_report["passed"])
+        self.assertEqual(
+            validator_report["blockers"],
+            ["canonical input packet hardlink alias not accepted"],
+        )
+        self.assertEqual(report["preflight_state"], "blocked")
+        self.assertEqual(
+            report["canonical_packet_path_hazards"]["annotation_adjudication_protocol"],
+            {
+                "input_packet": "inputs/human_annotation_results_v1.json",
+                "packet_error": "canonical input packet hardlink alias not accepted",
+                "packet_state": "hardlink_rejected",
+            },
+        )
+        self.assertEqual(
+            report["summary"]["total_acceptance_report_error"],
+            "skipped total acceptance refresh due to canonical packet path hazard",
+        )
+        self.assertEqual(
+            report["summary"]["objective_audit_report_error"],
+            "skipped objective audit refresh due to canonical packet path hazard",
+        )
+        self.assertEqual(row["validator_status"], "blocked")
+        self.assertEqual(row["packet_surface"]["packet_state"], "hardlink_rejected")
+        self.assertTrue(row["packet_surface"]["hardlink_rejected"])
+        self.assertFalse(row["packet_surface"]["symlink_rejected"])
+        self.assertIsNone(row["packet_surface"]["sha256"])
+        self.assertEqual(row["collection_state"], "validator_failed_canonical_packet")
+        self.assertIn(
+            "canonical input packet hardlink alias not accepted",
+            row["validator_blockers"],
+        )
+        self.assertNotEqual(row["collection_state"], "canonical_packet_validator_clear")
+
+    def test_non_regular_canonical_packet_is_rejected_before_validator_can_accept_it(self) -> None:
+        gate = preflight.EXPECTED_GATES["annotation_adjudication_protocol"]
+        state = self._saved_packet_state(gate["input_packet"])
+        shutil.rmtree(gate["real_root"] / "validator_fixture", ignore_errors=True)
+        state.clear_for_test()
+        gate["input_packet"].mkdir(parents=True)
+
+        with mock.patch.object(
+            gate["validator"],
+            "build_report",
+            side_effect=AssertionError("validator should not run"),
+        ):
+            validator_report = preflight.safe_validator_report(gate)
+
+        with self._patches_started(self._validator_no_run_patches()):
+            report = preflight.build_report()
+        row = self._gate(report, "annotation_adjudication_protocol")
+
+        self.assertFalse(validator_report["passed"])
+        self.assertEqual(validator_report["blockers"], ["canonical input packet is not a file"])
+        self.assertEqual(report["preflight_state"], "blocked")
+        self.assertEqual(
+            report["canonical_packet_path_hazards"]["annotation_adjudication_protocol"],
+            {
+                "input_packet": "inputs/human_annotation_results_v1.json",
+                "packet_error": "canonical input packet is not a file",
+                "packet_state": "non_regular_rejected",
+            },
+        )
+        self.assertEqual(row["validator_status"], "blocked")
+        self.assertEqual(row["packet_surface"]["packet_state"], "non_regular_rejected")
+        self.assertTrue(row["packet_surface"]["non_regular_rejected"])
+        self.assertFalse(row["packet_surface"]["symlink_rejected"])
+        self.assertEqual(row["collection_state"], "validator_failed_canonical_packet")
+        self.assertIn("canonical input packet is not a file", row["validator_blockers"])
         self.assertNotEqual(row["collection_state"], "canonical_packet_validator_clear")
 
     def test_recursive_template_placeholder_and_raw_markers_are_detected_in_real_root(self) -> None:

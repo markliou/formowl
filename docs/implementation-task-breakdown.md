@@ -1390,6 +1390,29 @@ These groups can be split across multiple agents after Slice 1 is stable.
     GPT/Codex reviewers `Nietzsche`, `Bacon`, and `Copernicus` agreed after
     `Nietzsche`'s blocker about destructive directory cleanup in the new test
     helper was fixed. A no-op `Averroes` spawn is not counted.
+  - 2026-06-28 preflight canonical packet path-hazard checkpoint:
+    `real_evidence_preflight.py` now detects symlink, hardlink, and
+    non-regular canonical packet paths before refreshing total acceptance,
+    objective audit, template validators, or per-gate validators. Under any
+    canonical packet path hazard it reports `canonical_packet_path_hazards`,
+    keeps preflight blocked, skips validator refreshes, and avoids reading or
+    hashing alias packet paths. Focused tests cover symlink, hardlink, and
+    non-regular hazards; no-total/audit/validator-run behavior; packet-surface
+    state; and canonical packet cleanup that does not write through
+    pre-existing symlinks or hardlinks. This accepts no evidence, writes no
+    candidate artifacts, promotes no packets, writes no canonical broad
+    packets, and does not count as an acceptance gate. Verification passed:
+    host focused preflight unittest 17 OK; dev-container focused preflight
+    unittest 17 OK; full KG-eval unittest 428 OK; main repo unittest 252 OK;
+    full Ruff check and format-check; guide/template checks; refreshed broad
+    reports; and default main KG acceptance `passed_with_explicit_limits`.
+    Strict main KG acceptance still exits nonzero only for known limits.
+    Broad KG-eval remains `overall_passed=false`, 8 passed gates, and the same
+    four failed broad real-evidence gates, so this work-board item remains
+    unchecked. GPT/Codex reviewer gate passed 3/3: `Beauvoir`, `Dewey`, and
+    `Rawls` after `Beauvoir`'s total/audit refresh blocker and `Dewey`'s
+    test-cleanup / no-validator-run blockers were fixed and re-reviewed. A
+    mistakenly spawned no-op `Laplace` agent is not counted.
 
 ### Real Project and Wiki Integrations
 
