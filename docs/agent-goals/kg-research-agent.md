@@ -763,3 +763,27 @@ Reviewer cost-control rules:
   absent. GPT/Codex reviewers `Dirac`, `Zeno`, and `Hypatia` returned
   `RELEASE_DECISION: AGREE`; Hypatia's non-blocking guide-warning assertion
   suggestion was implemented and re-reviewed with final `AGREE`.
+- 2026-06-28 post-`27ff851` verification checkpoint: local Git state was clean
+  at `27ff851` (`Harden KG submission manifest input guard`) on
+  `complete-slice-1`, and `git status -sb` showed the branch matched
+  `origin/complete-slice-1`. Dev-container verification reran
+  `kg_total_acceptance_suite.py`, `kg_objective_completion_audit.py`,
+  `real_evidence_preflight.py`, `real_evidence_collection_work_orders.py`,
+  full KG-eval unittest, operator guide `--check`, submission template
+  `--check-template`, main repo unittest, full Ruff check and format-check,
+  default main KG acceptance, and strict main KG acceptance. Results: KG-eval
+  reports exited 0; KG-eval unittest ran 421 tests OK; guide/template checks
+  exited 0; main repo unittest ran 252 tests OK; full Ruff check passed and
+  format-check reported `200 files already formatted`; default main KG
+  acceptance remains `passed_with_explicit_limits`; strict main KG acceptance
+  still exits nonzero only for known limits. Broad KG-eval remains incomplete:
+  `overall_passed=false`, 8 passed gates, and 4 failed gates
+  (`fair_external_baseline_comparison`,
+  `annotation_adjudication_protocol`,
+  `multimodal_semantic_validation`, and `production_adapter_paths`).
+  Objective audit remains `objective_complete=false`, with 5 proved and 4
+  incomplete requirements. Preflight reports all four real roots have no files,
+  the four canonical broad packets are absent, and no packet/artifact hazards
+  are present. Work-board unchecked engineering item count remains 9: 1
+  KG-owned full real-evidence objective and 8 System Backbone/product-infra
+  items. No goal completion claim is supported.

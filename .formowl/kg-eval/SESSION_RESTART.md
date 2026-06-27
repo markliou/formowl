@@ -39,11 +39,11 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
-Current execution checkpoint, updated 2026-06-28:
+Current execution checkpoint, updated 2026-06-28 after `27ff851`:
 
-- `git fetch origin` found no newer commit beyond
-  `bf0fc2b` (`Record KG current verification run`) on `complete-slice-1`.
-  The branch matched `origin/complete-slice-1`.
+- Local Git state was clean at `27ff851`
+  (`Harden KG submission manifest input guard`) on `complete-slice-1`.
+  `git status -sb` showed the branch matched `origin/complete-slice-1`.
 - Dev-container KG-eval commands rerun against current state:
   - `python kg_total_acceptance_suite.py`
   - `python kg_objective_completion_audit.py`
@@ -83,6 +83,8 @@ Current execution checkpoint, updated 2026-06-28:
   production adapter has 4.
 - All four real roots have no files, the four canonical broad packets are
   absent, and preflight reports no packet or artifact hazards.
+- Work-board unchecked engineering item count remains 9: 1 KG-owned full
+  real-evidence objective and 8 System Backbone/product-infra items.
 - No completion claim is supported.
 
 Latest local implementation slice, updated 2026-06-28:

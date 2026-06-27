@@ -439,3 +439,22 @@ status in each role's goal file and task completion in
   four failed real-evidence gates. GPT/Codex reviewers `Dirac`, `Zeno`, and
   `Hypatia` agreed; Hypatia re-reviewed the final test-only assertion with
   `RELEASE_DECISION: AGREE`.
+- Post-`27ff851` verification checkpoint: local Git state was clean at
+  `27ff851` (`Harden KG submission manifest input guard`) on
+  `complete-slice-1`, and the branch matched `origin/complete-slice-1`.
+  Dev-container verification reran the broad KG-eval reports, full KG-eval
+  unittest, operator guide `--check`, submission template `--check-template`,
+  main repo unittest, full Ruff check/format-check, default main KG
+  acceptance, and strict main KG acceptance. Results: KG-eval reports exited
+  0; KG-eval unittest ran 421 tests OK; guide/template checks exited 0; main
+  repo unittest ran 252 tests OK; Ruff passed with `200 files already
+  formatted`; default main KG acceptance remains `passed_with_explicit_limits`;
+  strict main KG acceptance still exits nonzero only for known limits. Broad
+  KG-eval remains incomplete with `overall_passed=false`, 8 passed gates, and
+  4 failed gates: `fair_external_baseline_comparison`,
+  `annotation_adjudication_protocol`, `multimodal_semantic_validation`, and
+  `production_adapter_paths`. Objective audit remains
+  `objective_complete=false`, with 5 proved and 4 incomplete requirements.
+  Work-board unchecked engineering item count remains 9: 1 KG-owned full
+  real-evidence objective and 8 System Backbone/product-infra items. No
+  completion claim is supported.
