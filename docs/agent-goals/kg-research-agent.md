@@ -893,3 +893,33 @@ Reviewer cost-control rules:
   accept follow-up input. Non-counted agents: `Pascal` no-op accidental spawn,
   `Sagan`/`Bernoulli`/`Arendt` accidentally shut down before decisions, and
   `Hegel` as blocker-only without final re-review.
+- 2026-06-28 candidate-manifest validate-only runner checkpoint:
+  `real_evidence_submission_manifest.py` now has an explicit
+  `--validate-candidate-manifests` mode for post-intake validation. It
+  validates the operator-filled submission manifest first, requires the four
+  expected emitted `work_packets/*_candidate_manifest.json` files to exist as
+  safe regular non-symlink/non-hardlink files, builds fixed argv for the
+  existing assembler scripts with `--validate` only, runs them through
+  `subprocess.run` without a shell, treats nonzero exit or
+  `validation_report.passed != true` as failed, and reports summarized stdout
+  without echoing assembled candidate packet contents. This validation mode
+  reads candidate manifests and referenced candidate artifacts through the
+  assemblers, but runs no response-intake commands, writes no candidate
+  artifacts, promotes no evidence, passes no `--promote`, writes no canonical
+  broad packets, and does not count as an acceptance gate. The tracked
+  operator guide documents the command and claim boundary. Verification
+  passed: host focused submission/guide unittest 41 OK; dev-container focused
+  submission/guide unittest 41 OK; dev-container full KG-eval unittest 443 OK;
+  dev-container main repo unittest 252 OK; operator guide `--check`;
+  submission template `--check-template`; full Ruff check and format-check;
+  refreshed broad reports; default main KG acceptance
+  `passed_with_explicit_limits`; strict main KG acceptance exits 1 only for
+  known limits `production_adapter_readiness` and
+  `latency_scalability_enterprise_claims`. Broad KG-eval remains incomplete:
+  `overall_passed=false`, 8 passed gates, and the same four failed
+  real-evidence gates; objective audit remains `objective_complete=false`
+  with 5 proved and 4 incomplete requirements; all four real roots are empty
+  and all four canonical broad packets are absent. GPT/Codex reviewer gate
+  passed 3/3 with `Einstein`, `Sartre`, and `Heisenberg`; all three suggested
+  direct hardlink coverage for emitted candidate manifests, the test was added,
+  and `Einstein` re-reviewed the final delta with `RELEASE_DECISION: AGREE`.

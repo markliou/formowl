@@ -96,6 +96,19 @@ input packets, and still does not count as an acceptance gate. Candidate
 artifacts from earlier successful intake commands remain for operator
 review and are not automatically promoted or rolled back by this runner.
 
+After candidate manifests exist, validate them through the controlled
+validate-only runner:
+
+```sh
+python3 real_evidence_submission_manifest.py --manifest work_packets/OPERATOR_FILLED_SUBMISSION_MANIFEST.json --validate-candidate-manifests
+```
+
+This validation mode reads emitted candidate manifests and their referenced
+candidate artifacts through the existing assembler `--validate` commands.
+It runs no response intake commands, writes no candidate artifacts, never
+passes a promotion flag, never writes canonical input packets, and still
+does not count as an acceptance gate.
+
 ## fair_external_baseline_comparison
 
 - work order id: collect_fair_external_baseline_comparison

@@ -96,6 +96,9 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             if before is None:
                 self.assertFalse(path.exists())
             else:
+                if not path.exists():
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(before)
                 self.assertEqual(path.read_bytes(), before)
 
     def operator_run_id(self, expected: submission_manifest.ExpectedSubmission) -> str:
@@ -134,6 +137,17 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.created_manifest_paths.append(path)
         return path
 
+    def write_candidate_manifests(self) -> list[Path]:
+        paths: list[Path] = []
+        for expected in submission_manifest.EXPECTED_SUBMISSIONS:
+            path = ROOT / expected.assembly_manifest_output
+            if path.exists() or path.is_symlink():
+                path.unlink()
+            write_json(path, {"candidate_manifest_for": expected.gate_id})
+            self.created_manifest_paths.append(path)
+            paths.append(path)
+        return paths
+
     def test_valid_manifest_returns_candidate_only_intake_commands(self) -> None:
         report = submission_manifest.validate_manifest(self.valid_manifest())
 
@@ -168,10 +182,18 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertIn("--execute-candidate-intakes", doc)
         self.assertIn("reads response packet contents", doc)
         self.assertIn("writes candidate artifacts", doc)
+        self.assertIn("--validate-candidate-manifests", doc)
+        self.assertIn("reads the candidate", doc)
+        self.assertIn("writes no candidate artifacts", doc)
         self.assertIn("No mode promotes evidence or writes canonical input packets", doc)
         self.assertIn("--execute-candidate-intakes", help_text)
+        self.assertIn("--validate-candidate-manifests", help_text)
         self.assertIn(
             "writes candidate artifacts but never canonical packets",
+            normalized_help,
+        )
+        self.assertIn(
+            "reads candidate artifacts but never promotes or writes canonical packets",
             normalized_help,
         )
 
@@ -297,6 +319,208 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertEqual(execution["execution_results"][1]["status"], "failed")
         self.assertFalse(execution["execution_results"][1]["stdout_summary"]["json_stdout"])
         self.assertEqual(execution["execution_results"][1]["stderr_line_count"], 1)
+
+    def test_valid_manifest_builds_candidate_manifest_validation_plan(self) -> None:
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+
+        plan = submission_manifest.build_candidate_validation_plan(
+            report,
+            manifest_path=manifest_path,
+        )
+
+        self.assertEqual(
+            plan["artifact_id"],
+            "kg_real_evidence_candidate_manifest_validation_plan_v1",
+        )
+        self.assertFalse(plan["authority"]["writes_candidate_artifacts"])
+        self.assertFalse(plan["authority"]["writes_canonical_packets"])
+        self.assertEqual(len(plan["validation_plan"]), 4)
+        for expected, row in zip(
+            submission_manifest.EXPECTED_SUBMISSIONS,
+            plan["validation_plan"],
+            strict=True,
+        ):
+            self.assertEqual(row["gate_id"], expected.gate_id)
+            self.assertEqual(row["candidate_manifest"], expected.assembly_manifest_output)
+            self.assertEqual(row["assembler_script"], expected.assembler_script)
+            self.assertEqual(row["argv"][0], "python3")
+            self.assertEqual(row["argv"][1], expected.assembler_script)
+            self.assertEqual(row["argv"][2], "--assembly-manifest")
+            self.assertEqual(row["argv"][3], expected.assembly_manifest_output)
+            self.assertEqual(row["argv"][4], "--validate")
+            self.assertNotIn("--promote", row["argv"])
+            self.assertFalse(row["validation_effects"]["writes_candidate_artifacts"])
+            self.assertFalse(row["validation_effects"]["writes_canonical_packets"])
+            self.assertFalse(row["validation_effects"]["promotes_evidence"])
+            self.assertFalse(row["validation_effects"]["counts_as_acceptance_gate"])
+
+    def test_validate_candidate_manifests_requires_existing_manifests_before_commands(
+        self,
+    ) -> None:
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+
+        with mock.patch.object(submission_manifest.subprocess, "run") as run_mock:
+            validation = submission_manifest.validate_candidate_manifests(
+                report,
+                manifest_path=manifest_path,
+            )
+
+        self.assertFalse(validation["overall_success"])
+        self.assertFalse(validation["candidate_manifest_preflight_passed"])
+        self.assertEqual(validation["executed_gate_count"], 0)
+        self.assertFalse(validation["validation_effects"]["reads_candidate_manifest_contents"])
+        self.assertFalse(validation["validation_effects"]["reads_candidate_artifacts"])
+        self.assertTrue(
+            any(
+                "candidate_manifest file is missing" in blocker
+                for blocker in validation["blockers"]
+            )
+        )
+        run_mock.assert_not_called()
+
+    def test_validate_candidate_manifests_runs_validate_only_assemblers_without_raw_packet_echo(
+        self,
+    ) -> None:
+        self.write_candidate_manifests()
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                '{"packet": {"sensitive": "assembled packet should not be echoed"}, '
+                '"validation_report": {"artifact_id": "validator_report", '
+                '"passed": true, "blockers": []}}\n'
+            ),
+            stderr="",
+        )
+
+        with mock.patch.object(
+            submission_manifest.subprocess,
+            "run",
+            return_value=completed,
+        ) as run_mock:
+            validation = submission_manifest.validate_candidate_manifests(
+                report,
+                manifest_path=manifest_path,
+            )
+
+        self.assertTrue(validation["overall_success"])
+        self.assertTrue(validation["candidate_manifest_preflight_passed"])
+        self.assertEqual(validation["executed_gate_count"], 4)
+        self.assertFalse(validation["authority"]["writes_candidate_artifacts"])
+        self.assertFalse(validation["authority"]["writes_canonical_packets"])
+        self.assertTrue(validation["validation_effects"]["reads_candidate_manifest_contents"])
+        self.assertTrue(validation["validation_effects"]["reads_candidate_artifacts"])
+        self.assertFalse(validation["validation_effects"]["promotes_evidence"])
+        self.assertFalse(validation["validation_effects"]["counts_as_acceptance_gate"])
+        self.assertEqual(run_mock.call_count, 4)
+        self.assertNotIn("assembled packet should not be echoed", json.dumps(validation))
+        for expected, call, row in zip(
+            submission_manifest.EXPECTED_SUBMISSIONS,
+            run_mock.call_args_list,
+            validation["validation_results"],
+            strict=True,
+        ):
+            args, kwargs = call
+            argv = args[0]
+            self.assertEqual(
+                argv,
+                [
+                    "python3",
+                    expected.assembler_script,
+                    "--assembly-manifest",
+                    expected.assembly_manifest_output,
+                    "--validate",
+                ],
+            )
+            self.assertNotIn("--promote", argv)
+            self.assertEqual(kwargs["cwd"], ROOT)
+            self.assertTrue(kwargs["capture_output"])
+            self.assertTrue(kwargs["text"])
+            self.assertFalse(kwargs["check"])
+            self.assertNotIn("shell", kwargs)
+            self.assertEqual(row["status"], "passed")
+            self.assertTrue(row["stdout_summary"]["packet_present"])
+            self.assertTrue(row["stdout_summary"]["passed"])
+            self.assertEqual(row["stdout_summary"]["blocker_count"], 0)
+
+    def test_validate_candidate_manifests_treats_failed_validation_report_as_failure(
+        self,
+    ) -> None:
+        self.write_candidate_manifests()
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"validation_report": {"passed": false, "blockers": ["blocked"]}}\n',
+            stderr="",
+        )
+
+        with mock.patch.object(
+            submission_manifest.subprocess,
+            "run",
+            return_value=completed,
+        ):
+            validation = submission_manifest.validate_candidate_manifests(
+                report,
+                manifest_path=manifest_path,
+            )
+
+        self.assertFalse(validation["overall_success"])
+        self.assertEqual(validation["executed_gate_count"], 4)
+        self.assertTrue(all(row["status"] == "failed" for row in validation["validation_results"]))
+        self.assertTrue(
+            all(
+                row["stdout_summary"]["blocker_count"] == 1
+                for row in validation["validation_results"]
+            )
+        )
+
+    def test_validate_candidate_manifests_rejects_symlinked_candidate_manifest_before_commands(
+        self,
+    ) -> None:
+        self.write_candidate_manifests()
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        symlink_path = ROOT / submission_manifest.EXPECTED_SUBMISSIONS[0].assembly_manifest_output
+        symlink_path.unlink()
+        symlink_path.symlink_to(TEMPLATE_PATH)
+
+        with mock.patch.object(submission_manifest.subprocess, "run") as run_mock:
+            validation = submission_manifest.validate_candidate_manifests(
+                report,
+                manifest_path=manifest_path,
+            )
+
+        self.assertFalse(validation["overall_success"])
+        self.assertEqual(validation["executed_gate_count"], 0)
+        self.assertTrue(any("symlink components" in blocker for blocker in validation["blockers"]))
+        run_mock.assert_not_called()
+
+    def test_validate_candidate_manifests_rejects_hardlink_candidate_manifest_before_commands(
+        self,
+    ) -> None:
+        self.write_candidate_manifests()
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        hardlink_path = ROOT / submission_manifest.EXPECTED_SUBMISSIONS[0].assembly_manifest_output
+        hardlink_path.unlink()
+        hardlink_path.hardlink_to(TEMPLATE_PATH)
+
+        with mock.patch.object(submission_manifest.subprocess, "run") as run_mock:
+            validation = submission_manifest.validate_candidate_manifests(
+                report,
+                manifest_path=manifest_path,
+            )
+
+        self.assertFalse(validation["overall_success"])
+        self.assertEqual(validation["executed_gate_count"], 0)
+        self.assertTrue(any("hardlink aliases" in blocker for blocker in validation["blockers"]))
+        run_mock.assert_not_called()
 
     def test_template_is_tracked_but_rejected_as_real_submission_manifest(self) -> None:
         template = submission_manifest.build_template()
@@ -449,6 +673,45 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertFalse(printed["authority"]["counts_as_acceptance_gate"])
         self.assertEqual(run_mock.call_count, 4)
 
+    def test_cli_validate_candidate_manifests_writes_no_artifacts_or_canonical_packets(
+        self,
+    ) -> None:
+        self.write_candidate_manifests()
+        manifest_path = self.write_operator_manifest()
+        stdout = StringIO()
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"validation_report": {"passed": true, "blockers": []}}\n',
+            stderr="",
+        )
+
+        with mock.patch.object(
+            submission_manifest.subprocess,
+            "run",
+            return_value=completed,
+        ) as run_mock:
+            with redirect_stdout(stdout):
+                status = submission_manifest.main(
+                    [
+                        "--manifest",
+                        str(manifest_path.relative_to(ROOT)),
+                        "--validate-candidate-manifests",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        printed = json.loads(stdout.getvalue())
+        self.assertEqual(
+            printed["artifact_id"],
+            "kg_real_evidence_candidate_manifest_validation_v1",
+        )
+        self.assertFalse(printed["authority"]["writes_candidate_artifacts"])
+        self.assertFalse(printed["authority"]["writes_canonical_packets"])
+        self.assertFalse(printed["authority"]["counts_as_acceptance_gate"])
+        self.assertTrue(printed["validation_effects"]["reads_candidate_artifacts"])
+        self.assertEqual(run_mock.call_count, 4)
+
     def test_invalid_manifest_execute_candidate_intakes_runs_no_commands(self) -> None:
         manifest_path = self.write_operator_manifest(
             "operatorpreflight_unitcase_invalid_execute_manifest.json"
@@ -478,12 +741,41 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             any("response_packet_type mismatch" in blocker for blocker in printed["blockers"])
         )
 
+    def test_invalid_manifest_validate_candidate_manifests_runs_no_commands(self) -> None:
+        manifest_path = self.write_operator_manifest(
+            "operatorpreflight_unitcase_invalid_validate_manifest.json"
+        )
+        payload = self.valid_manifest()
+        submissions = payload["submissions"]
+        assert isinstance(submissions, list)
+        submissions[0]["response_packet_type"] = "wrong_packet_type"
+        write_json(manifest_path, payload)
+        stdout = StringIO()
+
+        with mock.patch.object(submission_manifest.subprocess, "run") as run_mock:
+            with redirect_stdout(stdout):
+                status = submission_manifest.main(
+                    [
+                        "--manifest",
+                        str(manifest_path.relative_to(ROOT)),
+                        "--validate-candidate-manifests",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        run_mock.assert_not_called()
+        printed = json.loads(stdout.getvalue())
+        self.assertFalse(printed["valid"])
+        self.assertTrue(
+            any("response_packet_type mismatch" in blocker for blocker in printed["blockers"])
+        )
+
     def test_execute_candidate_intakes_rejects_path_only_validation_mode(self) -> None:
         manifest_path = self.write_operator_manifest()
 
         with self.assertRaisesRegex(
             submission_manifest.ManifestError,
-            "requires existing response packets",
+            "require existing response packets",
         ):
             submission_manifest.main(
                 [
@@ -494,7 +786,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
                 ]
             )
 
-    def test_emit_plan_and_execute_candidate_intakes_are_mutually_exclusive(self) -> None:
+    def test_emit_plan_execute_and_candidate_validation_are_mutually_exclusive(self) -> None:
         manifest_path = self.write_operator_manifest()
         plan_path = ROOT / "work_packets" / "operatorpreflight_unitcase_exclusive_plan.json"
         if plan_path.exists() or plan_path.is_symlink():
@@ -512,6 +804,20 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
                     "--emit-intake-plan",
                     str(plan_path.relative_to(ROOT)),
                     "--execute-candidate-intakes",
+                    "--validate-candidate-manifests",
+                ]
+            )
+
+        with self.assertRaisesRegex(
+            submission_manifest.ManifestError,
+            "mutually exclusive",
+        ):
+            submission_manifest.main(
+                [
+                    "--manifest",
+                    str(manifest_path.relative_to(ROOT)),
+                    "--execute-candidate-intakes",
+                    "--validate-candidate-manifests",
                 ]
             )
 

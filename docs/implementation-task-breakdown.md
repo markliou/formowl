@@ -1440,6 +1440,34 @@ These groups can be split across multiple agents after Slice 1 is stable.
     Non-counted agents: `Pascal` was a no-op accidental spawn; `Sagan`,
     `Bernoulli`, and `Arendt` were accidentally shut down before returning a
     decision; `Hegel` blocked but did not provide a final re-review decision.
+  - 2026-06-28 candidate-manifest validate-only runner checkpoint:
+    `real_evidence_submission_manifest.py` now supports
+    `--validate-candidate-manifests` after candidate-only intake. The runner
+    validates the operator-filled submission manifest first, requires the four
+    expected emitted `work_packets/*_candidate_manifest.json` files to exist
+    as safe regular non-symlink/non-hardlink files, builds fixed argv for the
+    existing assemblers in `--validate` mode only, runs them without a shell,
+    treats nonzero exit or `validation_report.passed != true` as failed, and
+    summarizes stdout without echoing assembled candidate packet contents. It
+    reads candidate manifests and candidate artifacts through the assemblers,
+    but runs no intake commands, writes no candidate artifacts, promotes no
+    evidence, passes no `--promote`, writes no canonical broad packets, and
+    does not count as acceptance. The tracked operator guide documents the
+    post-intake validation command. Verification passed: host focused
+    submission/guide unittest 41 OK; dev-container focused submission/guide
+    unittest 41 OK; dev-container full KG-eval unittest 443 OK; dev-container
+    main repo unittest 252 OK; guide `--check`; submission template
+    `--check-template`; full Ruff check and format-check; refreshed broad
+    reports; default main KG acceptance `passed_with_explicit_limits`; strict
+    main KG acceptance exits 1 only for known limits
+    `production_adapter_readiness` and
+    `latency_scalability_enterprise_claims`. Broad KG-eval remains
+    `overall_passed=false`, 8 passed gates, and the same four failed
+    real-evidence gates; real roots remain empty and canonical broad packets
+    are absent. GPT/Codex reviewer gate passed 3/3: `Einstein`, `Sartre`, and
+    `Heisenberg`. All three suggested direct hardlink coverage for emitted
+    candidate manifests; the test was added and `Einstein` re-reviewed the
+    final delta with `RELEASE_DECISION: AGREE`.
 
 ### Real Project and Wiki Integrations
 

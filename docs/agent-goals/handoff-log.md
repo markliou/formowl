@@ -529,3 +529,24 @@ status in each role's goal file and task completion in
   blocker was fixed and re-reviewed by replacement reviewer `Locke`.
   Non-counted agents: `Pascal`, `Sagan`, `Bernoulli`, `Arendt`, and blocker-only
   `Hegel`.
+- Candidate-manifest validate-only runner: `real_evidence_submission_manifest.py`
+  now supports `--validate-candidate-manifests` after candidate-only intake.
+  It validates the operator submission manifest first, requires the four fixed
+  emitted `work_packets/*_candidate_manifest.json` files to exist as safe
+  regular non-symlink/non-hardlink files, then runs fixed assembler argv in
+  `--validate` mode only with no shell. The runner reads candidate manifests
+  and candidate artifacts through the assemblers, summarizes validation output
+  without echoing assembled candidate packets, writes no candidate artifacts,
+  passes no `--promote`, writes no canonical broad packets, promotes no
+  evidence, and does not count as acceptance. Verification passed: focused
+  dev-container submission/guide unittest 41 OK, full KG-eval unittest 443 OK,
+  main repo unittest 252 OK, guide/template checks, full Ruff check/format
+  check, refreshed broad reports, default KG acceptance
+  `passed_with_explicit_limits`, and strict KG acceptance exits 1 only for the
+  known `production_adapter_readiness` failed and
+  `latency_scalability_enterprise_claims` blocked limits. Broad KG-eval
+  remains incomplete with the same four failed real-evidence gates, empty real
+  roots, and absent canonical packets. Reviewer gate passed 3/3:
+  `Einstein`, `Sartre`, and `Heisenberg`; all three suggested direct hardlink
+  test coverage for emitted candidate manifests, the test was added, and
+  `Einstein` re-reviewed the final delta with `AGREE`.

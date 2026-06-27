@@ -8,6 +8,11 @@ read response packet contents or write candidate artifacts.
 The explicit ``--execute-candidate-intakes`` mode reads response packet contents
 and writes candidate artifacts by running the existing candidate-only intake
 helpers. No mode promotes evidence or writes canonical input packets.
+
+The explicit ``--validate-candidate-manifests`` mode reads the candidate
+manifests emitted by intake and their referenced candidate artifacts through the
+existing assembler ``--validate`` commands. It writes no candidate artifacts,
+promotes no evidence, and writes no canonical input packets.
 """
 
 from __future__ import annotations
@@ -71,6 +76,7 @@ INTAKE_PLAN_ALLOWED_SUFFIX = ".json"
 class ExpectedSubmission:
     gate_id: str
     intake_script: str
+    assembler_script: str
     response_packet_type: str
     work_packet_path: str
     response_packet_placeholder: str
@@ -89,6 +95,7 @@ EXPECTED_SUBMISSIONS = [
     ExpectedSubmission(
         gate_id="fair_external_baseline_comparison",
         intake_script="fair_baseline_response_intake.py",
+        assembler_script="fair_external_baseline_packet_assembler.py",
         response_packet_type="fair_baseline_response_intake_v1",
         work_packet_path="work_packets/fair_baseline_run_work_packet_preview.json",
         response_packet_placeholder="OPERATOR_FAIR_BASELINE_RESPONSE_PACKET_JSON",
@@ -101,6 +108,7 @@ EXPECTED_SUBMISSIONS = [
     ExpectedSubmission(
         gate_id="annotation_adjudication_protocol",
         intake_script="human_annotation_response_intake.py",
+        assembler_script="human_annotation_packet_assembler.py",
         response_packet_type="human_annotation_response_intake_v1",
         work_packet_path="work_packets/human_annotation_work_packet_preview.json",
         response_packet_placeholder="OPERATOR_RESPONSE_PACKET_JSON",
@@ -113,6 +121,7 @@ EXPECTED_SUBMISSIONS = [
     ExpectedSubmission(
         gate_id="multimodal_semantic_validation",
         intake_script="enterprise_multimodal_response_intake.py",
+        assembler_script="enterprise_multimodal_packet_assembler.py",
         response_packet_type="enterprise_multimodal_response_intake_v1",
         work_packet_path="work_packets/enterprise_multimodal_collection_packet_preview.json",
         response_packet_placeholder="OPERATOR_ENTERPRISE_RESPONSE_PACKET_JSON",
@@ -125,6 +134,7 @@ EXPECTED_SUBMISSIONS = [
     ExpectedSubmission(
         gate_id="production_adapter_paths",
         intake_script="production_adapter_response_intake.py",
+        assembler_script="production_adapter_packet_assembler.py",
         response_packet_type="production_adapter_response_intake_v1",
         work_packet_path="work_packets/production_adapter_collection_packet_preview.json",
         response_packet_placeholder="OPERATOR_PRODUCTION_ADAPTER_RESPONSE_PACKET_JSON",
@@ -580,6 +590,34 @@ def _json_summary(stdout: str) -> dict[str, Any]:
     }
 
 
+def _assembler_validation_summary(stdout: str) -> dict[str, Any]:
+    try:
+        loaded = json.loads(stdout)
+    except json.JSONDecodeError:
+        return {
+            "json_stdout": False,
+            "stdout_line_count": len([line for line in stdout.splitlines() if line.strip()]),
+        }
+    if not isinstance(loaded, dict):
+        return {"json_stdout": True, "stdout_type": type(loaded).__name__}
+    report = loaded.get("validation_report")
+    if not isinstance(report, dict):
+        return {
+            "json_stdout": True,
+            "validation_report_present": False,
+            "packet_present": isinstance(loaded.get("packet"), dict),
+        }
+    blockers = report.get("blockers")
+    return {
+        "json_stdout": True,
+        "validation_report_present": True,
+        "packet_present": isinstance(loaded.get("packet"), dict),
+        "artifact_id": report.get("artifact_id"),
+        "passed": report.get("passed"),
+        "blocker_count": len(blockers) if isinstance(blockers, list) else None,
+    }
+
+
 def execute_candidate_intakes(
     validation_report: dict[str, Any],
     *,
@@ -656,6 +694,173 @@ def execute_candidate_intakes(
     }
 
 
+def _candidate_manifest_blockers(expected: ExpectedSubmission) -> list[str]:
+    field_name = f"{expected.gate_id}: candidate_manifest"
+    path, blockers = _safe_work_packets_path(expected.assembly_manifest_output, field_name)
+    if path is None:
+        return blockers
+    if str(path) != expected.assembly_manifest_output:
+        blockers.append(f"{field_name} path mismatch")
+    if not path.name.endswith("_candidate_manifest.json"):
+        blockers.append(f"{field_name} must use generated candidate-manifest naming")
+    blockers.extend(_existing_regular_file_blockers(path, field_name))
+    return blockers
+
+
+def build_candidate_validation_plan(
+    validation_report: dict[str, Any],
+    *,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    if not validation_report.get("valid"):
+        raise ManifestError(
+            "cannot validate candidate manifests from an invalid submission manifest"
+        )
+    validated = validation_report.get("validated_submissions")
+    if not isinstance(validated, list) or len(validated) != len(EXPECTED_SUBMISSIONS):
+        raise ManifestError("validated submission rows are incomplete")
+    plan_rows: list[dict[str, Any]] = []
+    for index, row in enumerate(validated, start=1):
+        if not isinstance(row, dict):
+            raise ManifestError("validated submission row is malformed")
+        expected = EXPECTED_BY_GATE[row["gate_id"]]
+        argv = [
+            "python3",
+            expected.assembler_script,
+            "--assembly-manifest",
+            expected.assembly_manifest_output,
+            "--validate",
+        ]
+        plan_rows.append(
+            {
+                "sequence": index,
+                "gate_id": row["gate_id"],
+                "candidate_manifest": expected.assembly_manifest_output,
+                "assembler_script": expected.assembler_script,
+                "canonical_packet_not_written": row["canonical_packet_not_written"],
+                "argv": argv,
+                "command": " ".join(argv),
+                "validation_effects": {
+                    "reads_candidate_manifest_contents": True,
+                    "reads_candidate_artifacts": True,
+                    "writes_candidate_artifacts": False,
+                    "writes_canonical_packets": False,
+                    "promotes_evidence": False,
+                    "counts_as_acceptance_gate": False,
+                },
+            }
+        )
+    return {
+        "artifact_id": "kg_real_evidence_candidate_manifest_validation_plan_v1",
+        "manifest": str(manifest_path.relative_to(ROOT)),
+        "valid_manifest": True,
+        "authority": {
+            "accepts_evidence": False,
+            "promotes_evidence": False,
+            "writes_candidate_artifacts": False,
+            "writes_canonical_packets": False,
+            "counts_as_acceptance_gate": False,
+        },
+        "validation_required": "operator must review validate-only assembler results",
+        "validation_plan": plan_rows,
+        "validation_commands": [row["command"] for row in plan_rows],
+    }
+
+
+def validate_candidate_manifests(
+    validation_report: dict[str, Any],
+    *,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    plan = build_candidate_validation_plan(validation_report, manifest_path=manifest_path)
+    blockers: list[str] = []
+    for expected in EXPECTED_SUBMISSIONS:
+        blockers.extend(_candidate_manifest_blockers(expected))
+    if blockers:
+        return {
+            "artifact_id": "kg_real_evidence_candidate_manifest_validation_v1",
+            "manifest": str(manifest_path.relative_to(ROOT)),
+            "valid_manifest": True,
+            "overall_success": False,
+            "candidate_manifest_preflight_passed": False,
+            "blockers": blockers,
+            "executed_gate_count": 0,
+            "authority": plan["authority"],
+            "validation_effects": {
+                "reads_candidate_manifest_contents": False,
+                "reads_candidate_artifacts": False,
+                "writes_candidate_artifacts": False,
+                "writes_canonical_packets": False,
+                "promotes_evidence": False,
+                "counts_as_acceptance_gate": False,
+            },
+            "validation_results": [],
+        }
+    validation_results: list[dict[str, Any]] = []
+    overall_success = True
+    for row in plan["validation_plan"]:
+        if not isinstance(row, dict):
+            raise ManifestError("candidate validation plan row is malformed")
+        argv = row.get("argv")
+        if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+            raise ManifestError("candidate validation argv is malformed")
+        if "--promote" in argv:
+            raise ManifestError("candidate validation argv must not contain --promote")
+        completed = subprocess.run(
+            argv,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        stdout_summary = _assembler_validation_summary(completed.stdout)
+        passed = completed.returncode == 0 and stdout_summary.get("passed") is True
+        overall_success = overall_success and passed
+        validation_results.append(
+            {
+                "sequence": row["sequence"],
+                "gate_id": row["gate_id"],
+                "candidate_manifest": row["candidate_manifest"],
+                "assembler_script": row["assembler_script"],
+                "canonical_packet_not_written": row["canonical_packet_not_written"],
+                "argv": argv,
+                "exit_code": completed.returncode,
+                "status": "passed" if passed else "failed",
+                "stdout_summary": stdout_summary,
+                "stderr_line_count": len(
+                    [line for line in completed.stderr.splitlines() if line.strip()]
+                ),
+            }
+        )
+    return {
+        "artifact_id": "kg_real_evidence_candidate_manifest_validation_v1",
+        "manifest": str(manifest_path.relative_to(ROOT)),
+        "valid_manifest": True,
+        "overall_success": overall_success,
+        "candidate_manifest_preflight_passed": True,
+        "blockers": [],
+        "executed_gate_count": len(validation_results),
+        "authority": plan["authority"],
+        "validation_effects": {
+            "reads_candidate_manifest_contents": True,
+            "reads_candidate_artifacts": True,
+            "writes_candidate_artifacts": False,
+            "writes_canonical_packets": False,
+            "promotes_evidence": False,
+            "counts_as_acceptance_gate": False,
+        },
+        "partial_execution_policy": (
+            "validate-only assembler commands run for every existing candidate manifest; "
+            "a failed candidate validation does not promote or write canonical evidence"
+        ),
+        "validation_results": validation_results,
+        "next_step": (
+            "manual governance review is still required before any canonical packet can "
+            "affect broad acceptance"
+        ),
+    }
+
+
 def safe_template_output(path_value: str) -> Path:
     if not isinstance(path_value, str) or not path_value.strip():
         raise ManifestError("template output must be a non-empty string")
@@ -722,6 +927,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "execute the candidate-only response-intake commands from a validated manifest; "
             "writes candidate artifacts but never canonical packets"
+        ),
+    )
+    parser.add_argument(
+        "--validate-candidate-manifests",
+        action="store_true",
+        help=(
+            "run validate-only assembler commands for existing emitted candidate manifests; "
+            "reads candidate artifacts but never promotes or writes canonical packets"
         ),
     )
     parser.add_argument(
@@ -798,12 +1011,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if not args.manifest:
         raise ManifestError("either --manifest, --emit-template, or --check-template is required")
-    if args.emit_intake_plan and args.execute_candidate_intakes:
+    selected_actions = [
+        bool(args.emit_intake_plan),
+        bool(args.execute_candidate_intakes),
+        bool(args.validate_candidate_manifests),
+    ]
+    if sum(selected_actions) > 1:
         raise ManifestError(
-            "--emit-intake-plan and --execute-candidate-intakes are mutually exclusive"
+            "--emit-intake-plan, --execute-candidate-intakes, and "
+            "--validate-candidate-manifests are mutually exclusive"
         )
-    if args.execute_candidate_intakes and args.no_require_existing_response_packets:
-        raise ManifestError("--execute-candidate-intakes requires existing response packets")
+    if (
+        args.execute_candidate_intakes or args.validate_candidate_manifests
+    ) and args.no_require_existing_response_packets:
+        raise ManifestError(
+            "--execute-candidate-intakes and --validate-candidate-manifests "
+            "require existing response packets"
+        )
     manifest_path = safe_manifest_input(args.manifest)
     report = validate_manifest(
         load_json_file(manifest_path),
@@ -816,6 +1040,13 @@ def main(argv: list[str] | None = None) -> int:
         execution = execute_candidate_intakes(report, manifest_path=manifest_path)
         print(json.dumps(execution, indent=2, sort_keys=True))
         return 0 if execution["overall_success"] else 1
+    if args.validate_candidate_manifests:
+        if not report["valid"]:
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 1
+        candidate_validation = validate_candidate_manifests(report, manifest_path=manifest_path)
+        print(json.dumps(candidate_validation, indent=2, sort_keys=True))
+        return 0 if candidate_validation["overall_success"] else 1
     if args.emit_intake_plan:
         plan_output = safe_intake_plan_output(args.emit_intake_plan)
         if not report["valid"]:

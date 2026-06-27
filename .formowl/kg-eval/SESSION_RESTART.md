@@ -39,11 +39,11 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
-Current execution checkpoint, updated 2026-06-28 after canonical packet path
-guard hardening:
+Current execution checkpoint, updated 2026-06-28 after candidate-manifest
+validate-only runner hardening:
 
-- Local Git state before commit has the canonical packet path guard slice
-  staged for review on `complete-slice-1`.
+- Local Git state before commit has the candidate-manifest validate-only runner
+  slice staged for review on `complete-slice-1`.
 - Dev-container KG-eval commands rerun against current state:
   - `python kg_total_acceptance_suite.py`
   - `python kg_objective_completion_audit.py`
@@ -60,7 +60,7 @@ guard hardening:
   - `ruff format --check python tests scripts .formowl/kg-eval`
 - Verification result:
   - KG-eval reports exited 0.
-  - KG-eval unittest ran 426 tests OK.
+  - KG-eval unittest ran 443 tests OK.
   - Operator guide check and submission-template check exited 0.
   - Main repo unittest ran 252 tests OK.
   - Default main KG acceptance remains `passed_with_explicit_limits`.
@@ -86,7 +86,7 @@ guard hardening:
   real-evidence objective and 8 System Backbone/product-infra items.
 - No completion claim is supported.
 
-Latest local implementation slice, updated 2026-06-28 after candidate-intake
+Previous local implementation slice, updated 2026-06-28 after candidate-intake
 execution runner hardening:
 
 - `real_evidence_submission_manifest.py` now supports explicit
@@ -129,6 +129,47 @@ execution runner hardening:
   Non-counted agents: `Pascal` was a no-op accidental spawn; `Sagan`,
   `Bernoulli`, and `Arendt` were accidentally shut down before returning
   decisions; `Hegel` is blocker-only without final re-review.
+
+Most recent local implementation slice, updated 2026-06-28 after candidate-manifest
+validate-only runner hardening:
+
+- `real_evidence_submission_manifest.py` now supports explicit
+  `--validate-candidate-manifests` after candidate-only intake.
+- The runner validates the operator-filled submission manifest first, requires
+  the four expected emitted `work_packets/*_candidate_manifest.json` files to
+  exist as safe regular non-symlink/non-hardlink files, builds fixed argv for
+  the four existing assembler scripts in `--validate` mode only, runs them via
+  `subprocess.run` with no shell, treats nonzero exit or
+  `validation_report.passed != true` as failed, and summarizes stdout without
+  echoing assembled candidate packet contents.
+- This validation mode reads candidate manifests and referenced candidate
+  artifacts through the assemblers. It runs no response-intake commands, writes
+  no candidate artifacts, passes no `--promote`, promotes no evidence, writes
+  no canonical broad packets, and does not count as an acceptance gate.
+- The tracked operator guide documents the post-intake validation command and
+  the claim boundary.
+- Verification passed:
+  - host focused submission/guide unittest 41 OK
+  - dev-container focused submission/guide unittest 41 OK
+  - dev-container full KG-eval unittest 443 OK
+  - dev-container main repo unittest 252 OK
+  - dev-container operator guide `--check`
+  - dev-container submission template `--check-template`
+  - dev-container full Ruff check and format-check
+  - refreshed broad KG-eval reports
+  - default main KG acceptance `passed_with_explicit_limits`
+  - strict main KG acceptance exits 1 only for known limits:
+    `production_adapter_readiness` and
+    `latency_scalability_enterprise_claims`
+- Broad KG-eval remains incomplete: `overall_passed=false`, 8 passed gates,
+  and the same four failed real-evidence gates. Objective audit remains
+  `objective_complete=false`, with 5 proved and 4 incomplete requirements.
+  All four real roots remain empty and the four canonical broad packets remain
+  absent.
+- GPT/Codex reviewer gate passed 3/3 with `Einstein`, `Sartre`, and
+  `Heisenberg`. All three suggested direct hardlink coverage for emitted
+  candidate manifests; the test was added and `Einstein` re-reviewed the final
+  delta with `RELEASE_DECISION: AGREE`.
 
 Latest local implementation slice, updated 2026-06-28 after preflight
 canonical packet path-hazard hardening:
