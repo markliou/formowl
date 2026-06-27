@@ -39,6 +39,30 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
+Latest execution checkpoint, updated 2026-06-28:
+
+- `git fetch origin` found no newer `complete-slice-1` commit beyond
+  `f3ba5f8` (`Route KG candidate validation to intake manifests`), and the
+  worktree was clean before execution.
+- Dev-container commands rerun against current state:
+  - `python kg_total_acceptance_suite.py`
+  - `python kg_objective_completion_audit.py`
+  - `python real_evidence_preflight.py`
+  - `python real_evidence_collection_work_orders.py`
+  - full KG-eval unittest 417 OK
+  - main repo unittest 252 OK
+  - default main KG acceptance `passed_with_explicit_limits`
+  - strict main KG acceptance exited nonzero only for the known
+    `production_adapter_readiness` failed item and
+    `latency_scalability_enterprise_claims` blocked item.
+- Refreshed broad KG-eval remains `overall_passed=false`, with 8 passed gates
+  and the same four failed gates.
+- Objective audit remains `objective_complete=false`, with 5 proved
+  requirements and 4 incomplete requirements.
+- Preflight reports all four `inputs/*_real` roots have zero files, no
+  candidate artifacts, and the four canonical broad packets are absent.
+- No completion claim is supported.
+
 Latest completed local slice, updated 2026-06-27:
 
 - Candidate-manifest validation guidance completed on 2026-06-28.
