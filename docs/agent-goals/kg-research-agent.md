@@ -923,3 +923,36 @@ Reviewer cost-control rules:
   passed 3/3 with `Einstein`, `Sartre`, and `Heisenberg`; all three suggested
   direct hardlink coverage for emitted candidate manifests, the test was added,
   and `Einstein` re-reviewed the final delta with `RELEASE_DECISION: AGREE`.
+- 2026-06-28 candidate-validation report output checkpoint:
+  `real_evidence_submission_manifest.py --validate-candidate-manifests` can now
+  optionally persist its validate-only result with
+  `--emit-candidate-validation-report` to an ignored
+  `work_packets/*_candidate_validation_report.json` file for manual governance
+  review. The output path must be a safe direct child of `work_packets/`, must
+  use `_candidate_validation_report.json` naming, must not overwrite tracked
+  work packets, templates, preview packets, candidate manifests, intake plans,
+  or an existing file, and is written only after candidate manifest preflight
+  passes. The report writer first writes a same-directory temporary file, then
+  creates the final report with an atomic no-overwrite link and removes the
+  temporary file, so an interrupted write leaves no final partial JSON report.
+  Invalid operator manifests and missing emitted candidate manifests do not
+  write a report; failed assembler validation after preflight may write a
+  failure report as a non-evidence review aid. This slice writes no candidate
+  artifacts, promotes no evidence, writes no canonical broad packets, and does
+  not count as acceptance. Verification passed: host focused submission/guide
+  unittest 48 OK; dev-container focused submission/guide unittest 48 OK;
+  operator guide `--check`; submission template `--check-template`; full
+  KG-eval unittest 450 OK; main repo unittest 252 OK; full Ruff check and
+  format-check; refreshed broad reports; default main KG acceptance
+  `passed_with_explicit_limits`; strict main KG acceptance exits 1 only for
+  known limits `production_adapter_readiness` and
+  `latency_scalability_enterprise_claims`. Broad KG-eval remains incomplete:
+  `overall_passed=false`, 8 passed gates, and the same four failed
+  real-evidence gates; objective audit remains `objective_complete=false` with
+  5 proved and 4 incomplete requirements; all four real roots are empty and
+  all four canonical broad packets are absent. Reviewer gate state:
+  `Turing` returned `RELEASE_DECISION: AGREE`; `Cicero` returned
+  `RELEASE_DECISION: AGREE` after blockers for nested report paths and partial
+  final report writes were fixed; `Boyle` returned `RELEASE_DECISION: AGREE`
+  after blockers for missing durable docs and stale checkpoint text were fixed.
+  Reviewer gate passed 3/3. A mistaken no-op `McClintock` spawn is not counted.

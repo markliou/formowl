@@ -550,3 +550,26 @@ status in each role's goal file and task completion in
   `Einstein`, `Sartre`, and `Heisenberg`; all three suggested direct hardlink
   test coverage for emitted candidate manifests, the test was added, and
   `Einstein` re-reviewed the final delta with `AGREE`.
+- Candidate-validation report output: `real_evidence_submission_manifest.py
+  --validate-candidate-manifests` now accepts optional
+  `--emit-candidate-validation-report` to persist the validate-only result as
+  an ignored non-evidence `work_packets/*_candidate_validation_report.json`
+  review aid. The output must be a direct child of `work_packets/`, cannot use
+  template/preview/candidate-manifest/intake-plan/tracked names, cannot
+  overwrite an existing file, and is written through a same-directory
+  temporary file plus atomic no-overwrite link so interrupted writes leave no
+  final partial JSON report. Invalid operator manifests and missing emitted
+  candidate manifests do not write a report; failed assembler validation after
+  preflight may write a failure report for manual review only. Verification
+  passed: host focused submission/guide unittest 48 OK; dev-container focused
+  submission/guide unittest 48 OK; full KG-eval unittest 450 OK; main repo
+  unittest 252 OK; guide/template checks; full Ruff check/format-check;
+  refreshed broad reports; default KG acceptance `passed_with_explicit_limits`;
+  strict KG acceptance exits 1 only for the known
+  `production_adapter_readiness` failed and
+  `latency_scalability_enterprise_claims` blocked limits. Broad KG-eval
+  remains incomplete with the same four failed real-evidence gates, empty real
+  roots, and absent canonical packets. Reviewer gate state: `Turing` agreed;
+  `Cicero` agreed after nested-path and partial-write blockers were fixed;
+  `Boyle` agreed after missing-durable-doc and stale-checkpoint blockers were
+  fixed. Reviewer gate passed 3/3. A no-op `McClintock` spawn is not counted.

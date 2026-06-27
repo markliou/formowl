@@ -12,13 +12,16 @@ helpers. No mode promotes evidence or writes canonical input packets.
 The explicit ``--validate-candidate-manifests`` mode reads the candidate
 manifests emitted by intake and their referenced candidate artifacts through the
 existing assembler ``--validate`` commands. It writes no candidate artifacts,
-promotes no evidence, and writes no canonical input packets.
+promotes no evidence, and writes no canonical input packets. It can optionally
+write an ignored non-evidence validation report under ``work_packets/`` for
+manual governance review.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -70,6 +73,7 @@ SUBMISSION_ALLOWED_FIELDS = {
     "assembly_manifest_output",
 }
 INTAKE_PLAN_ALLOWED_SUFFIX = ".json"
+CANDIDATE_VALIDATION_REPORT_ALLOWED_SUFFIX = ".json"
 
 
 @dataclass(frozen=True)
@@ -501,6 +505,65 @@ def safe_intake_plan_output(path_value: object) -> Path:
     if blockers:
         raise ManifestError("; ".join(blockers))
     return output
+
+
+def safe_candidate_validation_report_output(path_value: object) -> Path:
+    path, blockers = _safe_work_packets_path(path_value, "candidate validation report output")
+    if path is None:
+        raise ManifestError("; ".join(blockers))
+    if len(path.parts) != 2:
+        blockers.append("candidate validation report output must be directly under work_packets/")
+    if path.suffix != CANDIDATE_VALIDATION_REPORT_ALLOWED_SUFFIX:
+        blockers.append("candidate validation report output must be a JSON file")
+    if path.name.endswith(".template.json"):
+        blockers.append("candidate validation report output must not use template naming")
+    if path.name.endswith("_preview.json"):
+        blockers.append(
+            "candidate validation report output must not use tracked preview-packet naming"
+        )
+    if path.name.endswith("_candidate_manifest.json"):
+        blockers.append("candidate validation report output must not overwrite candidate manifests")
+    if path.name.endswith("_intake_plan.json"):
+        blockers.append("candidate validation report output must not use intake-plan naming")
+    if not path.name.endswith("_candidate_validation_report.json"):
+        blockers.append(
+            "candidate validation report output must use "
+            "*_candidate_validation_report.json naming"
+        )
+    tracked_work_packets = {
+        DEFAULT_TEMPLATE_OUTPUT.relative_to(ROOT),
+        *(Path(row.work_packet_path) for row in EXPECTED_SUBMISSIONS),
+        *(Path(row.assembly_manifest_output) for row in EXPECTED_SUBMISSIONS),
+    }
+    if path in tracked_work_packets:
+        blockers.append(
+            "candidate validation report output must not overwrite tracked work packets"
+        )
+    output = ROOT / path
+    if output.exists() or output.is_symlink():
+        blockers.append("candidate validation report output already exists")
+    if blockers:
+        raise ManifestError("; ".join(blockers))
+    return output
+
+
+def write_candidate_validation_report(output: Path, payload: dict[str, Any]) -> None:
+    temp_path = output.with_name(f".{output.name}.tmp")
+    if temp_path.exists() or temp_path.is_symlink():
+        raise ManifestError("candidate validation report temporary output already exists")
+    try:
+        with temp_path.open("x", encoding="utf-8") as handle:
+            handle.write(_json_text(payload))
+        try:
+            os.link(temp_path, output)
+        except FileExistsError as exc:
+            raise ManifestError("candidate validation report output already exists") from exc
+    except Exception:
+        if temp_path.exists() or temp_path.is_symlink():
+            temp_path.unlink()
+        raise
+    else:
+        temp_path.unlink()
 
 
 def build_intake_plan(
@@ -938,6 +1001,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--emit-candidate-validation-report",
+        help=(
+            "with --validate-candidate-manifests, write the validate-only result as an "
+            "ignored non-evidence JSON report under work_packets/"
+        ),
+    )
+    parser.add_argument(
         "--emit-template",
         action="store_true",
         help="write the tracked non-evidence submission manifest template",
@@ -1028,6 +1098,10 @@ def main(argv: list[str] | None = None) -> int:
             "--execute-candidate-intakes and --validate-candidate-manifests "
             "require existing response packets"
         )
+    if args.emit_candidate_validation_report and not args.validate_candidate_manifests:
+        raise ManifestError(
+            "--emit-candidate-validation-report requires --validate-candidate-manifests"
+        )
     manifest_path = safe_manifest_input(args.manifest)
     report = validate_manifest(
         load_json_file(manifest_path),
@@ -1041,10 +1115,20 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(execution, indent=2, sort_keys=True))
         return 0 if execution["overall_success"] else 1
     if args.validate_candidate_manifests:
+        report_output = (
+            safe_candidate_validation_report_output(args.emit_candidate_validation_report)
+            if args.emit_candidate_validation_report
+            else None
+        )
         if not report["valid"]:
             print(json.dumps(report, indent=2, sort_keys=True))
             return 1
         candidate_validation = validate_candidate_manifests(report, manifest_path=manifest_path)
+        if report_output is not None and candidate_validation.get(
+            "candidate_manifest_preflight_passed"
+        ):
+            report_output.parent.mkdir(parents=True, exist_ok=True)
+            write_candidate_validation_report(report_output, candidate_validation)
         print(json.dumps(candidate_validation, indent=2, sort_keys=True))
         return 0 if candidate_validation["overall_success"] else 1
     if args.emit_intake_plan:

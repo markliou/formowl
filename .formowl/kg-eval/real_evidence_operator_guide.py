@@ -160,6 +160,21 @@ def _submission_manifest_section() -> list[str]:
         "passes a promotion flag, never writes canonical input packets, and still",
         "does not count as an acceptance gate.",
         "",
+        "Optionally persist that validate-only result as an ignored non-evidence",
+        "report for manual governance review:",
+        "",
+        "```sh",
+        "python3 real_evidence_submission_manifest.py --manifest "
+        "work_packets/OPERATOR_FILLED_SUBMISSION_MANIFEST.json "
+        "--validate-candidate-manifests "
+        "--emit-candidate-validation-report "
+        "work_packets/OPERATOR_CANDIDATE_VALIDATION_REPORT_candidate_validation_report.json",
+        "```",
+        "",
+        "The persisted validation report is not evidence and does not authorize",
+        "promotion by itself. It is a review aid that records the validate-only",
+        "assembler result without writing canonical input packets.",
+        "",
     ]
 
 
