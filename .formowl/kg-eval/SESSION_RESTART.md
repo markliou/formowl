@@ -42,7 +42,7 @@ This snapshot supersedes older "latest work" notes below when they conflict.
 Current execution checkpoint, updated 2026-06-28:
 
 - `git fetch origin` found no newer commit beyond
-  `63df752` (`Document agy MCP route disablement`) on `complete-slice-1`.
+  `bf0fc2b` (`Record KG current verification run`) on `complete-slice-1`.
   The branch matched `origin/complete-slice-1`.
 - Dev-container KG-eval commands rerun against current state:
   - `python kg_total_acceptance_suite.py`
@@ -56,6 +56,8 @@ Current execution checkpoint, updated 2026-06-28:
   - `python -m unittest discover -s tests`
   - `python scripts/kg_research_acceptance_suite.py`
   - `python scripts/kg_research_acceptance_suite.py --strict`
+  - `ruff check python tests scripts .formowl/kg-eval`
+  - `ruff format --check python tests scripts .formowl/kg-eval`
 - Verification result:
   - KG-eval reports exited 0.
   - KG-eval unittest ran 421 tests OK.
@@ -65,6 +67,9 @@ Current execution checkpoint, updated 2026-06-28:
   - Strict main KG acceptance still exits nonzero for known limits:
     `production_adapter_readiness` failed and
     `latency_scalability_enterprise_claims` blocked.
+  - Full Ruff lint passed.
+  - Full Ruff format-check still reports 33 pre-existing files that would be
+    reformatted; this execution-only checkpoint did not reformat them.
 - Refreshed broad KG-eval remains incomplete:
   `overall_passed=false`, `passed_gate_count=8`, `failed_gate_count=4`.
   Failed gates remain exactly:
@@ -76,6 +81,8 @@ Current execution checkpoint, updated 2026-06-28:
 - Real-evidence preflight reports all four remaining gates blocked:
   fair baseline has 5 blockers, human annotation has 3, multimodal has 4, and
   production adapter has 4.
+- All four real roots have no files, the four canonical broad packets are
+  absent, and preflight reports no packet or artifact hazards.
 - No completion claim is supported.
 
 Latest local implementation slice, updated 2026-06-28:

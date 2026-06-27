@@ -392,3 +392,25 @@ status in each role's goal file and task completion in
   `multimodal_semantic_validation`, and `production_adapter_paths`. Objective
   audit remains `objective_complete=false`, with 5 proved and 4 incomplete
   requirements. No completion claim is supported.
+- Follow-up current-state execution after user request: `git fetch origin`
+  found no newer commit beyond `bf0fc2b` (`Record KG current verification
+  run`) on `complete-slice-1`, and the branch matched
+  `origin/complete-slice-1`. Codex reran broad KG-eval and main-repo
+  verification in the dev container without code changes:
+  `kg_total_acceptance_suite.py`, `kg_objective_completion_audit.py`,
+  `real_evidence_preflight.py`, `real_evidence_collection_work_orders.py`,
+  full KG-eval unittest, operator guide `--check`, submission template
+  `--check-template`, main repo unittest, default main KG acceptance, strict
+  main KG acceptance, and full Ruff lint/format checks. KG-eval reports
+  exited 0; KG-eval unittest ran 421 tests OK; guide/template checks exited 0;
+  main repo unittest ran 252 tests OK; default main KG acceptance remains
+  `passed_with_explicit_limits`; strict main KG acceptance still exits nonzero
+  only for known limits. Full Ruff lint passed, but full Ruff format-check
+  still reports 33 pre-existing files that would be reformatted. Broad KG-eval
+  remains incomplete with `overall_passed=false`, 8 passed gates, and 4 failed
+  gates: `fair_external_baseline_comparison`,
+  `annotation_adjudication_protocol`,
+  `multimodal_semantic_validation`, and `production_adapter_paths`. Objective
+  audit remains `objective_complete=false`, with 5 proved and 4 incomplete
+  requirements; all four real roots have no files and the four canonical broad
+  packets are absent. No completion claim is supported.
