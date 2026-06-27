@@ -232,7 +232,9 @@ class ExternalBaselineConfigArtifactBindingTest(unittest.TestCase):
             status["blockers"],
         )
 
-    def test_official_default_artifact_not_matching_package_version_or_policy_row_fails(self) -> None:
+    def test_official_default_artifact_not_matching_package_version_or_policy_row_fails(
+        self,
+    ) -> None:
         policy = valid_config_policy()
         policy = self._rewrite_config_artifact_in_policy(
             policy,

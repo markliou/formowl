@@ -58,7 +58,9 @@ class GraphIndexStoreTests(unittest.TestCase):
             allow_stale=False,
             now=NOW,
         )
-        self.assertEqual([result.record.vector_id for result in without_stale], ["vec_ready_allowed"])
+        self.assertEqual(
+            [result.record.vector_id for result in without_stale], ["vec_ready_allowed"]
+        )
         self.assertFalse(without_stale[0].stale)
 
         with_stale = store.search(
@@ -73,7 +75,9 @@ class GraphIndexStoreTests(unittest.TestCase):
             {"vec_ready_allowed", "vec_stale_allowed"},
         )
         self.assertTrue(
-            next(result for result in with_stale if result.record.vector_id == "vec_stale_allowed").stale
+            next(
+                result for result in with_stale if result.record.vector_id == "vec_stale_allowed"
+            ).stale
         )
         self.assertNotIn(
             "vec_stale_denied",
@@ -137,7 +141,9 @@ class GraphIndexStoreTests(unittest.TestCase):
         with self.assertRaises(ContractValidationError):
             projection_store.visible_nodes(requester_user_id="user_yifan", grants=[grant])
         with self.assertRaises(ContractValidationError):
-            projection_store.neighbors("node_visible", requester_user_id="user_yifan", grants=[grant])
+            projection_store.neighbors(
+                "node_visible", requester_user_id="user_yifan", grants=[grant]
+            )
 
     def test_vector_store_persists_records_and_marks_source_vectors_stale(self) -> None:
         temp_dir = _paths.fresh_test_dir("graph-index-vectors-restart")
@@ -232,9 +238,7 @@ class GraphIndexStoreTests(unittest.TestCase):
         invalid_metadata_non_string_key["vector_id"] = "vec_invalid_metadata_non_string_key"
         invalid_metadata_non_string_key["metadata"] = {1: "source"}
         invalid_metadata_nested_non_string_key = valid_record.to_dict()
-        invalid_metadata_nested_non_string_key["vector_id"] = (
-            "vec_invalid_metadata_nested_key"
-        )
+        invalid_metadata_nested_non_string_key["vector_id"] = "vec_invalid_metadata_nested_key"
         invalid_metadata_nested_non_string_key["metadata"] = {"outer": {1: "source"}}
         invalid_metadata_tuple_raw_locator = valid_record.to_dict()
         invalid_metadata_tuple_raw_locator["vector_id"] = "vec_invalid_metadata_tuple"

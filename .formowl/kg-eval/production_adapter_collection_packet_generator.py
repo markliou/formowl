@@ -90,7 +90,9 @@ def _reject_forbidden_text(value: str, field_name: str) -> None:
     if value.startswith(("/", "\\")):
         raise WorkPacketError(f"{field_name} must not expose a raw path")
     if any(marker in lowered for marker in FORBIDDEN_TEXT_MARKERS):
-        raise WorkPacketError(f"{field_name} must not expose raw, test, result, or template sources")
+        raise WorkPacketError(
+            f"{field_name} must not expose raw, test, result, or template sources"
+        )
     if ":" in value and "://" in value:
         raise WorkPacketError(f"{field_name} must not expose URI-like sources")
 
@@ -128,7 +130,9 @@ def normalize_component_kinds(component_kinds: dict[str, str] | None = None) -> 
     return normalized
 
 
-def build_component_collection_plan(component_kinds: dict[str, str] | None = None) -> dict[str, Any]:
+def build_component_collection_plan(
+    component_kinds: dict[str, str] | None = None,
+) -> dict[str, Any]:
     normalized = normalize_component_kinds(component_kinds)
     rows = []
     for component_key in validator.REQUIRED_COMPONENTS:

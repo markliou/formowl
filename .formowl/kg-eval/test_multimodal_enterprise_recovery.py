@@ -15,7 +15,9 @@ class MultimodalEnterpriseRecoveryTest(unittest.TestCase):
         self.assertTrue(report["passed"])
         self.assertTrue(report["claim_boundary"]["supports_multimodal_control_fixture_claim"])
         self.assertFalse(report["claim_boundary"]["supports_real_enterprise_multimodal_claim"])
-        self.assertFalse(report["claim_boundary"]["supports_multimodal_human_adjudication_completed_claim"])
+        self.assertFalse(
+            report["claim_boundary"]["supports_multimodal_human_adjudication_completed_claim"]
+        )
         self.assertEqual(report["metrics"]["covered_modality_count"], 4)
         self.assertFalse(report["metrics"]["real_enterprise_pilot_present"])
 

@@ -730,3 +730,15 @@ Reviewer cost-control rules:
   requirements. Preflight reports all four real roots have no files, the four
   canonical broad packets are absent, and no packet/artifact hazards are
   present. No goal completion claim is supported.
+- 2026-06-28 formatting cleanup checkpoint: the pre-existing full Ruff format
+  drift from 33 Python/test/script files was mechanically formatted in the dev
+  container. Verification passed after the cleanup: full Ruff lint and
+  format-check, full KG-eval unittest 421 OK, main repo unittest 252 OK,
+  operator guide `--check`, submission template `--check-template`, refreshed
+  broad KG-eval reports, and default main KG acceptance
+  `passed_with_explicit_limits`; strict main KG acceptance still exits nonzero
+  only for the known `production_adapter_readiness` failed item and
+  `latency_scalability_enterprise_claims` blocked item. This cleanup created
+  no evidence packets, wrote no real artifacts, and changed no acceptance gate:
+  broad KG-eval remains `overall_passed=false` with the same four failed
+  real-evidence gates.

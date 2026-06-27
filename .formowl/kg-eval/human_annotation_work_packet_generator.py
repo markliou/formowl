@@ -86,7 +86,9 @@ def _reject_forbidden_text(value: str, field_name: str) -> None:
     if value.startswith(("/", "\\")):
         raise WorkPacketError(f"{field_name} must not expose a raw path")
     if any(marker in lowered for marker in FORBIDDEN_TEXT_MARKERS):
-        raise WorkPacketError(f"{field_name} must not expose raw, test, result, or template sources")
+        raise WorkPacketError(
+            f"{field_name} must not expose raw, test, result, or template sources"
+        )
 
 
 def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -128,7 +130,9 @@ def normalize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return normalized
 
 
-def normalize_reviewers(first_pass_reviewer_ids: list[str], adjudicator_id: str) -> tuple[list[str], str]:
+def normalize_reviewers(
+    first_pass_reviewer_ids: list[str], adjudicator_id: str
+) -> tuple[list[str], str]:
     if not isinstance(first_pass_reviewer_ids, list) or len(first_pass_reviewer_ids) != 2:
         raise WorkPacketError("exactly two first-pass reviewer ids are required")
     reviewers = [
@@ -227,7 +231,9 @@ def build_work_packet(
 ) -> dict[str, Any]:
     normalized_items = normalize_items(items if items is not None else list(DEFAULT_ITEMS))
     reviewers, adjudicator = normalize_reviewers(
-        first_pass_reviewer_ids if first_pass_reviewer_ids is not None else list(DEFAULT_FIRST_PASS_REVIEWERS),
+        first_pass_reviewer_ids
+        if first_pass_reviewer_ids is not None
+        else list(DEFAULT_FIRST_PASS_REVIEWERS),
         adjudicator_id,
     )
     manifest = build_manifest_artifact(

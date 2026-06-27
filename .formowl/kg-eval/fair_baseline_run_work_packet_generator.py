@@ -76,7 +76,9 @@ def _reject_forbidden_text(value: str, field_name: str) -> None:
     if value.startswith(("/", "\\")):
         raise WorkPacketError(f"{field_name} must not expose a raw path")
     if any(marker in lowered for marker in FORBIDDEN_TEXT_MARKERS):
-        raise WorkPacketError(f"{field_name} must not expose raw, test, result, or template sources")
+        raise WorkPacketError(
+            f"{field_name} must not expose raw, test, result, or template sources"
+        )
 
 
 def _source_by_id() -> dict[str, dict[str, Any]]:
@@ -96,7 +98,9 @@ def _source_by_id() -> dict[str, dict[str, Any]]:
         if source_id in by_id:
             raise WorkPacketError("literature source ids must be distinct")
         url = source.get("url")
-        if not isinstance(url, str) or not url.startswith(("https://github.com/", "https://arxiv.org/", "https://microsoft.github.io/")):
+        if not isinstance(url, str) or not url.startswith(
+            ("https://github.com/", "https://arxiv.org/", "https://microsoft.github.io/")
+        ):
             raise WorkPacketError("literature source URL must be an approved public source")
         _reject_forbidden_text(url, "source_url")
         by_id[source_id] = {
@@ -178,9 +182,7 @@ def build_assignment_rows(
         for source in source_lock["locked_sources"]
         if isinstance(source, dict)
     }
-    equalized_surface_contract_sha256s = run_manifest_artifact[
-        "equalized_surface_contract_sha256s"
-    ]
+    equalized_surface_contract_sha256s = run_manifest_artifact["equalized_surface_contract_sha256s"]
     rows = []
     for baseline_id in validator.REQUIRED_BASELINES:
         baseline_id = _ensure_safe_identifier(baseline_id, "baseline_id")

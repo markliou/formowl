@@ -85,7 +85,9 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
 
             self.assertEqual(row["validator_module"], expected["validator_module"])
             self.assertEqual(row["input_packet"], expected["input_packet"])
-            self.assertEqual(row["required_packet_artifact_id"], expected["required_packet_artifact_id"])
+            self.assertEqual(
+                row["required_packet_artifact_id"], expected["required_packet_artifact_id"]
+            )
             self.assertEqual(row["required_evidence_kind"], expected["required_evidence_kind"])
             self.assertEqual(row["current_blockers"], report["blockers"])
             self.assertFalse(report["passed"])
@@ -95,9 +97,13 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
             for field in exact_artifact_fields(row.get("required_artifacts", [])):
                 self.assertIn(field, packet_allowed_fields)
                 self.assertIn(field, template)
-            claim_boundary_allowed_fields = getattr(validator, "CLAIM_BOUNDARY_ALLOWED_FIELDS", set())
+            claim_boundary_allowed_fields = getattr(
+                validator, "CLAIM_BOUNDARY_ALLOWED_FIELDS", set()
+            )
             if claim_boundary_allowed_fields:
-                self.assertEqual(set(template["claim_boundary"]), set(claim_boundary_allowed_fields))
+                self.assertEqual(
+                    set(template["claim_boundary"]), set(claim_boundary_allowed_fields)
+                )
 
     def test_checklist_status_matches_total_acceptance_snapshot(self) -> None:
         checklist = load_json(CHECKLIST)
@@ -127,7 +133,9 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
                 self.assertNotEqual(str(template_path.relative_to(ROOT)), expected["input_packet"])
                 self.assertFalse(report["passed"])
                 self.assertTrue(report["blockers"])
-                self.assertTrue(any("unsupported fields" in blocker for blocker in report["blockers"]))
+                self.assertTrue(
+                    any("unsupported fields" in blocker for blocker in report["blockers"])
+                )
 
     def test_templates_do_not_change_total_acceptance_failed_gates(self) -> None:
         total = total_suite.build_report()

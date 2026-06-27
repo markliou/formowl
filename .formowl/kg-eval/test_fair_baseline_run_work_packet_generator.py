@@ -63,8 +63,7 @@ class FairBaselineRunWorkPacketGeneratorTest(unittest.TestCase):
             else None
         )
         self.real_root_before = sorted(
-            path.relative_to(generator.REAL_ROOT)
-            for path in generator.REAL_ROOT.rglob("*")
+            path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")
         )
 
     def tearDown(self) -> None:
@@ -87,7 +86,9 @@ class FairBaselineRunWorkPacketGeneratorTest(unittest.TestCase):
         else:
             self.assertEqual(generator.CANONICAL_PACKET_PATH.read_bytes(), self.canonical_before)
         self.assertEqual(
-            sorted(path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")),
+            sorted(
+                path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")
+            ),
             self.real_root_before,
         )
 
@@ -123,7 +124,9 @@ class FairBaselineRunWorkPacketGeneratorTest(unittest.TestCase):
             "ready_for_acceptance",
         }
         self.assertTrue(forbidden_keys.isdisjoint(keys))
-        self.assertTrue({"passed", "ready", "overall_ready", "ready_for_acceptance"}.isdisjoint(strings))
+        self.assertTrue(
+            {"passed", "ready", "overall_ready", "ready_for_acceptance"}.isdisjoint(strings)
+        )
         self.assertFalse(any(key.startswith("supports_") for key in keys))
         self.assertFalse(any("supports_" in value for value in strings))
         self.assertFalse(any("--promote" in value for value in strings))
@@ -148,7 +151,9 @@ class FairBaselineRunWorkPacketGeneratorTest(unittest.TestCase):
         )
 
         self.assertEqual(run_manifest["artifact_type"], "fair_external_baseline_run_manifest_v1")
-        self.assertEqual(run_assignments["artifact_type"], "fair_external_baseline_run_assignments_v1")
+        self.assertEqual(
+            run_assignments["artifact_type"], "fair_external_baseline_run_assignments_v1"
+        )
         self.assertEqual(
             sorted(row["baseline_id"] for row in rows),
             sorted(validator.REQUIRED_BASELINES),
@@ -165,8 +170,12 @@ class FairBaselineRunWorkPacketGeneratorTest(unittest.TestCase):
         for row in rows:
             baseline_id = row["baseline_id"]
             with self.subTest(baseline_id=baseline_id):
-                self.assertEqual(row["package_source_url"], validator.REQUIRED_BASELINE_URLS[baseline_id])
-                self.assertEqual(row["run_artifact_field_names"], list(validator.RUN_ARTIFACT_FIELDS))
+                self.assertEqual(
+                    row["package_source_url"], validator.REQUIRED_BASELINE_URLS[baseline_id]
+                )
+                self.assertEqual(
+                    row["run_artifact_field_names"], list(validator.RUN_ARTIFACT_FIELDS)
+                )
                 self.assertEqual(
                     row["equalized_surface_contract_sha256s"],
                     run_manifest["equalized_surface_contract_sha256s"],
@@ -175,7 +184,9 @@ class FairBaselineRunWorkPacketGeneratorTest(unittest.TestCase):
                     set(row["equalized_surface_contract_sha256s"]),
                     set(validator.EQUALIZED_FIELDS),
                 )
-                self.assertEqual(row["permission_probe_names"], list(validator.REQUIRED_PERMISSION_PROBES))
+                self.assertEqual(
+                    row["permission_probe_names"], list(validator.REQUIRED_PERMISSION_PROBES)
+                )
                 if baseline_id == "hipporag":
                     self.assertIn("hipporag2_paper", row["source_ids"])
                     self.assertIn(
@@ -299,7 +310,12 @@ class FairBaselineRunWorkPacketGeneratorTest(unittest.TestCase):
     def test_cli_does_not_accept_evidence_or_promotion_arguments(self) -> None:
         original_argv = sys.argv[:]
         try:
-            sys.argv = ["fair_baseline_run_work_packet_generator.py", "--promote", "--evidence", "fake"]
+            sys.argv = [
+                "fair_baseline_run_work_packet_generator.py",
+                "--promote",
+                "--evidence",
+                "fake",
+            ]
             with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
                 with self.assertRaises(SystemExit):
                     generator.main()

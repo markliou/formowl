@@ -407,7 +407,9 @@ def validate_fixture(fixture: dict[str, Any]) -> list[str]:
 
     missing_sources = REQUIRED_SOURCE_IDS - set(source_by_id)
     if missing_sources:
-        blockers.append("required literature/source coverage missing: " + ", ".join(sorted(missing_sources)))
+        blockers.append(
+            "required literature/source coverage missing: " + ", ".join(sorted(missing_sources))
+        )
     if not any(source.get("source_type") == "survey" for source in source_by_id.values()):
         blockers.append("recent survey source missing")
 
@@ -436,8 +438,14 @@ def validate_fixture(fixture: dict[str, Any]) -> list[str]:
             source_ids = []
         unknown = [source_id for source_id in source_ids if source_id not in source_by_id]
         if unknown:
-            blockers.append(f"{baseline_id} references unknown sources: " + ", ".join(sorted(unknown)))
-        source_types = {source_by_id[source_id]["source_type"] for source_id in source_ids if source_id in source_by_id}
+            blockers.append(
+                f"{baseline_id} references unknown sources: " + ", ".join(sorted(unknown))
+            )
+        source_types = {
+            source_by_id[source_id]["source_type"]
+            for source_id in source_ids
+            if source_id in source_by_id
+        }
         if "paper" not in source_types:
             blockers.append(f"{baseline_id} paper source missing")
         if not ({"official_repo", "official_docs", "official_blog"} & source_types):
@@ -500,8 +508,12 @@ def build_report(fixture: dict[str, Any] | None = None) -> dict[str, Any]:
         "passed": not blockers,
         "blockers": blockers,
         "metrics": {
-            "source_count": len(fixture.get("sources", [])) if isinstance(fixture.get("sources"), list) else 0,
-            "baseline_count": len(fixture.get("baselines", [])) if isinstance(fixture.get("baselines"), list) else 0,
+            "source_count": len(fixture.get("sources", []))
+            if isinstance(fixture.get("sources"), list)
+            else 0,
+            "baseline_count": len(fixture.get("baselines", []))
+            if isinstance(fixture.get("baselines"), list)
+            else 0,
             "comparison_axis_count": len(fixture.get("comparison_axes", []))
             if isinstance(fixture.get("comparison_axes"), list)
             else 0,

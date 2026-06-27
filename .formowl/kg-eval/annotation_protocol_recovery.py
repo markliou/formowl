@@ -179,10 +179,14 @@ def default_fixture() -> dict[str, Any]:
                     first_pass_rows[0]["row_sha256"],
                     first_pass_rows[2]["row_sha256"],
                 ],
-                "submission_set_sha256": sha256_json(sorted([
-                    first_pass_rows[0]["row_sha256"],
-                    first_pass_rows[2]["row_sha256"],
-                ])),
+                "submission_set_sha256": sha256_json(
+                    sorted(
+                        [
+                            first_pass_rows[0]["row_sha256"],
+                            first_pass_rows[2]["row_sha256"],
+                        ]
+                    )
+                ),
             },
             {
                 "reviewer_id": "reviewer_beta",
@@ -191,10 +195,14 @@ def default_fixture() -> dict[str, Any]:
                     first_pass_rows[1]["row_sha256"],
                     first_pass_rows[3]["row_sha256"],
                 ],
-                "submission_set_sha256": sha256_json(sorted([
-                    first_pass_rows[1]["row_sha256"],
-                    first_pass_rows[3]["row_sha256"],
-                ])),
+                "submission_set_sha256": sha256_json(
+                    sorted(
+                        [
+                            first_pass_rows[1]["row_sha256"],
+                            first_pass_rows[3]["row_sha256"],
+                        ]
+                    )
+                ),
             },
         ],
         "adjudication_open_receipt": {
@@ -262,11 +270,16 @@ def validate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         work_order = work_order_by_id.get(row.get("work_order_id"))
         if not work_order:
             blockers.append("first-pass row references unknown work order")
-        elif work_order.get("reviewer_id") != row.get("reviewer_id") or work_order.get("role") != "first_pass":
+        elif (
+            work_order.get("reviewer_id") != row.get("reviewer_id")
+            or work_order.get("role") != "first_pass"
+        ):
             blockers.append("first-pass row work-order binding mismatch")
         elif work_order.get("item_id") != row.get("item_id"):
             blockers.append("first-pass row work-order item mismatch")
-        elif work_order.get("manifest_row_sha256") != manifest_by_id.get(row.get("item_id"), {}).get("row_sha256"):
+        elif work_order.get("manifest_row_sha256") != manifest_by_id.get(
+            row.get("item_id"), {}
+        ).get("row_sha256"):
             blockers.append("first-pass row work-order manifest binding mismatch")
         first_pass_by_item.setdefault(row.get("item_id"), []).append(row)
 
@@ -277,9 +290,7 @@ def validate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
             blockers.append(f"{item_id} does not have two distinct first-pass reviewers")
 
     first_pass_reviewers = {
-        row.get("reviewer_id")
-        for rows in first_pass_by_item.values()
-        for row in rows
+        row.get("reviewer_id") for rows in first_pass_by_item.values() for row in rows
     }
     first_pass_hashes_by_reviewer: dict[str, list[str]] = {}
     for rows in first_pass_by_item.values():
@@ -360,11 +371,16 @@ def validate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         work_order = work_order_by_id.get(row.get("work_order_id"))
         if not work_order:
             blockers.append("adjudication row references unknown work order")
-        elif work_order.get("reviewer_id") != row.get("adjudicator_id") or work_order.get("role") != "adjudicator":
+        elif (
+            work_order.get("reviewer_id") != row.get("adjudicator_id")
+            or work_order.get("role") != "adjudicator"
+        ):
             blockers.append("adjudication row work-order binding mismatch")
         elif work_order.get("item_id") != row.get("item_id"):
             blockers.append("adjudication row work-order item mismatch")
-        elif work_order.get("manifest_row_sha256") != manifest_by_id.get(row.get("item_id"), {}).get("row_sha256"):
+        elif work_order.get("manifest_row_sha256") != manifest_by_id.get(
+            row.get("item_id"), {}
+        ).get("row_sha256"):
             blockers.append("adjudication row work-order manifest binding mismatch")
         if row.get("adjudicator_id") in first_pass_reviewers:
             blockers.append("adjudicator is not distinct from first-pass reviewers")
@@ -378,7 +394,9 @@ def validate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
     }
     if duplicate_items:
         blockers.append("duplicate adjudication row for sealed disagreement item")
-    if set(adjudicated_items) != disagreement_items or len(adjudicated_items) != len(disagreement_items):
+    if set(adjudicated_items) != disagreement_items or len(adjudicated_items) != len(
+        disagreement_items
+    ):
         blockers.append("adjudication rows do not cover exactly the sealed disagreement set")
 
     custody = fixture.get("custody_receipt", {})

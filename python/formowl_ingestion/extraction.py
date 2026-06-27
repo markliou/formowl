@@ -204,9 +204,7 @@ def _validate_optional_timestamp(field_name: str, value: str | None) -> None:
         try:
             datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError as exc:
-            raise ContractValidationError(
-                f"{field_name} must be an ISO timestamp"
-            ) from exc
+            raise ContractValidationError(f"{field_name} must be an ISO timestamp") from exc
 
 
 __all__ = [

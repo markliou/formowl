@@ -23,7 +23,9 @@ class AnnotationProtocolRecoveryTest(unittest.TestCase):
         fixture["first_pass_rows"] = [
             row
             for row in fixture["first_pass_rows"]
-            if not (row["item_id"] == "ann_item_invoice_001" and row["reviewer_id"] == "reviewer_beta")
+            if not (
+                row["item_id"] == "ann_item_invoice_001" and row["reviewer_id"] == "reviewer_beta"
+            )
         ]
 
         report = annotation.build_report(fixture)
@@ -60,7 +62,9 @@ class AnnotationProtocolRecoveryTest(unittest.TestCase):
     def test_synthetic_first_pass_label_fails(self) -> None:
         fixture = annotation.default_fixture()
         fixture["first_pass_rows"][0]["generated_by_llm"] = True
-        fixture["first_pass_rows"][0]["row_sha256"] = annotation.row_hash(fixture["first_pass_rows"][0])
+        fixture["first_pass_rows"][0]["row_sha256"] = annotation.row_hash(
+            fixture["first_pass_rows"][0]
+        )
 
         report = annotation.build_report(fixture)
 
@@ -70,7 +74,9 @@ class AnnotationProtocolRecoveryTest(unittest.TestCase):
     def test_work_order_mismatch_fails(self) -> None:
         fixture = annotation.default_fixture()
         fixture["first_pass_rows"][0]["work_order_id"] = "wo_beta_item_invoice"
-        fixture["first_pass_rows"][0]["row_sha256"] = annotation.row_hash(fixture["first_pass_rows"][0])
+        fixture["first_pass_rows"][0]["row_sha256"] = annotation.row_hash(
+            fixture["first_pass_rows"][0]
+        )
 
         report = annotation.build_report(fixture)
 
@@ -178,17 +184,19 @@ class AnnotationProtocolRecoveryTest(unittest.TestCase):
             if row["reviewer_id"] == "reviewer_beta"
         ]
         fixture["first_pass_submission_artifacts"][0]["submission_row_sha256s"] = alpha_hashes
-        fixture["first_pass_submission_artifacts"][0]["submission_set_sha256"] = annotation.sha256_json(
-            sorted(alpha_hashes)
+        fixture["first_pass_submission_artifacts"][0]["submission_set_sha256"] = (
+            annotation.sha256_json(sorted(alpha_hashes))
         )
         fixture["first_pass_submission_artifacts"][1]["submission_row_sha256s"] = beta_hashes
-        fixture["first_pass_submission_artifacts"][1]["submission_set_sha256"] = annotation.sha256_json(
-            sorted(beta_hashes)
+        fixture["first_pass_submission_artifacts"][1]["submission_set_sha256"] = (
+            annotation.sha256_json(sorted(beta_hashes))
         )
         fixture["disagreement_set"] = []
         fixture["adjudication_rows"] = []
         empty_disagreement_hash = annotation.sha256_json([])
-        fixture["adjudication_open_receipt"]["sealed_disagreement_set_sha256"] = empty_disagreement_hash
+        fixture["adjudication_open_receipt"]["sealed_disagreement_set_sha256"] = (
+            empty_disagreement_hash
+        )
         fixture["custody_receipt"]["first_pass_rows_sha256"] = annotation.sha256_json(
             fixture["first_pass_rows"]
         )
@@ -198,7 +206,10 @@ class AnnotationProtocolRecoveryTest(unittest.TestCase):
         report = annotation.build_report(fixture)
 
         self.assertFalse(report["passed"])
-        self.assertIn("annotation protocol fixture does not exercise adjudication disagreement", report["blockers"])
+        self.assertIn(
+            "annotation protocol fixture does not exercise adjudication disagreement",
+            report["blockers"],
+        )
 
     def test_duplicate_conflicting_adjudication_rows_fail(self) -> None:
         fixture = annotation.default_fixture()

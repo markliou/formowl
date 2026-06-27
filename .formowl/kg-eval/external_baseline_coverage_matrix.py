@@ -252,7 +252,9 @@ def baseline_config_fairness_policy_status(
 
         config_source = row.get("config_source")
         if config_source not in {"official_default", "declared_tuned_equalized"}:
-            blockers.append(f"{baseline_id} config source is not official/default or declared equalized tuning")
+            blockers.append(
+                f"{baseline_id} config source is not official/default or declared equalized tuning"
+            )
 
         blockers.extend(config_artifact_content_blockers(baseline_id, row, "config_artifact"))
         if config_source == "official_default":
@@ -291,13 +293,21 @@ def baseline_config_fairness_policy_status(
                 target.add(value)
 
         context_window = row.get("context_window_tokens")
-        if not isinstance(context_window, int) or isinstance(context_window, bool) or context_window <= 0:
+        if (
+            not isinstance(context_window, int)
+            or isinstance(context_window, bool)
+            or context_window <= 0
+        ):
             blockers.append(f"{baseline_id} context window token budget missing")
         else:
             context_windows.add(context_window)
 
         retrieval_top_k = row.get("retrieval_top_k")
-        if not isinstance(retrieval_top_k, int) or isinstance(retrieval_top_k, bool) or retrieval_top_k <= 0:
+        if (
+            not isinstance(retrieval_top_k, int)
+            or isinstance(retrieval_top_k, bool)
+            or retrieval_top_k <= 0
+        ):
             blockers.append(f"{baseline_id} retrieval top-k missing")
         else:
             retrieval_top_ks.add(retrieval_top_k)

@@ -33,9 +33,7 @@ def load_snapshot() -> dict[str, Any]:
         loaded = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(loaded, dict):
             gate_ids = {
-                gate.get("gate_id")
-                for gate in loaded.get("gates", [])
-                if isinstance(gate, dict)
+                gate.get("gate_id") for gate in loaded.get("gates", []) if isinstance(gate, dict)
             }
             required_current_gates = {
                 "external_recent_literature_baseline_protocol",

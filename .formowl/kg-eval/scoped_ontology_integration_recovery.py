@@ -202,9 +202,16 @@ def validate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
             blockers.append("candidate type row proposes unknown type")
         if row.get("llm_direct_commit") is not False:
             blockers.append("candidate type row allows LLM direct commit")
-        if row.get("action") not in {"accept_core_type", "accept_as_scoped_extension", "needs_review"}:
+        if row.get("action") not in {
+            "accept_core_type",
+            "accept_as_scoped_extension",
+            "needs_review",
+        }:
             blockers.append("candidate type row has unsupported governance action")
-        if not isinstance(row.get("source_observation_id"), str) or not row["source_observation_id"]:
+        if (
+            not isinstance(row.get("source_observation_id"), str)
+            or not row["source_observation_id"]
+        ):
             blockers.append("candidate type row lacks source observation")
 
     relation_rows = fixture.get("relation_rows", [])
@@ -236,7 +243,11 @@ def validate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
     mappings = fixture.get("revision_mappings", [])
     if not isinstance(mappings, list) or not mappings:
         blockers.append("ontology revision mapping evidence missing")
-    elif not any(row.get("to_ontology_revision_id") == ontology_revision_id for row in mappings if isinstance(row, dict)):
+    elif not any(
+        row.get("to_ontology_revision_id") == ontology_revision_id
+        for row in mappings
+        if isinstance(row, dict)
+    ):
         blockers.append("ontology revision mapping does not target current revision")
 
     metrics = {
@@ -244,7 +255,13 @@ def validate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         "scoped_extension_type_count": len(scoped_type_ids),
         "candidate_type_row_count": len(candidate_rows),
         "typed_relation_row_count": len(relation_rows),
-        "schema_violation_count": len([blocker for blocker in blockers if "violates schema" in blocker or "missing required slot" in blocker]),
+        "schema_violation_count": len(
+            [
+                blocker
+                for blocker in blockers
+                if "violates schema" in blocker or "missing required slot" in blocker
+            ]
+        ),
     }
     return {
         "passed": not blockers,

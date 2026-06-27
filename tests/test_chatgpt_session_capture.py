@@ -298,6 +298,7 @@ class ChatGptSessionCaptureTests(unittest.TestCase):
                 with self.assertRaises(ContractValidationError):
                     ChatGptSessionCapture.from_dict(payload)
 
+
 def _valid_capture_payload() -> dict[str, object]:
     return {
         "capture_id": "cap_001",

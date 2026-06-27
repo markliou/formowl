@@ -21,8 +21,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = Path("/tmp/formowl-kg-eval/results/main_repo_pgvector_live_smoke.json")
 PGVECTOR_IMAGE = (
-    "pgvector/pgvector@"
-    "sha256:131dcf7ff6a900545df8e7e092c270aa8c6db2f2c818e408cb45ec21316b74e6"
+    "pgvector/pgvector@" "sha256:131dcf7ff6a900545df8e7e092c270aa8c6db2f2c818e408cb45ec21316b74e6"
 )
 FORBIDDEN_TEXT = (
     "postgresql://",
@@ -198,7 +197,10 @@ def write_markdown(report: dict[str, Any], validation: dict[str, Any], output_pa
 
 def _contains_forbidden_text(value: Any) -> bool:
     if isinstance(value, dict):
-        return any(_contains_forbidden_text(key) or _contains_forbidden_text(item) for key, item in value.items())
+        return any(
+            _contains_forbidden_text(key) or _contains_forbidden_text(item)
+            for key, item in value.items()
+        )
     if isinstance(value, list):
         return any(_contains_forbidden_text(item) for item in value)
     if isinstance(value, str):

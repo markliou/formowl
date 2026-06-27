@@ -120,12 +120,7 @@ class StorageBackendRegistryTests(unittest.TestCase):
 
         self.assertIsNone(registry.get_backend("storage_raw_root_prefix"))
         self.assertFalse(
-            (
-                temp_dir
-                / "ingestion"
-                / "storage-backends"
-                / "storage_raw_root_prefix.json"
-            ).exists()
+            (temp_dir / "ingestion" / "storage-backends" / "storage_raw_root_prefix.json").exists()
         )
 
 

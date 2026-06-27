@@ -81,9 +81,7 @@ class GraphRecordStoreTests(unittest.TestCase):
         records = _valid_graph_records()
 
         self.assertEqual(
-            SemanticMetadataStore(temp_dir)
-            .create(records.semantic_metadata.to_dict())
-            .to_dict(),
+            SemanticMetadataStore(temp_dir).create(records.semantic_metadata.to_dict()).to_dict(),
             records.semantic_metadata.to_dict(),
         )
         self.assertEqual(
@@ -91,9 +89,7 @@ class GraphRecordStoreTests(unittest.TestCase):
             records.candidate_atom.to_dict(),
         )
         self.assertEqual(
-            CandidateRelationStore(temp_dir)
-            .create(records.candidate_relation.to_dict())
-            .to_dict(),
+            CandidateRelationStore(temp_dir).create(records.candidate_relation.to_dict()).to_dict(),
             records.candidate_relation.to_dict(),
         )
 
@@ -277,7 +273,9 @@ class GraphRecordStoreTests(unittest.TestCase):
             ),
             (
                 CandidateRelationStore,
-                _with_field(records.candidate_relation.to_dict(), "source_observation_ids", ["obs id"]),
+                _with_field(
+                    records.candidate_relation.to_dict(), "source_observation_ids", ["obs id"]
+                ),
             ),
             (
                 CandidateRelationStore,
@@ -293,7 +291,9 @@ class GraphRecordStoreTests(unittest.TestCase):
             ),
             (
                 CandidateRelationStore,
-                _with_field(records.candidate_relation.to_dict(), "target_candidate_atom_id", "catom id"),
+                _with_field(
+                    records.candidate_relation.to_dict(), "target_candidate_atom_id", "catom id"
+                ),
             ),
             (
                 CandidateRelationStore,

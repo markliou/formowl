@@ -63,8 +63,7 @@ class EnterpriseMultimodalCollectionPacketGeneratorTest(unittest.TestCase):
             else None
         )
         self.real_root_before = sorted(
-            path.relative_to(generator.REAL_ROOT)
-            for path in generator.REAL_ROOT.rglob("*")
+            path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")
         )
 
     def tearDown(self) -> None:
@@ -87,14 +86,18 @@ class EnterpriseMultimodalCollectionPacketGeneratorTest(unittest.TestCase):
         else:
             self.assertEqual(generator.CANONICAL_PACKET_PATH.read_bytes(), self.canonical_before)
         self.assertEqual(
-            sorted(path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")),
+            sorted(
+                path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")
+            ),
             self.real_root_before,
         )
 
     def test_default_packet_is_non_evidence_and_not_acceptance_shaped(self) -> None:
         packet = generator.build_work_packet()
 
-        self.assertEqual(packet["work_packet_type"], "enterprise_multimodal_collection_packet_preview_v1")
+        self.assertEqual(
+            packet["work_packet_type"], "enterprise_multimodal_collection_packet_preview_v1"
+        )
         self.assertEqual(packet["work_packet_state"], "operator_assignment_only")
         self.assertEqual(packet["evidence_state"], "non_evidence")
         self.assertFalse(packet["artifact_boundary"]["creates_real_source_rows"])
@@ -181,8 +184,7 @@ class EnterpriseMultimodalCollectionPacketGeneratorTest(unittest.TestCase):
     def test_review_plan_binds_to_source_collection_rows_without_results(self) -> None:
         packet = generator.build_work_packet()
         source_hashes = {
-            row["row_sha256"]
-            for row in packet["source_collection_plan"]["modality_rows"]
+            row["row_sha256"] for row in packet["source_collection_plan"]["modality_rows"]
         }
         review_rows = packet["review_collection_plan"]["review_rows"]
 
@@ -208,7 +210,9 @@ class EnterpriseMultimodalCollectionPacketGeneratorTest(unittest.TestCase):
         report = validator.build_report(generator.build_work_packet())
 
         self.assertFalse(report["passed"])
-        self.assertIn("enterprise multimodal validation packet artifact id mismatch", report["blockers"])
+        self.assertIn(
+            "enterprise multimodal validation packet artifact id mismatch", report["blockers"]
+        )
         self.assertIn("enterprise multimodal evidence kind mismatch", report["blockers"])
         self.assertIn("enterprise multimodal packet claim boundary missing", report["blockers"])
         self.assertIn("pilot_manifest_artifact missing or hash mismatch", report["blockers"])
@@ -273,7 +277,9 @@ class EnterpriseMultimodalCollectionPacketGeneratorTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertTrue(OUTPUT.exists())
         payload = json.loads(OUTPUT.read_text(encoding="utf-8"))
-        self.assertEqual(payload["work_packet_type"], "enterprise_multimodal_collection_packet_preview_v1")
+        self.assertEqual(
+            payload["work_packet_type"], "enterprise_multimodal_collection_packet_preview_v1"
+        )
         self.assert_no_canonical_or_real_root_mutation()
 
     def test_cli_does_not_accept_evidence_validation_or_promotion_arguments(self) -> None:
@@ -370,10 +376,7 @@ class EnterpriseMultimodalCollectionPacketGeneratorTest(unittest.TestCase):
         with self.assertRaisesRegex(generator.WorkPacketError, "unsupported modalities"):
             generator.build_work_packet(modality_requirements=extra)
 
-        raw = {
-            key: dict(value)
-            for key, value in generator.DEFAULT_MODALITY_REQUIREMENTS.items()
-        }
+        raw = {key: dict(value) for key, value in generator.DEFAULT_MODALITY_REQUIREMENTS.items()}
         raw["spreadsheet"]["operator_checks"] = ["/mnt/nas/finance.xlsx"]
         with self.assertRaisesRegex(generator.WorkPacketError, "raw path"):
             generator.build_work_packet(modality_requirements=raw)

@@ -16,8 +16,12 @@ class ExternalLiteratureBaselineProtocolRecoveryTest(unittest.TestCase):
         self.assertTrue(report["passed"])
         self.assertEqual(report["blockers"], [])
         self.assertEqual(report["metrics"]["baseline_count"], 3)
-        self.assertEqual(report["metrics"]["comparison_axis_count"], len(literature.REQUIRED_COMPARISON_AXES))
-        self.assertEqual(report["metrics"]["required_source_count"], len(literature.REQUIRED_SOURCE_IDS))
+        self.assertEqual(
+            report["metrics"]["comparison_axis_count"], len(literature.REQUIRED_COMPARISON_AXES)
+        )
+        self.assertEqual(
+            report["metrics"]["required_source_count"], len(literature.REQUIRED_SOURCE_IDS)
+        )
         source_ids = {source["source_id"] for source in report["sources"]}
         self.assertIn("hipporag2_paper", source_ids)
         self.assertIn(
@@ -40,10 +44,14 @@ class ExternalLiteratureBaselineProtocolRecoveryTest(unittest.TestCase):
         )
         hipporag = next(row for row in report["baselines"] if row["baseline_id"] == "hipporag")
         self.assertIn("hipporag2_paper", hipporag["source_ids"])
-        self.assertTrue(report["claim_boundary"]["supports_external_recent_literature_comparison_claim"])
+        self.assertTrue(
+            report["claim_boundary"]["supports_external_recent_literature_comparison_claim"]
+        )
         self.assertFalse(report["claim_boundary"]["supports_fair_external_baseline_run_claim"])
         self.assertFalse(report["claim_boundary"]["supports_real_package_execution_claim"])
-        self.assertFalse(report["claim_boundary"]["supports_human_adjudicated_answer_quality_claim"])
+        self.assertFalse(
+            report["claim_boundary"]["supports_human_adjudicated_answer_quality_claim"]
+        )
 
     def test_missing_required_baseline_fails(self) -> None:
         fixture = literature.default_fixture()
@@ -76,7 +84,9 @@ class ExternalLiteratureBaselineProtocolRecoveryTest(unittest.TestCase):
         report = literature.build_report(fixture)
 
         self.assertFalse(report["passed"])
-        self.assertIn("lightrag_repo source URL does not match locked reference", report["blockers"])
+        self.assertIn(
+            "lightrag_repo source URL does not match locked reference", report["blockers"]
+        )
 
     def test_non_recent_source_fails(self) -> None:
         fixture = literature.default_fixture()
@@ -150,7 +160,9 @@ class ExternalLiteratureBaselineProtocolRecoveryTest(unittest.TestCase):
         report = literature.build_report()
         fixture = literature.default_fixture()
         mutated = deepcopy(fixture)
-        mutated["baselines"][0]["comparison"]["retrieval_strategy"] = "degraded summary-only retrieval"
+        mutated["baselines"][0]["comparison"]["retrieval_strategy"] = (
+            "degraded summary-only retrieval"
+        )
 
         mutated_report = literature.build_report(mutated)
 

@@ -52,7 +52,10 @@ def write_artifact(relative_name: str, payload: object) -> tuple[str, str]:
     path = BASE / relative_name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return f"inputs/test_human_annotation_work_packet_generator/{relative_name}", validator.sha256_file(path) or ""
+    return (
+        f"inputs/test_human_annotation_work_packet_generator/{relative_name}",
+        validator.sha256_file(path) or "",
+    )
 
 
 class HumanAnnotationWorkPacketGeneratorTest(unittest.TestCase):
@@ -71,8 +74,7 @@ class HumanAnnotationWorkPacketGeneratorTest(unittest.TestCase):
             else None
         )
         self.real_root_before = sorted(
-            path.relative_to(generator.REAL_ROOT)
-            for path in generator.REAL_ROOT.rglob("*")
+            path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")
         )
 
     def tearDown(self) -> None:
@@ -96,7 +98,9 @@ class HumanAnnotationWorkPacketGeneratorTest(unittest.TestCase):
         else:
             self.assertEqual(generator.CANONICAL_PACKET_PATH.read_bytes(), self.canonical_before)
         self.assertEqual(
-            sorted(path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")),
+            sorted(
+                path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")
+            ),
             self.real_root_before,
         )
 
@@ -159,7 +163,9 @@ class HumanAnnotationWorkPacketGeneratorTest(unittest.TestCase):
                 set(row),
                 {"item_id", "task_id", "source_ref", "source_observation_id", "row_sha256"},
             )
-            self.assertEqual(row["source_ref"], f"formowl://observation/{row['source_observation_id']}")
+            self.assertEqual(
+                row["source_ref"], f"formowl://observation/{row['source_observation_id']}"
+            )
             self.assertEqual(row["row_sha256"], validator.row_hash(row))
         for row in work_orders["work_orders"]:
             self.assertEqual(row["row_sha256"], validator.row_hash(row))
@@ -178,7 +184,9 @@ class HumanAnnotationWorkPacketGeneratorTest(unittest.TestCase):
     def test_generated_manifest_and_work_orders_alone_do_not_pass_validator(self) -> None:
         packet = generator.build_work_packet()
         manifest_path, manifest_sha = write_artifact("manifest.json", packet["manifest_artifact"])
-        work_orders_path, work_orders_sha = write_artifact("work_orders.json", packet["work_orders_artifact"])
+        work_orders_path, work_orders_sha = write_artifact(
+            "work_orders.json", packet["work_orders_artifact"]
+        )
         partial_evidence_packet = {
             "artifact_id": "human_annotation_results_v1",
             "evidence_kind": "real_human_annotation_adjudication",
@@ -209,7 +217,10 @@ class HumanAnnotationWorkPacketGeneratorTest(unittest.TestCase):
         report = validator.build_report(partial_evidence_packet)
 
         self.assertFalse(report["passed"])
-        self.assertIn("two independent first-pass human submission artifacts are not present", report["blockers"])
+        self.assertIn(
+            "two independent first-pass human submission artifacts are not present",
+            report["blockers"],
+        )
         self.assertIn("adjudication_artifact missing or hash mismatch", report["blockers"])
         self.assertIn("confusion_matrix_artifact missing or hash mismatch", report["blockers"])
         self.assertIn("custody_receipt_artifact missing or hash mismatch", report["blockers"])
@@ -241,8 +252,12 @@ class HumanAnnotationWorkPacketGeneratorTest(unittest.TestCase):
         self.assert_no_canonical_or_real_root_mutation()
 
     def test_rejects_duplicate_reviewers_and_non_distinct_adjudicator(self) -> None:
-        with self.assertRaisesRegex(generator.WorkPacketError, "first-pass reviewer ids must be distinct"):
-            generator.build_work_packet(first_pass_reviewer_ids=["human_reviewer_alpha", "human_reviewer_alpha"])
+        with self.assertRaisesRegex(
+            generator.WorkPacketError, "first-pass reviewer ids must be distinct"
+        ):
+            generator.build_work_packet(
+                first_pass_reviewer_ids=["human_reviewer_alpha", "human_reviewer_alpha"]
+            )
 
         with self.assertRaisesRegex(generator.WorkPacketError, "adjudicator id must be distinct"):
             generator.build_work_packet(
@@ -250,7 +265,9 @@ class HumanAnnotationWorkPacketGeneratorTest(unittest.TestCase):
                 adjudicator_id="human_reviewer_alpha",
             )
 
-        with self.assertRaisesRegex(generator.WorkPacketError, "exactly two first-pass reviewer ids"):
+        with self.assertRaisesRegex(
+            generator.WorkPacketError, "exactly two first-pass reviewer ids"
+        ):
             generator.build_work_packet(
                 first_pass_reviewer_ids=[
                     "human_reviewer_alpha",
@@ -270,10 +287,22 @@ class HumanAnnotationWorkPacketGeneratorTest(unittest.TestCase):
             ("source_ref", "postgres://db/table", "raw, test, result, or template"),
             ("source_ref", "C:\\raw\\file.pdf", "raw, test, result, or template"),
             ("source_ref", "../raw/file.pdf", "raw, test, result, or template"),
-            ("source_ref", "inputs/test_human_annotation_validator/manifest.json", "raw, test, result, or template"),
+            (
+                "source_ref",
+                "inputs/test_human_annotation_validator/manifest.json",
+                "raw, test, result, or template",
+            ),
             ("source_ref", "results/generated.json", "raw, test, result, or template"),
-            ("source_ref", "templates/human_annotation_results_v1.template.json", "raw, test, result, or template"),
-            ("source_ref", "formowl://observation/do_not_submit_as_evidence", "raw, test, result, or template"),
+            (
+                "source_ref",
+                "templates/human_annotation_results_v1.template.json",
+                "raw, test, result, or template",
+            ),
+            (
+                "source_ref",
+                "formowl://observation/do_not_submit_as_evidence",
+                "raw, test, result, or template",
+            ),
             ("item_id", "test_item_001", "test fixture or template markers"),
             ("task_id", "fixture_task_001", "test fixture or template markers"),
         ]
@@ -315,7 +344,12 @@ class HumanAnnotationWorkPacketGeneratorTest(unittest.TestCase):
     def test_cli_does_not_accept_evidence_or_promotion_arguments(self) -> None:
         original_argv = sys.argv[:]
         try:
-            sys.argv = ["human_annotation_work_packet_generator.py", "--promote", "--evidence", "fake"]
+            sys.argv = [
+                "human_annotation_work_packet_generator.py",
+                "--promote",
+                "--evidence",
+                "fake",
+            ]
             with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
                 with self.assertRaises(SystemExit):
                     generator.main()

@@ -235,7 +235,9 @@ def validate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         "cross_user_edge_leak_count": revocation_probe.get("cross_user_edge_leak_count"),
         "private_atom_leak_count": private_leak_count,
         "canonical_merge_execution_count": sum(
-            1 for row in fusion_candidates if isinstance(row, dict) and row.get("canonical_merge_executed") is True
+            1
+            for row in fusion_candidates
+            if isinstance(row, dict) and row.get("canonical_merge_executed") is True
         ),
     }
     return {

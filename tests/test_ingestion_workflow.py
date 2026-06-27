@@ -303,9 +303,7 @@ class IngestionWorkflowTests(unittest.TestCase):
                         pending,
                         status=status,  # type: ignore[arg-type]
                         started_at="2026-06-17T10:01:00+00:00",
-                        completed_at=(
-                            "2026-06-17T10:01:00+00:00" if status != "running" else None
-                        ),
+                        completed_at=("2026-06-17T10:01:00+00:00" if status != "running" else None),
                         error="previous failure" if status == "failed" else None,
                     )
                 )

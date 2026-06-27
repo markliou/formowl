@@ -44,7 +44,17 @@ def default_fixture() -> dict[str, Any]:
     policy_id = "production_adapter_policy_recovery_v1"
     audit_events = []
     for index, action in enumerate(REQUIRED_ACTIONS):
-        decision = "allow" if action in {"deploy_started", "grant_check_before_content", "wiki_projection_draft_not_published", "deploy_completed"} else "deny"
+        decision = (
+            "allow"
+            if action
+            in {
+                "deploy_started",
+                "grant_check_before_content",
+                "wiki_projection_draft_not_published",
+                "deploy_completed",
+            }
+            else "deny"
+        )
         row = {
             "event_id": f"event_{index:02d}_{action}",
             "sequence": index,
@@ -146,8 +156,12 @@ def validate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         "metrics": {
             "required_audit_action_count": len(REQUIRED_ACTIONS),
             "audit_event_count": len(events),
-            "non_synthetic_deployment_present": fixture.get("non_synthetic_deployment_present") is True,
-            "human_reviewed_false_merge_labels_present": fixture.get("human_reviewed_false_merge_labels_present") is True,
+            "non_synthetic_deployment_present": fixture.get("non_synthetic_deployment_present")
+            is True,
+            "human_reviewed_false_merge_labels_present": fixture.get(
+                "human_reviewed_false_merge_labels_present"
+            )
+            is True,
         },
     }
 

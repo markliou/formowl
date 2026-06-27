@@ -128,7 +128,8 @@ class ManualTrustedInternalAuthProvider:
         return [
             grant
             for grant in self.grants
-            if grant.grantee_user_id == user_id and grant.revoked_at is None
+            if grant.grantee_user_id == user_id
+            and grant.revoked_at is None
             and _parse_iso(grant.expires_at) > _parse_iso(selected_at)
         ]
 

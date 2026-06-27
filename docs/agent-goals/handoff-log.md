@@ -414,3 +414,13 @@ status in each role's goal file and task completion in
   audit remains `objective_complete=false`, with 5 proved and 4 incomplete
   requirements; all four real roots have no files and the four canonical broad
   packets are absent. No completion claim is supported.
+- Formatting cleanup: Codex mechanically formatted the 33 files previously
+  reported by full Ruff format-check, using the dev container and an external
+  `/tmp` Ruff cache to avoid the root-owned `.ruff_cache` permission issue.
+  Verification passed after formatting: full Ruff lint and format-check, full
+  KG-eval unittest 421 OK, main repo unittest 252 OK, operator guide
+  `--check`, submission template `--check-template`, refreshed broad KG-eval
+  reports, and default main KG acceptance `passed_with_explicit_limits`;
+  strict main KG acceptance still exits nonzero only for known limits. This was
+  format-only cleanup and does not change broad KG acceptance:
+  `overall_passed=false` with the same four failed real-evidence gates.

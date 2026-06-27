@@ -312,9 +312,7 @@ def _validate_capture_workflow_inputs(
         for field_name in ("role", "message_id"):
             value = message.get(field_name)
             if value is not None and not isinstance(value, str):
-                raise ContractValidationError(
-                    f"messages[{index}].{field_name} must be a string"
-                )
+                raise ContractValidationError(f"messages[{index}].{field_name} must be a string")
     for field_name, value in (
         ("storage_backend_id", storage_backend_id),
         ("actor_user_id", actor_user_id),

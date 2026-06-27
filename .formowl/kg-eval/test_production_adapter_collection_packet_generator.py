@@ -63,8 +63,7 @@ class ProductionAdapterCollectionPacketGeneratorTest(unittest.TestCase):
             else None
         )
         self.real_root_before = sorted(
-            path.relative_to(generator.REAL_ROOT)
-            for path in generator.REAL_ROOT.rglob("*")
+            path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")
         )
 
     def tearDown(self) -> None:
@@ -87,14 +86,18 @@ class ProductionAdapterCollectionPacketGeneratorTest(unittest.TestCase):
         else:
             self.assertEqual(generator.CANONICAL_PACKET_PATH.read_bytes(), self.canonical_before)
         self.assertEqual(
-            sorted(path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")),
+            sorted(
+                path.relative_to(generator.REAL_ROOT) for path in generator.REAL_ROOT.rglob("*")
+            ),
             self.real_root_before,
         )
 
     def test_default_packet_is_non_evidence_and_not_acceptance_shaped(self) -> None:
         packet = generator.build_work_packet()
 
-        self.assertEqual(packet["work_packet_type"], "production_adapter_collection_packet_preview_v1")
+        self.assertEqual(
+            packet["work_packet_type"], "production_adapter_collection_packet_preview_v1"
+        )
         self.assertEqual(packet["work_packet_state"], "operator_assignment_only")
         self.assertEqual(packet["evidence_state"], "non_evidence")
         self.assertFalse(packet["artifact_boundary"]["creates_deployment_manifest"])
@@ -291,7 +294,9 @@ class ProductionAdapterCollectionPacketGeneratorTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertTrue(OUTPUT.exists())
         payload = json.loads(OUTPUT.read_text(encoding="utf-8"))
-        self.assertEqual(payload["work_packet_type"], "production_adapter_collection_packet_preview_v1")
+        self.assertEqual(
+            payload["work_packet_type"], "production_adapter_collection_packet_preview_v1"
+        )
         self.assert_no_canonical_or_real_root_mutation()
 
     def test_cli_does_not_accept_evidence_validation_or_promotion_arguments(self) -> None:

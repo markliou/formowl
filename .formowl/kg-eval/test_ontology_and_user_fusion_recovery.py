@@ -65,9 +65,7 @@ class UserGraphFusionRecoveryTest(unittest.TestCase):
         report = fusion.build_report()
 
         self.assertTrue(report["passed"])
-        self.assertTrue(
-            report["claim_boundary"]["supports_different_user_kg_fusion_method_claim"]
-        )
+        self.assertTrue(report["claim_boundary"]["supports_different_user_kg_fusion_method_claim"])
         self.assertFalse(report["claim_boundary"]["supports_full_automatic_kg_merge_claim"])
         self.assertFalse(report["claim_boundary"]["supports_raw_data_fusion_without_grants_claim"])
         self.assertEqual(report["metrics"]["distinct_user_count"], 2)

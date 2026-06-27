@@ -69,7 +69,13 @@ DEFAULT_MODALITY_REQUIREMENTS = {
     "mail": {
         "collection_task_id": "collect_mail_thread_obligations",
         "source_family": "mail_thread_or_archive_asset",
-        "locator_fields": ["message_id", "mailbox_id", "folder_path_hash", "uri_fragment", "attachment_index"],
+        "locator_fields": [
+            "message_id",
+            "mailbox_id",
+            "folder_path_hash",
+            "uri_fragment",
+            "attachment_index",
+        ],
         "validation_focus": [
             "thread-level obligation evidence",
             "sender and recipient identity consistency",
@@ -139,7 +145,9 @@ def _reject_forbidden_text(value: str, field_name: str) -> None:
     if value.startswith(("/", "\\")):
         raise WorkPacketError(f"{field_name} must not expose a raw path")
     if any(marker in lowered for marker in FORBIDDEN_TEXT_MARKERS):
-        raise WorkPacketError(f"{field_name} must not expose raw, test, result, or template sources")
+        raise WorkPacketError(
+            f"{field_name} must not expose raw, test, result, or template sources"
+        )
 
 
 def _safe_text(value: object, field_name: str) -> str:
@@ -169,7 +177,9 @@ def normalize_modality_requirements(
     if missing:
         raise WorkPacketError("modality requirements missing modalities: " + ", ".join(missing))
     if extra:
-        raise WorkPacketError("modality requirements contain unsupported modalities: " + ", ".join(extra))
+        raise WorkPacketError(
+            "modality requirements contain unsupported modalities: " + ", ".join(extra)
+        )
 
     rows = []
     for modality in validator.REQUIRED_MODALITIES:

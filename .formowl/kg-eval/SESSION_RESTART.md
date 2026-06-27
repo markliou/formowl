@@ -68,8 +68,8 @@ Current execution checkpoint, updated 2026-06-28:
     `production_adapter_readiness` failed and
     `latency_scalability_enterprise_claims` blocked.
   - Full Ruff lint passed.
-  - Full Ruff format-check still reports 33 pre-existing files that would be
-    reformatted; this execution-only checkpoint did not reformat them.
+  - Follow-up format cleanup passed full Ruff format-check:
+    `200 files already formatted`.
 - Refreshed broad KG-eval remains incomplete:
   `overall_passed=false`, `passed_gate_count=8`, `failed_gate_count=4`.
   Failed gates remain exactly:
@@ -86,6 +86,24 @@ Current execution checkpoint, updated 2026-06-28:
 - No completion claim is supported.
 
 Latest local implementation slice, updated 2026-06-28:
+
+- Follow-up format cleanup removed the pre-existing full Ruff format drift in
+  33 Python/test/script files. This was a mechanical formatting cleanup only:
+  it did not create evidence packets, did not write real artifacts, and did
+  not change broad KG acceptance state.
+- Dev-container verification after formatting passed:
+  - `ruff check python tests scripts .formowl/kg-eval`
+  - `ruff format --check python tests scripts .formowl/kg-eval`
+  - full KG-eval unittest 421 OK
+  - main repo unittest 252 OK
+  - operator guide `--check`
+  - submission template `--check-template`
+  - refreshed broad KG-eval reports
+  - default main KG acceptance `passed_with_explicit_limits`
+  - strict main KG acceptance still exits nonzero only for known limits:
+    `production_adapter_readiness` and `latency_scalability_enterprise_claims`
+- Broad KG-eval remains `overall_passed=false`, 8 passed gates, and the same
+  four failed broad real-evidence gates.
 
 - Candidate intake execution-plan emission added to
   `real_evidence_submission_manifest.py`.

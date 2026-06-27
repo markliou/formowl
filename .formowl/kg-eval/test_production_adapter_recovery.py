@@ -13,14 +13,18 @@ class ProductionAdapterRecoveryTest(unittest.TestCase):
         report = production.build_report()
 
         self.assertTrue(report["passed"])
-        self.assertTrue(report["claim_boundary"]["supports_production_adapter_control_fixture_claim"])
+        self.assertTrue(
+            report["claim_boundary"]["supports_production_adapter_control_fixture_claim"]
+        )
         self.assertFalse(report["claim_boundary"]["supports_production_ready_claim"])
         self.assertFalse(report["metrics"]["non_synthetic_deployment_present"])
 
     def test_missing_required_audit_control_fails(self) -> None:
         fixture = production.default_fixture()
         fixture["audit_events"] = [
-            row for row in fixture["audit_events"] if row["action"] != "raw_asset_read_guard_rejected"
+            row
+            for row in fixture["audit_events"]
+            if row["action"] != "raw_asset_read_guard_rejected"
         ]
 
         report = production.build_report(fixture)
@@ -32,7 +36,9 @@ class ProductionAdapterRecoveryTest(unittest.TestCase):
         report = production.build_report({})
 
         self.assertFalse(report["passed"])
-        self.assertIn("production fixture request/resource/policy binding missing", report["blockers"])
+        self.assertIn(
+            "production fixture request/resource/policy binding missing", report["blockers"]
+        )
         self.assertIn("production audit events missing", report["blockers"])
 
     def test_empty_request_resource_policy_binding_fails(self) -> None:
@@ -49,11 +55,17 @@ class ProductionAdapterRecoveryTest(unittest.TestCase):
         report = production.build_report(fixture)
 
         self.assertFalse(report["passed"])
-        self.assertIn("production fixture request/resource/policy binding missing", report["blockers"])
+        self.assertIn(
+            "production fixture request/resource/policy binding missing", report["blockers"]
+        )
 
     def test_revoked_grant_not_denied_fails(self) -> None:
         fixture = production.default_fixture()
-        row = next(row for row in fixture["audit_events"] if row["action"] == "revoked_grant_blocks_content")
+        row = next(
+            row
+            for row in fixture["audit_events"]
+            if row["action"] == "revoked_grant_blocks_content"
+        )
         row["decision"] = "allow"
         row["row_sha256"] = production.row_hash(row)
 
@@ -72,12 +84,20 @@ class ProductionAdapterRecoveryTest(unittest.TestCase):
         report = production.build_report(fixture)
 
         self.assertFalse(report["passed"])
-        self.assertIn("canonical_merge_guard_rejected is not an explicit deny guard", report["blockers"])
-        self.assertIn("raw_asset_read_guard_rejected is not an explicit deny guard", report["blockers"])
+        self.assertIn(
+            "canonical_merge_guard_rejected is not an explicit deny guard", report["blockers"]
+        )
+        self.assertIn(
+            "raw_asset_read_guard_rejected is not an explicit deny guard", report["blockers"]
+        )
 
     def test_wiki_projection_published_fails(self) -> None:
         fixture = production.default_fixture()
-        row = next(row for row in fixture["audit_events"] if row["action"] == "wiki_projection_draft_not_published")
+        row = next(
+            row
+            for row in fixture["audit_events"]
+            if row["action"] == "wiki_projection_draft_not_published"
+        )
         row["published"] = True
         row["row_sha256"] = production.row_hash(row)
 

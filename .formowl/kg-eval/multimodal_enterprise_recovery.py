@@ -200,7 +200,9 @@ def validate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
             blockers.append("validation row candidate id missing")
     missing_validation_modalities = sorted(REQUIRED_MODALITIES - row_modalities)
     if missing_validation_modalities:
-        blockers.append("validation rows missing modalities: " + ", ".join(missing_validation_modalities))
+        blockers.append(
+            "validation rows missing modalities: " + ", ".join(missing_validation_modalities)
+        )
 
     decision_rows = fixture.get("business_decision_rows", [])
     if not isinstance(decision_rows, list) or not decision_rows:
@@ -238,7 +240,8 @@ def validate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         "business_decision_row_count": len(decision_rows),
         "cross_modal_private_leak_count": probe.get("cross_modal_private_leak_count"),
         "real_enterprise_pilot_present": fixture.get("real_enterprise_pilot_present") is True,
-        "human_adjudication_packet_present": fixture.get("human_adjudication_packet_present") is True,
+        "human_adjudication_packet_present": fixture.get("human_adjudication_packet_present")
+        is True,
     }
     return {
         "passed": not blockers,
