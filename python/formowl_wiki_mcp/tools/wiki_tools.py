@@ -7,6 +7,7 @@ from formowl_contract import McpResultEnvelope, now_iso, sha256_json
 from formowl_core import diff_lines, sha256_prefixed
 
 from ..markdown import MarkdownDraftRenderer, MarkdownFrontmatterBuilder, slugify
+from ..projection import build_graph_projection_draft
 
 
 class WikiMcpTools:
@@ -98,6 +99,46 @@ class WikiMcpTools:
             permission_scope=frontmatter.get("permission_scope"),
         )
         self._log("generate_wiki_draft", input_data, envelope, started, wiki_draft_id=draft_id)
+        return envelope
+
+    def generate_wiki_draft_from_graph_view(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        started = time.perf_counter()
+        projection_spec = input_data["projection_spec"]
+        previous_draft = _latest_projection_draft(
+            self.draft_store.list_drafts(),
+            str(projection_spec.get("projection_spec_id", "")),
+        )
+        draft = build_graph_projection_draft(
+            projection_spec=projection_spec,
+            graph_view=input_data.get("graph_view") or {},
+            frontmatter_builder=self.frontmatter_builder,
+            previous_draft=previous_draft,
+        )
+        self.draft_store.save_draft(draft)
+        envelope = _envelope(
+            "wiki_draft",
+            "ok",
+            {
+                "draft_id": draft["draft_id"],
+                "markdown": draft["markdown"],
+                "frontmatter": draft["frontmatter"],
+                "diff_markdown": draft.get("diff_markdown"),
+                "revision_status": "draft",
+                "redaction_counts": draft.get("redaction_counts", {}),
+            },
+            source_refs=draft.get("source_refs", []),
+            evidence_snapshot_ids=draft.get("evidence_snapshot_ids", []),
+            citations=draft.get("citations", []),
+            permission_scope=draft.get("frontmatter", {}).get("permission_scope"),
+            warnings=["Draft generated from graph view only; no wiki page was published."],
+        )
+        self._log(
+            "generate_wiki_draft_from_graph_view",
+            input_data,
+            envelope,
+            started,
+            wiki_draft_id=draft["draft_id"],
+        )
         return envelope
 
     def update_wiki_draft(self, input_data: dict[str, Any]) -> dict[str, Any]:
@@ -303,3 +344,17 @@ def _draft_id(page_type: str, title: str, context_package: dict[str, Any]) -> st
 
 def _proposal_id(prefix: str, seed: str, payload: Any) -> str:
     return f"{prefix}_{slugify(seed)}_{sha256_json(payload).split(':', 1)[1][:12]}"
+
+
+def _latest_projection_draft(
+    drafts: list[dict[str, Any]],
+    projection_spec_id: str,
+) -> dict[str, Any] | None:
+    matches = [
+        draft
+        for draft in drafts
+        if draft.get("frontmatter", {}).get("projection_spec_id") == projection_spec_id
+    ]
+    if not matches:
+        return None
+    return sorted(matches, key=lambda draft: str(draft.get("updated_at") or ""))[-1]

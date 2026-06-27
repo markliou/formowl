@@ -1,0 +1,29 @@
+{
+  "template_only": true,
+  "do_not_submit_as_evidence": true,
+  "artifact_id": "production_adapter_evidence_packet_v1",
+  "evidence_kind": "non_synthetic_production_adapter_validation",
+  "recovered_after_tmp_loss": false,
+  "deployment_manifest_artifact": "inputs/path-to-real-deployment-manifest.json",
+  "deployment_manifest_artifact_sha256": "fill-with-real-sha256",
+  "adapter_artifacts": [],
+  "human_false_merge_label_artifact": "inputs/path-to-real-false-merge-labels.json",
+  "human_false_merge_label_artifact_sha256": "fill-with-real-sha256",
+  "audit_trail_artifact": "inputs/path-to-real-audit-trail.json",
+  "audit_trail_artifact_sha256": "fill-with-real-sha256",
+  "permission_probe_artifact": "inputs/path-to-real-permission-probe.json",
+  "permission_probe_artifact_sha256": "fill-with-real-sha256",
+  "rollback_smoke_artifact": "inputs/path-to-real-rollback-smoke.json",
+  "rollback_smoke_artifact_sha256": "fill-with-real-sha256",
+  "claim_boundary": {
+    "supports_production_adapter_paths_claim": false,
+    "supports_non_synthetic_deployment_claim": false,
+    "supports_human_reviewed_false_merge_labels_claim": false,
+    "supports_permission_probe_claim": false,
+    "supports_rollback_smoke_claim": false,
+    "supports_full_product_production_ready_claim": false,
+    "supports_top_tier_scientific_validation_claim": false,
+    "supports_canonical_write_claim": false,
+    "supports_raw_access_claim": false
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "artifact_type": "enterprise_multimodal_validation_rows_v1",
+  "modality": "spreadsheet",
+  "rows": [
+    {
+      "candidate_id": "cand_spreadsheet_001",
+      "extractor_run_id": "run_spreadsheet_001",
+      "human_adjudicated": true,
+      "modality": "spreadsheet",
+      "observation_id": "obs_spreadsheet_001",
+      "row_sha256": "6d951a82cfd1ebea47800f58e96afdbaf7cd1a40755d7e31459445be9359cc24",
+      "source_asset_sha256": "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+      "source_id": "src_spreadsheet_001",
+      "task": "spreadsheet_semantic_validation",
+      "validation_id": "val_spreadsheet_001"
+    }
+  ]
+}

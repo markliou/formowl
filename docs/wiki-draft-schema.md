@@ -22,20 +22,42 @@ The wiki workflow must be usable by non-technical users. Normal authors should w
 
 Graph-aware wiki generation should be controlled by a projection spec rather than free-form generation.
 
-A projection spec should define:
+A projection spec is now represented by the `WikiProjectionSpec` contract. It
+must define:
 
 ```text
-projection_id
-page_type
-target entity, topic, query, or source context
-section list
-section source such as entity_summary, graph_query, graph_neighbors, source_observations, or manual_notes
-filters such as atom_type, relation_type, status, confidence, permission_scope, and time window
-generator policy
-review requirements
+projection_spec_id
+projection_kind
+title
+graph_revision_id
+ontology_revision_id
+user_graph_revision_id, optional
+source_refs
+evidence_snapshot_ids
+citation_behavior
+redaction_policy
+projection_rules
+draft_target
+permission_scope
+created_by
+created_at
 ```
 
 The projection spec selects what should appear in the wiki view. `WikiRevision` records the output of applying that spec, including source refs, evidence snapshots, citations, graph lineage, generator metadata, and review state.
+
+Public projection specs must keep `include_private_evidence` false. Private
+evidence can influence a draft only after a separate permissioned graph view or
+retrieval flow has produced visible evidence, citations, and redaction counts.
+
+The current Wiki MCP can generate a reviewable graph-derived draft from a
+`WikiProjectionSpec` and a visible graph view through
+`generate_wiki_draft_from_graph_view`. The draft frontmatter pins
+`projection_spec_id`, `graph_revision_id`, `ontology_revision_id`,
+`user_graph_revision_id`, `graph_view_hash`, source refs, evidence snapshot
+refs, citation behavior, redaction policy, included graph node ids, and
+redaction counts. Refreshing the same projection spec creates a new draft with
+a diff against the previous projection draft rather than publishing or silently
+overwriting a reviewed page.
 
 ## User Graph Boundary
 
@@ -57,6 +79,9 @@ atom_granularity_policy_id: atom_granularity_policy_v2
 user_graph_revision_id: user_graph_rev_person_yifan_20260616_001
 graph_profile_id: graph_profile_person_yifan_research_detail
 assembly_policy_id: assembly_policy_method_fine_intro_coarse
+graph_view_hash: sha256:...
+evidence_snapshot_refs:
+  - evidence_snapshot_id: ev_project_001
 ```
 
 These fields are required only when the draft is generated from graph-aware inputs. The current Project MCP to Wiki MCP flow must still preserve enough `source_refs`, `evidence_snapshot_ids`, and `citations` for later observation extraction, atom extraction, candidate graph review, and user graph assembly.

@@ -1,0 +1,32 @@
+{
+  "adjudicator_id": "human_adjudicator_gamma",
+  "adjudicator_type": "human",
+  "artifact_type": "human_final_adjudication_v1",
+  "first_pass_rows_sha256": "7472c92a6c2bcbcb8fb5f4ae8b5977ebbe47908197fd7932e0f1121a8f7b5ec8",
+  "generated_by_llm": false,
+  "manifest_artifact_sha256": "7aad5a0ed8f894059b6983bc1447514f2a30cc5d8f4c3cafd5c57f1759e385d5",
+  "opened_after_first_pass_seal": true,
+  "rows": [
+    {
+      "adjudication_id": "adj_decision",
+      "adjudicator_id": "human_adjudicator_gamma",
+      "final_label": "needs_review",
+      "generated_by_llm": false,
+      "item_id": "ann_item_decision_001",
+      "manifest_row_sha256": "f90dc78ac09fc6b993fe89ab47d451754ab66eba5728dcc84080d0127dbf3edc",
+      "row_sha256": "ce4bd65fd519c76251796b88ced039ecdf625b7fe823a8552d9b0c22113da9b6",
+      "sealed_disagreement_set_sha256": "50889acb6cb31d8d687c12a4ff2afa58e39b0740b308811158b2b81a0f3ad936",
+      "template_source": null,
+      "work_order_id": "wo_gamma_decision"
+    }
+  ],
+  "sealed_disagreement_set": [
+    {
+      "first_row_sha256": "9654243a1df0ecfa0f0c398fd858b8c6655be9ab2910eb1e8c898d418dfa75f3",
+      "item_id": "ann_item_decision_001",
+      "second_row_sha256": "dfe16074660311153c96d1fa2c22ec1e9f1ef5e13f5b92661b7ca9d95ae8a4fd"
+    }
+  ],
+  "sealed_disagreement_set_sha256": "50889acb6cb31d8d687c12a4ff2afa58e39b0740b308811158b2b81a0f3ad936",
+  "template_source": null
+}

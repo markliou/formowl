@@ -25,6 +25,48 @@ Raw resource
 
 Users should experience this as task-oriented review work, not as manual graph maintenance.
 
+## Minimal Local Ingestion Workflow
+
+The current Slice 1 workflow is a deterministic internal path for trusted local
+tests. It proves the resource extraction spine before real upload sessions,
+workers, OCR, audio, video, graph fusion, or external storage adapters exist.
+
+```text
+trusted local file or text payload
+  -> register_asset_from_local_file
+  -> FileObjectStore copy under a registered local backend
+  -> AssetStore record with FormOwl object locator, hash, source ref, and permission scope
+  -> create_ingestion_job
+  -> run_ingestion_job
+  -> PlainTextObservationExtractor
+  -> ExtractorRunStore and ObservationStore records
+  -> build_context_package_from_text_observations
+  -> existing Wiki MCP generate_wiki_draft
+```
+
+This path is intentionally narrow:
+
+- It supports deterministic plain text and markdown extraction only.
+- It uses FormOwl locators such as `formowl://object/...` in records and does not expose raw local paths through generated context or wiki drafts.
+- It creates observations and citation locators with asset, extractor run, and observation IDs.
+- It does not create semantic metadata, candidate atoms, canonical graph records, user graph revisions, or wiki revisions.
+- Failed local extractor runs leave the ingestion job in `failed` status with an error and without observation records.
+
+## Phase 0 Identity and Audit Helpers
+
+The current Phase 0 implementation includes `ManualTrustedInternalAuthProvider`
+for trusted internal tests. It selects a pre-seeded active `User`, creates a
+`SessionIdentity`, and returns actor context with workspace memberships, active
+grants, and pending access requests. This provider is explicitly not production
+authentication and does not validate SSO, OIDC, passwords, cookies, or external
+identity assertions.
+
+File-backed audit logging records reviewable `AuditLog` records for actor
+selection, asset registration, ingestion job creation, evidence snapshot fetches,
+permission denials, and upload session creation. User-facing gateway flows should
+pass actor, session, workspace, target, status, and timestamp fields so these
+events remain traceable.
+
 ## Guided Upload and Source Preparation Flow
 
 FormOwl users normally interact with the system through ChatGPT and the FormOwl MCP server. Users must not be required to switch into backend tools or manually choose NAS folders, storage backends, buckets, volumes, queues, parser-specific paths, or extractor settings during normal usage.
@@ -44,6 +86,16 @@ upload expiration
 source preparation state
 processing status
 ```
+
+The current file-backed `UploadSessionStore` and `create_upload_session()` helper
+enforce that normal upload sessions include intent, actor identity, permission
+scope, and a linked audit log before the session is persisted.
+
+Controlled backend imports use `upload_asset_reference()`. This helper is
+reserved for migrations, trusted backend references, and other controlled import
+paths; it still registers an `Asset`, records permission scope, requires source
+provenance and an import reason, and writes audit records. It is not the normal
+user upload path.
 
 The physical storage backend is selected by FormOwl according to storage routing policy. Users see the business and knowledge scope of the upload, not the physical storage placement.
 
@@ -128,6 +180,12 @@ ChatGPT: shows a capture task card and processing status
 
 The shortcut may avoid a visible upload page because the source artifact is the current ChatGPT session. It must still record selected user, workspace or project scope, source account metadata, visibility, capture method, storage locator, asset registration, ingestion job, and audit event.
 
+The current `capture_current_chatgpt_session()` helper follows that path by
+rendering the conversation into a source artifact, copying it through the
+registered object store, creating an `Asset`, creating an `IngestionJob`, saving
+a capture record, and writing audit records. The temporary scratch file remains
+inside the selected FormOwl storage backend and is not exposed to MCP callers.
+
 The capture task card should show:
 
 ```text
@@ -139,6 +197,52 @@ source account status
 capture method
 processing status
 ```
+
+## Technical Metadata Extraction
+
+The current deterministic metadata adapter is `FileTechnicalMetadataExtractor`.
+It runs against registered assets and creates a `technical_metadata` observation
+with file size, MIME type, content hash, original filename, source ref, and
+FormOwl object locator. It does not call ExifTool, MediaInfo, FFmpeg, OCR, ASR,
+LLMs, or graph tooling yet.
+
+## Deterministic Fixture Extractors
+
+The current real-adapter boundary includes deterministic fixture adapters for
+document structure, OCR text, audio transcripts, video scenes/keyframes, and
+mail archives.
+These adapters are deliberately narrow: they prove `ExtractorRun`,
+`Observation`, locator metadata, permission scope, and source provenance for each
+modality without introducing external parser or model dependencies.
+
+Supported fixture adapters:
+
+- `FixtureDocumentParserExtractor` reads text-backed document fixtures and emits
+  heading, paragraph, table, and list-item observations with page and block
+  locators.
+- `FixtureOcrExtractor` reads text-backed image/PDF OCR fixtures and emits
+  `ocr_line` observations with page, image, line, and bounding-box locators.
+- `FixtureAudioTranscriptExtractor` reads text-backed transcript fixtures and
+  emits `transcript_segment` observations with start/end timestamps and speaker
+  locators.
+- `FixtureVideoSceneExtractor` reads text-backed video fixtures and emits
+  `video_scene` and `keyframe` observations with time, frame, and scene locators.
+- `FixtureMailArchiveExtractor` reads JSON-backed mail archive fixtures and
+  emits folder occurrence, email message, email body segment, and attachment
+  occurrence observations. Archive, mailbox, folder, message, and attachment
+  occurrence identities remain separate.
+
+These are not replacements for Docling, Tesseract, Whisper, FFmpeg, or
+PySceneDetect, nor are they a PST/EML parser. Later adapters can use those tools
+behind the same `ExtractorAdapter` boundary and write to the same stores.
+
+## Candidate Graph Contracts
+
+The current candidate graph layer has contract models for `CandidateAtom`,
+`CandidateRelation`, and `ExternalGraphImport`. These records are proposals:
+they preserve source observation IDs, optional semantic metadata IDs, extractor
+run provenance, confidence, and review status. They do not create canonical graph
+state, user graph revisions, wiki revisions, or merge decisions.
 
 The shortcut must not expose raw storage folders, object-store paths, or backend controls. After capture, the session follows the normal pipeline:
 

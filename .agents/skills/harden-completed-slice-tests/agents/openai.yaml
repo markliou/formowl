@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harden Completed Slice Tests"
+  short_description: "Strict reviewer-gated test hardening workflow"
+  default_prompt: "Use $harden-completed-slice-tests to harden completed slice tests one reviewer finding at a time."

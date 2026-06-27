@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use agy Antigravity"
+  short_description: "Delegate review or bounded writes via agy"
+  default_prompt: "Use $use-agy-antigravity to run a bounded FormOwl KG reviewer or write-delegation task through agy."

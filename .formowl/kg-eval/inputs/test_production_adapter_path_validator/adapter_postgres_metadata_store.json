@@ -1,0 +1,14 @@
+{
+  "artifact_type": "production_adapter_component_artifact_v1",
+  "canonical_write_enabled": false,
+  "component_id": "postgres_metadata_store",
+  "component_kind": "adapter_boundary",
+  "config_sha256": "000000000000000000000000000000000000000000000000000000000000001e",
+  "deployment_id": "deploy_prod_adapter_001",
+  "non_synthetic_deployment": true,
+  "package_or_image_sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+  "permission_filter_enabled": true,
+  "policy_sha256": "0000000000000000000000000000000000000000000000000000000000000032",
+  "raw_path_exposed": false,
+  "synthetic_or_demo": false
+}

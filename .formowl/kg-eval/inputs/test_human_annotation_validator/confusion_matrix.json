@@ -1,0 +1,10 @@
+{
+  "adjudication_artifact_sha256": "0cd07273238e88fbf4d4f1cf991ebc6d9e5064f264ee389f83d5492e44a3a579",
+  "artifact_type": "annotation_confusion_matrix_v1",
+  "final_label_counts": {
+    "needs_review": 1,
+    "supported": 1
+  },
+  "generated_by_llm": false,
+  "item_count": 2
+}

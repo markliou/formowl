@@ -1,0 +1,23 @@
+{
+  "access_policy_sha256": "4567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef123",
+  "artifact_type": "fair_baseline_config_v1",
+  "baseline_id": "lightrag",
+  "completion_model_budget_sha256": "567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234",
+  "corpus_export_sha256": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+  "embedding_model_budget_sha256": "67890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12345",
+  "evaluation_question_set_sha256": "34567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12",
+  "mock_or_dry_run": false,
+  "ontology_mapping_sha256": "7890abcdef1234567890abcdef1234567890abcdef1234567890abcdef123456",
+  "package_source_url": "https://github.com/HKUDS/LightRAG",
+  "package_version": "lightrag-release-2026-06",
+  "prompt_set_sha256": "234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1",
+  "real_package_execution": true,
+  "run_manifest_sha256": "90abcdef1234567890abcdef1234567890abcdef1234567890abcdef12345678",
+  "source_ids": [
+    "lightrag_paper",
+    "lightrag_repo"
+  ],
+  "source_lock_sha256": "addba921e9cc4ebc4ded09b26d23a25a29aeba4f0e15e4dacb711f29dcedb2da",
+  "synthetic_corpus": false,
+  "uses_mocked_llm_or_retrieval": false
+}

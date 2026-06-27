@@ -30,6 +30,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     && rm -rf /var/lib/apt/lists/* /tmp/gitleaks.tar.gz
 
 RUN python -m pip install --no-cache-dir \
+    "coverage[toml]>=7.6" \
     "pre-commit>=4.0" \
     "ruff==0.8.6"
 
