@@ -587,3 +587,99 @@ status in each role's goal file and task completion in
   and absent canonical packets. Reviewer gate passed 3/3: `Anscombe` agreed
   on engineering path safety, `Epicurus` agreed on governance and non-evidence
   boundaries, and `Ptolemy` agreed on durable docs/status honesty.
+- 2026-06-28 status-only resume checkpoint: after the user asked for remaining
+  engineering-item count, Codex confirmed the work board still has 9 unchecked
+  items: 1 KG-owned full real-evidence objective and 8 System
+  Backbone/product-infra items. Dev-container verification in this resume
+  passed for KG-eval unittest 450 OK and main repo unittest 252 OK. A later
+  dev-container report refresh command was rejected by the approval reviewer
+  because it required unsandboxed Docker socket access with workspace writes;
+  sandbox host-level supplemental report commands exited 0 and still showed
+  the same blocked broad KG state. Host `ruff` is unavailable, so lint/format
+  was not rerun in this resume. Safety checks found all four `inputs/*_real`
+  roots empty and the four canonical broad evidence packets absent. The full
+  KG objective remains active and incomplete with the same four failed broad
+  gates.
+- 2026-06-28 intake-plan partial-write hardening: the candidate-only
+  `real_evidence_submission_manifest.py --emit-intake-plan` path now writes
+  ignored non-evidence intake plans through a temporary file plus atomic
+  no-overwrite link, matching the candidate-validation report writer. A
+  regression test now simulates interrupted intake-plan writes and asserts
+  that neither a final partial plan nor a temporary partial file remains. This
+  accepts no evidence, writes no candidate artifacts, promotes no evidence,
+  writes no canonical broad packet, and does not count as acceptance. Host
+  verification passed: focused submission-manifest unittest 41 OK, full
+  KG-eval unittest 451 OK, main repo unittest 252 OK, guide check after
+  regeneration, template check, and host main KG acceptance default
+  `passed_with_explicit_limits`; strict exits 1 only for the known failed /
+  blocked items. Broad KG-eval remains incomplete with the same four failed
+  gates, empty real roots, and absent canonical packets. Canonical
+  dev-container verification, Git commit/push, and reviewer gate are pending
+  because escalated Docker/Git/network permissions were rejected in this
+  resume.
+- 2026-06-28 real-root churn preflight hardening: `real_evidence_preflight.py`
+  now treats files that disappear during `inputs/*_real` scanning as unstable
+  non-evidence. The scanner records `disappeared_file_count` and
+  `disappeared_file_paths`, does not count those paths as files or candidate
+  artifacts, keeps `root_ready=false`, and makes the hazard summary non-clear.
+  This prevents concurrent operator/test cleanup from crashing preflight or
+  accepting transient files. A regression test simulates a disappearing real
+  artifact during scan. This accepts no evidence, writes no candidate
+  artifacts, promotes no evidence, writes no canonical broad packets, and does
+  not count as acceptance. Host verification passed: focused preflight unittest
+  18 OK, focused submission-manifest unittest 41 OK, full KG-eval unittest
+  452 OK, main repo unittest 252 OK, guide/template checks, refreshed broad
+  reports, and host main KG acceptance default `passed_with_explicit_limits`;
+  strict exits 1 only for known failed / blocked items. Broad KG-eval remains
+  incomplete with the same four failed gates, empty real roots, absent
+  canonical packets, and zero disappeared-file hazards in the current scan.
+  Canonical dev-container verification, Git commit/push, and reviewer gate are
+  still pending because escalated Docker/Git/network permissions were rejected
+  in this resume.
+- 2026-06-28 work-order disappeared-file contract hardening:
+  `real_evidence_collection_work_orders.py` now carries
+  `real_root_disappeared_file_count` in each work-order preflight snapshot and
+  fails closed if per-gate preflight rows omit, mistype, or report nonzero
+  `disappeared_file_count`. This keeps unstable real-root scans from being
+  treated as clean missing-evidence absence in operator work orders. Reviewer
+  blocker fix: real-root scanning now uses `lstat()` before file-type
+  classification, so a path that disappears before the old `is_file()` check
+  is reported through `disappeared_file_count` instead of being silently
+  treated as clean absence. The tracked operator guide remains synchronized
+  after the work-order report schema/hash changed. This accepts no evidence,
+  writes no candidate artifacts, promotes no evidence, writes no canonical
+  broad packets, and does not count as acceptance. Canonical dev-container
+  verification passed: focused current-slice KG-eval unittest 79 OK, full
+  KG-eval unittest 454 OK, main repo unittest 252 OK, guide/template checks,
+  refreshed broad reports, default main KG acceptance
+  `passed_with_explicit_limits`, strict main KG acceptance exits 1 only for
+  known limits, full Ruff check and format-check, and `git diff --check`.
+  Broad KG-eval remains incomplete with `overall_passed=false`, 8 passed
+  gates, and the same four failed gates. Reviewer gate passed 3/3 after blocker
+  fixes: `Curie`, `Erdos`, and `Hume` returned `RELEASE_DECISION: AGREE`.
+  This slice is release-ready; the current run will commit and push it.
+- 2026-06-28 restart-note cleanup: `.formowl/kg-eval/SESSION_RESTART.md`
+  still had an older "Next Best Work" section saying broad validators needed
+  real-root path-helper hardening. That target is complete, with tests covering
+  `results/`, `inputs/test_*`, templates, and template-named artifacts under
+  real roots. The restart note now treats that as historical and points the
+  next action back to canonical dev-container verification plus real
+  operator/user-supplied evidence for the four failed gates. Host consistency
+  checks passed: `git diff --check`, operator guide `--check`, submission
+  template `--check-template`, and focused work-order unittest 19 OK.
+- 2026-06-28 historical blocked audit, superseded later the same day by user
+  authorization and canonical verification: the same external blocker repeated
+  across continuation turns, with canonical dev-container Docker verification
+  rejected by the approval reviewer and Git commit/push blocked. This is no
+  longer the current Docker/Git state for this run; it remains only as audit
+  history. The four broad gates still require real operator/user-supplied
+  evidence packets.
+- 2026-06-28 resume authorization: the user explicitly authorized collecting
+  failed-gate evidence, Docker/dev-container access, and Git commit/push.
+  Durable KG goal status is active again for this run, and canonical
+  dev-container verification plus the 3 Codex/GPT reviewer gate for the
+  current work-order/preflight hardening slice have passed. Reviewer gate
+  result: `Curie`, `Erdos`, and `Hume` returned `RELEASE_DECISION: AGREE`
+  after blocker fixes. The current run will commit and push it. The broad KG
+  objective still remains incomplete until real operator/user-supplied
+  artifacts and governed canonical packets make the four broad gates pass.

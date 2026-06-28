@@ -687,6 +687,55 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertFalse(plan["authority"]["writes_candidate_artifacts"])
         self.assertFalse(plan["authority"]["writes_canonical_packets"])
 
+    def test_cli_emit_intake_plan_does_not_leave_partial_plan_on_write_failure(
+        self,
+    ) -> None:
+        manifest_path = self.write_operator_manifest()
+        plan_path = ROOT / "work_packets" / "operatorpreflight_unitcase_partial_intake_plan.json"
+        temp_path = plan_path.with_name(f".{plan_path.name}.tmp")
+        for path in (plan_path, temp_path):
+            if path.exists() or path.is_symlink():
+                path.unlink()
+            self.created_plan_paths.append(path)
+        stdout = StringIO()
+        original_open = Path.open
+
+        class FailingHandle:
+            def __enter__(self) -> "FailingHandle":
+                return self
+
+            def __exit__(self, *exc_info: object) -> bool:
+                return False
+
+            def write(self, _text: str) -> int:
+                with original_open(temp_path, "w", encoding="utf-8") as handle:
+                    handle.write("partial plan\n")
+                raise OSError("simulated interrupted intake-plan write")
+
+        def fake_open(path_self: Path, *args: object, **kwargs: object) -> object:
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if path_self == temp_path and mode == "x":
+                return FailingHandle()
+            return original_open(path_self, *args, **kwargs)
+
+        with (
+            mock.patch.object(Path, "open", autospec=True, side_effect=fake_open),
+            redirect_stdout(stdout),
+            self.assertRaisesRegex(OSError, "simulated interrupted intake-plan write"),
+        ):
+            submission_manifest.main(
+                [
+                    "--manifest",
+                    str(manifest_path.relative_to(ROOT)),
+                    "--emit-intake-plan",
+                    str(plan_path.relative_to(ROOT)),
+                ]
+            )
+
+        self.assertFalse(plan_path.exists())
+        self.assertFalse(temp_path.exists())
+        self.assertEqual(stdout.getvalue(), "")
+
     def test_cli_execute_candidate_intakes_writes_no_canonical_packets_itself(self) -> None:
         manifest_path = self.write_operator_manifest()
         stdout = StringIO()

@@ -266,6 +266,74 @@ class RealEvidencePreflightTest(unittest.TestCase):
         self.assertFalse(row["real_root_scan"]["root_ready"])
         self.assertFalse(report["summary"]["no_packet_or_artifact_hazards"])
 
+    def test_disappearing_real_root_file_is_reported_without_accepting_artifact(
+        self,
+    ) -> None:
+        gate = preflight.EXPECTED_GATES["annotation_adjudication_protocol"]
+        candidate = gate["real_root"] / "release_artifacts" / "manifest.json"
+        self._write_json(
+            candidate,
+            {
+                "artifact_type": "human_annotation_manifest_v1",
+                "items": [],
+            },
+        )
+        original_scan_text = preflight._scan_text
+
+        def disappearing_scan(path: Path) -> dict[str, bool]:
+            if path == candidate:
+                path.unlink()
+                raise FileNotFoundError(path)
+            return original_scan_text(path)
+
+        with mock.patch.object(preflight, "_scan_text", side_effect=disappearing_scan):
+            report = preflight.build_report()
+        row = self._gate(report, "annotation_adjudication_protocol")
+
+        self.assertEqual(row["real_root_scan"]["file_count"], 0)
+        self.assertEqual(row["real_root_scan"]["candidate_artifact_count"], 0)
+        self.assertEqual(row["real_root_scan"]["candidate_artifact_paths"], [])
+        self.assertEqual(row["real_root_scan"]["disappeared_file_count"], 1)
+        self.assertEqual(
+            row["real_root_scan"]["disappeared_file_paths"],
+            ["inputs/human_annotation_real/release_artifacts/manifest.json"],
+        )
+        self.assertFalse(row["real_root_scan"]["root_ready"])
+        self.assertFalse(report["summary"]["no_packet_or_artifact_hazards"])
+
+    def test_real_root_file_disappearing_before_file_check_is_reported(self) -> None:
+        gate = preflight.EXPECTED_GATES["annotation_adjudication_protocol"]
+        candidate = gate["real_root"] / "release_artifacts" / "manifest.json"
+        self._write_json(
+            candidate,
+            {
+                "artifact_type": "human_annotation_manifest_v1",
+                "items": [],
+            },
+        )
+        original_lstat = Path.lstat
+
+        def disappearing_lstat(path_self: Path) -> object:
+            if path_self == candidate:
+                path_self.unlink()
+                raise FileNotFoundError(path_self)
+            return original_lstat(path_self)
+
+        with mock.patch.object(Path, "lstat", autospec=True, side_effect=disappearing_lstat):
+            report = preflight.build_report()
+        row = self._gate(report, "annotation_adjudication_protocol")
+
+        self.assertEqual(row["real_root_scan"]["file_count"], 0)
+        self.assertEqual(row["real_root_scan"]["candidate_artifact_count"], 0)
+        self.assertEqual(row["real_root_scan"]["candidate_artifact_paths"], [])
+        self.assertEqual(row["real_root_scan"]["disappeared_file_count"], 1)
+        self.assertEqual(
+            row["real_root_scan"]["disappeared_file_paths"],
+            ["inputs/human_annotation_real/release_artifacts/manifest.json"],
+        )
+        self.assertFalse(row["real_root_scan"]["root_ready"])
+        self.assertFalse(report["summary"]["no_packet_or_artifact_hazards"])
+
     def test_valid_packet_nearby_does_not_replace_missing_canonical_packet(self) -> None:
         gate = preflight.EXPECTED_GATES["annotation_adjudication_protocol"]
         nearby_packet = gate["real_root"] / "assembler_test" / "promoted_packet.json"

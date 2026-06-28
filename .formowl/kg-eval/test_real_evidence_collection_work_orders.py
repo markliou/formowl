@@ -177,6 +177,11 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
                 self.assertEqual(
                     order["preflight_snapshot"]["real_root_candidate_artifact_count"], 0
                 )
+                self.assertEqual(order["preflight_snapshot"]["real_root_disappeared_file_count"], 0)
+                self.assertEqual(
+                    order["preflight_snapshot"]["real_root_disappeared_file_count"],
+                    preflight_row["real_root_scan"]["disappeared_file_count"],
+                )
 
     def test_current_baseline_visibly_remains_missing_real_evidence(self) -> None:
         report = work_orders.build_report()
@@ -193,6 +198,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
                 self.assertEqual(snapshot["root_ready"], False)
                 self.assertEqual(snapshot["real_root_file_count"], 0)
                 self.assertEqual(snapshot["real_root_candidate_artifact_count"], 0)
+                self.assertEqual(snapshot["real_root_disappeared_file_count"], 0)
 
     def test_checklist_or_preflight_drift_fails_closed_without_normal_work_orders(self) -> None:
         checklist = work_orders.load_json(work_orders.CHECKLIST_PATH)
@@ -233,14 +239,52 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
 
         malformed_gate = preflight.build_report()
         malformed_gate["gates"][0].pop("packet_surface")
-        malformed_gate["gates"][1]["real_root_scan"] = {"file_count": "0"}
+        malformed_gate["gates"][1]["real_root_scan"] = {
+            "file_count": 0,
+            "candidate_artifact_count": 0,
+            "disappeared_file_count": "0",
+            "root_ready": False,
+        }
+        malformed_gate["gates"][2]["real_root_scan"].pop("disappeared_file_count")
 
         malformed_report = work_orders.build_report(preflight_report_override=malformed_gate)
 
         self.assertEqual(malformed_report["sync"]["status"], "drifted")
         self.assertFalse(malformed_report["sync"]["per_gate_preflight_contract_valid"])
+        details = malformed_report["sync"]["per_gate_preflight_contract"]["details"]
+        self.assertFalse(
+            details["annotation_adjudication_protocol"]["checks"][
+                "real_root_disappeared_file_count_is_int"
+            ]
+        )
+        self.assertFalse(
+            details["multimodal_semantic_validation"]["checks"][
+                "real_root_disappeared_file_count_is_int"
+            ]
+        )
         self.assertTrue(malformed_report["sync"]["normal_work_orders_withheld"])
         self.assertEqual(malformed_report["work_orders"], [])
+
+    def test_disappeared_real_root_files_fail_closed_instead_of_collecting(self) -> None:
+        unstable_preflight = preflight.build_report()
+        unstable_scan = unstable_preflight["gates"][0]["real_root_scan"]
+        unstable_scan["disappeared_file_count"] = 1
+        unstable_scan["disappeared_file_paths"] = [
+            "inputs/fair_baseline_real/operator-run/transient.json"
+        ]
+
+        report = work_orders.build_report(preflight_report_override=unstable_preflight)
+        checks = report["sync"]["per_gate_preflight_contract"]["details"][
+            "fair_external_baseline_comparison"
+        ]["checks"]
+
+        self.assertEqual(report["sync"]["status"], "drifted")
+        self.assertFalse(report["sync"]["per_gate_preflight_contract_valid"])
+        self.assertFalse(checks["current_absence_visible"])
+        self.assertTrue(checks["real_root_disappeared_file_count_is_int"])
+        self.assertTrue(report["sync"]["normal_work_orders_withheld"])
+        self.assertEqual(report["summary"]["work_order_count"], 0)
+        self.assertEqual(report["work_orders"], [])
 
     def test_clear_preflight_gate_rows_fail_closed_instead_of_collecting(self) -> None:
         clear_preflight = preflight.build_report()

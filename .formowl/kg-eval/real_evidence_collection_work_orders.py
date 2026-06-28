@@ -412,6 +412,9 @@ def build_work_order(
             "real_root_candidate_artifact_count": preflight_row.get("real_root_scan", {}).get(
                 "candidate_artifact_count"
             ),
+            "real_root_disappeared_file_count": preflight_row.get("real_root_scan", {}).get(
+                "disappeared_file_count"
+            ),
             "root_ready": preflight_row.get("real_root_scan", {}).get("root_ready"),
         },
         "work_order_authority": {
@@ -461,11 +464,15 @@ def _per_gate_preflight_contract(
             "real_root_candidate_artifact_count_is_int": isinstance(real_root_scan, dict)
             and isinstance(real_root_scan.get("candidate_artifact_count"), int)
             and not isinstance(real_root_scan.get("candidate_artifact_count"), bool),
+            "real_root_disappeared_file_count_is_int": isinstance(real_root_scan, dict)
+            and isinstance(real_root_scan.get("disappeared_file_count"), int)
+            and not isinstance(real_root_scan.get("disappeared_file_count"), bool),
             "real_root_ready_is_bool": isinstance(real_root_scan, dict)
             and isinstance(real_root_scan.get("root_ready"), bool),
             "current_absence_visible": isinstance(real_root_scan, dict)
             and real_root_scan.get("file_count") == 0
             and real_root_scan.get("candidate_artifact_count") == 0
+            and real_root_scan.get("disappeared_file_count") == 0
             and real_root_scan.get("root_ready") is False,
         }
         details[gate_id] = {

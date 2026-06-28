@@ -1,7 +1,7 @@
 # Remaining KG Real-Evidence Operator Guide
 
 Source report: `kg_real_evidence_collection_work_orders_v1`
-Source report sha256: `860e78a297b61e7c5c4613a76a6a860ebcd353c9509c6fcbf57fea9bfee3435e`
+Source report sha256: `12fa43d671d7073597f7aed4855e521371a7c1f1e1309b568f62c8c4cf6dd46d`
 
 ## Authority Boundary
 

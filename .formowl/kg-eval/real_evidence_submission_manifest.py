@@ -549,23 +549,31 @@ def safe_candidate_validation_report_output(path_value: object) -> Path:
     return output
 
 
-def write_candidate_validation_report(output: Path, payload: dict[str, Any]) -> None:
+def _write_no_overwrite_json(output: Path, payload: dict[str, Any], artifact_name: str) -> None:
     temp_path = output.with_name(f".{output.name}.tmp")
     if temp_path.exists() or temp_path.is_symlink():
-        raise ManifestError("candidate validation report temporary output already exists")
+        raise ManifestError(f"{artifact_name} temporary output already exists")
     try:
         with temp_path.open("x", encoding="utf-8") as handle:
             handle.write(_json_text(payload))
         try:
             os.link(temp_path, output)
         except FileExistsError as exc:
-            raise ManifestError("candidate validation report output already exists") from exc
+            raise ManifestError(f"{artifact_name} output already exists") from exc
     except Exception:
         if temp_path.exists() or temp_path.is_symlink():
             temp_path.unlink()
         raise
     else:
         temp_path.unlink()
+
+
+def write_candidate_validation_report(output: Path, payload: dict[str, Any]) -> None:
+    _write_no_overwrite_json(output, payload, "candidate validation report")
+
+
+def write_intake_plan(output: Path, payload: dict[str, Any]) -> None:
+    _write_no_overwrite_json(output, payload, "intake plan")
 
 
 def build_intake_plan(
@@ -1140,8 +1148,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         plan = build_intake_plan(report, manifest_path=manifest_path, plan_output=plan_output)
         plan_output.parent.mkdir(parents=True, exist_ok=True)
-        with plan_output.open("x", encoding="utf-8") as handle:
-            handle.write(_json_text(plan))
+        write_intake_plan(plan_output, plan)
         print(json.dumps(plan, indent=2, sort_keys=True))
         return 0
     print(json.dumps(report, indent=2, sort_keys=True))

@@ -978,3 +978,53 @@ Reviewer cost-control rules:
   packets are absent. Reviewer gate passed 3/3: `Anscombe` agreed on
   engineering path safety, `Epicurus` agreed on governance and non-evidence
   boundaries, and `Ptolemy` agreed on durable docs/status honesty.
+- 2026-06-28 work-order disappeared-file contract hardening checkpoint:
+  following the real-root churn preflight hardening, collection work orders now
+  require every per-gate preflight row to expose `disappeared_file_count` as a
+  non-bool integer and to keep it at `0` before normal work orders are emitted.
+  The work-order `preflight_snapshot` now includes
+  `real_root_disappeared_file_count`, and disappeared real-root files fail
+  closed as preflight contract drift instead of appearing as clean missing
+  evidence. Reviewer blocker fix: real-root scanning now uses `lstat()` before
+  file-type classification, so a path that disappears before the old
+  `is_file()` check is reported through `disappeared_file_count` instead of
+  being silently treated as clean absence. The tracked operator guide remains
+  synchronized after the work-order report schema/hash changed. This accepts no
+  evidence, writes no candidate artifacts, promotes no evidence, writes no
+  canonical broad packets, and does not count as acceptance. Canonical
+  dev-container verification passed: focused current-slice KG-eval unittest
+  79 OK, full KG-eval unittest 454 OK, main repo unittest 252 OK,
+  guide/template checks, refreshed broad reports, default main KG acceptance
+  `passed_with_explicit_limits`, strict main KG acceptance exits 1 only for
+  known limits, full Ruff check and format-check, and `git diff --check`.
+  Broad KG-eval remains incomplete: `overall_passed=false`, 8 passed gates,
+  and the same four failed real-evidence gates. Reviewer gate passed 3/3 after
+  blocker fixes: `Curie`, `Erdos`, and `Hume` returned
+  `RELEASE_DECISION: AGREE`. This slice is release-ready; the current run will
+  commit and push it.
+- 2026-06-28 restart-note cleanup checkpoint: the older
+  `.formowl/kg-eval/SESSION_RESTART.md` "Next Best Work" section incorrectly
+  still pointed at validator real-root path-helper hardening. That validator
+  hardening is already complete and covered for `results/`, `inputs/test_*`,
+  templates, and template-named artifacts under real roots. The restart note
+  now marks it historical and names the actual next action as canonical
+  dev-container verification plus real operator/user-supplied evidence for the
+  four failed broad gates. Host consistency checks passed: `git diff --check`,
+  operator guide `--check`, submission template `--check-template`, and
+  focused work-order unittest 19 OK.
+- 2026-06-28 historical blocked audit checkpoint, superseded later the same
+  day by user authorization and canonical verification: after repeated
+  continuation turns, canonical dev-container Docker verification had been
+  rejected by the approval reviewer and Git commit/push could not proceed.
+  This is no longer the current Docker/Git state for this run; it remains only
+  as audit history. The four broad gates still require real
+  operator/user-supplied evidence packets.
+- 2026-06-28 resume authorization checkpoint: the user explicitly authorized
+  collecting failed-gate evidence, Docker/dev-container access, and Git
+  commit/push. The prior Docker/Git approval blocker is cleared for this run,
+  and canonical dev-container verification plus the 3 Codex/GPT reviewer gate
+  for the current hardening slice have passed. The current run will commit and
+  push it. The broad KG objective is still incomplete: collecting failure
+  evidence from reports is allowed, but passing the four broad gates still
+  requires real operator/user-supplied artifacts and governed canonical packets
+  accepted by the validators.

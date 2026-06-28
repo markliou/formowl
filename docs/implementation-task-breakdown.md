@@ -1130,6 +1130,66 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `results/`, local long-form handoff history, operator real artifact roots,
     and canonical real evidence packets remain ignored. The item stays
     unchecked because the four broad real-evidence gates still fail.
+  - 2026-06-28 status-only resume note: work-board unchecked engineering item
+    count remains 9 total, consisting of this KG-owned full real-evidence
+    objective plus 8 System Backbone/product-infra items. Dev-container
+    KG-eval unittest ran 450 OK and main repo unittest ran 252 OK during this
+    resume. A subsequent dev-container report refresh was blocked by
+    environment approval policy; sandbox host-level supplemental reports still
+    show the same blocked state, all four real roots empty, and all four
+    canonical broad evidence packets absent.
+  - 2026-06-28 intake-plan partial-write hardening note:
+    `real_evidence_submission_manifest.py --emit-intake-plan` now uses a
+    temporary file plus atomic no-overwrite link so an interrupted operator
+    intake-plan write does not leave a partial final or temporary JSON plan.
+    Host verification passed for focused submission-manifest unittest 41 OK,
+    full KG-eval unittest 451 OK, main repo unittest 252 OK, guide/template
+    checks, and host main KG acceptance with the same known limits. The item
+    stays unchecked because this hardening accepts no evidence and the four
+    broad real-evidence gates still fail.
+  - 2026-06-28 real-root churn preflight hardening note:
+    `real_evidence_preflight.py` now records files that disappear during
+    `inputs/*_real` scanning as unstable non-evidence via
+    `disappeared_file_count` and `disappeared_file_paths`; disappearing files
+    are not counted as files or candidate artifacts and cannot make a root
+    ready. Host verification passed for focused preflight unittest 18 OK,
+    focused submission-manifest unittest 41 OK, full KG-eval unittest 452 OK,
+    main repo unittest 252 OK, broad report refresh, guide/template checks,
+    and host main KG acceptance with the same known limits. The item stays
+    unchecked because this hardening accepts no evidence and the four broad
+    real-evidence gates still fail.
+  - 2026-06-28 work-order disappeared-file contract hardening note:
+    `real_evidence_collection_work_orders.py` now requires each per-gate
+    preflight row to expose `disappeared_file_count` as a non-bool integer and
+    to keep it at `0` before normal collection work orders are emitted. The
+    work-order `preflight_snapshot` includes
+    `real_root_disappeared_file_count`, and disappeared real-root files now
+    fail closed as preflight contract drift instead of being treated as clean
+    absence. Reviewer blocker fix: real-root scanning now uses `lstat()` before
+    file-type classification, so a path that disappears before the old
+    `is_file()` check is reported through `disappeared_file_count` instead of
+    being silently treated as clean absence. Canonical dev-container
+    verification passed for focused current-slice KG-eval unittest 79 OK, full
+    KG-eval unittest 454 OK, main repo unittest 252 OK, guide/template checks,
+    refreshed broad reports, default main KG acceptance with the same known
+    limits, full Ruff check and format-check, and `git diff --check`. Reviewer
+    gate passed 3/3 after blocker fixes: `Curie`, `Erdos`, and `Hume` returned
+    `RELEASE_DECISION: AGREE`. The item stays unchecked because this hardening
+    accepts no evidence and the four broad real-evidence gates still fail.
+  - 2026-06-28 historical blocked audit note, superseded later the same day by
+    user authorization and canonical verification: canonical dev-container
+    Docker verification had been rejected by the approval reviewer, so reviewer
+    gate and commit/push could not proceed at that time. This is no longer the
+    current Docker/Git state for this run. The item remains unchecked because
+    the four broad real-evidence gates still require real operator/user-supplied
+    evidence packets.
+  - 2026-06-28 resume authorization note: the user explicitly authorized
+    collecting failed-gate evidence, Docker/dev-container access, and Git
+    commit/push. The previous Docker/Git approval blocker is cleared for this
+    run, and canonical dev-container verification plus the 3 Codex/GPT reviewer
+    gate for the current hardening slice have passed. The item remains unchecked
+    because full KG acceptance still requires real operator/user-supplied
+    evidence and validator-accepted canonical packets for the four broad gates.
   - 2026-06-27 fair-baseline response-intake note: candidate-only intake is
     implemented for `fair_external_baseline_comparison` and wired into the
     collection work orders. It can seal operator-supplied fair-baseline

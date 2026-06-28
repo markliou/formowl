@@ -285,29 +285,42 @@ def scan_real_root(root: Path) -> dict[str, Any]:
         "file_count": 0,
         "candidate_artifact_count": 0,
         "symlink_count": 0,
+        "disappeared_file_count": 0,
         "test_or_sandbox_file_count": 0,
         "template_marker_file_count": 0,
         "placeholder_marker_file_count": 0,
         "raw_internal_marker_file_count": 0,
         "candidate_artifact_paths": [],
+        "disappeared_file_paths": [],
     }
     if not root.exists():
         return report
 
     for path in sorted(root.rglob("*")):
-        if path.is_symlink():
+        rel_path = str(path.relative_to(ROOT))
+        try:
+            path_stat = path.lstat()
+        except FileNotFoundError:
+            report["disappeared_file_count"] += 1
+            report["disappeared_file_paths"].append(rel_path)
+            continue
+        if stat.S_ISLNK(path_stat.st_mode):
             report["symlink_count"] += 1
             continue
-        if not path.is_file():
+        if not stat.S_ISREG(path_stat.st_mode):
             continue
-        rel_path = str(path.relative_to(ROOT))
+        try:
+            text_scan = _scan_text(path)
+        except FileNotFoundError:
+            report["disappeared_file_count"] += 1
+            report["disappeared_file_paths"].append(rel_path)
+            continue
         report["file_count"] += 1
         if _is_test_or_sandbox_path(path, root=root):
             report["test_or_sandbox_file_count"] += 1
         else:
             report["candidate_artifact_paths"].append(rel_path)
             report["candidate_artifact_count"] += 1
-        text_scan = _scan_text(path)
         if text_scan["contains_template_marker"]:
             report["template_marker_file_count"] += 1
         if text_scan["contains_placeholder_marker"]:
@@ -317,6 +330,7 @@ def scan_real_root(root: Path) -> dict[str, Any]:
     report["root_ready"] = (
         report["candidate_artifact_count"] > 0
         and report["symlink_count"] == 0
+        and report["disappeared_file_count"] == 0
         and report["test_or_sandbox_file_count"] == 0
         and report["template_marker_file_count"] == 0
         and report["placeholder_marker_file_count"] == 0
@@ -742,6 +756,7 @@ def build_report() -> dict[str, Any]:
         and not row["packet_surface"]["contains_placeholder_marker"]
         and not row["packet_surface"]["contains_raw_internal_marker"]
         and row["real_root_scan"]["symlink_count"] == 0
+        and row["real_root_scan"]["disappeared_file_count"] == 0
         and row["real_root_scan"]["test_or_sandbox_file_count"] == 0
         and row["real_root_scan"]["template_marker_file_count"] == 0
         and row["real_root_scan"]["placeholder_marker_file_count"] == 0
