@@ -86,6 +86,51 @@ response-intake hardening:
   wording was narrowed, and `Pascal` agreed on status honesty after the same
   wording update.
 
+Current local implementation slice, updated 2026-06-28 after fair-baseline
+response-intake hardening:
+
+- `fair_baseline_response_intake.py` now requires response-packet top-level
+  allowlisting, `operator_run_id`, and output-dir final-segment binding before
+  candidate artifacts are written.
+- Baseline-run rows, human-answer adjudication rows, graph-quality rows, and
+  permission-probe rows reject unsupported wrapper fields, and raw/internal
+  field names are rejected throughout the response payload.
+- Candidate artifact writes now preflight parent directories, reject nested
+  default real-root output dirs outside tests, clean up after-open partial
+  writes, and roll back already-created candidate artifacts plus optional
+  candidate manifests when assembly or validation execution raises after
+  writes.
+- The intake still writes only non-authoritative candidate artifacts and a
+  response custody receipt that binds the operator response packet hash,
+  candidate packet hash, emitted candidate artifact hashes, and optional
+  candidate-manifest hash. This receipt is candidate-only and is not the
+  canonical fair-baseline packet.
+- The tracked operator guide now lists the hardened fair-baseline response
+  intake controls for `fair_external_baseline_comparison`.
+- Canonical dev-container verification passed in this resume:
+  - focused fair-intake/work-order/operator-guide unittest ran 46 tests OK.
+  - full KG-eval unittest ran 490 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - operator guide `--check`, submission template `--check-template`, and
+    governance approval template `--check-template` exited 0.
+  - broad reports were refreshed with `kg_total_acceptance_suite.py`,
+    `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+    `real_evidence_collection_work_orders.py`.
+  - default main KG acceptance remains `passed_with_explicit_limits`.
+  - strict main KG acceptance exits 1 only for known failed / blocked limits.
+  - full Ruff check passed, Ruff format-check passed, and `git diff --check`
+    exited 0.
+- Safety state after verification: all four `inputs/*_real` roots contain no
+  files, the four canonical broad evidence packets remain absent, and broad
+  KG-eval still shows `overall_passed=false`, 8 passed gates, and the same
+  four failed gates. No completion claim is supported.
+- Reviewer gate passed 3/3 after blocker fixes: `Arendt` agreed on
+  engineering correctness after the final delta, `Confucius` agreed on
+  governance/safety after the work-order report stopped emitting an absolute
+  local workspace path, and `Lorentz` agreed on status honesty after the
+  operator guide/control inventory listed parent-dir preflight, after-open
+  cleanup, and rollback controls.
+
 Current local implementation slice, updated 2026-06-28 after governed
 approval-bridge hardening:
 

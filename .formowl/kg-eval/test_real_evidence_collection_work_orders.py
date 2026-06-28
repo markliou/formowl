@@ -113,8 +113,14 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertFalse(report["work_order_authority"]["replaces_authoritative_validators"])
         self.assertNotIn("overall_ready", report)
         self.assertNotIn("claim_boundary", report)
+        self.assertEqual(report["workspace"], ".formowl/kg-eval")
+        self.assertFalse(Path(report["workspace"]).is_absolute())
         keys = nested_keys(report)
         strings = nested_strings(report)
+        root_text = str(work_orders.ROOT)
+        self.assertFalse(
+            any(value == root_text or value.startswith(f"{root_text}/") for value in strings)
+        )
         self.assertNotIn("passed", keys)
         self.assertNotIn("overall_ready", keys)
         self.assertNotIn("ready_for_acceptance", keys)
@@ -410,7 +416,42 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             fair_response_contract["required_controls"],
         )
         self.assertIn(
+            "operator_run_id matches the candidate output directory final segment",
+            fair_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "candidate output dir is exactly inputs/fair_baseline_real/<operator_run_id> outside tests",
+            fair_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "response packet top-level fields and baseline-run wrapper fields are allowlisted",
+            fair_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "raw/internal field names are rejected throughout response payloads",
+            fair_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "candidate artifact parent directories are preflighted before writes",
+            fair_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "after-open partial output writes are cleaned up",
+            fair_response_contract["required_controls"],
+        )
+        self.assertIn(
+            (
+                "created candidate artifacts and optional candidate manifests are rolled back "
+                "when assembly or validation raises after writes"
+            ),
+            fair_response_contract["required_controls"],
+        )
+        self.assertIn(
             "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+            fair_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "intake custody receipt binds optional assembly manifest hash when emitted",
             fair_response_contract["required_controls"],
         )
 

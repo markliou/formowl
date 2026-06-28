@@ -233,6 +233,14 @@ def _fair_tasks(row: dict[str, Any]) -> dict[str, Any]:
             "promotes_evidence": False,
             "counts_as_acceptance_gate": False,
             "required_controls": [
+                "operator_run_id matches the candidate output directory final segment",
+                "candidate output dir is exactly inputs/fair_baseline_real/<operator_run_id> outside tests",
+                "response packet top-level fields and baseline-run wrapper fields are allowlisted",
+                "human adjudication, graph-quality, and permission-probe wrapper fields are allowlisted",
+                "raw/internal field names are rejected throughout response payloads",
+                "candidate artifact parent directories are preflighted before writes",
+                "after-open partial output writes are cleaned up",
+                "created candidate artifacts and optional candidate manifests are rolled back when assembly or validation raises after writes",
                 "operator supplied real package run artifacts for every baseline",
                 "operator supplied non-synthetic run environment",
                 "operator supplied human answer-quality adjudication",
@@ -240,6 +248,7 @@ def _fair_tasks(row: dict[str, Any]) -> dict[str, Any]:
                 "operator supplied permission probes for every baseline",
                 "candidate packet validates before any manual governance promotion",
                 "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+                "intake custody receipt binds optional assembly manifest hash when emitted",
             ],
         },
     }
@@ -573,7 +582,7 @@ def build_report(
     work_order_gate_ids = [row["gate_id"] for row in work_orders]
     report = {
         "artifact_id": "kg_real_evidence_collection_work_orders_v1",
-        "workspace": str(ROOT),
+        "workspace": ".formowl/kg-eval",
         "source_checklist": "remaining_evidence_checklist.json",
         "source_preflight": "results/real_evidence_preflight.json",
         "work_order_state": (

@@ -1301,6 +1301,38 @@ These groups can be split across multiple agents after Slice 1 is stable.
     engineering correctness, `Gibbs` agreed on governance/safety after the
     validation-report wording was narrowed, and `Pascal` agreed on status
     honesty after the same wording update.
+  - 2026-06-28 fair-baseline response-intake hardening checkpoint:
+    `fair_baseline_response_intake.py` now requires response-packet
+    top-level allowlisting, `operator_run_id` binding to the candidate output
+    directory, baseline-run and adjudication/graph-quality/permission-probe
+    wrapper-field allowlisting, raw/internal field-name rejection throughout
+    the response payload, parent directory preflight, default real-root
+    output-dir restriction to
+    `inputs/fair_baseline_real/<operator_run_id>`, after-open partial write
+    cleanup, and rollback of already-created candidate artifacts plus optional
+    candidate manifests when assembly or validation execution raises after
+    writes. It still emits only non-authoritative candidate artifacts and a
+    response custody receipt binding the operator response packet hash,
+    candidate packet hash, candidate artifact hashes, and optional
+    candidate-manifest hash. The tracked operator guide now lists these
+    controls for `fair_external_baseline_comparison`. Canonical
+    dev-container verification passed: focused fair-intake/work-order/operator
+    guide unittest 46 OK, full KG-eval unittest 490 OK, main repo unittest
+    252 OK, guide/submission-template/approval-template checks, refreshed
+    broad reports, default KG acceptance `passed_with_explicit_limits`,
+    strict KG acceptance exits 1 only for known limits, full Ruff check and
+    format-check, and `git diff --check`. Broad KG-eval remains incomplete
+    with `overall_passed=false`, 8 passed gates, and the same four failed
+    gates; all four real roots remain empty and canonical broad packets remain
+    absent. Reviewer gate passed 3/3 after blocker fixes: `Arendt` agreed on
+    engineering correctness after the final delta, `Confucius` agreed on
+    governance/safety after the work-order report stopped emitting an
+    absolute local workspace path, and `Lorentz` agreed on status honesty
+    after the operator guide/control inventory listed parent-dir preflight,
+    after-open cleanup, and rollback controls. The item remains unchecked
+    because this hardening accepts no evidence, writes no canonical broad
+    packet, and the four broad real-evidence gates still require real
+    operator/user-supplied artifacts plus validator-accepted canonical packets.
   - 2026-06-27 fair-baseline response-intake note: candidate-only intake is
     implemented for `fair_external_baseline_comparison` and wired into the
     collection work orders. It can seal operator-supplied fair-baseline

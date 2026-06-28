@@ -34,6 +34,84 @@ RUN_ARTIFACT_FILENAMES = {
     "graph_output_artifact": "graph_output.json",
     "permission_probe_artifact": "permission_probe.json",
 }
+RESPONSE_PACKET_ALLOWED_FIELDS = {
+    "response_packet_type",
+    "operator_run_id",
+    "run_environment",
+    "source_lock_sha256",
+    "baseline_runs",
+    "human_answer_adjudication",
+    "graph_quality_validation",
+    "permission_probes",
+}
+RUN_ENVIRONMENT_ALLOWED_FIELDS = {
+    "container_image_digest_sha256",
+    "non_synthetic_benchmark_context",
+    "run_manifest_sha256",
+    "uses_mocked_llm_or_retrieval",
+    "uses_real_external_packages",
+}
+HUMAN_ANSWER_ADJUDICATION_ALLOWED_FIELDS = {
+    "adjudicator_id",
+    "artifact_id",
+    "completed",
+    "custody_receipt_sha256",
+    "final_adjudication_sha256",
+    "per_baseline_rows",
+    "question_set_sha256",
+    "reviewers",
+    "synthetic_or_agent_generated",
+}
+HUMAN_ANSWER_REVIEWER_ALLOWED_FIELDS = {
+    "independent_first_pass",
+    "reviewer_id",
+    "reviewer_type",
+    "sealed_submission_sha256",
+}
+HUMAN_ANSWER_ROW_ALLOWED_FIELDS = {
+    "answer_output_artifact_sha256",
+    "baseline_id",
+    "question_count",
+}
+GRAPH_QUALITY_VALIDATION_ALLOWED_FIELDS = {
+    "completed",
+    "human_reviewed",
+    "per_baseline_rows",
+}
+GRAPH_QUALITY_ROW_ALLOWED_FIELDS = {
+    "baseline_id",
+    "graph_output_artifact_sha256",
+    "reviewed_entity_count",
+    "reviewed_relation_count",
+}
+PERMISSION_PROBE_ALLOWED_FIELDS = {
+    "baseline_id",
+    "permission_probe_artifact_sha256",
+    "private_content_leak_count",
+    "raw_asset_access_count",
+    *validator.REQUIRED_PERMISSION_PROBES,
+}
+RAW_INTERNAL_FIELD_NAMES = {
+    "absolute_path",
+    "backend_path",
+    "database_uri",
+    "db_uri",
+    "file_path",
+    "filesystem_path",
+    "local_path",
+    "nas_path",
+    "nfs_path",
+    "object_store_uri",
+    "object_store_url",
+    "raw_path",
+    "raw_paths",
+    "raw_sql",
+    "s3_uri",
+    "scratch_path",
+    "sql",
+    "storage_uri",
+    "worker_scratch_path",
+}
 CUSTODY_RECEIPT_FILENAME = "response_custody_receipt.json"
 
 
@@ -81,6 +159,9 @@ def _ensure_safe_identifier(value: object, field_name: str) -> str:
 def _is_test_or_sandbox_path_parts(parts: tuple[str, ...]) -> bool:
     return any(
         part == "assembler_test"
+        or part == "sandbox"
+        or part.startswith("sandbox_")
+        or part.endswith("_sandbox")
         or part.startswith("test_")
         or part.endswith("_test")
         or part.startswith("preflight_test")
@@ -107,6 +188,10 @@ def safe_real_output_dir(path_value: str, *, allow_test_artifacts: bool = False)
         raise IntakeError("output_dir must not use template paths")
     if not allow_test_artifacts and _is_test_or_sandbox_path_parts(real_root_relative_parts):
         raise IntakeError("output_dir must not use test or sandbox paths")
+    if not allow_test_artifacts and len(real_root_relative_parts) != 1:
+        raise IntakeError(
+            f"output_dir must be exactly {validator.REAL_ARTIFACT_ROOT}/<operator_run_id>"
+        )
     current = ROOT
     for part in path.parts:
         current = current / part
@@ -154,13 +239,23 @@ def _write_json(path: Path, payload: object) -> None:
     _reject_symlink_components(path, "intake output")
     path.parent.mkdir(parents=True, exist_ok=True)
     _reject_symlink_components(path, "intake output")
+    created = False
     try:
         with path.open("x", encoding="utf-8") as handle:
+            created = True
             handle.write(_artifact_json_text(payload))
     except FileExistsError as exc:
         raise IntakeError(
             f"intake output would overwrite existing artifact: {_relative_artifact_path(path)}"
         ) from exc
+    except Exception as exc:
+        if created:
+            try:
+                if path.is_symlink() or path.is_file():
+                    path.unlink()
+            except FileNotFoundError:
+                pass
+        raise IntakeError(f"intake output write failed: {_relative_artifact_path(path)}") from exc
 
 
 def _cleanup_created_outputs(created_paths: list[Path], output_path: Path) -> None:
@@ -210,6 +305,27 @@ def _ensure_no_overwrite(paths: dict[str, Path]) -> None:
         )
 
 
+def _validate_allowed_fields(
+    payload: dict[str, Any],
+    allowed_fields: set[str],
+    label: str,
+) -> None:
+    unsupported = sorted(set(payload) - allowed_fields)
+    if unsupported:
+        raise IntakeError(f"{label} has unsupported fields: " + ", ".join(unsupported))
+
+
+def _reject_raw_internal_fields(payload: Any, *, label: str) -> None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if isinstance(key, str) and key in RAW_INTERNAL_FIELD_NAMES:
+                raise IntakeError(f"{label} contains raw/internal field: {key}")
+            _reject_raw_internal_fields(value, label=label)
+    elif isinstance(payload, list):
+        for value in payload:
+            _reject_raw_internal_fields(value, label=label)
+
+
 def _validated_work_packet(work_packet: dict[str, Any]) -> None:
     if work_packet.get("work_packet_type") != "fair_baseline_run_work_packet_preview_v1":
         raise IntakeError("work packet type mismatch")
@@ -244,6 +360,13 @@ def _safe_payload(payload: object, field_name: str) -> dict[str, Any]:
         assembler.reject_raw_internal_payload(payload, label=field_name)
     except assembler.AssemblyError as exc:
         raise IntakeError(str(exc)) from exc
+    _reject_raw_internal_fields(payload, label=field_name)
+    return payload
+
+
+def _run_environment(response_packet: dict[str, Any]) -> dict[str, Any]:
+    payload = _safe_payload(response_packet.get("run_environment"), "run_environment")
+    _validate_allowed_fields(payload, RUN_ENVIRONMENT_ALLOWED_FIELDS, "run_environment")
     return payload
 
 
@@ -260,6 +383,10 @@ def _baseline_runs(response_packet: dict[str, Any]) -> list[dict[str, Any]]:
             assembler.reject_raw_internal_payload(entry, label="baseline run")
         except assembler.AssemblyError as exc:
             raise IntakeError(str(exc)) from exc
+        _reject_raw_internal_fields(entry, label="baseline run")
+        unsupported = sorted(set(entry) - assembler.RUN_SOURCE_ALLOWED_FIELDS)
+        if unsupported:
+            raise IntakeError("baseline run has unsupported fields: " + ", ".join(unsupported))
         baseline_id = entry.get("baseline_id")
         if baseline_id not in validator.REQUIRED_BASELINES:
             raise IntakeError("baseline run id is unsupported")
@@ -277,6 +404,84 @@ def _baseline_runs(response_packet: dict[str, Any]) -> list[dict[str, Any]]:
     if missing_baselines:
         raise IntakeError("baseline runs missing baselines: " + ", ".join(missing_baselines))
     return [by_baseline[baseline_id] for baseline_id in validator.REQUIRED_BASELINES]
+
+
+def _human_answer_adjudication(response_packet: dict[str, Any]) -> dict[str, Any]:
+    payload = _safe_payload(
+        response_packet.get("human_answer_adjudication"),
+        "human_answer_adjudication",
+    )
+    _validate_allowed_fields(
+        payload,
+        HUMAN_ANSWER_ADJUDICATION_ALLOWED_FIELDS,
+        "human_answer_adjudication",
+    )
+    reviewers = payload.get("reviewers")
+    if not isinstance(reviewers, list):
+        raise IntakeError("human_answer_adjudication reviewers must be a list")
+    for reviewer in reviewers:
+        if not isinstance(reviewer, dict):
+            raise IntakeError("human_answer_adjudication reviewer must be a JSON object")
+        _validate_allowed_fields(
+            reviewer,
+            HUMAN_ANSWER_REVIEWER_ALLOWED_FIELDS,
+            "human_answer_adjudication reviewer",
+        )
+    rows = payload.get("per_baseline_rows")
+    if not isinstance(rows, list):
+        raise IntakeError("human_answer_adjudication per_baseline_rows must be a list")
+    for row in rows:
+        if not isinstance(row, dict):
+            raise IntakeError("human_answer_adjudication row must be a JSON object")
+        _validate_allowed_fields(
+            row,
+            HUMAN_ANSWER_ROW_ALLOWED_FIELDS,
+            "human_answer_adjudication row",
+        )
+    return payload
+
+
+def _graph_quality_validation(response_packet: dict[str, Any]) -> dict[str, Any]:
+    payload = _safe_payload(
+        response_packet.get("graph_quality_validation"),
+        "graph_quality_validation",
+    )
+    _validate_allowed_fields(
+        payload,
+        GRAPH_QUALITY_VALIDATION_ALLOWED_FIELDS,
+        "graph_quality_validation",
+    )
+    rows = payload.get("per_baseline_rows")
+    if not isinstance(rows, list):
+        raise IntakeError("graph_quality_validation per_baseline_rows must be a list")
+    for row in rows:
+        if not isinstance(row, dict):
+            raise IntakeError("graph_quality_validation row must be a JSON object")
+        _validate_allowed_fields(
+            row,
+            GRAPH_QUALITY_ROW_ALLOWED_FIELDS,
+            "graph_quality_validation row",
+        )
+    return payload
+
+
+def _permission_probes(response_packet: dict[str, Any]) -> list[dict[str, Any]]:
+    permission_probes = response_packet.get("permission_probes")
+    if not isinstance(permission_probes, list):
+        raise IntakeError("permission_probes must be a list")
+    try:
+        assembler.reject_template_or_placeholder_payload(
+            permission_probes, label="permission_probes"
+        )
+        assembler.reject_raw_internal_payload(permission_probes, label="permission_probes")
+    except assembler.AssemblyError as exc:
+        raise IntakeError(str(exc)) from exc
+    _reject_raw_internal_fields(permission_probes, label="permission_probes")
+    for row in permission_probes:
+        if not isinstance(row, dict):
+            raise IntakeError("permission_probe row must be a JSON object")
+        _validate_allowed_fields(row, PERMISSION_PROBE_ALLOWED_FIELDS, "permission_probe row")
+    return permission_probes
 
 
 def _planned_paths(output_dir: Path, baseline_runs: list[dict[str, Any]]) -> dict[str, Path]:
@@ -337,6 +542,8 @@ def build_intake_artifacts(
     allow_test_artifacts: bool = False,
 ) -> dict[str, Any]:
     _validated_work_packet(work_packet)
+    _validate_allowed_fields(response_packet, RESPONSE_PACKET_ALLOWED_FIELDS, "response packet")
+    _reject_raw_internal_fields(response_packet, label="response packet")
     if response_packet.get("response_packet_type") != "fair_baseline_response_intake_v1":
         raise IntakeError("response packet type mismatch")
     run_id = _ensure_safe_identifier(response_packet.get("operator_run_id"), "operator_run_id")
@@ -350,23 +557,11 @@ def build_intake_artifacts(
     )
 
     baseline_runs = _baseline_runs(response_packet)
-    run_environment = _safe_payload(response_packet.get("run_environment"), "run_environment")
-    human_answer_adjudication = _safe_payload(
-        response_packet.get("human_answer_adjudication"),
-        "human_answer_adjudication",
-    )
-    graph_quality_validation = _safe_payload(
-        response_packet.get("graph_quality_validation"),
-        "graph_quality_validation",
-    )
-    permission_probes = response_packet.get("permission_probes")
-    if not isinstance(permission_probes, list):
-        raise IntakeError("permission_probes must be a list")
+    run_environment = _run_environment(response_packet)
+    human_answer_adjudication = _human_answer_adjudication(response_packet)
+    graph_quality_validation = _graph_quality_validation(response_packet)
+    permission_probes = _permission_probes(response_packet)
     try:
-        assembler.reject_template_or_placeholder_payload(
-            permission_probes, label="permission_probes"
-        )
-        assembler.reject_raw_internal_payload(permission_probes, label="permission_probes")
         assembler.validate_source_lock_sha256(response_packet.get("source_lock_sha256"))
     except assembler.AssemblyError as exc:
         raise IntakeError(str(exc)) from exc
@@ -421,7 +616,7 @@ def build_intake_artifacts(
             packet,
             allow_test_artifacts=allow_test_artifacts,
         )
-    except (assembler.AssemblyError, IntakeError) as exc:
+    except (assembler.AssemblyError, IntakeError, OSError) as exc:
         _cleanup_created_outputs(created_paths, output_path)
         if isinstance(exc, IntakeError):
             raise
@@ -471,9 +666,11 @@ def build_intake_artifacts(
     try:
         _write_json(planned_paths["response_custody_receipt"], custody_receipt)
         created_paths.append(planned_paths["response_custody_receipt"])
-    except IntakeError:
+    except (IntakeError, OSError) as exc:
         _cleanup_created_outputs(created_paths, output_path)
-        raise
+        if isinstance(exc, IntakeError):
+            raise
+        raise IntakeError(str(exc)) from exc
     custody_receipt_sha = validator.sha256_file(planned_paths["response_custody_receipt"]) or ""
     return {
         "intake_packet_type": "fair_baseline_response_intake_result_v1",

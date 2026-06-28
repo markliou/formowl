@@ -211,6 +211,40 @@ class FairBaselineResponseIntakeTest(unittest.TestCase):
         self.assertFalse(BASE.exists())
         self.assert_canonical_unchanged()
 
+    def test_rejects_operator_run_id_output_dir_mismatch_before_writes(self) -> None:
+        with self.assertRaisesRegex(intake.IntakeError, "final segment"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=valid_response_packet(),
+                output_dir="inputs/fair_baseline_real/fair_intake_mismatch",
+            )
+
+        self.assertFalse((validator.REAL_ARTIFACT_ROOT_PATH / "fair_intake_mismatch").exists())
+        self.assert_canonical_unchanged()
+
+    def test_default_rejects_sandbox_and_nested_output_dirs_before_writes(self) -> None:
+        for output_dir, pattern in (
+            (
+                "inputs/fair_baseline_real/sandbox/fair_intake_run",
+                "test or sandbox",
+            ),
+            (
+                "inputs/fair_baseline_real/operator_group/fair_intake_run",
+                "exactly inputs/fair_baseline_real/<operator_run_id>",
+            ),
+        ):
+            with self.subTest(output_dir=output_dir):
+                with self.assertRaisesRegex(intake.IntakeError, pattern):
+                    intake.build_intake_artifacts(
+                        work_packet=work_packet_generator.build_work_packet(),
+                        response_packet=valid_response_packet(),
+                        output_dir=output_dir,
+                    )
+
+        self.assertFalse((validator.REAL_ARTIFACT_ROOT_PATH / "sandbox").exists())
+        self.assertFalse((validator.REAL_ARTIFACT_ROOT_PATH / "operator_group").exists())
+        self.assert_canonical_unchanged()
+
     def test_rejects_output_overwrite_and_broken_symlink_before_partial_writes(self) -> None:
         path = BASE / "microsoft_graphrag" / "package_lock.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -242,9 +276,79 @@ class FairBaselineResponseIntakeTest(unittest.TestCase):
 
     def test_rejects_raw_internal_response_payload_before_writes(self) -> None:
         response = valid_response_packet()
-        response["baseline_runs"][0]["package_lock_artifact"]["raw_path"] = "/mnt/nas/run.json"
+        response["baseline_runs"][0]["package_lock_artifact"]["package_source_url"] = (
+            "file:///mnt/nas/run.json"
+        )
 
         with self.assertRaisesRegex(intake.IntakeError, "raw/internal artifact value"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir=OUTPUT_DIR,
+                allow_test_artifacts=True,
+            )
+
+        self.assertFalse(BASE.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rejects_top_level_unsupported_response_fields_before_writes(self) -> None:
+        response = valid_response_packet()
+        response["claim_boundary"] = {"supports_fair_external_baseline_comparison_claim": True}
+
+        with self.assertRaisesRegex(intake.IntakeError, "unsupported fields"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir=OUTPUT_DIR,
+                allow_test_artifacts=True,
+            )
+
+        self.assertFalse(BASE.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rejects_unsupported_nested_response_wrapper_fields_before_writes(self) -> None:
+        response = valid_response_packet()
+        response["baseline_runs"][0]["notes"] = "operator-side note"
+        with self.assertRaisesRegex(intake.IntakeError, "baseline run has unsupported fields"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir=OUTPUT_DIR,
+                allow_test_artifacts=True,
+            )
+        self.assertFalse(BASE.exists())
+
+        response = valid_response_packet()
+        response["human_answer_adjudication"]["reviewers"][0]["notes"] = "manual review"
+        with self.assertRaisesRegex(
+            intake.IntakeError,
+            "human_answer_adjudication reviewer has unsupported fields",
+        ):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir=OUTPUT_DIR,
+                allow_test_artifacts=True,
+            )
+        self.assertFalse(BASE.exists())
+
+        response = valid_response_packet()
+        response["permission_probes"][0]["notes"] = "manual probe"
+        with self.assertRaisesRegex(intake.IntakeError, "permission_probe row has unsupported"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir=OUTPUT_DIR,
+                allow_test_artifacts=True,
+            )
+        self.assertFalse(BASE.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rejects_raw_internal_response_field_before_writes(self) -> None:
+        response = valid_response_packet()
+        response["baseline_runs"][0]["package_lock_artifact"]["raw_path"] = "redacted"
+
+        with self.assertRaisesRegex(intake.IntakeError, "raw/internal field"):
             intake.build_intake_artifacts(
                 work_packet=work_packet_generator.build_work_packet(),
                 response_packet=response,
@@ -320,6 +424,87 @@ class FairBaselineResponseIntakeTest(unittest.TestCase):
         self.assertEqual(
             ASSEMBLY_MANIFEST_PARENT_FILE.read_text(encoding="utf-8"), "not a directory\n"
         )
+        self.assert_canonical_unchanged()
+
+    def test_rolls_back_intake_created_files_on_assembler_failure(self) -> None:
+        original_assemble_packet = intake.assembler.assemble_packet
+
+        def raise_after_writes(**_: object) -> dict:
+            raise assembler.AssemblyError("simulated assembler failure")
+
+        try:
+            intake.assembler.assemble_packet = raise_after_writes
+            with self.assertRaisesRegex(intake.IntakeError, "simulated assembler failure"):
+                intake.build_intake_artifacts(
+                    work_packet=work_packet_generator.build_work_packet(),
+                    response_packet=valid_response_packet(),
+                    output_dir=OUTPUT_DIR,
+                    assembly_manifest_output=(
+                        "work_packets/test_fair_baseline_response_intake_manifest.json"
+                    ),
+                    allow_test_artifacts=True,
+                )
+        finally:
+            intake.assembler.assemble_packet = original_assemble_packet
+
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rolls_back_intake_created_files_on_validator_failure(self) -> None:
+        original_validate_candidate = intake.assembler.validate_candidate
+
+        def raise_after_writes(packet: object, *, allow_test_artifacts: bool = False) -> dict:
+            del packet, allow_test_artifacts
+            raise assembler.AssemblyError("simulated validator failure")
+
+        try:
+            intake.assembler.validate_candidate = raise_after_writes
+            with self.assertRaisesRegex(intake.IntakeError, "simulated validator failure"):
+                intake.build_intake_artifacts(
+                    work_packet=work_packet_generator.build_work_packet(),
+                    response_packet=valid_response_packet(),
+                    output_dir=OUTPUT_DIR,
+                    assembly_manifest_output=(
+                        "work_packets/test_fair_baseline_response_intake_manifest.json"
+                    ),
+                    allow_test_artifacts=True,
+                )
+        finally:
+            intake.assembler.validate_candidate = original_validate_candidate
+
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rolls_back_partial_file_created_by_after_open_write_failure(self) -> None:
+        original_artifact_json_text = intake._artifact_json_text
+        write_count = 0
+
+        def fail_second_serialization(payload: object) -> str:
+            nonlocal write_count
+            write_count += 1
+            if write_count == 2:
+                raise OSError("simulated after-open write failure")
+            return original_artifact_json_text(payload)
+
+        try:
+            intake._artifact_json_text = fail_second_serialization
+            with self.assertRaisesRegex(intake.IntakeError, "intake output write failed"):
+                intake.build_intake_artifacts(
+                    work_packet=work_packet_generator.build_work_packet(),
+                    response_packet=valid_response_packet(),
+                    output_dir=OUTPUT_DIR,
+                    assembly_manifest_output=(
+                        "work_packets/test_fair_baseline_response_intake_manifest.json"
+                    ),
+                    allow_test_artifacts=True,
+                )
+        finally:
+            intake._artifact_json_text = original_artifact_json_text
+
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
         self.assert_canonical_unchanged()
 
     def test_cli_rejects_promotion_arguments_without_writes(self) -> None:

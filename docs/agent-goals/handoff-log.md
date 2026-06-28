@@ -792,3 +792,30 @@ status in each role's goal file and task completion in
   correctness, `Gibbs` agreed on governance/safety after the validation-report
   wording was narrowed, and `Pascal` agreed on status honesty after the same
   wording update.
+- 2026-06-28 fair-baseline response-intake hardening: the candidate-only
+  `fair_baseline_response_intake.py` path now requires response-packet
+  top-level allowlisting, `operator_run_id` to match the output directory
+  final segment, baseline-run and adjudication/graph-quality/permission-probe
+  wrapper-field allowlisting, raw/internal field-name rejection throughout the
+  response payload, parent directory preflight, default real-root output-dir
+  restriction to `inputs/fair_baseline_real/<operator_run_id>`, after-open
+  partial write cleanup, and rollback of already-created candidate artifacts
+  plus optional candidate manifests when assembler assembly or validation
+  raises after writes. It emits a non-authoritative response custody receipt
+  binding response packet, candidate packet, candidate artifact, and optional
+  candidate-manifest hashes, and the tracked operator guide lists the controls
+  for `fair_external_baseline_comparison`. Canonical dev-container
+  verification passed: focused fair-intake/work-order/operator-guide unittest
+  46 OK, full KG-eval unittest 490 OK, main repo unittest 252 OK, guide,
+  submission-template, and governance-approval-template checks, refreshed
+  broad reports, default KG acceptance `passed_with_explicit_limits`, strict
+  KG acceptance exits 1 only for known limits, full Ruff check/format-check,
+  and `git diff --check`. Broad KG-eval remains incomplete with
+  `overall_passed=false`, 8 passed gates, and the same four failed gates; all
+  real roots are empty and canonical broad packets are absent. Reviewer gate
+  passed 3/3 after blocker fixes: `Arendt` agreed on engineering correctness
+  after the final delta, `Confucius` agreed on governance/safety after the
+  work-order report stopped emitting an absolute local workspace path, and
+  `Lorentz` agreed on status honesty after the operator guide/control
+  inventory listed parent-dir preflight, after-open cleanup, and rollback
+  controls.
