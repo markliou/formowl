@@ -1332,6 +1332,33 @@ These groups can be split across multiple agents after Slice 1 is stable.
     The item remains unchecked because this status aid accepts no evidence and
     the four broad gates still require real operator/user-supplied artifacts
     plus validator-accepted canonical packets.
+  - 2026-06-28 enterprise-multimodal response-intake parity hardening
+    checkpoint: `enterprise_multimodal_response_intake.py` now matches the
+    hardened candidate-only response-intake baseline for raw/internal field
+    names and custody-phase rollback. Operator-supplied enterprise multimodal
+    artifact payloads recursively reject raw/internal field names such as
+    backend connection strings, database/object-store locators, raw SQL,
+    scratch paths, and raw paths even when the submitted value is otherwise
+    benign. Custody receipt construction, optional assembly-manifest hashing,
+    custody write, and custody receipt hashing are now inside rollback
+    handling, so intake-created candidate artifacts and optional manifests are
+    removed if custody hashing or custody write fails after writes. The
+    enterprise work-order response contract and tracked operator guide now
+    list output-dir binding, top-level/validation wrapper allowlisting,
+    raw/internal field-name rejection, parent-dir preflight, after-open
+    cleanup, rollback, and optional manifest custody hashing. Canonical
+    dev-container verification passed: focused
+    enterprise-intake/work-order/operator-guide unittest 47 OK, full KG-eval
+    unittest 514 OK, main repo unittest 252 OK, guide/progress checks, full
+    Ruff check/format-check, and `git diff --check`. Broad KG-eval remains
+    incomplete with `overall_passed=false`, 8 passed gates, and the same four
+    failed gates; all four real roots remain empty and canonical broad packets
+    remain absent. Reviewer gate passed 3/3: `Socrates` agreed on engineering
+    correctness, `Gibbs` agreed on governance/safety, and `Pascal` agreed on
+    status honesty. The item remains unchecked because this hardening accepts
+    no evidence, writes no canonical broad packet, and the four broad
+    real-evidence gates still require real operator/user-supplied artifacts
+    plus validator-accepted canonical packets.
   - 2026-06-28 human annotation response-intake hardening checkpoint:
     `human_annotation_response_intake.py` now requires response-packet
     top-level allowlisting, `operator_run_id` binding to the candidate output

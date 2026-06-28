@@ -306,6 +306,13 @@ def _enterprise_tasks(row: dict[str, Any]) -> dict[str, Any]:
             "promotes_evidence": False,
             "counts_as_acceptance_gate": False,
             "required_controls": [
+                "operator_run_id matches the candidate output directory final segment",
+                "candidate output dir is exactly inputs/enterprise_multimodal_real/<operator_run_id> outside tests",
+                "response packet top-level fields and validation wrapper fields are allowlisted",
+                "raw/internal field names are rejected throughout response payloads",
+                "candidate artifact parent directories are preflighted before writes",
+                "after-open partial output writes are cleaned up",
+                "created candidate artifacts and optional candidate manifests are rolled back when assembly, validation, custody hashing, or custody write raises after writes",
                 "operator supplied pilot manifest artifact",
                 "operator supplied validation artifacts for every required modality",
                 "operator supplied human adjudication artifact",

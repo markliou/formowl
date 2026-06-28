@@ -560,6 +560,36 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertFalse(enterprise_response_contract["promotes_evidence"])
         self.assertFalse(enterprise_response_contract["counts_as_acceptance_gate"])
         self.assertIn(
+            "operator_run_id matches the candidate output directory final segment",
+            enterprise_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "candidate output dir is exactly "
+            "inputs/enterprise_multimodal_real/<operator_run_id> outside tests",
+            enterprise_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "response packet top-level fields and validation wrapper fields are allowlisted",
+            enterprise_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "raw/internal field names are rejected throughout response payloads",
+            enterprise_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "candidate artifact parent directories are preflighted before writes",
+            enterprise_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "after-open partial output writes are cleaned up",
+            enterprise_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "created candidate artifacts and optional candidate manifests are rolled back "
+            "when assembly, validation, custody hashing, or custody write raises after writes",
+            enterprise_response_contract["required_controls"],
+        )
+        self.assertIn(
             "operator supplied validation artifacts for every required modality",
             enterprise_response_contract["required_controls"],
         )

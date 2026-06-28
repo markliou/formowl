@@ -1253,3 +1253,25 @@ Reviewer cost-control rules:
   contract withholding plus rejected approval-surface reporting were added.
   This makes the remaining state easier to audit but does not make any broad
   gate pass. No goal completion claim is supported.
+- 2026-06-28 enterprise-multimodal response-intake parity hardening
+  checkpoint: `enterprise_multimodal_response_intake.py` now rejects the same
+  broader raw/internal field-name surface as the other hardened response
+  intake paths, including backend connection-string, database/object-store,
+  raw SQL, raw path, and worker scratch field names with otherwise benign
+  values. Custody receipt construction, optional assembly-manifest hashing,
+  custody write, and custody receipt hashing now sit inside rollback handling,
+  so candidate artifacts and optional candidate manifests are removed if
+  custody hashing or custody write fails after writes. The enterprise
+  work-order response contract and tracked operator guide now list output-dir
+  binding, top-level/validation wrapper allowlisting, raw/internal field-name
+  rejection, parent-dir preflight, after-open cleanup, rollback, and optional
+  manifest custody hashing. Canonical dev-container verification passed:
+  focused enterprise-intake/work-order/operator-guide unittest 47 OK, full
+  KG-eval unittest 514 OK, main repo unittest 252 OK, guide/progress checks,
+  full Ruff check/format-check, and `git diff --check`. Broad KG-eval remains
+  incomplete with `overall_passed=false`, 8 passed gates, and the same four
+  failed real-evidence gates; all real roots are empty and canonical broad
+  packets are absent. Reviewer gate passed 3/3: `Socrates`, `Gibbs`, and
+  `Pascal` returned `RELEASE_DECISION: AGREE`. This hardening does not make
+  `multimodal_semantic_validation` pass, and no goal completion claim is
+  supported.

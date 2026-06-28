@@ -337,6 +337,23 @@ class EnterpriseMultimodalResponseIntakeTest(unittest.TestCase):
         self.assertFalse(BASE.exists())
         self.assert_canonical_unchanged()
 
+    def test_rejects_backend_connection_field_names_with_benign_values_before_writes(
+        self,
+    ) -> None:
+        response = valid_response_packet()
+        response["permission_probe_artifact"]["backend_connection_string"] = "redacted"
+
+        with self.assertRaisesRegex(intake.IntakeError, "raw/internal artifact field"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir=OUTPUT_DIR,
+                allow_test_artifacts=True,
+            )
+
+        self.assertFalse(BASE.exists())
+        self.assert_canonical_unchanged()
+
     def test_rejects_top_level_unsupported_response_fields_before_writes(self) -> None:
         response = valid_response_packet()
         response["raw_path"] = "/mnt/nas/multimodal.json"
@@ -435,6 +452,36 @@ class EnterpriseMultimodalResponseIntakeTest(unittest.TestCase):
                 )
         finally:
             intake._write_json = original_write_json
+
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rolls_back_created_files_on_custody_receipt_hash_oserror(self) -> None:
+        original_sha256_file = intake.validator.sha256_file
+
+        def fail_manifest_hash(path: object) -> str | None:
+            if path == ASSEMBLY_MANIFEST:
+                raise OSError("simulated custody hash failure")
+            return original_sha256_file(path)
+
+        try:
+            intake.validator.sha256_file = fail_manifest_hash
+            with self.assertRaisesRegex(
+                intake.IntakeError,
+                "simulated custody hash failure",
+            ):
+                intake.build_intake_artifacts(
+                    work_packet=work_packet_generator.build_work_packet(),
+                    response_packet=valid_response_packet(),
+                    output_dir=OUTPUT_DIR,
+                    assembly_manifest_output=(
+                        "work_packets/test_enterprise_multimodal_response_intake_manifest.json"
+                    ),
+                    allow_test_artifacts=True,
+                )
+        finally:
+            intake.validator.sha256_file = original_sha256_file
 
         self.assertFalse(BASE.exists())
         self.assertFalse(ASSEMBLY_MANIFEST.exists())

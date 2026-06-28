@@ -41,6 +41,37 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
+Current local implementation slice, updated 2026-06-28 after
+enterprise-multimodal response-intake parity hardening:
+
+- `enterprise_multimodal_response_intake.py` now rejects the same broader
+  raw/internal field-name surface as the other hardened candidate-only intake
+  paths, including backend connection-string, database/object-store, raw SQL,
+  raw path, and worker scratch field names with otherwise benign values.
+- Custody receipt construction, optional assembly-manifest hashing, custody
+  write, and custody receipt hashing now run inside rollback handling. If
+  custody hashing or custody write fails after candidate outputs are created,
+  intake-created candidate artifacts and optional candidate manifests are
+  removed.
+- The enterprise work-order response contract and tracked operator guide now
+  list output-dir binding, top-level/validation wrapper allowlisting,
+  raw/internal field-name rejection, parent-dir preflight, after-open cleanup,
+  rollback, and optional manifest custody hashing.
+- Canonical dev-container verification passed:
+  - focused enterprise-intake/work-order/operator-guide unittest ran 47 tests
+    OK.
+  - full KG-eval unittest ran 514 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - operator guide `--check` and progress report `--check` exited 0.
+  - full Ruff check passed, Ruff format-check passed, and `git diff --check`
+    exited 0.
+- Reviewer gate passed 3/3: `Socrates` agreed on engineering correctness,
+  `Gibbs` agreed on governance/safety, and `Pascal` agreed on status honesty.
+- Broad KG-eval remains incomplete with `overall_passed=false`, 8 passed
+  gates, and the same four failed gates. All four real roots remain empty and
+  the four canonical broad packets remain absent. No completion claim is
+  supported.
+
 Current local implementation slice, updated 2026-06-28 after gate-progress
 report:
 
@@ -1497,7 +1528,7 @@ roots.
 Current high-priority target:
 
 - Canonical dev-container verification and the 3 Codex/GPT reviewer gate have
-  passed for the current production-adapter response-intake parity hardening
+  passed for the current enterprise-multimodal response-intake parity hardening
   slice. The current run may commit and push this reviewed slice.
 - The four broad real-evidence gates still require real operator/user-supplied
   artifacts and canonical packets accepted by their validators.
