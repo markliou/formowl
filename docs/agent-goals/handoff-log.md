@@ -657,7 +657,8 @@ status in each role's goal file and task completion in
   Broad KG-eval remains incomplete with `overall_passed=false`, 8 passed
   gates, and the same four failed gates. Reviewer gate passed 3/3 after blocker
   fixes: `Curie`, `Erdos`, and `Hume` returned `RELEASE_DECISION: AGREE`.
-  This slice is release-ready; the current run will commit and push it.
+  This slice was committed and pushed on `complete-slice-1` as `8fc5a55`
+  (`Harden KG real-evidence preflight work orders`).
 - 2026-06-28 restart-note cleanup: `.formowl/kg-eval/SESSION_RESTART.md`
   still had an older "Next Best Work" section saying broad validators needed
   real-root path-helper hardening. That target is complete, with tests covering
@@ -680,6 +681,17 @@ status in each role's goal file and task completion in
   dev-container verification plus the 3 Codex/GPT reviewer gate for the
   current work-order/preflight hardening slice have passed. Reviewer gate
   result: `Curie`, `Erdos`, and `Hume` returned `RELEASE_DECISION: AGREE`
-  after blocker fixes. The current run will commit and push it. The broad KG
-  objective still remains incomplete until real operator/user-supplied
-  artifacts and governed canonical packets make the four broad gates pass.
+  after blocker fixes. The slice was pushed as `8fc5a55` on
+  `complete-slice-1`. The broad KG objective still remains incomplete until
+  real operator/user-supplied artifacts and governed canonical packets make the
+  four broad gates pass.
+- 2026-06-28 post-push checkpoint: local `HEAD` and
+  `origin/complete-slice-1` both point to `8fc5a55`
+  (`Harden KG real-evidence preflight work orders`) with a clean worktree
+  before this status-doc update. The next KG-owned work remains real
+  operator/user-supplied evidence collection and governed packet validation for
+  `fair_external_baseline_comparison`,
+  `annotation_adjudication_protocol`,
+  `multimodal_semantic_validation`, and `production_adapter_paths`. Do not
+  treat work orders, candidate manifests, intake plans, or validation reports
+  as acceptance evidence.

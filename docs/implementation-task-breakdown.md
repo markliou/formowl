@@ -1190,6 +1190,13 @@ These groups can be split across multiple agents after Slice 1 is stable.
     gate for the current hardening slice have passed. The item remains unchecked
     because full KG acceptance still requires real operator/user-supplied
     evidence and validator-accepted canonical packets for the four broad gates.
+  - 2026-06-28 post-push note: the work-order/preflight hardening slice above
+    was committed and pushed to `complete-slice-1` as `8fc5a55`
+    (`Harden KG real-evidence preflight work orders`). The worktree was clean
+    and local `HEAD` matched `origin/complete-slice-1` before the follow-up
+    status-doc checkpoint. The item remains unchecked because the four broad
+    real-evidence gates still require real operator/user-supplied artifacts and
+    validator-accepted canonical packets.
   - 2026-06-27 fair-baseline response-intake note: candidate-only intake is
     implemented for `fair_external_baseline_comparison` and wired into the
     collection work orders. It can seal operator-supplied fair-baseline

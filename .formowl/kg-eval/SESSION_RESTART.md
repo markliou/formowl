@@ -29,9 +29,9 @@ Goal mode is active. Do not mark complete.
 
 This snapshot supersedes older "latest work" notes below when they conflict.
 
-- Session goal tool status: `blocked` in Codex local state; durable repo goal
-  status is `active` after the user authorized failed-gate evidence collection,
-  Docker/dev-container access, and Git commit/push on 2026-06-28.
+- Durable repo goal status is `active` after the user authorized failed-gate
+  evidence collection, Docker/dev-container access, and Git commit/push on
+  2026-06-28.
 - Overall KG objective: incomplete. Do not mark complete.
 - Total acceptance remains `overall_passed = false`.
 - Current count remains 8 passed gates and 4 failed gates.
@@ -84,8 +84,10 @@ disappeared-file contract hardening:
 - Reviewer gate passed 3/3 after blocker fixes: `Curie` agreed on engineering
   correctness after the `lstat()` disappearance-race fix, `Erdos` agreed on
   governance/safety and durable status after docs were updated, and `Hume`
-  agreed on durable status honesty. This slice is release-ready; the current
-  run will commit and push it.
+  agreed on durable status honesty.
+- The slice was committed and pushed on `complete-slice-1` as `8fc5a55`
+  (`Harden KG real-evidence preflight work orders`). Follow-up status-doc
+  checkpoints may sit on top of that reviewed hardening slice.
 - No completion claim is supported.
 
 The older checkpoints below are historical pre-authorization state unless they
@@ -135,14 +137,14 @@ Historical blocked audit, updated 2026-06-28:
   permissions and real evidence artifacts, or explicitly changes the
   verification policy.
 
-Resume authorization, updated 2026-06-28:
+Resume authorization and post-push state, updated 2026-06-28:
 
 - The user explicitly authorized collecting failed-gate evidence,
   Docker/dev-container access, and Git commit/push. Treat the prior Docker/Git
   approval blocker as cleared for this run.
-- Immediate next action is canonical dev-container verification for the current
-  hardening slice, then the configured 3 Codex/GPT reviewer gate, then commit
-  and push if the slice passes.
+- The current hardening slice has passed canonical dev-container verification,
+  passed the configured 3 Codex/GPT reviewer gate, and was pushed as `8fc5a55`
+  on `complete-slice-1`.
 - The broad KG objective remains incomplete. Report-based failed-gate evidence
   may be collected, but the four broad gates still cannot pass without real
   operator/user-supplied artifacts and governed canonical packets accepted by

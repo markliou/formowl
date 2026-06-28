@@ -1000,8 +1000,10 @@ Reviewer cost-control rules:
   Broad KG-eval remains incomplete: `overall_passed=false`, 8 passed gates,
   and the same four failed real-evidence gates. Reviewer gate passed 3/3 after
   blocker fixes: `Curie`, `Erdos`, and `Hume` returned
-  `RELEASE_DECISION: AGREE`. This slice is release-ready; the current run will
-  commit and push it.
+  `RELEASE_DECISION: AGREE`. This slice was committed and pushed on
+  `complete-slice-1` as `8fc5a55`
+  (`Harden KG real-evidence preflight work orders`). Follow-up status-doc
+  checkpoints may sit on top of that reviewed hardening slice.
 - 2026-06-28 restart-note cleanup checkpoint: the older
   `.formowl/kg-eval/SESSION_RESTART.md` "Next Best Work" section incorrectly
   still pointed at validator real-root path-helper hardening. That validator
@@ -1023,8 +1025,8 @@ Reviewer cost-control rules:
   collecting failed-gate evidence, Docker/dev-container access, and Git
   commit/push. The prior Docker/Git approval blocker is cleared for this run,
   and canonical dev-container verification plus the 3 Codex/GPT reviewer gate
-  for the current hardening slice have passed. The current run will commit and
-  push it. The broad KG objective is still incomplete: collecting failure
-  evidence from reports is allowed, but passing the four broad gates still
-  requires real operator/user-supplied artifacts and governed canonical packets
-  accepted by the validators.
+  for the current hardening slice have passed. The slice was pushed as
+  `8fc5a55` on `complete-slice-1`. The broad KG objective is still incomplete:
+  collecting failure evidence from reports is allowed, but passing the four
+  broad gates still requires real operator/user-supplied artifacts and governed
+  canonical packets accepted by the validators.
