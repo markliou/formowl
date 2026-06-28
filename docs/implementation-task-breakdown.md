@@ -1197,6 +1197,26 @@ These groups can be split across multiple agents after Slice 1 is stable.
     status-doc checkpoint. The item remains unchecked because the four broad
     real-evidence gates still require real operator/user-supplied artifacts and
     validator-accepted canonical packets.
+  - 2026-06-28 candidate-runner canonical packet integrity checkpoint:
+    `real_evidence_submission_manifest.py --execute-candidate-intakes` and
+    `--validate-candidate-manifests` now snapshot the four canonical broad
+    packet paths before subprocess execution and fail closed if a subprocess
+    exits with a canonical packet path created or changed. The guard reports
+    `canonical_packet_integrity`, stops immediately on final-state canonical
+    packet drift, and keeps the runner outputs non-evidence. The tracked
+    operator guide documents this final-state boundary. This accepts no
+    evidence, promotes no evidence, writes no canonical broad packets, and does
+    not count as acceptance. Canonical dev-container verification passed:
+    focused submission/guide unittest 51 OK, full KG-eval unittest 456 OK,
+    main repo unittest 252 OK, guide/template checks, refreshed broad reports,
+    default main KG acceptance `passed_with_explicit_limits`, strict main KG
+    acceptance exits 1 only for known limits, and full Ruff check/format-check.
+    Broad KG-eval remains incomplete with `overall_passed=false`, 8 passed
+    gates, and the same four failed real-evidence gates. Reviewer gate passed
+    3/3: `Sagan`, `Hooke`, and `Laplace` agreed. A mistaken no-op `Banach`
+    subagent is not counted. The item remains unchecked because real
+    operator/user-supplied artifacts and validator-accepted canonical packets
+    are still missing for the four broad gates.
   - 2026-06-27 fair-baseline response-intake note: candidate-only intake is
     implemented for `fair_external_baseline_comparison` and wired into the
     collection work orders. It can seal operator-supplied fair-baseline

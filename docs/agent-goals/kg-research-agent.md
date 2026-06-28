@@ -1030,3 +1030,25 @@ Reviewer cost-control rules:
   collecting failure evidence from reports is allowed, but passing the four
   broad gates still requires real operator/user-supplied artifacts and governed
   canonical packets accepted by the validators.
+- 2026-06-28 candidate-runner canonical packet integrity checkpoint:
+  `real_evidence_submission_manifest.py --execute-candidate-intakes` and
+  `--validate-candidate-manifests` now snapshot the four canonical broad input
+  packet paths before running candidate-only subprocesses and fail closed if a
+  subprocess exits with a canonical packet path created or changed. The output
+  includes `canonical_packet_integrity`, marks the affected row failed, keeps
+  `overall_success=false`, and stops immediately on final-state canonical
+  packet drift. This is not a live audit of transient write-and-restore
+  behavior, and the operator guide now scopes that limitation explicitly. This
+  slice accepts no evidence, promotes no evidence, writes no canonical broad
+  packets, and does not make any broad gate pass. Canonical dev-container
+  verification passed: focused submission/guide unittest 51 OK, full KG-eval
+  unittest 456 OK, main repo unittest 252 OK, operator guide `--check`,
+  submission template `--check-template`, refreshed
+  `kg_total_acceptance_suite.py`, `kg_objective_completion_audit.py`,
+  `real_evidence_preflight.py`, and `real_evidence_collection_work_orders.py`,
+  default main KG acceptance `passed_with_explicit_limits`, strict main KG
+  acceptance exits 1 only for known limits, and full Ruff check/format-check.
+  Broad KG-eval remains incomplete with `overall_passed=false`, 8 passed
+  gates, and the same four failed gates. Reviewer gate passed 3/3:
+  `Sagan`, `Hooke`, and `Laplace` returned `RELEASE_DECISION: AGREE`; a
+  mistaken no-op `Banach` subagent is not counted.

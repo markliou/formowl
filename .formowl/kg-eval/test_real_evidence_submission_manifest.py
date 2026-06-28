@@ -326,6 +326,58 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertFalse(execution["execution_results"][1]["stdout_summary"]["json_stdout"])
         self.assertEqual(execution["execution_results"][1]["stderr_line_count"], 1)
 
+    def test_execute_candidate_intakes_fails_if_subprocess_changes_canonical_packet(
+        self,
+    ) -> None:
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        canonical_rel_path = sorted(submission_manifest.CANONICAL_INPUT_PACKETS)[0]
+        canonical_path = ROOT / canonical_rel_path
+        before = canonical_path.read_bytes() if canonical_path.exists() else None
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"artifact_id": "candidate_intake_result"}\n',
+            stderr="",
+        )
+
+        def write_canonical_packet(
+            *_args: object, **_kwargs: object
+        ) -> subprocess.CompletedProcess:
+            canonical_path.parent.mkdir(parents=True, exist_ok=True)
+            canonical_path.write_text('{"unexpected":"canonical write"}\n', encoding="utf-8")
+            return completed
+
+        try:
+            with mock.patch.object(
+                submission_manifest.subprocess,
+                "run",
+                side_effect=write_canonical_packet,
+            ) as run_mock:
+                execution = submission_manifest.execute_candidate_intakes(
+                    report,
+                    manifest_path=manifest_path,
+                )
+        finally:
+            if before is None:
+                if canonical_path.exists() or canonical_path.is_symlink():
+                    canonical_path.unlink()
+            else:
+                canonical_path.write_bytes(before)
+
+        self.assertFalse(execution["overall_success"])
+        self.assertTrue(execution["stopped_after_failure"])
+        self.assertEqual(execution["executed_gate_count"], 1)
+        self.assertEqual(run_mock.call_count, 1)
+        self.assertIn("canonical packet integrity", execution["partial_execution_policy"])
+        self.assertFalse(execution["canonical_packet_integrity"]["passed"])
+        self.assertEqual(
+            execution["canonical_packet_integrity"]["changed_packets"][0]["packet"],
+            canonical_rel_path,
+        )
+        self.assertEqual(execution["execution_results"][0]["status"], "failed")
+        self.assertFalse(execution["execution_results"][0]["canonical_packet_integrity"]["passed"])
+
     def test_valid_manifest_builds_candidate_manifest_validation_plan(self) -> None:
         manifest_path = self.write_operator_manifest()
         report = submission_manifest.validate_manifest(self.valid_manifest())
@@ -484,6 +536,59 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
                 row["stdout_summary"]["blocker_count"] == 1
                 for row in validation["validation_results"]
             )
+        )
+
+    def test_validate_candidate_manifests_fails_if_assembler_changes_canonical_packet(
+        self,
+    ) -> None:
+        self.write_candidate_manifests()
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        canonical_rel_path = sorted(submission_manifest.CANONICAL_INPUT_PACKETS)[0]
+        canonical_path = ROOT / canonical_rel_path
+        before = canonical_path.read_bytes() if canonical_path.exists() else None
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"validation_report": {"passed": true, "blockers": []}}\n',
+            stderr="",
+        )
+
+        def write_canonical_packet(
+            *_args: object, **_kwargs: object
+        ) -> subprocess.CompletedProcess:
+            canonical_path.parent.mkdir(parents=True, exist_ok=True)
+            canonical_path.write_text('{"unexpected":"canonical write"}\n', encoding="utf-8")
+            return completed
+
+        try:
+            with mock.patch.object(
+                submission_manifest.subprocess,
+                "run",
+                side_effect=write_canonical_packet,
+            ) as run_mock:
+                validation = submission_manifest.validate_candidate_manifests(
+                    report,
+                    manifest_path=manifest_path,
+                )
+        finally:
+            if before is None:
+                if canonical_path.exists() or canonical_path.is_symlink():
+                    canonical_path.unlink()
+            else:
+                canonical_path.write_bytes(before)
+
+        self.assertFalse(validation["overall_success"])
+        self.assertEqual(validation["executed_gate_count"], 1)
+        self.assertEqual(run_mock.call_count, 1)
+        self.assertFalse(validation["canonical_packet_integrity"]["passed"])
+        self.assertEqual(
+            validation["canonical_packet_integrity"]["changed_packets"][0]["packet"],
+            canonical_rel_path,
+        )
+        self.assertEqual(validation["validation_results"][0]["status"], "failed")
+        self.assertFalse(
+            validation["validation_results"][0]["canonical_packet_integrity"]["passed"]
         )
 
     def test_validate_candidate_manifests_rejects_symlinked_candidate_manifest_before_commands(

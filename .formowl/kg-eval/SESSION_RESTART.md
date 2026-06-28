@@ -41,6 +41,39 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
+Current local implementation slice, updated 2026-06-28 after candidate-runner
+canonical packet integrity hardening:
+
+- `real_evidence_submission_manifest.py --execute-candidate-intakes` and
+  `--validate-candidate-manifests` now snapshot the four canonical broad input
+  packet paths before running subprocesses.
+- If a candidate-only intake helper or validate-only assembler subprocess exits
+  with a canonical packet path created or changed, the runner reports
+  `canonical_packet_integrity`, marks the row failed, sets
+  `overall_success=false`, and stops immediately.
+- This is final-state surface integrity, not a live audit of transient
+  write-and-restore behavior; the tracked operator guide documents that
+  boundary.
+- This slice accepts no evidence, promotes no evidence, writes no canonical
+  broad packets, and does not count as acceptance.
+- Canonical dev-container verification passed:
+  - focused submission/guide unittest ran 51 tests OK.
+  - full KG-eval unittest ran 456 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - broad reports refreshed with `kg_total_acceptance_suite.py`,
+    `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+    `real_evidence_collection_work_orders.py`.
+  - `real_evidence_operator_guide.py --check` exited 0.
+  - `real_evidence_submission_manifest.py --check-template` exited 0.
+  - full Ruff check passed.
+  - full Ruff format-check passed with 201 files already formatted.
+  - default main KG acceptance remains `passed_with_explicit_limits`.
+  - strict main KG acceptance exits 1 only for known failed / blocked limits.
+- Reviewer gate passed 3/3: `Sagan`, `Hooke`, and `Laplace` returned
+  `RELEASE_DECISION: AGREE`; mistaken no-op `Banach` is not counted.
+- Refreshed broad KG-eval still shows `overall_passed=false`, 8 passed gates,
+  and the same four failed gates. No completion claim is supported.
+
 Current local implementation slice, updated 2026-06-28 after work-order
 disappeared-file contract hardening:
 

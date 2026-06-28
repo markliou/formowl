@@ -20,9 +20,11 @@ manual governance review.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -663,6 +665,78 @@ def _json_summary(stdout: str) -> dict[str, Any]:
     }
 
 
+def _canonical_packet_surface(path_value: str) -> dict[str, Any]:
+    path = ROOT / path_value
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        return {
+            "state": "missing",
+            "sha256": None,
+            "hardlink_alias": False,
+        }
+    except OSError:
+        return {
+            "state": "metadata_unavailable",
+            "sha256": None,
+            "hardlink_alias": False,
+        }
+    if stat.S_ISLNK(path_stat.st_mode):
+        return {
+            "state": "symlink",
+            "sha256": None,
+            "hardlink_alias": False,
+        }
+    if not stat.S_ISREG(path_stat.st_mode):
+        return {
+            "state": "non_regular",
+            "sha256": None,
+            "hardlink_alias": False,
+        }
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return {
+            "state": "read_unavailable",
+            "sha256": None,
+            "hardlink_alias": path_stat.st_nlink > 1,
+        }
+    return {
+        "state": "regular",
+        "sha256": digest,
+        "hardlink_alias": path_stat.st_nlink > 1,
+    }
+
+
+def _canonical_packet_snapshot() -> dict[str, dict[str, Any]]:
+    return {
+        packet_path: _canonical_packet_surface(packet_path)
+        for packet_path in sorted(CANONICAL_INPUT_PACKETS)
+    }
+
+
+def _canonical_packet_integrity(
+    before: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    changed_packets: list[dict[str, Any]] = []
+    for packet_path in sorted(CANONICAL_INPUT_PACKETS):
+        before_surface = before.get(packet_path)
+        after_surface = _canonical_packet_surface(packet_path)
+        if before_surface != after_surface:
+            changed_packets.append(
+                {
+                    "packet": packet_path,
+                    "before": before_surface,
+                    "after": after_surface,
+                }
+            )
+    return {
+        "passed": not changed_packets,
+        "changed_packet_count": len(changed_packets),
+        "changed_packets": changed_packets,
+    }
+
+
 def _assembler_validation_summary(stdout: str) -> dict[str, Any]:
     try:
         loaded = json.loads(stdout)
@@ -697,6 +771,7 @@ def execute_candidate_intakes(
     manifest_path: Path,
 ) -> dict[str, Any]:
     plan = build_intake_plan(validation_report, manifest_path=manifest_path)
+    canonical_snapshot = _canonical_packet_snapshot()
     execution_results: list[dict[str, Any]] = []
     overall_success = True
     for row in plan["execution_plan"]:
@@ -712,7 +787,8 @@ def execute_candidate_intakes(
             text=True,
             check=False,
         )
-        success = completed.returncode == 0
+        canonical_integrity = _canonical_packet_integrity(canonical_snapshot)
+        success = completed.returncode == 0 and canonical_integrity["passed"]
         overall_success = overall_success and success
         execution_results.append(
             {
@@ -729,10 +805,12 @@ def execute_candidate_intakes(
                 "stderr_line_count": len(
                     [line for line in completed.stderr.splitlines() if line.strip()]
                 ),
+                "canonical_packet_integrity": canonical_integrity,
             }
         )
         if not success:
             break
+    final_canonical_integrity = _canonical_packet_integrity(canonical_snapshot)
     return {
         "artifact_id": "kg_real_evidence_candidate_intake_execution_v1",
         "manifest": str(manifest_path.relative_to(ROOT)),
@@ -740,6 +818,7 @@ def execute_candidate_intakes(
         "overall_success": overall_success,
         "stopped_after_failure": not overall_success,
         "executed_gate_count": len(execution_results),
+        "canonical_packet_integrity": final_canonical_integrity,
         "authority": {
             "accepts_evidence": False,
             "promotes_evidence": False,
@@ -757,7 +836,8 @@ def execute_candidate_intakes(
         "partial_execution_policy": (
             "execution stops on the first failed intake; candidate artifacts written by "
             "earlier successful intake commands remain for operator review and are not "
-            "promoted or treated as acceptance evidence by this runner"
+            "promoted or treated as acceptance evidence by this runner; final-state "
+            "canonical packet integrity changes also stop execution immediately"
         ),
         "execution_results": execution_results,
         "next_step": (
@@ -846,6 +926,7 @@ def validate_candidate_manifests(
     manifest_path: Path,
 ) -> dict[str, Any]:
     plan = build_candidate_validation_plan(validation_report, manifest_path=manifest_path)
+    canonical_snapshot = _canonical_packet_snapshot()
     blockers: list[str] = []
     for expected in EXPECTED_SUBMISSIONS:
         blockers.extend(_candidate_manifest_blockers(expected))
@@ -887,7 +968,12 @@ def validate_candidate_manifests(
             check=False,
         )
         stdout_summary = _assembler_validation_summary(completed.stdout)
-        passed = completed.returncode == 0 and stdout_summary.get("passed") is True
+        canonical_integrity = _canonical_packet_integrity(canonical_snapshot)
+        passed = (
+            completed.returncode == 0
+            and stdout_summary.get("passed") is True
+            and canonical_integrity["passed"]
+        )
         overall_success = overall_success and passed
         validation_results.append(
             {
@@ -903,8 +989,12 @@ def validate_candidate_manifests(
                 "stderr_line_count": len(
                     [line for line in completed.stderr.splitlines() if line.strip()]
                 ),
+                "canonical_packet_integrity": canonical_integrity,
             }
         )
+        if not canonical_integrity["passed"]:
+            break
+    final_canonical_integrity = _canonical_packet_integrity(canonical_snapshot)
     return {
         "artifact_id": "kg_real_evidence_candidate_manifest_validation_v1",
         "manifest": str(manifest_path.relative_to(ROOT)),
@@ -913,6 +1003,7 @@ def validate_candidate_manifests(
         "candidate_manifest_preflight_passed": True,
         "blockers": [],
         "executed_gate_count": len(validation_results),
+        "canonical_packet_integrity": final_canonical_integrity,
         "authority": plan["authority"],
         "validation_effects": {
             "reads_candidate_manifest_contents": True,
@@ -924,7 +1015,8 @@ def validate_candidate_manifests(
         },
         "partial_execution_policy": (
             "validate-only assembler commands run for every existing candidate manifest; "
-            "a failed candidate validation does not promote or write canonical evidence"
+            "a failed candidate validation does not promote or write canonical evidence; "
+            "final-state canonical packet integrity changes stop validation immediately"
         ),
         "validation_results": validation_results,
         "next_step": (

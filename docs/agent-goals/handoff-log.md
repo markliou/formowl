@@ -695,3 +695,17 @@ status in each role's goal file and task completion in
   `multimodal_semantic_validation`, and `production_adapter_paths`. Do not
   treat work orders, candidate manifests, intake plans, or validation reports
   as acceptance evidence.
+- 2026-06-28 candidate-runner canonical packet integrity: the controlled
+  submission-manifest runners now snapshot all four canonical broad packet
+  paths before subprocess execution and fail closed if candidate-only intake or
+  validate-only assembler subprocesses exit with a canonical packet path
+  created or changed. The output reports `canonical_packet_integrity`; this is
+  final-state surface integrity, not a live transient-write audit. The tracked
+  operator guide documents that boundary. Verification passed in the dev
+  container: focused submission/guide unittest 51 OK, full KG-eval unittest
+  456 OK, main repo unittest 252 OK, guide/template checks, refreshed broad
+  reports, default KG acceptance `passed_with_explicit_limits`, strict KG
+  acceptance exits 1 only for known limits, and full Ruff check/format-check.
+  Reviewer gate passed 3/3 with `Sagan`, `Hooke`, and `Laplace`; a mistaken
+  no-op `Banach` subagent is not counted. Broad KG-eval remains incomplete
+  with `overall_passed=false`, 8 passed gates, and the same four failed gates.
