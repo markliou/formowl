@@ -473,7 +473,7 @@ def _rollback_target_packet_created_by_promotion(
             "removed": False,
             "reason": "target canonical packet was not missing before promotion",
         }
-    if after_surface.get("state") not in {"regular", "symlink"}:
+    if after_surface.get("state") not in {"regular", "symlink", "hardlink_alias"}:
         return {
             "attempted": False,
             "removed": False,
@@ -493,6 +493,20 @@ def _rollback_target_packet_created_by_promotion(
         "removed": True,
         "reason": None,
     }
+
+
+def _target_packet_created_by_promotion(
+    before: dict[str, dict[str, Any]],
+    *,
+    target_packet: str,
+) -> bool:
+    before_surface = before.get(target_packet)
+    after_surface = submission_manifest._canonical_packet_surface(target_packet)
+    return before_surface == {
+        "state": "missing",
+        "sha256": None,
+        "hardlink_alias": False,
+    } and after_surface.get("state") in {"regular", "symlink", "hardlink_alias"}
 
 
 def _promotion_stdout_summary(stdout: str) -> dict[str, Any]:
@@ -561,32 +575,61 @@ def execute_approved_promotion(
         approved_candidate_manifest_sha256,
         "--promote",
     ]
-    completed = subprocess.run(
-        argv,
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    subprocess_error = None
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        completed = None
+        subprocess_error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
     integrity = _promotion_integrity(before, target_packet=expected.canonical_packet)
     candidate_manifest_integrity = _candidate_manifest_hash_integrity(
         expected,
         target["candidate_manifest_sha256"],
     )
-    rollback = None
+    rollback_after_candidate_manifest_drift = None
+    rollback_after_failed_promotion = None
     if not candidate_manifest_integrity["passed"]:
-        rollback = _rollback_target_packet_created_by_promotion(
+        rollback_after_candidate_manifest_drift = _rollback_target_packet_created_by_promotion(
             before,
             target_packet=expected.canonical_packet,
         )
         integrity = _promotion_integrity(before, target_packet=expected.canonical_packet)
-    stdout_summary = _promotion_stdout_summary(completed.stdout)
+    stdout_summary = (
+        _promotion_stdout_summary(completed.stdout)
+        if completed is not None
+        else {
+            "json_stdout": False,
+            "validation_report_present": False,
+            "packet_present": False,
+            "subprocess_error": subprocess_error,
+        }
+    )
     success = (
-        completed.returncode == 0
+        completed is not None
+        and completed.returncode == 0
         and stdout_summary.get("passed") is True
         and candidate_manifest_integrity["passed"]
         and integrity["passed"]
     )
+    if (
+        not success
+        and candidate_manifest_integrity["passed"]
+        and _target_packet_created_by_promotion(before, target_packet=expected.canonical_packet)
+    ):
+        rollback_after_failed_promotion = _rollback_target_packet_created_by_promotion(
+            before,
+            target_packet=expected.canonical_packet,
+        )
+        integrity = _promotion_integrity(before, target_packet=expected.canonical_packet)
     return {
         "artifact_id": "kg_real_evidence_governance_promotion_execution_v1",
         "manifest": str(manifest_path.relative_to(ROOT)),
@@ -612,15 +655,19 @@ def execute_approved_promotion(
             "candidate_manifest": expected.assembly_manifest_output,
             "candidate_manifest_sha256": approved_candidate_manifest_sha256,
             "canonical_packet": expected.canonical_packet,
-            "exit_code": completed.returncode,
+            "exit_code": completed.returncode if completed is not None else None,
+            "subprocess_error": subprocess_error,
             "status": "succeeded" if success else "failed",
             "stdout_summary": stdout_summary,
             "stderr_line_count": len(
                 [line for line in completed.stderr.splitlines() if line.strip()]
-            ),
+            )
+            if completed is not None
+            else 0,
             "candidate_manifest_integrity": candidate_manifest_integrity,
             "canonical_packet_promotion_integrity": integrity,
-            "rollback_after_candidate_manifest_drift": rollback,
+            "rollback_after_candidate_manifest_drift": rollback_after_candidate_manifest_drift,
+            "rollback_after_failed_promotion": rollback_after_failed_promotion,
         },
         "next_step": (
             "run the specific broad validator, then kg_total_acceptance_suite.py, "

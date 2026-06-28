@@ -846,3 +846,23 @@ status in each role's goal file and task completion in
   claiming commit/push readiness, `Curie` agreed after backend
   connection-string field-name rejection was added, and `Raman` agreed after
   raw write and custody-phase rollback gaps were fixed.
+- 2026-06-28 governed approval promotion failure rollback: the approval
+  bridge now rolls back a newly created target canonical broad packet when
+  `real_evidence_governance_approval.py --execute-approved-promotion` fails
+  after subprocess launch, including nonzero return, subprocess `OSError`, and
+  Pasteur's hardlink-alias blocker where the assembler fails after linking the
+  temporary packet to the canonical target but before unlinking the temporary
+  file. The execution report includes `subprocess_error` and
+  `rollback_after_failed_promotion`; the operator guide documents that failed
+  approved promotion removes the newly created target packet before reporting
+  failure. Canonical dev-container verification passed after the hardlink fix:
+  focused approval/operator-guide/submission unittest 68 OK, full KG-eval
+  unittest 500 OK, main repo unittest 252 OK, guide/template checks, refreshed
+  broad reports, default KG acceptance `passed_with_explicit_limits`, strict
+  KG acceptance exits 1 only for known limits, full Ruff check/format-check,
+  and `git diff --check`. Broad KG-eval remains incomplete with the same four
+  failed real-evidence gates, empty real roots, absent canonical broad packets,
+  and no packet/artifact hazards. Reviewer gate passed 3/3 after Pasteur's
+  hardlink-alias rollback blocker was fixed and re-reviewed:
+  `Chandrasekhar`, `Pasteur`, and `Locke` returned
+  `RELEASE_DECISION: AGREE`.

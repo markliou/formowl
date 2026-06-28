@@ -90,6 +90,8 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
         self.assertIn("refuses stale hashes", text)
         self.assertIn("manifest bytes consumed for", text)
         self.assertIn("pre-existing canonical packet targets", text)
+        self.assertIn("removes that", text)
+        self.assertIn("newly created target packet", text)
         self.assertIn("passing target gate", text)
         self.assertIn("Do not pass generated `*_candidate_manifest.json` files", text)
         self.assertIn("not operator-filled submission manifests", text)

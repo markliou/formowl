@@ -421,6 +421,133 @@ class RealEvidenceGovernanceApprovalTest(unittest.TestCase):
         self.assertFalse(canonical_path.exists())
         self.assertFalse(result["canonical_packet_promotion_integrity"]["passed"])
 
+    def test_execute_approved_promotion_rolls_back_target_packet_on_subprocess_failure(
+        self,
+    ) -> None:
+        payload = self.write_approval_manifest()
+        canonical_path = ROOT / EXPECTED.canonical_packet
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout='{"validation_report": {"passed": true, "blockers": []}}\n',
+            stderr="assembler failed after writing target\n",
+        )
+
+        def write_target_packet_then_fail(
+            *_args: object,
+            **_kwargs: object,
+        ) -> subprocess.CompletedProcess:
+            canonical_path.parent.mkdir(parents=True, exist_ok=True)
+            canonical_path.write_text(
+                '{"artifact_id":"operatorapproval_unitcase_failed_promoted"}\n',
+                encoding="utf-8",
+            )
+            return completed
+
+        with mock.patch.object(
+            approval.subprocess,
+            "run",
+            side_effect=write_target_packet_then_fail,
+        ):
+            execution = approval.execute_approved_promotion(
+                payload,
+                manifest_path=self.approval_manifest,
+            )
+
+        self.assertFalse(execution["overall_success"])
+        result = execution["execution_result"]
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["exit_code"], 1)
+        self.assertTrue(result["candidate_manifest_integrity"]["passed"])
+        self.assertTrue(result["rollback_after_failed_promotion"]["attempted"])
+        self.assertTrue(result["rollback_after_failed_promotion"]["removed"])
+        self.assertFalse(canonical_path.exists())
+        self.assertFalse(result["canonical_packet_promotion_integrity"]["passed"])
+
+    def test_execute_approved_promotion_rolls_back_hardlink_alias_target_on_failure(
+        self,
+    ) -> None:
+        payload = self.write_approval_manifest()
+        canonical_path = ROOT / EXPECTED.canonical_packet
+        temp_path = canonical_path.with_name(f".{canonical_path.name}.tmp")
+        self.created_paths.append(temp_path)
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout='{"validation_report": {"passed": true, "blockers": []}}\n',
+            stderr="assembler failed after linking target\n",
+        )
+
+        def link_target_packet_then_fail(
+            *_args: object,
+            **_kwargs: object,
+        ) -> subprocess.CompletedProcess:
+            canonical_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path.write_text(
+                '{"artifact_id":"operatorapproval_unitcase_failed_promoted"}\n',
+                encoding="utf-8",
+            )
+            canonical_path.hardlink_to(temp_path)
+            return completed
+
+        with mock.patch.object(
+            approval.subprocess,
+            "run",
+            side_effect=link_target_packet_then_fail,
+        ):
+            execution = approval.execute_approved_promotion(
+                payload,
+                manifest_path=self.approval_manifest,
+            )
+
+        self.assertFalse(execution["overall_success"])
+        result = execution["execution_result"]
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["exit_code"], 1)
+        self.assertTrue(result["candidate_manifest_integrity"]["passed"])
+        self.assertTrue(result["rollback_after_failed_promotion"]["attempted"])
+        self.assertTrue(result["rollback_after_failed_promotion"]["removed"])
+        self.assertFalse(canonical_path.exists())
+        self.assertFalse(result["canonical_packet_promotion_integrity"]["passed"])
+
+    def test_execute_approved_promotion_rolls_back_target_packet_on_subprocess_oserror(
+        self,
+    ) -> None:
+        payload = self.write_approval_manifest()
+        canonical_path = ROOT / EXPECTED.canonical_packet
+
+        def write_target_packet_then_raise(
+            *_args: object,
+            **_kwargs: object,
+        ) -> subprocess.CompletedProcess:
+            canonical_path.parent.mkdir(parents=True, exist_ok=True)
+            canonical_path.write_text(
+                '{"artifact_id":"operatorapproval_unitcase_oserror_promoted"}\n',
+                encoding="utf-8",
+            )
+            raise OSError("launcher failed after target write")
+
+        with mock.patch.object(
+            approval.subprocess,
+            "run",
+            side_effect=write_target_packet_then_raise,
+        ):
+            execution = approval.execute_approved_promotion(
+                payload,
+                manifest_path=self.approval_manifest,
+            )
+
+        self.assertFalse(execution["overall_success"])
+        result = execution["execution_result"]
+        self.assertEqual(result["status"], "failed")
+        self.assertIsNone(result["exit_code"])
+        self.assertEqual(result["subprocess_error"]["type"], "OSError")
+        self.assertTrue(result["candidate_manifest_integrity"]["passed"])
+        self.assertTrue(result["rollback_after_failed_promotion"]["attempted"])
+        self.assertTrue(result["rollback_after_failed_promotion"]["removed"])
+        self.assertFalse(canonical_path.exists())
+        self.assertFalse(result["canonical_packet_promotion_integrity"]["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()

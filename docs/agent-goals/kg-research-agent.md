@@ -1196,3 +1196,27 @@ Reviewer cost-control rules:
   backend connection-string field-name rejection was added, and `Raman` agreed
   after raw write and custody-phase rollback gaps were fixed. No goal
   completion claim is supported.
+- 2026-06-28 governed approval promotion failure rollback checkpoint:
+  `real_evidence_governance_approval.py --execute-approved-promotion` now
+  removes a target canonical broad packet if an approved promotion subprocess
+  fails after creating that target packet. The rollback is covered for
+  nonzero subprocess returns, subprocess `OSError`, and Pasteur's
+  hardlink-alias blocker: if an assembler fails after linking its temporary
+  file to the canonical target but before unlinking the temporary file, the
+  newly created target `hardlink_alias` is now removed. The execution report
+  exposes `subprocess_error` plus `rollback_after_failed_promotion` alongside
+  the existing candidate-manifest-drift rollback result. The tracked operator
+  guide documents that failed approved promotion removes the newly created
+  target packet before reporting failure. Canonical dev-container verification
+  passed after the hardlink fix: focused approval/operator-guide/submission
+  unittest 68 OK, full KG-eval unittest 500 OK, main repo unittest 252 OK,
+  operator guide and template checks, refreshed broad reports, default KG
+  acceptance `passed_with_explicit_limits`, strict KG acceptance exits 1 only
+  for known limits, full Ruff check/format-check, and `git diff --check`.
+  Broad KG-eval remains incomplete with `overall_passed=false`, 8 passed
+  gates, and the same four failed real-evidence gates; all real roots are
+  empty, all four canonical broad packets are absent, and preflight reports no
+  packet or artifact hazards. Reviewer gate passed 3/3 after Pasteur's
+  hardlink-alias rollback blocker was fixed and re-reviewed:
+  `Chandrasekhar`, `Pasteur`, and `Locke` returned
+  `RELEASE_DECISION: AGREE`. No goal completion claim is supported.

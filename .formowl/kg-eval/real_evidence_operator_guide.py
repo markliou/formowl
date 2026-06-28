@@ -225,9 +225,11 @@ def _submission_manifest_section() -> list[str]:
         "hazards, and validation reports that do not have a passing target gate",
         "row. During execution, the runner passes the approved candidate",
         "manifest hash to the assembler so the manifest bytes consumed for",
-        "promotion are bound to the human-reviewed approval. After any canonical",
-        "packet update, rerun the specific broad validator and the total",
-        "acceptance reports.",
+        "promotion are bound to the human-reviewed approval. If execution fails",
+        "after creating the target canonical packet, the runner removes that",
+        "newly created target packet before reporting failure. After any successful",
+        "canonical packet update, rerun the specific broad validator and the",
+        "total acceptance reports.",
         "",
     ]
 

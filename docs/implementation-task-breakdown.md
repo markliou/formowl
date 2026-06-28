@@ -1275,6 +1275,27 @@ These groups can be split across multiple agents after Slice 1 is stable.
     The item remains unchecked because real operator/user-supplied
     artifacts and validator-accepted canonical packets are still missing for
     the four broad gates.
+  - 2026-06-28 governed approval promotion failure rollback checkpoint:
+    `real_evidence_governance_approval.py --execute-approved-promotion` now
+    removes a newly created target canonical broad packet when an approved
+    promotion subprocess fails after creation. The rollback covers nonzero
+    subprocess return, subprocess `OSError`, and Pasteur's hardlink-alias
+    blocker where assembler promotion fails after `os.link(temp_path,
+    output_path)` but before removing the temporary file. This accepts no
+    evidence, writes no durable canonical broad packet on failure, and does
+    not count as acceptance. Canonical dev-container verification passed after
+    the hardlink fix: focused approval/operator-guide/submission unittest
+    68 OK, full KG-eval unittest 500 OK, main repo unittest 252 OK,
+    guide/template checks, refreshed broad reports, default KG acceptance
+    `passed_with_explicit_limits`, strict KG acceptance exits 1 only for known
+    limits, full Ruff check/format-check, and `git diff --check`. Broad
+    KG-eval remains incomplete with `overall_passed=false`, 8 passed gates,
+    and the same four failed real-evidence gates. Reviewer gate passed 3/3
+    after Pasteur's hardlink-alias rollback blocker was fixed and re-reviewed:
+    `Chandrasekhar`, `Pasteur`, and `Locke` returned
+    `RELEASE_DECISION: AGREE`. The item remains unchecked because real
+    operator/user-supplied artifacts and validator-accepted canonical packets
+    are still missing for the four broad gates.
   - 2026-06-28 human annotation response-intake hardening checkpoint:
     `human_annotation_response_intake.py` now requires response-packet
     top-level allowlisting, `operator_run_id` binding to the candidate output

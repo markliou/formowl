@@ -41,6 +41,45 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
+Current local implementation slice, updated 2026-06-28 after governed approval
+promotion failure rollback:
+
+- `real_evidence_governance_approval.py --execute-approved-promotion` now
+  removes a target canonical broad packet if an approved promotion subprocess
+  fails after creating that target packet.
+- The rollback path is covered for nonzero subprocess return, subprocess
+  `OSError`, and the assembler hard-link promotion window where the target
+  canonical packet exists as a `hardlink_alias` before the temporary file is
+  removed.
+- The execution report now exposes `subprocess_error` and
+  `rollback_after_failed_promotion` alongside the existing
+  candidate-manifest-drift rollback result.
+- The tracked operator guide now states that failed approved promotion removes
+  the newly created target packet before reporting failure.
+- Reviewer gate passed 3/3 for this slice after Pasteur's hardlink-alias
+  rollback blocker was fixed and re-reviewed: `Chandrasekhar` agreed on
+  engineering correctness, `Pasteur` agreed after the blocker fix, and
+  `Locke` agreed on status honesty.
+- Canonical dev-container verification passed in this resume after the
+  hardlink-alias rollback fix:
+  - focused approval/operator-guide/submission unittest ran 68 tests OK.
+  - full KG-eval unittest ran 500 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - operator guide `--check`, governance approval template `--check-template`,
+    and submission template `--check-template` exited 0.
+  - broad reports were refreshed with `kg_total_acceptance_suite.py`,
+    `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+    `real_evidence_collection_work_orders.py`.
+  - default main KG acceptance remains `passed_with_explicit_limits`.
+  - strict main KG acceptance exits 1 only for known failed / blocked limits.
+  - full Ruff check passed, Ruff format-check passed, and `git diff --check`
+    exited 0.
+- Safety state after verification: all four `inputs/*_real` roots contain no
+  files, the four canonical broad evidence packets remain absent, preflight
+  reports no packet or artifact hazards, and broad KG-eval still shows
+  `overall_passed=false`, 8 passed gates, and the same four failed gates.
+- No completion claim is supported.
+
 Current local implementation slice, updated 2026-06-28 after human annotation
 response-intake hardening:
 
