@@ -1163,6 +1163,16 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `overall_passed=false`, 8 passed gates, and the same four failed
     real-evidence gates; all four stages remain `missing_operator_response`
     with empty real roots and absent canonical broad packets.
+  - 2026-06-28 blocked audit after `1e2010f`: current-state inspection found
+    no operator/user-supplied files under the four ignored `inputs/*_real/`
+    roots, no operator-filled submission/candidate/approval surfaces under
+    `work_packets/`, and no canonical broad evidence packets. Progress remains
+    four gates at `missing_operator_response` with zero candidate manifests,
+    zero clear candidate-validation reports, zero valid approvals, and zero
+    canonical validator clears. The item remains unchecked and is now blocked
+    on external operator/user evidence; additional repository-side hardening
+    should not be treated as checkpoint progress unless it accompanies real
+    evidence intake, validation, approval, promotion, and validator acceptance.
   - Note: the checked item above is only the scoped ontology and
     method/acceptance-harness slice. It does not prove fair external baseline
     execution, real human adjudication, real enterprise multimodal validation,

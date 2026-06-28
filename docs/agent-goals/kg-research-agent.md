@@ -16,7 +16,7 @@ and a total acceptance suite that clearly marks passed and failed items.
 
 Historical source: Codex session `019eda5f-7dd6-74a2-ac56-4f84e5d58560`.
 
-Status: `active`
+Status: `blocked`
 
 ## Current Acceptance State
 
@@ -40,6 +40,25 @@ The four failed broad real-evidence gates are:
 - `annotation_adjudication_protocol`
 - `multimodal_semantic_validation`
 - `production_adapter_paths`
+
+Current blocker, confirmed 2026-06-28 after commit `1e2010f`:
+
+- All four failed gates are still at `missing_operator_response`.
+- `inputs/fair_baseline_real/`, `inputs/human_annotation_real/`,
+  `inputs/enterprise_multimodal_real/`, and
+  `inputs/production_adapter_real/` contain no operator/user-supplied files.
+- No operator-filled submission manifest, candidate manifest, candidate
+  validation report, or approval manifest is present under the ignored
+  `work_packets/` operator surfaces.
+- The four canonical broad evidence packets remain absent:
+  `inputs/fair_external_baseline_run_packet.json`,
+  `inputs/human_annotation_results_v1.json`,
+  `inputs/enterprise_multimodal_validation_packet.json`, and
+  `inputs/production_adapter_evidence_packet.json`.
+- No further code or process hardening can make a broad gate pass or change the
+  gate stage until real operator/user response packets are supplied and then
+  validated, candidate-intaken, validate-only checked, governance-approved,
+  promoted, and accepted by the corresponding broad validator.
 
 The goal is complete only when the broad real-evidence acceptance state proves
 all required gates, the main-repo acceptance suite has no failed or blocked
@@ -1350,3 +1369,16 @@ Reviewer cost-control rules:
   `missing_operator_response`, with zero candidate manifests, zero clear
   validation reports, zero valid approvals, empty real roots, and absent
   canonical broad packets. No goal completion claim is supported.
+- 2026-06-28 blocked audit after `1e2010f`: current-state inspection found no
+  files under the four ignored `inputs/*_real/` roots, no operator-filled
+  submission/candidate/approval surfaces under `work_packets/`, and no
+  canonical broad evidence packets. `real_evidence_gate_progress.json` still
+  reports four gates at `missing_operator_response`, with zero candidate
+  manifests, zero clear candidate-validation reports, zero valid approvals,
+  and zero canonical validator clears. The repeated blocker is now concrete:
+  broad KG completion is blocked on external operator/user evidence, not on
+  more repository-side implementation. Next action after evidence arrives is
+  to validate an operator-filled submission manifest, run
+  `--preflight-responses`, run `--execute-candidate-intakes`, run
+  `--validate-candidate-manifests`, validate an approval manifest, execute
+  approved promotion, then rerun the broad validators and total acceptance.

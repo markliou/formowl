@@ -19,7 +19,8 @@ Read these before editing:
 
 ## Goal
 
-Goal mode is active. Do not mark complete.
+Goal status is blocked on external operator/user evidence. Do not mark
+complete.
 
 ```text
 完成 FormOwl Knowledge Graph 方法探索與驗收：補齊外部近期文獻比較、ontology 結合方法、不同使用者 KG 與 KG 融合實驗、多模態企業資料驗證、人工作業/標註/裁決流程、production adapter gate，並用總驗收套件清楚標示已通過與未通過項目。
@@ -29,9 +30,9 @@ Goal mode is active. Do not mark complete.
 
 This snapshot supersedes older "latest work" notes below when they conflict.
 
-- Durable repo goal status is `active` after the user authorized failed-gate
-  evidence collection, Docker/dev-container access, and Git commit/push on
-  2026-06-28.
+- Durable repo goal status is `blocked` after current-state inspection on
+  2026-06-28 found no operator/user-supplied evidence surfaces that can move a
+  broad gate out of `missing_operator_response`.
 - Overall KG objective: incomplete. Do not mark complete.
 - Total acceptance remains `overall_passed = false`.
 - Current count remains 8 passed gates and 4 failed gates.
@@ -40,6 +41,23 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `annotation_adjudication_protocol`
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
+
+Current blocker, confirmed after `1e2010f`:
+
+- The four ignored real roots contain no files.
+- No operator-filled submission manifest, candidate manifest, candidate
+  validation report, or approval manifest is present under `work_packets/`.
+- The four canonical broad evidence packets are absent.
+- `real_evidence_gate_progress.json` still reports four
+  `missing_operator_response` stages with zero candidate manifests, zero clear
+  candidate-validation reports, zero valid approvals, and zero canonical
+  validator clears.
+- Do not continue repository-side hardening as checkpoint progress. The next
+  gate-changing action requires a real operator/user response packet, followed
+  by submission validation, `--preflight-responses`,
+  `--execute-candidate-intakes`, `--validate-candidate-manifests`, governance
+  approval validation, approved promotion, per-gate validator execution, and
+  total acceptance.
 
 Current local implementation slice, updated 2026-06-28 after operator
 submission-manifest response-preflight runner:

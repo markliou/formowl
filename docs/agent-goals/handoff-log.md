@@ -965,3 +965,15 @@ status in each role's goal file and task completion in
   8/12 with the same four failed gates, all still
   `missing_operator_response`; real roots are empty and canonical broad
   packets are absent.
+- 2026-06-28 blocked audit after `1e2010f`: Codex reloaded the KG goal state
+  and inspected current real-evidence surfaces. The four ignored real roots
+  contain no files, no operator-filled submission/candidate/approval work
+  packets are present, and all four canonical broad packets are missing.
+  Gate progress remains four `missing_operator_response` stages with zero
+  candidate manifests, zero clear validation reports, zero valid approvals,
+  and zero canonical validator clears. The durable KG goal is blocked on
+  external operator/user evidence; do not continue repository-side hardening as
+  if it changes checkpoint progress. Resume only when a real operator response
+  packet is supplied, then run submission validation, response preflight,
+  candidate intake, candidate validation, governance approval, approved
+  promotion, broad validators, and total acceptance.
