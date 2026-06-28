@@ -37,6 +37,40 @@ RESPONSE_PACKET_ALLOWED_FIELDS = {
     "adapter_artifacts",
     *ARTIFACT_FILENAMES,
 }
+RAW_INTERNAL_FIELD_NAMES = {
+    "absolute_path",
+    "backend_path",
+    "bucket",
+    "backend_connection_string",
+    "connection_dsn",
+    "connection_string",
+    "connection_uri",
+    "database_uri",
+    "database_url",
+    "db_uri",
+    "db_url",
+    "dsn",
+    "file_path",
+    "filesystem_path",
+    "jdbc_url",
+    "local_path",
+    "nas_path",
+    "nfs_path",
+    "object_key",
+    "object_store_uri",
+    "object_store_url",
+    "object_uri",
+    "postgres_uri",
+    "postgresql_uri",
+    "raw_path",
+    "raw_paths",
+    "raw_sql",
+    "s3_uri",
+    "scratch_path",
+    "sql",
+    "storage_uri",
+    "worker_scratch_path",
+}
 CUSTODY_RECEIPT_FILENAME = "response_custody_receipt.json"
 
 
@@ -164,13 +198,23 @@ def _write_json(path: Path, payload: object) -> None:
     _reject_symlink_components(path, "intake output")
     path.parent.mkdir(parents=True, exist_ok=True)
     _reject_symlink_components(path, "intake output")
+    created = False
     try:
         with path.open("x", encoding="utf-8") as handle:
+            created = True
             handle.write(_artifact_json_text(payload))
     except FileExistsError as exc:
         raise IntakeError(
             f"intake output would overwrite existing artifact: {_relative_artifact_path(path)}"
         ) from exc
+    except Exception as exc:
+        if created:
+            try:
+                if path.is_symlink() or path.is_file():
+                    path.unlink()
+            except FileNotFoundError:
+                pass
+        raise IntakeError(f"intake output write failed: {_relative_artifact_path(path)}") from exc
 
 
 def _cleanup_created_outputs(created_paths: list[Path], output_path: Path) -> None:
@@ -248,6 +292,17 @@ def _validate_response_packet_fields(response_packet: dict[str, Any]) -> None:
         raise IntakeError("response packet has unsupported fields: " + ", ".join(unsupported))
 
 
+def _reject_raw_internal_fields(payload: Any, *, label: str) -> None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if isinstance(key, str) and key in RAW_INTERNAL_FIELD_NAMES:
+                raise IntakeError(f"{label} contains raw/internal artifact field: {key}")
+            _reject_raw_internal_fields(value, label=label)
+    elif isinstance(payload, list):
+        for value in payload:
+            _reject_raw_internal_fields(value, label=label)
+
+
 def _safe_payload(payload: object, field_name: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise IntakeError(f"{field_name} must be a JSON object")
@@ -256,6 +311,7 @@ def _safe_payload(payload: object, field_name: str) -> dict[str, Any]:
         assembler.reject_raw_internal_payload(payload, label=field_name)
     except assembler.AssemblyError as exc:
         raise IntakeError(str(exc)) from exc
+    _reject_raw_internal_fields(payload, label=field_name)
     return payload
 
 
@@ -395,7 +451,7 @@ def build_intake_artifacts(
             packet,
             allow_test_artifacts=allow_test_artifacts,
         )
-    except (assembler.AssemblyError, IntakeError) as exc:
+    except (assembler.AssemblyError, IntakeError, OSError) as exc:
         _cleanup_created_outputs(created_paths, output_path)
         if isinstance(exc, IntakeError):
             raise
@@ -412,44 +468,49 @@ def build_intake_artifacts(
     }
     response_packet_sha = sha256_artifact_payload(response_packet)
     candidate_packet_sha = validator.sha256_json(packet)
-    custody_receipt = {
-        "artifact_type": "production_adapter_response_custody_receipt_v1",
-        "operator_run_id": run_id,
-        "response_packet_type": response_packet["response_packet_type"],
-        "response_packet_sha256": response_packet_sha,
-        "candidate_packet_sha256": candidate_packet_sha,
-        "candidate_packet_validator_passed": validation_summary[
-            "candidate_packet_validator_passed"
-        ],
-        "blocker_count": validation_summary["blocker_count"],
-        "written_artifacts": _artifact_receipts(planned_paths),
-        "assembly_manifest_output": str(assembly_manifest_path.relative_to(ROOT))
-        if assembly_manifest_path is not None
-        else None,
-        "assembly_manifest_sha256": validator.sha256_file(assembly_manifest_path)
-        if assembly_manifest_path is not None
-        else None,
-        "writes_canonical_packet": False,
-        "canonical_packet_not_written": str(assembler.CANONICAL_PACKET_PATH.relative_to(ROOT)),
-        "counts_as_acceptance_gate": False,
-        "claim_boundary": {
-            "supports_production_adapter_paths_claim": False,
-            "supports_non_synthetic_deployment_claim": False,
-            "supports_human_reviewed_false_merge_labels_claim": False,
-            "supports_permission_probe_claim": False,
-            "supports_rollback_smoke_claim": False,
-            "supports_canonical_packet_written_claim": False,
-            "supports_full_product_production_ready_claim": False,
-            "supports_top_tier_scientific_validation_claim": False,
-        },
-    }
     try:
+        assembly_manifest_sha = (
+            validator.sha256_file(assembly_manifest_path)
+            if assembly_manifest_path is not None
+            else None
+        )
+        custody_receipt = {
+            "artifact_type": "production_adapter_response_custody_receipt_v1",
+            "operator_run_id": run_id,
+            "response_packet_type": response_packet["response_packet_type"],
+            "response_packet_sha256": response_packet_sha,
+            "candidate_packet_sha256": candidate_packet_sha,
+            "candidate_packet_validator_passed": validation_summary[
+                "candidate_packet_validator_passed"
+            ],
+            "blocker_count": validation_summary["blocker_count"],
+            "written_artifacts": _artifact_receipts(planned_paths),
+            "assembly_manifest_output": str(assembly_manifest_path.relative_to(ROOT))
+            if assembly_manifest_path is not None
+            else None,
+            "assembly_manifest_sha256": assembly_manifest_sha,
+            "writes_canonical_packet": False,
+            "canonical_packet_not_written": str(assembler.CANONICAL_PACKET_PATH.relative_to(ROOT)),
+            "counts_as_acceptance_gate": False,
+            "claim_boundary": {
+                "supports_production_adapter_paths_claim": False,
+                "supports_non_synthetic_deployment_claim": False,
+                "supports_human_reviewed_false_merge_labels_claim": False,
+                "supports_permission_probe_claim": False,
+                "supports_rollback_smoke_claim": False,
+                "supports_canonical_packet_written_claim": False,
+                "supports_full_product_production_ready_claim": False,
+                "supports_top_tier_scientific_validation_claim": False,
+            },
+        }
         _write_json(planned_paths["response_custody_receipt"], custody_receipt)
         created_paths.append(planned_paths["response_custody_receipt"])
-    except IntakeError:
+        custody_receipt_sha = validator.sha256_file(planned_paths["response_custody_receipt"]) or ""
+    except (IntakeError, OSError) as exc:
         _cleanup_created_outputs(created_paths, output_path)
-        raise
-    custody_receipt_sha = validator.sha256_file(planned_paths["response_custody_receipt"]) or ""
+        if isinstance(exc, IntakeError):
+            raise
+        raise IntakeError(str(exc)) from exc
     return {
         "intake_packet_type": "production_adapter_response_intake_result_v1",
         "evidence_state": "candidate_artifacts_written",
@@ -464,9 +525,7 @@ def build_intake_artifacts(
         "assembly_manifest_output": str(assembly_manifest_path.relative_to(ROOT))
         if assembly_manifest_path is not None
         else None,
-        "assembly_manifest_sha256": validator.sha256_file(assembly_manifest_path)
-        if assembly_manifest_path is not None
-        else None,
+        "assembly_manifest_sha256": assembly_manifest_sha,
         "candidate_packet_sha256": candidate_packet_sha,
         "validation_report": validation_summary,
         "claim_boundary": {

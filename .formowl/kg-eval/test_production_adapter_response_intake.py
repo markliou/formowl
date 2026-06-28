@@ -277,6 +277,36 @@ class ProductionAdapterResponseIntakeTest(unittest.TestCase):
         self.assertFalse(BASE.exists())
         self.assert_canonical_unchanged()
 
+    def test_rejects_raw_internal_response_field_before_writes(self) -> None:
+        response = valid_response_packet()
+        response["deployment_manifest_artifact"]["raw_path"] = "redacted"
+
+        with self.assertRaisesRegex(intake.IntakeError, "raw/internal artifact field"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir=OUTPUT_DIR,
+                allow_test_artifacts=True,
+            )
+
+        self.assertFalse(BASE.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rejects_backend_connection_string_field_before_writes(self) -> None:
+        response = valid_response_packet()
+        response["adapter_artifacts"][0]["artifact"]["connection_string"] = "redacted"
+
+        with self.assertRaisesRegex(intake.IntakeError, "raw/internal artifact field"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir=OUTPUT_DIR,
+                allow_test_artifacts=True,
+            )
+
+        self.assertFalse(BASE.exists())
+        self.assert_canonical_unchanged()
+
     def test_rejects_top_level_unsupported_response_fields_before_writes(self) -> None:
         response = valid_response_packet()
         response["raw_path"] = "/mnt/nas/deploy.json"
@@ -353,6 +383,152 @@ class ProductionAdapterResponseIntakeTest(unittest.TestCase):
         self.assertEqual(
             ASSEMBLY_MANIFEST_PARENT_FILE.read_text(encoding="utf-8"), "not a directory\n"
         )
+        self.assert_canonical_unchanged()
+
+    def test_rolls_back_intake_created_files_on_assembler_failure(self) -> None:
+        original_assemble_packet = intake.assembler.assemble_packet
+
+        def raise_after_writes(**_: object) -> dict:
+            raise assembler.AssemblyError("simulated assembler failure")
+
+        try:
+            intake.assembler.assemble_packet = raise_after_writes
+            with self.assertRaisesRegex(intake.IntakeError, "simulated assembler failure"):
+                intake.build_intake_artifacts(
+                    work_packet=work_packet_generator.build_work_packet(),
+                    response_packet=valid_response_packet(),
+                    output_dir=OUTPUT_DIR,
+                    assembly_manifest_output=(
+                        "work_packets/test_production_adapter_response_intake_manifest.json"
+                    ),
+                    allow_test_artifacts=True,
+                )
+        finally:
+            intake.assembler.assemble_packet = original_assemble_packet
+
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rolls_back_intake_created_files_on_raw_write_oserror(self) -> None:
+        original_write_json = intake._write_json
+        write_count = 0
+
+        def fail_second_write(path: object, payload: object) -> None:
+            nonlocal write_count
+            write_count += 1
+            if write_count == 2:
+                raise OSError("simulated mkdir failure before exclusive open")
+            original_write_json(path, payload)
+
+        try:
+            intake._write_json = fail_second_write
+            with self.assertRaisesRegex(
+                intake.IntakeError,
+                "simulated mkdir failure before exclusive open",
+            ):
+                intake.build_intake_artifacts(
+                    work_packet=work_packet_generator.build_work_packet(),
+                    response_packet=valid_response_packet(),
+                    output_dir=OUTPUT_DIR,
+                    assembly_manifest_output=(
+                        "work_packets/test_production_adapter_response_intake_manifest.json"
+                    ),
+                    allow_test_artifacts=True,
+                )
+        finally:
+            intake._write_json = original_write_json
+
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rolls_back_created_files_on_custody_receipt_hash_oserror(self) -> None:
+        original_artifact_receipts = intake._artifact_receipts
+
+        def fail_artifact_receipts(paths: object) -> list[dict[str, str]]:
+            raise OSError("simulated custody hash failure")
+
+        try:
+            intake._artifact_receipts = fail_artifact_receipts
+            with self.assertRaisesRegex(
+                intake.IntakeError,
+                "simulated custody hash failure",
+            ):
+                intake.build_intake_artifacts(
+                    work_packet=work_packet_generator.build_work_packet(),
+                    response_packet=valid_response_packet(),
+                    output_dir=OUTPUT_DIR,
+                    assembly_manifest_output=(
+                        "work_packets/test_production_adapter_response_intake_manifest.json"
+                    ),
+                    allow_test_artifacts=True,
+                )
+        finally:
+            intake._artifact_receipts = original_artifact_receipts
+
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rolls_back_partial_file_created_by_after_open_write_failure(self) -> None:
+        original_artifact_json_text = intake._artifact_json_text
+        write_count = 0
+
+        def fail_second_serialization(payload: object) -> str:
+            nonlocal write_count
+            write_count += 1
+            if write_count == 2:
+                raise OSError("simulated after-open write failure")
+            return original_artifact_json_text(payload)
+
+        try:
+            intake._artifact_json_text = fail_second_serialization
+            with self.assertRaisesRegex(intake.IntakeError, "intake output write failed"):
+                intake.build_intake_artifacts(
+                    work_packet=work_packet_generator.build_work_packet(),
+                    response_packet=valid_response_packet(),
+                    output_dir=OUTPUT_DIR,
+                    assembly_manifest_output=(
+                        "work_packets/test_production_adapter_response_intake_manifest.json"
+                    ),
+                    allow_test_artifacts=True,
+                )
+        finally:
+            intake._artifact_json_text = original_artifact_json_text
+
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rolls_back_partial_file_created_by_after_open_serialization_failure(self) -> None:
+        original_artifact_json_text = intake._artifact_json_text
+        write_count = 0
+
+        def fail_second_serialization(payload: object) -> str:
+            nonlocal write_count
+            write_count += 1
+            if write_count == 2:
+                raise TypeError("simulated serialization failure")
+            return original_artifact_json_text(payload)
+
+        try:
+            intake._artifact_json_text = fail_second_serialization
+            with self.assertRaisesRegex(intake.IntakeError, "intake output write failed"):
+                intake.build_intake_artifacts(
+                    work_packet=work_packet_generator.build_work_packet(),
+                    response_packet=valid_response_packet(),
+                    output_dir=OUTPUT_DIR,
+                    assembly_manifest_output=(
+                        "work_packets/test_production_adapter_response_intake_manifest.json"
+                    ),
+                    allow_test_artifacts=True,
+                )
+        finally:
+            intake._artifact_json_text = original_artifact_json_text
+
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
         self.assert_canonical_unchanged()
 
     def test_cli_rejects_promotion_arguments_without_writes(self) -> None:

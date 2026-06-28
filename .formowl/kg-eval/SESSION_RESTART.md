@@ -131,6 +131,56 @@ response-intake hardening:
   operator guide/control inventory listed parent-dir preflight, after-open
   cleanup, and rollback controls.
 
+Current local implementation slice, updated 2026-06-28 after production-adapter
+response-intake parity hardening:
+
+- `production_adapter_response_intake.py` now rejects raw/internal field names
+  throughout operator-supplied artifact payloads, including database,
+  object-store, raw SQL, bucket/object key, backend connection-string, and
+  worker scratch field names whose values are otherwise benign.
+- Candidate artifact writes now remove files created by exclusive open if JSON
+  serialization or writing fails after open, preventing empty or partial
+  candidate artifacts from remaining after a failed intake.
+- Raw `OSError` write failures from the intake write path are caught by the
+  rollback scope, so earlier candidate artifacts and optional candidate
+  manifests are cleaned up instead of being left behind.
+- `OSError` failures while building the custody receipt from artifact or
+  optional manifest hashes are also caught by the rollback scope, so already
+  created candidate outputs are not left behind if custody construction fails.
+- Focused tests now cover raw/internal field-name rejection, assembler-failure
+  rollback of already-created artifacts and optional manifests, backend
+  connection-string field-name rejection, raw `OSError` rollback,
+  custody-phase hash failure rollback, and after-open OSError/TypeError
+  cleanup.
+- The production work-order response contract and tracked operator guide now
+  list output-dir binding, top-level/adapter wrapper allowlisting, parent-dir
+  preflight, after-open cleanup, rollback, raw/internal field-name rejection,
+  and optional manifest custody hashing.
+- Canonical dev-container verification passed in this resume:
+  - focused production-intake/work-order/operator-guide unittest ran
+    47 tests OK.
+  - full KG-eval unittest ran 497 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - operator guide `--check`, submission template `--check-template`, and
+    governance approval template `--check-template` exited 0.
+  - broad reports were refreshed with `kg_total_acceptance_suite.py`,
+    `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+    `real_evidence_collection_work_orders.py`.
+  - default main KG acceptance remains `passed_with_explicit_limits`.
+  - strict main KG acceptance exits 1 only for known failed / blocked limits.
+  - full Ruff check passed, Ruff format-check passed, and `git diff --check`
+    exited 0.
+- Safety state after verification: all four `inputs/*_real` roots contain no
+  files, the four canonical broad evidence packets remain absent, and broad
+  KG-eval still shows `overall_passed=false`, 8 passed gates, and the same
+  four failed gates. No completion claim is supported.
+- Reviewer gate passed 3/3:
+  - Heisenberg agreed on status honesty after the restart note stopped
+    claiming commit/push readiness.
+  - Curie agreed after backend connection-string field-name rejection was
+    added.
+  - Raman agreed after raw write and custody-phase rollback gaps were fixed.
+
 Current local implementation slice, updated 2026-06-28 after governed
 approval-bridge hardening:
 
@@ -1360,8 +1410,8 @@ roots.
 Current high-priority target:
 
 - Canonical dev-container verification and the 3 Codex/GPT reviewer gate have
-  passed for the current local hardening slice; the current run will commit and
-  push it.
+  passed for the current production-adapter response-intake parity hardening
+  slice. The current run may commit and push this reviewed slice.
 - The four broad real-evidence gates still require real operator/user-supplied
   artifacts and canonical packets accepted by their validators.
 - Do not leave fake passing artifacts under `inputs/*_real/`, and do not

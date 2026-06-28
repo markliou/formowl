@@ -1164,3 +1164,35 @@ Reviewer cost-control rules:
   path, and `Lorentz` agreed on status honesty after the operator
   guide/control inventory listed parent-dir preflight, after-open cleanup, and
   rollback controls. No goal completion claim is supported.
+- 2026-06-28 production-adapter response-intake parity hardening checkpoint:
+  `production_adapter_response_intake.py` now matches the current hardened
+  response-intake baseline for raw/internal field names and after-open partial
+  writes. Operator-supplied production adapter artifact payloads recursively
+  reject raw/internal field names such as raw paths, backend connection
+  strings, database/object-store locators, raw SQL, bucket/object keys, and
+  worker scratch fields even when the submitted value is otherwise benign.
+  `_write_json()` now removes the just-created output if JSON serialization or
+  writing fails after exclusive open, and raw `OSError` write or custody-hash
+  failures are caught by the intake rollback path so earlier candidate
+  artifacts are not left behind. Focused tests cover raw/internal field-name
+  rejection, backend connection-string field-name rejection,
+  assembler-failure rollback, raw `OSError` rollback, custody-phase hash
+  failure rollback, and after-open OSError/TypeError cleanup.
+  `real_evidence_collection_work_orders.py`
+  and the tracked operator guide now list the production adapter intake
+  controls for output-dir binding, top-level/adapter wrapper allowlisting,
+  raw/internal field-name rejection, parent-dir preflight, after-open cleanup,
+  rollback, and optional manifest custody hashing. Canonical dev-container
+  verification passed: focused production-intake/work-order/operator-guide
+  unittest 47 OK; full KG-eval unittest 497 OK; main repo unittest 252 OK;
+  operator guide, submission-template, and approval-template checks; refreshed
+  broad reports; default KG acceptance `passed_with_explicit_limits`; strict
+  KG acceptance exits 1 only for known limits; full Ruff check and
+  format-check; and `git diff --check`. Broad KG-eval remains incomplete with
+  `overall_passed=false`, 8 passed gates, and the same four failed gates; all
+  real roots are empty and the four canonical broad packets are absent.
+  Reviewer gate passed 3/3: `Heisenberg` agreed on status honesty after the
+  restart note stopped claiming commit/push readiness, `Curie` agreed after
+  backend connection-string field-name rejection was added, and `Raman` agreed
+  after raw write and custody-phase rollback gaps were fixed. No goal
+  completion claim is supported.

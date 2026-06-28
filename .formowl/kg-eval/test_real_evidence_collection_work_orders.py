@@ -622,11 +622,49 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertFalse(production_response_contract["promotes_evidence"])
         self.assertFalse(production_response_contract["counts_as_acceptance_gate"])
         self.assertIn(
+            "operator_run_id matches the candidate output directory final segment",
+            production_response_contract["required_controls"],
+        )
+        self.assertIn(
+            (
+                "candidate output dir is exactly "
+                "inputs/production_adapter_real/<operator_run_id> outside tests"
+            ),
+            production_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "response packet top-level fields and adapter wrapper fields are allowlisted",
+            production_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "raw/internal field names are rejected throughout response payloads",
+            production_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "candidate artifact parent directories are preflighted before writes",
+            production_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "after-open partial output writes are cleaned up",
+            production_response_contract["required_controls"],
+        )
+        self.assertIn(
+            (
+                "created candidate artifacts and optional candidate manifests are rolled back "
+                "when assembly or validation raises after writes"
+            ),
+            production_response_contract["required_controls"],
+        )
+        self.assertIn(
             "operator supplied component artifacts for every required adapter",
             production_response_contract["required_controls"],
         )
         self.assertIn(
             "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+            production_response_contract["required_controls"],
+        )
+        self.assertIn(
+            "intake custody receipt binds optional assembly manifest hash when emitted",
             production_response_contract["required_controls"],
         )
 

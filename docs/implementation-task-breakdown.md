@@ -1333,6 +1333,38 @@ These groups can be split across multiple agents after Slice 1 is stable.
     because this hardening accepts no evidence, writes no canonical broad
     packet, and the four broad real-evidence gates still require real
     operator/user-supplied artifacts plus validator-accepted canonical packets.
+  - 2026-06-28 production-adapter response-intake parity hardening
+    checkpoint: `production_adapter_response_intake.py` now rejects
+    raw/internal field names throughout operator-supplied artifact payloads,
+    including backend connection-string, database/object-store/raw SQL/worker
+    scratch, and bucket/object-key field names whose values are otherwise
+    benign. It also removes files created by exclusive open when serialization
+    or write fails after open, catches raw `OSError` write and custody-hash
+    failures so earlier candidate artifacts roll back, and focused tests now
+    cover raw/internal field-name rejection, backend connection-string
+    field-name rejection, assembler-failure rollback, raw `OSError` rollback,
+    custody-phase hash failure rollback, and after-open partial-write cleanup.
+    The production work-order response
+    contract and tracked operator guide now list the same parent-dir
+    preflight, after-open cleanup, rollback, output-dir binding, allowlisting,
+    and manifest-custody controls that the intake implements. Canonical
+    dev-container verification passed: focused production-intake/work-order/
+    operator-guide unittest 47 OK, full KG-eval unittest 497 OK, main repo
+    unittest 252 OK, guide/submission-template/approval-template checks,
+    refreshed broad reports, default KG acceptance
+    `passed_with_explicit_limits`, strict KG acceptance exits 1 only for known
+    limits, full Ruff check/format-check, and `git diff --check`. Broad
+    KG-eval remains incomplete with `overall_passed=false`, 8 passed gates,
+    and the same four failed gates; all four real roots remain empty and all
+    four canonical broad packets remain absent. Reviewer gate passed 3/3:
+    `Heisenberg` agreed on status honesty after the restart note stopped
+    claiming commit/push readiness, `Curie` agreed after backend
+    connection-string field-name rejection was added, and `Raman` agreed after
+    raw write and custody-phase rollback gaps were fixed. The item remains
+    unchecked because this hardening accepts no
+    evidence, writes no canonical broad packet, and the four broad
+    real-evidence gates still require real operator/user-supplied artifacts
+    plus validator-accepted canonical packets.
   - 2026-06-27 fair-baseline response-intake note: candidate-only intake is
     implemented for `fair_external_baseline_comparison` and wired into the
     collection work orders. It can seal operator-supplied fair-baseline

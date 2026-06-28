@@ -349,6 +349,13 @@ def _production_tasks(row: dict[str, Any]) -> dict[str, Any]:
             "promotes_evidence": False,
             "counts_as_acceptance_gate": False,
             "required_controls": [
+                "operator_run_id matches the candidate output directory final segment",
+                "candidate output dir is exactly inputs/production_adapter_real/<operator_run_id> outside tests",
+                "response packet top-level fields and adapter wrapper fields are allowlisted",
+                "raw/internal field names are rejected throughout response payloads",
+                "candidate artifact parent directories are preflighted before writes",
+                "after-open partial output writes are cleaned up",
+                "created candidate artifacts and optional candidate manifests are rolled back when assembly or validation raises after writes",
                 "operator supplied non-synthetic deployment manifest",
                 "operator supplied component artifacts for every required adapter",
                 "operator supplied human-reviewed false-merge labels for candidate adapters",
@@ -357,6 +364,7 @@ def _production_tasks(row: dict[str, Any]) -> dict[str, Any]:
                 "operator supplied rollback smoke artifact",
                 "candidate packet validates before any manual governance promotion",
                 "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+                "intake custody receipt binds optional assembly manifest hash when emitted",
             ],
         },
         "per_component_rows": [

@@ -819,3 +819,30 @@ status in each role's goal file and task completion in
   `Lorentz` agreed on status honesty after the operator guide/control
   inventory listed parent-dir preflight, after-open cleanup, and rollback
   controls.
+- 2026-06-28 production-adapter response-intake parity hardening:
+  `production_adapter_response_intake.py` now recursively rejects raw/internal
+  field names in operator-supplied artifact payloads, including backend
+  connection-string field names, and removes outputs created by exclusive open
+  when serialization or write fails after open. The intake rollback path now
+  also catches raw `OSError` write and custody-hash failures so earlier
+  candidate artifacts are cleaned up. Focused tests cover raw/internal
+  field-name rejection with benign values, backend connection-string
+  field-name rejection, assembler-failure rollback, raw `OSError` rollback,
+  custody-phase hash failure rollback, and after-open OSError/TypeError
+  cleanup. The
+  production work-order response contract and tracked operator guide now list
+  output-dir binding, top-level/adapter wrapper allowlisting, parent-dir
+  preflight, after-open cleanup, rollback, raw/internal field-name rejection,
+  and optional manifest custody hashing. Canonical dev-container verification
+  passed: focused production-intake/work-order/operator-guide unittest 47 OK,
+  full KG-eval unittest 497 OK, main repo unittest 252 OK, guide/template
+  checks, refreshed broad reports, default KG acceptance
+  `passed_with_explicit_limits`, strict KG acceptance exits 1 only for known
+  limits, full Ruff check/format-check, and `git diff --check`. Broad KG-eval
+  remains incomplete with `overall_passed=false`, 8 passed gates, and the
+  same four failed real-evidence gates; all real roots are empty and the four
+  canonical broad packets are absent. Reviewer gate passed 3/3:
+  `Heisenberg` agreed on status honesty after the restart note stopped
+  claiming commit/push readiness, `Curie` agreed after backend
+  connection-string field-name rejection was added, and `Raman` agreed after
+  raw write and custody-phase rollback gaps were fixed.

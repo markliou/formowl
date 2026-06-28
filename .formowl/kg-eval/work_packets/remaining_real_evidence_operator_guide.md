@@ -1,7 +1,7 @@
 # Remaining KG Real-Evidence Operator Guide
 
 Source report: `kg_real_evidence_collection_work_orders_v1`
-Source report sha256: `e4c6595786a2bc1de131573beb44981f247bea698e3175f6b42c483cdc3f4187`
+Source report sha256: `0c1d4598aa2d27b8d8c16bcda7315dc4396388292767114ce3493f4d1765f7a9`
 
 ## Authority Boundary
 
@@ -734,6 +734,13 @@ Response intake contract:
 
 Required intake controls:
 
+- operator_run_id matches the candidate output directory final segment
+- candidate output dir is exactly inputs/production_adapter_real/<operator_run_id> outside tests
+- response packet top-level fields and adapter wrapper fields are allowlisted
+- raw/internal field names are rejected throughout response payloads
+- candidate artifact parent directories are preflighted before writes
+- after-open partial output writes are cleaned up
+- created candidate artifacts and optional candidate manifests are rolled back when assembly or validation raises after writes
 - operator supplied non-synthetic deployment manifest
 - operator supplied component artifacts for every required adapter
 - operator supplied human-reviewed false-merge labels for candidate adapters
@@ -742,6 +749,7 @@ Required intake controls:
 - operator supplied rollback smoke artifact
 - candidate packet validates before any manual governance promotion
 - intake custody receipt binds response packet, candidate packet, and artifact hashes
+- intake custody receipt binds optional assembly manifest hash when emitted
 
 Candidate-only intake command:
 
