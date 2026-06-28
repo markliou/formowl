@@ -79,6 +79,18 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
         self.assertIn("ignored non-evidence", text)
         self.assertIn("does not authorize", text)
         self.assertIn("_candidate_validation_report.json", text)
+        self.assertIn("real_evidence_governance_approval.py --check-template", text)
+        self.assertIn(
+            "work_packets/remaining_real_evidence_governance_approval.template.json",
+            text,
+        )
+        self.assertIn("real_evidence_governance_approval.py --approval-manifest", text)
+        self.assertIn("--execute-approved-promotion", text)
+        self.assertIn("approval manifest remains non-evidence", text)
+        self.assertIn("refuses stale hashes", text)
+        self.assertIn("manifest bytes consumed for", text)
+        self.assertIn("pre-existing canonical packet targets", text)
+        self.assertIn("passing target gate", text)
         self.assertIn("Do not pass generated `*_candidate_manifest.json` files", text)
         self.assertIn("not operator-filled submission manifests", text)
         self.assertIn("preflight rejects hardlink aliases", text)

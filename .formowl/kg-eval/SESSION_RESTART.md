@@ -41,6 +41,61 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
+Current local implementation slice, updated 2026-06-28 after governed
+approval-bridge hardening:
+
+- Added `real_evidence_governance_approval.py`, focused tests, and the tracked
+  non-evidence approval template
+  `work_packets/remaining_real_evidence_governance_approval.template.json`.
+- The approval runner validates an operator-filled approval manifest under
+  `work_packets/` before any canonical packet update. Validation requires the
+  exact manifest type and field set, a human approver id, exact
+  `approval_scope` and `claim_boundary`, current candidate validation report
+  hash, current candidate manifest hash, a passing target-gate row, exact
+  validate-only assembler argv, safe report/manifest naming, a missing target
+  canonical packet, and a hazard-free canonical packet baseline.
+- Execute mode uses fixed assembler argv with `--promote` and
+  `--assembly-manifest-sha256 <approved-candidate-manifest-sha256>`, so the
+  manifest bytes consumed by the assembler must match the human-reviewed
+  approval. It still rehashes the candidate manifest after the subprocess,
+  checks that only the target canonical packet changed, and rolls back a newly
+  created target packet when candidate-manifest drift is detected.
+- The four packet assemblers now promote through a temporary file plus atomic
+  no-overwrite hard link instead of direct `write_text()`, and their CLI
+  manifest loaders reject bytes that do not match an optional approved
+  `--assembly-manifest-sha256` guard before any assembly or promotion.
+- `real_evidence_submission_manifest.py --validate-candidate-manifests` now
+  records `candidate_manifest_sha256` in each candidate validation report row,
+  and canonical packet surface checks now reject parent symlinks, missing
+  parents, metadata-unavailable parents, and non-directory parents.
+- The tracked operator guide documents the approval-template check,
+  validation, and `--execute-approved-promotion` flow without exposing raw
+  assembler `--promote` as the normal operator path.
+- Canonical dev-container verification passed in this resume:
+  - focused approval/assembler/operator-guide unittest ran 78 tests OK after
+    the approved-manifest hash guard fix.
+  - approval template, operator guide, and submission template checks exited 0.
+  - full KG-eval unittest ran 474 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - full Ruff check passed.
+  - full Ruff format-check passed with 203 files already formatted.
+  - broad reports refreshed with `kg_total_acceptance_suite.py`,
+    `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+    `real_evidence_collection_work_orders.py`.
+  - default main KG acceptance remains `passed_with_explicit_limits`.
+  - strict main KG acceptance exits 1 only for known failed / blocked limits:
+    `production_adapter_readiness` and
+    `latency_scalability_enterprise_claims`.
+- Safety state after verification: all four `inputs/*_real` roots contain no
+  files, and the four canonical broad evidence packets remain absent.
+- Refreshed broad KG-eval still shows `overall_passed=false`, 8 passed gates,
+  and the same four failed gates. Objective audit remains
+  `objective_complete=false`, with 5 proved and 4 incomplete requirements.
+- Reviewer gate passed 3/3 for this approval bridge slice after Bernoulli's
+  candidate-manifest TOCTOU blocker was fixed and re-reviewed. Final agreeing
+  reviewers: `Bernoulli`, `Popper`, and `Dalton`.
+- No completion claim is supported.
+
 Current local implementation slice, updated 2026-06-28 after candidate-runner
 pre-existing canonical packet hazard hardening:
 

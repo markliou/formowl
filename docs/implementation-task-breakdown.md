@@ -1241,6 +1241,40 @@ These groups can be split across multiple agents after Slice 1 is stable.
     The item remains unchecked because real operator/user-supplied artifacts
     and validator-accepted canonical packets are still missing for the four
     broad gates.
+  - 2026-06-28 governed approval-bridge checkpoint:
+    `real_evidence_governance_approval.py` now provides the controlled
+    non-evidence bridge from a validate-only candidate report to an approved
+    canonical packet update. It validates exact approval manifest fields,
+    human approver identity, exact approval scope and claim boundary, current
+    candidate validation report hash, current candidate manifest hash, a
+    passing target-gate validation row with exact validate-only argv, safe
+    report/manifest names, a missing target canonical packet, and a
+    hazard-free canonical packet baseline. Execute mode uses fixed assembler
+    `--promote` argv plus `--assembly-manifest-sha256` so the manifest bytes
+    consumed by the assembler must match the approved candidate-manifest hash;
+    it also rehashes the candidate manifest after the subprocess, verifies only
+    the target canonical packet changed, and rolls back a newly created target
+    packet when candidate-manifest drift is detected. The four packet
+    assemblers now use temporary-file plus atomic no-overwrite hard-link
+    promotion and reject mismatched approved manifest bytes before assembly or
+    promotion; candidate validation reports include
+    `candidate_manifest_sha256`; canonical packet surface checks reject parent
+    symlinks, missing parents, metadata-unavailable parents, and non-directory
+    parents; and the operator guide documents approval validation and
+    `--execute-approved-promotion`. Canonical dev-container verification
+    passed: focused approval/assembler/operator-guide unittest 78 OK;
+    approval-template,
+    operator-guide, and submission-template checks; full KG-eval unittest
+    474 OK; main repo unittest 252 OK; full Ruff check and format-check;
+    refreshed broad reports; default KG acceptance
+    `passed_with_explicit_limits`; strict KG acceptance exits 1 only for known
+    limits. All four real roots remain empty and the four canonical broad
+    packets remain absent. Reviewer gate passed 3/3 after Bernoulli's
+    candidate-manifest TOCTOU blocker was fixed and re-reviewed:
+    `Bernoulli`, `Popper`, and `Dalton` returned `RELEASE_DECISION: AGREE`.
+    The item remains unchecked because real operator/user-supplied
+    artifacts and validator-accepted canonical packets are still missing for
+    the four broad gates.
   - 2026-06-27 fair-baseline response-intake note: candidate-only intake is
     implemented for `fair_external_baseline_comparison` and wired into the
     collection work orders. It can seal operator-supplied fair-baseline

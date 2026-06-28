@@ -9,7 +9,9 @@ adjudication rows, confusion matrices, or custody receipts.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -219,12 +221,34 @@ def promote_packet(
     report = validate_candidate(packet, allow_test_artifacts=allow_test_artifacts)
     if report.get("passed") is not True:
         raise AssemblyError("candidate packet failed validation and cannot be promoted")
+    if output_path.exists() or output_path.is_symlink():
+        raise AssemblyError("canonical packet output already exists")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temp_path = output_path.with_name(f".{output_path.name}.tmp")
+    if temp_path.exists() or temp_path.is_symlink():
+        raise AssemblyError("canonical packet temporary output already exists")
+    try:
+        with temp_path.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(packet, indent=2, sort_keys=True) + "\n")
+        try:
+            os.link(temp_path, output_path)
+        except FileExistsError as exc:
+            raise AssemblyError("canonical packet output already exists") from exc
+    except Exception:
+        if temp_path.exists() or temp_path.is_symlink():
+            temp_path.unlink()
+        raise
+    else:
+        temp_path.unlink()
 
 
-def load_manifest(path: Path) -> dict[str, Any]:
-    loaded = load_json(path)
+def load_manifest(path: Path, *, expected_sha256: str | None = None) -> dict[str, Any]:
+    raw = path.read_bytes()
+    if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise AssemblyError("assembly manifest sha256 mismatch")
+    loaded = json.loads(raw.decode("utf-8"))
+    if not isinstance(loaded, dict):
+        raise AssemblyError("assembly manifest must be a JSON object")
     if set(loaded) - MANIFEST_ALLOWED_FIELDS:
         raise AssemblyError("assembly manifest has unsupported fields")
     return loaded
@@ -234,6 +258,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--assembly-manifest", required=True, help="JSON manifest listing real artifact paths"
+    )
+    parser.add_argument(
+        "--assembly-manifest-sha256",
+        help="expected sha256 of the assembly manifest bytes approved for promotion",
     )
     parser.add_argument(
         "--validate", action="store_true", help="validate the assembled packet in memory"
@@ -248,7 +276,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_arg_parser().parse_args()
-    assembly_manifest = load_manifest(Path(args.assembly_manifest))
+    assembly_manifest = load_manifest(
+        Path(args.assembly_manifest),
+        expected_sha256=args.assembly_manifest_sha256,
+    )
     packet = assemble_packet(**assembly_manifest)
     report = validate_candidate(packet) if args.validate or args.promote else None
     if args.promote:

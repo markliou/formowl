@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import unittest
@@ -124,6 +125,19 @@ class EnterpriseMultimodalPacketAssemblerTest(unittest.TestCase):
         self.assertTrue(output.exists())
         promoted = json.loads(output.read_text(encoding="utf-8"))
         self.assertEqual(promoted, packet)
+
+    def test_load_manifest_rejects_bytes_that_do_not_match_approved_sha(self) -> None:
+        manifest_path = BASE / "assembly_manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(valid_assembly_manifest(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        approved_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        manifest_path.write_text('{"artifact_id": "swapped"}\n', encoding="utf-8")
+
+        with self.assertRaisesRegex(assembler.AssemblyError, "assembly manifest sha256 mismatch"):
+            assembler.load_manifest(manifest_path, expected_sha256=approved_sha)
 
     def test_valid_fixture_packet_cannot_promote_to_canonical_input(self) -> None:
         manifest = valid_assembly_manifest()

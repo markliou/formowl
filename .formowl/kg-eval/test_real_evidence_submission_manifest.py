@@ -479,6 +479,37 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
                 self.assertEqual(execution["execution_results"], [])
                 run_mock.assert_not_called()
 
+    def test_canonical_packet_surface_rejects_symlinked_parent_components(self) -> None:
+        parent = ROOT / "work_packets" / "operatorpreflight_unitcase_parent_symlink"
+        target_dir = ROOT / "work_packets" / "operatorpreflight_unitcase_parent_target"
+        packet_rel_path = "work_packets/operatorpreflight_unitcase_parent_symlink/packet.json"
+        for path in (parent, target_dir):
+            if path.exists() or path.is_symlink():
+                if path.is_dir() and not path.is_symlink():
+                    path.rmdir()
+                else:
+                    path.unlink()
+        target_dir.mkdir()
+        parent.symlink_to(target_dir, target_is_directory=True)
+        self.created_manifest_paths.extend([parent, target_dir])
+
+        try:
+            surface = submission_manifest._canonical_packet_surface(packet_rel_path)
+            snapshot = {packet_rel_path: surface}
+            baseline = submission_manifest._canonical_packet_baseline_hazards(snapshot)
+        finally:
+            if parent.exists() or parent.is_symlink():
+                parent.unlink()
+            if target_dir.exists():
+                target_dir.rmdir()
+            self.created_manifest_paths = [
+                path for path in self.created_manifest_paths if path not in {parent, target_dir}
+            ]
+
+        self.assertEqual(surface["state"], "parent_symlink")
+        self.assertFalse(baseline["passed"])
+        self.assertEqual(baseline["hazards"][0]["packet"], packet_rel_path)
+
     def test_execute_candidate_intakes_refuses_unavailable_canonical_packet_surfaces(
         self,
     ) -> None:
@@ -636,6 +667,10 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             self.assertFalse(kwargs["check"])
             self.assertNotIn("shell", kwargs)
             self.assertEqual(row["status"], "passed")
+            self.assertEqual(
+                row["candidate_manifest_sha256"],
+                submission_manifest._sha256_file(ROOT / expected.assembly_manifest_output),
+            )
             self.assertTrue(row["stdout_summary"]["packet_present"])
             self.assertTrue(row["stdout_summary"]["passed"])
             self.assertEqual(row["stdout_summary"]["blocker_count"], 0)

@@ -667,6 +667,39 @@ def _json_summary(stdout: str) -> dict[str, Any]:
 
 
 def _canonical_packet_surface(path_value: str) -> dict[str, Any]:
+    current = ROOT
+    for part in Path(path_value).parts[:-1]:
+        current = current / part
+        try:
+            parent_stat = current.lstat()
+        except FileNotFoundError:
+            return {
+                "state": "parent_missing",
+                "sha256": None,
+                "hardlink_alias": False,
+                "component": part,
+            }
+        except OSError:
+            return {
+                "state": "parent_metadata_unavailable",
+                "sha256": None,
+                "hardlink_alias": False,
+                "component": part,
+            }
+        if stat.S_ISLNK(parent_stat.st_mode):
+            return {
+                "state": "parent_symlink",
+                "sha256": None,
+                "hardlink_alias": False,
+                "component": part,
+            }
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            return {
+                "state": "parent_non_directory",
+                "sha256": None,
+                "hardlink_alias": False,
+                "component": part,
+            }
     path = ROOT / path_value
     try:
         path_stat = path.lstat()
@@ -806,6 +839,10 @@ def _assembler_validation_summary(stdout: str) -> dict[str, Any]:
         "passed": report.get("passed"),
         "blocker_count": len(blockers) if isinstance(blockers, list) else None,
     }
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def execute_candidate_intakes(
@@ -1063,6 +1100,10 @@ def validate_candidate_manifests(
             },
             "validation_results": [],
         }
+    candidate_manifest_sha256s = {
+        expected.assembly_manifest_output: _sha256_file(ROOT / expected.assembly_manifest_output)
+        for expected in EXPECTED_SUBMISSIONS
+    }
     validation_results: list[dict[str, Any]] = []
     overall_success = True
     for row in plan["validation_plan"]:
@@ -1093,6 +1134,7 @@ def validate_candidate_manifests(
                 "sequence": row["sequence"],
                 "gate_id": row["gate_id"],
                 "candidate_manifest": row["candidate_manifest"],
+                "candidate_manifest_sha256": candidate_manifest_sha256s[row["candidate_manifest"]],
                 "assembler_script": row["assembler_script"],
                 "canonical_packet_not_written": row["canonical_packet_not_written"],
                 "argv": argv,

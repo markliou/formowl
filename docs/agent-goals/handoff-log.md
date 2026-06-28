@@ -729,3 +729,42 @@ status in each role's goal file and task completion in
   packet test helper was changed to preserve pre-existing path surfaces by
   rename; `Feynman` agreed on governance/safety; and `Kuhn` agreed on status
   honesty.
+- 2026-06-28 governed approval-bridge hardening: added the non-evidence
+  governance approval runner, focused tests, and tracked approval template.
+  The runner validates an operator-filled approval manifest before any
+  canonical packet update by binding the candidate validation report hash,
+  candidate manifest hash, target gate, canonical packet, exact validate-only
+  validation argv, exact approval scope / claim boundary, and human approver.
+  Execute mode uses fixed assembler `--promote` argv, rechecks candidate
+  manifest hash after the subprocess, verifies only the target canonical
+  packet changed, and rolls back a newly created target packet on
+  candidate-manifest drift. The four packet assemblers now promote through a
+  temporary file plus atomic no-overwrite hard link; candidate validation
+  reports include `candidate_manifest_sha256`; canonical packet surface checks
+  reject hazardous parent components; and the operator guide documents the
+  controlled approval flow. Canonical dev-container verification passed:
+  focused approval/submission unittest 57 OK; approval-template,
+  operator-guide, and submission-template checks; full KG-eval unittest
+  470 OK; main repo unittest 252 OK; full Ruff check/format-check; refreshed
+  broad reports; default KG acceptance `passed_with_explicit_limits`; strict
+  KG acceptance exits 1 only for known limits. Real roots remain empty,
+  canonical broad packets remain absent, and broad KG-eval remains incomplete
+  with the same four failed gates. Reviewer gate is pending final 3 Codex/GPT
+  re-review for this slice; do not claim the goal complete.
+- 2026-06-28 governed approval-bridge reviewer-blocker follow-up:
+  Bernoulli found a candidate-manifest TOCTOU blocker: post-subprocess rehash
+  alone could miss a transient swap/restore before assembler read. The fix
+  adds an approved `--assembly-manifest-sha256` guard to approved promotion
+  argv and makes all four packet assemblers hash the manifest bytes they read
+  before assembly/promotion. The operator guide and durable docs now state this
+  boundary. Canonical dev-container verification after the fix passed:
+  focused approval/assembler/operator-guide unittest 78 OK; full KG-eval
+  unittest 474 OK; main repo unittest 252 OK; approval-template,
+  operator-guide, and submission-template checks; full Ruff check/format-check;
+  refreshed broad reports; default KG acceptance `passed_with_explicit_limits`;
+  strict KG acceptance exits 1 only for known limits. Broad KG-eval remains
+  incomplete with the same four failed gates; all four real roots remain empty
+  and canonical broad packets remain absent. Reviewer gate passed 3/3:
+  `Bernoulli` agreed after the TOCTOU blocker fix, `Popper` agreed after the
+  final hash-guard delta, and `Dalton` agreed after durable docs/tracking were
+  updated and staged.

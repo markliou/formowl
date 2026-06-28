@@ -129,6 +129,48 @@ The persisted validation report is not evidence and does not authorize
 promotion by itself. It is a review aid that records the validate-only
 assembler result without writing canonical input packets.
 
+After manual governance review, fill an operator approval manifest
+from the tracked non-evidence approval template. The approval manifest
+must bind the candidate validation report hash, candidate manifest
+hash, selected gate id, canonical packet target, and human reviewer
+approval controls.
+
+Check that the tracked governance approval template is current:
+
+```sh
+python3 real_evidence_governance_approval.py --check-template
+```
+
+Tracked non-evidence approval template:
+
+```text
+work_packets/remaining_real_evidence_governance_approval.template.json
+```
+
+Validate the operator-filled approval manifest before any canonical
+packet update:
+
+```sh
+python3 real_evidence_governance_approval.py --approval-manifest work_packets/OPERATOR_GOVERNANCE_APPROVAL.json
+```
+
+Only after that validation passes, the same approval manifest can execute
+the approved canonical packet update through the governance runner:
+
+```sh
+python3 real_evidence_governance_approval.py --approval-manifest work_packets/OPERATOR_GOVERNANCE_APPROVAL.json --execute-approved-promotion
+```
+
+The approval manifest remains non-evidence and does not count as an
+acceptance gate. The governance runner refuses stale hashes, non-human
+approvers, pre-existing canonical packet targets, canonical packet path
+hazards, and validation reports that do not have a passing target gate
+row. During execution, the runner passes the approved candidate
+manifest hash to the assembler so the manifest bytes consumed for
+promotion are bound to the human-reviewed approval. After any canonical
+packet update, rerun the specific broad validator and the total
+acceptance reports.
+
 ## fair_external_baseline_comparison
 
 - work order id: collect_fair_external_baseline_comparison

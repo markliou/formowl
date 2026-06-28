@@ -1075,3 +1075,39 @@ Reviewer cost-control rules:
   the canonical packet test helper was changed to preserve pre-existing path
   surfaces by rename; `Feynman` agreed on governance/safety; and `Kuhn` agreed
   on status honesty. No goal completion claim is supported.
+- 2026-06-28 governed approval-bridge checkpoint:
+  added `.formowl/kg-eval/real_evidence_governance_approval.py`, focused
+  tests, and the tracked non-evidence approval template
+  `.formowl/kg-eval/work_packets/remaining_real_evidence_governance_approval.template.json`.
+  The bridge validates an operator-filled approval manifest under
+  `work_packets/` before any canonical packet update: exact manifest type and
+  fields, human approver id, exact approval scope and claim boundary, current
+  candidate validation report hash, current candidate manifest hash, a passing
+  target-gate validation row with exact validate-only assembler argv, safe
+  report/manifest names, missing target canonical packet, and hazard-free
+  canonical packet baseline. Execute mode uses fixed assembler `--promote`
+  argv plus `--assembly-manifest-sha256` so the manifest bytes consumed by the
+  assembler must match the approved candidate-manifest hash; it also rehashes
+  the candidate manifest after the subprocess, checks that only the target
+  canonical packet changed, and rolls back a newly created target packet on
+  candidate-manifest drift. The four broad packet assemblers now use
+  temporary-file plus atomic no-overwrite hard-link promotion and reject
+  mismatched approved manifest bytes before assembly or promotion. Candidate
+  validation reports now include `candidate_manifest_sha256`, and canonical
+  packet surface checks reject hazardous parent components. The tracked
+  operator guide documents the approval validation and
+  `--execute-approved-promotion` flow. Canonical dev-container verification
+  passed: focused approval/assembler/operator-guide unittest 78 OK;
+  approval-template,
+  operator-guide, and submission-template checks; full KG-eval unittest
+  474 OK; main repo unittest 252 OK; full Ruff check and format-check;
+  refreshed broad reports; default main KG acceptance
+  `passed_with_explicit_limits`; strict main KG acceptance exits 1 only for
+  known limits. All four real roots remain empty and the four canonical broad
+  packets remain absent. Broad KG-eval remains incomplete with
+  `overall_passed=false`, 8 passed gates, and the same four failed gates;
+  objective audit remains `objective_complete=false` with 5 proved and
+  4 incomplete requirements. Reviewer gate passed 3/3 after Bernoulli's
+  candidate-manifest TOCTOU blocker was fixed and re-reviewed:
+  `Bernoulli`, `Popper`, and `Dalton` returned `RELEASE_DECISION: AGREE`.
+  No goal completion claim is supported.
