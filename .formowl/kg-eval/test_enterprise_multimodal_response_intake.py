@@ -196,12 +196,108 @@ class EnterpriseMultimodalResponseIntakeTest(unittest.TestCase):
         )
         self.assert_canonical_unchanged()
 
+    def test_cli_preflight_response_validates_without_writing_artifacts(self) -> None:
+        WORK_PACKET_PATH.write_text(
+            json.dumps(work_packet_generator.build_work_packet(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        response = valid_response_packet()
+        RESPONSE_PACKET_PATH.write_text(
+            json.dumps(response, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = [
+                "enterprise_multimodal_response_intake.py",
+                "--work-packet",
+                str(WORK_PACKET_PATH),
+                "--response-packet",
+                str(RESPONSE_PACKET_PATH),
+                "--output-dir",
+                OUTPUT_DIR,
+                "--assembly-manifest-output",
+                "work_packets/test_enterprise_multimodal_response_intake_manifest.json",
+                "--preflight-response",
+                "--allow-test-artifacts",
+            ]
+            with redirect_stdout(StringIO()) as output:
+                exit_code = intake.main()
+        finally:
+            sys.argv = original_argv
+
+        self.assertEqual(exit_code, 0)
+        result = json.loads(output.getvalue())
+        self.assertEqual(
+            result["preflight_packet_type"], "enterprise_multimodal_response_preflight_v1"
+        )
+        self.assertTrue(result["response_packet_valid_for_candidate_intake"])
+        self.assertFalse(result["writes_candidate_artifacts"])
+        self.assertFalse(result["writes_canonical_packet"])
+        self.assertFalse(result["counts_as_acceptance_gate"])
+        self.assertFalse(result["candidate_packet_validator_run"])
+        self.assertEqual(result["operator_run_id"], "enterprise_intake_run")
+        self.assertEqual(result["response_packet_sha256"], intake.sha256_artifact_payload(response))
+        self.assertIn(f"{OUTPUT_DIR}/response_custody_receipt.json", result["planned_artifacts"])
+        self.assertNotIn("candidate_packet_sha256", result)
+        self.assertNotIn("validation_report", result)
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
     def test_rejects_work_packet_boundary_mismatch_before_writes(self) -> None:
         work_packet = work_packet_generator.build_work_packet()
         work_packet["artifact_boundary"]["counts_as_acceptance_gate"] = True
 
         with self.assertRaisesRegex(intake.IntakeError, "counts_as_acceptance_gate"):
             intake.build_intake_artifacts(
+                work_packet=work_packet,
+                response_packet=valid_response_packet(),
+                output_dir=OUTPUT_DIR,
+                allow_test_artifacts=True,
+            )
+
+        self.assertFalse(BASE.exists())
+        self.assert_canonical_unchanged()
+
+    def test_preflight_rejects_fabricated_work_packet_even_with_false_boundary(
+        self,
+    ) -> None:
+        work_packet = {
+            "work_packet_type": "enterprise_multimodal_collection_packet_preview_v1",
+            "work_packet_state": "operator_assignment_only",
+            "evidence_state": "non_evidence",
+            "safe_output_root": "work_packets/",
+            "forbidden_output_roots": [
+                "inputs/enterprise_multimodal_real/",
+                "inputs/test_*",
+                "results/",
+                "templates/",
+            ],
+            "artifact_boundary": {
+                "creates_real_source_rows": False,
+                "creates_real_validation_rows": False,
+                "creates_human_review_results": False,
+                "creates_business_review_results": False,
+                "creates_permission_probe_results": False,
+                "writes_assembly_manifest": False,
+                "writes_canonical_packet": False,
+                "touches_real_evidence_root": False,
+                "counts_as_acceptance_gate": False,
+            },
+            "canonical_packet_not_written": "inputs/enterprise_multimodal_validation_packet.json",
+            "real_evidence_root_not_written": "inputs/enterprise_multimodal_real",
+            "source_collection_plan": {"plan_type": "forged"},
+            "review_collection_plan": {"plan_type": "forged"},
+            "validator_expectation": {
+                "authoritative_validator_must_be_run_separately": True,
+                "this_packet_is_sufficient_for_multimodal_gate": False,
+            },
+            "work_packet_sha256": "forged",
+        }
+
+        with self.assertRaisesRegex(intake.IntakeError, "work packet .* mismatch"):
+            intake.preflight_response_packet(
                 work_packet=work_packet,
                 response_packet=valid_response_packet(),
                 output_dir=OUTPUT_DIR,

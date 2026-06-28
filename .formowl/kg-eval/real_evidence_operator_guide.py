@@ -191,7 +191,17 @@ def _submission_manifest_section() -> list[str]:
         "```",
         "",
         "The intake plan is ignored by Git and does not execute commands. Review it before",
-        "running any listed candidate-only intake command.",
+        "running any listed response preflight or candidate-only intake command.",
+        "It lists paired response-preflight commands and candidate-only intake",
+        "commands for the same operator response packet paths and output dirs.",
+        "",
+        "Before executing candidate-only intake, run each gate-specific",
+        "`--preflight-response` command in this guide against the exact",
+        "operator response packet and output surface. Response preflight reads",
+        "the response packet contents, validates the intake contract and planned",
+        "artifact surface, writes no candidate artifacts, writes no candidate",
+        "manifest, never passes a promotion flag, never writes canonical input",
+        "packets, and still does not count as an acceptance gate.",
         "",
         "After reviewing the validated manifest and optional plan, the same manifest",
         "can execute the four candidate-only intake commands through the controlled",
@@ -385,18 +395,38 @@ def _gate_specific_requirements(order: dict[str, Any]) -> list[str]:
 
 def _commands_section(order: dict[str, Any]) -> list[str]:
     commands = order.get("commands", {})
+    preflight_commands = [
+        value
+        for key, value in commands.items()
+        if isinstance(value, str) and key.startswith("preflight_")
+    ]
     seal_commands = [
         value
         for key, value in commands.items()
         if isinstance(value, str) and key.startswith("seal_")
     ]
     lines = [
-        "Candidate-only intake command:",
+        "Response packet preflight command:",
         "",
-        "Replace the operator placeholders with real response packet paths and",
-        "a unique operator run id. This command writes only candidate artifacts.",
+        "Run this first with the final operator response packet and output",
+        "surface. It writes no candidate artifacts, no candidate manifest, and",
+        "no canonical packet.",
         "",
     ]
+    if preflight_commands:
+        lines.extend(_command_block(preflight_commands[0]))
+    else:
+        lines.append("- no response preflight command is available")
+    lines.extend(
+        [
+            "",
+            "Candidate-only intake command:",
+            "",
+            "Replace the operator placeholders with real response packet paths and",
+            "a unique operator run id. This command writes only candidate artifacts.",
+            "",
+        ]
+    )
     if seal_commands:
         lines.extend(_command_block(seal_commands[0]))
     else:

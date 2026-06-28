@@ -925,3 +925,25 @@ status in each role's goal file and task completion in
   Broad KG-eval remains incomplete with 8 passed gates and the same four
   failed gates. Reviewer gate passed 3/3 with `Euclid`, `Schrodinger`, and
   `Franklin`. No goal completion claim is supported.
+- 2026-06-28 operator response-packet preflight:
+  all four candidate-only response-intake CLIs now support
+  `--preflight-response`, and the submission-manifest intake plan, work orders,
+  and operator guide now expose paired response-preflight commands before
+  candidate-only intake. The preflight validates response packet shape,
+  work-packet/output binding, planned artifact surfaces, raw/internal guards,
+  and no-overwrite/parent-dir surfaces without writing candidate artifacts,
+  candidate manifests, or canonical broad packets. Nash's reviewer blocker was
+  fixed by making enterprise-multimodal and production-adapter intake reject
+  forged same-type work packets through generated work-packet state, roots,
+  canonical target, collection-plan, validator-expectation, and
+  `work_packet_sha256` comparisons. Dev-container verification passed so far:
+  focused response-intake/submission/work-order/operator-guide unittest
+  162 OK, full KG-eval unittest 524 OK, main repo unittest 252 OK,
+  guide/template checks, refreshed broad reports, full Ruff check,
+  format-check, and `git diff --check`. Broad KG-eval remains incomplete:
+  8 passed gates, 4 failed gates, all four stages
+  `missing_operator_response`, empty real roots, and absent canonical broad
+  packets. Reviewer gate passed 3/3: `Euler` agreed on engineering
+  correctness, `Nash` agreed after the enterprise/production work-packet
+  binding blocker was fixed and re-reviewed, and `Beauvoir` agreed on status
+  honesty.

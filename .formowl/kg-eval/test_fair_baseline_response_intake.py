@@ -185,6 +185,76 @@ class FairBaselineResponseIntakeTest(unittest.TestCase):
             )
         self.assert_canonical_unchanged()
 
+    def test_cli_preflight_response_validates_without_writing_artifacts(self) -> None:
+        WORK_PACKET_PATH.write_text(
+            json.dumps(work_packet_generator.build_work_packet(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        response = valid_response_packet()
+        RESPONSE_PACKET_PATH.write_text(
+            json.dumps(response, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = [
+                "fair_baseline_response_intake.py",
+                "--work-packet",
+                str(WORK_PACKET_PATH),
+                "--response-packet",
+                str(RESPONSE_PACKET_PATH),
+                "--output-dir",
+                OUTPUT_DIR,
+                "--assembly-manifest-output",
+                "work_packets/test_fair_baseline_response_intake_manifest.json",
+                "--preflight-response",
+                "--allow-test-artifacts",
+            ]
+            with redirect_stdout(StringIO()) as output:
+                exit_code = intake.main()
+        finally:
+            sys.argv = original_argv
+
+        self.assertEqual(exit_code, 0)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["preflight_packet_type"], "fair_baseline_response_preflight_v1")
+        self.assertTrue(result["response_packet_valid_for_candidate_intake"])
+        self.assertFalse(result["writes_candidate_artifacts"])
+        self.assertFalse(result["writes_canonical_packet"])
+        self.assertFalse(result["counts_as_acceptance_gate"])
+        self.assertFalse(result["candidate_packet_validator_run"])
+        self.assertEqual(result["operator_run_id"], "fair_intake_run")
+        self.assertEqual(result["response_packet_sha256"], intake.sha256_artifact_payload(response))
+        self.assertEqual(
+            result["assembly_manifest_output"],
+            "work_packets/test_fair_baseline_response_intake_manifest.json",
+        )
+        self.assertIn(f"{OUTPUT_DIR}/response_custody_receipt.json", result["planned_artifacts"])
+        self.assertNotIn("candidate_packet_sha256", result)
+        self.assertNotIn("validation_report", result)
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
+    def test_preflight_rejects_invalid_run_artifact_payload_without_writes(self) -> None:
+        response = valid_response_packet()
+        response["baseline_runs"][0]["package_lock_artifact"] = "not an artifact object"
+
+        with self.assertRaisesRegex(intake.IntakeError, "package_lock_artifact"):
+            intake.preflight_response_packet(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir=OUTPUT_DIR,
+                assembly_manifest_output=(
+                    "work_packets/test_fair_baseline_response_intake_manifest.json"
+                ),
+                allow_test_artifacts=True,
+            )
+
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
     def test_rejects_work_packet_boundary_mismatch_before_writes(self) -> None:
         work_packet = work_packet_generator.build_work_packet()
         work_packet["artifact_boundary"]["counts_as_acceptance_gate"] = True

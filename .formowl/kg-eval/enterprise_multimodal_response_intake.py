@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import enterprise_multimodal_collection_packet_generator as work_packet_generator
 import enterprise_multimodal_packet_assembler as assembler
 import enterprise_multimodal_validation_validator as validator
 
@@ -274,6 +275,21 @@ def _validated_work_packet(work_packet: dict[str, Any]) -> None:
     ):
         if boundary.get(field) is not False:
             raise IntakeError(f"work packet {field} must be false")
+    expected = work_packet_generator.build_work_packet()
+    for field in (
+        "work_packet_state",
+        "evidence_state",
+        "safe_output_root",
+        "forbidden_output_roots",
+        "canonical_packet_not_written",
+        "real_evidence_root_not_written",
+        "source_collection_plan",
+        "review_collection_plan",
+        "validator_expectation",
+        "work_packet_sha256",
+    ):
+        if work_packet.get(field) != expected[field]:
+            raise IntakeError(f"work packet {field} mismatch")
 
 
 def _validate_response_packet_fields(response_packet: dict[str, Any]) -> None:
@@ -365,6 +381,71 @@ def _artifact_receipts(paths: dict[str, Path]) -> list[dict[str, str]]:
             row["artifact_field"] = "validation_artifact"
         receipts.append(row)
     return receipts
+
+
+def _planned_artifact_refs(planned_paths: dict[str, Path]) -> list[str]:
+    return sorted(_artifact_ref(path) for path in planned_paths.values())
+
+
+def preflight_response_packet(
+    *,
+    work_packet: dict[str, Any],
+    response_packet: dict[str, Any],
+    output_dir: str,
+    assembly_manifest_output: str | None = None,
+    allow_test_artifacts: bool = False,
+) -> dict[str, Any]:
+    _validated_work_packet(work_packet)
+    if response_packet.get("response_packet_type") != "enterprise_multimodal_response_intake_v1":
+        raise IntakeError("response packet type mismatch")
+    _validate_response_packet_fields(response_packet)
+    _reject_raw_internal_fields(response_packet, label="response packet")
+    run_id = _ensure_safe_identifier(response_packet.get("operator_run_id"), "operator_run_id")
+    output_path = safe_real_output_dir(output_dir, allow_test_artifacts=allow_test_artifacts)
+    if output_path.name != run_id:
+        raise IntakeError("output_dir final segment must match operator_run_id")
+    assembly_manifest_path = (
+        safe_work_packet_output_path(assembly_manifest_output)
+        if assembly_manifest_output is not None
+        else None
+    )
+
+    validation_payloads = _validation_payloads(response_packet)
+    for field in ARTIFACT_FILENAMES:
+        _artifact_payload(response_packet, field)
+
+    planned_paths = _planned_paths(output_path, validation_payloads)
+    if assembly_manifest_path is not None:
+        planned_paths["assembly_manifest"] = assembly_manifest_path
+    _ensure_no_overwrite(planned_paths)
+    _ensure_parent_dirs_available(planned_paths)
+    return {
+        "preflight_packet_type": "enterprise_multimodal_response_preflight_v1",
+        "preflight_state": "operator_response_validated_without_writes",
+        "response_packet_valid_for_candidate_intake": True,
+        "writes_candidate_artifacts": False,
+        "writes_canonical_packet": False,
+        "canonical_packet_not_written": str(assembler.CANONICAL_PACKET_PATH.relative_to(ROOT)),
+        "counts_as_acceptance_gate": False,
+        "candidate_packet_validator_run": False,
+        "output_dir": str(output_path.relative_to(ROOT)),
+        "operator_run_id": run_id,
+        "response_packet_sha256": sha256_artifact_payload(response_packet),
+        "planned_artifact_count": len(planned_paths),
+        "planned_artifacts": _planned_artifact_refs(planned_paths),
+        "assembly_manifest_output": str(assembly_manifest_path.relative_to(ROOT))
+        if assembly_manifest_path is not None
+        else None,
+        "claim_boundary": {
+            "supports_real_enterprise_multimodal_claim": False,
+            "supports_multimodal_human_adjudication_completed_claim": False,
+            "supports_cross_modal_permission_probe_claim": False,
+            "supports_business_decision_review_claim": False,
+            "supports_canonical_packet_written_claim": False,
+            "supports_production_ready_claim": False,
+            "supports_top_tier_scientific_validation_claim": False,
+        },
+    }
 
 
 def build_intake_artifacts(
@@ -568,19 +649,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--assembly-manifest-output",
         help="optional safe relative output path under work_packets/",
     )
+    parser.add_argument(
+        "--preflight-response",
+        action="store_true",
+        help="validate response packet and planned output surface without writing artifacts",
+    )
     parser.add_argument("--allow-test-artifacts", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
 def main() -> int:
     args = build_arg_parser().parse_args()
-    result = build_intake_artifacts(
-        work_packet=load_json_file(Path(args.work_packet)),
-        response_packet=load_json_file(Path(args.response_packet)),
-        output_dir=args.output_dir,
-        assembly_manifest_output=args.assembly_manifest_output,
-        allow_test_artifacts=args.allow_test_artifacts,
-    )
+    payload = {
+        "work_packet": load_json_file(Path(args.work_packet)),
+        "response_packet": load_json_file(Path(args.response_packet)),
+        "output_dir": args.output_dir,
+        "assembly_manifest_output": args.assembly_manifest_output,
+        "allow_test_artifacts": args.allow_test_artifacts,
+    }
+    if args.preflight_response:
+        result = preflight_response_packet(**payload)
+    else:
+        result = build_intake_artifacts(**payload)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

@@ -799,8 +799,10 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         fair = self._order(report, "fair_external_baseline_comparison")
 
         command = fair["commands"]["seal_fair_baseline_responses_into_candidate_artifacts"]
+        preflight_command = fair["commands"]["preflight_fair_baseline_response_packet"]
 
         self.assertIn("python3 fair_baseline_response_intake.py", command)
+        self.assertEqual(preflight_command, f"{command} --preflight-response")
         self.assertIn(f"--work-packet {work_orders.FAIR_RESPONSE_INTAKE_WORK_PACKET}", command)
         self.assertIn(
             f"--response-packet {work_orders.FAIR_RESPONSE_PACKET_PLACEHOLDER}",
@@ -824,6 +826,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             fair["real_artifact_root"], work_orders.FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT
         )
         self.assertNotIn("--promote", command)
+        self.assertNotIn("--promote", preflight_command)
         self.assertFalse(fair["work_order_authority"]["accepts_evidence"])
         self.assertFalse(fair["work_order_authority"]["promotes_evidence"])
         self.assertFalse(fair["work_order_authority"]["writes_canonical_packet"])
@@ -834,8 +837,10 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         human = self._order(report, "annotation_adjudication_protocol")
 
         command = human["commands"]["seal_human_responses_into_candidate_artifacts"]
+        preflight_command = human["commands"]["preflight_human_response_packet"]
 
         self.assertIn("python3 human_annotation_response_intake.py", command)
+        self.assertEqual(preflight_command, f"{command} --preflight-response")
         self.assertIn(f"--work-packet {work_orders.HUMAN_RESPONSE_INTAKE_WORK_PACKET}", command)
         self.assertIn(
             f"--response-packet {work_orders.HUMAN_RESPONSE_PACKET_PLACEHOLDER}",
@@ -861,6 +866,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             human["real_artifact_root"], work_orders.HUMAN_RESPONSE_INTAKE_MANIFEST_OUTPUT
         )
         self.assertNotIn("--promote", command)
+        self.assertNotIn("--promote", preflight_command)
         self.assertFalse(human["work_order_authority"]["accepts_evidence"])
         self.assertFalse(human["work_order_authority"]["promotes_evidence"])
         self.assertFalse(human["work_order_authority"]["writes_canonical_packet"])
@@ -871,8 +877,10 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         enterprise = self._order(report, "multimodal_semantic_validation")
 
         command = enterprise["commands"]["seal_enterprise_responses_into_candidate_artifacts"]
+        preflight_command = enterprise["commands"]["preflight_enterprise_response_packet"]
 
         self.assertIn("python3 enterprise_multimodal_response_intake.py", command)
+        self.assertEqual(preflight_command, f"{command} --preflight-response")
         self.assertIn(
             f"--work-packet {work_orders.ENTERPRISE_RESPONSE_INTAKE_WORK_PACKET}",
             command,
@@ -902,6 +910,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             work_orders.ENTERPRISE_RESPONSE_INTAKE_MANIFEST_OUTPUT,
         )
         self.assertNotIn("--promote", command)
+        self.assertNotIn("--promote", preflight_command)
         self.assertFalse(enterprise["work_order_authority"]["accepts_evidence"])
         self.assertFalse(enterprise["work_order_authority"]["promotes_evidence"])
         self.assertFalse(enterprise["work_order_authority"]["writes_canonical_packet"])
@@ -914,8 +923,10 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         command = production["commands"][
             "seal_production_adapter_responses_into_candidate_artifacts"
         ]
+        preflight_command = production["commands"]["preflight_production_adapter_response_packet"]
 
         self.assertIn("python3 production_adapter_response_intake.py", command)
+        self.assertEqual(preflight_command, f"{command} --preflight-response")
         self.assertIn(
             f"--work-packet {work_orders.PRODUCTION_RESPONSE_INTAKE_WORK_PACKET}",
             command,
@@ -945,6 +956,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             work_orders.PRODUCTION_RESPONSE_INTAKE_MANIFEST_OUTPUT,
         )
         self.assertNotIn("--promote", command)
+        self.assertNotIn("--promote", preflight_command)
         self.assertFalse(production["work_order_authority"]["accepts_evidence"])
         self.assertFalse(production["work_order_authority"]["promotes_evidence"])
         self.assertFalse(production["work_order_authority"]["writes_canonical_packet"])

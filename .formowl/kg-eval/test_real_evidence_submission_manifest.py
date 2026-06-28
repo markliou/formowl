@@ -278,6 +278,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertFalse(plan["authority"]["writes_candidate_artifacts"])
         self.assertFalse(plan["authority"]["writes_canonical_packets"])
         self.assertEqual(len(plan["execution_plan"]), 4)
+        self.assertEqual(len(plan["preflight_commands"]), 4)
         for expected, row in zip(
             submission_manifest.EXPECTED_SUBMISSIONS,
             plan["execution_plan"],
@@ -286,16 +287,27 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             self.assertEqual(row["gate_id"], expected.gate_id)
             self.assertEqual(row["work_packet"], expected.work_packet_path)
             self.assertEqual(row["canonical_packet_not_written"], expected.canonical_packet)
+            self.assertTrue(row["preflight_effects"]["reads_response_packet_contents"])
+            self.assertFalse(row["preflight_effects"]["writes_candidate_artifacts"])
+            self.assertFalse(row["preflight_effects"]["writes_candidate_manifest"])
+            self.assertFalse(row["preflight_effects"]["writes_canonical_packets"])
+            self.assertFalse(row["preflight_effects"]["promotes_evidence"])
+            self.assertFalse(row["preflight_effects"]["counts_as_acceptance_gate"])
             self.assertTrue(row["execution_effects"]["reads_response_packet_contents"])
             self.assertTrue(row["execution_effects"]["writes_candidate_artifacts"])
             self.assertFalse(row["execution_effects"]["writes_canonical_packets"])
             self.assertFalse(row["execution_effects"]["promotes_evidence"])
             self.assertFalse(row["execution_effects"]["counts_as_acceptance_gate"])
+            self.assertEqual(row["preflight_argv"], [*row["argv"], "--preflight-response"])
+            self.assertEqual(row["preflight_command"], f"{row['command']} --preflight-response")
+            self.assertIn(row["preflight_command"], plan["preflight_commands"])
             self.assertEqual(row["argv"][0], "python3")
             self.assertEqual(row["argv"][1], expected.intake_script)
             self.assertIn("--response-packet", row["argv"])
             self.assertIn("--assembly-manifest-output", row["argv"])
+            self.assertIn("--preflight-response", row["preflight_argv"])
             self.assertNotIn("--promote", row["argv"])
+            self.assertNotIn("--promote", row["preflight_argv"])
             self.assertNotIn("--allow-test-artifacts", row["argv"])
 
     def test_execute_candidate_intakes_uses_validated_argv_without_shell(self) -> None:
@@ -1033,6 +1045,8 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertEqual(printed, plan)
         self.assertEqual(plan["artifact_id"], "kg_real_evidence_candidate_intake_plan_v1")
         self.assertEqual(len(plan["execution_plan"]), 4)
+        self.assertEqual(len(plan["preflight_commands"]), 4)
+        self.assertTrue(all("--preflight-response" in row for row in plan["preflight_commands"]))
         self.assertFalse(plan["authority"]["writes_candidate_artifacts"])
         self.assertFalse(plan["authority"]["writes_canonical_packets"])
 

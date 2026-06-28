@@ -68,6 +68,11 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
         self.assertIn("real_evidence_submission_manifest.py --manifest", text)
         self.assertIn("--emit-intake-plan", text)
         self.assertIn("work_packets/OPERATOR_INTAKE_PLAN.json", text)
+        self.assertIn("response preflight or candidate-only intake command", text)
+        self.assertIn("paired response-preflight commands", text)
+        self.assertIn("`--preflight-response` command", text)
+        self.assertIn("Response preflight reads", text)
+        self.assertIn("writes no candidate artifacts, writes no candidate", text)
         self.assertIn("--execute-candidate-intakes", text)
         self.assertIn("candidate artifacts plus generated candidate manifests only", text)
         self.assertIn("still does not count as an acceptance gate", text)
@@ -137,6 +142,15 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
                     response_contract["canonical_packet_not_written"],
                     text,
                 )
+                self.assertIn("Response packet preflight command:", text)
+                preflight_commands = [
+                    value
+                    for key, value in order["commands"].items()
+                    if isinstance(value, str) and key.startswith("preflight_")
+                ]
+                self.assertEqual(len(preflight_commands), 1)
+                self.assertIn(preflight_commands[0], text)
+                self.assertIn("--preflight-response", preflight_commands[0])
                 self.assertIn("Candidate-only intake command:", text)
                 self.assertIn("Optional non-evidence scaffold command:", text)
                 self.assertIn("Candidate manifest emitted by intake:", text)
@@ -167,6 +181,7 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
         self.assertIn("## Guide Withheld", text)
         self.assertIn("not synchronized", text)
         self.assertIn("## Submission Manifest Preflight", text)
+        self.assertNotIn("Response packet preflight command:", text)
         self.assertNotIn("Candidate-only intake command:", text)
 
     def test_output_path_is_limited_to_work_packets_markdown(self) -> None:

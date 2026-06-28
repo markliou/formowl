@@ -135,36 +135,58 @@ def _common_commands(row: dict[str, Any], gate_config: dict[str, Any]) -> dict[s
             f"python3 {generator} --output {manifest_path}"
         )
     if row["gate_id"] == "fair_external_baseline_comparison":
-        commands["seal_fair_baseline_responses_into_candidate_artifacts"] = (
+        fair_response_intake_command = (
             "python3 fair_baseline_response_intake.py "
             f"--work-packet {FAIR_RESPONSE_INTAKE_WORK_PACKET} "
             f"--response-packet {FAIR_RESPONSE_PACKET_PLACEHOLDER} "
             f"--output-dir {FAIR_RESPONSE_INTAKE_OUTPUT_DIR} "
             f"--assembly-manifest-output {FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT}"
         )
+        commands["preflight_fair_baseline_response_packet"] = (
+            f"{fair_response_intake_command} --preflight-response"
+        )
+        commands["seal_fair_baseline_responses_into_candidate_artifacts"] = (
+            fair_response_intake_command
+        )
     if row["gate_id"] == "annotation_adjudication_protocol":
-        commands["seal_human_responses_into_candidate_artifacts"] = (
+        human_response_intake_command = (
             "python3 human_annotation_response_intake.py "
             f"--work-packet {HUMAN_RESPONSE_INTAKE_WORK_PACKET} "
             f"--response-packet {HUMAN_RESPONSE_PACKET_PLACEHOLDER} "
             f"--output-dir {HUMAN_RESPONSE_INTAKE_OUTPUT_DIR} "
             f"--assembly-manifest-output {HUMAN_RESPONSE_INTAKE_MANIFEST_OUTPUT}"
         )
+        commands["preflight_human_response_packet"] = (
+            f"{human_response_intake_command} --preflight-response"
+        )
+        commands["seal_human_responses_into_candidate_artifacts"] = human_response_intake_command
     if row["gate_id"] == "multimodal_semantic_validation":
-        commands["seal_enterprise_responses_into_candidate_artifacts"] = (
+        enterprise_response_intake_command = (
             "python3 enterprise_multimodal_response_intake.py "
             f"--work-packet {ENTERPRISE_RESPONSE_INTAKE_WORK_PACKET} "
             f"--response-packet {ENTERPRISE_RESPONSE_PACKET_PLACEHOLDER} "
             f"--output-dir {ENTERPRISE_RESPONSE_INTAKE_OUTPUT_DIR} "
             f"--assembly-manifest-output {ENTERPRISE_RESPONSE_INTAKE_MANIFEST_OUTPUT}"
         )
+        commands["preflight_enterprise_response_packet"] = (
+            f"{enterprise_response_intake_command} --preflight-response"
+        )
+        commands["seal_enterprise_responses_into_candidate_artifacts"] = (
+            enterprise_response_intake_command
+        )
     if row["gate_id"] == "production_adapter_paths":
-        commands["seal_production_adapter_responses_into_candidate_artifacts"] = (
+        production_response_intake_command = (
             "python3 production_adapter_response_intake.py "
             f"--work-packet {PRODUCTION_RESPONSE_INTAKE_WORK_PACKET} "
             f"--response-packet {PRODUCTION_RESPONSE_PACKET_PLACEHOLDER} "
             f"--output-dir {PRODUCTION_RESPONSE_INTAKE_OUTPUT_DIR} "
             f"--assembly-manifest-output {PRODUCTION_RESPONSE_INTAKE_MANIFEST_OUTPUT}"
+        )
+        commands["preflight_production_adapter_response_packet"] = (
+            f"{production_response_intake_command} --preflight-response"
+        )
+        commands["seal_production_adapter_responses_into_candidate_artifacts"] = (
+            production_response_intake_command
         )
     return commands
 

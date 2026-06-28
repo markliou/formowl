@@ -1297,3 +1297,31 @@ Reviewer cost-control rules:
   `Schrodinger`, and `Franklin` returned `RELEASE_DECISION: AGREE`. This
   template slice does not make any broad gate pass, and no goal completion
   claim is supported.
+- 2026-06-28 operator response-packet preflight checkpoint:
+  the four candidate-only response-intake CLIs now support
+  `--preflight-response`, which validates final operator response packet
+  shape, work-packet binding, output-dir/operator-run-id binding, optional
+  candidate-manifest output path, planned artifact surfaces, raw/internal
+  field guards, and no-overwrite/parent-dir surfaces without writing candidate
+  artifacts, candidate manifests, or canonical broad packets. The
+  enterprise-multimodal and production-adapter paths now reject forged
+  same-type work packets even when artifact-boundary booleans are false by
+  comparing the generated work-packet state, roots, canonical target,
+  collection plans, validator expectation, and `work_packet_sha256`. The
+  submission-manifest intake plan now lists paired response-preflight commands
+  beside candidate-only intake commands, and the tracked work orders/operator
+  guide instruct operators to run preflight before intake. Claim boundary: the
+  slice accepts no evidence, promotes no evidence, does not run candidate
+  validators during preflight, writes no canonical broad packets, and does not
+  count as acceptance. Canonical dev-container verification passed: focused
+  response-intake/submission/work-order/operator-guide unittest 162 OK, full
+  KG-eval unittest 524 OK, main repo unittest 252 OK, operator guide
+  `--check`, submission template `--check-template`, refreshed broad reports,
+  full Ruff check, Ruff format-check, and `git diff --check`. Broad KG-eval
+  remains incomplete with `overall_passed=false`, 8 passed gates, and the same
+  four failed real-evidence gates; progress still shows all four at
+  `missing_operator_response`, with empty real roots and absent canonical broad
+  packets. Reviewer gate passed 3/3: `Euler` agreed on engineering
+  correctness, `Nash` agreed after the enterprise/production work-packet
+  binding blocker was fixed and re-reviewed, and `Beauvoir` agreed on status
+  honesty. No completion claim is supported.

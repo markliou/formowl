@@ -213,6 +213,50 @@ class HumanAnnotationResponseIntakeTest(unittest.TestCase):
         )
         self.assert_canonical_unchanged()
 
+    def test_cli_preflight_response_validates_without_writing_artifacts(self) -> None:
+        write_json(WORK_PACKET_PATH, work_packet_generator.build_work_packet())
+        response = valid_response_packet(operator_run_id="operator_intake_cli_check")
+        write_json(RESPONSE_PACKET_PATH, response)
+        original_argv = sys.argv[:]
+        stdout = StringIO()
+        try:
+            sys.argv = [
+                "human_annotation_response_intake.py",
+                "--work-packet",
+                str(WORK_PACKET_PATH),
+                "--response-packet",
+                str(RESPONSE_PACKET_PATH),
+                "--output-dir",
+                "inputs/human_annotation_real/operator_intake_cli_check",
+                "--assembly-manifest-output",
+                "work_packets/test_human_annotation_response_intake_manifest.json",
+                "--preflight-response",
+            ]
+            with redirect_stdout(stdout):
+                exit_code = intake.main()
+        finally:
+            sys.argv = original_argv
+
+        self.assertEqual(exit_code, 0)
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(result["preflight_packet_type"], "human_annotation_response_preflight_v1")
+        self.assertTrue(result["response_packet_valid_for_candidate_intake"])
+        self.assertFalse(result["writes_candidate_artifacts"])
+        self.assertFalse(result["writes_canonical_packet"])
+        self.assertFalse(result["counts_as_acceptance_gate"])
+        self.assertFalse(result["candidate_packet_validator_run"])
+        self.assertEqual(result["operator_run_id"], "operator_intake_cli_check")
+        self.assertEqual(result["response_packet_sha256"], intake.sha256_artifact_payload(response))
+        self.assertIn(
+            "inputs/human_annotation_real/operator_intake_cli_check/response_custody_receipt.json",
+            result["planned_artifacts"],
+        )
+        self.assertNotIn("candidate_packet_sha256", result)
+        self.assertNotIn("validation_report", result)
+        self.assertFalse(LIVE_CLI_BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
     def test_rejects_annotation_task_id_mismatch_before_writes(self) -> None:
         response = valid_response_packet()
         response["annotation_task_id"] = "kg_eval_human_annotation_wrong"

@@ -42,6 +42,48 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `production_adapter_paths`
 
 Current local implementation slice, updated 2026-06-28 after operator
+response-packet preflight:
+
+- The four candidate-only response-intake CLIs now support
+  `--preflight-response`:
+  - `fair_baseline_response_intake.py`
+  - `human_annotation_response_intake.py`
+  - `enterprise_multimodal_response_intake.py`
+  - `production_adapter_response_intake.py`
+- Response preflight validates the operator response packet shape, work-packet
+  binding, output-dir/operator-run-id binding, optional candidate-manifest
+  output path, planned artifact surface, raw/internal field guards, and
+  no-overwrite/parent-dir surfaces without writing candidate artifacts,
+  candidate manifests, or canonical packets.
+- Reviewer blocker fix: enterprise-multimodal and production-adapter intake now
+  reject forged same-type work packets even when artifact-boundary booleans are
+  false by comparing the generated work-packet state, roots, canonical target,
+  collection plans, validator expectation, and `work_packet_sha256`.
+- The submission-manifest intake plan now lists paired
+  `preflight_command`/`preflight_argv` rows alongside the existing
+  candidate-only intake commands. The tracked work orders and operator guide
+  now direct operators to run response preflight before candidate intake.
+- Claim boundary: this slice accepts no evidence, promotes no evidence, writes
+  no canonical broad packets, does not run candidate validators during
+  preflight, and does not count as an acceptance gate.
+- Canonical dev-container verification passed:
+  - focused response-intake/submission/work-order/operator-guide unittest ran
+    162 tests OK.
+  - full KG-eval unittest ran 524 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - operator guide `--check`, submission template `--check-template`, refreshed
+    broad reports, full Ruff check, Ruff format-check, and `git diff --check`
+    exited 0.
+- Broad KG-eval remains incomplete with `overall_passed=false`, 8 passed gates,
+  and the same four failed gates. `real_evidence_gate_progress.py` still
+  reports all four gates at `missing_operator_response`, with zero candidate
+  manifests, zero clear validation reports, zero valid approvals, empty real
+  roots, and absent canonical broad packets. No completion claim is supported.
+- Reviewer gate passed 3/3: `Euler` agreed on engineering correctness,
+  `Nash` agreed after the enterprise/production work-packet binding blocker
+  was fixed and re-reviewed, and `Beauvoir` agreed on status honesty.
+
+Current local implementation slice, updated 2026-06-28 after operator
 response-packet template generation:
 
 - Added `real_evidence_response_packet_templates.py` and four tracked

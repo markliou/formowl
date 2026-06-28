@@ -607,6 +607,7 @@ def build_intake_plan(
             "--assembly-manifest-output",
             row["assembly_manifest_output"],
         ]
+        preflight_argv = [*argv, "--preflight-response"]
         plan_rows.append(
             {
                 "sequence": index,
@@ -618,8 +619,18 @@ def build_intake_plan(
                 "output_dir": row["output_dir"],
                 "assembly_manifest_output": row["assembly_manifest_output"],
                 "canonical_packet_not_written": row["canonical_packet_not_written"],
+                "preflight_argv": preflight_argv,
+                "preflight_command": " ".join(preflight_argv),
                 "argv": argv,
                 "command": row["intake_command"],
+                "preflight_effects": {
+                    "reads_response_packet_contents": True,
+                    "writes_candidate_artifacts": False,
+                    "writes_candidate_manifest": False,
+                    "writes_canonical_packets": False,
+                    "promotes_evidence": False,
+                    "counts_as_acceptance_gate": False,
+                },
                 "execution_effects": {
                     "reads_response_packet_contents": True,
                     "writes_candidate_artifacts": True,
@@ -643,6 +654,7 @@ def build_intake_plan(
         },
         "execution_required": "operator must explicitly run the listed intake commands",
         "execution_plan": plan_rows,
+        "preflight_commands": [row["preflight_command"] for row in plan_rows],
         "intake_commands": [row["command"] for row in plan_rows],
     }
 

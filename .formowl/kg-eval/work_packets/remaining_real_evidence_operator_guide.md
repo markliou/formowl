@@ -1,7 +1,7 @@
 # Remaining KG Real-Evidence Operator Guide
 
 Source report: `kg_real_evidence_collection_work_orders_v1`
-Source report sha256: `5cb3f90c24ca3745b2e0b86f9c4a8ce6bbd8afa1681a00a96f2bfe0d7d77cbd6`
+Source report sha256: `f999fd978babd544370de7e58f03845c1d29882d670db4986212a46e06f0716c`
 
 ## Authority Boundary
 
@@ -138,7 +138,17 @@ python3 real_evidence_submission_manifest.py --manifest work_packets/OPERATOR_FI
 ```
 
 The intake plan is ignored by Git and does not execute commands. Review it before
-running any listed candidate-only intake command.
+running any listed response preflight or candidate-only intake command.
+It lists paired response-preflight commands and candidate-only intake
+commands for the same operator response packet paths and output dirs.
+
+Before executing candidate-only intake, run each gate-specific
+`--preflight-response` command in this guide against the exact
+operator response packet and output surface. Response preflight reads
+the response packet contents, validates the intake contract and planned
+artifact surface, writes no candidate artifacts, writes no candidate
+manifest, never passes a promotion flag, never writes canonical input
+packets, and still does not count as an acceptance gate.
 
 After reviewing the validated manifest and optional plan, the same manifest
 can execute the four candidate-only intake commands through the controlled
@@ -358,6 +368,16 @@ Required intake controls:
 - intake custody receipt binds response packet, candidate packet, and artifact hashes
 - intake custody receipt binds optional assembly manifest hash when emitted
 
+Response packet preflight command:
+
+Run this first with the final operator response packet and output
+surface. It writes no candidate artifacts, no candidate manifest, and
+no canonical packet.
+
+```sh
+python3 fair_baseline_response_intake.py --work-packet work_packets/fair_baseline_run_work_packet_preview.json --response-packet OPERATOR_FAIR_BASELINE_RESPONSE_PACKET_JSON --output-dir inputs/fair_baseline_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/fair_external_baseline_comparison_candidate_manifest.json --preflight-response
+```
+
 Candidate-only intake command:
 
 Replace the operator placeholders with real response packet paths and
@@ -500,6 +520,16 @@ Required intake controls:
 - unsupported response packet fields and raw/internal field names are rejected
 - intake custody receipt binds response packet, candidate packet, and artifact hashes
 - intake custody receipt binds optional assembly manifest hash when emitted
+
+Response packet preflight command:
+
+Run this first with the final operator response packet and output
+surface. It writes no candidate artifacts, no candidate manifest, and
+no canonical packet.
+
+```sh
+python3 human_annotation_response_intake.py --work-packet work_packets/human_annotation_work_packet_preview.json --response-packet OPERATOR_RESPONSE_PACKET_JSON --output-dir inputs/human_annotation_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/annotation_adjudication_protocol_candidate_manifest.json --preflight-response
+```
 
 Candidate-only intake command:
 
@@ -649,6 +679,16 @@ Required intake controls:
 - candidate packet validates before any manual governance promotion
 - intake custody receipt binds response packet, candidate packet, and artifact hashes
 - intake custody receipt binds optional assembly manifest hash when emitted
+
+Response packet preflight command:
+
+Run this first with the final operator response packet and output
+surface. It writes no candidate artifacts, no candidate manifest, and
+no canonical packet.
+
+```sh
+python3 enterprise_multimodal_response_intake.py --work-packet work_packets/enterprise_multimodal_collection_packet_preview.json --response-packet OPERATOR_ENTERPRISE_RESPONSE_PACKET_JSON --output-dir inputs/enterprise_multimodal_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/multimodal_semantic_validation_candidate_manifest.json --preflight-response
+```
 
 Candidate-only intake command:
 
@@ -818,6 +858,16 @@ Required intake controls:
 - candidate packet validates before any manual governance promotion
 - intake custody receipt binds response packet, candidate packet, and artifact hashes
 - intake custody receipt binds optional assembly manifest hash when emitted
+
+Response packet preflight command:
+
+Run this first with the final operator response packet and output
+surface. It writes no candidate artifacts, no candidate manifest, and
+no canonical packet.
+
+```sh
+python3 production_adapter_response_intake.py --work-packet work_packets/production_adapter_collection_packet_preview.json --response-packet OPERATOR_PRODUCTION_ADAPTER_RESPONSE_PACKET_JSON --output-dir inputs/production_adapter_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/production_adapter_paths_candidate_manifest.json --preflight-response
+```
 
 Candidate-only intake command:
 

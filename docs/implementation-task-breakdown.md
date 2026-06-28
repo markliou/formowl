@@ -1119,6 +1119,26 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `fair_external_baseline_comparison`,
     `annotation_adjudication_protocol`,
     `multimodal_semantic_validation`, and `production_adapter_paths`.
+  - 2026-06-28 operator response-packet preflight note:
+    the four candidate-only response-intake CLIs now support
+    `--preflight-response`, and the submission-manifest intake plan, work
+    orders, and operator guide expose paired response-preflight commands before
+    candidate-only intake. The preflight validates response-packet shape,
+    work-packet/output binding, planned artifact surfaces, raw/internal guards,
+    and no-overwrite/parent-dir surfaces without writing candidate artifacts,
+    candidate manifests, or canonical broad packets. Reviewer blocker fix:
+    enterprise-multimodal and production-adapter intake now reject forged
+    same-type work packets by comparing the generated work-packet state, roots,
+    canonical target, collection plans, validator expectation, and
+    `work_packet_sha256`. Canonical dev-container verification passed for
+    focused response-intake/submission/work-order/operator-guide unittest
+    162 OK, full KG-eval unittest 524 OK, main repo unittest 252 OK,
+    guide/template checks, refreshed broad reports, full Ruff check,
+    format-check, and `git diff --check`. The item remains unchecked
+    because broad KG-eval still reports `overall_passed=false`, 8 passed
+    gates, and the same four failed real-evidence gates; all four stages are
+    still `missing_operator_response` with empty real roots and absent
+    canonical broad packets.
   - Note: the checked item above is only the scoped ontology and
     method/acceptance-harness slice. It does not prove fair external baseline
     execution, real human adjudication, real enterprise multimodal validation,
