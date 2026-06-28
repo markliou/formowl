@@ -947,3 +947,21 @@ status in each role's goal file and task completion in
   correctness, `Nash` agreed after the enterprise/production work-packet
   binding blocker was fixed and re-reviewed, and `Beauvoir` agreed on status
   honesty.
+- 2026-06-28 submission-manifest response-preflight runner:
+  `real_evidence_submission_manifest.py --preflight-responses` validates the
+  operator-filled submission manifest, then runs the four fixed intake helper
+  `--preflight-response` argv without a shell. It requires existing response
+  packets, refuses pre-existing canonical broad-packet path hazards, stops on
+  the first failed response preflight, and fails closed if final-state
+  canonical packet or candidate-output surfaces change. It reads response
+  contents only through existing preflight helpers, writes no candidate
+  artifacts or candidate manifests, promotes no evidence, writes no canonical
+  broad packets, and does not count as acceptance. Dev-container verification
+  passed: focused submission/guide unittest 63 OK, full KG-eval unittest
+  531 OK, main repo unittest 252 OK, guide/template/progress checks, refreshed
+  broad reports, default KG acceptance `passed_with_explicit_limits`, strict
+  exits 1 only for known limits, and full Ruff check/format-check. Reviewer
+  gate passed 3/3 with `Huygens`, `Gauss`, and `Ohm`. Broad KG-eval remains
+  8/12 with the same four failed gates, all still
+  `missing_operator_response`; real roots are empty and canonical broad
+  packets are absent.

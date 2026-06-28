@@ -1139,6 +1139,30 @@ These groups can be split across multiple agents after Slice 1 is stable.
     gates, and the same four failed real-evidence gates; all four stages are
     still `missing_operator_response` with empty real roots and absent
     canonical broad packets.
+  - 2026-06-28 submission-manifest response-preflight runner checkpoint:
+    `real_evidence_submission_manifest.py --preflight-responses` now validates
+    the operator-filled submission manifest first, then runs the four fixed
+    response-intake helper `--preflight-response` argv without a shell. It
+    requires existing response packets, refuses pre-existing canonical packet
+    path hazards before subprocess launch, stops on the first failed response
+    preflight, and fails closed if a helper leaves a final-state canonical
+    packet surface, candidate output surface, or candidate-manifest output
+    changed. The runner reads response-packet contents only through the
+    existing preflight helpers; it writes no candidate artifacts, writes no
+    candidate manifest, promotes no evidence, writes no canonical broad
+    packets, and does not count as an acceptance gate. Canonical dev-container
+    verification passed: focused submission/guide unittest 63 OK, full
+    KG-eval unittest 531 OK, main repo unittest 252 OK, guide/template/
+    approval-template/response-template/progress checks, refreshed broad
+    reports, default main KG acceptance `passed_with_explicit_limits`, strict
+    main KG acceptance exits 1 only for known limits, full Ruff check and
+    format-check. Reviewer gate passed 3/3: `Huygens`, `Gauss`, and `Ohm`
+    returned `RELEASE_DECISION: AGREE` after Huygens' direct canonical-drift
+    test suggestion was implemented. The item remains unchecked because this
+    hardening accepts no evidence and broad KG-eval still reports
+    `overall_passed=false`, 8 passed gates, and the same four failed
+    real-evidence gates; all four stages remain `missing_operator_response`
+    with empty real roots and absent canonical broad packets.
   - Note: the checked item above is only the scoped ontology and
     method/acceptance-harness slice. It does not prove fair external baseline
     execution, real human adjudication, real enterprise multimodal validation,

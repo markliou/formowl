@@ -1325,3 +1325,28 @@ Reviewer cost-control rules:
   correctness, `Nash` agreed after the enterprise/production work-packet
   binding blocker was fixed and re-reviewed, and `Beauvoir` agreed on status
   honesty. No completion claim is supported.
+- 2026-06-28 submission-manifest response-preflight runner checkpoint:
+  `real_evidence_submission_manifest.py --preflight-responses` now provides a
+  single controlled non-evidence runner over the four response-intake helper
+  preflights. It validates the operator-filled submission manifest first,
+  requires existing response packets, builds fixed `--preflight-response` argv,
+  runs helpers without a shell, refuses pre-existing canonical broad-packet
+  path hazards before subprocess launch, stops on the first failed preflight,
+  and fails closed on final-state canonical packet or response-output surface
+  drift. It reads response-packet contents only through the existing preflight
+  helpers, writes no candidate artifacts, writes no candidate manifest,
+  promotes no evidence, writes no canonical broad packets, and does not count
+  as an acceptance gate. Canonical dev-container verification passed: focused
+  submission/guide unittest 63 OK, full KG-eval unittest 531 OK, main repo
+  unittest 252 OK, operator guide/submission-template/governance-approval
+  template/response-template/progress checks, refreshed broad reports, default
+  main KG acceptance `passed_with_explicit_limits`, strict main KG acceptance
+  exits 1 only for known limits, and full Ruff check/format-check. Reviewer
+  gate passed 3/3: `Huygens`, `Gauss`, and `Ohm` returned
+  `RELEASE_DECISION: AGREE` after Huygens' direct canonical-drift test
+  suggestion was implemented. Broad KG-eval remains incomplete with
+  `overall_passed=false`, 8 passed gates, and the same four failed
+  real-evidence gates; progress still shows all four at
+  `missing_operator_response`, with zero candidate manifests, zero clear
+  validation reports, zero valid approvals, empty real roots, and absent
+  canonical broad packets. No goal completion claim is supported.

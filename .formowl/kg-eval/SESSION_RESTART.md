@@ -42,6 +42,41 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `production_adapter_paths`
 
 Current local implementation slice, updated 2026-06-28 after operator
+submission-manifest response-preflight runner:
+
+- `real_evidence_submission_manifest.py --preflight-responses` now runs the
+  four response-intake helper `--preflight-response` commands from a validated
+  operator-filled submission manifest.
+- The runner requires existing response packets, uses fixed manifest-derived
+  argv with no shell, refuses pre-existing canonical broad-packet path hazards
+  before subprocess launch, stops on the first failed response preflight, and
+  fails closed if final-state canonical packet or response-output surfaces
+  change.
+- Claim boundary: it reads response-packet contents only through the existing
+  preflight helpers, writes no candidate artifacts, writes no candidate
+  manifest, promotes no evidence, writes no canonical broad packets, and does
+  not count as an acceptance gate.
+- Canonical dev-container verification passed:
+  - focused submission/guide unittest ran 63 tests OK.
+  - full KG-eval unittest ran 531 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - operator guide, submission-template, approval-template, response-template,
+    and progress checks exited 0.
+  - broad reports were refreshed; default main KG acceptance remains
+    `passed_with_explicit_limits`, and strict main KG acceptance exits 1 only
+    for known limits.
+  - full Ruff check passed and Ruff format-check reported 207 files already
+    formatted.
+- Reviewer gate passed 3/3: `Huygens`, `Gauss`, and `Ohm` returned
+  `RELEASE_DECISION: AGREE` after Huygens' direct canonical-drift test
+  suggestion was implemented.
+- Broad KG-eval remains incomplete with `overall_passed=false`, 8 passed gates,
+  and the same four failed gates. `real_evidence_gate_progress.py` still
+  reports all four gates at `missing_operator_response`, with zero candidate
+  manifests, zero clear validation reports, zero valid approvals, empty real
+  roots, and absent canonical broad packets. No completion claim is supported.
+
+Current local implementation slice, updated 2026-06-28 after operator
 response-packet preflight:
 
 - The four candidate-only response-intake CLIs now support

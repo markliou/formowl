@@ -244,14 +244,22 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertIn("--execute-candidate-intakes", doc)
         self.assertIn("reads response packet contents", doc)
         self.assertIn("writes candidate artifacts", doc)
+        self.assertIn("--preflight-responses", doc)
+        self.assertIn("writes no candidate artifacts", doc)
+        self.assertIn("writes no candidate manifest", doc)
         self.assertIn("--validate-candidate-manifests", doc)
         self.assertIn("reads the candidate", doc)
         self.assertIn("writes no candidate artifacts", doc)
         self.assertIn("non-evidence validation report", doc)
         self.assertIn("No mode promotes evidence or writes canonical input packets", doc)
+        self.assertIn("--preflight-responses", help_text)
         self.assertIn("--execute-candidate-intakes", help_text)
         self.assertIn("--validate-candidate-manifests", help_text)
         self.assertIn("--emit-candidate-validation-report", help_text)
+        self.assertIn(
+            "reads response packet contents but writes no candidate or canonical artifacts",
+            normalized_help,
+        )
         self.assertIn(
             "writes candidate artifacts but never canonical packets",
             normalized_help,
@@ -309,6 +317,212 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             self.assertNotIn("--promote", row["argv"])
             self.assertNotIn("--promote", row["preflight_argv"])
             self.assertNotIn("--allow-test-artifacts", row["argv"])
+
+    def test_preflight_operator_responses_runs_preflight_argv_without_shell(self) -> None:
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"artifact_id": "response_preflight", "valid": true}\n',
+            stderr="",
+        )
+
+        with mock.patch.object(
+            submission_manifest.subprocess,
+            "run",
+            return_value=completed,
+        ) as run_mock:
+            preflight = submission_manifest.preflight_operator_responses(
+                report,
+                manifest_path=manifest_path,
+            )
+
+        self.assertTrue(preflight["overall_success"])
+        self.assertEqual(preflight["executed_gate_count"], 4)
+        self.assertFalse(preflight["authority"]["accepts_evidence"])
+        self.assertFalse(preflight["authority"]["writes_candidate_artifacts"])
+        self.assertFalse(preflight["authority"]["writes_canonical_packets"])
+        self.assertTrue(preflight["preflight_effects"]["reads_response_packet_contents"])
+        self.assertFalse(preflight["preflight_effects"]["writes_candidate_artifacts"])
+        self.assertFalse(preflight["preflight_effects"]["writes_candidate_manifest"])
+        self.assertFalse(preflight["preflight_effects"]["counts_as_acceptance_gate"])
+        self.assertTrue(preflight["response_output_integrity"]["passed"])
+        self.assertEqual(run_mock.call_count, 4)
+        for expected, call, row in zip(
+            submission_manifest.EXPECTED_SUBMISSIONS,
+            run_mock.call_args_list,
+            preflight["preflight_results"],
+            strict=True,
+        ):
+            args, kwargs = call
+            argv = args[0]
+            self.assertEqual(argv[0], "python3")
+            self.assertEqual(argv[1], expected.intake_script)
+            self.assertIn("--preflight-response", argv)
+            self.assertNotIn("--promote", argv)
+            self.assertNotIn("--allow-test-artifacts", argv)
+            self.assertEqual(kwargs["cwd"], ROOT)
+            self.assertTrue(kwargs["capture_output"])
+            self.assertTrue(kwargs["text"])
+            self.assertFalse(kwargs["check"])
+            self.assertNotIn("shell", kwargs)
+            self.assertEqual(row["status"], "succeeded")
+            self.assertEqual(row["stdout_summary"]["artifact_id"], "response_preflight")
+            self.assertTrue(row["response_output_integrity"]["passed"])
+            self.assertEqual(row["canonical_packet_not_written"], expected.canonical_packet)
+
+    def test_preflight_operator_responses_stops_after_first_failure(self) -> None:
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        success = subprocess.CompletedProcess(args=[], returncode=0, stdout="{}\n", stderr="")
+        failure = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="not-json\n",
+            stderr="operator response preflight failed\n",
+        )
+
+        with mock.patch.object(
+            submission_manifest.subprocess,
+            "run",
+            side_effect=[success, failure, success, success],
+        ) as run_mock:
+            preflight = submission_manifest.preflight_operator_responses(
+                report,
+                manifest_path=manifest_path,
+            )
+
+        self.assertFalse(preflight["overall_success"])
+        self.assertTrue(preflight["stopped_after_failure"])
+        self.assertEqual(preflight["executed_gate_count"], 2)
+        self.assertEqual(run_mock.call_count, 2)
+        self.assertEqual(preflight["preflight_results"][0]["status"], "succeeded")
+        self.assertEqual(preflight["preflight_results"][1]["status"], "failed")
+        self.assertFalse(preflight["preflight_results"][1]["stdout_summary"]["json_stdout"])
+        self.assertEqual(preflight["preflight_results"][1]["stderr_line_count"], 1)
+
+    def test_preflight_operator_responses_refuses_preexisting_canonical_packet_hazard(
+        self,
+    ) -> None:
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        rel_path, canonical_path, restore_path = self.make_canonical_packet_path_hazard("symlink")
+
+        try:
+            with mock.patch.object(submission_manifest.subprocess, "run") as run_mock:
+                preflight = submission_manifest.preflight_operator_responses(
+                    report,
+                    manifest_path=manifest_path,
+                )
+        finally:
+            self.restore_path_surface(canonical_path, restore_path)
+
+        self.assertFalse(preflight["overall_success"])
+        self.assertEqual(preflight["executed_gate_count"], 0)
+        self.assertFalse(preflight["preflight_effects"]["reads_response_packet_contents"])
+        self.assertFalse(preflight["authority"]["writes_candidate_artifacts"])
+        self.assertEqual(preflight["canonical_packet_baseline"]["hazards"][0]["packet"], rel_path)
+        self.assertTrue(
+            any(
+                "pre-existing canonical packet path hazard" in blocker
+                for blocker in preflight["blockers"]
+            )
+        )
+        self.assertEqual(preflight["preflight_results"], [])
+        run_mock.assert_not_called()
+
+    def test_preflight_operator_responses_detects_candidate_output_surface_change(
+        self,
+    ) -> None:
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        expected = submission_manifest.EXPECTED_SUBMISSIONS[0]
+        run_id = self.operator_run_id(expected)
+        leaked_candidate = ROOT / expected.output_dir_for(run_id) / "unexpected_candidate.json"
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="{}\n", stderr="")
+
+        def write_unexpected_candidate(
+            *_args: object, **_kwargs: object
+        ) -> subprocess.CompletedProcess:
+            leaked_candidate.write_text('{"unexpected":"candidate artifact"}\n', encoding="utf-8")
+            return completed
+
+        try:
+            with mock.patch.object(
+                submission_manifest.subprocess,
+                "run",
+                side_effect=write_unexpected_candidate,
+            ) as run_mock:
+                preflight = submission_manifest.preflight_operator_responses(
+                    report,
+                    manifest_path=manifest_path,
+                )
+        finally:
+            if leaked_candidate.exists() or leaked_candidate.is_symlink():
+                leaked_candidate.unlink()
+
+        self.assertFalse(preflight["overall_success"])
+        self.assertTrue(preflight["stopped_after_failure"])
+        self.assertEqual(preflight["executed_gate_count"], 1)
+        self.assertEqual(run_mock.call_count, 1)
+        self.assertFalse(preflight["response_output_integrity"]["passed"])
+        changed_paths = {
+            row["path"] for row in preflight["response_output_integrity"]["changed_surfaces"]
+        }
+        self.assertIn(str(leaked_candidate.relative_to(ROOT)), changed_paths)
+        self.assertEqual(preflight["preflight_results"][0]["status"], "failed")
+
+    def test_preflight_operator_responses_fails_if_subprocess_changes_canonical_packet(
+        self,
+    ) -> None:
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        canonical_rel_path = sorted(submission_manifest.CANONICAL_INPUT_PACKETS)[0]
+        canonical_path = ROOT / canonical_rel_path
+        before = canonical_path.read_bytes() if canonical_path.exists() else None
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"artifact_id": "response_preflight"}\n',
+            stderr="",
+        )
+
+        def write_canonical_packet(
+            *_args: object, **_kwargs: object
+        ) -> subprocess.CompletedProcess:
+            canonical_path.parent.mkdir(parents=True, exist_ok=True)
+            canonical_path.write_text('{"unexpected":"canonical write"}\n', encoding="utf-8")
+            return completed
+
+        try:
+            with mock.patch.object(
+                submission_manifest.subprocess,
+                "run",
+                side_effect=write_canonical_packet,
+            ) as run_mock:
+                preflight = submission_manifest.preflight_operator_responses(
+                    report,
+                    manifest_path=manifest_path,
+                )
+        finally:
+            if before is None:
+                if canonical_path.exists() or canonical_path.is_symlink():
+                    canonical_path.unlink()
+            else:
+                canonical_path.write_bytes(before)
+
+        self.assertFalse(preflight["overall_success"])
+        self.assertTrue(preflight["stopped_after_failure"])
+        self.assertEqual(preflight["executed_gate_count"], 1)
+        self.assertEqual(run_mock.call_count, 1)
+        self.assertFalse(preflight["canonical_packet_integrity"]["passed"])
+        self.assertEqual(
+            preflight["canonical_packet_integrity"]["changed_packets"][0]["packet"],
+            canonical_rel_path,
+        )
+        self.assertEqual(preflight["preflight_results"][0]["status"], "failed")
+        self.assertFalse(preflight["preflight_results"][0]["canonical_packet_integrity"]["passed"])
 
     def test_execute_candidate_intakes_uses_validated_argv_without_shell(self) -> None:
         manifest_path = self.write_operator_manifest()
@@ -1134,6 +1348,42 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertFalse(printed["authority"]["counts_as_acceptance_gate"])
         self.assertEqual(run_mock.call_count, 4)
 
+    def test_cli_preflight_responses_writes_no_candidate_or_canonical_packets(self) -> None:
+        manifest_path = self.write_operator_manifest()
+        stdout = StringIO()
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"artifact_id": "response_preflight"}\n',
+            stderr="",
+        )
+
+        with mock.patch.object(
+            submission_manifest.subprocess,
+            "run",
+            return_value=completed,
+        ) as run_mock:
+            with redirect_stdout(stdout):
+                status = submission_manifest.main(
+                    [
+                        "--manifest",
+                        str(manifest_path.relative_to(ROOT)),
+                        "--preflight-responses",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        printed = json.loads(stdout.getvalue())
+        self.assertEqual(
+            printed["artifact_id"],
+            "kg_real_evidence_response_preflight_execution_v1",
+        )
+        self.assertFalse(printed["authority"]["writes_candidate_artifacts"])
+        self.assertFalse(printed["authority"]["writes_canonical_packets"])
+        self.assertFalse(printed["authority"]["counts_as_acceptance_gate"])
+        self.assertTrue(printed["preflight_effects"]["reads_response_packet_contents"])
+        self.assertEqual(run_mock.call_count, 4)
+
     def test_cli_validate_candidate_manifests_writes_no_artifacts_or_canonical_packets(
         self,
     ) -> None:
@@ -1437,6 +1687,35 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             any("response_packet_type mismatch" in blocker for blocker in printed["blockers"])
         )
 
+    def test_invalid_manifest_preflight_responses_runs_no_commands(self) -> None:
+        manifest_path = self.write_operator_manifest(
+            "operatorpreflight_unitcase_invalid_preflight_manifest.json"
+        )
+        payload = self.valid_manifest()
+        submissions = payload["submissions"]
+        assert isinstance(submissions, list)
+        submissions[0]["response_packet_type"] = "wrong_packet_type"
+        write_json(manifest_path, payload)
+        stdout = StringIO()
+
+        with mock.patch.object(submission_manifest.subprocess, "run") as run_mock:
+            with redirect_stdout(stdout):
+                status = submission_manifest.main(
+                    [
+                        "--manifest",
+                        str(manifest_path.relative_to(ROOT)),
+                        "--preflight-responses",
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        run_mock.assert_not_called()
+        printed = json.loads(stdout.getvalue())
+        self.assertFalse(printed["valid"])
+        self.assertTrue(
+            any("response_packet_type mismatch" in blocker for blocker in printed["blockers"])
+        )
+
     def test_invalid_manifest_validate_candidate_manifests_runs_no_commands(self) -> None:
         manifest_path = self.write_operator_manifest(
             "operatorpreflight_unitcase_invalid_validate_manifest.json"
@@ -1481,6 +1760,18 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
                     "--execute-candidate-intakes",
                 ]
             )
+        with self.assertRaisesRegex(
+            submission_manifest.ManifestError,
+            "require existing response packets",
+        ):
+            submission_manifest.main(
+                [
+                    "--manifest",
+                    str(manifest_path.relative_to(ROOT)),
+                    "--no-require-existing-response-packets",
+                    "--preflight-responses",
+                ]
+            )
 
     def test_emit_candidate_validation_report_requires_candidate_validation_mode(self) -> None:
         manifest_path = self.write_operator_manifest()
@@ -1506,7 +1797,9 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
                 ]
             )
 
-    def test_emit_plan_execute_and_candidate_validation_are_mutually_exclusive(self) -> None:
+    def test_emit_plan_preflight_execute_and_candidate_validation_are_mutually_exclusive(
+        self,
+    ) -> None:
         manifest_path = self.write_operator_manifest()
         plan_path = ROOT / "work_packets" / "operatorpreflight_unitcase_exclusive_plan.json"
         if plan_path.exists() or plan_path.is_symlink():
@@ -1525,6 +1818,19 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
                     str(plan_path.relative_to(ROOT)),
                     "--execute-candidate-intakes",
                     "--validate-candidate-manifests",
+                ]
+            )
+
+        with self.assertRaisesRegex(
+            submission_manifest.ManifestError,
+            "mutually exclusive",
+        ):
+            submission_manifest.main(
+                [
+                    "--manifest",
+                    str(manifest_path.relative_to(ROOT)),
+                    "--preflight-responses",
+                    "--execute-candidate-intakes",
                 ]
             )
 

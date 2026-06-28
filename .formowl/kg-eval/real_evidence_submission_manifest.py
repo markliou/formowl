@@ -16,6 +16,12 @@ existing assembler ``--validate`` commands. It writes no candidate artifacts,
 promotes no evidence, and writes no canonical input packets. It can optionally
 write an ignored non-evidence validation report under ``work_packets/`` for
 manual governance review.
+
+The explicit ``--preflight-responses`` mode runs each intake helper with
+``--preflight-response`` from a validated manifest. It reads response packet
+contents through the existing preflight helpers, writes no candidate artifacts,
+writes no candidate manifest, promotes no evidence, and writes no canonical
+input packets.
 """
 
 from __future__ import annotations
@@ -825,6 +831,109 @@ def _canonical_packet_baseline_blockers(
     return blockers
 
 
+def _path_surface(path: Path) -> dict[str, Any]:
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        return {"state": "missing", "sha256": None, "hardlink_alias": False}
+    except OSError:
+        return {
+            "state": "metadata_unavailable",
+            "sha256": None,
+            "hardlink_alias": False,
+        }
+    if stat.S_ISLNK(path_stat.st_mode):
+        return {"state": "symlink", "sha256": None, "hardlink_alias": False}
+    if stat.S_ISDIR(path_stat.st_mode):
+        return {"state": "directory", "sha256": None, "hardlink_alias": False}
+    if not stat.S_ISREG(path_stat.st_mode):
+        return {"state": "non_regular", "sha256": None, "hardlink_alias": False}
+    hardlink_alias = path_stat.st_nlink > 1
+    if hardlink_alias:
+        return {"state": "hardlink_alias", "sha256": None, "hardlink_alias": True}
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return {
+            "state": "read_unavailable",
+            "sha256": None,
+            "hardlink_alias": False,
+        }
+    return {"state": "regular", "sha256": digest, "hardlink_alias": False}
+
+
+def _tree_snapshot(path: Path) -> dict[str, dict[str, Any]]:
+    snapshot: dict[str, dict[str, Any]] = {
+        str(path.relative_to(ROOT)): _path_surface(path),
+    }
+    try:
+        path_stat = path.lstat()
+    except OSError:
+        return snapshot
+    if not stat.S_ISDIR(path_stat.st_mode) or stat.S_ISLNK(path_stat.st_mode):
+        return snapshot
+    for child in sorted(path.rglob("*")):
+        snapshot[str(child.relative_to(ROOT))] = _path_surface(child)
+    return snapshot
+
+
+def _response_preflight_output_snapshot(
+    validation_report: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    snapshot: dict[str, dict[str, Any]] = {}
+    rows = validation_report.get("validated_submissions")
+    if not isinstance(rows, list):
+        return snapshot
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        output_dir = row.get("output_dir")
+        assembly_manifest_output = row.get("assembly_manifest_output")
+        if isinstance(output_dir, str):
+            snapshot.update(_tree_snapshot(ROOT / output_dir))
+        if isinstance(assembly_manifest_output, str):
+            manifest_path = ROOT / assembly_manifest_output
+            snapshot[str(manifest_path.relative_to(ROOT))] = _path_surface(manifest_path)
+    return snapshot
+
+
+def _response_preflight_output_integrity(
+    before: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    tracked_paths = set(before)
+    for rel_path, surface in before.items():
+        if surface.get("state") == "directory":
+            output_dir = ROOT / rel_path
+            try:
+                output_stat = output_dir.lstat()
+            except OSError:
+                continue
+            if stat.S_ISDIR(output_stat.st_mode) and not stat.S_ISLNK(output_stat.st_mode):
+                tracked_paths.update(
+                    str(child.relative_to(ROOT)) for child in output_dir.rglob("*")
+                )
+    changed_surfaces: list[dict[str, Any]] = []
+    for rel_path in sorted(tracked_paths):
+        before_surface = before.get(
+            rel_path,
+            {"state": "missing", "sha256": None, "hardlink_alias": False},
+        )
+        after_surface = _path_surface(ROOT / rel_path)
+        if before_surface != after_surface:
+            changed_surfaces.append(
+                {
+                    "path": rel_path,
+                    "before": before_surface,
+                    "after": after_surface,
+                }
+            )
+    return {
+        "passed": not changed_surfaces,
+        "changed_surface_count": len(changed_surfaces),
+        "changed_surfaces": changed_surfaces,
+    }
+
+
 def _assembler_validation_summary(stdout: str) -> dict[str, Any]:
     try:
         loaded = json.loads(stdout)
@@ -855,6 +964,146 @@ def _assembler_validation_summary(stdout: str) -> dict[str, Any]:
 
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def preflight_operator_responses(
+    validation_report: dict[str, Any],
+    *,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    plan = build_intake_plan(validation_report, manifest_path=manifest_path)
+    canonical_snapshot = _canonical_packet_snapshot()
+    canonical_baseline = _canonical_packet_baseline_hazards(canonical_snapshot)
+    if not canonical_baseline["passed"]:
+        return {
+            "artifact_id": "kg_real_evidence_response_preflight_execution_v1",
+            "manifest": str(manifest_path.relative_to(ROOT)),
+            "valid_manifest": True,
+            "overall_success": False,
+            "stopped_after_failure": True,
+            "executed_gate_count": 0,
+            "canonical_packet_baseline": canonical_baseline,
+            "canonical_packet_integrity": _canonical_packet_integrity(canonical_snapshot),
+            "response_output_integrity": {
+                "passed": True,
+                "changed_surface_count": 0,
+                "changed_surfaces": [],
+            },
+            "blockers": _canonical_packet_baseline_blockers(canonical_baseline),
+            "authority": {
+                "accepts_evidence": False,
+                "promotes_evidence": False,
+                "writes_candidate_artifacts": False,
+                "writes_canonical_packets": False,
+                "counts_as_acceptance_gate": False,
+            },
+            "preflight_effects": {
+                "reads_response_packet_contents": False,
+                "writes_candidate_artifacts": False,
+                "writes_candidate_manifest": False,
+                "writes_canonical_packets": False,
+                "promotes_evidence": False,
+                "counts_as_acceptance_gate": False,
+            },
+            "partial_execution_policy": (
+                "response preflight refused before subprocess launch because a "
+                "pre-existing canonical packet path hazard is present"
+            ),
+            "preflight_results": [],
+            "next_step": (
+                "clear canonical packet path hazards, rerun preflight, then revalidate "
+                "the operator submission manifest before response preflight"
+            ),
+        }
+    output_snapshot = _response_preflight_output_snapshot(validation_report)
+    preflight_results: list[dict[str, Any]] = []
+    overall_success = True
+    for row in plan["execution_plan"]:
+        if not isinstance(row, dict):
+            raise ManifestError("response preflight plan row is malformed")
+        argv = row.get("preflight_argv")
+        if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+            raise ManifestError("response preflight argv is malformed")
+        if "--preflight-response" not in argv:
+            raise ManifestError("response preflight argv must include --preflight-response")
+        if "--promote" in argv or "--allow-test-artifacts" in argv:
+            raise ManifestError("response preflight argv must not contain promotion or test flags")
+        completed = subprocess.run(
+            argv,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        canonical_integrity = _canonical_packet_integrity(canonical_snapshot)
+        output_integrity = _response_preflight_output_integrity(output_snapshot)
+        success = (
+            completed.returncode == 0
+            and canonical_integrity["passed"]
+            and output_integrity["passed"]
+        )
+        overall_success = overall_success and success
+        preflight_results.append(
+            {
+                "sequence": row["sequence"],
+                "gate_id": row["gate_id"],
+                "operator_run_id": row["operator_run_id"],
+                "response_packet": row["response_packet"],
+                "output_dir": row["output_dir"],
+                "assembly_manifest_output": row["assembly_manifest_output"],
+                "canonical_packet_not_written": row["canonical_packet_not_written"],
+                "argv": argv,
+                "exit_code": completed.returncode,
+                "status": "succeeded" if success else "failed",
+                "stdout_summary": _json_summary(completed.stdout),
+                "stderr_line_count": len(
+                    [line for line in completed.stderr.splitlines() if line.strip()]
+                ),
+                "canonical_packet_integrity": canonical_integrity,
+                "response_output_integrity": output_integrity,
+            }
+        )
+        if not success:
+            break
+    final_canonical_integrity = _canonical_packet_integrity(canonical_snapshot)
+    final_output_integrity = _response_preflight_output_integrity(output_snapshot)
+    return {
+        "artifact_id": "kg_real_evidence_response_preflight_execution_v1",
+        "manifest": str(manifest_path.relative_to(ROOT)),
+        "valid_manifest": True,
+        "overall_success": overall_success,
+        "stopped_after_failure": not overall_success,
+        "executed_gate_count": len(preflight_results),
+        "canonical_packet_baseline": canonical_baseline,
+        "canonical_packet_integrity": final_canonical_integrity,
+        "response_output_integrity": final_output_integrity,
+        "authority": {
+            "accepts_evidence": False,
+            "promotes_evidence": False,
+            "writes_candidate_artifacts": False,
+            "writes_canonical_packets": False,
+            "counts_as_acceptance_gate": False,
+        },
+        "preflight_effects": {
+            "reads_response_packet_contents": True,
+            "writes_candidate_artifacts": False,
+            "writes_candidate_manifest": False,
+            "writes_canonical_packets": False,
+            "promotes_evidence": False,
+            "counts_as_acceptance_gate": False,
+        },
+        "partial_execution_policy": (
+            "response preflight stops on the first failed response preflight; "
+            "final-state canonical packet or response-output surface changes also "
+            "stop execution immediately and keep the result non-evidence"
+        ),
+        "preflight_results": preflight_results,
+        "next_step": (
+            "run candidate-only intake only after every response preflight succeeds; "
+            "manual governance and validator acceptance are still required before "
+            "any broad gate can pass"
+        ),
+    }
 
 
 def execute_candidate_intakes(
@@ -1263,6 +1512,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--preflight-responses",
+        action="store_true",
+        help=(
+            "run each candidate-only intake helper in --preflight-response mode; "
+            "reads response packet contents but writes no candidate or canonical artifacts"
+        ),
+    )
+    parser.add_argument(
         "--validate-candidate-manifests",
         action="store_true",
         help=(
@@ -1353,20 +1610,24 @@ def main(argv: list[str] | None = None) -> int:
         raise ManifestError("either --manifest, --emit-template, or --check-template is required")
     selected_actions = [
         bool(args.emit_intake_plan),
+        bool(args.preflight_responses),
         bool(args.execute_candidate_intakes),
         bool(args.validate_candidate_manifests),
     ]
     if sum(selected_actions) > 1:
         raise ManifestError(
-            "--emit-intake-plan, --execute-candidate-intakes, and "
-            "--validate-candidate-manifests are mutually exclusive"
+            "--emit-intake-plan, --preflight-responses, "
+            "--execute-candidate-intakes, and --validate-candidate-manifests "
+            "are mutually exclusive"
         )
     if (
-        args.execute_candidate_intakes or args.validate_candidate_manifests
+        args.preflight_responses
+        or args.execute_candidate_intakes
+        or args.validate_candidate_manifests
     ) and args.no_require_existing_response_packets:
         raise ManifestError(
-            "--execute-candidate-intakes and --validate-candidate-manifests "
-            "require existing response packets"
+            "--preflight-responses, --execute-candidate-intakes, and "
+            "--validate-candidate-manifests require existing response packets"
         )
     if args.emit_candidate_validation_report and not args.validate_candidate_manifests:
         raise ManifestError(
@@ -1377,6 +1638,13 @@ def main(argv: list[str] | None = None) -> int:
         load_json_file(manifest_path),
         require_existing_response_packets=not args.no_require_existing_response_packets,
     )
+    if args.preflight_responses:
+        if not report["valid"]:
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 1
+        response_preflight = preflight_operator_responses(report, manifest_path=manifest_path)
+        print(json.dumps(response_preflight, indent=2, sort_keys=True))
+        return 0 if response_preflight["overall_success"] else 1
     if args.execute_candidate_intakes:
         if not report["valid"]:
             print(json.dumps(report, indent=2, sort_keys=True))
