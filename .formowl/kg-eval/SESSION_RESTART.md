@@ -41,6 +41,41 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
+Current local implementation slice, updated 2026-06-28 after operator
+response-packet template generation:
+
+- Added `real_evidence_response_packet_templates.py` and four tracked
+  non-evidence response-packet templates:
+  - `work_packets/fair_baseline_response_packet.template.json`
+  - `work_packets/human_annotation_response_packet.template.json`
+  - `work_packets/enterprise_multimodal_response_packet.template.json`
+  - `work_packets/production_adapter_response_packet.template.json`
+- The templates are operator-fillable starting shapes for the first missing
+  response packets. They are generated from validator constants for required
+  fair-baseline systems, enterprise modalities, and production adapter
+  components where applicable.
+- They deliberately carry `template_only`, `do_not_submit_as_evidence`,
+  `gate_id`, false claim-boundary fields, and operator instructions. Focused
+  tests prove all four templates are rejected by response-intake helpers as-is
+  without candidate artifact, candidate manifest, or canonical packet writes.
+- The tracked operator guide now lists the response templates and
+  `python3 real_evidence_response_packet_templates.py --check-templates`.
+- Canonical dev-container verification passed:
+  - focused response-template/operator-guide unittest ran 11 tests OK.
+  - full KG-eval unittest ran 517 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - response-template, operator-guide, submission-template, approval-template,
+    and progress checks exited 0.
+  - full Ruff check passed, Ruff format-check passed, and `git diff --check`
+    exited 0.
+- Reviewer gate passed 3/3: `Euclid` agreed on engineering correctness,
+  `Schrodinger` agreed on governance/safety, and `Franklin` agreed on status
+  honesty.
+- Broad KG-eval remains incomplete with `overall_passed=false`, 8 passed
+  gates, and the same four failed gates. All four real roots remain empty and
+  the four canonical broad packets remain absent. No completion claim is
+  supported.
+
 Current local implementation slice, updated 2026-06-28 after
 enterprise-multimodal response-intake parity hardening:
 

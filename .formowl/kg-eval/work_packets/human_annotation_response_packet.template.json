@@ -1,0 +1,71 @@
+{
+  "adjudication": {
+    "adjudicator_id": "OPERATOR_HUMAN_ADJUDICATOR_ID",
+    "generated_by_llm": false,
+    "human_attestation": "OPERATOR_HUMAN_ADJUDICATION_ATTESTATION",
+    "opened_after_first_pass_seal": true,
+    "reviewer_type": "human",
+    "rows": [
+      {
+        "final_label": "OPERATOR_FINAL_LABEL",
+        "generated_by_llm": false,
+        "item_id": "OPERATOR_ITEM_ID_WITH_DISAGREEMENT",
+        "template_source": null
+      }
+    ],
+    "template_source": null
+  },
+  "annotation_task_id": "OPERATOR_ANNOTATION_TASK_ID",
+  "claim_boundary": {
+    "accepts_evidence": false,
+    "counts_as_acceptance_gate": false,
+    "promotes_evidence": false,
+    "writes_candidate_artifacts": false,
+    "writes_canonical_packets": false
+  },
+  "do_not_submit_as_evidence": true,
+  "first_pass_submissions": [
+    {
+      "generated_by_llm": false,
+      "human_attestation": "OPERATOR_HUMAN_ATTESTATION_A",
+      "independent_first_pass": true,
+      "reviewer_id": "OPERATOR_HUMAN_REVIEWER_A",
+      "reviewer_type": "human",
+      "rows": [
+        {
+          "generated_by_llm": false,
+          "item_id": "OPERATOR_ITEM_ID",
+          "label": "OPERATOR_LABEL",
+          "template_source": null
+        }
+      ],
+      "template_source": null
+    },
+    {
+      "generated_by_llm": false,
+      "human_attestation": "OPERATOR_HUMAN_ATTESTATION_B",
+      "independent_first_pass": true,
+      "reviewer_id": "OPERATOR_HUMAN_REVIEWER_B",
+      "reviewer_type": "human",
+      "rows": [
+        {
+          "generated_by_llm": false,
+          "item_id": "OPERATOR_ITEM_ID",
+          "label": "OPERATOR_SECOND_LABEL",
+          "template_source": null
+        }
+      ],
+      "template_source": null
+    }
+  ],
+  "gate_id": "annotation_adjudication_protocol",
+  "operator_instructions": [
+    "Copy this template to inputs/*_real/<operator_run_id>/operator_response_packet.json.",
+    "Replace every OPERATOR_* placeholder with real reviewed values.",
+    "Remove template_only, do_not_submit_as_evidence, gate_id, claim_boundary, and operator_instructions before intake.",
+    "Run real_evidence_submission_manifest.py before candidate intake."
+  ],
+  "operator_run_id": "OPERATOR_RUN_ID",
+  "response_packet_type": "human_annotation_response_intake_v1",
+  "template_only": true
+}

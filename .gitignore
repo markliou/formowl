@@ -23,6 +23,10 @@
 !.formowl/kg-eval/work_packets/human_annotation_work_packet_preview.json
 !.formowl/kg-eval/work_packets/enterprise_multimodal_collection_packet_preview.json
 !.formowl/kg-eval/work_packets/production_adapter_collection_packet_preview.json
+!.formowl/kg-eval/work_packets/fair_baseline_response_packet.template.json
+!.formowl/kg-eval/work_packets/human_annotation_response_packet.template.json
+!.formowl/kg-eval/work_packets/enterprise_multimodal_response_packet.template.json
+!.formowl/kg-eval/work_packets/production_adapter_response_packet.template.json
 !.formowl/kg-eval/work_packets/remaining_real_evidence_submission_manifest.template.json
 !.formowl/kg-eval/work_packets/remaining_real_evidence_governance_approval.template.json
 !.formowl/kg-eval/work_packets/remaining_real_evidence_operator_guide.md

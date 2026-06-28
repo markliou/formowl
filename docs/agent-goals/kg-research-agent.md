@@ -1275,3 +1275,25 @@ Reviewer cost-control rules:
   `Pascal` returned `RELEASE_DECISION: AGREE`. This hardening does not make
   `multimodal_semantic_validation` pass, and no goal completion claim is
   supported.
+- 2026-06-28 operator response-packet template checkpoint:
+  added `.formowl/kg-eval/real_evidence_response_packet_templates.py`,
+  focused tests, and four tracked non-evidence response-packet templates under
+  `work_packets/` for the remaining gates. The templates are operator-fillable
+  starting shapes for the first missing response packets and are generated from
+  validator constants for required fair-baseline systems, enterprise
+  modalities, and production adapter components where applicable. They carry
+  `template_only`, `do_not_submit_as_evidence`, false claim-boundary fields,
+  and operator instructions, and focused tests prove all four templates are
+  rejected by response-intake helpers as-is without candidate artifact,
+  candidate manifest, or canonical packet writes. The tracked operator guide
+  now lists the response templates and `--check-templates` command. Canonical
+  dev-container verification passed: focused response-template/operator-guide
+  unittest 11 OK, full KG-eval unittest 517 OK, main repo unittest 252 OK,
+  response-template/operator-guide/submission-template/approval-template/
+  progress checks, full Ruff check/format-check, and `git diff --check`.
+  Broad KG-eval remains incomplete with `overall_passed=false`, 8 passed
+  gates, and the same four failed gates; all real roots are empty and
+  canonical broad packets are absent. Reviewer gate passed 3/3: `Euclid`,
+  `Schrodinger`, and `Franklin` returned `RELEASE_DECISION: AGREE`. This
+  template slice does not make any broad gate pass, and no goal completion
+  claim is supported.

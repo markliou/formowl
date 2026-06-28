@@ -1359,6 +1359,32 @@ These groups can be split across multiple agents after Slice 1 is stable.
     no evidence, writes no canonical broad packet, and the four broad
     real-evidence gates still require real operator/user-supplied artifacts
     plus validator-accepted canonical packets.
+  - 2026-06-28 operator response-packet template checkpoint:
+    `.formowl/kg-eval/real_evidence_response_packet_templates.py` now emits
+    and checks four tracked non-evidence operator response-packet templates
+    under `work_packets/` for the remaining gates:
+    `fair_baseline_response_packet.template.json`,
+    `human_annotation_response_packet.template.json`,
+    `enterprise_multimodal_response_packet.template.json`, and
+    `production_adapter_response_packet.template.json`. The templates provide
+    an operator-fillable starting shape for the first missing response packets
+    and are generated from validator constants for required baselines,
+    modalities, and adapter components where applicable. They deliberately
+    include `template_only`, `do_not_submit_as_evidence`, `gate_id`,
+    `claim_boundary`, and operator instructions, and tests prove each template
+    is rejected by its response-intake helper as-is without candidate artifact,
+    candidate manifest, or canonical packet writes. The tracked operator guide
+    now lists the templates and check command. Canonical dev-container
+    verification passed: focused response-template/operator-guide unittest
+    11 OK, full KG-eval unittest 517 OK, main repo unittest 252 OK,
+    response-template/operator-guide/submission-template/approval-template/
+    progress checks, full Ruff check/format-check, and `git diff --check`.
+    Reviewer gate passed 3/3: `Euclid` agreed on engineering correctness,
+    `Schrodinger` agreed on governance/safety, and `Franklin` agreed on status
+    honesty. The item remains unchecked because this slice accepts no evidence,
+    writes no real artifacts, writes no canonical broad packet, and all four
+    broad real-evidence gates still require real operator/user-supplied
+    artifacts plus validator-accepted canonical packets.
   - 2026-06-28 human annotation response-intake hardening checkpoint:
     `human_annotation_response_intake.py` now requires response-packet
     top-level allowlisting, `operator_run_id` binding to the candidate output

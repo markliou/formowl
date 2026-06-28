@@ -1,0 +1,62 @@
+{
+  "business_decision_review_artifact": {
+    "artifact_type": "enterprise_multimodal_business_decision_review_v1"
+  },
+  "claim_boundary": {
+    "accepts_evidence": false,
+    "counts_as_acceptance_gate": false,
+    "promotes_evidence": false,
+    "writes_candidate_artifacts": false,
+    "writes_canonical_packets": false
+  },
+  "do_not_submit_as_evidence": true,
+  "gate_id": "multimodal_semantic_validation",
+  "human_adjudication_artifact": {
+    "artifact_type": "enterprise_multimodal_human_adjudication_v1"
+  },
+  "operator_instructions": [
+    "Copy this template to inputs/*_real/<operator_run_id>/operator_response_packet.json.",
+    "Replace every OPERATOR_* placeholder with real reviewed values.",
+    "Remove template_only, do_not_submit_as_evidence, gate_id, claim_boundary, and operator_instructions before intake.",
+    "Run real_evidence_submission_manifest.py before candidate intake."
+  ],
+  "operator_run_id": "OPERATOR_RUN_ID",
+  "permission_probe_artifact": {
+    "artifact_type": "enterprise_multimodal_permission_probe_v1"
+  },
+  "pilot_manifest_artifact": {
+    "artifact_type": "enterprise_multimodal_pilot_manifest_v1"
+  },
+  "response_packet_type": "enterprise_multimodal_response_intake_v1",
+  "template_only": true,
+  "validation_artifacts": [
+    {
+      "artifact": {
+        "artifact_type": "enterprise_multimodal_validation_artifact_v1",
+        "modality": "spreadsheet"
+      },
+      "modality": "spreadsheet"
+    },
+    {
+      "artifact": {
+        "artifact_type": "enterprise_multimodal_validation_artifact_v1",
+        "modality": "mail"
+      },
+      "modality": "mail"
+    },
+    {
+      "artifact": {
+        "artifact_type": "enterprise_multimodal_validation_artifact_v1",
+        "modality": "meeting_audio"
+      },
+      "modality": "meeting_audio"
+    },
+    {
+      "artifact": {
+        "artifact_type": "enterprise_multimodal_validation_artifact_v1",
+        "modality": "video_ocr"
+      },
+      "modality": "video_ocr"
+    }
+  ]
+}

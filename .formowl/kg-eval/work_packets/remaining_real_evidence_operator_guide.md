@@ -84,6 +84,28 @@ The preflight validates path and command contracts only; it does not
 read response packet contents, write candidate artifacts, promote
 evidence, or write canonical packets.
 
+Tracked non-evidence response packet templates:
+
+```text
+work_packets/fair_baseline_response_packet.template.json
+work_packets/human_annotation_response_packet.template.json
+work_packets/enterprise_multimodal_response_packet.template.json
+work_packets/production_adapter_response_packet.template.json
+```
+
+Check that the tracked response packet templates are current:
+
+```sh
+python3 real_evidence_response_packet_templates.py --check-templates
+```
+
+Use these only as starting points. Copy a template to the matching
+`inputs/*_real/<operator_run_id>/operator_response_packet.json` path,
+replace every `OPERATOR_*` placeholder with real reviewed values, and
+remove `template_only`, `do_not_submit_as_evidence`, `gate_id`,
+`claim_boundary`, and `operator_instructions` before candidate intake.
+The templates are deliberately rejected by response-intake helpers as-is.
+
 Tracked non-evidence template:
 
 ```text

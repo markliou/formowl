@@ -908,3 +908,20 @@ status in each role's goal file and task completion in
   failed real-evidence gates; all real roots are empty and canonical broad
   packets are absent. Reviewer gate passed 3/3 with `Socrates`, `Gibbs`, and
   `Pascal`. No goal completion claim is supported.
+- 2026-06-28 operator response-packet templates:
+  added `.formowl/kg-eval/real_evidence_response_packet_templates.py`,
+  focused tests, and four tracked non-evidence response-packet templates under
+  `work_packets/`. These templates give operators a machine-checkable starting
+  shape for the first missing response packets, but they include
+  `template_only`, `do_not_submit_as_evidence`, false claim-boundary fields,
+  and operator instructions, so response-intake helpers reject them as-is.
+  Focused tests prove the templates create no candidate artifacts, no
+  candidate manifests, and no canonical packets. The tracked operator guide
+  lists the templates and `--check-templates` command. Canonical dev-container
+  verification passed: focused response-template/operator-guide unittest
+  11 OK, full KG-eval unittest 517 OK, main repo unittest 252 OK,
+  response-template/operator-guide/submission-template/approval-template/
+  progress checks, full Ruff check/format-check, and `git diff --check`.
+  Broad KG-eval remains incomplete with 8 passed gates and the same four
+  failed gates. Reviewer gate passed 3/3 with `Euclid`, `Schrodinger`, and
+  `Franklin`. No goal completion claim is supported.

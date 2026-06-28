@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import real_evidence_collection_work_orders as work_orders
+import real_evidence_response_packet_templates as response_templates
 
 
 ROOT = Path(__file__).resolve().parent
@@ -117,6 +118,9 @@ def _progress_report_section() -> list[str]:
 
 
 def _submission_manifest_section() -> list[str]:
+    template_paths = [
+        str(path.relative_to(ROOT)) for path in response_templates.TEMPLATE_PATHS.values()
+    ]
     return [
         "## Submission Manifest Preflight",
         "",
@@ -132,6 +136,25 @@ def _submission_manifest_section() -> list[str]:
         "The preflight validates path and command contracts only; it does not",
         "read response packet contents, write candidate artifacts, promote",
         "evidence, or write canonical packets.",
+        "",
+        "Tracked non-evidence response packet templates:",
+        "",
+        "```text",
+        *template_paths,
+        "```",
+        "",
+        "Check that the tracked response packet templates are current:",
+        "",
+        "```sh",
+        "python3 real_evidence_response_packet_templates.py --check-templates",
+        "```",
+        "",
+        "Use these only as starting points. Copy a template to the matching",
+        "`inputs/*_real/<operator_run_id>/operator_response_packet.json` path,",
+        "replace every `OPERATOR_*` placeholder with real reviewed values, and",
+        "remove `template_only`, `do_not_submit_as_evidence`, `gate_id`,",
+        "`claim_boundary`, and `operator_instructions` before candidate intake.",
+        "The templates are deliberately rejected by response-intake helpers as-is.",
         "",
         "Tracked non-evidence template:",
         "",
