@@ -7,7 +7,8 @@ read response packet contents or write candidate artifacts.
 
 The explicit ``--execute-candidate-intakes`` mode reads response packet contents
 and writes candidate artifacts by running the existing candidate-only intake
-helpers. No mode promotes evidence or writes canonical input packets.
+helpers. It refuses to run while any canonical input packet path is already a
+filesystem hazard. No mode promotes evidence or writes canonical input packets.
 
 The explicit ``--validate-candidate-manifests`` mode reads the candidate
 manifests emitted by intake and their referenced candidate artifacts through the
@@ -693,6 +694,12 @@ def _canonical_packet_surface(path_value: str) -> dict[str, Any]:
             "sha256": None,
             "hardlink_alias": False,
         }
+    if path_stat.st_nlink > 1:
+        return {
+            "state": "hardlink_alias",
+            "sha256": None,
+            "hardlink_alias": True,
+        }
     try:
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
@@ -737,6 +744,42 @@ def _canonical_packet_integrity(
     }
 
 
+def _canonical_packet_baseline_hazards(
+    snapshot: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    hazards: list[dict[str, Any]] = []
+    safe_states = {"missing", "regular"}
+    for packet_path, surface in sorted(snapshot.items()):
+        state = surface.get("state")
+        if state not in safe_states or surface.get("hardlink_alias") is True:
+            hazards.append(
+                {
+                    "packet": packet_path,
+                    "surface": surface,
+                }
+            )
+    return {
+        "passed": not hazards,
+        "hazard_count": len(hazards),
+        "hazards": hazards,
+    }
+
+
+def _canonical_packet_baseline_blockers(
+    baseline: dict[str, Any],
+) -> list[str]:
+    blockers: list[str] = []
+    for hazard in baseline.get("hazards", []):
+        if not isinstance(hazard, dict):
+            continue
+        surface = hazard.get("surface")
+        state = surface.get("state") if isinstance(surface, dict) else "unknown"
+        blockers.append(
+            f"{hazard.get('packet')}: pre-existing canonical packet path hazard: {state}"
+        )
+    return blockers
+
+
 def _assembler_validation_summary(stdout: str) -> dict[str, Any]:
     try:
         loaded = json.loads(stdout)
@@ -772,6 +815,44 @@ def execute_candidate_intakes(
 ) -> dict[str, Any]:
     plan = build_intake_plan(validation_report, manifest_path=manifest_path)
     canonical_snapshot = _canonical_packet_snapshot()
+    canonical_baseline = _canonical_packet_baseline_hazards(canonical_snapshot)
+    if not canonical_baseline["passed"]:
+        return {
+            "artifact_id": "kg_real_evidence_candidate_intake_execution_v1",
+            "manifest": str(manifest_path.relative_to(ROOT)),
+            "valid_manifest": True,
+            "overall_success": False,
+            "stopped_after_failure": True,
+            "executed_gate_count": 0,
+            "canonical_packet_baseline": canonical_baseline,
+            "canonical_packet_integrity": _canonical_packet_integrity(canonical_snapshot),
+            "blockers": _canonical_packet_baseline_blockers(canonical_baseline),
+            "authority": {
+                "accepts_evidence": False,
+                "promotes_evidence": False,
+                "writes_candidate_artifacts": False,
+                "writes_canonical_packets": False,
+                "counts_as_acceptance_gate": False,
+            },
+            "execution_effects": {
+                "reads_response_packet_contents": False,
+                "writes_candidate_artifacts": False,
+                "writes_canonical_packets": False,
+                "promotes_evidence": False,
+                "counts_as_acceptance_gate": False,
+            },
+            "partial_execution_policy": (
+                "execution refused before subprocess launch because a pre-existing "
+                "canonical packet path hazard is present; remove symlink, hardlink, "
+                "non-regular, or unreadable canonical packet surfaces before candidate "
+                "intake"
+            ),
+            "execution_results": [],
+            "next_step": (
+                "clear canonical packet path hazards, rerun preflight, then revalidate "
+                "the operator submission manifest before candidate intake"
+            ),
+        }
     execution_results: list[dict[str, Any]] = []
     overall_success = True
     for row in plan["execution_plan"]:
@@ -818,6 +899,7 @@ def execute_candidate_intakes(
         "overall_success": overall_success,
         "stopped_after_failure": not overall_success,
         "executed_gate_count": len(execution_results),
+        "canonical_packet_baseline": canonical_baseline,
         "canonical_packet_integrity": final_canonical_integrity,
         "authority": {
             "accepts_evidence": False,
@@ -927,6 +1009,37 @@ def validate_candidate_manifests(
 ) -> dict[str, Any]:
     plan = build_candidate_validation_plan(validation_report, manifest_path=manifest_path)
     canonical_snapshot = _canonical_packet_snapshot()
+    canonical_baseline = _canonical_packet_baseline_hazards(canonical_snapshot)
+    if not canonical_baseline["passed"]:
+        return {
+            "artifact_id": "kg_real_evidence_candidate_manifest_validation_v1",
+            "manifest": str(manifest_path.relative_to(ROOT)),
+            "valid_manifest": True,
+            "overall_success": False,
+            "candidate_manifest_preflight_passed": False,
+            "blockers": _canonical_packet_baseline_blockers(canonical_baseline),
+            "executed_gate_count": 0,
+            "canonical_packet_baseline": canonical_baseline,
+            "canonical_packet_integrity": _canonical_packet_integrity(canonical_snapshot),
+            "authority": plan["authority"],
+            "validation_effects": {
+                "reads_candidate_manifest_contents": False,
+                "reads_candidate_artifacts": False,
+                "writes_candidate_artifacts": False,
+                "writes_canonical_packets": False,
+                "promotes_evidence": False,
+                "counts_as_acceptance_gate": False,
+            },
+            "partial_execution_policy": (
+                "validate-only execution refused before subprocess launch because a "
+                "pre-existing canonical packet path hazard is present"
+            ),
+            "validation_results": [],
+            "next_step": (
+                "clear canonical packet path hazards, rerun preflight, then rerun "
+                "candidate-manifest validation"
+            ),
+        }
     blockers: list[str] = []
     for expected in EXPECTED_SUBMISSIONS:
         blockers.extend(_candidate_manifest_blockers(expected))
@@ -1003,6 +1116,7 @@ def validate_candidate_manifests(
         "candidate_manifest_preflight_passed": True,
         "blockers": [],
         "executed_gate_count": len(validation_results),
+        "canonical_packet_baseline": canonical_baseline,
         "canonical_packet_integrity": final_canonical_integrity,
         "authority": plan["authority"],
         "validation_effects": {

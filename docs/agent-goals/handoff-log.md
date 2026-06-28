@@ -709,3 +709,23 @@ status in each role's goal file and task completion in
   Reviewer gate passed 3/3 with `Sagan`, `Hooke`, and `Laplace`; a mistaken
   no-op `Banach` subagent is not counted. Broad KG-eval remains incomplete
   with `overall_passed=false`, 8 passed gates, and the same four failed gates.
+- 2026-06-28 candidate-runner pre-existing canonical packet hazard guard: the
+  controlled `real_evidence_submission_manifest.py
+  --execute-candidate-intakes` and `--validate-candidate-manifests` runners
+  now refuse to launch subprocesses if any canonical broad packet path is
+  already a symlink, hardlink alias, non-regular file, or unreadable /
+  metadata-unavailable surface. The refusal path returns
+  `executed_gate_count=0`, reports `canonical_packet_baseline`, reads no
+  response packet or candidate manifest contents, writes no candidate
+  artifacts, promotes no evidence, and writes no canonical broad packets. The
+  tracked operator guide documents the boundary. Canonical dev-container
+  verification passed: focused submission/guide unittest 55 OK, full KG-eval
+  unittest 460 OK, main repo unittest 252 OK, guide/template checks,
+  refreshed broad reports, default KG acceptance `passed_with_explicit_limits`,
+  strict KG acceptance exits 1 only for known limits, full Ruff
+  check/format-check, and `git diff --check`. Broad KG-eval remains
+  incomplete with the same four failed real-evidence gates. Reviewer gate
+  passed 3/3: `Wegener` agreed on engineering correctness after the canonical
+  packet test helper was changed to preserve pre-existing path surfaces by
+  rename; `Feynman` agreed on governance/safety; and `Kuhn` agreed on status
+  honesty.

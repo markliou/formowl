@@ -97,7 +97,9 @@ artifacts from earlier successful intake commands remain for operator
 review and are not automatically promoted or rolled back by this runner.
 The runner snapshots canonical input packet state and fails closed if
 any candidate-only helper exits with a canonical packet path created
-or changed.
+or changed. It also refuses to launch subprocesses when a canonical
+input packet path is already a symlink, hardlink alias, non-regular
+file, or unreadable surface.
 
 After candidate manifests exist, validate them through the controlled
 validate-only runner:
@@ -112,7 +114,9 @@ It runs no response intake commands, writes no candidate artifacts, never
 passes a promotion flag, never writes canonical input packets, and still
 does not count as an acceptance gate.
 The validate-only runner also fails closed if any assembler exits with
-a canonical packet path created or changed.
+a canonical packet path created or changed. It refuses to launch
+assembler subprocesses while any canonical input packet path is already
+a symlink, hardlink alias, non-regular file, or unreadable surface.
 
 Optionally persist that validate-only result as an ignored non-evidence
 report for manual governance review:

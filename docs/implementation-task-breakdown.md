@@ -1217,6 +1217,30 @@ These groups can be split across multiple agents after Slice 1 is stable.
     subagent is not counted. The item remains unchecked because real
     operator/user-supplied artifacts and validator-accepted canonical packets
     are still missing for the four broad gates.
+  - 2026-06-28 candidate-runner pre-existing canonical packet hazard
+    checkpoint: `real_evidence_submission_manifest.py
+    --execute-candidate-intakes` and `--validate-candidate-manifests` now fail
+    closed before subprocess launch if any canonical broad packet path is
+    already a symlink, hardlink alias, non-regular file, or unreadable /
+    metadata-unavailable surface. In that state the execution reports
+    `canonical_packet_baseline`, sets `executed_gate_count=0`, reads no
+    response packet or candidate manifest contents, writes no candidate
+    artifacts, promotes no evidence, and writes no canonical broad packets.
+    The tracked operator guide documents the boundary. Canonical dev-container
+    verification passed: focused submission/guide unittest 55 OK, full KG-eval
+    unittest 460 OK, main repo unittest 252 OK, guide/template checks,
+    refreshed broad reports, default main KG acceptance
+    `passed_with_explicit_limits`, strict main KG acceptance exits 1 only for
+    known limits, full Ruff check/format-check, and `git diff --check`. Broad
+    KG-eval remains incomplete with `overall_passed=false`, 8 passed gates,
+    and the same four failed real-evidence gates. Reviewer gate passed 3/3:
+    `Wegener` agreed on engineering correctness after the canonical packet
+    test helper was changed to preserve pre-existing path surfaces by rename;
+    `Feynman` agreed on governance/safety; and `Kuhn` agreed on status
+    honesty.
+    The item remains unchecked because real operator/user-supplied artifacts
+    and validator-accepted canonical packets are still missing for the four
+    broad gates.
   - 2026-06-27 fair-baseline response-intake note: candidate-only intake is
     implemented for `fair_external_baseline_comparison` and wired into the
     collection work orders. It can seal operator-supplied fair-baseline

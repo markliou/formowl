@@ -42,6 +42,40 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `production_adapter_paths`
 
 Current local implementation slice, updated 2026-06-28 after candidate-runner
+pre-existing canonical packet hazard hardening:
+
+- `real_evidence_submission_manifest.py --execute-candidate-intakes` and
+  `--validate-candidate-manifests` now inspect the canonical broad packet
+  baseline before launching intake or validate-only subprocesses.
+- If any canonical packet path is already a symlink, hardlink alias,
+  non-regular file, or unreadable / metadata-unavailable surface, the runner
+  fails closed with `executed_gate_count=0`.
+- The refusal path reports `canonical_packet_baseline`, reads no response
+  packet or candidate manifest contents, writes no candidate artifacts,
+  promotes no evidence, and writes no canonical broad packets.
+- The tracked operator guide documents this boundary.
+- Canonical dev-container verification passed:
+  - focused submission/guide unittest ran 55 tests OK.
+  - full KG-eval unittest ran 460 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - broad reports refreshed with `kg_total_acceptance_suite.py`,
+    `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+    `real_evidence_collection_work_orders.py`.
+  - `real_evidence_operator_guide.py --check` exited 0.
+  - `real_evidence_submission_manifest.py --check-template` exited 0.
+  - full Ruff check passed.
+  - full Ruff format-check passed with 201 files already formatted.
+  - default main KG acceptance remains `passed_with_explicit_limits`.
+  - strict main KG acceptance exits 1 only for known failed / blocked limits.
+  - `git diff --check` exited 0.
+- Refreshed broad KG-eval still shows `overall_passed=false`, 8 passed gates,
+  and the same four failed gates. No completion claim is supported.
+- Reviewer gate passed 3/3: `Wegener` agreed on engineering correctness after
+  the canonical packet test helper was changed to preserve pre-existing path
+  surfaces by rename; `Feynman` agreed on governance/safety; and `Kuhn` agreed
+  on status honesty.
+
+Current local implementation slice, updated 2026-06-28 after candidate-runner
 canonical packet integrity hardening:
 
 - `real_evidence_submission_manifest.py --execute-candidate-intakes` and

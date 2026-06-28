@@ -152,6 +152,64 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             paths.append(path)
         return paths
 
+    def remove_path_surface(self, path: Path) -> None:
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.exists():
+            path.rmdir()
+
+    def move_path_surface_aside(self, path: Path) -> Path | None:
+        restore_path = path.with_name(f".{path.name}.unitcase_restore")
+        if restore_path.exists() or restore_path.is_symlink():
+            raise AssertionError(f"test restore path already exists: {restore_path}")
+        if path.exists() or path.is_symlink():
+            path.rename(restore_path)
+            return restore_path
+        return None
+
+    def restore_path_surface(self, path: Path, restore_path: Path | None) -> None:
+        if path.is_symlink() or path.exists():
+            self.remove_path_surface(path)
+        if restore_path is not None:
+            restore_path.rename(path)
+
+    def make_canonical_packet_path_hazard(
+        self,
+        kind: str,
+    ) -> tuple[str, Path, Path | None]:
+        canonical_rel_path = sorted(submission_manifest.CANONICAL_INPUT_PACKETS)[0]
+        canonical_path = ROOT / canonical_rel_path
+        restore_path = self.move_path_surface_aside(canonical_path)
+        canonical_path.parent.mkdir(parents=True, exist_ok=True)
+        if kind == "symlink":
+            canonical_path.symlink_to(TEMPLATE_PATH)
+        elif kind == "hardlink":
+            canonical_path.hardlink_to(TEMPLATE_PATH)
+        elif kind == "directory":
+            canonical_path.mkdir()
+        else:
+            raise AssertionError(f"unsupported hazard kind {kind}")
+        return canonical_rel_path, canonical_path, restore_path
+
+    def canonical_packet_snapshot_with_state(
+        self, state: str
+    ) -> tuple[str, dict[str, dict[str, object]]]:
+        canonical_rel_path = sorted(submission_manifest.CANONICAL_INPUT_PACKETS)[0]
+        snapshot = {
+            rel_path: {
+                "state": "missing",
+                "sha256": None,
+                "hardlink_alias": False,
+            }
+            for rel_path in submission_manifest.CANONICAL_INPUT_PACKETS
+        }
+        snapshot[canonical_rel_path] = {
+            "state": state,
+            "sha256": None,
+            "hardlink_alias": False,
+        }
+        return canonical_rel_path, snapshot
+
     def test_valid_manifest_returns_candidate_only_intake_commands(self) -> None:
         report = submission_manifest.validate_manifest(self.valid_manifest())
 
@@ -378,6 +436,83 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertEqual(execution["execution_results"][0]["status"], "failed")
         self.assertFalse(execution["execution_results"][0]["canonical_packet_integrity"]["passed"])
 
+    def test_execute_candidate_intakes_refuses_preexisting_canonical_packet_path_hazards(
+        self,
+    ) -> None:
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+
+        for hazard_kind in ("symlink", "hardlink", "directory"):
+            with self.subTest(hazard_kind=hazard_kind):
+                rel_path, canonical_path, restore_path = self.make_canonical_packet_path_hazard(
+                    hazard_kind
+                )
+                try:
+                    with mock.patch.object(submission_manifest.subprocess, "run") as run_mock:
+                        execution = submission_manifest.execute_candidate_intakes(
+                            report,
+                            manifest_path=manifest_path,
+                        )
+                finally:
+                    self.restore_path_surface(canonical_path, restore_path)
+
+                self.assertFalse(execution["overall_success"])
+                self.assertTrue(execution["stopped_after_failure"])
+                self.assertEqual(execution["executed_gate_count"], 0)
+                self.assertFalse(execution["authority"]["writes_candidate_artifacts"])
+                self.assertFalse(execution["execution_effects"]["reads_response_packet_contents"])
+                self.assertFalse(execution["canonical_packet_baseline"]["passed"])
+                self.assertEqual(
+                    execution["canonical_packet_baseline"]["hazards"][0]["packet"],
+                    rel_path,
+                )
+                self.assertTrue(
+                    any(
+                        "pre-existing canonical packet path hazard" in blocker
+                        for blocker in execution["blockers"]
+                    )
+                )
+                self.assertIn(
+                    "pre-existing canonical packet path hazard",
+                    execution["partial_execution_policy"],
+                )
+                self.assertEqual(execution["execution_results"], [])
+                run_mock.assert_not_called()
+
+    def test_execute_candidate_intakes_refuses_unavailable_canonical_packet_surfaces(
+        self,
+    ) -> None:
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+
+        for state in ("metadata_unavailable", "read_unavailable"):
+            with self.subTest(state=state):
+                rel_path, snapshot = self.canonical_packet_snapshot_with_state(state)
+                with (
+                    mock.patch.object(
+                        submission_manifest,
+                        "_canonical_packet_snapshot",
+                        return_value=snapshot,
+                    ),
+                    mock.patch.object(submission_manifest.subprocess, "run") as run_mock,
+                ):
+                    execution = submission_manifest.execute_candidate_intakes(
+                        report,
+                        manifest_path=manifest_path,
+                    )
+
+                self.assertFalse(execution["overall_success"])
+                self.assertEqual(execution["executed_gate_count"], 0)
+                self.assertFalse(execution["execution_effects"]["reads_response_packet_contents"])
+                self.assertFalse(execution["authority"]["writes_candidate_artifacts"])
+                self.assertEqual(
+                    execution["canonical_packet_baseline"]["hazards"][0]["packet"],
+                    rel_path,
+                )
+                self.assertIn(state, execution["blockers"][0])
+                self.assertEqual(execution["execution_results"], [])
+                run_mock.assert_not_called()
+
     def test_valid_manifest_builds_candidate_manifest_validation_plan(self) -> None:
         manifest_path = self.write_operator_manifest()
         report = submission_manifest.validate_manifest(self.valid_manifest())
@@ -590,6 +725,80 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertFalse(
             validation["validation_results"][0]["canonical_packet_integrity"]["passed"]
         )
+
+    def test_validate_candidate_manifests_refuses_preexisting_canonical_packet_path_hazard(
+        self,
+    ) -> None:
+        self.write_candidate_manifests()
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+        rel_path, canonical_path, restore_path = self.make_canonical_packet_path_hazard("hardlink")
+
+        try:
+            with mock.patch.object(submission_manifest.subprocess, "run") as run_mock:
+                validation = submission_manifest.validate_candidate_manifests(
+                    report,
+                    manifest_path=manifest_path,
+                )
+        finally:
+            self.restore_path_surface(canonical_path, restore_path)
+
+        self.assertFalse(validation["overall_success"])
+        self.assertFalse(validation["candidate_manifest_preflight_passed"])
+        self.assertEqual(validation["executed_gate_count"], 0)
+        self.assertFalse(validation["validation_effects"]["reads_candidate_manifest_contents"])
+        self.assertFalse(validation["validation_effects"]["reads_candidate_artifacts"])
+        self.assertFalse(validation["canonical_packet_baseline"]["passed"])
+        self.assertEqual(
+            validation["canonical_packet_baseline"]["hazards"][0]["packet"],
+            rel_path,
+        )
+        self.assertTrue(
+            any(
+                "pre-existing canonical packet path hazard" in blocker
+                for blocker in validation["blockers"]
+            )
+        )
+        self.assertEqual(validation["validation_results"], [])
+        run_mock.assert_not_called()
+
+    def test_validate_candidate_manifests_refuses_unavailable_canonical_packet_surfaces(
+        self,
+    ) -> None:
+        self.write_candidate_manifests()
+        manifest_path = self.write_operator_manifest()
+        report = submission_manifest.validate_manifest(self.valid_manifest())
+
+        for state in ("metadata_unavailable", "read_unavailable"):
+            with self.subTest(state=state):
+                rel_path, snapshot = self.canonical_packet_snapshot_with_state(state)
+                with (
+                    mock.patch.object(
+                        submission_manifest,
+                        "_canonical_packet_snapshot",
+                        return_value=snapshot,
+                    ),
+                    mock.patch.object(submission_manifest.subprocess, "run") as run_mock,
+                ):
+                    validation = submission_manifest.validate_candidate_manifests(
+                        report,
+                        manifest_path=manifest_path,
+                    )
+
+                self.assertFalse(validation["overall_success"])
+                self.assertFalse(validation["candidate_manifest_preflight_passed"])
+                self.assertEqual(validation["executed_gate_count"], 0)
+                self.assertFalse(
+                    validation["validation_effects"]["reads_candidate_manifest_contents"]
+                )
+                self.assertFalse(validation["validation_effects"]["reads_candidate_artifacts"])
+                self.assertEqual(
+                    validation["canonical_packet_baseline"]["hazards"][0]["packet"],
+                    rel_path,
+                )
+                self.assertIn(state, validation["blockers"][0])
+                self.assertEqual(validation["validation_results"], [])
+                run_mock.assert_not_called()
 
     def test_validate_candidate_manifests_rejects_symlinked_candidate_manifest_before_commands(
         self,
