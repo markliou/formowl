@@ -866,3 +866,25 @@ status in each role's goal file and task completion in
   hardlink-alias rollback blocker was fixed and re-reviewed:
   `Chandrasekhar`, `Pasteur`, and `Locke` returned
   `RELEASE_DECISION: AGREE`.
+- 2026-06-28 gate-progress report: added
+  `.formowl/kg-eval/real_evidence_gate_progress.py`, focused tests, and an
+  operator-guide section for a compact non-authoritative stage report over the
+  four remaining real-evidence gates. It reads persisted preflight/work-order
+  reports and tracks safe `work_packets/` candidate manifest,
+  candidate-validation report, and approval-manifest surfaces without
+  refreshing preflight, reading operator response packets or candidate artifact
+  contents, and without writing candidate artifacts, promoting evidence,
+  writing canonical packets, replacing validators, or counting as acceptance.
+  Current refreshed
+  state remains all four gates at `missing_operator_response`, with zero
+  candidate manifests, zero clear validation reports, zero valid approvals,
+  empty real roots, and absent canonical broad packets. Canonical
+  dev-container verification after reviewer blocker fixes passed: focused
+  progress/operator-guide unittest 20 OK, full KG-eval unittest 512 OK, main
+  repo unittest 252 OK, guide/progress checks, refreshed broad reports, default
+  KG acceptance
+  `passed_with_explicit_limits`, strict KG acceptance exits 1 only for known
+  limits, full Ruff check/format-check, and `git diff --check`. Reviewer gate
+  passed 3/3: `Plato`, `Carson`, and `Russell` returned
+  `RELEASE_DECISION: AGREE` after blocker fixes. No completion claim is
+  supported.

@@ -1296,6 +1296,42 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `RELEASE_DECISION: AGREE`. The item remains unchecked because real
     operator/user-supplied artifacts and validator-accepted canonical packets
     are still missing for the four broad gates.
+  - 2026-06-28 gate-progress report checkpoint:
+    `.formowl/kg-eval/real_evidence_gate_progress.py` now writes a
+    non-authoritative status report at
+    `.formowl/kg-eval/results/real_evidence_gate_progress.json` that maps the
+    four remaining real-evidence gates to explicit collection stages:
+    `missing_operator_response`,
+    `candidate_artifacts_present_without_manifest`,
+    `candidate_manifest_present_pending_validation`,
+    `candidate_validation_failed_or_stale`,
+    `candidate_validation_clear_pending_approval`,
+    `approval_valid_pending_promotion`,
+    `canonical_packet_present_needs_validator_clear`, or
+    `canonical_packet_validator_clear`. It reads persisted
+    preflight/work-order reports plus safe `work_packets/` candidate manifest,
+    candidate-validation report, and approval-manifest surfaces; it does not
+    refresh preflight, read operator response packets, read candidate artifact
+    contents, write candidate artifacts, promote evidence, write canonical
+    packets, or count as acceptance. The
+    tracked operator guide now includes the progress-report command. Current
+    refreshed progress still reports all four gates at
+    `missing_operator_response`, with zero candidate manifests, zero clear
+    validation reports, zero valid approval manifests, empty real roots, and
+    absent canonical broad packets. Canonical dev-container verification after
+    reviewer blocker fixes passed: focused progress/operator-guide unittest
+    20 OK, full KG-eval unittest 512 OK, main repo unittest 252 OK,
+    guide/progress checks,
+    refreshed broad reports, default KG acceptance `passed_with_explicit_limits`,
+    strict KG acceptance exits 1 only for known limits, full Ruff
+    check/format-check, and `git diff --check`. Reviewer gate passed 3/3:
+    `Plato` agreed on status honesty after the stage-label docs were
+    completed, `Carson` agreed after the candidate-manifest symlink/hardlink
+    hash-current blocker was fixed, and `Russell` agreed after source-report
+    contract withholding plus rejected approval-surface reporting were added.
+    The item remains unchecked because this status aid accepts no evidence and
+    the four broad gates still require real operator/user-supplied artifacts
+    plus validator-accepted canonical packets.
   - 2026-06-28 human annotation response-intake hardening checkpoint:
     `human_annotation_response_intake.py` now requires response-packet
     top-level allowlisting, `operator_run_id` binding to the candidate output

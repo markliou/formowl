@@ -41,6 +41,54 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
+Current local implementation slice, updated 2026-06-28 after gate-progress
+report:
+
+- Added `real_evidence_gate_progress.py` and focused tests for a compact,
+  non-authoritative progress report over the four remaining real-evidence
+  gates.
+- The report maps each gate to an explicit collection stage:
+  `missing_operator_response`,
+  `candidate_artifacts_present_without_manifest`,
+  `candidate_manifest_present_pending_validation`,
+  `candidate_validation_failed_or_stale`,
+  `candidate_validation_clear_pending_approval`,
+  `approval_valid_pending_promotion`,
+  `canonical_packet_present_needs_validator_clear`, or
+  `canonical_packet_validator_clear`.
+- It reads persisted preflight/work-order reports plus safe direct
+  `work_packets/` surfaces for candidate manifests, candidate-validation
+  reports, and approval manifests. It does not refresh preflight, read
+  operator response packets, read candidate artifact contents, write candidate
+  artifacts, promote evidence, write canonical packets, replace authoritative
+  validators, or count as an acceptance gate.
+- The tracked operator guide now includes the progress-report refresh and
+  `--check` commands.
+- Current refreshed progress still reports all four gates at
+  `missing_operator_response`; candidate manifest count, clear validation
+  count, valid approval count, and canonical validator clear count are all
+  `0`. All four real roots remain empty and the four canonical broad packets
+  remain absent.
+- Canonical dev-container verification after reviewer blocker fixes passed:
+  - focused progress/operator-guide unittest ran 20 tests OK.
+  - full KG-eval unittest ran 512 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - operator guide `--check` and progress report `--check` exited 0.
+  - broad reports were refreshed with `kg_total_acceptance_suite.py`,
+    `kg_objective_completion_audit.py`, `real_evidence_preflight.py`,
+    `real_evidence_collection_work_orders.py`, and
+    `real_evidence_gate_progress.py`.
+  - default main KG acceptance remains `passed_with_explicit_limits`.
+  - strict main KG acceptance exits 1 only for known failed / blocked limits.
+  - full Ruff check passed, Ruff format-check passed, and `git diff --check`
+    exited 0.
+- Reviewer gate passed 3/3: `Plato` agreed on status honesty after the
+  stage-label docs were completed, `Carson` agreed after the
+  candidate-manifest symlink/hardlink hash-current blocker was fixed, and
+  `Russell` agreed after source-report contract withholding plus rejected
+  approval-surface reporting were added.
+- No completion claim is supported.
+
 Current local implementation slice, updated 2026-06-28 after governed approval
 promotion failure rollback:
 

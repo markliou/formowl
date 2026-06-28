@@ -32,6 +32,43 @@ Blocked gate ids:
 - multimodal_semantic_validation
 - production_adapter_paths
 
+## Gate Progress Report
+
+Use the progress report when you need a compact machine-readable
+summary of the four remaining gate stages before or after candidate
+intake. It reads persisted preflight/work-order reports plus safe
+work-packet surfaces, but it does not refresh preflight, read
+operator response packets, read candidate artifact contents, write
+candidate artifacts, promote evidence, write canonical packets, or
+count as an acceptance gate.
+
+Refresh the progress report:
+
+```sh
+python3 real_evidence_gate_progress.py
+```
+
+Check whether the persisted progress report is current:
+
+```sh
+python3 real_evidence_gate_progress.py --check
+```
+
+The report stages are status labels only:
+
+- `missing_operator_response`
+- `candidate_artifacts_present_without_manifest`
+- `candidate_manifest_present_pending_validation`
+- `candidate_validation_failed_or_stale`
+- `candidate_validation_clear_pending_approval`
+- `approval_valid_pending_promotion`
+- `canonical_packet_present_needs_validator_clear`
+- `canonical_packet_validator_clear`
+
+A gate still requires a
+validator-accepted canonical packet and the total acceptance suite
+before it can count as completed.
+
 ## Submission Manifest Preflight
 
 Before running any candidate-only intake command, fill a copy of the

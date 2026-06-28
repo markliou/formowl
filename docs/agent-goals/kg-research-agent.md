@@ -1220,3 +1220,36 @@ Reviewer cost-control rules:
   hardlink-alias rollback blocker was fixed and re-reviewed:
   `Chandrasekhar`, `Pasteur`, and `Locke` returned
   `RELEASE_DECISION: AGREE`. No goal completion claim is supported.
+- 2026-06-28 gate-progress report checkpoint:
+  added `.formowl/kg-eval/real_evidence_gate_progress.py`, focused tests, and
+  operator-guide documentation for a compact non-authoritative progress report
+  over the four remaining real-evidence gates. The report maps each gate to a
+  collection stage such as `missing_operator_response`,
+  `candidate_artifacts_present_without_manifest`,
+  `candidate_manifest_present_pending_validation`,
+  `candidate_validation_failed_or_stale`,
+  `candidate_validation_clear_pending_approval`,
+  `approval_valid_pending_promotion`,
+  `canonical_packet_present_needs_validator_clear`, or
+  `canonical_packet_validator_clear`. It reads persisted preflight/work-order
+  reports plus safe `work_packets/` surfaces for candidate manifests,
+  candidate-validation reports, and approval manifests. It does not refresh
+  preflight, read operator response packets, read candidate artifact contents,
+  write candidate artifacts, promote evidence, write canonical packets,
+  replace validators, or count as acceptance. Current refreshed progress is
+  still fully blocked:
+  all four gates are `missing_operator_response`; candidate manifest,
+  candidate-validation-clear, valid-approval, and canonical-validator-clear
+  counts are all `0`; real roots remain empty; and canonical broad packets are
+  absent. Canonical dev-container verification after reviewer blocker fixes
+  passed: focused progress/operator-guide unittest 20 OK, full KG-eval
+  unittest 512 OK, main repo unittest 252 OK, operator guide and progress
+  checks, refreshed broad reports, default KG acceptance
+  `passed_with_explicit_limits`, strict KG acceptance exits 1 only for known
+  limits, full Ruff check/format-check, and `git diff --check`. Reviewer gate
+  passed 3/3: `Plato` agreed on status honesty after the stage-label docs were
+  completed, `Carson` agreed after the candidate-manifest symlink/hardlink
+  hash-current blocker was fixed, and `Russell` agreed after source-report
+  contract withholding plus rejected approval-surface reporting were added.
+  This makes the remaining state easier to audit but does not make any broad
+  gate pass. No goal completion claim is supported.
