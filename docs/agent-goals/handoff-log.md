@@ -977,3 +977,13 @@ status in each role's goal file and task completion in
   packet is supplied, then run submission validation, response preflight,
   candidate intake, candidate validation, governance approval, approved
   promotion, broad validators, and total acceptance.
+- 2026-06-28 Plan B provisional adjudication result: the user authorized
+  LLM-assisted provisional adjudication with four specialist subagents and
+  required all four to pass. Read-only subagents returned 0/4 PASS:
+  `Halley` blocked fair baseline, `Sartre` blocked annotation adjudication,
+  `Erdos` blocked multimodal validation, and `Avicenna` blocked production
+  adapter paths. Each blocker was due to missing real/candidate evidence, not
+  because of a human-only requirement: real roots are empty, candidate
+  manifests/reports/approvals are absent, and canonical broad packets are
+  missing. Plan B cannot advance until there is actual response/candidate
+  material for the subagents to judge.

@@ -59,6 +59,23 @@ Current blocker, confirmed after `1e2010f`:
   approval validation, approved promotion, per-gate validator execution, and
   total acceptance.
 
+Plan B result, updated 2026-06-28:
+
+- The user allowed LLM-assisted provisional adjudication instead of full human
+  adjudication, with four specialist subagents and an all-four-must-pass rule.
+- Results were 0/4 PASS:
+  - `Halley`: `fair_external_baseline_comparison` BLOCK.
+  - `Sartre`: `annotation_adjudication_protocol` BLOCK.
+  - `Erdos`: `multimodal_semantic_validation` BLOCK.
+  - `Avicenna`: `production_adapter_paths` BLOCK.
+- All four blocked because there is no real or candidate evidence to judge:
+  only templates/previews are present, real roots are empty, candidate
+  manifests/reports/approvals are absent, and canonical broad packets are
+  missing.
+- This means even LLM-assisted provisional adjudication cannot pass yet. It
+  also still cannot be represented as completed human adjudication or original
+  broad real-evidence acceptance.
+
 Current local implementation slice, updated 2026-06-28 after operator
 submission-manifest response-preflight runner:
 

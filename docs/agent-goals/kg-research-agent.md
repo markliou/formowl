@@ -1382,3 +1382,16 @@ Reviewer cost-control rules:
   `--preflight-responses`, run `--execute-candidate-intakes`, run
   `--validate-candidate-manifests`, validate an approval manifest, execute
   approved promotion, then rerun the broad validators and total acceptance.
+- 2026-06-28 Plan B LLM-assisted provisional adjudication attempt: at the
+  user's request, Codex opened four read-only specialist subagents, one per
+  failed broad gate. Gate rule was strict: all four had to return
+  `PROVISIONAL_DECISION: PASS`, and provisional LLM adjudication could not be
+  represented as completed human adjudication. Results were 0/4 PASS:
+  `Halley` blocked `fair_external_baseline_comparison`, `Sartre` blocked
+  `annotation_adjudication_protocol`, `Erdos` blocked
+  `multimodal_semantic_validation`, and `Avicenna` blocked
+  `production_adapter_paths`. All four found the same material blocker: there
+  is no real or candidate evidence to adjudicate; only templates/previews and
+  empty real roots are present. Therefore Plan B is also blocked until at
+  least operator/user response packets or candidate artifacts exist. The
+  original human/real-evidence gates remain failed.
