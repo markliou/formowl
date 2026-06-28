@@ -41,6 +41,51 @@ This snapshot supersedes older "latest work" notes below when they conflict.
   - `multimodal_semantic_validation`
   - `production_adapter_paths`
 
+Current local implementation slice, updated 2026-06-28 after human annotation
+response-intake hardening:
+
+- `human_annotation_response_intake.py` now requires a top-level
+  response-packet allowlist, `operator_run_id`, and output-dir final-segment
+  binding before candidate artifacts are written.
+- First-pass and adjudication response rows now reject unsupported fields and
+  raw/internal field names such as raw paths, storage/database URIs, raw SQL,
+  and worker scratch references.
+- Candidate artifact writes now preflight parent directories, reject nested
+  default real-root output dirs, clean up after-open partial writes, and roll
+  back already-created candidate artifacts plus optional candidate manifests
+  when assembly or validation execution raises after writes. A completed
+  validate-only report with `passed=false` remains candidate-only evidence
+  state, not canonical evidence.
+- The intake now writes a non-authoritative response custody receipt that
+  binds the operator response packet hash, candidate packet hash, emitted
+  candidate artifact hashes, and optional candidate-manifest hash. This
+  receipt is candidate-only and is not the canonical human annotation packet.
+- The tracked operator guide now lists the hardened human response-intake
+  controls for `annotation_adjudication_protocol`.
+- Canonical dev-container verification passed in this resume:
+  - focused human-intake/work-order/operator-guide unittest ran 48 tests OK.
+  - full KG-eval unittest ran 482 tests OK.
+  - main repo unittest ran 252 tests OK.
+  - operator guide `--check` and submission template `--check-template`
+    exited 0.
+  - broad reports were refreshed with `kg_total_acceptance_suite.py`,
+    `kg_objective_completion_audit.py`, `real_evidence_preflight.py`, and
+    `real_evidence_collection_work_orders.py`.
+  - default main KG acceptance remains `passed_with_explicit_limits`.
+  - strict main KG acceptance exits 1 only for known failed / blocked limits:
+    `production_adapter_readiness` and
+    `latency_scalability_enterprise_claims`.
+  - full Ruff check passed and Ruff format-check reports 203 files already
+    formatted.
+- Safety state after verification: all four `inputs/*_real` roots contain no
+  files, the four canonical broad evidence packets remain absent, and broad
+  KG-eval still shows `overall_passed=false`, 8 passed gates, and the same
+  four failed gates. No completion claim is supported.
+- Reviewer gate passed 3/3 for this slice: `Socrates` agreed on engineering
+  correctness, `Gibbs` agreed on governance/safety after the validation-report
+  wording was narrowed, and `Pascal` agreed on status honesty after the same
+  wording update.
+
 Current local implementation slice, updated 2026-06-28 after governed
 approval-bridge hardening:
 

@@ -10,6 +10,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 import human_annotation_adjudication_validator as validator
 import human_annotation_packet_assembler as assembler
@@ -25,9 +26,17 @@ RESPONSE_PACKET_PATH = intake.WORK_PACKETS / "test_human_annotation_response_int
 BROKEN_SYMLINK_TARGET = Path("/tmp/formowl_human_annotation_response_intake_broken_target.json")
 
 
-def valid_response_packet() -> dict[str, object]:
+def remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def valid_response_packet(operator_run_id: str = "intake_test") -> dict[str, object]:
     return {
         "response_packet_type": "human_annotation_response_intake_v1",
+        "operator_run_id": operator_run_id,
         "annotation_task_id": work_packet_generator.DEFAULT_ANNOTATION_TASK_ID,
         "first_pass_submissions": [
             {
@@ -101,8 +110,8 @@ def write_json(path: Path, payload: object) -> None:
 
 class HumanAnnotationResponseIntakeTest(unittest.TestCase):
     def setUp(self) -> None:
-        shutil.rmtree(BASE, ignore_errors=True)
-        shutil.rmtree(LIVE_CLI_BASE, ignore_errors=True)
+        remove_path(BASE)
+        remove_path(LIVE_CLI_BASE)
         BROKEN_SYMLINK_TARGET.unlink(missing_ok=True)
         for path in (ASSEMBLY_MANIFEST, WORK_PACKET_PATH, RESPONSE_PACKET_PATH):
             path.unlink(missing_ok=True)
@@ -113,8 +122,8 @@ class HumanAnnotationResponseIntakeTest(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
-        shutil.rmtree(BASE, ignore_errors=True)
-        shutil.rmtree(LIVE_CLI_BASE, ignore_errors=True)
+        remove_path(BASE)
+        remove_path(LIVE_CLI_BASE)
         BROKEN_SYMLINK_TARGET.unlink(missing_ok=True)
         for path in (ASSEMBLY_MANIFEST, WORK_PACKET_PATH, RESPONSE_PACKET_PATH):
             path.unlink(missing_ok=True)
@@ -158,11 +167,37 @@ class HumanAnnotationResponseIntakeTest(unittest.TestCase):
         self.assertEqual(report["blockers"], [])
         self.assertEqual(result["candidate_packet_sha256"], validator.sha256_json(packet))
         self.assertEqual(result["response_packet_sha256"], intake.sha256_artifact_payload(response))
+        self.assertEqual(result["operator_run_id"], "intake_test")
+        self.assertEqual(
+            result["custody_receipt_artifact"],
+            "inputs/human_annotation_real/intake_test/response_custody_receipt.json",
+        )
+        self.assertEqual(
+            result["custody_receipt_sha256"],
+            validator.sha256_file(BASE / "response_custody_receipt.json"),
+        )
+        self.assertEqual(
+            result["assembly_manifest_sha256"],
+            validator.sha256_file(ASSEMBLY_MANIFEST),
+        )
         self.assertTrue(result["claim_boundary"]["candidate_packet_validator_passed"])
         self.assertFalse(result["claim_boundary"]["supports_human_annotation_completed_claim"])
         self.assertFalse(result["claim_boundary"]["supports_human_adjudication_completed_claim"])
         custody = json.loads((BASE / "custody_receipt.json").read_text(encoding="utf-8"))
         self.assertEqual(custody["response_packet_sha256"], result["response_packet_sha256"])
+        response_custody = json.loads(
+            (BASE / "response_custody_receipt.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(response_custody["operator_run_id"], "intake_test")
+        self.assertEqual(
+            response_custody["candidate_packet_sha256"], result["candidate_packet_sha256"]
+        )
+        self.assertEqual(
+            response_custody["assembly_manifest_sha256"],
+            validator.sha256_file(ASSEMBLY_MANIFEST),
+        )
+        self.assertFalse(response_custody["writes_canonical_packet"])
+        self.assertFalse(response_custody["counts_as_acceptance_gate"])
         self.assertEqual(
             sorted(path.name for path in BASE.iterdir()),
             [
@@ -172,6 +207,7 @@ class HumanAnnotationResponseIntakeTest(unittest.TestCase):
                 "first_pass_human_reviewer_alpha.json",
                 "first_pass_human_reviewer_beta.json",
                 "manifest.json",
+                "response_custody_receipt.json",
                 "work_orders.json",
             ],
         )
@@ -190,6 +226,32 @@ class HumanAnnotationResponseIntakeTest(unittest.TestCase):
             )
 
         self.assertFalse(BASE.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rejects_operator_run_id_output_dir_mismatch_before_writes(self) -> None:
+        response = valid_response_packet(operator_run_id="human_run_001")
+
+        with self.assertRaisesRegex(intake.IntakeError, "final segment"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir="inputs/human_annotation_real/human_run_002",
+            )
+
+        self.assertFalse((validator.REAL_ARTIFACT_ROOT_PATH / "human_run_002").exists())
+        self.assert_canonical_unchanged()
+
+    def test_default_rejects_nested_output_dir_before_writes(self) -> None:
+        response = valid_response_packet(operator_run_id="human_run_001")
+
+        with self.assertRaisesRegex(intake.IntakeError, "exactly inputs/human_annotation_real"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir="inputs/human_annotation_real/human_run_001/nested",
+            )
+
+        self.assertFalse((validator.REAL_ARTIFACT_ROOT_PATH / "human_run_001").exists())
         self.assert_canonical_unchanged()
 
     def test_default_rejects_test_output_dir_before_writes(self) -> None:
@@ -224,6 +286,51 @@ class HumanAnnotationResponseIntakeTest(unittest.TestCase):
                 output_dir="inputs/human_annotation_real/intake_test",
                 allow_test_artifacts=True,
             )
+        self.assertFalse(BASE.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rejects_unsupported_response_fields_before_writes(self) -> None:
+        response = valid_response_packet()
+        response["claim_boundary"] = {"supports_human_annotation_completed_claim": True}
+
+        with self.assertRaisesRegex(intake.IntakeError, "unsupported fields"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir="inputs/human_annotation_real/intake_test",
+                allow_test_artifacts=True,
+            )
+
+        self.assertFalse(BASE.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rejects_raw_internal_nested_response_fields_before_writes(self) -> None:
+        response = valid_response_packet()
+        response["first_pass_submissions"][0]["rows"][0]["raw_sql"] = "select * from labels"
+
+        with self.assertRaisesRegex(intake.IntakeError, "raw/internal field"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir="inputs/human_annotation_real/intake_test",
+                allow_test_artifacts=True,
+            )
+
+        self.assertFalse(BASE.exists())
+        self.assert_canonical_unchanged()
+
+    def test_rejects_unsupported_nested_response_fields_before_writes(self) -> None:
+        response = valid_response_packet()
+        response["first_pass_submissions"][0]["rows"][0]["notes"] = "manually reviewed"
+
+        with self.assertRaisesRegex(intake.IntakeError, "first-pass row has unsupported fields"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=response,
+                output_dir="inputs/human_annotation_real/intake_test",
+                allow_test_artifacts=True,
+            )
+
         self.assertFalse(BASE.exists())
         self.assert_canonical_unchanged()
 
@@ -313,9 +420,57 @@ class HumanAnnotationResponseIntakeTest(unittest.TestCase):
         self.assertTrue((BASE / "manifest.json").is_symlink())
         self.assert_canonical_unchanged()
 
+    def test_refuses_parent_file_collision_before_writes(self) -> None:
+        BASE.parent.mkdir(parents=True, exist_ok=True)
+        BASE.write_text("not a directory\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(intake.IntakeError, "parent must be a directory"):
+            intake.build_intake_artifacts(
+                work_packet=work_packet_generator.build_work_packet(),
+                response_packet=valid_response_packet(),
+                output_dir="inputs/human_annotation_real/intake_test",
+                allow_test_artifacts=True,
+            )
+
+        self.assertEqual(BASE.read_text(encoding="utf-8"), "not a directory\n")
+        self.assert_canonical_unchanged()
+
+    def test_rolls_back_candidate_artifacts_when_assembler_fails_after_writes(self) -> None:
+        with patch.object(
+            assembler, "assemble_packet", side_effect=assembler.AssemblyError("boom")
+        ):
+            with self.assertRaisesRegex(intake.IntakeError, "boom"):
+                intake.build_intake_artifacts(
+                    work_packet=work_packet_generator.build_work_packet(),
+                    response_packet=valid_response_packet(),
+                    output_dir="inputs/human_annotation_real/intake_test",
+                    assembly_manifest_output=(
+                        "work_packets/test_human_annotation_response_intake_manifest.json"
+                    ),
+                    allow_test_artifacts=True,
+                )
+
+        self.assertFalse(BASE.exists())
+        self.assertFalse(ASSEMBLY_MANIFEST.exists())
+        self.assert_canonical_unchanged()
+
+    def test_write_json_removes_after_open_partial_output(self) -> None:
+        partial = BASE / "partial.json"
+
+        with patch.object(intake, "_artifact_json_text", side_effect=RuntimeError("interrupted")):
+            with self.assertRaisesRegex(intake.IntakeError, "write failed"):
+                intake._write_json(partial, {"artifact": "partial"})
+
+        self.assertFalse(partial.exists())
+        self.assertFalse(any(BASE.glob("*.json")) if BASE.exists() else False)
+        self.assert_canonical_unchanged()
+
     def test_main_writes_candidate_artifacts_and_manifest_without_canonical_promotion(self) -> None:
         write_json(WORK_PACKET_PATH, work_packet_generator.build_work_packet())
-        write_json(RESPONSE_PACKET_PATH, valid_response_packet())
+        write_json(
+            RESPONSE_PACKET_PATH,
+            valid_response_packet(operator_run_id="operator_intake_cli_check"),
+        )
         original_argv = sys.argv[:]
         stdout = StringIO()
         try:
@@ -352,7 +507,18 @@ class HumanAnnotationResponseIntakeTest(unittest.TestCase):
         self.assertFalse(
             any(key.startswith("supports_") for key in cli_result["validation_report"])
         )
+        self.assertEqual(cli_result["operator_run_id"], "operator_intake_cli_check")
+        self.assertEqual(
+            cli_result["custody_receipt_artifact"],
+            "inputs/human_annotation_real/operator_intake_cli_check/"
+            "response_custody_receipt.json",
+        )
+        self.assertEqual(
+            cli_result["custody_receipt_sha256"],
+            validator.sha256_file(LIVE_CLI_BASE / "response_custody_receipt.json"),
+        )
         self.assertTrue((LIVE_CLI_BASE / "manifest.json").exists())
+        self.assertTrue((LIVE_CLI_BASE / "response_custody_receipt.json").exists())
         self.assertTrue(ASSEMBLY_MANIFEST.exists())
         packet = assembler.assemble_packet(
             **json.loads(ASSEMBLY_MANIFEST.read_text(encoding="utf-8"))

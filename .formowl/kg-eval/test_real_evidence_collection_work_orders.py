@@ -456,6 +456,22 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             "generated_by_llm == false for every submission and adjudication row",
             response_contract["required_controls"],
         )
+        self.assertIn(
+            "operator_run_id matches the candidate output directory final segment",
+            response_contract["required_controls"],
+        )
+        self.assertIn(
+            "unsupported response packet fields and raw/internal field names are rejected",
+            response_contract["required_controls"],
+        )
+        self.assertIn(
+            "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+            response_contract["required_controls"],
+        )
+        self.assertIn(
+            "intake custody receipt binds optional assembly manifest hash when emitted",
+            response_contract["required_controls"],
+        )
 
         enterprise = self._order(report, "multimodal_semantic_validation")
         enterprise_checklist = checklist_by_gate["multimodal_semantic_validation"]

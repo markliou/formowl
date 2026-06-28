@@ -1275,6 +1275,32 @@ These groups can be split across multiple agents after Slice 1 is stable.
     The item remains unchecked because real operator/user-supplied
     artifacts and validator-accepted canonical packets are still missing for
     the four broad gates.
+  - 2026-06-28 human annotation response-intake hardening checkpoint:
+    `human_annotation_response_intake.py` now requires response-packet
+    top-level allowlisting, `operator_run_id` binding to the candidate output
+    directory, unsupported nested field rejection, raw/internal field-name
+    rejection, parent directory preflight, nested default real-root output-dir
+    rejection, after-open partial write cleanup, and rollback of already
+    created candidate artifacts plus optional candidate manifests when
+    assembly or validation execution raises after writes. A completed
+    validate-only report with `passed=false` remains candidate-only evidence
+    state, not canonical evidence. It also emits a non-authoritative response
+    custody receipt binding the operator response packet hash,
+    candidate packet hash, candidate artifact hashes, and optional
+    candidate-manifest hash. The tracked operator guide now lists these
+    controls for `annotation_adjudication_protocol`. Canonical dev-container
+    verification passed: focused human-intake/work-order/operator-guide
+    unittest 48 OK, full KG-eval unittest 482 OK, main repo unittest 252 OK,
+    guide/template checks, refreshed broad reports, default KG acceptance
+    `passed_with_explicit_limits`, strict KG acceptance exits 1 only for known
+    limits, full Ruff check/format-check, and `git diff --check`. The item
+    remains unchecked because this hardening accepts no evidence, writes no
+    canonical broad packet, and the four broad real-evidence gates still
+    require real operator/user-supplied artifacts plus validator-accepted
+    canonical packets. Reviewer gate passed 3/3: `Socrates` agreed on
+    engineering correctness, `Gibbs` agreed on governance/safety after the
+    validation-report wording was narrowed, and `Pascal` agreed on status
+    honesty after the same wording update.
   - 2026-06-27 fair-baseline response-intake note: candidate-only intake is
     implemented for `fair_external_baseline_comparison` and wired into the
     collection work orders. It can seal operator-supplied fair-baseline

@@ -1111,3 +1111,28 @@ Reviewer cost-control rules:
   candidate-manifest TOCTOU blocker was fixed and re-reviewed:
   `Bernoulli`, `Popper`, and `Dalton` returned `RELEASE_DECISION: AGREE`.
   No goal completion claim is supported.
+- 2026-06-28 human annotation response-intake hardening checkpoint:
+  `human_annotation_response_intake.py` now requires response-packet top-level
+  allowlisting, `operator_run_id` binding to the candidate output directory,
+  unsupported nested field rejection, raw/internal field-name rejection, parent
+  directory preflight, nested default real-root output-dir rejection, partial
+  write cleanup, and rollback of already-created candidate artifacts plus
+  optional candidate manifests when assembly or validation execution raises
+  after writes. A completed validate-only report with `passed=false` remains
+  candidate-only evidence state, not canonical evidence.
+  It also emits a non-authoritative response custody receipt binding the
+  operator response packet hash, candidate packet hash, candidate artifact
+  hashes, and optional candidate-manifest hash. The tracked operator guide now
+  lists these controls for `annotation_adjudication_protocol`. Canonical
+  dev-container verification passed: focused human-intake/work-order/operator
+  guide unittest 48 OK, full KG-eval unittest 482 OK, main repo unittest
+  252 OK, operator guide `--check`, submission template `--check-template`,
+  refreshed broad reports, default KG acceptance `passed_with_explicit_limits`,
+  strict KG acceptance exits 1 only for known limits, full Ruff check and
+  format-check, and `git diff --check`. Broad KG-eval remains incomplete with
+  `overall_passed=false`, 8 passed gates, and the same four failed gates; all
+  four real roots remain empty and canonical broad packets remain absent.
+  Reviewer gate passed 3/3: `Socrates` agreed on engineering correctness,
+  `Gibbs` agreed on governance/safety after the validation-report wording was
+  narrowed, and `Pascal` agreed on status honesty after the same wording
+  update. No goal completion claim is supported.

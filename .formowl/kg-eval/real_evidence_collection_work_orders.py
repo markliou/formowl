@@ -260,12 +260,16 @@ def _human_tasks(row: dict[str, Any]) -> dict[str, Any]:
             "promotes_evidence": False,
             "counts_as_acceptance_gate": False,
             "required_controls": [
+                "operator_run_id matches the candidate output directory final segment",
                 "two independent first-pass human reviewer submissions",
                 "human adjudicator distinct from first-pass reviewers",
                 "at least one first-pass disagreement",
                 "adjudication rows exactly cover disagreed items",
                 "generated_by_llm == false for every submission and adjudication row",
                 "template_source is null for every submission and adjudication row",
+                "unsupported response packet fields and raw/internal field names are rejected",
+                "intake custody receipt binds response packet, candidate packet, and artifact hashes",
+                "intake custody receipt binds optional assembly manifest hash when emitted",
             ],
         },
         "custody_controls": [

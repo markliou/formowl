@@ -768,3 +768,27 @@ status in each role's goal file and task completion in
   `Bernoulli` agreed after the TOCTOU blocker fix, `Popper` agreed after the
   final hash-guard delta, and `Dalton` agreed after durable docs/tracking were
   updated and staged.
+- 2026-06-28 human annotation response-intake hardening: the candidate-only
+  `human_annotation_response_intake.py` path now requires response-packet
+  top-level allowlisting, `operator_run_id` to match the output directory
+  final segment, unsupported nested field rejection, raw/internal field-name
+  rejection, parent directory preflight, nested default real-root output-dir
+  rejection, after-open partial write cleanup, and rollback of already-created
+  candidate artifacts plus optional candidate manifests when assembler
+  assembly or validation execution raises after writes. A completed
+  validate-only report with `passed=false` remains candidate-only evidence
+  state, not canonical evidence. It emits a non-authoritative response custody
+  receipt binding response packet, candidate packet, candidate artifact, and
+  optional candidate-manifest hashes, and the tracked operator guide lists the
+  controls for `annotation_adjudication_protocol`. Canonical dev-container
+  verification passed: focused human-intake/work-order/operator-guide unittest
+  48 OK, full KG-eval unittest 482 OK, main repo unittest 252 OK, guide and
+  submission-template checks, refreshed broad reports, default KG acceptance
+  `passed_with_explicit_limits`, strict KG acceptance exits 1 only for known
+  limits, full Ruff check/format-check, and `git diff --check`. Broad KG-eval
+  remains incomplete with `overall_passed=false`, 8 passed gates, and the same
+  four failed gates; all real roots are empty and canonical broad packets are
+  absent. Reviewer gate passed 3/3: `Socrates` agreed on engineering
+  correctness, `Gibbs` agreed on governance/safety after the validation-report
+  wording was narrowed, and `Pascal` agreed on status honesty after the same
+  wording update.
