@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Protocol, Sequence
 
 from formowl_auth import FileAuditLogStore, write_audit_log
 from formowl_contract import (
@@ -53,6 +53,7 @@ _FORBIDDEN_PUBLIC_VALUE = re.compile(
     r"\bdelete\b\s+|\bdrop\b\s+)",
     re.IGNORECASE,
 )
+_FORMOWL_ASSET_LOCATOR = re.compile(r"^formowl://asset/[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,32 @@ class RetrievalGatewayResult:
         return payload
 
 
+class RawAssetLocatorResolver(Protocol):
+    def resolve_raw_asset_refs(self, result: VectorSearchResult) -> list[dict[str, Any]]:
+        """Return FormOwl raw-asset locator references for a visible vector result."""
+
+
+@dataclass(frozen=True)
+class MetadataRawAssetLocatorResolver:
+    """Resolve raw asset refs from already indexed metadata.
+
+    This is the default adapter path for file-backed tests and early production
+    wiring. It accepts only governed FormOwl asset locators and never returns
+    raw object-store or filesystem locations.
+    """
+
+    def resolve_raw_asset_refs(self, result: VectorSearchResult) -> list[dict[str, Any]]:
+        metadata = result.record.metadata
+        locators = metadata.get("asset_locators")
+        if not isinstance(locators, list):
+            locators = [metadata.get("asset_locator")]
+        return [
+            {"asset_locator": locator}
+            for locator in locators
+            if _safe_formowl_asset_locator(locator) is not None
+        ]
+
+
 class RetrievalGateway:
     """Public retrieval boundary that checks grants before exposing content.
 
@@ -101,10 +128,12 @@ class RetrievalGateway:
         vector_store: FileVectorStore,
         graph_projection_store: FileGraphProjectionStore | None = None,
         audit_store: FileAuditLogStore | None = None,
+        raw_asset_resolver: RawAssetLocatorResolver | None = None,
     ) -> None:
         self.vector_store = vector_store
         self.graph_projection_store = graph_projection_store
         self.audit_store = audit_store
+        self.raw_asset_resolver = raw_asset_resolver or MetadataRawAssetLocatorResolver()
 
     def query_effective_graph(
         self,
@@ -192,7 +221,11 @@ class RetrievalGateway:
             mode=mode,
             answer=_answer_only_mode(results) if mode == "answer_only" else None,
             evidence_snippets=_evidence_snippet_mode(results) if mode == "evidence_snippet" else [],
-            raw_asset_refs=_raw_asset_mode(results) if mode == "raw_asset" else [],
+            raw_asset_refs=(
+                _raw_asset_mode(results, raw_asset_resolver=self.raw_asset_resolver)
+                if mode == "raw_asset"
+                else []
+            ),
             visible_graph_snippets=_graph_snippets(visible_nodes),
             retrieval_trace=trace,
             audit_log_id=audit.audit_log_id if audit else None,
@@ -267,18 +300,53 @@ def _evidence_snippet_mode(results: Sequence[VectorSearchResult]) -> list[dict[s
     return snippets
 
 
-def _raw_asset_mode(results: Sequence[VectorSearchResult]) -> list[dict[str, Any]]:
+def _raw_asset_mode(
+    results: Sequence[VectorSearchResult],
+    *,
+    raw_asset_resolver: RawAssetLocatorResolver,
+) -> list[dict[str, Any]]:
     refs: list[dict[str, Any]] = []
     for result in results:
-        refs.append(
-            {
-                "source_type": result.record.source_type,
-                "source_id": result.record.source_id,
-                "access": "explicit_grant_required",
-                "content_returned": False,
-            }
-        )
+        try:
+            resolved_refs = raw_asset_resolver.resolve_raw_asset_refs(result)
+        except Exception:
+            refs.append(_raw_asset_ref(result, warning="raw_asset_resolver_failed"))
+            continue
+        sanitized_refs = [_raw_asset_ref(result, ref) for ref in resolved_refs]
+        refs.extend(sanitized_refs or [_raw_asset_ref(result, warning="asset_locator_unavailable")])
+    _assert_public_payload(refs)
     return refs
+
+
+def _raw_asset_ref(
+    result: VectorSearchResult,
+    ref: dict[str, Any] | None = None,
+    *,
+    warning: str | None = None,
+) -> dict[str, Any]:
+    asset_locator = _safe_formowl_asset_locator((ref or {}).get("asset_locator"))
+    payload = {
+        "source_type": result.record.source_type,
+        "source_id": result.record.source_id,
+        "asset_locator": asset_locator,
+        "access": "explicit_grant_required",
+        "content_returned": False,
+    }
+    if warning is not None:
+        payload["warnings"] = [warning]
+    if asset_locator is None and warning is None:
+        payload["warnings"] = ["asset_locator_redacted"]
+    _assert_public_payload(payload)
+    return payload
+
+
+def _safe_formowl_asset_locator(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    locator = value.strip()
+    if not _FORMOWL_ASSET_LOCATOR.fullmatch(locator):
+        return None
+    return locator
 
 
 def _graph_snippets(nodes: Sequence[GraphProjectionNode]) -> list[dict[str, Any]]:
@@ -398,7 +466,7 @@ def _sanitize_public_dict(payload: dict[str, Any]) -> dict[str, Any]:
             ]
         else:
             cleaned = _sanitize_public_value(value)
-            if cleaned is not None:
+            if cleaned is not None or value is None:
                 sanitized[str(key)] = cleaned
     _assert_public_payload(sanitized)
     return sanitized

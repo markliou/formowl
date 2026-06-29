@@ -216,6 +216,15 @@ For v1, PostgreSQL job tables may be the coordination mechanism. A dedicated que
 
 Workers should process registered assets by `asset_id` and `object_uri`. Large files should be copied to local scratch SSD before parsing instead of being parsed directly from NAS-mounted paths as the normal runtime model.
 
+The current Phase 0 worker boundary is the `formowl_worker` package. Its
+ingestion worker reads pending `IngestionJob` records from the existing
+`JobStore`, checks storage backend `allowed_workers`, and invokes the same
+`run_ingestion_job` transition path used by deterministic tests. It does not
+add worker lease fields to job records, expose worker scratch paths through
+MCP-facing payloads, or change the `IngestionJob` contract. This keeps worker
+execution movable out of MCP request handling while leaving database-backed
+leasing and retry policy as a later storage implementation detail.
+
 Worker scheduling should be storage-aware when raw data is distributed:
 
 ```text
@@ -1066,6 +1075,47 @@ FORMOWL_EXTRACTOR_WORKER_CONCURRENCY
 ```
 
 The current file-backed `FORMOWL_DATA_DIR` behavior is acceptable for early MCP prototypes. Team deployments should move source-of-truth metadata to PostgreSQL and raw or large payloads to object storage.
+
+Storage backend registry configuration is loaded through the
+`formowl_ingestion.storage` configuration helpers. The local-first path uses
+`FORMOWL_DATA_DIR` plus `FORMOWL_STORAGE_BACKEND_ROOT` to create a
+`local_fs` backend record in `StorageBackendRegistry`. The public backend
+record contains stable FormOwl identifiers such as
+`formowl://storage/{storage_backend_id}`; the local root path is stored only in
+the registry private record and must not be returned through MCP envelopes.
+
+Supported early configuration fields:
+
+```text
+FORMOWL_STORAGE_BACKEND_ID
+FORMOWL_STORAGE_BACKEND_TYPE
+FORMOWL_STORAGE_BACKEND_ROOT
+FORMOWL_STORAGE_BACKEND_ROOT_PREFIX
+FORMOWL_STORAGE_BACKEND_DISPLAY_NAME
+FORMOWL_STORAGE_BACKEND_ACCESS_MODE
+FORMOWL_STORAGE_BACKEND_TRUST_LEVEL
+FORMOWL_STORAGE_BACKEND_HEALTH_STATUS
+FORMOWL_STORAGE_BACKEND_BANDWIDTH_CLASS
+FORMOWL_STORAGE_BACKEND_LATENCY_CLASS
+FORMOWL_STORAGE_ALLOWED_WORKERS
+FORMOWL_STORAGE_INTERNAL_ENDPOINT
+FORMOWL_STORAGE_BACKENDS_JSON
+```
+
+`FORMOWL_STORAGE_BACKENDS_JSON` may declare multiple backend descriptors. It
+is intended for stable deployment metadata such as backend id, type, display
+name, workspace scope, internal endpoint, bucket name, region, and worker
+routing hints. It must not contain secret keys, passwords, tokens, credentials,
+or access keys. Secret material such as
+`FORMOWL_OBJECT_STORE_SECRET_ACCESS_KEY` stays outside the registry and should
+be consumed only by the eventual object-store adapter or deployment secret
+provider.
+
+Non-local descriptors such as `minio` or `s3_compatible` must provide an
+explicit `storage_backend_id` so adapter implementation details can change
+without changing asset contract ids. Until a concrete object-store adapter is
+configured, these descriptors are registry metadata only; object bytes still
+flow through the existing local object-store implementation.
 
 ## Observability
 

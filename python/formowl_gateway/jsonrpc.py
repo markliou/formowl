@@ -38,6 +38,126 @@ class JsonRpcTranscriptEntry:
         return payload
 
 
+def _default_session() -> SemanticGatewaySession:
+    return SemanticGatewaySession(
+        session_id="mcp_gateway_session",
+        actor_user_id="manual_trusted_internal",
+        workspace_id="workspace_main",
+    )
+
+
+@dataclass
+class McpServerJsonRpcGateway:
+    server: Any
+    server_name: str | None = None
+    session: SemanticGatewaySession = field(default_factory=_default_session)
+    transcript: list[JsonRpcTranscriptEntry] = field(default_factory=list)
+
+    def handle_json_rpc(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        response = self._handle(request)
+        validate_public_gateway_payload(response)
+        self._record_transcript(request, response)
+        return response
+
+    def leak_transcript(self) -> list[dict[str, Any]]:
+        return [entry.to_dict() for entry in self.transcript]
+
+    def _handle(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        request_id = request.get("id")
+        if request.get("jsonrpc") != "2.0":
+            return _json_rpc_error(request_id, -32600, "invalid_request")
+        if not self.session.authenticated:
+            return _json_rpc_error(request_id, -32001, "session_not_authenticated")
+        method = request.get("method")
+        if method == "initialize":
+            return _json_rpc_result(
+                request_id,
+                {
+                    "protocolVersion": "2024-11-05",
+                    "serverInfo": {
+                        "name": self._public_server_name(),
+                        "version": "0.1.0",
+                    },
+                    "capabilities": {"tools": {"listChanged": False}},
+                    "session": self.session.to_dict(),
+                },
+            )
+        if method == "tools/list":
+            return _json_rpc_result(
+                request_id,
+                {
+                    "tools": [
+                        _mcp_server_tool_to_json_rpc_schema(tool)
+                        for tool in self.server.list_tools()
+                    ],
+                    "session": self.session.to_dict(),
+                },
+            )
+        if method == "tools/call":
+            return self._handle_tool_call(request_id, request.get("params"))
+        return _json_rpc_error(request_id, -32601, "method_not_found")
+
+    def _handle_tool_call(self, request_id: Any, params: Any) -> dict[str, Any]:
+        if not isinstance(params, Mapping):
+            return _json_rpc_error(request_id, -32602, "invalid_params")
+        tool_name = params.get("name")
+        arguments = params.get("arguments", {})
+        if not isinstance(tool_name, str) or not isinstance(arguments, Mapping):
+            return _json_rpc_error(request_id, -32602, "invalid_params")
+        try:
+            validate_public_gateway_payload({"tool_name": tool_name, "arguments": arguments})
+        except ContractValidationError:
+            return self._tool_result(
+                request_id,
+                _safe_mcp_tool_error_envelope(
+                    server_name=self._public_server_name(),
+                    tool_name=tool_name,
+                    error_code="unsafe_tool_payload",
+                ),
+            )
+        try:
+            tool_result = self.server.call_tool(tool_name, dict(arguments))
+            validate_public_gateway_payload(tool_result)
+        except ContractValidationError:
+            tool_result = _safe_mcp_tool_error_envelope(
+                server_name=self._public_server_name(),
+                tool_name=tool_name,
+                error_code="unsafe_tool_payload",
+            )
+        except Exception:
+            tool_result = _safe_mcp_tool_error_envelope(
+                server_name=self._public_server_name(),
+                tool_name=tool_name,
+                error_code="tool_execution_failed",
+            )
+        return self._tool_result(request_id, tool_result)
+
+    def _tool_result(self, request_id: Any, tool_result: dict[str, Any]) -> dict[str, Any]:
+        return _json_rpc_result(
+            request_id,
+            {
+                "content": [{"type": "json", "json": tool_result}],
+                "isError": tool_result.get("status") == "error",
+                "session": self.session.to_dict(),
+            },
+        )
+
+    def _public_server_name(self) -> str:
+        value = self.server_name or getattr(self.server, "server_name", "formowl-mcp")
+        safe_value = _safe_method_name(str(value))
+        return f"formowl-{safe_value}-jsonrpc"
+
+    def _record_transcript(self, request: Mapping[str, Any], response: dict[str, Any]) -> None:
+        method = str(request.get("method", "unknown"))
+        entry = JsonRpcTranscriptEntry(
+            method=_safe_method_name(method),
+            request_hash=sha256_json(to_plain(dict(request))),
+            response_hash=sha256_json(response),
+            status="error" if "error" in response else "ok",
+        )
+        self.transcript.append(entry)
+
+
 @dataclass
 class SemanticMcpJsonRpcGateway:
     semantic_gateway: SemanticMcpGateway = field(default_factory=SemanticMcpGateway)
@@ -200,16 +320,11 @@ def containerized_semantic_mcp_gateway_smoke() -> dict[str, Any]:
         for response in responses
         for tool in response.get("result", {}).get("tools", [])
     }
+    expected_tool_names = {schema["tool_name"] for schema in PUBLIC_TOOL_SCHEMAS}
     smoke = {
         "transport_initialized": responses[0].get("result", {}).get("protocolVersion")
         == "2024-11-05",
-        "tools_listed": tool_names
-        == {
-            "preview_graph_candidates",
-            "query_effective_graph",
-            "submit_graph_review_decision",
-            "generate_wiki_draft_from_graph_view",
-        },
+        "tools_listed": tool_names == expected_tool_names,
         "tool_call_succeeded": responses[2].get("result", {}).get("isError") is False,
         "session_bound": all(
             response.get("result", {}).get("session", {}).get("actor_user_id")
@@ -262,6 +377,45 @@ def _tool_to_json_rpc_schema(schema: dict[str, Any]) -> dict[str, Any]:
             "additionalProperties": True,
         },
     }
+
+
+def _mcp_server_tool_to_json_rpc_schema(tool: dict[str, Any]) -> dict[str, Any]:
+    name = _safe_method_name(str(tool.get("name") or "unknown_tool"))
+    description = str(tool.get("description") or f"FormOwl MCP tool: {name}")
+    try:
+        validate_public_gateway_payload(description)
+    except ContractValidationError:
+        description = "FormOwl MCP tool."
+    return {
+        "name": name,
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": True,
+        },
+    }
+
+
+def _safe_mcp_tool_error_envelope(
+    *,
+    server_name: str,
+    tool_name: str,
+    error_code: str,
+) -> dict[str, Any]:
+    envelope = {
+        "result_type": "mcp_gateway_error",
+        "status": "error",
+        "data": {
+            "server_name": _safe_method_name(server_name),
+            "tool_name": _safe_method_name(tool_name),
+            "error_code": _safe_method_name(error_code),
+            "message": "The MCP JSON-RPC gateway rejected this request.",
+        },
+        "warnings": ["safe_json_rpc_error_envelope"],
+    }
+    validate_public_gateway_payload(envelope)
+    return envelope
 
 
 def _json_rpc_result(request_id: Any, result: dict[str, Any]) -> dict[str, Any]:

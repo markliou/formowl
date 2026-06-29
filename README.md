@@ -84,6 +84,18 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   content, requires requester access to private user graph revisions before
   projection scanning, rejects raw/evidence/internal locators in visible view
   payloads, and keeps raw asset access and canonical merges out of the view.
+- Retrieval gateway plumbing for answer-only, evidence-snippet, and raw-asset
+  request modes. Raw-asset mode requires an explicit grant and returns only
+  governed `formowl://asset/...` locators through an injectable resolver path;
+  it does not read raw content or expose filesystem/object-store locations.
+- Storage backend registry configuration helpers for local-first deployments
+  and metadata-only MinIO/S3-compatible descriptors. Public backend records use
+  stable FormOwl storage locators while local roots, internal endpoints, and
+  object-store adapter metadata remain private.
+- Ingestion worker boundary package that can process pending ingestion jobs
+  outside MCP request handling while reusing the existing `IngestionJob`
+  records, extractor adapters, stores, and permissioned storage backend
+  routing.
 - Optional graph-adapter manifests for RapidFuzz and Splink integration
   boundaries; RapidFuzz and Splink package-adapter bindings remain
   candidate-only and do not run by default unless the optional `graph-adapters`
@@ -110,13 +122,17 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   the current Plan B target, legacy human compatibility where already
   supported, production adapter gates, metrics, ablations, and explicit known
   failed or blocked claims.
-- ChatGPT-facing semantic gateway helpers with public tool schemas, safe error
-  envelopes, proposal-only review/draft stubs, and bans on direct database,
-  filesystem, raw SQL, worker-internal, and canonical mutation tools.
-- Semantic MCP JSON-RPC compatibility gateway for `initialize`, `tools/list`,
-  and `tools/call`, with session context, hash-only leak transcripts, and
-  containerized smoke coverage. This is not an end-to-end production adapter
-  claim.
+- ChatGPT-facing gateway helpers with public tool schemas and safe error
+  envelopes for upload, ingestion, observation listing, candidate graph,
+  access, and wiki projection workflows. The gateway uses `McpResultEnvelope`
+  outputs, proposal/pending-review stubs where handlers are not configured,
+  and bans on direct database, filesystem, raw SQL, worker-internal, and
+  canonical mutation tools.
+- MCP JSON-RPC compatibility gateway for `initialize`, `tools/list`, and
+  `tools/call`. Coverage includes the semantic gateway plus existing Project
+  MCP and Wiki MCP server behavior, with session context, hash-only leak
+  transcripts, and raw/internal payload rejection. This is not an end-to-end
+  production adapter claim.
 - `WikiProjectionSpec` contract objects that pin graph revision, ontology
   revision, source references, evidence snapshots, citation behavior, and
   redaction policy before graph-aware wiki drafts are generated.
@@ -125,6 +141,7 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   refresh diffs without publishing pages.
 - Deterministic text-fixture candidate extraction that turns marked observations into reviewable candidate atom proposals.
 - Candidate preview tooling that exposes review actions, warnings, confidence, and provenance without committing canonical graph state.
+- Canonical graph contract models for atoms, entities, relations, and graph revisions, with stable canonical object IDs across revisions.
 - Project MCP with a mocked OpenProject adapter, evidence snapshot file storage, context package generation, and proposal-only work item comments.
 - Wiki MCP with markdown draft generation, frontmatter provenance, draft storage, wiki snapshot capture, and proposal-only publishing.
 - Dockerfile-managed dev/runtime containers and `.devcontainer/devcontainer.json`.
@@ -273,7 +290,11 @@ The dev container installs Gitleaks for commit-time scanning. TruffleHog remains
 
 ## MCP JSON Line Entry Points
 
-Both Python MCP server modules currently accept one JSON request per stdin line and print one JSON response per line. This is a prototype transport for local testing, not standards-compliant MCP JSON-RPC over stdio yet.
+The legacy Python MCP server modules still accept one JSON request per stdin
+line and print one JSON response per line for local testing. The FormOwl
+gateway package now provides a JSON-RPC compatibility wrapper for existing MCP
+server objects and semantic gateway tools; Project/Wiki behavior is preserved
+through transport tests.
 
 Project MCP example:
 

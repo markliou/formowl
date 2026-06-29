@@ -1,6 +1,8 @@
 """Permissioned retrieval gateway for FormOwl graph views."""
 
 from .gateway import (
+    MetadataRawAssetLocatorResolver,
+    RawAssetLocatorResolver,
     RetrievalGateway,
     RetrievalGatewayResult,
     RetrievalMode,
@@ -12,4 +14,6 @@ __all__ = [
     "RetrievalGatewayResult",
     "RetrievalMode",
     "RetrievalTrace",
+    "MetadataRawAssetLocatorResolver",
+    "RawAssetLocatorResolver",
 ]
