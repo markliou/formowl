@@ -24,6 +24,11 @@ status in each role's goal file and task completion in
   `experiments/kg_bert_ablation/results/kg_bert_ablation_gpu_runtime_2026-06-29_blocked_nvidia_ldconfig.json`.
   The GPU image manifest resolved, but the local image build was stopped after
   a slow 3.17GB base-layer download; no Dockerfile failure was observed.
+  A later explicit outside-sandbox rerun produced the same
+  `/sbin/ldconfig.real` NVIDIA prestart-hook failure, and a non-mutating bind
+  mount attempt to provide `/sbin/ldconfig.real` inside the container also
+  failed before container mounts took effect. This confirms the blocker is host
+  NVIDIA Container Toolkit configuration, not the Codex sandbox.
 
 ## 2026-06-27
 

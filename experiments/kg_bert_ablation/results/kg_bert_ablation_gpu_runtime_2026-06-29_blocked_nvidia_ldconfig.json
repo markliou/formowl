@@ -42,6 +42,16 @@
       "command_summary": "docker run --rm --gpus all pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime python -c 'import torch; ...'",
       "error": "nvidia-container-cli: ldcache error: open failed: /sbin/ldconfig.real: no such file or directory",
       "status": "blocked_container_startup"
+    },
+    {
+      "command_summary": "outside-sandbox rerun: docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi",
+      "error": "nvidia-container-cli: ldcache error: open failed: /sbin/ldconfig.real: no such file or directory",
+      "status": "blocked_container_startup"
+    },
+    {
+      "command_summary": "outside-sandbox bind workaround: docker run --rm --gpus all -v /sbin/ldconfig:/sbin/ldconfig.real:ro nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi",
+      "error": "nvidia-container-cli: ldcache error: open failed: /sbin/ldconfig.real: no such file or directory",
+      "status": "blocked_before_container_mount_workaround"
     }
   ]
 }
