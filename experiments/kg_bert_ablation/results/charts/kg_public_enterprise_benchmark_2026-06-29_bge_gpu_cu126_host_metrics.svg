@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="680" viewBox="0 0 1180 680" role="img" aria-label="Public Enterprise KG Benchmark (10000 pairs)">
+<style>
+text{font-family:Arial,sans-serif;fill:#111827}
+.axis{stroke:#374151;stroke-width:1}
+.grid{stroke:#e5e7eb;stroke-width:1}
+.label{font-size:14px}
+.small{font-size:12px;fill:#4b5563}
+.title{font-size:24px;font-weight:700}
+.value{font-size:12px;font-weight:700}
+</style>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text class="title" x="90" y="42">Public Enterprise KG Benchmark (10000 pairs)</text>
+<line class="grid" x1="90" y1="510.00" x2="1140" y2="510.00"/>
+<text class="small" x="44" y="514.00">0.0</text>
+<line class="grid" x1="90" y1="467.60" x2="1140" y2="467.60"/>
+<text class="small" x="44" y="471.60">0.1</text>
+<line class="grid" x1="90" y1="425.20" x2="1140" y2="425.20"/>
+<text class="small" x="44" y="429.20">0.2</text>
+<line class="grid" x1="90" y1="382.80" x2="1140" y2="382.80"/>
+<text class="small" x="44" y="386.80">0.3</text>
+<line class="grid" x1="90" y1="340.40" x2="1140" y2="340.40"/>
+<text class="small" x="44" y="344.40">0.4</text>
+<line class="grid" x1="90" y1="298.00" x2="1140" y2="298.00"/>
+<text class="small" x="44" y="302.00">0.5</text>
+<line class="grid" x1="90" y1="255.60" x2="1140" y2="255.60"/>
+<text class="small" x="44" y="259.60">0.6</text>
+<line class="grid" x1="90" y1="213.20" x2="1140" y2="213.20"/>
+<text class="small" x="44" y="217.20">0.7</text>
+<line class="grid" x1="90" y1="170.80" x2="1140" y2="170.80"/>
+<text class="small" x="44" y="174.80">0.8</text>
+<line class="grid" x1="90" y1="128.40" x2="1140" y2="128.40"/>
+<text class="small" x="44" y="132.40">0.9</text>
+<line class="grid" x1="90" y1="86.00" x2="1140" y2="86.00"/>
+<text class="small" x="44" y="90.00">1.0</text>
+<line class="axis" x1="90" y1="86" x2="90" y2="510"/>
+<line class="axis" x1="90" y1="510" x2="1140" y2="510"/>
+<text class="label" text-anchor="middle" x="221.25" y="552">accuracy</text>
+<rect x="108.00" y="288.84" width="109.25" height="221.16" fill="#2563eb" rx="2"/>
+<text class="value" text-anchor="middle" x="162.62" y="282.84">0.522</text>
+<rect x="225.25" y="205.44" width="109.25" height="304.56" fill="#059669" rx="2"/>
+<text class="value" text-anchor="middle" x="279.88" y="199.44">0.718</text>
+<text class="label" text-anchor="middle" x="483.75" y="552">precision</text>
+<rect x="370.50" y="111.28" width="109.25" height="398.72" fill="#2563eb" rx="2"/>
+<text class="value" text-anchor="middle" x="425.12" y="105.28">0.940</text>
+<rect x="487.75" y="114.99" width="109.25" height="395.01" fill="#059669" rx="2"/>
+<text class="value" text-anchor="middle" x="542.38" y="108.99">0.932</text>
+<text class="label" text-anchor="middle" x="746.25" y="552">recall</text>
+<rect x="633.00" y="492.53" width="109.25" height="17.47" fill="#2563eb" rx="2"/>
+<text class="value" text-anchor="middle" x="687.62" y="486.53">0.041</text>
+<rect x="750.25" y="311.46" width="109.25" height="198.54" fill="#059669" rx="2"/>
+<text class="value" text-anchor="middle" x="804.88" y="305.46">0.468</text>
+<text class="label" text-anchor="middle" x="1008.75" y="552">f1</text>
+<rect x="895.50" y="476.53" width="109.25" height="33.47" fill="#2563eb" rx="2"/>
+<text class="value" text-anchor="middle" x="950.12" y="470.53">0.079</text>
+<rect x="1012.75" y="245.74" width="109.25" height="264.26" fill="#059669" rx="2"/>
+<text class="value" text-anchor="middle" x="1067.38" y="239.74">0.623</text>
+<rect x="90" y="576" width="14" height="14" fill="#2563eb" rx="2"/>
+<text class="small" x="112" y="588">Lexical baseline</text>
+<rect x="610" y="576" width="14" height="14" fill="#059669" rx="2"/>
+<text class="small" x="632" y="588">BGE large GPU</text>
+<text class="small" x="90" y="658">Candidate-only artifact; no canonical graph/type writes; no raw access grants; not stakeholder-grade unless explicitly marked.</text>
+</svg>

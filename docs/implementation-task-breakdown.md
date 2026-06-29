@@ -1964,6 +1964,75 @@ These groups can be split across multiple agents after Slice 1 is stable.
     BERT/SentenceTransformer adapter slot. Follow-up experiment work should run
     on a separate branch and persist BERT vs non-BERT ablation artifacts.
 
+- [x] Add KG BERT ablation benchmark manifest and GPU model profile upgrade.
+  - Owner paths: `experiments/kg_bert_ablation/`, `containers/kg-bert-*`,
+    `python/formowl_graph/`, `docs/`, `tests/`
+  - Proof: the ablation harness binds each result to a public enterprise
+    benchmark manifest, preserves the legacy CPU BERT profile, sets the GPU
+    default model profile to `BAAI/bge-large-en-v1.5`, records the local GPU
+    floor as one NVIDIA GeForce GTX 1080 Ti class device with 11GB VRAM, and
+    keeps all neural output candidate-only with no canonical graph/type writes
+    or raw-access grants.
+  - Note: canonical dev-container verification passed: focused ablation tests
+    ran 6 OK, focused candidate capability tests ran 5 OK, focused runtime
+    container tests ran 4 OK, full `python -m unittest discover -s tests` ran
+    273 OK, Ruff check passed, Ruff format-check passed, and
+    `python -m formowl_kg_eval summary` exposes the updated CPU/GPU model
+    profiles. The new default-dev-container artifact is
+    `experiments/kg_bert_ablation/results/kg_bert_ablation_2026-06-29_devcontainer_bge_manifest_no_bert_dependency.json`.
+    It records that the default dev container still lacks neural dependencies;
+    the actual host GPU BGE artifact is
+    `experiments/kg_bert_ablation/results/kg_bert_ablation_bge_large_gpu_cu126_host.json`,
+    with threshold 0.62, `model_device=cuda:0`, two visible GTX 1080 Ti
+    devices, precision 1.0, recall 0.9, F1 0.947368, and accuracy 0.9375 on
+    the small 16-pair fixture. This is not a large-benchmark claim; the public
+    enterprise benchmark manifest still must be executed before
+    stakeholder-grade model-selection claims.
+  - Reviewer gate: 3/3 effective read-only Codex/GPT reviewers agreed
+    (`Descartes` for engineering correctness after stale active artifact paths
+    were fixed, `Boole` for governance/safety, and `Lagrange` for research
+    method/benchmark validity).
+  - 2026-06-29 public benchmark execution note: the first 10,000-pair public
+    enterprise benchmark run completed on the host-specific GPU image at
+    `experiments/kg_bert_ablation/results/kg_public_enterprise_benchmark_2026-06-29_bge_gpu_cu126_host.json`.
+    Dataset mix: 7,000 CUAD contract-document pairs and 3,000 SEC
+    financial-report/company pairs, with 4,976 positives and 5,024 negatives.
+    Lexical baseline scored accuracy 0.5216, precision 0.940367, recall
+    0.041198, F1 0.078937. BGE large GPU scored accuracy 0.7183, precision
+    0.931627, recall 0.468248, F1 0.623245. Deltas: accuracy +0.196700,
+    F1 +0.544308, recall +0.427050, precision -0.008740. The batch-size-32 GPU
+    run hit a CUDA illegal memory access; the completed artifact used
+    single-GPU batch size 8 on `cuda:0`. This is model-selection evidence only,
+    not the 50,000-pair stakeholder-grade benchmark and not production
+    readiness.
+  - 2026-06-29 stakeholder benchmark and ontology-ablation note: the
+    50,000-pair public enterprise run completed at
+    `experiments/kg_bert_ablation/results/kg_public_enterprise_benchmark_2026-06-29_bge_gpu_50k_cu126_host.json`.
+    Dataset mix: 22,500 CUAD contract-document pairs, 15,000 SEC
+    financial-report/company pairs, and 12,500 BEIR FiQA financial-QA pairs;
+    24,837 positives and 25,163 negatives. Lexical baseline scored accuracy
+    0.5225, precision 0.921930, recall 0.042316, F1 0.080918, and 4,915.593
+    pairs/s. BGE large GPU scored accuracy 0.79986, precision 0.945935,
+    recall 0.633289, F1 0.758664, and 63.851 pairs/s. Deltas: accuracy
+    +0.277360, F1 +0.677746, recall +0.590973, precision +0.024005. The
+    artifact reaches the 50,000-pair stakeholder evidence threshold but remains
+    candidate-only: no canonical graph/type writes, no raw-access grants, no
+    production latency claim, and no completed human adjudication claim.
+    Ontology guidance was tested at
+    `experiments/kg_bert_ablation/results/kg_ontology_ablation_2026-06-29_bge_gpu_cu126_host.json`
+    with 20,000 pairs, including 10,000 cross-type stress negatives. BGE-only
+    scored F1 0.342860 with 10,000 stress false positives; BGE plus hard or
+    soft ontology guidance scored F1 0.757744 and reduced stress false
+    positives to 0. SVG charts are under
+    `experiments/kg_bert_ablation/results/charts/`.
+  - 2026-06-29 package API note: `python/formowl_kg_eval/benchmarks.py` now
+    exposes `build_benchmark_summary()` and `summarize_benchmark_artifact()`.
+    `formowl-kg-eval summary` includes `kg_benchmark_results`, and
+    `formowl-kg-eval benchmarks` prints a redacted benchmark-only summary with
+    repo-relative chart paths. This is the intended System Backbone handoff
+    API; downstream integrations should not parse large experiment JSON files
+    directly unless they explicitly need research-internal samples.
+
 ### Real Project and Wiki Integrations
 
 - [ ] Add real OpenProject adapter client, mapper, and tests with mocked HTTP.

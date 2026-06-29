@@ -37,10 +37,33 @@ class CandidateGenerationCapabilityTests(unittest.TestCase):
         self.assertIn("BERT-family encoder", standard["model_families"])
         self.assertIn("sentence_transformer_embedding_adapter", standard["candidate_generators"])
         self.assertIn("score_breakdown.embedding", standard["output_records"])
+        self.assertEqual(
+            standard["default_model_profile"]["profile_id"],
+            "legacy_cpu_bert",
+        )
+        self.assertEqual(
+            standard["default_model_profile"]["default_model"],
+            "sentence-transformers/bert-base-nli-mean-tokens",
+        )
+        self.assertEqual(standard["default_model_profile"]["default_threshold"], 0.70)
 
         self.assertTrue(accelerated["uses_neural_networks"])
         self.assertTrue(accelerated["requires_gpu"])
         self.assertIn("BERT-family NER", accelerated["model_families"])
+        self.assertEqual(
+            accelerated["default_model_profile"]["profile_id"],
+            "gpu_bge_large_en_v1_5",
+        )
+        self.assertEqual(
+            accelerated["default_model_profile"]["default_model"],
+            "BAAI/bge-large-en-v1.5",
+        )
+        self.assertEqual(accelerated["default_model_profile"]["default_threshold"], 0.62)
+        self.assertEqual(
+            accelerated["default_model_profile"]["minimum_gpu"],
+            "NVIDIA GeForce GTX 1080 Ti",
+        )
+        self.assertEqual(accelerated["minimum_capabilities"]["gpu_vram_gb_floor"], 11)
         self.assertIn(
             "bert_family_relation_extraction_adapter", accelerated["candidate_generators"]
         )
@@ -64,6 +87,10 @@ class CandidateGenerationCapabilityTests(unittest.TestCase):
         self.assertTrue(summary["selection_boundary"]["neural_models_optional"])
         self.assertTrue(
             summary["selection_boundary"]["bert_or_sentence_transformer_available_as_adapter_slot"]
+        )
+        self.assertTrue(summary["selection_boundary"]["legacy_cpu_bert_preserved"])
+        self.assertTrue(
+            summary["selection_boundary"]["gpu_default_model_requires_1080ti_or_better"]
         )
         self.assertTrue(summary["selection_boundary"]["candidate_output_only"])
         self.assertFalse(summary["selection_boundary"]["canonical_write_allowed"])

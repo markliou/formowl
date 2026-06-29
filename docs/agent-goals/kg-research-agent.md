@@ -1466,3 +1466,103 @@ Reviewer cost-control rules:
   `python -m formowl_kg_eval summary` shows the three profiles. Next work after
   pushing this branch is a separate BERT ablation experiment branch that
   preserves BERT vs non-BERT benchmark artifacts for stakeholder review.
+- 2026-06-29 BERT ablation experiment checkpoint on branch
+  `kg-bert-ablation-experiment`: the experiment branch now includes a large
+  public enterprise benchmark source manifest at
+  `experiments/kg_bert_ablation/public_enterprise_benchmark_manifest.json`.
+  It selects mail/conversation, office document, financial QA, SEC financial
+  report, and contract-document source families, sets the minimum model
+  selection target to 10,000 labeled pairs, and sets the
+  stakeholder-facing evidence target to 50,000 pairs. This is a selected
+  source/sampling plan, not a completed large benchmark result. The ablation
+  harness now binds result artifacts to the manifest hash, preserves the
+  legacy CPU neural profile `legacy_cpu_bert` /
+  `sentence-transformers/bert-base-nli-mean-tokens`, and changes the GPU
+  default profile to `gpu_bge_large_en_v1_5` / `BAAI/bge-large-en-v1.5` with a
+  one-NVIDIA-GeForce-GTX-1080-Ti / 11GB-VRAM local floor. The BGE profile uses
+  preliminary threshold 0.62; the legacy CPU BERT profile keeps threshold
+  0.70. CPU and GPU Dockerfile env defaults and docs match this split, and
+  `formowl_kg_eval summary` exposes the same routing contract to the System
+  Backbone Agent. Canonical dev-container verification passed: focused
+  ablation tests 6 OK, focused candidate capability tests 5 OK, focused runtime
+  container tests 4 OK, full main-repo unittest 273 OK, Ruff check passed,
+  Ruff format-check passed, and package summary smoke passed. The refreshed
+  default-dev-container artifacts record BGE as the default GPU profile but
+  `blocked_missing_dependency` for neural execution because the lightweight dev
+  container intentionally does not include `sentence_transformers` or torch.
+  The actual host GPU artifact
+  `experiments/kg_bert_ablation/results/kg_bert_ablation_bge_large_gpu_cu126_host.json`
+  completed with `model_device=cuda:0`, two visible GTX 1080 Ti devices,
+  threshold 0.62, precision 1.0, recall 0.9, F1 0.947368, and accuracy 0.9375
+  on the small 16-pair fixture. This supports only a small-fixture improvement
+  over the old BERT+type-gate artifact; do not claim stakeholder-grade model
+  selection until the public enterprise benchmark manifest is executed.
+  Reviewer gate passed 3/3: `Descartes` agreed on engineering correctness
+  after stale active artifact paths were fixed and covered by regression tests,
+  `Boole` agreed on governance/safety, and `Lagrange` agreed on research
+  method/benchmark validity. Final verification after reviewer fixes: full
+  main-repo unittest 273 OK, Ruff check passed, Ruff format-check passed, and
+  JSON artifacts parsed.
+- 2026-06-29 public enterprise BGE benchmark checkpoint: the first large
+  model-selection run completed at
+  `experiments/kg_bert_ablation/results/kg_public_enterprise_benchmark_2026-06-29_bge_gpu_cu126_host.json`.
+  The run used 10,000 candidate pairs: 7,000 CUAD contract-document pairs and
+  3,000 SEC financial-report/company pairs. Lexical baseline scored accuracy
+  0.5216, precision 0.940367, recall 0.041198, F1 0.078937, and 3,766.652
+  pairs/s. BGE large GPU with `BAAI/bge-large-en-v1.5`, threshold 0.62, single
+  GTX 1080 Ti batch size 8, `sentence-transformers=3.3.1`, and
+  `torch=2.10.0+cu126` scored accuracy 0.7183, precision 0.931627, recall
+  0.468248, F1 0.623245, and 23.874 pairs/s end-to-end including model
+  load/cache. Deltas versus lexical: accuracy +0.196700, F1 +0.544308, recall
+  +0.427050, precision -0.008740. The batch-size-32 attempt failed with a CUDA
+  illegal memory access around 60%; the batch-size-8 rerun completed. Claim
+  boundary: model-selection evidence only, candidate-only, no canonical
+  graph/type writes, no raw-access grants, no 50,000-pair stakeholder-grade
+  claim, and FiQA/Enron/RVL-CDIP are source-locked but not yet labeled pairs in
+  this runner.
+- 2026-06-29 50,000-pair and ontology-ablation checkpoint: the stakeholder-size
+  public enterprise BGE benchmark completed at
+  `experiments/kg_bert_ablation/results/kg_public_enterprise_benchmark_2026-06-29_bge_gpu_50k_cu126_host.json`.
+  The run used 50,000 candidate pairs: 22,500 CUAD contract-document pairs,
+  15,000 SEC financial-report/company pairs, and 12,500 BEIR FiQA
+  financial-QA pairs; 24,837 positives and 25,163 negatives. Lexical baseline
+  scored accuracy 0.5225, precision 0.921930, recall 0.042316, F1 0.080918,
+  and 4,915.593 pairs/s. BGE large GPU scored accuracy 0.79986, precision
+  0.945935, recall 0.633289, F1 0.758664, and 63.851 pairs/s. Deltas versus
+  lexical: accuracy +0.277360, F1 +0.677746, recall +0.590973, precision
+  +0.024005. The chart is
+  `experiments/kg_bert_ablation/results/charts/kg_public_enterprise_benchmark_2026-06-29_bge_gpu_50k_cu126_host_metrics.svg`.
+  The ontology ablation completed at
+  `experiments/kg_bert_ablation/results/kg_ontology_ablation_2026-06-29_bge_gpu_cu126_host.json`.
+  It used 20,000 pairs, including 10,000 cross-type stress negatives. BGE-only
+  scored accuracy 0.3999, precision 0.235272, recall 0.631759, F1 0.342860,
+  and 10,000 stress false positives; BGE plus hard or soft ontology guidance
+  scored accuracy 0.8999, precision 0.946493, recall 0.631759, F1 0.757744,
+  and 0 stress false positives. Ontology charts are
+  `experiments/kg_bert_ablation/results/charts/kg_ontology_ablation_2026-06-29_bge_gpu_cu126_host_metrics.svg`
+  and
+  `experiments/kg_bert_ablation/results/charts/kg_ontology_ablation_2026-06-29_bge_gpu_cu126_host_ontology_stress.svg`.
+  Claim boundary: both runs remain candidate-only; they support the BGE neural
+  profile and ontology-aware matching algorithm, but do not authorize canonical
+  graph/type writes, raw-access grants, production latency claims, or completed
+  human adjudication claims.
+- 2026-06-29 benchmark package API checkpoint: the experiment artifacts now
+  have a stable package surface for the System Backbone Agent.
+  `python/formowl_kg_eval/benchmarks.py` exposes `build_benchmark_summary()`
+  and `summarize_benchmark_artifact()`; `formowl-kg-eval summary` includes
+  `kg_benchmark_results`; and `formowl-kg-eval benchmarks` emits a
+  benchmark-only redacted JSON summary with metrics, deltas, claim boundaries,
+  and repo-relative SVG chart paths. The API intentionally omits per-pair
+  samples and raw labels from the large artifacts. This remains candidate-only
+  research evidence and does not create production gateway, canonical graph,
+  canonical type, raw-access, production-latency, or completed
+  human-adjudication authority.
+  Reviewer gate passed 3/3: engineering reviewer `Bacon` initially blocked
+  because benchmark JSON/chart artifacts were untracked, and re-reviewer
+  `Ramanujan` agreed after those artifacts were staged for commit; governance
+  reviewer `Halley` initially blocked raw workspace/path exposure through the
+  package facade, and re-reviewer `Epicurus` agreed after top-level
+  `kg_eval_workspace` export was removed, command stdout/stderr redaction was
+  added, tests were strengthened, and docs clarified that `summary` and
+  `benchmarks` are the product integration surfaces; research-method reviewer
+  `Chandrasekhar` agreed with no blocking findings.

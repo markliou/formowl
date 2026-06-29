@@ -30,6 +30,7 @@ class CandidateGenerationProfile:
     candidate_generators: tuple[str, ...]
     output_records: tuple[str, ...]
     minimum_capabilities: Mapping[str, Any]
+    default_model_profile: Mapping[str, Any] | None = None
     model_families: tuple[str, ...] = ()
     uses_neural_networks: bool = False
     produces_embeddings: bool = False
@@ -64,6 +65,10 @@ class CandidateGenerationProfile:
         _validate_string_tuple(self.model_families, "model_families", allow_empty=True)
         if not isinstance(self.minimum_capabilities, Mapping):
             raise ContractValidationError("minimum_capabilities must be an object")
+        if self.default_model_profile is not None and not isinstance(
+            self.default_model_profile, Mapping
+        ):
+            raise ContractValidationError("default_model_profile must be an object")
         payload = to_plain(self)
         payload["profile_hash"] = sha256_json(
             {
@@ -72,6 +77,7 @@ class CandidateGenerationProfile:
                 "candidate_generators": self.candidate_generators,
                 "output_records": self.output_records,
                 "minimum_capabilities": self.minimum_capabilities,
+                "default_model_profile": self.default_model_profile,
                 "model_families": self.model_families,
                 "uses_neural_networks": self.uses_neural_networks,
                 "produces_embeddings": self.produces_embeddings,
@@ -146,6 +152,14 @@ def list_candidate_generation_profiles() -> tuple[CandidateGenerationProfile, ..
                 "memory_gb_floor": 8,
                 "network_model_access_required": False,
             },
+            default_model_profile={
+                "profile_id": "legacy_cpu_bert",
+                "default_model": "sentence-transformers/bert-base-nli-mean-tokens",
+                "intended_runtime": "cpu_neural_fallback",
+                "default_threshold": 0.70,
+                "minimum_gpu": None,
+                "minimum_vram_gb": None,
+            },
             model_families=(
                 "Sentence Transformers",
                 "BERT-family encoder",
@@ -184,7 +198,17 @@ def list_candidate_generation_profiles() -> tuple[CandidateGenerationProfile, ..
                 "cpu_required": True,
                 "gpu_required": True,
                 "memory_gb_floor": 16,
+                "gpu_floor": "one NVIDIA GeForce GTX 1080 Ti class device",
+                "gpu_vram_gb_floor": 11,
                 "network_model_access_required": False,
+            },
+            default_model_profile={
+                "profile_id": "gpu_bge_large_en_v1_5",
+                "default_model": "BAAI/bge-large-en-v1.5",
+                "intended_runtime": "single_gpu_or_remote_model_worker",
+                "default_threshold": 0.62,
+                "minimum_gpu": "NVIDIA GeForce GTX 1080 Ti",
+                "minimum_vram_gb": 11,
             },
             model_families=(
                 "BERT-family NER",
@@ -237,6 +261,8 @@ def build_candidate_generation_capability_summary() -> dict[str, Any]:
             "canonical_write_allowed": False,
             "raw_access_allowed": False,
             "system_agent_owns_worker_scheduling": True,
+            "legacy_cpu_bert_preserved": True,
+            "gpu_default_model_requires_1080ti_or_better": True,
         },
         "worker_tier_mapping": dict(_PROFILE_IDS),
         "profiles": profiles,

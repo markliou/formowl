@@ -33,8 +33,67 @@ from formowl_graph import (  # noqa: E402
 )
 
 DEFAULT_OUTPUT = Path("experiments/kg_bert_ablation/results/kg_bert_ablation_latest.json")
-DEFAULT_BERT_MODEL = "sentence-transformers/bert-base-nli-mean-tokens"
+BENCHMARK_MANIFEST_PATH = (
+    ROOT / "experiments" / "kg_bert_ablation" / "public_enterprise_benchmark_manifest.json"
+)
+LEGACY_CPU_BERT_MODEL = "sentence-transformers/bert-base-nli-mean-tokens"
+GPU_DEFAULT_EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+DEFAULT_MODEL_PROFILE_ID = "gpu_bge_large_en_v1_5"
 CREATED_AT = "2026-06-29T00:00:00+00:00"
+
+
+@dataclass(frozen=True)
+class ModelProfile:
+    profile_id: str
+    display_name: str
+    default_model: str
+    intended_runtime: str
+    default_threshold: float
+    minimum_gpu: str | None
+    minimum_vram_gb: int | None
+    notes: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "profile_id": self.profile_id,
+            "display_name": self.display_name,
+            "default_model": self.default_model,
+            "intended_runtime": self.intended_runtime,
+            "default_threshold": self.default_threshold,
+            "minimum_gpu": self.minimum_gpu,
+            "minimum_vram_gb": self.minimum_vram_gb,
+            "notes": list(self.notes),
+        }
+
+
+MODEL_PROFILES = {
+    "legacy_cpu_bert": ModelProfile(
+        profile_id="legacy_cpu_bert",
+        display_name="Legacy CPU BERT/SentenceTransformer fallback",
+        default_model=LEGACY_CPU_BERT_MODEL,
+        intended_runtime="cpu_neural_fallback",
+        default_threshold=0.70,
+        minimum_gpu=None,
+        minimum_vram_gb=None,
+        notes=(
+            "Preserves the previous bert-base-nli-mean-tokens path for CPU users who still need a neural option.",
+            "Do not use this profile as the default GPU quality benchmark.",
+        ),
+    ),
+    "gpu_bge_large_en_v1_5": ModelProfile(
+        profile_id="gpu_bge_large_en_v1_5",
+        display_name="GPU BGE large English embedding default",
+        default_model=GPU_DEFAULT_EMBEDDING_MODEL,
+        intended_runtime="single_gpu_or_remote_model_worker",
+        default_threshold=0.62,
+        minimum_gpu="NVIDIA GeForce GTX 1080 Ti",
+        minimum_vram_gb=11,
+        notes=(
+            "Default upgraded model for GPU-backed KG matching experiments.",
+            "The deployment floor is one GTX 1080 Ti class GPU with 11GB VRAM.",
+        ),
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -163,8 +222,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--lexical-threshold", type=float, default=0.70)
-    parser.add_argument("--bert-threshold", type=float, default=0.70)
+    parser.add_argument(
+        "--bert-threshold",
+        type=float,
+        default=None,
+        help="Override the neural model profile's default threshold.",
+    )
     parser.add_argument("--bert-model", default=None)
+    parser.add_argument(
+        "--model-profile",
+        choices=tuple(sorted(MODEL_PROFILES)),
+        default=None,
+        help=(
+            "Neural model profile. Defaults to FORMOWL_BERT_ABLATION_MODEL_PROFILE "
+            "or gpu_bge_large_en_v1_5."
+        ),
+    )
+    parser.add_argument("--bert-batch-size", type=int, default=32)
     parser.add_argument(
         "--mode",
         choices=("both", "lexical", "bert"),
@@ -178,9 +252,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.mode in {"both", "lexical"}:
         runs.append(run_lexical_baseline(args.lexical_threshold))
     if args.mode in {"both", "bert"}:
+        model_profile = _default_model_profile(args.model_profile)
+        bert_threshold = (
+            args.bert_threshold
+            if args.bert_threshold is not None
+            else model_profile.default_threshold
+        )
         bert_run = run_sentence_transformer(
-            threshold=args.bert_threshold,
-            model_name=args.bert_model or _default_bert_model(),
+            threshold=bert_threshold,
+            model_name=args.bert_model or _default_bert_model(model_profile),
+            model_profile=model_profile,
+            batch_size=args.bert_batch_size,
         )
         runs.append(bert_run)
         if args.fail_if_bert_unavailable and bert_run["status"] != "completed":
@@ -235,7 +317,17 @@ def run_lexical_baseline(threshold: float) -> dict[str, Any]:
     }
 
 
-def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, Any]:
+def run_sentence_transformer(
+    *,
+    threshold: float,
+    model_name: str,
+    model_profile: ModelProfile | None = None,
+    batch_size: int = 32,
+) -> dict[str, Any]:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if model_profile is None:
+        model_profile = _default_model_profile(None)
     package_status = _sentence_transformer_status()
     torch_status = _torch_status()
     if not package_status["available"]:
@@ -246,6 +338,8 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
             "algorithm": "sentence_transformer_cosine_similarity_with_core_type_gate_v2",
             "threshold": threshold,
             "model_name": model_name,
+            "model_profile": model_profile.to_dict(),
+            "batch_size": batch_size,
             "package_status": package_status,
             "torch_status": torch_status,
             "metrics": None,
@@ -264,7 +358,7 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
         model_load_latency_ms = (time.perf_counter() - model_load_started) * 1000.0
         texts = [text for pair in DATASET for text in (pair.left_label, pair.right_label)]
         embedding_started = time.perf_counter()
-        embeddings = model.encode(texts, normalize_embeddings=True)
+        embeddings = model.encode(texts, batch_size=batch_size, normalize_embeddings=True)
         embedding_latency_ms = (time.perf_counter() - embedding_started) * 1000.0
     except Exception as exc:  # pragma: no cover - only exercised with optional package.
         return {
@@ -274,6 +368,8 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
             "algorithm": "sentence_transformer_cosine_similarity_with_core_type_gate_v2",
             "threshold": threshold,
             "model_name": model_name,
+            "model_profile": model_profile.to_dict(),
+            "batch_size": batch_size,
             "package_status": package_status,
             "torch_status": torch_status,
             "metrics": None,
@@ -319,6 +415,8 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
         "algorithm": "sentence_transformer_cosine_similarity_with_core_type_gate_v2",
         "threshold": threshold,
         "model_name": model_name,
+        "model_profile": model_profile.to_dict(),
+        "batch_size": batch_size,
         "package_status": package_status,
         "torch_status": torch_status,
         "model_device": model_device,
@@ -336,6 +434,7 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
 
 def build_report(*, started_at: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
     dataset = [pair.to_dict() for pair in DATASET]
+    benchmark_manifest = load_public_enterprise_benchmark_manifest()
     return {
         "artifact_id": "formowl_kg_bert_ablation_result_v1",
         "created_at": _now(),
@@ -347,6 +446,25 @@ def build_report(*, started_at: str, runs: list[dict[str, Any]]) -> dict[str, An
             "negative_pair_count": sum(1 for pair in DATASET if not pair.expected_same),
             "dataset_sha256": sha256_json(dataset),
             "pairs": dataset,
+            "claim_boundary": {
+                "small_fixture_only": True,
+                "large_benchmark_result_claim": False,
+                "model_selection_sufficient_by_itself": False,
+            },
+        },
+        "public_enterprise_benchmark": {
+            "manifest_path": str(BENCHMARK_MANIFEST_PATH.relative_to(ROOT)),
+            "manifest_sha256": sha256_json(benchmark_manifest),
+            "artifact_id": benchmark_manifest["artifact_id"],
+            "source_family_targets": benchmark_manifest["source_family_targets"],
+            "minimum_pair_count_for_model_selection": benchmark_manifest[
+                "minimum_pair_count_for_model_selection"
+            ],
+            "recommended_pair_count_for_stakeholder_claim": benchmark_manifest[
+                "recommended_pair_count_for_stakeholder_claim"
+            ],
+            "target_source_record_floor": benchmark_manifest["target_source_record_floor"],
+            "claim_boundary": benchmark_manifest["claim_boundary"],
         },
         "claim_boundary": {
             "candidate_only": True,
@@ -355,12 +473,14 @@ def build_report(*, started_at: str, runs: list[dict[str, Any]]) -> dict[str, An
             "raw_access_allowed": False,
             "production_quality_claim": False,
             "stakeholder_evidence_artifact": True,
+            "stakeholder_grade_claim": False,
         },
         "environment": {
             "python_version": sys.version.split()[0],
             "sentence_transformers_available": _sentence_transformer_status()["available"],
             "torch": _torch_status(),
-            "default_model": _default_bert_model(),
+            "default_model_profile": _default_model_profile(None).to_dict(),
+            "available_model_profiles": [profile.to_dict() for profile in MODEL_PROFILES.values()],
         },
         "runs": runs,
         "comparison": compare_runs(runs),
@@ -378,8 +498,17 @@ def compare_runs(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
         }
     lexical_metrics = lexical["metrics"]
     bert_metrics = bert["metrics"]
+    lexical_throughput = lexical["pairs_per_second"]
+    bert_throughput = bert["pairs_per_second"]
+    throughput_ratio = (
+        round(bert_throughput / lexical_throughput, 6) if lexical_throughput > 0 else 0.0
+    )
     return {
         "status": "completed",
+        "accuracy_delta_bert_minus_non_bert": round(
+            bert_metrics["accuracy"] - lexical_metrics["accuracy"],
+            6,
+        ),
         "f1_delta_bert_minus_non_bert": round(bert_metrics["f1"] - lexical_metrics["f1"], 6),
         "recall_delta_bert_minus_non_bert": round(
             bert_metrics["recall"] - lexical_metrics["recall"], 6
@@ -390,10 +519,7 @@ def compare_runs(runs: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "latency_ms_delta_bert_minus_non_bert": round(
             bert["latency_ms"] - lexical["latency_ms"], 3
         ),
-        "throughput_ratio_bert_over_non_bert": round(
-            bert["pairs_per_second"] / lexical["pairs_per_second"],
-            6 if lexical["pairs_per_second"] else 0.0,
-        ),
+        "throughput_ratio_bert_over_non_bert": throughput_ratio,
     }
 
 
@@ -401,6 +527,10 @@ def write_report(path: Path, report: dict[str, Any]) -> None:
     output_path = path if path.is_absolute() else ROOT / path
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def load_public_enterprise_benchmark_manifest() -> dict[str, Any]:
+    return json.loads(BENCHMARK_MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
 def _record(pair: LabeledPair, *, side: str) -> ResolutionRecord:
@@ -491,10 +621,28 @@ def _package_version(package_name: str) -> str | None:
         return None
 
 
-def _default_bert_model() -> str:
+def _default_model_profile(profile_id: str | None) -> ModelProfile:
     import os
 
-    return os.environ.get("FORMOWL_BERT_ABLATION_MODEL", DEFAULT_BERT_MODEL)
+    selected_profile_id = (
+        profile_id
+        or os.environ.get("FORMOWL_BERT_ABLATION_MODEL_PROFILE")
+        or DEFAULT_MODEL_PROFILE_ID
+    )
+    try:
+        return MODEL_PROFILES[selected_profile_id]
+    except KeyError as exc:
+        allowed = ", ".join(sorted(MODEL_PROFILES))
+        raise ValueError(
+            f"unknown FORMOWL_BERT_ABLATION_MODEL_PROFILE {selected_profile_id!r}; "
+            f"expected one of: {allowed}"
+        ) from exc
+
+
+def _default_bert_model(model_profile: ModelProfile) -> str:
+    import os
+
+    return os.environ.get("FORMOWL_BERT_ABLATION_MODEL", model_profile.default_model)
 
 
 def _embedding_to_list(value: Any) -> list[float]:
@@ -526,12 +674,23 @@ def _compact_stdout(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "artifact_id": report["artifact_id"],
         "output_dataset": report["dataset"]["dataset_id"],
+        "public_enterprise_benchmark": {
+            "artifact_id": report["public_enterprise_benchmark"]["artifact_id"],
+            "minimum_pair_count_for_model_selection": report["public_enterprise_benchmark"][
+                "minimum_pair_count_for_model_selection"
+            ],
+            "recommended_pair_count_for_stakeholder_claim": report["public_enterprise_benchmark"][
+                "recommended_pair_count_for_stakeholder_claim"
+            ],
+        },
+        "default_model_profile": report["environment"]["default_model_profile"],
         "comparison": report["comparison"],
         "runs": [
             {
                 "run_id": run["run_id"],
                 "status": run["status"],
                 "uses_neural_networks": run["uses_neural_networks"],
+                "model_profile": run.get("model_profile"),
                 "metrics": run["metrics"],
                 "latency_ms": run.get("latency_ms"),
                 "model_device": run.get("model_device"),

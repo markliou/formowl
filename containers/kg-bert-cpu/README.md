@@ -9,6 +9,16 @@ Use this image for low-spec or NVIDIA-free customer machines. Use
 `containers/kg-bert-gpu/Dockerfile` when a customer deployment has a working
 NVIDIA driver and Docker GPU runtime.
 
+This image intentionally preserves the legacy CPU neural profile:
+
+```text
+FORMOWL_BERT_ABLATION_MODEL_PROFILE=legacy_cpu_bert
+FORMOWL_BERT_ABLATION_MODEL=sentence-transformers/bert-base-nli-mean-tokens
+```
+
+The newer GPU default model is not forced onto CPU-only customer machines. The
+legacy CPU profile keeps threshold `0.70`.
+
 ## Build
 
 ```sh
@@ -37,6 +47,7 @@ docker run --rm \
 Override the model with:
 
 ```sh
+-e FORMOWL_BERT_ABLATION_MODEL_PROFILE=legacy_cpu_bert
 -e FORMOWL_BERT_ABLATION_MODEL=sentence-transformers/bert-base-nli-mean-tokens
 ```
 

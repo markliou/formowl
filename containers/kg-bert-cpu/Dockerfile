@@ -7,6 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/workspace/python \
     HF_HOME=/models/huggingface \
     SENTENCE_TRANSFORMERS_HOME=/models/sentence-transformers \
+    FORMOWL_BERT_ABLATION_MODEL_PROFILE=legacy_cpu_bert \
     FORMOWL_BERT_ABLATION_MODEL=sentence-transformers/bert-base-nli-mean-tokens
 
 WORKDIR /workspace

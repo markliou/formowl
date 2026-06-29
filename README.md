@@ -92,11 +92,26 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   graph writes, but this is not production entity-resolution adapter readiness.
 - Candidate-generation capability profiles for heterogeneous remote computers:
   low-spec CPU workers can use deterministic lexical/rule-based generation,
-  standard CPU workers have a SentenceTransformer or BERT-family embedding
-  adapter slot, and high-spec GPU or remote model workers have BERT-family
-  NER/relation extraction plus local LLM graph-extraction adapter slots. These
-  profiles are candidate-only and do not authorize canonical graph/type writes
-  or raw asset access.
+  standard CPU workers keep the legacy BERT/SentenceTransformer embedding
+  adapter profile, and high-spec GPU or remote model workers have a BGE large
+  embedding default plus BERT-family NER/relation extraction and local LLM
+  graph-extraction adapter slots. The current local GPU floor is one NVIDIA
+  GeForce GTX 1080 Ti class device with 11GB VRAM. These profiles are
+  candidate-only and do not authorize canonical graph/type writes or raw asset
+  access.
+- Public enterprise KG matching benchmark artifacts comparing the deterministic
+  lexical path with the BGE large GPU profile. The 10,000-pair CUAD/SEC
+  model-selection run improved from lexical F1 0.078937 to BGE F1 0.623245.
+  The 50,000-pair CUAD/SEC/FiQA stakeholder benchmark improved from lexical
+  F1 0.080918 to BGE F1 0.758664, with accuracy rising from 0.5225 to
+  0.79986. These artifacts remain candidate-only and do not claim production
+  latency, canonical graph/type writes, raw asset access, or completed human
+  adjudication.
+- An ontology-guidance ablation showing why BGE similarity should remain
+  ontology-aware. On the 20,000-pair stress benchmark, BGE-only F1 was
+  0.342860 with 10,000 cross-type stress false positives; BGE plus the
+  ontology gate reached F1 0.757744 and reduced stress false positives to 0.
+  This is ablation evidence, not canonical ontology/type mutation authority.
 - A locked production adapter stack smoke harness can compose the current
   file-backed retrieval gateway, semantic MCP gateway facade, RapidFuzz/Splink
   candidate-only package bindings, clerical-review packet export, and
@@ -156,7 +171,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - `docs/kg-eval-package.md` - packaged KG evaluation facade and integration
   contract for the System Backbone Agent.
 - `docs/kg-bert-runtime.md` - optional BERT/SentenceTransformer KG
-  candidate-generation runtimes, CPU/GPU Dockerfiles, and artifact rules.
+  candidate-generation runtimes, CPU/GPU Dockerfiles, benchmark manifest, model
+  profiles, and artifact rules.
 - `docs/openproject-adapter.md` - OpenProject adapter mapping.
 - `docs/implementation-task-breakdown.md` - shared implementation checklist for contributors and agents.
 
@@ -210,10 +226,17 @@ module fallback. System integrations should consume the stable summary instead
 of importing repo-local harness scripts directly. The summary also includes
 `candidate_generation_capabilities`, which maps low-spec, standard CPU, GPU,
 and remote model workers to deterministic or neural candidate-generation
-profiles:
+profiles. It also includes `kg_benchmark_results`; integrations that only need
+the BGE/lexical/ontology benchmark evidence can call
+`python -m formowl_kg_eval benchmarks` for a redacted summary with metrics,
+deltas, claim boundaries, and repo-relative SVG chart paths:
 
 ```sh
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python -m formowl_kg_eval summary"
+```
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python -m formowl_kg_eval benchmarks"
 ```
 
 ```sh

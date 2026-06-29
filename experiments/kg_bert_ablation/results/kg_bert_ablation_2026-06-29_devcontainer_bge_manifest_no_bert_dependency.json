@@ -222,7 +222,7 @@
   "runs": [
     {
       "algorithm": "rapidfuzz_compatible_lexical_v1",
-      "latency_ms": 5.988,
+      "latency_ms": 6.032,
       "metrics": {
         "accuracy": 0.4375,
         "f1": 0.181818,
@@ -443,7 +443,7 @@
           "status": "type_mismatch"
         }
       ],
-      "pairs_per_second": 2672.053973,
+      "pairs_per_second": 2652.719112,
       "run_id": "non_bert_lexical_baseline_v1",
       "status": "completed",
       "threshold": 0.7,

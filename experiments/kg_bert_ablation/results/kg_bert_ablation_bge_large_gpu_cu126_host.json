@@ -10,10 +10,15 @@
     "stakeholder_grade_claim": false
   },
   "comparison": {
-    "reason": "BERT/SentenceTransformer run did not complete in this environment",
-    "status": "incomplete"
+    "accuracy_delta_bert_minus_non_bert": 0.5,
+    "f1_delta_bert_minus_non_bert": 0.76555,
+    "latency_ms_delta_bert_minus_non_bert": 217159.997,
+    "precision_delta_bert_minus_non_bert": 0.0,
+    "recall_delta_bert_minus_non_bert": 0.8,
+    "status": "completed",
+    "throughput_ratio_bert_over_non_bert": 2.5e-05
   },
-  "created_at": "2026-06-29T10:20:36+00:00",
+  "created_at": "2026-06-29T10:24:36+00:00",
   "dataset": {
     "claim_boundary": {
       "large_benchmark_result_claim": false,
@@ -182,15 +187,18 @@
       ],
       "profile_id": "gpu_bge_large_en_v1_5"
     },
-    "python_version": "3.13.14",
-    "sentence_transformers_available": false,
+    "python_version": "3.12.3",
+    "sentence_transformers_available": true,
     "torch": {
-      "available": false,
-      "cuda_available": false,
-      "cuda_version": null,
-      "device_count": 0,
-      "device_names": [],
-      "package_version": null
+      "available": true,
+      "cuda_available": true,
+      "cuda_version": "12.6",
+      "device_count": 2,
+      "device_names": [
+        "NVIDIA GeForce GTX 1080 Ti",
+        "NVIDIA GeForce GTX 1080 Ti"
+      ],
+      "package_version": "2.10.0+cu126"
     }
   },
   "public_enterprise_benchmark": {
@@ -222,7 +230,7 @@
   "runs": [
     {
       "algorithm": "rapidfuzz_compatible_lexical_v1",
-      "latency_ms": 5.988,
+      "latency_ms": 5.511,
       "metrics": {
         "accuracy": 0.4375,
         "f1": 0.181818,
@@ -443,7 +451,7 @@
           "status": "type_mismatch"
         }
       ],
-      "pairs_per_second": 2672.053973,
+      "pairs_per_second": 2903.38602,
       "run_id": "non_bert_lexical_baseline_v1",
       "status": "completed",
       "threshold": 0.7,
@@ -452,8 +460,23 @@
     {
       "algorithm": "sentence_transformer_cosine_similarity_with_core_type_gate_v2",
       "batch_size": 32,
-      "blocker": "sentence_transformers is not installed in the execution environment",
-      "metrics": null,
+      "latency_breakdown_ms": {
+        "embedding": 221.926,
+        "model_load": 216940.234,
+        "scoring": 3.334
+      },
+      "latency_ms": 217165.508,
+      "metrics": {
+        "accuracy": 0.9375,
+        "f1": 0.947368,
+        "false_negative": 1,
+        "false_positive": 0,
+        "precision": 1.0,
+        "recall": 0.9,
+        "true_negative": 6,
+        "true_positive": 9
+      },
+      "model_device": "cuda:0",
       "model_name": "BAAI/bge-large-en-v1.5",
       "model_profile": {
         "default_model": "BAAI/bge-large-en-v1.5",
@@ -469,23 +492,252 @@
         "profile_id": "gpu_bge_large_en_v1_5"
       },
       "package_status": {
-        "available": false,
-        "package_version": null
+        "available": true,
+        "package_version": "3.3.1"
       },
-      "pair_results": [],
+      "pair_results": [
+        {
+          "expected_same": true,
+          "pair_id": "positive_customer_escalation",
+          "predicted_same": true,
+          "score": 0.625685,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.625685,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_refund_approval",
+          "predicted_same": true,
+          "score": 0.685087,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.685087,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_launch_date",
+          "predicted_same": false,
+          "score": 0.600491,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.600491,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_data_retention",
+          "predicted_same": true,
+          "score": 0.785242,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.785242,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_vendor_onboarding",
+          "predicted_same": true,
+          "score": 0.707179,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.707179,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_security_review",
+          "predicted_same": true,
+          "score": 0.660341,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.660341,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_meeting_action",
+          "predicted_same": true,
+          "score": 0.727075,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.727075,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_invoice_delay",
+          "predicted_same": true,
+          "score": 0.719996,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.719996,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_contract_renewal",
+          "predicted_same": true,
+          "score": 0.746899,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.746899,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_customer_org",
+          "predicted_same": true,
+          "score": 0.977391,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.977391,
+            "left_core_supertype": "Organization",
+            "right_core_supertype": "Organization",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_customer_vs_security",
+          "predicted_same": false,
+          "score": 0.570242,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.570242,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_refund_vs_launch",
+          "predicted_same": false,
+          "score": 0.514987,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.514987,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_vendor_vs_invoice",
+          "predicted_same": false,
+          "score": 0.451108,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.451108,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_contract_vs_action",
+          "predicted_same": false,
+          "score": 0.612656,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.612656,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_data_vs_vendor",
+          "predicted_same": false,
+          "score": 0.527436,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 0.527436,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
+            "threshold": 0.62,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_person_project_same_label",
+          "predicted_same": false,
+          "score": 1.0,
+          "score_breakdown": {
+            "embedding_cosine_similarity": 1.0,
+            "left_core_supertype": "Person",
+            "right_core_supertype": "Project",
+            "threshold": 0.62,
+            "type_gate_passed": false
+          },
+          "status": "type_mismatch"
+        }
+      ],
+      "pairs_per_second": 0.073677,
       "run_id": "bert_sentence_transformer_embedding_v1",
-      "status": "blocked_missing_dependency",
+      "status": "completed",
       "threshold": 0.62,
       "torch_status": {
-        "available": false,
-        "cuda_available": false,
-        "cuda_version": null,
-        "device_count": 0,
-        "device_names": [],
-        "package_version": null
+        "available": true,
+        "cuda_available": true,
+        "cuda_version": "12.6",
+        "device_count": 2,
+        "device_names": [
+          "NVIDIA GeForce GTX 1080 Ti",
+          "NVIDIA GeForce GTX 1080 Ti"
+        ],
+        "package_version": "2.10.0+cu126"
       },
       "uses_neural_networks": true
     }
   ],
-  "started_at": "2026-06-29T10:20:36+00:00"
+  "started_at": "2026-06-29T10:20:57+00:00"
 }

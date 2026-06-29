@@ -1,0 +1,3979 @@
+{
+  "artifact_id": "formowl_kg_public_enterprise_benchmark_result_v1",
+  "claim_boundary": {
+    "candidate_only": true,
+    "canonical_graph_write_allowed": false,
+    "canonical_type_write_allowed": false,
+    "label_limitations_present": true,
+    "large_benchmark_executed": true,
+    "production_quality_claim": false,
+    "raw_access_allowed": false,
+    "stakeholder_grade_claim": true
+  },
+  "comparison": {
+    "accuracy_delta_embedding_minus_lexical": 0.27736,
+    "f1_delta_embedding_minus_lexical": 0.677746,
+    "precision_delta_embedding_minus_lexical": 0.024005,
+    "recall_delta_embedding_minus_lexical": 0.590973,
+    "status": "completed"
+  },
+  "created_at": "2026-06-29T11:35:04+00:00",
+  "dataset": {
+    "dataset_id": "kg_public_enterprise_benchmark_run_v1",
+    "dataset_sha256": "sha256:3d0cfb7baa6761e8c1616387bd99a21b5fbb55d2e631e85f0ea56b6d1887dcb2",
+    "negative_pair_count": 25163,
+    "pair_count": 50000,
+    "pair_manifest_full_stored": false,
+    "pair_manifest_sample": [
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Parties\" that should be reviewed by a lawyer. Details: The two or more parties who signed the contract",
+        "pair_id": "cuad_positive_01724",
+        "right_label": "Licensee",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Does bull/bear market actually make a difference?",
+        "pair_id": "fiqa_positive_14964",
+        "right_label": "\"To short: Of course, you may always buy some index correlated ETF that eliminates the above. They use stock futures on the index, and you simply buy the \"\"shorting ETF\"\" in your non-margin account. However, they are surprisingly high cost, and despite the intended correlation, have significant drag. It's a much safer way to short the market (you have great choice in which market ETF) and eliminates the single stock risk.\"",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Parties\" that should be reviewed by a lawyer. Details: The two or more parties who signed the contract",
+        "pair_id": "cuad_positive_02294",
+        "right_label": "deep systems",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "What to sell when your financial needs change, stocks or bonds?",
+        "pair_id": "fiqa_positive_14007",
+        "right_label": "So I don't have any problems with your analysis or the comments associated with it. I just wanted to mention that no one is talking about taxes. Your answer....Figure out new portfolio breakdown and sell to 1.) Get money I need and 2.) re-balance the portfolio to my new target allocations is completely correct. (Unimpeachable in my opinion.) However, when you calculate what you need to sell to meet your current cash needs make sure to include in that analysis money to pay taxes on anything you sell for a ga",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Exclusivity\" that should be reviewed by a lawyer. Details: Is there an exclusive dealing commitment with the counterparty? This includes a commitment to procure all \u201crequirements\u201d from one party of certain technology, goods, or services or a prohibition on licensing or selling technology, goods or services to third parties, or a prohibition on collaborating or working with other parties), whether during the contract or after the contract ends (or bot",
+        "pair_id": "cuad_positive_00088",
+        "right_label": "During the term of this Agreement, CONSULTANT shall exclusively play/use the MANDATORY PRODUCT.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "How does one determine the width of a candlestick bar?",
+        "pair_id": "fiqa_negative_14169",
+        "right_label": "Sorry, but I am absolutely correct. Fractional reserve lending (banking) is simply that when someone deposits money into a bank, the bank is allowed to loan that money out, so long as they keep a reserve. If the reserve rate is 10% (it's much lower in reality), and someone deposits $100 into the bank, the bank can then loan out $90. That is fractional reserve lending at its most basics. Now fractional reserve lending does have a multiplier effect. And this effect is exactly how I described it. Let's go back",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Non-Transferable License\" that should be reviewed by a lawyer. Details: Does the contract limit the ability of a party to transfer the license being granted to a third party?",
+        "pair_id": "cuad_negative_01931",
+        "right_label": "conditions that may be included in any such purchase and sale agreement, Licensee shall have no obligation to consummate the acquisition of the assets of, or stock in, Licensor pursuant to its exercise of the Option if Licensee's board of directors should determine, in its sole discretion, that such acquisition would not be accretive to the value of Licensee.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Rofr/Rofo/Rofn\" that should be reviewed by a lawyer. Details: Is there a clause granting one party a right of first refusal, right of first offer or right of first negotiation to purchase, license, market, or distribute equity interest, technology, assets, products or services?",
+        "pair_id": "cuad_negative_06737",
+        "right_label": "AGI hereby grants a non-exclusive license (the \"License\") to the Company and its operating subsidiaries now or hereafter existing to use the Good Sam name and logo, including trademarks, trade names, or service marks as designated by AGI (the \"Trademarks\"), in connection with the sale of such new and used vehicles by the Company that have satisfied such criteria and standards as are established from time to time by AGI (the \"Approved Use\").",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": false,
+        "label_basis": "sec_different_cik_negative",
+        "left_label": "Soluna Holdings, Inc",
+        "pair_id": "sec_negative_09925",
+        "right_label": "DIVERSIFIED HEALTHCARE TRUST",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Non-Transferable License\" that should be reviewed by a lawyer. Details: Does the contract limit the ability of a party to transfer the license being granted to a third party?",
+        "pair_id": "cuad_negative_10888",
+        "right_label": "In addition to the foregoing, and subject to the terms and conditions of the applicable content agreement with such Licensor, COMPANY agrees to pay directly to each Licensor from whom CONTENT PROVIDER might obtain Content which CONTENT PROVIDER licenses to COMPANY pursuant hereto a royalty equal to that royalty which CONTENT PROVIDER might be obligated to pay to that Licensor with respect to the use and exploitation of that Content in the manner licensed to and actually used by COMPANY pursuant hereto provi",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "How to handle taxes related to affiliate marketing?",
+        "pair_id": "fiqa_negative_13700",
+        "right_label": "\"They have forever to collect a balance from you. Furthermore they can add whatever penalties and fees they wish to increase that balance. Worst of all, they don't have to remind you or send you bills or any other notification. You owed it when you left the office. (There very well could be local laws that require notifications, but that isn't really the issue here.) That dentist has every right to deny you service until you settle the account. Forever. The statute of limitations on collecting that debt via",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Document Name\" that should be reviewed by a lawyer. Details: The name of the contract",
+        "pair_id": "cuad_positive_08525",
+        "right_label": "Strategic Alliance Agreement",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Effective Date\" that should be reviewed by a lawyer. Details: The date when the contract is effective",
+        "pair_id": "cuad_positive_11753",
+        "right_label": "5th day of January, 2015",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "label_basis": "sec_same_cik_ticker_title",
+        "left_label": "AMBEV S.A.",
+        "pair_id": "sec_positive_00338",
+        "right_label": "AMBEV S.A. ticker ABEV CIK 0001565025",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Expiration Date\" that should be reviewed by a lawyer. Details: On what date will the contract's initial term expire?",
+        "pair_id": "cuad_positive_03664",
+        "right_label": "The initial term of this Agreement shall be three (3) calendar years from the Agreement date.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Revenue/Profit Sharing\" that should be reviewed by a lawyer. Details: Is one party required to share revenue or profit with the counterparty for any technology, goods, or services?",
+        "pair_id": "cuad_positive_08446",
+        "right_label": "The quarterly royalty payments made under this Section 6.3.1 may be based on estimated Net Sales.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Insurance\" that should be reviewed by a lawyer. Details: Is there a requirement for insurance that must be maintained by one party for the benefit of the counterparty?",
+        "pair_id": "cuad_negative_06675",
+        "right_label": "Unless terminated prior to the natural expiration of the Initial Term, upon the expiry of the Initial Term this Agreement shall automatically renew for successive terms of the same duration, unless either party gives written notice to the other of such party's desire not to renew not less than ninety (90) days prior to the date of the expiration of the Initial Term or any successive term thereafter.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Effective Date\" that should be reviewed by a lawyer. Details: The date when the contract is effective",
+        "pair_id": "cuad_negative_01241",
+        "right_label": "Party A",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Exclusivity\" that should be reviewed by a lawyer. Details: Is there an exclusive dealing commitment with the counterparty? This includes a commitment to procure all \u201crequirements\u201d from one party of certain technology, goods, or services or a prohibition on licensing or selling technology, goods or services to third parties, or a prohibition on collaborating or working with other parties), whether during the contract or after the contract ends (or bot",
+        "pair_id": "cuad_positive_03584",
+        "right_label": "Except as otherwise provided in this Agreement and provided that Franchise is in full compliance with this Agreement, Pretzel Time and its Affiliates will not during the term of this Agreement operate or grant franchises for the operation of Pretzel Time Units within the Territory other than the Franchise granted to Franchisee pursuant to this Agreement.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Ex-dividend date and time zones",
+        "pair_id": "fiqa_positive_14072",
+        "right_label": "Ex-Date is a function of the exchange, as well as the dividend. Consider Deutsche Bank AG, DB on the NYSE, DKR on Xetra. For a given dividend, each exchange sets the ex-date for trades on that exchange. (See http://www.sec.gov/answers/dividen.htm for a description of how it works in the US; other exchanges/countries are similar.) This ex-date is normally based on the dividends record date, which is when you must be on the company's books as a shareholder to receive the dividend, and based on when trades for",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "Are REIT worth it and is it a good option to generate passive income for a while?",
+        "pair_id": "fiqa_negative_10243",
+        "right_label": "You can take a look at EDGAR (Electronic Data Gathering, Analysis, and Retrieval), a big database run by the SEC where all companies, foreign and domestic, are required to file registration statements, periodic reports, and other forms electronically.",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Parties\" that should be reviewed by a lawyer. Details: The two or more parties who signed the contract",
+        "pair_id": "cuad_positive_10436",
+        "right_label": "SAGEM S.A.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "label_basis": "sec_same_cik_ticker_title",
+        "left_label": "Grayscale Ethereum Staking ETF",
+        "pair_id": "sec_positive_07383",
+        "right_label": "Grayscale Ethereum Staking ETF ticker ETHE CIK 0001725210",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Parties\" that should be reviewed by a lawyer. Details: The two or more parties who signed the contract",
+        "pair_id": "cuad_positive_08644",
+        "right_label": "Go Call",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "label_basis": "sec_same_cik_ticker_title",
+        "left_label": "URANIUM ENERGY CORP",
+        "pair_id": "sec_positive_01354",
+        "right_label": "URANIUM ENERGY CORP ticker UEC CIK 0001334933",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Is a robo-adviser worth the risk?",
+        "pair_id": "fiqa_positive_13128",
+        "right_label": "If you are looking for an advisor to just build a portfolio and then manage it, a robo-advisor can be beneficial (especially if the alternative is doing it your self, assuming that you are not well versed in the markets). The primary risk with one is that it does not build a portfolio that accurately represents your needs and risk tolerance. Some firms base the number of questions they ask you on sign up based not on what is needed to get a good profile, but on how many before people decide that it is too m",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Change Of Control\" that should be reviewed by a lawyer. Details: Does one party have the right to terminate or is consent or notice required of the counterparty if such party undergoes a change of control, such as a merger, stock sale, transfer of all or substantially all of its assets or business, or assignment by operation of law?",
+        "pair_id": "cuad_negative_09688",
+        "right_label": "Neither party shall have the right to assign this Agreement or any Work Order or to assign any rights thereunder without the prior written consent of the other party.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Should I learn to do my own tax?",
+        "pair_id": "fiqa_positive_09753",
+        "right_label": "Interesting. When you say DIY you mean pencil and paper. For most of us the choice came down to using a professional vs using the software. Your second bullet really hits the point. The tax return is a giant spreadsheet with multiple cells depending on each other. Short of building my own spreadsheet to perform the task, I found the software, at $30-$50, to be the happy medium between the full DIY and the Pro at $400+. With a single W2, and no other items, the form is likely just a 1040-EZ, and there should",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Parties\" that should be reviewed by a lawyer. Details: The two or more parties who signed the contract",
+        "pair_id": "cuad_positive_01902",
+        "right_label": "Biocept",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Rofr/Rofo/Rofn\" that should be reviewed by a lawyer. Details: Is there a clause granting one party a right of first refusal, right of first offer or right of first negotiation to purchase, license, market, or distribute equity interest, technology, assets, products or services?",
+        "pair_id": "cuad_positive_04356",
+        "right_label": "TPH or TPH-A may not exercise the Call Option for less than one hundred percent (100%) of the Shares held by both FSL and AFSL or any Affiliate of FSL or AFSL, as the case may be.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Why are interest rates on saving accounts so low in USA and Europe?",
+        "pair_id": "fiqa_positive_05804",
+        "right_label": "Banks in general will keep saving rates as low as possible especially if there is a surplus of funds or alternative access for funding as in the case of the Fed in the USA. Generally speaking, why would bank pay you a high interest rate when they cannot generate any income from your money? Usually we will expect to see a drop in the loan interest rate when their is a surplus of funds so as to encourage investment. But if the market is volatile then no banks will allow easy access to money through loans. The",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "label_basis": "sec_same_cik_ticker_title",
+        "left_label": "MOVING iMAGE TECHNOLOGIES INC.",
+        "pair_id": "sec_positive_06407",
+        "right_label": "MOVING iMAGE TECHNOLOGIES INC. ticker MITQ CIK 0001770236",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "Difference between a mortgage and buy-to-let in UK",
+        "pair_id": "fiqa_negative_01744",
+        "right_label": "'Pretty' inelastic does not mean completely inelastic, and if there is any elasticity at all there is an optimum price point. Also, in general, drugs are the most elastic portions of healthcare, for example, Drug A, might have serious side effects while Drug B at higher cost might a less serious set. These kinds of economic decisions are constantly happening. There might be specific cases where the drug is life saving with no analogs but that's uncommon across the drug spectrum. These are obvious facts and",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "label_basis": "sec_same_cik_ticker_title",
+        "left_label": "Third Coast Bancshares, Inc.",
+        "pair_id": "sec_positive_03111",
+        "right_label": "Third Coast Bancshares, Inc. ticker TCBX CIK 0001781730",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "Negatives to increased credit card spending limit? [duplicate]",
+        "pair_id": "fiqa_negative_12509",
+        "right_label": "\"I am strongly skeptical of this. In fact, after reading your question, I did the following: I wrote a little program in python that \"\"simulates\"\" a stock by flipping a coin. Each time the coin comes up heads, the stock's value grows by 1. Each time the coin comes up tails, the stock's value drops by 1. I then group, say, 50 of these steps into a \"\"day\"\", and for each day I look at opening, closing, maximum and minimum. This is then graphed in a candlestick chart. Funny enough, those things look exactly lik",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": false,
+        "label_basis": "sec_different_cik_negative",
+        "left_label": "SES AI Corp",
+        "pair_id": "sec_negative_08458",
+        "right_label": "Freightos Ltd",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"No-Solicit Of Customers\" that should be reviewed by a lawyer. Details: Is a party restricted from contracting or soliciting customers or partners of the counterparty, whether during the contract or after the contract ends (or both)?",
+        "pair_id": "cuad_positive_04111",
+        "right_label": "During the Term and any renewal terms of the Agreement, and for a period of one (1) year following the expiration or earlier termination thereof, Customer agrees not to work with, directly or indirectly, any Third-Party that Customer comes to know through disclosure by Kubient as part of the Services, without the express written consent of Kubient and compensation to Kubient under the applicable exhibit and/or schedule.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "label_basis": "sec_same_cik_ticker_title",
+        "left_label": "Fulcrum Therapeutics, Inc.",
+        "pair_id": "sec_positive_04141",
+        "right_label": "Fulcrum Therapeutics, Inc. ticker FULC CIK 0001680581",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "How much will a stock be worth after a merger?",
+        "pair_id": "fiqa_positive_00300",
+        "right_label": "If this is a one to one share exchange with added cash to make up the difference in value, you're getting 1 share of XYZ plus $19.20 in cash for each share of ABC. They calculated the per share price they're offering ($36) and subtracted the value of XYZ share at the time of the offer ($16.80) to get the cash part ($19.20). The value of XYZ after is subject to investor reaction. Nobody can accurately predict stock values. If you see the price dropping, owners of XYZ are selling because they feel that they n",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Dry cleaners lost $160 pants, what should I do?",
+        "pair_id": "fiqa_positive_05056",
+        "right_label": "\"You are looking to be made whole, so the requests need to be reasonable. You need to be clear that you want: You aren't going to 'punish' the dry cleaner or anything else. You don't want coupons or free service for future work, you want your pants or cash. If you send a letter, send it certified with a return receipt. You want to be able to show a judge you made efforts outside of the court that you attempted to reconcile the issue. Sending it certified is also a good way to indicate to the dry cleaner tha",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "Are you preparing for a possible dollar (USD) collapse? (How?)",
+        "pair_id": "fiqa_negative_07986",
+        "right_label": "You're spot on. I'm coming in because he thinks nobody else is doing a good job, and he's hoping we can turn things around. Everyone will know who I am, complete with family gossip. The existing culture will NOT be helpful. Perhaps a softer teamwork approach would be best in this instance? Slowly work up and earn respect and assume responsibility.",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Parties\" that should be reviewed by a lawyer. Details: The two or more parties who signed the contract",
+        "pair_id": "cuad_negative_07538",
+        "right_label": "3-14-18",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"License Grant\" that should be reviewed by a lawyer. Details: Does the contract contain a license granted by one party to its counterparty?",
+        "pair_id": "cuad_positive_11916",
+        "right_label": "We grant to you, upon the terms and conditions contained in this Agreement, the exclusive right to establish and operate a Franchised Business and a license to use the methods, procedures and products developed by us in the business of selling and servicing Unit Franchises in the territory described on Attachment A attached to this Agreement and incorporated into this Agreement by reference (the \"Master Territory\").",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Document Name\" that should be reviewed by a lawyer. Details: The name of the contract",
+        "pair_id": "cuad_negative_10365",
+        "right_label": "This Agreement is governed by the laws of the State of Texas, without regard to the conflict of laws provisions thereof.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "My account's been labeled as \u201cday trader\u201d and I got a big margin call. What should I do? What trades can I place in the blocked period?",
+        "pair_id": "fiqa_negative_03647",
+        "right_label": "**Here's a sneak peek of /r/jobs using the [top posts](https://np.reddit.com/r/jobs/top/?sort=top&amp;t=year) of the year!** \\#1: [Who else is sick of having to create a profile online just to apply for a job you are probably never going to hear back from?](https://np.reddit.com/r/jobs/comments/55te2w/who_else_is_sick_of_having_to_create_a_profile/) \\#2: [FINALLY have a new job, and it's all because I was nice to the valet guy.](https://np.reddit.com/r/jobs/comments/5nhmp3/finally_have_a_new_job_and_its_all",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "label_basis": "sec_same_cik_ticker_title",
+        "left_label": "TEMPLETON EMERGING MARKETS INCOME FUND",
+        "pair_id": "sec_positive_09638",
+        "right_label": "TEMPLETON EMERGING MARKETS INCOME FUND ticker TXEMF CIK 0000909112",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Parties\" that should be reviewed by a lawyer. Details: The two or more parties who signed the contract",
+        "pair_id": "cuad_negative_01775",
+        "right_label": "Biocept will provide notice to Life Technologies on December 31, 2012 if the conditions for the option apply, and if Life Technologies delivers written notice of exercise of such right of negotiation to Biocept on or before January 15, 2013, the parties will negotiate in good faith to conclude a license agreement no later than February 28, 2013.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": false,
+        "label_basis": "sec_different_cik_negative",
+        "left_label": "KKR Income Opportunities Fund",
+        "pair_id": "sec_negative_03414",
+        "right_label": "Colombier Acquisition Corp. III",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Why do stocks go up? Is it due to companies performing well, or what else? [duplicate]",
+        "pair_id": "fiqa_positive_04117",
+        "right_label": "The same applies if you were looking for a business to buy: would you pay more for a business that is doing well making increasing profits year after year, or for a business that is not doing so well and is losing money. A share in a company is basically a small part of a company which a shareholder can own. So would you rather own a part of a company that is increasing profits year after year or one that is continuously losing money? Someone would buy shares in a company in order to make a better return th",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "Question about car loan payment",
+        "pair_id": "fiqa_negative_14996",
+        "right_label": "\"The basic optimization rule on distributing windfalls toward debt is to pay off the highest interest rate debt first putting any extra money into that debt while making minimum payments to the other creditors. If the 5k in \"\"other debt\"\" is credit card debt it is virtually certain to be the highest interest rate debt. Pay it off immediately. Don't wait for the next statement. Once you are paying on credit cards there is no grace period and the sooner you pay it the less interest you will accrue. Second, ke",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "label_basis": "sec_same_cik_ticker_title",
+        "left_label": "Artius II Acquisition Inc.",
+        "pair_id": "sec_positive_09166",
+        "right_label": "Artius II Acquisition Inc. ticker AACBR CIK 0002034334",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "Historical stock prices: Where to find free / low cost data for offline analysis?",
+        "pair_id": "fiqa_negative_10028",
+        "right_label": "\"A REIT is a real estate investment trust. It is a company that derives most of its gross income from and holds most of its assets in real estate investments, which, in this case, include either real property, mortgages, or both. They provide a way for investors to get broad exposure in a real estate market without going to buy a bunch of properties themselves. It also provides diversification within the real estate segment since REITs will often (but not necessarily) have either way more properties than an",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Ip Ownership Assignment\" that should be reviewed by a lawyer. Details: Does intellectual property created by one party become the property of the counterparty, either per the terms of the contract or upon the occurrence of certain events?",
+        "pair_id": "cuad_positive_05909",
+        "right_label": "The foregoing provisions of this Section 6 shall not apply to any invention that CONSULTANT developed entirely on CONSULTANT's own time without using the Company's equipment, supplies, facilities or trade secret information, except for those inventions that (i) relate to the Company's business or actual or demonstrably anticipated research or development, or (ii) result from any work performed by CONSULTANT for the Company.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Parties\" that should be reviewed by a lawyer. Details: The two or more parties who signed the contract",
+        "pair_id": "cuad_negative_03709",
+        "right_label": "There shall be fewer than 1 talkoff in 5 hours of voice when the detector is programmed with the recommended parameters (minimum tone duration 400 ms).",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Governing Law\" that should be reviewed by a lawyer. Details: Which state/country's law governs the interpretation of the contract?",
+        "pair_id": "cuad_negative_06871",
+        "right_label": "NEITHER PARTY WILL BE LIABLE FOR ANY SPECIAL, INCIDENTAL, INDIRECT, EXEMPLARY, PUNITIVE, OR CONSEQUENTIAL DAMAGES ARISING OUT OF OR IN CONNECTION WITH THIS AGREEMENT OR THE USE OF THE LICENSED SOFTWARE, THE SERVICES OR DOCUMENTATION, WHETHER FROM BREACH OF CONTRACT OR WARRANTY, FROM NEGLIGENCE, STRICT LIABILITY OR OTHER CAUSE OF ACTION, EVEN IF SUCH PARTY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "What is a good way to save money on car expenses?",
+        "pair_id": "fiqa_positive_08041",
+        "right_label": "Manage the fuel consumption price: check the pattern of fuel prices if you can for your area. Some areas have weekly changes which are somewhat predictable and some sites will even predict the minimum price for the next day. Some other areas will have a discount fuel day. Switch to diesel: fuel consumption by diesel engines are much better than standard combustion engines. Downside is not as many refueling stations. Switch to a hybrid: fuel consumption is better than comparable combustion engines alone but",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Change Of Control\" that should be reviewed by a lawyer. Details: Does one party have the right to terminate or is consent or notice required of the counterparty if such party undergoes a change of control, such as a merger, stock sale, transfer of all or substantially all of its assets or business, or assignment by operation of law?",
+        "pair_id": "cuad_negative_07034",
+        "right_label": "g) User Data will be owned by Client, and subject to the limitations contained herein, Client grants to Excite a non-exclusive license to use the User Data for the purposes of this Agreement.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Audit Rights\" that should be reviewed by a lawyer. Details: Does a party have the right to audit the books, records, or physical locations of the counterparty to ensure compliance with the contract?",
+        "pair_id": "cuad_positive_07574",
+        "right_label": "Such inspection and audit shall be conducted at Astellas' sole cost and expense in a manner so as to minimize disruption of FG's, or its subcontractor's or Sublicensee's, business operations. FG shall, within [ * ] after FG's receipt of written notice from Astellas detailing any deficiencies which may be noted in any such audit which relate to the Relevant Standards use good faith efforts to remedy such deficiencies, and submit a plan to the Astellas outlining steps proposed to be taken.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Parties\" that should be reviewed by a lawyer. Details: The two or more parties who signed the contract",
+        "pair_id": "cuad_negative_01791",
+        "right_label": "To facilitate the promotion and performance of Tests, during the Term Life Technologies hereby grants Biocept a non-exclusive, royalty-free, non-transferable license to use the Life Technologies Trademarks solely for use in connection with the promotion and performance of the Tests in the Territory.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Insurance\" that should be reviewed by a lawyer. Details: Is there a requirement for insurance that must be maintained by one party for the benefit of the counterparty?",
+        "pair_id": "cuad_negative_04451",
+        "right_label": "You do not have any right to sublicense or subfranchise others within or outside of the Designated Area and do not have the right to operate more than one (1) Franchised Restaurant within the Designated Area.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"License Grant\" that should be reviewed by a lawyer. Details: Does the contract contain a license granted by one party to its counterparty?",
+        "pair_id": "cuad_negative_11969",
+        "right_label": "Notwithstanding Customer's obligations pursuant to clauses 3.1 and 3.4, the first [Redacted - Commercially Sensitive] of each Forecast shall constitute a binding commitment of Customer to purchase the quantities of Products set forth in the relevant Forecast for such [Redacted - Commercially Sensitive] period.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": false,
+        "label_basis": "sec_different_cik_negative",
+        "left_label": "MOBIX LABS, INC",
+        "pair_id": "sec_negative_08285",
+        "right_label": "Microvast Holdings, Inc.",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "label_basis": "sec_same_cik_ticker_title",
+        "left_label": "BANK BRADESCO",
+        "pair_id": "sec_positive_07602",
+        "right_label": "BANK BRADESCO ticker BBDO CIK 0001160330",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Is it a good investment for a foreigner to purchase a flat/apartment in China?",
+        "pair_id": "fiqa_positive_11240",
+        "right_label": "China is in the middle of a residential housing bubble, and now is probably a horrible time to invest in real estate in China. Even if China wasn't near the peak of its bubble it would probably still be a bad idea because owning real estate in a foreign country is expensive and risky. There are real currency risks, think what would happen if the yuan declined significantly against the dollar. There is also the risk of the government seizing foreign held investments (not extremely likely but plausible). Anot",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": false,
+        "label_basis": "sec_different_cik_negative",
+        "left_label": "Cresco Labs Inc.",
+        "pair_id": "sec_negative_03885",
+        "right_label": "Xsolla SPAC 1",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "Invest in low cost small cap index funds when saving towards retirement?",
+        "pair_id": "fiqa_negative_09755",
+        "right_label": "How would you compute the earnings for governments that are some of the main issuers of bonds and debt? When governments run deficits they would have a negative earnings ratio that makes the calculation quite hard to evaluate.",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Audit Rights\" that should be reviewed by a lawyer. Details: Does a party have the right to audit the books, records, or physical locations of the counterparty to ensure compliance with the contract?",
+        "pair_id": "cuad_negative_07116",
+        "right_label": "December 18, 1998",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "How can one go short in Uber?",
+        "pair_id": "fiqa_negative_04376",
+        "right_label": "\"I am co-owner of a business, and we incorporated federally. (Mostly to limit liability.) There is some excellent information above, and most of my wisdom I got from a trusted lawyer and accountant (find experts you trust in these two areas, they will prove invaluable in so many areas.) The one point I would add is that if you decide to incorporate, you can do so federally or provincially. We were all set to go provincially, when our lawyer asked \"\"Is there any chance you might move the business? Any chance",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "Why do people take out life insurance on their children? Should I take out a policy on my child?",
+        "pair_id": "fiqa_negative_06247",
+        "right_label": "Without knowing actual numbers it's tough to say. Personally, I would pay off the car then, going forward, use the money that would have been paid on your car note toward your mortgage. I always think of things in the worst possible scenario. It's easier, and faster, to repossess a car than to foreclose on real estate. Also, in an emergency situation, depleting your fund for your car loan and your mortgage would be significantly more detrimental than only paying a mortgage with a car owned outright. Fewer o",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "How to share income after marriage and kids?",
+        "pair_id": "fiqa_negative_04086",
+        "right_label": "This sounds more like a behavioral than a debit card issue to me TBH. Did you put the money you're putting away into a separate savings account that you (mentally) labelled 'for investment'? That's pretty much what I do (and I have a couple of savings accounts for exactly that reason) and even though I know I've got $x in the savings accounts, the debit card I carry only lets me spend money from my main bank account. By the time I've transferred the money, the urge to spend has usually gone away, even thoug",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Why should the P/E ratio of a growth stock match its percentage earnings growth rate?",
+        "pair_id": "fiqa_positive_12760",
+        "right_label": "Your observation is mostly right, that 1 is a the number around which this varies. You are actually referencing PEG, P/E to Growth ratio, which is a common benchmark to use to evaluate a stock. The article I link to provides more discussion.",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Warranty Duration\" that should be reviewed by a lawyer. Details: What is the duration of any warranty against defects or errors in technology, products, or services provided under the contract?",
+        "pair_id": "cuad_negative_00931",
+        "right_label": "The Advertising Cost Compensation depends on the actual sales generated by end users referred via the electronic advertisement (the Affiliate's link).",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Audit Rights\" that should be reviewed by a lawyer. Details: Does a party have the right to audit the books, records, or physical locations of the counterparty to ensure compliance with the contract?",
+        "pair_id": "cuad_positive_03403",
+        "right_label": "Such audits may be on a rotating site basis where operations and procedures of Supplier services provided to Bank of America are in multiple locations in order to confirm that Supplier is in compliance in all aspects of the Agreement Supplier shall provide Bank of America with a copy of each report prepared in connection with each such audit within thirty (30) calendar days after it receives such report.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": false,
+        "label_basis": "sec_different_cik_negative",
+        "left_label": "Morgan Stanley Bitcoin Trust",
+        "pair_id": "sec_negative_07105",
+        "right_label": "BALTIC CLASSIFIEDS GROUP PLC/ADR",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": false,
+        "label_basis": "sec_different_cik_negative",
+        "left_label": "Pasithea Therapeutics Corp.",
+        "pair_id": "sec_negative_08960",
+        "right_label": "Liberty Live Holdings, Inc.",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Parties\" that should be reviewed by a lawyer. Details: The two or more parties who signed the contract",
+        "pair_id": "cuad_negative_02089",
+        "right_label": "Subject to the terms and conditions of this Agreement, Todos hereby grants the Reseller a non-sublicensable, non-transferable, exclusive right to distribute and sell the Products to Customers in the Territory; provided, however, that Reseller may sub-license or transfer its distribution rights to a subsidiary or affiliate of the Reseller.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Why does it matter if a Central Bank has a negative rather than 0% interest rate?",
+        "pair_id": "fiqa_positive_07682",
+        "right_label": "That is kind of the point, one of the hopes is that it incentivizes banks to stop storing money and start injecting it into the economy themselves. Compared to the European Central Bank investing directly into the economy the way the US central bank has been doing. (The Federal Reserve buying mortgage backed securities) On a country level, individual European countries have tried this before in recent times with no noticeable effect.",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Audit Rights\" that should be reviewed by a lawyer. Details: Does a party have the right to audit the books, records, or physical locations of the counterparty to ensure compliance with the contract?",
+        "pair_id": "cuad_positive_11176",
+        "right_label": "Company shall make said books available to North or North's representative on reasonable notice during the Term of this Agreement and the two (2) year period immediately following thereafter.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Joint Ip Ownership\" that should be reviewed by a lawyer. Details: Is there any clause providing for joint or shared ownership of intellectual property between the parties to the contract?",
+        "pair_id": "cuad_positive_08754",
+        "right_label": "As between the Parties, Adaptimmune will have the first right to prepare, file, prosecute, maintain, enforce and defend all U.S. and foreign patents, registrations and other forms of intellectual property in any jointly-owned Invention using patent counsel of its choice that is subject to the written approval of MD Anderson not to be unreasonably withheld and at the sole cost and expense of Adaptimmune, with accounting to MD Anderson.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Expiration Date\" that should be reviewed by a lawyer. Details: On what date will the contract's initial term expire?",
+        "pair_id": "cuad_negative_10318",
+        "right_label": "Wade Enterprises",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Expiration Date\" that should be reviewed by a lawyer. Details: On what date will the contract's initial term expire?",
+        "pair_id": "cuad_negative_05103",
+        "right_label": "Party A",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Nanny taxes and payroll service",
+        "pair_id": "fiqa_positive_08122",
+        "right_label": "For Federal Return, Schedule H and its Instructions are a great start. You are the nanny's employer, and are responsible for FICA (social security and medicare) withholding, and also paying the employer portion. You will offer her a W4 so she can tell you how much federal and state tax to withhold. You'll use Circular E the employer's tax guide to calculate withholding. In January, you'll give her a W-2, and file the information with your own tax return. For State, some of the above applies, but as I recall",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "Can I sell a stock immediately?",
+        "pair_id": "fiqa_negative_14712",
+        "right_label": "You have it in your head that regulation = good and deregulation = bad which is why I was trying to stress why it is situational. Regulating taxi industry was bad for consumers and taxi drivers. Deregulation through uber/lyft was shown to be good for the drivers and consumers. You should think in terms of outcome. We should regulate to encourage free market practices and deregulate to encourage free market practices. In this case, it would be prudent to regulate Idaho to make sure employers cannot force non",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Expiration Date\" that should be reviewed by a lawyer. Details: On what date will the contract's initial term expire?",
+        "pair_id": "cuad_positive_03876",
+        "right_label": "\"Royalty Term\" means, with respect to sales of a Product in the Territory, the time period beginning on the First Commercial Sale of such Product in the Territory and expiring on the latest of the following dates: (a) *** (b) *** (c) ***",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "Self-directed RRSP into mortgage investment",
+        "pair_id": "fiqa_negative_11672",
+        "right_label": "The device in question, in this instance is parts for a PC. To build the PC you would need the additional parts ordered from New Egg. So anything gotten immediately from Best Buy would have no benefit insofar as timing. Purchasing items (most likely) made in foreign countries from a multinational conglomerate not based locally paying low wages which contributes to the bankruptcy of actual mom&amp;pop stores supports the local economy how?",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Non-Compete\" that should be reviewed by a lawyer. Details: Is there a restriction on the ability of a party to compete with the counterparty or operate in a certain geography or business or technology sector?",
+        "pair_id": "cuad_negative_04547",
+        "right_label": "May 31, 1999",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Post-Termination Services\" that should be reviewed by a lawyer. Details: Is a party subject to obligations after the termination or expiration of a contract, including any post-termination transition, payment, transfer of IP, wind-down, last-buy, or similar commitments?",
+        "pair_id": "cuad_negative_04067",
+        "right_label": "Company",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": false,
+        "label_basis": "sec_different_cik_negative",
+        "left_label": "MOOG INC.",
+        "pair_id": "sec_negative_00830",
+        "right_label": "Wise Group plc",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Change Of Control\" that should be reviewed by a lawyer. Details: Does one party have the right to terminate or is consent or notice required of the counterparty if such party undergoes a change of control, such as a merger, stock sale, transfer of all or substantially all of its assets or business, or assignment by operation of law?",
+        "pair_id": "cuad_negative_12284",
+        "right_label": "EXCEPT WITH RESPECT TO CONTRACTOR'S OBLIGATIONS PURSUANT TO PARAGRAPH 9 HEREOF, CONTRACTOR'S MAXIMUM LIABILITY TO COMPANY ARISING FOR ANY REASON RELATING TO CONTRACTOR'S PERFORMANCE OF SERVICES UNDER A STATEMENT OF WORK SHALL BE LIMITED TO THE AMOUNT OF FEES PAID TO CONTRACTOR FOR THE PERFORMANCE OF SUCH SERVICES.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "label_basis": "sec_same_cik_ticker_title",
+        "left_label": "GOLD ENTERPRISE GROUP INC",
+        "pair_id": "sec_positive_06723",
+        "right_label": "GOLD ENTERPRISE GROUP INC ticker GEGP CIK 0001081188",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "How to determine how much to charge your business for rent (in your house)?",
+        "pair_id": "fiqa_positive_01076",
+        "right_label": "To be confident in your solution, and get the best solution for you, consult a local accountant, preferably one who is specialized in taxes for businesses. Or muddle through the code and figure it out for yourself. The primary advantage in consulting with an accountant is that you can ask them to point out ways you can restructure your expenses, debts and income in order to minimize your tax burden. They can help you run the numbers for the various options and choose the one that is right, numerically.",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Effective Date\" that should be reviewed by a lawyer. Details: The date when the contract is effective",
+        "pair_id": "cuad_positive_04970",
+        "right_label": "March 18, 2019",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": true,
+        "label_basis": "fiqa_public_qrel_positive",
+        "left_label": "Do I need a business credit card?",
+        "pair_id": "fiqa_positive_04636",
+        "right_label": "I would suggest at least getting a personal card that you only use for business expenses, even if you don't opt for a business card. It makes it very clear that expenses on that card are business expenses, and is just more professional. The same goes for a checking account, if you have one of those. It makes it easier to defend if you are ever audited, and if you use an accountant or tax preparer.",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "label_basis": "sec_same_cik_ticker_title",
+        "left_label": "Venture Global, Inc.",
+        "pair_id": "sec_positive_00510",
+        "right_label": "Venture Global, Inc. ticker VG CIK 0002007855",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": false,
+        "label_basis": "cuad_cross_question_negative",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Audit Rights\" that should be reviewed by a lawyer. Details: Does a party have the right to audit the books, records, or physical locations of the counterparty to ensure compliance with the contract?",
+        "pair_id": "cuad_negative_06322",
+        "right_label": "For avoidance of doubt, all BII liability or indemnification obligation that might result from representations and the warranties under this Section 6 are always subject to the limitations set forth in Section 7.4 of this Agreement.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "How can I understand why investors think a particular company should have a high PE ratio?",
+        "pair_id": "fiqa_negative_11338",
+        "right_label": "\"FWIW, I've got a printed Amazon.ca invoice that was included in a shipment of books that I received in July, 2013. In the right-side side panel, at the bottom and in fine print, it reads: Amazon.com.ca, Inc. 410 Terry Avenue North Seattle, WA 98109-5210 GST Registration Number/No enregistrement TPS 85730 5932 RT0001 [etc.] If I view the same order online at Amazon.ca, the on-screen version does not have that detail. Interestingly, at the bottom of the online invoice page it says: \"\"Please note: This is not",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "FinancialAnswer",
+        "expected_same": false,
+        "label_basis": "fiqa_non_qrel_deterministic_negative",
+        "left_label": "5/1 ARM: Lifetime cap, First Adjustment Cap, Margin, and Annual Cap?",
+        "pair_id": "fiqa_negative_08119",
+        "right_label": "Company Income Tax Filling |GST Registration and Migration Sujata Associate ia an accounting Firm and we are expertise in Companies Act 2013 and we help in Company Registration, Private Limited Registration , Limited Laiblity Registration , Public Limited Company Registration , Partnership Company Registration and Propriotrship Company Registration. Sujata Associates also help in Company Audit ,Maintaince of Company Accounts ,Sale Tax Return Filling and Income Tax Filling.",
+        "source_family": "financial_qa",
+        "source_id": "beir_fiqa_2018"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": false,
+        "label_basis": "sec_different_cik_negative",
+        "left_label": "REGIONS FINANCIAL CORP",
+        "pair_id": "sec_negative_09833",
+        "right_label": "INTERNATIONAL PAPER CO /NEW/",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": false,
+        "label_basis": "sec_different_cik_negative",
+        "left_label": "Athena Technology Acquisition Corp. II",
+        "pair_id": "sec_negative_07966",
+        "right_label": "HAMMER TECHNOLOGY HOLDINGS CORP.",
+        "source_family": "financial_report",
+        "source_id": "sec_edgar_company_facts_and_submissions"
+      },
+      {
+        "core_supertype": "Clause",
+        "expected_same": true,
+        "label_basis": "cuad_expert_answer_span",
+        "left_label": "Highlight the parts (if any) of this contract related to \"Parties\" that should be reviewed by a lawyer. Details: The two or more parties who signed the contract",
+        "pair_id": "cuad_positive_09778",
+        "right_label": "Eurofarma Laborat\u00f3rios S.A.",
+        "source_family": "contract_document",
+        "source_id": "cuad_contract_understanding_atticus_dataset"
+      }
+    ],
+    "positive_pair_count": 24837,
+    "source_family_counts": {
+      "contract_document": 22500,
+      "financial_qa": 12500,
+      "financial_report": 15000
+    }
+  },
+  "label_limitations": [
+    "CUAD positives use expert answer spans as relevance evidence; negatives are cross-question hard negatives, not human-adjudicated nonmatches.",
+    "SEC positives use issuer alias/title variants; negatives use different issuers and should not be treated as legal entity resolution gold beyond public ticker metadata.",
+    "FiQA, Enron, and RVL-CDIP are source-locked or probed in this first run, but not used as labeled pairs unless a later qrel/OCR/mail-label builder is added."
+  ],
+  "manifest": {
+    "artifact_id": "formowl_kg_public_enterprise_benchmark_manifest_v1",
+    "manifest_sha256": "sha256:888b5cf17b9319b9e29c6bee9a5d3cb7a8a9f763e5240d048a118dab6b69609f",
+    "minimum_pair_count_for_model_selection": 10000,
+    "path": "experiments/kg_bert_ablation/public_enterprise_benchmark_manifest.json",
+    "recommended_pair_count_for_stakeholder_claim": 50000
+  },
+  "runs": [
+    {
+      "algorithm": "difflib_sequence_matcher_lexical_v1",
+      "latency_ms": 10171.713,
+      "metrics": {
+        "accuracy": 0.5225,
+        "f1": 0.080918,
+        "false_negative": 23786,
+        "false_positive": 89,
+        "precision": 0.92193,
+        "recall": 0.042316,
+        "true_negative": 25074,
+        "true_positive": 1051
+      },
+      "pair_result_sample": [
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_01724",
+          "predicted_same": false,
+          "score": 0.071429,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.071429,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_14964",
+          "predicted_same": false,
+          "score": 0.033684,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.033684,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_02294",
+          "predicted_same": false,
+          "score": 0.081395,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.081395,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_14007",
+          "predicted_same": false,
+          "score": 0.02087,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.02087,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_00088",
+          "predicted_same": false,
+          "score": 0.098847,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.098847,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_14169",
+          "predicted_same": false,
+          "score": 0.007067,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.007067,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_01931",
+          "predicted_same": false,
+          "score": 0.043845,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.043845,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_06737",
+          "predicted_same": false,
+          "score": 0.020513,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.020513,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_09925",
+          "predicted_same": false,
+          "score": 0.208333,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.208333,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_10888",
+          "predicted_same": false,
+          "score": 0.040323,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.040323,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_13700",
+          "predicted_same": false,
+          "score": 0.007105,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.007105,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_08525",
+          "predicted_same": false,
+          "score": 0.152047,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.152047,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_11753",
+          "predicted_same": false,
+          "score": 0.10929,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.10929,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_00338",
+          "predicted_same": false,
+          "score": 0.425532,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.425532,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_03664",
+          "predicted_same": false,
+          "score": 0.149813,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.149813,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_08446",
+          "predicted_same": false,
+          "score": 0.202985,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.202985,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_06675",
+          "predicted_same": false,
+          "score": 0.038278,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.038278,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_01241",
+          "predicted_same": false,
+          "score": 0.084337,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.084337,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_03584",
+          "predicted_same": false,
+          "score": 0.004608,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.004608,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_14072",
+          "predicted_same": false,
+          "score": 0.018416,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.018416,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_10243",
+          "predicted_same": false,
+          "score": 0.054217,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.054217,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_10436",
+          "predicted_same": false,
+          "score": 0.070588,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.070588,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_07383",
+          "predicted_same": false,
+          "score": 0.689655,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.689655,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_08644",
+          "predicted_same": false,
+          "score": 0.083832,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.083832,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_01354",
+          "predicted_same": false,
+          "score": 0.59375,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.59375,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_13128",
+          "predicted_same": false,
+          "score": 0.062385,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.062385,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_09688",
+          "predicted_same": false,
+          "score": 0.240143,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.240143,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_09753",
+          "predicted_same": false,
+          "score": 0.014706,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.014706,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_01902",
+          "predicted_same": false,
+          "score": 0.023952,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.023952,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_04356",
+          "predicted_same": false,
+          "score": 0.225243,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.225243,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_05804",
+          "predicted_same": false,
+          "score": 0.037997,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.037997,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_06407",
+          "predicted_same": false,
+          "score": 0.689655,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.689655,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_01744",
+          "predicted_same": false,
+          "score": 0.02139,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.02139,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_03111",
+          "predicted_same": false,
+          "score": 0.674699,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.674699,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_12509",
+          "predicted_same": false,
+          "score": 0.003484,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.003484,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_08458",
+          "predicted_same": false,
+          "score": 0.25,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.25,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_04111",
+          "predicted_same": false,
+          "score": 0.02805,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.02805,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_04141",
+          "predicted_same": false,
+          "score": 0.658228,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.658228,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_00300",
+          "predicted_same": false,
+          "score": 0.02509,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.02509,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_05056",
+          "predicted_same": false,
+          "score": 0.010733,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.010733,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_07986",
+          "predicted_same": false,
+          "score": 0.024331,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.024331,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_07538",
+          "predicted_same": false,
+          "score": 0.0,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.0,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_11916",
+          "predicted_same": false,
+          "score": 0.01626,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.01626,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_10365",
+          "predicted_same": false,
+          "score": 0.296578,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.296578,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_03647",
+          "predicted_same": false,
+          "score": 0.02473,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.02473,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_09638",
+          "predicted_same": true,
+          "score": 0.730769,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.730769,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_01775",
+          "predicted_same": false,
+          "score": 0.023669,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.023669,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_03414",
+          "predicted_same": false,
+          "score": 0.233333,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.233333,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_04117",
+          "predicted_same": false,
+          "score": 0.010033,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.010033,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_14996",
+          "predicted_same": false,
+          "score": 0.0,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.0,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_09166",
+          "predicted_same": false,
+          "score": 0.65,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.65,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_10028",
+          "predicted_same": false,
+          "score": 0.013491,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.013491,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_05909",
+          "predicted_same": false,
+          "score": 0.033195,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.033195,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_03709",
+          "predicted_same": false,
+          "score": 0.250804,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.250804,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_06871",
+          "predicted_same": false,
+          "score": 0.026756,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.026756,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_08041",
+          "predicted_same": false,
+          "score": 0.025,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.025,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_07034",
+          "predicted_same": false,
+          "score": 0.106346,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.106346,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_07574",
+          "predicted_same": false,
+          "score": 0.024064,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.024064,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_01791",
+          "predicted_same": false,
+          "score": 0.030435,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.030435,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_04451",
+          "predicted_same": false,
+          "score": 0.04157,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.04157,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_11969",
+          "predicted_same": false,
+          "score": 0.051282,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.051282,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_08285",
+          "predicted_same": false,
+          "score": 0.461538,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.461538,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_07602",
+          "predicted_same": false,
+          "score": 0.490566,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.490566,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_11240",
+          "predicted_same": false,
+          "score": 0.057627,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.057627,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_03885",
+          "predicted_same": false,
+          "score": 0.413793,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.413793,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_09755",
+          "predicted_same": false,
+          "score": 0.020134,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.020134,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_07116",
+          "predicted_same": false,
+          "score": 0.058608,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.058608,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_04376",
+          "predicted_same": false,
+          "score": 0.018484,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.018484,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_06247",
+          "predicted_same": false,
+          "score": 0.009868,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.009868,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_04086",
+          "predicted_same": false,
+          "score": 0.014388,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.014388,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_12760",
+          "predicted_same": false,
+          "score": 0.116564,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.116564,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_00931",
+          "predicted_same": false,
+          "score": 0.264339,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.264339,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_03403",
+          "predicted_same": false,
+          "score": 0.021116,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.021116,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_07105",
+          "predicted_same": false,
+          "score": 0.066667,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.066667,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_08960",
+          "predicted_same": false,
+          "score": 0.259259,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.259259,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_02089",
+          "predicted_same": false,
+          "score": 0.08,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.08,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_07682",
+          "predicted_same": false,
+          "score": 0.073359,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.073359,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_11176",
+          "predicted_same": false,
+          "score": 0.201342,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.201342,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_08754",
+          "predicted_same": false,
+          "score": 0.052709,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.052709,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_10318",
+          "predicted_same": false,
+          "score": 0.073684,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.073684,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_05103",
+          "predicted_same": false,
+          "score": 0.077348,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.077348,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_08122",
+          "predicted_same": false,
+          "score": 0.018416,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.018416,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_14712",
+          "predicted_same": false,
+          "score": 0.01105,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.01105,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_03876",
+          "predicted_same": false,
+          "score": 0.024331,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.024331,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_11672",
+          "predicted_same": false,
+          "score": 0.004124,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.004124,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_04547",
+          "predicted_same": false,
+          "score": 0.028777,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.028777,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_04067",
+          "predicted_same": false,
+          "score": 0.023881,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.023881,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_00830",
+          "predicted_same": false,
+          "score": 0.26087,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.26087,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_12284",
+          "predicted_same": false,
+          "score": 0.028289,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.028289,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_06723",
+          "predicted_same": false,
+          "score": 0.649351,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.649351,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_01076",
+          "predicted_same": false,
+          "score": 0.010309,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.010309,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_04970",
+          "predicted_same": false,
+          "score": 0.046243,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.046243,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_04636",
+          "predicted_same": false,
+          "score": 0.046189,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.046189,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_00510",
+          "predicted_same": false,
+          "score": 0.615385,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.615385,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_06322",
+          "predicted_same": false,
+          "score": 0.045082,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.045082,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_11338",
+          "predicted_same": false,
+          "score": 0.019934,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.019934,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_08119",
+          "predicted_same": false,
+          "score": 0.018349,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.018349,
+            "threshold": 0.7
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_09833",
+          "predicted_same": false,
+          "score": 0.36,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.36,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_07966",
+          "predicted_same": false,
+          "score": 0.628571,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.628571,
+            "threshold": 0.7
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_09778",
+          "predicted_same": false,
+          "score": 0.149733,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.149733,
+            "threshold": 0.7
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        }
+      ],
+      "pairs_per_second": 4915.59277,
+      "run_id": "public_enterprise_lexical_baseline_v1",
+      "status": "completed",
+      "threshold": 0.7,
+      "uses_neural_networks": false
+    },
+    {
+      "algorithm": "sentence_transformer_cosine_similarity_with_core_type_gate_v1",
+      "latency_breakdown_ms": {
+        "embedding": 567953.504,
+        "model_load": 204653.129,
+        "scoring": 10444.547
+      },
+      "latency_ms": 783070.479,
+      "metrics": {
+        "accuracy": 0.79986,
+        "f1": 0.758664,
+        "false_negative": 9108,
+        "false_positive": 899,
+        "precision": 0.945935,
+        "recall": 0.633289,
+        "true_negative": 24264,
+        "true_positive": 15729
+      },
+      "model_device": "cuda:0",
+      "model_name": "BAAI/bge-large-en-v1.5",
+      "package_status": {
+        "available": true,
+        "package_version": "3.3.1"
+      },
+      "pair_result_sample": [
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_01724",
+          "predicted_same": false,
+          "score": 0.524203,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.524203,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_14964",
+          "predicted_same": false,
+          "score": 0.596646,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.596646,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_02294",
+          "predicted_same": false,
+          "score": 0.38959,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.38959,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_14007",
+          "predicted_same": true,
+          "score": 0.674974,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.674974,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_00088",
+          "predicted_same": false,
+          "score": 0.596727,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.596727,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_14169",
+          "predicted_same": false,
+          "score": 0.388621,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.388621,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_01931",
+          "predicted_same": false,
+          "score": 0.618173,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.618173,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_06737",
+          "predicted_same": false,
+          "score": 0.51878,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.51878,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_09925",
+          "predicted_same": false,
+          "score": 0.54628,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.54628,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_10888",
+          "predicted_same": false,
+          "score": 0.560361,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.560361,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_13700",
+          "predicted_same": false,
+          "score": 0.521607,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.521607,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_08525",
+          "predicted_same": false,
+          "score": 0.497737,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.497737,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_11753",
+          "predicted_same": false,
+          "score": 0.488633,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.488633,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_00338",
+          "predicted_same": true,
+          "score": 0.758899,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.758899,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_03664",
+          "predicted_same": true,
+          "score": 0.635388,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.635388,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_08446",
+          "predicted_same": false,
+          "score": 0.566775,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.566775,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_06675",
+          "predicted_same": false,
+          "score": 0.573591,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.573591,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_01241",
+          "predicted_same": false,
+          "score": 0.437464,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.437464,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_03584",
+          "predicted_same": false,
+          "score": 0.57236,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.57236,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_14072",
+          "predicted_same": true,
+          "score": 0.763722,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.763722,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_10243",
+          "predicted_same": false,
+          "score": 0.437632,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.437632,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_10436",
+          "predicted_same": false,
+          "score": 0.413005,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.413005,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_07383",
+          "predicted_same": true,
+          "score": 0.889061,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.889061,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_08644",
+          "predicted_same": false,
+          "score": 0.458074,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.458074,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_01354",
+          "predicted_same": true,
+          "score": 0.817329,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.817329,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_13128",
+          "predicted_same": true,
+          "score": 0.829073,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.829073,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_09688",
+          "predicted_same": false,
+          "score": 0.562037,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.562037,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_09753",
+          "predicted_same": true,
+          "score": 0.70942,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.70942,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_01902",
+          "predicted_same": false,
+          "score": 0.375778,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.375778,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_04356",
+          "predicted_same": false,
+          "score": 0.540739,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.540739,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_05804",
+          "predicted_same": true,
+          "score": 0.723889,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.723889,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_06407",
+          "predicted_same": true,
+          "score": 0.782304,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.782304,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_01744",
+          "predicted_same": false,
+          "score": 0.472485,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.472485,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_03111",
+          "predicted_same": true,
+          "score": 0.847763,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.847763,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_12509",
+          "predicted_same": false,
+          "score": 0.512524,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.512524,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_08458",
+          "predicted_same": false,
+          "score": 0.521068,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.521068,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_04111",
+          "predicted_same": true,
+          "score": 0.641442,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.641442,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_04141",
+          "predicted_same": true,
+          "score": 0.813168,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.813168,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_00300",
+          "predicted_same": true,
+          "score": 0.683942,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.683942,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_05056",
+          "predicted_same": true,
+          "score": 0.720383,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.720383,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_07986",
+          "predicted_same": false,
+          "score": 0.503373,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.503373,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_07538",
+          "predicted_same": false,
+          "score": 0.456439,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.456439,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_11916",
+          "predicted_same": false,
+          "score": 0.588619,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.588619,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_10365",
+          "predicted_same": false,
+          "score": 0.406654,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.406654,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_03647",
+          "predicted_same": false,
+          "score": 0.424127,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.424127,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_09638",
+          "predicted_same": true,
+          "score": 0.85448,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.85448,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_01775",
+          "predicted_same": false,
+          "score": 0.511804,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.511804,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_03414",
+          "predicted_same": false,
+          "score": 0.470249,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.470249,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_04117",
+          "predicted_same": true,
+          "score": 0.692449,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.692449,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_14996",
+          "predicted_same": false,
+          "score": 0.597854,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.597854,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_09166",
+          "predicted_same": true,
+          "score": 0.836811,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.836811,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_10028",
+          "predicted_same": false,
+          "score": 0.410525,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.410525,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_05909",
+          "predicted_same": false,
+          "score": 0.583253,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.583253,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_03709",
+          "predicted_same": false,
+          "score": 0.369453,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.369453,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_06871",
+          "predicted_same": false,
+          "score": 0.582577,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.582577,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_08041",
+          "predicted_same": false,
+          "score": 0.559686,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.559686,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_07034",
+          "predicted_same": false,
+          "score": 0.540706,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.540706,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_07574",
+          "predicted_same": true,
+          "score": 0.669594,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.669594,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_01791",
+          "predicted_same": false,
+          "score": 0.414019,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.414019,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_04451",
+          "predicted_same": false,
+          "score": 0.486679,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.486679,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_11969",
+          "predicted_same": false,
+          "score": 0.484909,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.484909,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_08285",
+          "predicted_same": false,
+          "score": 0.557087,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.557087,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_07602",
+          "predicted_same": true,
+          "score": 0.76958,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.76958,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_11240",
+          "predicted_same": true,
+          "score": 0.779689,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.779689,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_03885",
+          "predicted_same": false,
+          "score": 0.478906,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.478906,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_09755",
+          "predicted_same": false,
+          "score": 0.450763,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.450763,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_07116",
+          "predicted_same": false,
+          "score": 0.424936,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.424936,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_04376",
+          "predicted_same": false,
+          "score": 0.500803,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.500803,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_06247",
+          "predicted_same": false,
+          "score": 0.503942,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.503942,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_04086",
+          "predicted_same": false,
+          "score": 0.554583,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.554583,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_12760",
+          "predicted_same": true,
+          "score": 0.774689,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.774689,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_00931",
+          "predicted_same": false,
+          "score": 0.416383,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.416383,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_03403",
+          "predicted_same": false,
+          "score": 0.616298,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.616298,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_07105",
+          "predicted_same": false,
+          "score": 0.417625,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.417625,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_08960",
+          "predicted_same": false,
+          "score": 0.517836,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.517836,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_02089",
+          "predicted_same": false,
+          "score": 0.497771,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.497771,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_07682",
+          "predicted_same": true,
+          "score": 0.673661,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.673661,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_11176",
+          "predicted_same": false,
+          "score": 0.539263,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.539263,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_08754",
+          "predicted_same": false,
+          "score": 0.607848,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.607848,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_10318",
+          "predicted_same": false,
+          "score": 0.403288,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.403288,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_05103",
+          "predicted_same": false,
+          "score": 0.420048,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.420048,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_08122",
+          "predicted_same": true,
+          "score": 0.775825,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.775825,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_14712",
+          "predicted_same": false,
+          "score": 0.485989,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.485989,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_03876",
+          "predicted_same": true,
+          "score": 0.62785,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.62785,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_11672",
+          "predicted_same": false,
+          "score": 0.466174,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.466174,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_04547",
+          "predicted_same": false,
+          "score": 0.425262,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.425262,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_04067",
+          "predicted_same": false,
+          "score": 0.462371,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.462371,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_00830",
+          "predicted_same": false,
+          "score": 0.47776,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.47776,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_12284",
+          "predicted_same": false,
+          "score": 0.522275,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.522275,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_06723",
+          "predicted_same": true,
+          "score": 0.808938,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.808938,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_01076",
+          "predicted_same": true,
+          "score": 0.643549,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.643549,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_04970",
+          "predicted_same": false,
+          "score": 0.421471,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.421471,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "fiqa_positive_04636",
+          "predicted_same": true,
+          "score": 0.747934,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_public_qrel_positive",
+            "score": 0.747934,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "sec_positive_00510",
+          "predicted_same": true,
+          "score": 0.755193,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_same_cik_ticker_title",
+            "score": 0.755193,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "cuad_negative_06322",
+          "predicted_same": false,
+          "score": 0.501245,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_cross_question_negative",
+            "score": 0.501245,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_11338",
+          "predicted_same": false,
+          "score": 0.419996,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.419996,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "fiqa_negative_08119",
+          "predicted_same": false,
+          "score": 0.477665,
+          "score_breakdown": {
+            "core_supertype": "FinancialAnswer",
+            "label_basis": "fiqa_non_qrel_deterministic_negative",
+            "score": 0.477665,
+            "threshold": 0.62
+          },
+          "source_family": "financial_qa",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_09833",
+          "predicted_same": false,
+          "score": 0.472693,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.472693,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "sec_negative_07966",
+          "predicted_same": true,
+          "score": 0.627898,
+          "score_breakdown": {
+            "core_supertype": "Organization",
+            "label_basis": "sec_different_cik_negative",
+            "score": 0.627898,
+            "threshold": 0.62
+          },
+          "source_family": "financial_report",
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "cuad_positive_09778",
+          "predicted_same": false,
+          "score": 0.381031,
+          "score_breakdown": {
+            "core_supertype": "Clause",
+            "label_basis": "cuad_expert_answer_span",
+            "score": 0.381031,
+            "threshold": 0.62
+          },
+          "source_family": "contract_document",
+          "status": "below_threshold"
+        }
+      ],
+      "pairs_per_second": 63.851213,
+      "run_id": "public_enterprise_bge_embedding_v1",
+      "status": "completed",
+      "threshold": 0.62,
+      "torch_status": {
+        "available": true,
+        "cuda_available": true,
+        "cuda_version": "12.6",
+        "device_count": 1,
+        "device_names": [
+          "NVIDIA GeForce GTX 1080 Ti"
+        ],
+        "package_version": "2.10.0+cu126"
+      },
+      "uses_neural_networks": true
+    }
+  ],
+  "source_locks": {
+    "artifact_id": "formowl_kg_public_benchmark_source_locks_v1",
+    "cache_policy": {
+      "raw_cache_committed_to_git": false,
+      "raw_cache_directory": ".formowl/kg-benchmark-cache"
+    },
+    "created_at": "2026-06-29T11:21:47+00:00",
+    "locks": {
+      "beir_fiqa_2018": {
+        "bytes": 17948027,
+        "cached_filename": "fiqa_beir.zip",
+        "sha256": "sha256:32c7df99ed21252fdfb2cf3f5673502a8d245ee0c44c4a133570d92ce2b3ad02",
+        "status": "cached",
+        "url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/fiqa.zip"
+      },
+      "beir_fiqa_2018_splits": {
+        "bytes": 157,
+        "json": {
+          "failed": [],
+          "pending": [],
+          "splits": [
+            {
+              "config": "corpus",
+              "dataset": "BeIR/fiqa",
+              "split": "corpus"
+            },
+            {
+              "config": "queries",
+              "dataset": "BeIR/fiqa",
+              "split": "queries"
+            }
+          ]
+        },
+        "sha256": "sha256:3ee57623d9cb71e3a2bab835ba98e3af2398f3b3bccddb946b7455e2a53725b3",
+        "status": "probed_json",
+        "url": "https://datasets-server.huggingface.co/splits?dataset=BeIR/fiqa"
+      },
+      "cuad_contract_understanding_atticus_dataset": {
+        "bytes": 18309308,
+        "cached_filename": "cuad_data.zip",
+        "sha256": "sha256:f8161d18bea4e9c05e78fa6dda61c19c846fb8087ea969c172753bc2f45b999a",
+        "status": "cached",
+        "url": "https://github.com/TheAtticusProject/cuad/raw/main/data.zip"
+      },
+      "enron_email_dataset_cmu": {
+        "content_length": "443254787",
+        "content_type": "application/x-gzip",
+        "status": "head_ok",
+        "url": "https://www.cs.cmu.edu/~enron/enron_mail_20150507.tar.gz"
+      },
+      "rvl_cdip_document_images": {
+        "content_length": "7002",
+        "content_type": "text/html; charset=utf-8",
+        "status": "head_ok",
+        "url": "https://adamharley.com/rvl-cdip/"
+      },
+      "sec_edgar_company_tickers": {
+        "bytes": 798068,
+        "cached_filename": "sec_company_tickers.json",
+        "sha256": "sha256:4308e05bc9e1bc891f5c0c7cdcfbedc43bb3ab1dc009f4d557c64301a764299e",
+        "status": "cached",
+        "url": "https://www.sec.gov/files/company_tickers.json"
+      }
+    }
+  },
+  "started_at": "2026-06-29T11:21:18+00:00"
+}

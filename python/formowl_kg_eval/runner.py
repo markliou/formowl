@@ -17,6 +17,8 @@ from typing import Any
 
 from formowl_graph import build_candidate_generation_capability_summary
 
+from .benchmarks import build_benchmark_summary
+
 
 KG_EVAL_COMMANDS: dict[str, str] = {
     "total": "kg_total_acceptance_suite.py",
@@ -97,12 +99,21 @@ def run_kg_eval_command(
         capture_output=True,
         text=True,
     )
+    repository_root = workspace.parents[1]
     return KGEvalCommandResult(
         command=command,
         script=script,
         returncode=completed.returncode,
-        stdout=completed.stdout,
-        stderr=completed.stderr,
+        stdout=_redact_local_paths(
+            completed.stdout,
+            repository_root=repository_root,
+            workspace=workspace,
+        ),
+        stderr=_redact_local_paths(
+            completed.stderr,
+            repository_root=repository_root,
+            workspace=workspace,
+        ),
     )
 
 
@@ -184,6 +195,7 @@ def build_acceptance_summary(*, repository_root: Path | str | None = None) -> di
             "total_acceptance_state": progress_summary.get("total_acceptance_state"),
         },
         "candidate_generation_capabilities": build_candidate_generation_capability_summary(),
+        "kg_benchmark_results": build_benchmark_summary(repository_root=repository_root),
         "integration_boundary": {
             "authoritative_workspace": ".formowl/kg-eval",
             "system_agent_should_call": "formowl-kg-eval summary",
@@ -198,3 +210,17 @@ def _dict_at(payload: dict[str, Any], key: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     return value
+
+
+def _redact_local_paths(
+    text: str,
+    *,
+    repository_root: Path,
+    workspace: Path,
+) -> str:
+    if not text:
+        return text
+    redacted = text
+    redacted = redacted.replace(str(workspace), ".formowl/kg-eval")
+    redacted = redacted.replace(str(repository_root), "<FORMOWL_REPOSITORY_ROOT>")
+    return redacted
