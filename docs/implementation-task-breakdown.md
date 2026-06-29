@@ -2101,6 +2101,31 @@ These groups can be split across multiple agents after Slice 1 is stable.
     fixed and re-reviewed.
   - Non-counted agents: none.
   - Active reviewers: none.
+- [x] Add local data resource folder ingestion MVP.
+  - Owner paths: `python/formowl_ingestion/folder_inbox.py`,
+    `tests/test_local_folder_ingestion.py`,
+    `docs/local-data-resource-inbox.md`, `README.md`, this file
+  - Proof: a trusted local folder scanner defers unstable files with zero
+    durable side effects; stable files register `Asset` records and managed
+    ObjectStore copies; configured extractors create `IngestionJob`,
+    `ExtractorRun`, and persisted `Observation` records; re-scans are
+    idempotent for assets and jobs; public scan reports expose only FormOwl ids,
+    governed locators, hashes, statuses, and counts.
+  - Note: completed as issue #9's generic trusted folder inbox MVP. The scanner
+    uses caller-held stability snapshots before durable writes, registers stable
+    files as normal assets, creates idempotent ingestion jobs, can run the
+    deterministic `.txt` / `.md` text extractor, persists extractor runs and
+    observations, and returns a public report that omits trusted folder paths,
+    source filenames, ObjectStore roots, parser-local paths, and internal
+    stability tokens. Dev-container verification passed: focused
+    `test_local_folder_ingestion.py` ran 10 OK, focused
+    `test_ingestion_package.py` ran 1 OK, Ruff check/format-check passed for
+    `python`, `tests`, and `scripts`, and full
+    `python -m unittest discover -s tests` ran 326 OK. Reviewer gate passed 3/3
+    with `folder_inbox_gate_engineering_v2`,
+    `folder_inbox_gate_safety_v2`, and `folder_inbox_gate_release_v3`; the
+    safety reviewer blocker about public `source_file_token` exposure was fixed
+    and re-reviewed.
 - [ ] Add database-backed stores after file-backed stores stabilize.
   - Owner paths: storage modules, migrations
   - Proof: tests run against file stores and database stores through the same

@@ -46,9 +46,9 @@ gateway, and public tool schemas/error envelopes for the current gateway
 surface, and retrieval gateway completion for governed evidence/raw-asset
 access, plus storage backend registry configuration for local-first and
 metadata-only object-store descriptors, worker execution, PostgreSQL-backed
-ingestion record stores, and the closed-beta readiness smoke. The next
-backbone focus should move to the remaining closed-beta blockers without
-claiming production readiness.
+ingestion record stores, the closed-beta readiness smoke, and the local data
+resource folder ingestion MVP. The next backbone focus should move to the
+remaining closed-beta blockers without claiming production readiness.
 
 ## Current Status
 
@@ -105,6 +105,17 @@ automatic publishing, raw asset content access, canonical graph writes, or mail
 adapter readiness. Its implementation, dev-container verification, and
 user-authorized 3-reviewer test-hardening gate are complete.
 
+The local data resource folder ingestion MVP now provides a trusted internal
+folder scanner for issue #9. It uses caller-held stability snapshots before any
+durable writes, registers stable files as normal FormOwl assets, creates
+idempotent ingestion jobs, can run configured deterministic `.txt` / `.md`
+extraction through the existing plain-text extractor, persists extractor runs
+and observations, and returns a safe public scan report without trusted folder
+paths, source filenames, object-store roots, parser-local paths, or internal
+stability tokens. This is generic infrastructure only; it does not implement
+mail parsing, financial reconciliation, canonical graph writes, or wiki
+publishing.
+
 ## Owner Paths
 
 - `python/formowl_project_mcp/adapters/openproject/`
@@ -119,6 +130,9 @@ user-authorized 3-reviewer test-hardening gate are complete.
 - `scripts/closed_beta_smoke.py`
 - `tests/test_closed_beta_smoke_script.py`
 - `docs/closed-beta-runbook.md`
+- `python/formowl_ingestion/folder_inbox.py`
+- `tests/test_local_folder_ingestion.py`
+- `docs/local-data-resource-inbox.md`
 - `docs/implementation-task-breakdown.md`
 - `README.md`
 
@@ -138,6 +152,9 @@ user-authorized 3-reviewer test-hardening gate are complete.
 - Closed-beta smoke passes in the dev container while preserving proposal-only
   publishing, raw/internal leak guards, governed raw-asset references, KG-eval
   facade boundaries, and no canonical graph writes.
+- Local folder inbox MVP passes focused and full dev-container checks, defers
+  unstable files with zero durable side effects, keeps public scan output
+  redacted, and passes the default 3-reviewer gate.
 
 Canonical verification commands:
 
@@ -195,6 +212,15 @@ Latest verification:
   `closed_beta_reviewer_engineering`, `closed_beta_reviewer_safety`, and
   `closed_beta_reviewer_release` after accepted validation/status findings were
   fixed and re-reviewed.
+- Local folder inbox focused tests: 10 tests OK.
+- Ingestion package export regression after folder inbox export: 1 test OK.
+- Ruff check and format-check for `python`, `tests`, and `scripts`: passed.
+- Full canonical dev-container suite after local folder inbox slice:
+  326 tests OK.
+- Local folder inbox 3-reviewer gate: passed 3/3 with
+  `folder_inbox_gate_engineering_v2`, `folder_inbox_gate_safety_v2`, and
+  `folder_inbox_gate_release_v3`; the safety blocker about public
+  `source_file_token` exposure was fixed and re-reviewed.
 
 ## Known Blockers And Dependencies
 
@@ -209,18 +235,19 @@ Latest verification:
 
 ## Last Verified Commit And Branch
 
-- Branch: `closed-beta-readiness`
-- Base remote commit: `4525aa1`
-- Canonical dev-container verification passed after the closed-beta smoke
+- Branch: `local-folder-ingestion-mvp`
+- Base remote commit: `d0942c5`
+- Canonical dev-container verification passed after the local folder inbox
   slice.
 
 ## Next Action
 
-Pick the next unchecked System Backbone work-board item that materially moves
-closed beta forward. The strongest next candidates are the backend-specific
-wiki adapter behind proposal-only publishing and the remaining database-backed
-store/live adapter evidence. Do not start the mail adapter / issue #5 work
-until the PM schedule assigns it.
+Push the local folder inbox branch and open the main PR if not already done,
+then pick the next unchecked System Backbone work-board item that materially
+moves closed beta forward. The strongest next candidates are the
+backend-specific wiki adapter behind proposal-only publishing and the remaining
+database-backed store/live adapter evidence. Do not start the mail adapter /
+issue #5 work until the PM schedule assigns it.
 
 ## Handoff Notes For KG Research Agent
 

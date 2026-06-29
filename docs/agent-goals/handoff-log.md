@@ -1221,3 +1221,22 @@ status in each role's goal file and task completion in
   `closed_beta_reviewer_release` all returned `RELEASE_DECISION: AGREE` after
   validation/status blockers were fixed and re-reviewed. The closed-beta smoke
   work-board item is checked complete.
+- 2026-06-29 System Backbone local folder inbox MVP:
+  completed issue #9 on branch `local-folder-ingestion-mvp` with
+  `python/formowl_ingestion/folder_inbox.py`,
+  `tests/test_local_folder_ingestion.py`, and
+  `docs/local-data-resource-inbox.md`. The scanner uses caller-held stability
+  snapshots before durable writes, defers unstable files with zero asset,
+  object, job, run, observation, or audit side effects, registers stable files
+  as normal assets, creates idempotent ingestion jobs, can run the configured
+  deterministic text extractor, and returns a public scan report without raw
+  folder paths, source filenames, object-store roots, parser-local paths, or
+  internal stability tokens. This is generic infrastructure only; mail parsing
+  and financial reconciliation remain future consumers. Dev-container
+  verification passed: local folder focused tests 10 OK, ingestion package
+  export regression 1 OK, Ruff check/format-check passed, and full
+  `python -m unittest discover -s tests` ran 326 OK. The default 3-reviewer
+  gate passed with `folder_inbox_gate_engineering_v2`,
+  `folder_inbox_gate_safety_v2`, and `folder_inbox_gate_release_v3`; the
+  safety blocker about public `source_file_token` exposure was fixed and
+  re-reviewed.

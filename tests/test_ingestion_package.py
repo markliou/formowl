@@ -13,6 +13,7 @@ class IngestionPackageTests(unittest.TestCase):
             chatgpt,
             extraction,
             extractors,
+            folder_inbox,
             jobs,
             observations,
             storage,
@@ -26,6 +27,7 @@ class IngestionPackageTests(unittest.TestCase):
                 "chatgpt",
                 "extraction",
                 "extractors",
+                "folder_inbox",
                 "jobs",
                 "observations",
                 "storage",
@@ -63,6 +65,15 @@ class IngestionPackageTests(unittest.TestCase):
                 "FixtureOcrExtractor",
                 "FixtureVideoSceneExtractor",
                 "PlainTextObservationExtractor",
+            ],
+        )
+        self.assertEqual(
+            folder_inbox.__all__,
+            [
+                "FolderFileStabilitySnapshot",
+                "FolderInboxItemResult",
+                "FolderInboxScanResult",
+                "scan_local_data_resource_folder",
             ],
         )
         self.assertEqual(jobs.__all__, ["create_ingestion_job", "run_ingestion_job"])
