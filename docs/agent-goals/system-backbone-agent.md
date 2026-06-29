@@ -102,7 +102,8 @@ redaction, worker ingestion, observation-to-wiki draft bridging, governed
 retrieval grant checks and raw-asset references, and the packaged KG-eval
 facade. It does not claim production readiness, live database readiness,
 automatic publishing, raw asset content access, canonical graph writes, or mail
-adapter readiness.
+adapter readiness. Its implementation, dev-container verification, and
+user-authorized 3-reviewer test-hardening gate are complete.
 
 ## Owner Paths
 
@@ -183,13 +184,17 @@ Latest verification:
 - PostgreSQL ingestion store touched-file Ruff check and format check: passed.
 - Full canonical dev-container suite after PostgreSQL ingestion store slice:
   302 tests OK.
-- Closed-beta smoke focused tests: 7 tests OK.
+- Closed-beta smoke focused tests: 14 tests OK.
 - Closed-beta smoke CLI:
   `python scripts/closed_beta_smoke.py --output /tmp/formowl-closed-beta-smoke.json`
   exited 0 in the dev container.
 - Ruff check and format check for `python`, `tests`, and `scripts`: passed.
 - Full canonical dev-container suite after closed-beta smoke slice:
-  309 tests OK.
+  316 tests OK.
+- Closed-beta smoke 3-reviewer test-hardening gate: passed 3/3 with
+  `closed_beta_reviewer_engineering`, `closed_beta_reviewer_safety`, and
+  `closed_beta_reviewer_release` after accepted validation/status findings were
+  fixed and re-reviewed.
 
 ## Known Blockers And Dependencies
 

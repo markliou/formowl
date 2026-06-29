@@ -163,6 +163,26 @@ FORBIDDEN_VALUE_PATTERNS = (
     re.compile(r"\b(select|with|copy|insert|update|delete|drop|alter)\b\s+", re.IGNORECASE),
     re.compile(r"\bTraceback \(most recent call last\):", re.IGNORECASE),
 )
+_SHA256_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
+_SAFE_RAW_ASSET_REF_KEYS = {
+    "source_type",
+    "source_id",
+    "asset_locator",
+    "access",
+    "content_returned",
+}
+_SAFE_JSONRPC_OUTPUT_KEYS = {
+    "project_server",
+    "project_tool_count",
+    "project_context_status",
+    "project_evidence_snapshot_count",
+    "wiki_server",
+    "wiki_draft_status",
+    "wiki_draft_id",
+    "publish_status",
+    "transcript_entry_count",
+}
+_EXPECTED_KG_EVAL_COMMANDS = {"total", "objective", "preflight", "work-orders", "progress"}
 
 
 def sha256_file(path: Path) -> str:
@@ -350,12 +370,20 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
         blockers.append("retrieval did not expose granted evidence snippets")
     if metrics.get("raw_asset_ref_count", 0) < 1:
         blockers.append("raw-asset reference payload was not exercised")
+    if not _raw_asset_refs_are_safe(safe_outputs):
+        blockers.append("raw-asset references are unsafe or returned content")
+    if not _wiki_publish_output_is_proposal_only(safe_outputs):
+        blockers.append("wiki publish output is not proposal-only")
     if metrics.get("jsonrpc_transcript_entry_count", 0) < 5:
         blockers.append("JSON-RPC transcript coverage was too small")
     if metrics.get("kg_eval_remaining_gate_count") not in {0, "0"}:
         blockers.append("KG-eval facade reports remaining gates")
+    if not _kg_eval_output_is_clear(safe_outputs):
+        blockers.append("KG-eval safe output does not support closed-beta gate")
     if metrics.get("canonical_artifact_unexpected_count", 0) != 0:
         blockers.append("unexpected canonical graph artifact was written")
+    if not _canonical_inventory_is_clean(safe_outputs):
+        blockers.append("canonical artifact inventory is not clean")
     try:
         validate_public_gateway_payload(safe_outputs)
     except Exception:
@@ -858,7 +886,14 @@ def _tool_envelope(response: dict[str, Any]) -> dict[str, Any]:
 
 def _hash_only_transcripts(entries: list[dict[str, Any]]) -> bool:
     expected = {"method", "request_hash", "response_hash", "status"}
-    return bool(entries) and all(set(entry) == expected for entry in entries)
+    return bool(entries) and all(
+        set(entry) == expected
+        and _safe_public_text(entry["method"])
+        and _safe_public_text(entry["status"])
+        and _is_sha256_digest(entry["request_hash"])
+        and _is_sha256_digest(entry["response_hash"])
+        for entry in entries
+    )
 
 
 def _wiki_draft_is_draft(envelope: dict[str, Any]) -> bool:
@@ -888,6 +923,84 @@ def _unexpected_canonical_artifact_paths(paths: list[str]) -> list[str]:
         if any(marker in part for part in parts for marker in markers):
             unexpected.append(path)
     return unexpected
+
+
+def _raw_asset_refs_are_safe(report_or_outputs: dict[str, Any]) -> bool:
+    outputs = report_or_outputs.get("safe_outputs", report_or_outputs)
+    retrieval = outputs.get("retrieval", {})
+    refs = retrieval.get("raw_asset_refs", [])
+    if not isinstance(refs, list) or not refs:
+        return False
+    for ref in refs:
+        if not isinstance(ref, dict) or set(ref) != _SAFE_RAW_ASSET_REF_KEYS:
+            return False
+        if ref.get("source_type") != "observation":
+            return False
+        if not _safe_public_text(ref.get("source_id")):
+            return False
+        if not _safe_formowl_asset_locator(ref.get("asset_locator")):
+            return False
+        if ref.get("access") != "explicit_grant_required":
+            return False
+        if ref.get("content_returned") is not False:
+            return False
+    return True
+
+
+def _canonical_inventory_is_clean(report_or_outputs: dict[str, Any]) -> bool:
+    outputs = report_or_outputs.get("safe_outputs", report_or_outputs)
+    state = outputs.get("state_verification", {})
+    return (
+        isinstance(state, dict)
+        and state.get("canonical_artifact_unexpected_count") == 0
+        and state.get("canonical_artifact_unexpected_paths") == []
+    )
+
+
+def _wiki_publish_output_is_proposal_only(report_or_outputs: dict[str, Any]) -> bool:
+    outputs = report_or_outputs.get("safe_outputs", report_or_outputs)
+    jsonrpc = outputs.get("jsonrpc", {})
+    return (
+        isinstance(jsonrpc, dict)
+        and set(jsonrpc) == _SAFE_JSONRPC_OUTPUT_KEYS
+        and jsonrpc.get("publish_status") == "pending_review"
+    )
+
+
+def _kg_eval_output_is_clear(report_or_outputs: dict[str, Any]) -> bool:
+    outputs = report_or_outputs.get("safe_outputs", report_or_outputs)
+    kg_eval = outputs.get("kg_eval", {})
+    if not isinstance(kg_eval, dict):
+        return False
+    returncodes = kg_eval.get("command_returncodes", {})
+    return (
+        kg_eval.get("artifact_id") == "formowl_kg_eval_acceptance_summary_v1"
+        and isinstance(returncodes, dict)
+        and set(returncodes) == _EXPECTED_KG_EVAL_COMMANDS
+        and all(code == 0 for code in returncodes.values())
+        and kg_eval.get("remaining_gate_count") == 0
+        and kg_eval.get("system_agent_should_call") == "formowl-kg-eval summary"
+        and kg_eval.get("raw_backend_surfaces_exposed") is False
+    )
+
+
+def _safe_formowl_asset_locator(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and re.fullmatch(
+            r"formowl://asset/[A-Za-z0-9][A-Za-z0-9_.-]*",
+            value,
+        )
+        is not None
+    )
+
+
+def _is_sha256_digest(value: Any) -> bool:
+    return isinstance(value, str) and _SHA256_DIGEST.fullmatch(value) is not None
+
+
+def _safe_public_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value) and not _contains_forbidden_text(value)
 
 
 def _is_containerized() -> bool:

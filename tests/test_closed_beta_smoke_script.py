@@ -115,6 +115,21 @@ class ClosedBetaSmokeScriptTests(unittest.TestCase):
             validation["blockers"],
         )
 
+    def test_report_rejects_raw_asset_payload_even_when_metrics_claim_safe(self) -> None:
+        smoke = _load_smoke_module()
+        report = copy.deepcopy(_valid_report())
+        report["safe_outputs"]["retrieval"]["raw_asset_refs"][0]["content"] = (
+            "raw fixture body must not be public"
+        )
+
+        validation = smoke.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn(
+            "raw-asset references are unsafe or returned content",
+            validation["blockers"],
+        )
+
     def test_report_rejects_kg_facade_drift_or_remaining_gate(self) -> None:
         smoke = _load_smoke_module()
         report = copy.deepcopy(_valid_report())
@@ -137,6 +152,64 @@ class ClosedBetaSmokeScriptTests(unittest.TestCase):
             validation["blockers"],
         )
         self.assertIn("KG-eval facade reports remaining gates", validation["blockers"])
+
+    def test_report_rejects_failed_kg_output_even_when_metrics_claim_safe(self) -> None:
+        smoke = _load_smoke_module()
+        report = copy.deepcopy(_valid_report())
+        report["safe_outputs"]["kg_eval"]["command_returncodes"]["total"] = 1
+        report["safe_outputs"]["kg_eval"]["remaining_gate_count"] = 1
+        report["safe_outputs"]["kg_eval"]["total_acceptance_overall_passed"] = False
+
+        validation = smoke.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn(
+            "KG-eval safe output does not support closed-beta gate",
+            validation["blockers"],
+        )
+
+    def test_report_rejects_incomplete_kg_command_map_even_when_metrics_claim_safe(
+        self,
+    ) -> None:
+        smoke = _load_smoke_module()
+        report = copy.deepcopy(_valid_report())
+        del report["safe_outputs"]["kg_eval"]["command_returncodes"]["objective"]
+
+        validation = smoke.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn(
+            "KG-eval safe output does not support closed-beta gate",
+            validation["blockers"],
+        )
+
+    def test_report_rejects_non_proposal_publish_even_when_metrics_claim_safe(self) -> None:
+        smoke = _load_smoke_module()
+        report = copy.deepcopy(_valid_report())
+        report["safe_outputs"]["jsonrpc"]["publish_status"] = "ok"
+
+        validation = smoke.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn(
+            "wiki publish output is not proposal-only",
+            validation["blockers"],
+        )
+
+    def test_report_rejects_publish_artifact_fields_even_when_status_is_pending(
+        self,
+    ) -> None:
+        smoke = _load_smoke_module()
+        report = copy.deepcopy(_valid_report())
+        report["safe_outputs"]["jsonrpc"]["published_at"] = "2026-06-29T00:00:00+00:00"
+
+        validation = smoke.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn(
+            "wiki publish output is not proposal-only",
+            validation["blockers"],
+        )
 
     def test_report_rejects_canonical_artifact_inventory(self) -> None:
         smoke = _load_smoke_module()
@@ -163,6 +236,49 @@ class ClosedBetaSmokeScriptTests(unittest.TestCase):
         self.assertIn(
             "unexpected canonical graph artifact was written",
             validation["blockers"],
+        )
+
+    def test_report_rejects_canonical_inventory_even_when_metric_claims_clean(
+        self,
+    ) -> None:
+        smoke = _load_smoke_module()
+        report = copy.deepcopy(_valid_report())
+        report["safe_outputs"]["state_verification"]["canonical_artifact_unexpected_count"] = 1
+        report["safe_outputs"]["state_verification"]["canonical_artifact_unexpected_paths"] = [
+            "graph/canonical-commits/commit_001.json"
+        ]
+
+        validation = smoke.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn("canonical artifact inventory is not clean", validation["blockers"])
+
+    def test_hash_only_transcript_requires_sha256_digest_values(self) -> None:
+        smoke = _load_smoke_module()
+
+        self.assertTrue(
+            smoke._hash_only_transcripts(
+                [
+                    {
+                        "method": "tools/call",
+                        "request_hash": "sha256:" + ("a" * 64),
+                        "response_hash": "sha256:" + ("b" * 64),
+                        "status": "ok",
+                    }
+                ]
+            )
+        )
+        self.assertFalse(
+            smoke._hash_only_transcripts(
+                [
+                    {
+                        "method": "tools/call",
+                        "request_hash": "not-a-hash",
+                        "response_hash": "sha256:" + ("b" * 64),
+                        "status": "ok",
+                    }
+                ]
+            )
         )
 
 

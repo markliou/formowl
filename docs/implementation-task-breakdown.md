@@ -2088,10 +2088,19 @@ These groups can be split across multiple agents after Slice 1 is stable.
     claiming production readiness, live database readiness, automatic
     publishing, raw asset content access, canonical graph writes, or mail
     adapter readiness. Dev-container verification passed: focused
-    `test_closed_beta_smoke_script.py` ran 7 OK; `python
+    `test_closed_beta_smoke_script.py` ran 14 OK; `python
     scripts/closed_beta_smoke.py --output /tmp/formowl-closed-beta-smoke.json`
     exited 0; Ruff check and format-check passed for `python`, `tests`, and
-    `scripts`; full `python -m unittest discover -s tests` ran 309 OK.
+    `scripts`; full `python -m unittest discover -s tests` ran 316 OK.
+  - Reviewer gate status: passed user-authorized 3-reviewer test-hardening
+    gate.
+  - Effective reviewer count: 3/3.
+  - Reviewer agreement count: 3/3 (`closed_beta_reviewer_engineering`,
+    `closed_beta_reviewer_safety`, `closed_beta_reviewer_release`).
+  - Reviewers with blocking findings: none remaining; accepted findings were
+    fixed and re-reviewed.
+  - Non-counted agents: none.
+  - Active reviewers: none.
 - [ ] Add database-backed stores after file-backed stores stabilize.
   - Owner paths: storage modules, migrations
   - Proof: tests run against file stores and database stores through the same

@@ -1212,7 +1212,12 @@ status in each role's goal file and task completion in
   raw-asset references, and the packaged KG-eval facade. It explicitly does
   not claim production readiness, live database readiness, automatic
   publishing, raw asset content access, canonical graph writes, or mail adapter
-  readiness. Dev-container verification passed: focused closed-beta smoke
-  tests 7 OK; smoke CLI exited 0; Ruff check and format-check passed for
+  readiness. Dev-container verification passed after reviewer-driven
+  validation hardening: focused closed-beta smoke tests 14 OK; smoke CLI exited
+  0; Ruff check and format-check passed for
   `python`, `tests`, and `scripts`; full `python -m unittest discover -s tests`
-  ran 309 OK. The closed-beta smoke work-board item is checked complete.
+  ran 316 OK. The user-authorized 3-reviewer test-hardening gate passed 3/3:
+  `closed_beta_reviewer_engineering`, `closed_beta_reviewer_safety`, and
+  `closed_beta_reviewer_release` all returned `RELEASE_DECISION: AGREE` after
+  validation/status blockers were fixed and re-reviewed. The closed-beta smoke
+  work-board item is checked complete.

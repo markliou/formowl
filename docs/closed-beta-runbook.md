@@ -50,6 +50,11 @@ The command writes:
 The report path is inside the container and is intended for immediate operator
 inspection, not as a tracked completion artifact.
 
+The smoke also refreshes the ignored KG-eval runtime reports under
+`.formowl/kg-eval/results/` through the packaged `formowl_kg_eval` facade
+before loading the redacted summary. Those reports are generated validation
+state, not tracked product artifacts.
+
 ## Pass Criteria
 
 The smoke passes only when all of these are true:
