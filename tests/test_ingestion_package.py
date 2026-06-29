@@ -13,6 +13,7 @@ class IngestionPackageTests(unittest.TestCase):
             chatgpt,
             extraction,
             extractors,
+            folder_inbox,
             jobs,
             observations,
             storage,
@@ -26,6 +27,7 @@ class IngestionPackageTests(unittest.TestCase):
                 "chatgpt",
                 "extraction",
                 "extractors",
+                "folder_inbox",
                 "jobs",
                 "observations",
                 "storage",
@@ -65,6 +67,15 @@ class IngestionPackageTests(unittest.TestCase):
                 "PlainTextObservationExtractor",
             ],
         )
+        self.assertEqual(
+            folder_inbox.__all__,
+            [
+                "FolderFileStabilitySnapshot",
+                "FolderInboxItemResult",
+                "FolderInboxScanResult",
+                "scan_local_data_resource_folder",
+            ],
+        )
         self.assertEqual(jobs.__all__, ["create_ingestion_job", "run_ingestion_job"])
         self.assertEqual(observations.__all__, ["build_context_package_from_text_observations"])
         self.assertEqual(
@@ -75,9 +86,19 @@ class IngestionPackageTests(unittest.TestCase):
                 "FileObjectStore",
                 "JobStore",
                 "ObservationStore",
+                "PostgreSQLAssetStore",
+                "PostgreSQLExtractorRunStore",
+                "PostgreSQLJobStore",
+                "PostgreSQLObservationStore",
+                "PostgreSQLUploadSessionStore",
+                "StorageBackendConfig",
                 "StoredObject",
                 "StorageBackendRegistry",
                 "UploadSessionStore",
+                "configure_storage_backend_registry",
+                "configure_storage_backend_registry_from_env",
+                "load_storage_backend_configs_from_env",
+                "postgre_sql_ingestion_store_interfaces",
             ],
         )
         self.assertEqual(uploads.__all__, ["create_upload_session", "upload_asset_reference"])

@@ -1270,3 +1270,133 @@ status in each role's goal file and task completion in
   command stdout/stderr, and documenting raw command output as developer
   diagnostic only; `Chandrasekhar` agreed on research-method accuracy and
   claim limits.
+- 2026-06-29 System Backbone resume after Docker update and KG merge: pulled
+  and fast-forwarded `origin/complete-slice-1` to `9ba1528`, applied the
+  pre-merge local stash, and resolved shared conflict files by keeping the
+  merged upstream versions so KG/contract/wiki work from the other agent is not
+  overwritten. The active backbone slice is real OpenProject adapter
+  completion. Implementation and the user-requested 6/6 reviewer gate are
+  locally present, but the work-board item remains unchecked pending focused
+  and full canonical dev-container verification against the merged tree.
+  Untracked `.test-tmp-resume/` host artifacts and stale pre-merge graph/wiki
+  files should be separated from this OpenProject completion claim.
+- 2026-06-29 System Backbone Project MCP adapter milestone complete: after the
+  user clarified that OpenProject is only a FormOwl subcomponent, the
+  work-board language was tightened to treat it as the Project MCP
+  real-backend adapter milestone, not the whole FormOwl plan. Canonical
+  dev-container verification passed: focused adapter tests ran 22 OK,
+  OpenProject slice Ruff check and format check passed, and the full
+  `python -m unittest discover -s tests` suite ran 278 OK. The next System
+  Backbone focus should return to FormOwl-wide plumbing, especially Project/Wiki
+  MCP JSON-RPC compatibility or gateway coverage, tool schemas/error envelopes,
+  retrieval completion, storage configuration, worker boundaries, and
+  database-backed stores. Stale untracked pre-merge graph/wiki test artifacts
+  that caused discovery import failures were removed.
+- 2026-06-29 System Backbone JSON-RPC compatibility milestone complete:
+  `McpServerJsonRpcGateway` now wraps existing Project MCP and Wiki MCP server
+  objects through JSON-RPC 2.0 `initialize`, `tools/list`, and `tools/call`
+  without rewriting their tool behavior. Tests cover Project context snapshot
+  creation, Wiki draft generation, proposal-only wiki publish, session context,
+  hash-only transcripts, and raw/internal payload rejection before tool side
+  effects. Dev-container verification passed: Project/Wiki JSON-RPC focused
+  tests 4 OK, semantic JSON-RPC focused tests 5 OK, and gateway Ruff
+  check/format check passed. Full canonical unittest after this change ran
+  282 OK. The next System Backbone target should be public tool schemas and
+  safe error envelopes across upload, ingestion, observation, candidate graph,
+  access, and wiki projection workflows.
+- 2026-06-29 System Backbone public schema/error-envelope milestone:
+  `python/formowl_gateway/semantic.py` now exposes public workflow schemas for
+  upload, ingestion, observation listing, candidate graph, access, and wiki
+  projection. `safe_workflow_error_envelope` and the pending-review workflow
+  stubs keep unconfigured handlers inside `McpResultEnvelope` outputs without
+  echoing raw paths, SQL, worker scratch strings, or backend internals. Focused
+  dev-container verification passed: semantic gateway tests 8 OK, semantic
+  JSON-RPC tests 5 OK, Project/Wiki JSON-RPC regression tests 4 OK, and gateway
+  Ruff check/format check passed. Full canonical unittest after this change ran
+  283 OK. Next backbone target: complete retrieval gateway raw-asset/evidence
+  flow through governed FormOwl locators and permission checks.
+- 2026-06-29 System Backbone retrieval gateway milestone: completed the
+  governed raw-asset/evidence retrieval path in `python/formowl_retrieval/`.
+  Raw-asset mode still requires explicit `asset_scoped_access`, returns
+  `content_returned=false`, and now emits only safe `formowl://asset/...`
+  locators through `RawAssetLocatorResolver` / `MetadataRawAssetLocatorResolver`.
+  Unsafe locator values and resolver failures are redacted without echoing raw
+  paths or backend internals. Dev-container verification passed: retrieval
+  gateway tests 8 OK, retrieval Ruff check/format check passed, and the full
+  `python -m unittest discover -s tests` suite ran 286 OK. Next backbone
+  targets are storage backend registry configuration, worker execution
+  boundaries, and database-backed stores.
+- 2026-06-29 System Backbone storage backend registry configuration:
+  completed `python/formowl_ingestion/storage/config.py` and public exports for
+  local-first registry setup plus metadata-only MinIO/S3-compatible
+  descriptors. Configuration can load from env or structured JSON descriptors,
+  keeps local roots/internal endpoints/private adapter metadata out of public
+  MCP-facing backend envelopes, rejects secret-like registry config, and
+  requires explicit stable backend ids for non-local descriptors so future
+  object-store adapters can be added without changing asset contract ids.
+  Dev-container verification passed: storage registry focused tests 7 OK,
+  ingestion package export regression 1 OK, changed-file Ruff check/format
+  check passed, and the full `python -m unittest discover -s tests` suite ran
+  289 OK. Next backbone target: worker execution boundary.
+- 2026-06-29 System Backbone ingestion worker boundary: added
+  `python/formowl_worker/` with an `IngestionWorker` that pulls pending
+  `IngestionJob` records from the existing `JobStore`, respects storage
+  backend `allowed_workers`, and runs jobs through the existing
+  `run_ingestion_job` transition path without adding lease fields or changing
+  the job record contract. Worker result summaries avoid raw source paths,
+  object roots, and worker scratch internals. Dev-container verification
+  passed: worker focused tests 3 OK, worker Ruff check/format check passed,
+  and the full `python -m unittest discover -s tests` suite ran 292 OK. Next
+  backbone target: database-backed stores behind the existing file-store
+  interfaces.
+- 2026-06-29 System Backbone PostgreSQL ingestion-store contract slice:
+  added `python/formowl_ingestion/storage/postgres.py` plus migration
+  `003_ingestion_records.sql` for database-backed `AssetStore`, `JobStore`,
+  `ExtractorRunStore`, `ObservationStore`, and `UploadSessionStore`
+  create/get/list surfaces over the internal connection protocol. The slice
+  uses parameterized SQL, validated contract payloads, safe record ids, scope
+  and asset indexes, and `PostgreSQLUnitOfWork` rollback behavior under mocked
+  connection tests. It does not expose database controls through MCP and does
+  not claim live PostgreSQL readiness. Dev-container verification passed:
+  focused `test_postgres*.py` ran 20 OK, ingestion package export regression
+  ran 1 OK, touched-file Ruff check/format check passed, and full
+  `python -m unittest discover -s tests` ran 302 OK. The database-backed
+  stores work-board item remains unchecked pending remaining repository and
+  production end-to-end adapter evidence.
+- 2026-06-29 System Backbone closed-beta readiness smoke:
+  added `scripts/closed_beta_smoke.py`, `tests/test_closed_beta_smoke_script.py`,
+  and `docs/closed-beta-runbook.md`. The smoke uses synthetic fixtures to
+  validate the trusted internal closed-beta backbone path through Project/Wiki
+  JSON-RPC, storage backend public-envelope redaction, worker ingestion,
+  observation-to-wiki draft bridging, governed retrieval grant checks and
+  raw-asset references, and the packaged KG-eval facade. It explicitly does
+  not claim production readiness, live database readiness, automatic
+  publishing, raw asset content access, canonical graph writes, or mail adapter
+  readiness. Dev-container verification passed after reviewer-driven
+  validation hardening: focused closed-beta smoke tests 14 OK; smoke CLI exited
+  0; Ruff check and format-check passed for
+  `python`, `tests`, and `scripts`; full `python -m unittest discover -s tests`
+  ran 316 OK. The user-authorized 3-reviewer test-hardening gate passed 3/3:
+  `closed_beta_reviewer_engineering`, `closed_beta_reviewer_safety`, and
+  `closed_beta_reviewer_release` all returned `RELEASE_DECISION: AGREE` after
+  validation/status blockers were fixed and re-reviewed. The closed-beta smoke
+  work-board item is checked complete.
+- 2026-06-29 System Backbone local folder inbox MVP:
+  completed issue #9 on branch `local-folder-ingestion-mvp` with
+  `python/formowl_ingestion/folder_inbox.py`,
+  `tests/test_local_folder_ingestion.py`, and
+  `docs/local-data-resource-inbox.md`. The scanner uses caller-held stability
+  snapshots before durable writes, defers unstable files with zero asset,
+  object, job, run, observation, or audit side effects, registers stable files
+  as normal assets, creates idempotent ingestion jobs, can run the configured
+  deterministic text extractor, and returns a public scan report without raw
+  folder paths, source filenames, object-store roots, parser-local paths, or
+  internal stability tokens. This is generic infrastructure only; mail parsing
+  and financial reconciliation remain future consumers. Dev-container
+  verification passed: local folder focused tests 10 OK, ingestion package
+  export regression 1 OK, Ruff check/format-check passed, and full
+  `python -m unittest discover -s tests` ran 326 OK. The default 3-reviewer
+  gate passed with `folder_inbox_gate_engineering_v2`,
+  `folder_inbox_gate_safety_v2`, and `folder_inbox_gate_release_v3`; the
+  safety blocker about public `source_file_token` exposure was fixed and
+  re-reviewed.

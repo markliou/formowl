@@ -7,6 +7,7 @@ from formowl_contract import ContractValidationError
 from formowl_gateway import (
     PUBLIC_TOOL_SCHEMAS,
     SemanticMcpGateway,
+    safe_workflow_error_envelope,
     validate_public_gateway_payload,
 )
 
@@ -21,8 +22,12 @@ class SemanticMcpGatewayTests(unittest.TestCase):
         self.assertEqual(
             tool_names,
             {
+                "open_upload_session",
+                "create_ingestion_job",
+                "list_observations",
                 "preview_graph_candidates",
                 "query_effective_graph",
+                "request_graph_access",
                 "submit_graph_review_decision",
                 "generate_wiki_draft_from_graph_view",
             },
@@ -81,6 +86,30 @@ class SemanticMcpGatewayTests(unittest.TestCase):
     ) -> None:
         gateway = SemanticMcpGateway()
 
+        upload = gateway.dispatch_tool(
+            "open_upload_session",
+            {
+                "workspace_id": "workspace_main",
+                "requester_user_id": "user_yifan",
+                "intent": "Upload sourced notes.",
+            },
+        )
+        ingestion = gateway.dispatch_tool(
+            "create_ingestion_job",
+            {
+                "workspace_id": "workspace_main",
+                "requester_user_id": "user_yifan",
+                "asset_locator": "formowl://asset/asset_001",
+            },
+        )
+        observations = gateway.dispatch_tool(
+            "list_observations",
+            {
+                "workspace_id": "workspace_main",
+                "requester_user_id": "user_yifan",
+                "asset_locator": "formowl://asset/asset_001",
+            },
+        )
         preview = gateway.dispatch_tool(
             "preview_graph_candidates",
             {"workspace_id": "workspace_main", "requester_user_id": "user_yifan"},
@@ -101,18 +130,39 @@ class SemanticMcpGatewayTests(unittest.TestCase):
                 "reviewer_user_id": "user_reviewer",
             },
         )
+        access = gateway.dispatch_tool(
+            "request_graph_access",
+            {
+                "workspace_id": "workspace_main",
+                "requester_user_id": "user_yifan",
+                "owner_user_id": "user_owner",
+                "requested_scope": {"scope_type": "project", "scope_id": "formowl"},
+                "requested_access_level": "evidence_snippet",
+                "reason": "Review sourced project context.",
+            },
+        )
         draft = gateway.dispatch_tool(
             "generate_wiki_draft_from_graph_view",
             {"projection_spec_id": "projection_001", "requester_user_id": "user_yifan"},
         )
 
+        self.assertEqual(upload["status"], "pending_review")
+        self.assertEqual(ingestion["status"], "pending_review")
+        self.assertEqual(observations["status"], "pending_review")
         self.assertEqual(preview["status"], "pending_review")
         self.assertEqual(query["status"], "pending_review")
         self.assertEqual(review["status"], "pending_review")
+        self.assertEqual(access["status"], "pending_review")
         self.assertEqual(draft["status"], "pending_review")
-        self.assertNotIn("canonical_commit", str([preview, query, review, draft]))
-        self.assertNotIn("raw_path", str([preview, query, review, draft]))
-        self.assertEqual(len(gateway.tool_call_logs), 4)
+        self.assertNotIn(
+            "canonical_commit",
+            str([upload, ingestion, observations, preview, query, review, access, draft]),
+        )
+        self.assertNotIn(
+            "raw_path",
+            str([upload, ingestion, observations, preview, query, review, access, draft]),
+        )
+        self.assertEqual(len(gateway.tool_call_logs), 8)
 
     def test_gateway_rejects_handler_payloads_with_raw_values(self) -> None:
         gateway = SemanticMcpGateway(
@@ -142,11 +192,51 @@ class SemanticGatewayStaticContractTests(unittest.TestCase):
         no_worker_internal_output = True
         safe_error_envelope = True
 
-        self.assertEqual(len(PUBLIC_TOOL_SCHEMAS), 4)
+        self.assertEqual(len(PUBLIC_TOOL_SCHEMAS), 8)
+        self.assertEqual(
+            {schema["workflow"] for schema in PUBLIC_TOOL_SCHEMAS},
+            {
+                "upload",
+                "ingestion",
+                "observation",
+                "candidate_graph",
+                "access",
+                "wiki_projection",
+            },
+        )
+        for schema in PUBLIC_TOOL_SCHEMAS:
+            with self.subTest(tool_name=schema["tool_name"]):
+                validate_public_gateway_payload(schema)
+                self.assertIn("result_type", schema)
+                self.assertIn("status_values", schema)
         self.assertTrue(no_raw_path_output)
         self.assertTrue(no_raw_sql_output)
         self.assertTrue(no_worker_internal_output)
         self.assertTrue(safe_error_envelope)
+
+    def test_safe_workflow_error_envelopes_cover_public_workflows_without_echoing_raw_input(
+        self,
+    ) -> None:
+        for workflow in {
+            "upload",
+            "ingestion",
+            "observation",
+            "candidate_graph",
+            "access",
+            "wiki_projection",
+        }:
+            with self.subTest(workflow=workflow):
+                envelope = safe_workflow_error_envelope(
+                    workflow=workflow,
+                    tool_name="/srv/formowl/private/raw.txt",
+                    error_code="select * from private_table worker_scratch",
+                )
+                rendered = str(envelope).lower()
+                self.assertEqual(envelope["status"], "error")
+                self.assertEqual(envelope["data"]["workflow"], workflow)
+                self.assertNotIn("/srv/formowl", rendered)
+                self.assertNotIn("select *", rendered)
+                self.assertNotIn("worker_scratch", rendered)
 
     def test_public_payload_validator_rejects_forbidden_public_values(self) -> None:
         for payload in [

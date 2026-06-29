@@ -9,9 +9,14 @@ from formowl_graph.index import (
     FileGraphProjectionStore,
     FileVectorStore,
     GraphProjectionNode,
+    VectorSearchResult,
     VectorRecord,
 )
-from formowl_retrieval import RetrievalGateway, RetrievalGatewayResult
+from formowl_retrieval import (
+    MetadataRawAssetLocatorResolver,
+    RetrievalGateway,
+    RetrievalGatewayResult,
+)
 
 NOW = "2026-06-18T00:00:00+00:00"
 
@@ -162,6 +167,7 @@ class RetrievalGatewayTests(unittest.TestCase):
                 {
                     "source_type": "observation",
                     "source_id": "obs_allowed",
+                    "asset_locator": "formowl://asset/asset_allowed",
                     "access": "explicit_grant_required",
                     "content_returned": False,
                 }
@@ -176,6 +182,144 @@ class RetrievalGatewayTests(unittest.TestCase):
             ]
         )
         self.assertTrue(answer_only_evidence_snippet_raw_asset_modes)
+
+    def test_raw_asset_mode_uses_injected_locator_resolver_without_returning_content(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("retrieval-gateway-raw-asset-resolver")
+        resolver = _FixtureRawAssetResolver("formowl://asset/asset_from_adapter")
+        gateway = _gateway_with_records(temp_dir, raw_asset_resolver=resolver)
+
+        result = gateway.query_effective_graph(
+            query_embedding=[1.0, 0.0],
+            query_text="summarize project",
+            requester_user_id="user_yifan",
+            workspace_id="workspace_main",
+            session_id="session_001",
+            grants=[
+                _project_grant("project_formowl"),
+                _project_grant("project_formowl", permission="asset_scoped_access"),
+            ],
+            mode="raw_asset",
+            now=NOW,
+        )
+
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(resolver.resolved_source_ids, ["obs_allowed"])
+        self.assertEqual(
+            result.raw_asset_refs,
+            [
+                {
+                    "source_type": "observation",
+                    "source_id": "obs_allowed",
+                    "asset_locator": "formowl://asset/asset_from_adapter",
+                    "access": "explicit_grant_required",
+                    "content_returned": False,
+                }
+            ],
+        )
+        self.assertNotIn("must not be returned", str(result.raw_asset_refs).lower())
+
+    def test_raw_asset_locator_flow_redacts_unsafe_or_failed_resolver_outputs(self) -> None:
+        temp_dir = _paths.fresh_test_dir("retrieval-gateway-raw-asset-redaction")
+        unsafe_gateway = _gateway_with_records(
+            temp_dir,
+            raw_asset_resolver=_FixtureRawAssetResolver("/tmp/private/source.pdf"),
+        )
+        failed_gateway = _gateway_with_records(
+            temp_dir,
+            raw_asset_resolver=_FailingRawAssetResolver(),
+        )
+
+        unsafe = unsafe_gateway.query_effective_graph(
+            query_embedding=[1.0, 0.0],
+            query_text="summarize project",
+            requester_user_id="user_yifan",
+            workspace_id="workspace_main",
+            session_id="session_001",
+            grants=[
+                _project_grant("project_formowl"),
+                _project_grant("project_formowl", permission="asset_scoped_access"),
+            ],
+            mode="raw_asset",
+            now=NOW,
+        ).to_dict()
+        failed = failed_gateway.query_effective_graph(
+            query_embedding=[1.0, 0.0],
+            query_text="summarize project",
+            requester_user_id="user_yifan",
+            workspace_id="workspace_main",
+            session_id="session_001",
+            grants=[
+                _project_grant("project_formowl"),
+                _project_grant("project_formowl", permission="asset_scoped_access"),
+            ],
+            mode="raw_asset",
+            now=NOW,
+        ).to_dict()
+
+        self.assertNotIn("asset_locator", unsafe["raw_asset_refs"][0])
+        self.assertEqual(unsafe["raw_asset_refs"][0]["warnings"], ["asset_locator_redacted"])
+        self.assertEqual(failed["raw_asset_refs"][0]["warnings"], ["raw_asset_resolver_failed"])
+        self.assertNotIn("/tmp/private", str(unsafe))
+        self.assertNotIn("/tmp/private", str(failed))
+
+    def test_metadata_raw_asset_locator_resolver_accepts_only_formowl_asset_locators(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("retrieval-gateway-metadata-resolver")
+        vector_store = FileVectorStore(temp_dir)
+        permission_scope = PermissionScope.project("project_formowl").to_dict()
+        vector_store.create(
+            _vector_record(
+                vector_id="vec_multi_locator",
+                source_id="obs_multi_locator",
+                embedding=[1.0, 0.0],
+                permission_scope=permission_scope,
+                metadata={
+                    "answer_summary": "Delivery owner is visible",
+                    "asset_locators": [
+                        "formowl://asset/asset_safe",
+                        "not-a-formowl-asset-locator",
+                        "formowl://evidence/ev_not_asset",
+                    ],
+                },
+            )
+        )
+        gateway = RetrievalGateway(
+            vector_store=vector_store,
+            audit_store=FileAuditLogStore(temp_dir),
+            raw_asset_resolver=MetadataRawAssetLocatorResolver(),
+        )
+
+        result = gateway.query_effective_graph(
+            query_embedding=[1.0, 0.0],
+            query_text="summarize project",
+            requester_user_id="user_yifan",
+            workspace_id="workspace_main",
+            session_id="session_001",
+            grants=[
+                _project_grant("project_formowl"),
+                _project_grant("project_formowl", permission="asset_scoped_access"),
+            ],
+            mode="raw_asset",
+            now=NOW,
+        ).to_dict()
+
+        self.assertEqual(
+            result["raw_asset_refs"],
+            [
+                {
+                    "source_type": "observation",
+                    "source_id": "obs_multi_locator",
+                    "asset_locator": "formowl://asset/asset_safe",
+                    "access": "explicit_grant_required",
+                    "content_returned": False,
+                }
+            ],
+        )
+        self.assertNotIn("not-a-formowl-asset-locator", str(result))
+        self.assertNotIn("formowl://evidence", str(result))
 
     def test_safe_error_envelope_rejects_raw_path_sql_and_internal_values(self) -> None:
         temp_dir = _paths.fresh_test_dir("retrieval-gateway-public-payload")
@@ -263,7 +407,7 @@ class RetrievalGatewayTests(unittest.TestCase):
         self.assertEqual(implicit_raw_access_from_merge.status, "permission_denied")
 
 
-def _gateway_with_records(temp_dir):
+def _gateway_with_records(temp_dir, raw_asset_resolver=None):
     vector_store = FileVectorStore(temp_dir)
     graph_store = FileGraphProjectionStore(temp_dir)
     permission_scope = PermissionScope.project("project_formowl").to_dict()
@@ -276,6 +420,7 @@ def _gateway_with_records(temp_dir):
             metadata={
                 "answer_summary": "Delivery owner is visible",
                 "evidence_snippet": "Visible delivery note",
+                "asset_locator": "formowl://asset/asset_allowed",
             },
         )
     )
@@ -294,7 +439,23 @@ def _gateway_with_records(temp_dir):
         vector_store=vector_store,
         graph_projection_store=graph_store,
         audit_store=FileAuditLogStore(temp_dir),
+        raw_asset_resolver=raw_asset_resolver,
     )
+
+
+class _FixtureRawAssetResolver:
+    def __init__(self, locator: str) -> None:
+        self.locator = locator
+        self.resolved_source_ids: list[str] = []
+
+    def resolve_raw_asset_refs(self, result: VectorSearchResult) -> list[dict[str, object]]:
+        self.resolved_source_ids.append(result.record.source_id)
+        return [{"asset_locator": self.locator, "content": "must not be returned"}]
+
+
+class _FailingRawAssetResolver:
+    def resolve_raw_asset_refs(self, result: VectorSearchResult) -> list[dict[str, object]]:
+        raise RuntimeError("/tmp/private/raw-source.pdf")
 
 
 def _vector_record(

@@ -55,24 +55,86 @@ _FORBIDDEN_PUBLIC_VALUE_PATTERNS = (
 
 PUBLIC_TOOL_SCHEMAS = [
     {
+        "tool_name": "open_upload_session",
+        "workflow": "upload",
+        "input_keys": [
+            "workspace_id",
+            "requester_user_id",
+            "intent",
+            "intended_asset_type",
+            "permission_scope",
+        ],
+        "output_keys": ["upload_session_id", "status", "next_required_action"],
+        "result_type": "upload_session_request",
+        "status_values": ["pending_review", "error"],
+    },
+    {
+        "tool_name": "create_ingestion_job",
+        "workflow": "ingestion",
+        "input_keys": ["workspace_id", "requester_user_id", "asset_locator", "extractor_profile"],
+        "output_keys": ["ingestion_job_id", "status", "next_required_action"],
+        "result_type": "ingestion_job_request",
+        "status_values": ["pending_review", "error"],
+    },
+    {
+        "tool_name": "list_observations",
+        "workflow": "observation",
+        "input_keys": [
+            "workspace_id",
+            "requester_user_id",
+            "asset_locator",
+            "observation_filter",
+        ],
+        "output_keys": ["observations", "redaction_counts", "warnings"],
+        "result_type": "observation_listing",
+        "status_values": ["pending_review", "ok", "error"],
+    },
+    {
         "tool_name": "preview_graph_candidates",
+        "workflow": "candidate_graph",
         "input_keys": ["workspace_id", "candidate_filter", "requester_user_id"],
         "output_keys": ["candidate_summaries", "redaction_counts", "warnings"],
+        "result_type": "candidate_preview",
+        "status_values": ["pending_review", "ok", "error"],
     },
     {
         "tool_name": "query_effective_graph",
+        "workflow": "access",
         "input_keys": ["workspace_id", "query_text", "requester_user_id"],
         "output_keys": ["answer", "citations", "visible_graph_snippets", "redaction_counts"],
+        "result_type": "effective_graph_query",
+        "status_values": ["pending_review", "ok", "permission_denied", "error"],
+    },
+    {
+        "tool_name": "request_graph_access",
+        "workflow": "access",
+        "input_keys": [
+            "workspace_id",
+            "requester_user_id",
+            "owner_user_id",
+            "requested_scope",
+            "requested_access_level",
+            "reason",
+        ],
+        "output_keys": ["access_request_id", "status", "next_required_action"],
+        "result_type": "access_request",
+        "status_values": ["pending_review", "error"],
     },
     {
         "tool_name": "submit_graph_review_decision",
+        "workflow": "candidate_graph",
         "input_keys": ["proposal_id", "decision", "reviewer_user_id"],
         "output_keys": ["status", "audit_ref", "next_required_action"],
+        "result_type": "graph_review_decision",
+        "status_values": ["pending_review", "error"],
     },
     {
         "tool_name": "generate_wiki_draft_from_graph_view",
+        "workflow": "wiki_projection",
         "input_keys": ["projection_spec_id", "requester_user_id"],
         "output_keys": ["draft_id", "revision_status", "citations", "redaction_counts"],
+        "result_type": "wiki_projection_request",
+        "status_values": ["pending_review", "ok", "error"],
     },
 ]
 _PUBLIC_TOOL_NAMES = {schema["tool_name"] for schema in PUBLIC_TOOL_SCHEMAS}
@@ -131,24 +193,34 @@ class SemanticMcpGateway:
 
     def dispatch_tool(self, tool_name: str, input_data: Mapping[str, Any]) -> dict[str, Any]:
         if tool_name in _FORBIDDEN_TOOL_NAMES:
-            envelope = safe_error_envelope(
+            envelope = safe_workflow_error_envelope(
+                workflow="semantic_gateway",
                 tool_name=tool_name,
                 error_code="forbidden_tool",
             )
             self._record_tool_call(tool_name, dict(input_data), envelope)
             return envelope
         if tool_name not in _PUBLIC_TOOL_NAMES:
-            envelope = safe_error_envelope(
+            envelope = safe_workflow_error_envelope(
+                workflow="semantic_gateway",
                 tool_name=tool_name,
                 error_code="unknown_tool",
             )
             self._record_tool_call(tool_name, dict(input_data), envelope)
             return envelope
 
-        if tool_name == "preview_graph_candidates":
+        if tool_name == "open_upload_session":
+            envelope = self._open_upload_session(dict(input_data))
+        elif tool_name == "create_ingestion_job":
+            envelope = self._create_ingestion_job(dict(input_data))
+        elif tool_name == "list_observations":
+            envelope = self._list_observations(dict(input_data))
+        elif tool_name == "preview_graph_candidates":
             envelope = self._preview_graph_candidates(dict(input_data))
         elif tool_name == "query_effective_graph":
             envelope = self._query_effective_graph(dict(input_data))
+        elif tool_name == "request_graph_access":
+            envelope = self._request_graph_access(dict(input_data))
         elif tool_name == "submit_graph_review_decision":
             envelope = self._submit_graph_review_decision(dict(input_data))
         else:
@@ -161,10 +233,48 @@ class SemanticMcpGateway:
         *,
         tool_name: str,
         error_code: str = "gateway_error",
+        workflow: str = "semantic_gateway",
     ) -> dict[str, Any]:
-        envelope = safe_error_envelope(tool_name=tool_name, error_code=error_code)
+        envelope = safe_workflow_error_envelope(
+            workflow=workflow,
+            tool_name=tool_name,
+            error_code=error_code,
+        )
         self._record_tool_call(tool_name, {}, envelope)
         return envelope
+
+    def _open_upload_session(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        return _pending_workflow_envelope(
+            result_type="upload_session_request",
+            data={
+                "upload_session_id": None,
+                "status": "pending_review",
+                "next_required_action": "upload_handler_not_configured",
+            },
+            warning="upload_handler_not_configured",
+        )
+
+    def _create_ingestion_job(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        return _pending_workflow_envelope(
+            result_type="ingestion_job_request",
+            data={
+                "ingestion_job_id": None,
+                "status": "pending_review",
+                "next_required_action": "ingestion_handler_not_configured",
+            },
+            warning="ingestion_handler_not_configured",
+        )
+
+    def _list_observations(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        return _pending_workflow_envelope(
+            result_type="observation_listing",
+            data={
+                "observations": [],
+                "redaction_counts": {"hidden_observations": 0},
+                "warnings": ["observation_handler_not_configured"],
+            },
+            warning="observation_handler_not_configured",
+        )
 
     def _preview_graph_candidates(self, input_data: dict[str, Any]) -> dict[str, Any]:
         if self.preview_handler is None:
@@ -199,6 +309,30 @@ class SemanticMcpGateway:
         return _safe_handler_envelope(
             result_type="effective_graph_query",
             handler_payload=self.retrieval_handler(input_data),
+        )
+
+    def _request_graph_access(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        requester_user_id = _safe_public_string(input_data.get("requester_user_id"), "requester")
+        owner_user_id = _safe_public_string(input_data.get("owner_user_id"), "owner")
+        scope = input_data.get("requested_scope")
+        scope_hash = sha256_json(scope if isinstance(scope, Mapping) else {})
+        request_payload = {
+            "requester_user_id": requester_user_id,
+            "owner_user_id": owner_user_id,
+            "scope_hash": scope_hash,
+            "requested_access_level": _safe_public_string(
+                input_data.get("requested_access_level"), "answer_only"
+            ),
+        }
+        access_request_id = f"access_request_{sha256_json(request_payload)[-24:]}"
+        return _pending_workflow_envelope(
+            result_type="access_request",
+            data={
+                "access_request_id": access_request_id,
+                "status": "pending_review",
+                "next_required_action": "owner_review_required",
+            },
+            warning="access_request_requires_review",
         )
 
     def _submit_graph_review_decision(self, input_data: dict[str, Any]) -> dict[str, Any]:
@@ -268,15 +402,30 @@ def safe_error_envelope(
     tool_name: str,
     error_code: str = "gateway_error",
 ) -> dict[str, Any]:
+    return safe_workflow_error_envelope(
+        workflow="semantic_gateway",
+        tool_name=tool_name,
+        error_code=error_code,
+    )
+
+
+def safe_workflow_error_envelope(
+    *,
+    workflow: str,
+    tool_name: str,
+    error_code: str = "gateway_error",
+) -> dict[str, Any]:
+    workflow_name = _safe_public_string(workflow, "semantic_gateway")
     tool = _safe_public_string(tool_name, "unknown_tool")
     error = _safe_public_string(error_code, "gateway_error")
     return _envelope(
-        result_type="semantic_gateway_error",
+        result_type=f"{workflow_name}_gateway_error",
         status="error",
         data={
+            "workflow": workflow_name,
             "tool_name": tool,
             "error_code": error,
-            "message": "The semantic gateway rejected this request.",
+            "message": "The FormOwl gateway rejected this request.",
         },
         warnings=["safe_error_envelope"],
     )
@@ -327,6 +476,20 @@ def _safe_handler_envelope(*, result_type: str, handler_payload: dict[str, Any])
     envelope = _envelope(result_type=result_type, status="ok", data=handler_payload)
     validate_public_gateway_payload(envelope)
     return envelope
+
+
+def _pending_workflow_envelope(
+    *,
+    result_type: str,
+    data: dict[str, Any],
+    warning: str,
+) -> dict[str, Any]:
+    return _envelope(
+        result_type=result_type,
+        status="pending_review",
+        data=data,
+        warnings=[warning],
+    )
 
 
 def _envelope(

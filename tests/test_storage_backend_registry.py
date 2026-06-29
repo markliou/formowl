@@ -5,7 +5,12 @@ import unittest
 
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError, StorageBackend
-from formowl_ingestion.storage import StorageBackendRegistry
+from formowl_ingestion.storage import (
+    StorageBackendConfig,
+    StorageBackendRegistry,
+    configure_storage_backend_registry,
+    configure_storage_backend_registry_from_env,
+)
 
 
 class StorageBackendRegistryTests(unittest.TestCase):
@@ -122,6 +127,143 @@ class StorageBackendRegistryTests(unittest.TestCase):
         self.assertFalse(
             (temp_dir / "ingestion" / "storage-backends" / "storage_raw_root_prefix.json").exists()
         )
+
+    def test_configures_local_backend_from_environment_without_public_raw_path(self) -> None:
+        temp_dir = _paths.fresh_test_dir("storage-backend-registry-env-local")
+        local_root = temp_dir / "configured-local-root"
+        registry = StorageBackendRegistry(temp_dir)
+
+        configured = configure_storage_backend_registry_from_env(
+            registry,
+            {
+                "FORMOWL_STORAGE_BACKEND_ID": "storage_configured_local",
+                "FORMOWL_STORAGE_BACKEND_ROOT": str(local_root),
+                "FORMOWL_STORAGE_BACKEND_DISPLAY_NAME": "Configured local object store",
+                "FORMOWL_STORAGE_ALLOWED_WORKERS": "worker_a, worker_b",
+                "FORMOWL_WORKSPACE_ID": "workspace_formowl",
+            },
+        )
+
+        self.assertEqual(len(configured), 1)
+        backend = configured[0]
+        self.assertEqual(backend.storage_backend_id, "storage_configured_local")
+        self.assertEqual(backend.type, "local_fs")
+        self.assertEqual(backend.workspace_scope, "workspace_formowl")
+        self.assertEqual(backend.allowed_workers, ["worker_a", "worker_b"])
+        self.assertEqual(registry.resolve_local_root(backend.storage_backend_id), local_root)
+
+        public_json = json.dumps(
+            registry.backend_mcp_envelope("storage_configured_local"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        self.assertNotIn(str(local_root), public_json)
+        self.assertNotIn("configured-local-root", public_json)
+        self.assertIn("formowl://storage/storage_configured_local", public_json)
+
+    def test_configures_nonlocal_descriptor_without_changing_contract_id(self) -> None:
+        temp_dir = _paths.fresh_test_dir("storage-backend-registry-env-object")
+        registry = StorageBackendRegistry(temp_dir)
+        config = StorageBackendConfig(
+            storage_backend_id="storage_minio_primary",
+            type="minio",
+            display_name="Primary object backend",
+            access_mode="read_write",
+            trust_level="trusted_internal",
+            workspace_scope="workspace_formowl",
+            health_status="not_configured",
+            internal_endpoint="http://minio.internal:9000",
+            private_config={"bucket": "formowl-raw", "region": "local"},
+        )
+
+        first = configure_storage_backend_registry(registry, [config])[0]
+        second = configure_storage_backend_registry(
+            registry,
+            [
+                StorageBackendConfig(
+                    storage_backend_id="storage_minio_primary",
+                    type="minio",
+                    display_name="Primary object backend",
+                    access_mode="read_write",
+                    trust_level="trusted_internal",
+                    workspace_scope="workspace_formowl",
+                    health_status="degraded",
+                    internal_endpoint="http://minio-replacement.internal:9000",
+                    private_config={"bucket": "formowl-raw", "region": "local"},
+                )
+            ],
+        )[0]
+
+        self.assertEqual(first.storage_backend_id, "storage_minio_primary")
+        self.assertEqual(second.storage_backend_id, "storage_minio_primary")
+        self.assertEqual(second.root_prefix, "formowl://storage/storage_minio_primary")
+        self.assertIsNone(registry.resolve_local_root("storage_minio_primary"))
+
+        raw_record = json.loads(
+            (temp_dir / "ingestion" / "storage-backends" / "storage_minio_primary.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            raw_record["private"]["internal_endpoint"],
+            "http://minio-replacement.internal:9000",
+        )
+        self.assertEqual(raw_record["private"]["bucket"], "formowl-raw")
+        public_json = json.dumps(
+            registry.backend_mcp_envelope("storage_minio_primary"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        self.assertNotIn("minio-replacement", public_json)
+        self.assertNotIn("formowl-raw", public_json)
+        self.assertNotIn("internal_endpoint", public_json)
+
+    def test_storage_backend_config_rejects_public_raw_locators_and_secrets(self) -> None:
+        temp_dir = _paths.fresh_test_dir("storage-backend-registry-config-rejects")
+        bad_public_registry = StorageBackendRegistry(temp_dir / "bad-public")
+        with self.assertRaises(ValueError):
+            configure_storage_backend_registry(
+                bad_public_registry,
+                [
+                    {
+                        "type": "local_fs",
+                        "workspace_scope": "workspace_formowl",
+                        "display_name": str(temp_dir / "private-root"),
+                        "root_path": str(temp_dir / "private-root"),
+                    }
+                ],
+            )
+
+        bad_secret_registry = StorageBackendRegistry(temp_dir / "bad-secret")
+        with self.assertRaises(ValueError):
+            configure_storage_backend_registry(
+                bad_secret_registry,
+                [
+                    {
+                        "type": "local_fs",
+                        "workspace_scope": "workspace_formowl",
+                        "root_path": str(temp_dir / "private-root"),
+                        "private_config": {"secret_access_key": "do-not-store"},
+                    }
+                ],
+            )
+
+        no_id_registry = StorageBackendRegistry(temp_dir / "no-id")
+        with self.assertRaises(ValueError):
+            configure_storage_backend_registry(
+                no_id_registry,
+                [
+                    StorageBackendConfig(
+                        type="minio",
+                        workspace_scope="workspace_formowl",
+                        internal_endpoint="http://minio.internal:9000",
+                    )
+                ],
+            )
+
+        self.assertEqual(bad_public_registry.list_backends(), [])
+        self.assertEqual(bad_secret_registry.list_backends(), [])
+        self.assertEqual(no_id_registry.list_backends(), [])
 
 
 if __name__ == "__main__":

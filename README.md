@@ -43,6 +43,11 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - File-backed audit logs for actor selection, asset registration, ingestion job creation, evidence fetches, permission denials, and upload session creation.
 - Controlled `upload_asset_reference` imports for trusted backend references that still create asset, permission, and audit records.
 - ChatGPT session capture helper that turns the current conversation into a registered asset and ingestion job.
+- Trusted local data resource inbox scanning for internal deployments. Stable
+  files can become normal `Asset` and `IngestionJob` records, and configured
+  `.txt` / `.md` inputs can run through the deterministic text extractor to
+  produce `ExtractorRun` and `Observation` records without exposing local
+  folder paths in the public scan report.
 - Deterministic file technical metadata extractor for file size, MIME type, content hash, and FormOwl object locator observations.
 - Deterministic fixture adapters for document structure, OCR text, audio transcripts, video scene/keyframe observations, and mail/archive observations.
 - Candidate graph contract models for `CandidateAtom`, `CandidateRelation`, and `ExternalGraphImport` proposal records.
@@ -68,6 +73,12 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   metadata-store migration's partial-failure rollback behavior for graph and
   audit rows. This is not end-to-end PostgreSQL/pgvector production adapter
   readiness.
+- PostgreSQL-backed ingestion record store adapters for assets, ingestion jobs,
+  extractor runs, observations, and upload sessions behind the same create/get/list
+  surfaces as the current file-backed stores. These use the internal
+  connection protocol and parameterized SQL over validated contract payloads;
+  they are mocked-connection adapter evidence, not live PostgreSQL readiness or
+  a ChatGPT-facing database control surface.
 - Candidate-only graph resolution helpers that produce fusion proposals,
   score breakdowns, ontology revision pins, clerical review items, and
   permission-aware human review queue exports without granting raw access or
@@ -84,6 +95,18 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   content, requires requester access to private user graph revisions before
   projection scanning, rejects raw/evidence/internal locators in visible view
   payloads, and keeps raw asset access and canonical merges out of the view.
+- Retrieval gateway plumbing for answer-only, evidence-snippet, and raw-asset
+  request modes. Raw-asset mode requires an explicit grant and returns only
+  governed `formowl://asset/...` locators through an injectable resolver path;
+  it does not read raw content or expose filesystem/object-store locations.
+- Storage backend registry configuration helpers for local-first deployments
+  and metadata-only MinIO/S3-compatible descriptors. Public backend records use
+  stable FormOwl storage locators while local roots, internal endpoints, and
+  object-store adapter metadata remain private.
+- Ingestion worker boundary package that can process pending ingestion jobs
+  outside MCP request handling while reusing the existing `IngestionJob`
+  records, extractor adapters, stores, and permissioned storage backend
+  routing.
 - Optional graph-adapter manifests for RapidFuzz and Splink integration
   boundaries; RapidFuzz and Splink package-adapter bindings remain
   candidate-only and do not run by default unless the optional `graph-adapters`
@@ -119,19 +142,30 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   boundary evidence only; it does not claim production readiness, enterprise
   entity-resolution quality, completed adjudication, raw asset access, or
   canonical graph commits.
+- A closed-beta readiness smoke harness can compose the current trusted
+  internal path through Project/Wiki JSON-RPC, storage backend configuration,
+  worker ingestion, observation-to-wiki draft bridging, governed retrieval, and
+  the packaged KG-eval facade. It is synthetic closed-beta gate evidence only;
+  it does not claim production readiness, live database readiness, automatic
+  publishing, raw asset content access, canonical graph writes, or mail adapter
+  readiness.
 - A deterministic KG research acceptance suite and method note covering recent
   literature comparison, scoped ontology integration, multi-user fusion,
   multimodal enterprise fixtures, four-specialist LLM subagent adjudication as
   the current Plan B target, legacy human compatibility where already
   supported, production adapter gates, metrics, ablations, and explicit known
   failed or blocked claims.
-- ChatGPT-facing semantic gateway helpers with public tool schemas, safe error
-  envelopes, proposal-only review/draft stubs, and bans on direct database,
-  filesystem, raw SQL, worker-internal, and canonical mutation tools.
-- Semantic MCP JSON-RPC compatibility gateway for `initialize`, `tools/list`,
-  and `tools/call`, with session context, hash-only leak transcripts, and
-  containerized smoke coverage. This is not an end-to-end production adapter
-  claim.
+- ChatGPT-facing gateway helpers with public tool schemas and safe error
+  envelopes for upload, ingestion, observation listing, candidate graph,
+  access, and wiki projection workflows. The gateway uses `McpResultEnvelope`
+  outputs, proposal/pending-review stubs where handlers are not configured,
+  and bans on direct database, filesystem, raw SQL, worker-internal, and
+  canonical mutation tools.
+- MCP JSON-RPC compatibility gateway for `initialize`, `tools/list`, and
+  `tools/call`. Coverage includes the semantic gateway plus existing Project
+  MCP and Wiki MCP server behavior, with session context, hash-only leak
+  transcripts, and raw/internal payload rejection. This is not an end-to-end
+  production adapter claim.
 - `WikiProjectionSpec` contract objects that pin graph revision, ontology
   revision, source references, evidence snapshots, citation behavior, and
   redaction policy before graph-aware wiki drafts are generated.
@@ -140,6 +174,7 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   refresh diffs without publishing pages.
 - Deterministic text-fixture candidate extraction that turns marked observations into reviewable candidate atom proposals.
 - Candidate preview tooling that exposes review actions, warnings, confidence, and provenance without committing canonical graph state.
+- Canonical graph contract models for atoms, entities, relations, and graph revisions, with stable canonical object IDs across revisions.
 - Project MCP with a mocked OpenProject adapter, evidence snapshot file storage, context package generation, and proposal-only work item comments.
 - Wiki MCP with markdown draft generation, frontmatter provenance, draft storage, wiki snapshot capture, and proposal-only publishing.
 - Dockerfile-managed dev/runtime containers and `.devcontainer/devcontainer.json`.
@@ -173,6 +208,10 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - `docs/kg-bert-runtime.md` - optional BERT/SentenceTransformer KG
   candidate-generation runtimes, CPU/GPU Dockerfiles, benchmark manifest, model
   profiles, and artifact rules.
+- `docs/closed-beta-runbook.md` - trusted internal closed-beta smoke command,
+  pass criteria, and explicit exclusions.
+- `docs/local-data-resource-inbox.md` - trusted local folder ingress behavior,
+  stability policy, idempotency, and public report boundary.
 - `docs/openproject-adapter.md` - OpenProject adapter mapping.
 - `docs/implementation-task-breakdown.md` - shared implementation checklist for contributors and agents.
 
@@ -249,6 +288,12 @@ Run lint and formatting checks inside the dev container:
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "ruff check python tests scripts && ruff format --check python tests scripts"
 ```
 
+Run the closed-beta readiness smoke inside the dev container:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/closed_beta_smoke.py --output /tmp/formowl-closed-beta-smoke.json"
+```
+
 ## Repository Skills
 
 Reusable Codex workflow skills live under `.agents/skills/` so Codex can
@@ -298,7 +343,11 @@ The dev container installs Gitleaks for commit-time scanning. TruffleHog remains
 
 ## MCP JSON Line Entry Points
 
-Both Python MCP server modules currently accept one JSON request per stdin line and print one JSON response per line. This is a prototype transport for local testing, not standards-compliant MCP JSON-RPC over stdio yet.
+The legacy Python MCP server modules still accept one JSON request per stdin
+line and print one JSON response per line for local testing. The FormOwl
+gateway package now provides a JSON-RPC compatibility wrapper for existing MCP
+server objects and semantic gateway tools; Project/Wiki behavior is preserved
+through transport tests.
 
 Project MCP example:
 

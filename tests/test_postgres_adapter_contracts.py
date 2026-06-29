@@ -67,13 +67,16 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         manifest = migration_files()
         index_names = grant_audit_query_indexes()
 
-        migration_replay = len(manifest) == 2 and all(
+        migration_replay = len(manifest) == 3 and all(
             item.statement_count >= 3 for item in manifest
         )
         migration_files_marker = manifest[0].filename == "001_metadata_store.sql"
         vector_migration_marker = manifest[1].filename == "002_vector_index.sql"
+        ingestion_migration_marker = manifest[2].filename == "003_ingestion_records.sql"
         grant_audit_query_indexes_marker = {
             "idx_formowl_graph_records_scope",
+            "idx_formowl_ingestion_records_scope",
+            "idx_formowl_ingestion_records_asset",
             "idx_formowl_grants_effective_scope",
             "idx_formowl_audit_log_actor_target",
         }.issubset(set(index_names))
@@ -81,6 +84,7 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         self.assertTrue(migration_replay)
         self.assertTrue(migration_files_marker)
         self.assertTrue(vector_migration_marker)
+        self.assertTrue(ingestion_migration_marker)
         self.assertTrue(grant_audit_query_indexes_marker)
         self.assertEqual(
             postgre_sql_backed_repository_interfaces(),
@@ -102,7 +106,7 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         connection = _RecordingConnection()
         statements = PostgreSQLMigrationRunner(connection).migration_replay()
 
-        self.assertGreaterEqual(len(statements), 10)
+        self.assertGreaterEqual(len(statements), 13)
         self.assertEqual(connection.actions, ["execute"] * len(statements))
         self.assertTrue(
             any(

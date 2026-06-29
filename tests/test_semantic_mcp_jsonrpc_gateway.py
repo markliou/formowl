@@ -43,8 +43,12 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
         self.assertEqual(
             {tool["name"] for tool in tools["result"]["tools"]},
             {
+                "open_upload_session",
+                "create_ingestion_job",
+                "list_observations",
                 "preview_graph_candidates",
                 "query_effective_graph",
+                "request_graph_access",
                 "submit_graph_review_decision",
                 "generate_wiki_draft_from_graph_view",
             },

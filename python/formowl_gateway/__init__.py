@@ -9,10 +9,12 @@ from .semantic import (
     direct_filesystem_read_tool,
     public_tool_schema,
     safe_error_envelope,
+    safe_workflow_error_envelope,
     validate_public_gateway_payload,
 )
 from .jsonrpc import (
     JsonRpcTranscriptEntry,
+    McpServerJsonRpcGateway,
     SemanticGatewaySession,
     SemanticMcpJsonRpcGateway,
     build_raw_path_raw_sql_worker_internal_leak_transcript,
@@ -24,6 +26,7 @@ from .jsonrpc import (
 
 __all__ = [
     "JsonRpcTranscriptEntry",
+    "McpServerJsonRpcGateway",
     "PUBLIC_TOOL_SCHEMAS",
     "SemanticGatewaySession",
     "SemanticMcpGateway",
@@ -37,6 +40,7 @@ __all__ = [
     "end_to_end_raw_path_raw_sql_worker_internal_leak_transcript",
     "public_tool_schema",
     "safe_error_envelope",
+    "safe_workflow_error_envelope",
     "session_auth_and_audit_store_integration",
     "standards_compliant_mcp_gateway_transport",
     "validate_public_gateway_payload",

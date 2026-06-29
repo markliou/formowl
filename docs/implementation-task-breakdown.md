@@ -2035,33 +2035,55 @@ These groups can be split across multiple agents after Slice 1 is stable.
 
 ### Real Project and Wiki Integrations
 
-- [ ] Add real OpenProject adapter client, mapper, and tests with mocked HTTP.
+- [x] Add real OpenProject adapter client, mapper, and tests with mocked HTTP.
   - Owner paths: `python/formowl_project_mcp/adapters/openproject/`
   - Proof: no live credentials are required in tests.
+  - Note: completed as the Project MCP real-backend adapter milestone for
+    FormOwl. Implementation uses a standard-library urllib client, same-origin
+    HAL link handling, HAL mapping, mocked-HTTP tests, relation/activity
+    evidence lineage, attachment URL redaction, proposal-only writes, and
+    atomic evidence snapshot hardening. The user-requested reviewer gate passed
+    6/6 (`Hooke`, `Sartre`, `openproject_client_review`,
+    `openproject_mapper_review`, `openproject_integration_review`,
+    `openproject_final_gate6`) with no remaining blocking findings. Canonical
+    dev-container verification passed after the 2026-06-29 merge: focused
+    `test_openproject_adapter.py` ran 22 tests OK; OpenProject Ruff check and
+    format check passed; full `python -m unittest discover -s tests` ran
+    278 tests OK.
 - [ ] Add backend-specific wiki adapter behind proposal-only publishing.
   - Owner paths: `python/formowl_wiki_mcp/`
   - Proof: automatic publish remains disabled unless explicitly configured.
-- [ ] Add retrieval gateway for evidence snippets and raw assets.
+- [x] Add retrieval gateway for evidence snippets and raw assets.
   - Owner paths: gateway/retrieval modules
   - Proof: retrieval uses FormOwl locators and permission checks, not raw paths.
-  - Note: partial implementation now exists in `python/formowl_retrieval/` with
-    dev-container tests covering grant checks, revocation, answer-only,
-    evidence-snippet, raw-asset explicit-grant mode, audit records, and public
-    payload redaction. Leave unchecked until the full raw asset locator flow and
-    production adapter path are complete.
+  - Note: completed in `python/formowl_retrieval/` with grant checks,
+    revocation checks, answer-only mode, evidence-snippet mode, raw-asset mode,
+    audit records, public payload redaction, and an injectable
+    `RawAssetLocatorResolver` production adapter path. Raw-asset mode requires
+    an explicit `asset_scoped_access` grant and returns only governed
+    `formowl://asset/...` locators with `content_returned=false`; unsafe or
+    failing resolver outputs are redacted without echoing raw paths.
+    Dev-container verification passed: `test_retrieval_gateway.py` ran
+    8 tests OK, retrieval Ruff check/format check passed, and the full
+    `python -m unittest discover -s tests` suite ran 286 tests OK.
 
 ### MCP Transport and Gateway
 
-- [ ] Replace JSON-line prototype transport with standards-compliant MCP JSON-RPC
+- [x] Replace JSON-line prototype transport with standards-compliant MCP JSON-RPC
   over stdio or a compatibility gateway.
   - Owner paths: MCP server modules and gateway package
   - Proof: existing tool behavior is preserved through transport tests.
-  - Note: semantic gateway compatibility now exists in
-    `python/formowl_gateway/jsonrpc.py` with tests for JSON-RPC 2.0
-    `initialize`, `tools/list`, `tools/call`, session context, and hash-only
-    leak transcripts. A semantic gateway container smoke helper is covered by
-    dev-container tests. Leave unchecked until Project/Wiki MCP behavior is
-    preserved through the transport.
+  - Note: completed through a compatibility gateway in
+    `python/formowl_gateway/jsonrpc.py`. Existing semantic, Project MCP, and
+    Wiki MCP server behavior is available through JSON-RPC 2.0 `initialize`,
+    `tools/list`, and `tools/call`. Tests cover Project context snapshot
+    creation, Wiki draft generation, proposal-only wiki publish, session
+    context, hash-only transcripts, and unsafe raw/internal payload rejection
+    before tool side effects. Dev-container focused checks passed:
+    `test_project_wiki_mcp_jsonrpc_gateway.py` ran 4 tests OK,
+    `test_semantic_mcp_jsonrpc_gateway.py` ran 5 tests OK, and gateway Ruff
+    check/format check passed. Full canonical dev-container unittest ran
+    282 tests OK after this change.
 - [x] Add ChatGPT-facing MCP Gateway tools for semantic workflows.
   - Owner paths: gateway package, docs
   - Proof: gateway does not expose NAS paths, object-store admin operations,
@@ -2072,21 +2094,107 @@ These groups can be split across multiple agents after Slice 1 is stable.
     tool-call log records. JSON-RPC compatibility now exists for the semantic
     gateway, but this still does not replace every JSON-line MCP prototype or
     close end-to-end production adapter readiness.
-- [ ] Add tool schemas and error envelopes for upload, ingestion, observation,
+- [x] Add tool schemas and error envelopes for upload, ingestion, observation,
   candidate graph, access, and wiki projection workflows.
   - Owner paths: gateway package, `python/formowl_contract/`
   - Proof: tool outputs use `McpResultEnvelope` or a documented successor.
+  - Note: completed in `python/formowl_gateway/semantic.py` with a public
+    schema registry covering `upload`, `ingestion`, `observation`,
+    `candidate_graph`, `access`, and `wiki_projection` workflows. The gateway
+    exposes safe pending-review envelopes for unconfigured upload, ingestion,
+    observation, and access handlers; existing candidate/access/wiki projection
+    semantic tools still use `McpResultEnvelope`; and
+    `safe_workflow_error_envelope` redacts raw paths, SQL, worker scratch
+    strings, and unsafe tool names. Dev-container focused verification passed:
+    `test_semantic_mcp_gateway.py` ran 8 tests OK,
+    `test_semantic_mcp_jsonrpc_gateway.py` ran 5 tests OK,
+    `test_project_wiki_mcp_jsonrpc_gateway.py` ran 4 tests OK, and gateway
+    Ruff check/format check passed. Full canonical dev-container unittest ran
+    283 tests OK after this change.
 
 ### Infrastructure and Operations
 
-- [ ] Add storage backend registry configuration.
+- [x] Add storage backend registry configuration.
   - Owner paths: `docs/infra-spec.md`, runtime configuration modules
   - Proof: local filesystem backend works first; object-store adapters can be
     added without changing contract ids.
-- [ ] Add worker execution boundary for extraction jobs.
+  - Note: completed with `python/formowl_ingestion/storage/config.py` and
+    public exports from `formowl_ingestion.storage`. The config layer loads a
+    local-first backend from env or structured JSON descriptors, keeps local
+    roots/internal endpoints/private adapter metadata out of public envelopes,
+    rejects secret-like registry config, and requires explicit stable backend
+    ids for non-local descriptors such as MinIO/S3-compatible backends.
+    Dev-container verification passed: `test_storage_backend_registry.py` ran
+    7 tests OK, `test_ingestion_package.py` ran 1 test OK, changed-file Ruff
+    check/format check passed, and the full
+    `python -m unittest discover -s tests` suite ran 289 tests OK.
+- [x] Add worker execution boundary for extraction jobs.
   - Owner paths: worker package, compose/container files
   - Proof: job execution can move out of synchronous tests without changing job
     records.
+  - Note: completed with `python/formowl_worker/`. The ingestion worker reads
+    pending `IngestionJob` records from the existing `JobStore`, respects
+    storage backend `allowed_workers`, runs jobs through the existing
+    `run_ingestion_job` transition path, and returns worker summaries without
+    raw source/object-root paths or worker scratch internals. It does not add
+    lease fields or alter the job record contract. Dev-container verification
+    passed: `test_worker_ingestion.py` ran 3 tests OK, worker Ruff
+    check/format check passed, and the full
+    `python -m unittest discover -s tests` suite ran 292 tests OK.
+- [x] Add closed-beta readiness smoke harness and runbook.
+  - Owner paths: `scripts/closed_beta_smoke.py`,
+    `tests/test_closed_beta_smoke_script.py`, `docs/closed-beta-runbook.md`,
+    `README.md`, this file
+  - Proof: a dev-container smoke exercises Project/Wiki JSON-RPC, storage
+    config redaction, worker ingestion, observation-to-wiki draft bridging,
+    governed retrieval grants/raw-asset references, KG-eval facade integration,
+    public output leak guards, and no canonical graph writes without claiming
+    production readiness.
+  - Note: completed with `scripts/closed_beta_smoke.py`,
+    `tests/test_closed_beta_smoke_script.py`, and
+    `docs/closed-beta-runbook.md`. The smoke uses synthetic fixtures only and
+    validates the current trusted internal closed-beta backbone path without
+    claiming production readiness, live database readiness, automatic
+    publishing, raw asset content access, canonical graph writes, or mail
+    adapter readiness. Dev-container verification passed: focused
+    `test_closed_beta_smoke_script.py` ran 14 OK; `python
+    scripts/closed_beta_smoke.py --output /tmp/formowl-closed-beta-smoke.json`
+    exited 0; Ruff check and format-check passed for `python`, `tests`, and
+    `scripts`; full `python -m unittest discover -s tests` ran 316 OK.
+  - Reviewer gate status: passed user-authorized 3-reviewer test-hardening
+    gate.
+  - Effective reviewer count: 3/3.
+  - Reviewer agreement count: 3/3 (`closed_beta_reviewer_engineering`,
+    `closed_beta_reviewer_safety`, `closed_beta_reviewer_release`).
+  - Reviewers with blocking findings: none remaining; accepted findings were
+    fixed and re-reviewed.
+  - Non-counted agents: none.
+  - Active reviewers: none.
+- [x] Add local data resource folder ingestion MVP.
+  - Owner paths: `python/formowl_ingestion/folder_inbox.py`,
+    `tests/test_local_folder_ingestion.py`,
+    `docs/local-data-resource-inbox.md`, `README.md`, this file
+  - Proof: a trusted local folder scanner defers unstable files with zero
+    durable side effects; stable files register `Asset` records and managed
+    ObjectStore copies; configured extractors create `IngestionJob`,
+    `ExtractorRun`, and persisted `Observation` records; re-scans are
+    idempotent for assets and jobs; public scan reports expose only FormOwl ids,
+    governed locators, hashes, statuses, and counts.
+  - Note: completed as issue #9's generic trusted folder inbox MVP. The scanner
+    uses caller-held stability snapshots before durable writes, registers stable
+    files as normal assets, creates idempotent ingestion jobs, can run the
+    deterministic `.txt` / `.md` text extractor, persists extractor runs and
+    observations, and returns a public report that omits trusted folder paths,
+    source filenames, ObjectStore roots, parser-local paths, and internal
+    stability tokens. Dev-container verification passed: focused
+    `test_local_folder_ingestion.py` ran 10 OK, focused
+    `test_ingestion_package.py` ran 1 OK, Ruff check/format-check passed for
+    `python`, `tests`, and `scripts`, and full
+    `python -m unittest discover -s tests` ran 326 OK. Reviewer gate passed 3/3
+    with `folder_inbox_gate_engineering_v2`,
+    `folder_inbox_gate_safety_v2`, and `folder_inbox_gate_release_v3`; the
+    safety reviewer blocker about public `source_file_token` exposure was fixed
+    and re-reviewed.
 - [ ] Add database-backed stores after file-backed stores stabilize.
   - Owner paths: storage modules, migrations
   - Proof: tests run against file stores and database stores through the same
@@ -2103,6 +2211,19 @@ These groups can be split across multiple agents after Slice 1 is stable.
     guards. Leave this unchecked until the remaining container-backed
     repository tests and the production end-to-end adapter path pass through
     the same interfaces.
+  - 2026-06-29 update: added PostgreSQL-backed ingestion record stores behind
+    the existing file-backed `AssetStore`, `JobStore`, `ExtractorRunStore`,
+    `ObservationStore`, and `UploadSessionStore` surfaces. The new
+    `formowl_ingestion.storage.postgres` slice uses the internal connection
+    protocol, parameterized SQL statements, validated contract payloads, safe
+    record ids, transaction rollback through `PostgreSQLUnitOfWork`, and
+    migration `003_ingestion_records.sql` with scope/asset indexes. This is
+    still an adapter-contract and mocked-connection slice; it does not expose
+    database controls through MCP, claim live PostgreSQL readiness, or close
+    the full database-backed stores item. Dev-container verification passed:
+    focused `test_postgres*.py` ran 20 tests OK, ingestion package export
+    regression ran 1 test OK, touched-file Ruff check/format check passed, and
+    full `python -m unittest discover -s tests` ran 302 tests OK.
 - [x] Add vector and optional graph storage after candidate review workflows
   stabilize.
   - Owner paths: graph/index modules

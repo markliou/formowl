@@ -3,7 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 import json
 from pathlib import Path
+import re
+import shutil
 from typing import Any
+import uuid
 
 from formowl_contract import to_plain
 from formowl_auth.audit import FileAuditLogStore, record_evidence_fetch
@@ -15,7 +18,7 @@ class FileEvidenceSnapshotStore:
 
     def save_snapshot(self, write: dict[str, Any]) -> dict[str, str]:
         snapshot = to_plain(write["snapshot"])
-        snapshot_id = str(snapshot["evidence_snapshot_id"])
+        snapshot_id = _validate_snapshot_id(snapshot["evidence_snapshot_id"])
         source = _first_source(snapshot)
         captured_at = _parse_datetime(str(snapshot["captured_at"]))
         directory = (
@@ -28,19 +31,31 @@ class FileEvidenceSnapshotStore:
             / f"{captured_at.day:02d}"
             / snapshot_id
         )
-        directory.mkdir(parents=True, exist_ok=True)
+        parent_directory = directory.parent
+        parent_directory.mkdir(parents=True, exist_ok=True)
         storage_uri = directory.as_posix()
         snapshot["storage_uri"] = storage_uri
+        if directory.exists():
+            if _is_complete_snapshot_directory(directory):
+                return {"evidence_snapshot_id": snapshot_id, "storage_uri": storage_uri}
+            raise RuntimeError(f"Evidence snapshot directory is incomplete: {snapshot_id}")
 
-        _write_json(directory / "request.json", write.get("request_payload", {}))
-        _write_json(directory / "response.json", write.get("response_payload", {}))
-        normalized = str(write.get("normalized_markdown") or "")
-        (directory / "normalized.md").write_text(normalized, encoding="utf-8")
-        _write_json(
-            directory / "metadata.json",
-            {"snapshot": snapshot, "metadata": write.get("metadata", {})},
-        )
-        _write_json(directory / "snapshot.json", snapshot)
+        temporary_directory = parent_directory / f"{snapshot_id}.tmp-{uuid.uuid4().hex}"
+        temporary_directory.mkdir()
+        try:
+            _write_json(temporary_directory / "request.json", write.get("request_payload", {}))
+            _write_json(temporary_directory / "response.json", write.get("response_payload", {}))
+            normalized = str(write.get("normalized_markdown") or "")
+            (temporary_directory / "normalized.md").write_text(normalized, encoding="utf-8")
+            _write_json(
+                temporary_directory / "metadata.json",
+                {"snapshot": snapshot, "metadata": write.get("metadata", {})},
+            )
+            _write_json(temporary_directory / "snapshot.json", snapshot)
+            temporary_directory.rename(directory)
+        except BaseException:
+            shutil.rmtree(temporary_directory, ignore_errors=True)
+            raise
         return {"evidence_snapshot_id": snapshot_id, "storage_uri": storage_uri}
 
     def get_snapshot(
@@ -53,9 +68,12 @@ class FileEvidenceSnapshotStore:
         workspace_id: str | None = None,
         timestamp: str | None = None,
     ) -> dict[str, Any] | None:
+        evidence_snapshot_id = _validate_snapshot_id(evidence_snapshot_id)
         for path in self.base_dir.glob(
             f"raw/evidence/*/*/*/*/{evidence_snapshot_id}/metadata.json"
         ):
+            if not _is_complete_snapshot_directory(path.parent):
+                continue
             payload = json.loads(path.read_text(encoding="utf-8"))
             _log_evidence_fetch(
                 audit_store=audit_store,
@@ -88,9 +106,12 @@ class FileEvidenceSnapshotStore:
         workspace_id: str | None = None,
         timestamp: str | None = None,
     ) -> dict[str, Any] | None:
+        evidence_snapshot_id = _validate_snapshot_id(evidence_snapshot_id)
         for path in self.base_dir.glob(
             f"raw/evidence/*/*/*/*/{evidence_snapshot_id}/response.json"
         ):
+            if not _is_complete_snapshot_directory(path.parent):
+                continue
             _log_evidence_fetch(
                 audit_store=audit_store,
                 actor_user_id=actor_user_id,
@@ -129,6 +150,26 @@ def _write_json(path: Path, payload: Any) -> None:
         json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+
+_REQUIRED_SNAPSHOT_FILES = {
+    "request.json",
+    "response.json",
+    "normalized.md",
+    "metadata.json",
+    "snapshot.json",
+}
+_SAFE_SNAPSHOT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def _is_complete_snapshot_directory(directory: Path) -> bool:
+    return all((directory / name).is_file() for name in _REQUIRED_SNAPSHOT_FILES)
+
+
+def _validate_snapshot_id(value: Any) -> str:
+    if not isinstance(value, str) or not _SAFE_SNAPSHOT_ID.fullmatch(value):
+        raise ValueError("evidence_snapshot_id must be a safe FormOwl identifier")
+    return value
 
 
 def _log_evidence_fetch(
