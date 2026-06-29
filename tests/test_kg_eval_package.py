@@ -123,6 +123,14 @@ class KGEvalPackageTests(unittest.TestCase):
             self.assertFalse(
                 summary["claim_boundary"]["supports_full_product_production_ready_claim"]
             )
+            candidate_capabilities = summary["candidate_generation_capabilities"]
+            self.assertTrue(
+                candidate_capabilities["selection_boundary"][
+                    "bert_or_sentence_transformer_available_as_adapter_slot"
+                ]
+            )
+            self.assertTrue(candidate_capabilities["selection_boundary"]["neural_models_optional"])
+            self.assertEqual(len(candidate_capabilities["profiles"]), 3)
             self.assertNotIn(str(repo_root), rendered)
 
     def test_cli_summary_prints_json(self) -> None:

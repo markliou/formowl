@@ -15,6 +15,8 @@ import subprocess
 import sys
 from typing import Any
 
+from formowl_graph import build_candidate_generation_capability_summary
+
 
 KG_EVAL_COMMANDS: dict[str, str] = {
     "total": "kg_total_acceptance_suite.py",
@@ -181,6 +183,7 @@ def build_acceptance_summary(*, repository_root: Path | str | None = None) -> di
             "blocked_gate_ids": progress_summary.get("blocked_gate_ids", []),
             "total_acceptance_state": progress_summary.get("total_acceptance_state"),
         },
+        "candidate_generation_capabilities": build_candidate_generation_capability_summary(),
         "integration_boundary": {
             "authoritative_workspace": ".formowl/kg-eval",
             "system_agent_should_call": "formowl-kg-eval summary",

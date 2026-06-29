@@ -68,6 +68,37 @@ views, and graph projection redaction:
 - `tests/test_graph_resolution.py`
 - `tests/test_graph_wiki_projection.py`
 
+## Candidate Generation Capability Profiles
+
+The KG method now treats BERT, SentenceTransformer, NER, relation extraction,
+and local LLM graph extraction as optional candidate-generation capabilities,
+not as the source of ontology or canonical graph truth.
+
+This is a feature boundary for heterogeneous remote computers:
+
+| Profile | Intended worker | Neural network use | Output |
+| --- | --- | --- | --- |
+| `deterministic_cpu_candidate_generation_v1` | low-spec CPU worker | no | lexical, rule, gazetteer, and RapidFuzz-compatible `FusionCandidate` / candidate graph proposals |
+| `local_embedding_candidate_generation_v1` | standard CPU worker with local model files | yes, optional | SentenceTransformer or BERT-family embeddings, pgvector similarity candidates, embedding score breakdowns, and type-alignment candidates |
+| `accelerated_neural_candidate_generation_v1` | GPU or remote model worker | yes, optional | BERT-family NER, BERT-family relation extraction, local LLM graph extraction, multimodal semantic candidates, and large embedding batches |
+
+All profiles preserve the same governance boundary:
+
+- neural adapters may create observations, semantic metadata, candidate atoms,
+  candidate relations, fusion candidates, type alignment candidates, embedding
+  rows, and score breakdowns;
+- neural adapters must not define canonical ontology state by themselves;
+- neural adapters must not write canonical graph/type state;
+- neural adapters must not grant raw access;
+- ontology policy, candidate review, relation/entity resolution, and canonical
+  commit workflows remain the decision layers.
+
+The current default package declares these profiles and implements the
+deterministic baseline path. It does not claim that BERT inference is enabled
+by default. A follow-up BERT ablation branch should compare the deterministic
+profile against a neural profile and persist the benchmark artifacts so the
+team can evaluate the cost/quality tradeoff with evidence.
+
 ## Multimodal Enterprise-Data Validation
 
 The acceptance suite checks locked observations for these enterprise resource

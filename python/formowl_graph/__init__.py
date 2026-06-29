@@ -10,6 +10,13 @@ from .canonical import (
     CanonicalCommitResult,
     commit_reviewed_candidates_to_canonical_graph,
 )
+from .capabilities import (
+    CandidateGenerationProfile,
+    build_candidate_generation_capability_summary,
+    get_candidate_generation_profile,
+    list_candidate_generation_profiles,
+    select_candidate_generation_profile,
+)
 from .lifecycle import (
     CanonicalLifecycleEvent,
     CanonicalLifecycleResolution,
@@ -72,6 +79,7 @@ __all__ = [
     "AccessRequiredScope",
     "AcceptanceItem",
     "CandidateExtractionResult",
+    "CandidateGenerationProfile",
     "CandidatePreviewItem",
     "CandidatePreviewResult",
     "CanonicalCommitPolicyPins",
@@ -96,6 +104,7 @@ __all__ = [
     "StructuredLinkageCandidateGenerator",
     "TypeCompatibilityDecision",
     "assemble_effective_graph_view",
+    "build_candidate_generation_capability_summary",
     "build_clerical_review_queue",
     "canonical_merge",
     "commit_reviewed_candidates_to_canonical_graph",
@@ -103,7 +112,9 @@ __all__ = [
     "extract_and_store_candidates",
     "generate_lexical_fusion_candidates",
     "generate_structured_linkage_candidates",
+    "get_candidate_generation_profile",
     "human_clerical_review_queue_export",
+    "list_candidate_generation_profiles",
     "no_raw_access_grant",
     "preview_candidates",
     "policy_contract_hash",
@@ -121,5 +132,6 @@ __all__ = [
     "requester_has_effective_graph_view_access",
     "resolve_canonical_lifecycle_id",
     "run_kg_research_acceptance_suite",
+    "select_candidate_generation_profile",
     "splink_model_config_manifest_bound_to_main_repo",
 ]

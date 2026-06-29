@@ -90,6 +90,13 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   extra is installed. A narrow container smoke harness can exercise both
   package bindings as candidate-only outputs with no raw access or canonical
   graph writes, but this is not production entity-resolution adapter readiness.
+- Candidate-generation capability profiles for heterogeneous remote computers:
+  low-spec CPU workers can use deterministic lexical/rule-based generation,
+  standard CPU workers have a SentenceTransformer or BERT-family embedding
+  adapter slot, and high-spec GPU or remote model workers have BERT-family
+  NER/relation extraction plus local LLM graph-extraction adapter slots. These
+  profiles are candidate-only and do not authorize canonical graph/type writes
+  or raw asset access.
 - A locked production adapter stack smoke harness can compose the current
   file-backed retrieval gateway, semantic MCP gateway facade, RapidFuzz/Splink
   candidate-only package bindings, clerical-review packet export, and
@@ -198,7 +205,10 @@ enterprise-scale latency/scalability.
 The packaged integration facade is `formowl_kg_eval`, with CLI entry point
 `formowl-kg-eval` after installation and `python -m formowl_kg_eval` as the
 module fallback. System integrations should consume the stable summary instead
-of importing repo-local harness scripts directly:
+of importing repo-local harness scripts directly. The summary also includes
+`candidate_generation_capabilities`, which maps low-spec, standard CPU, GPU,
+and remote model workers to deterministic or neural candidate-generation
+profiles:
 
 ```sh
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python -m formowl_kg_eval summary"

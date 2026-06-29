@@ -1449,3 +1449,20 @@ Reviewer cost-control rules:
   `.formowl/kg-eval` scripts. `docs/kg-eval-package.md` records the package
   contract, CLI, Python API, claim boundary, and System Backbone integration
   guidance.
+- 2026-06-29 candidate-generation capability profile checkpoint:
+  `python/formowl_graph/capabilities.py` now declares stable KG
+  candidate-generation profiles for heterogeneous remote workers:
+  deterministic low-spec CPU generation, local SentenceTransformer or
+  BERT-family embedding generation, and accelerated neural generation for
+  BERT-family NER/relation extraction, local LLM graph extraction, multimodal
+  semantic adapters, and large embedding batches. `formowl_kg_eval summary`
+  exposes these profiles under `candidate_generation_capabilities` for System
+  Backbone worker routing. This restores BERT/SentenceTransformer as an
+  optional adapter slot; it does not claim default BERT inference is running,
+  and neural adapters remain candidate-only with no canonical graph/type write
+  authority and no raw-access authority. Dev-container verification passed:
+  focused capability tests 5 OK, focused KG-eval package tests 4 OK, full main
+  repo unittest 261 OK, full Ruff check and format-check passed, and
+  `python -m formowl_kg_eval summary` shows the three profiles. Next work after
+  pushing this branch is a separate BERT ablation experiment branch that
+  preserves BERT vs non-BERT benchmark artifacts for stakeholder review.

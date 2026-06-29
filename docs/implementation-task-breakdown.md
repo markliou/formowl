@@ -1945,6 +1945,25 @@ These groups can be split across multiple agents after Slice 1 is stable.
     safety, `Epicurus` agreed on governance and non-evidence boundaries, and
     `Ptolemy` agreed on durable docs/status honesty.
 
+- [x] Add KG candidate-generation capability profiles for heterogeneous remote
+  workers.
+  - Owner paths: `python/formowl_graph/`, `python/formowl_kg_eval/`, `docs/`,
+    `tests/`
+  - Proof: `formowl_kg_eval summary` exposes
+    `candidate_generation_capabilities` with deterministic CPU,
+    local-embedding, and accelerated neural profiles. BERT/SentenceTransformer
+    is restored as an optional candidate-generation adapter slot rather than a
+    canonical ontology or graph-write mechanism. Profiles remain candidate-only
+    and forbid canonical graph/type writes and raw asset access.
+  - Note: canonical dev-container verification passed: focused
+    `test_candidate_generation_capabilities.py` ran 5 OK; focused
+    `test_kg_eval_package.py` ran 4 OK; full
+    `python -m unittest discover -s tests` ran 261 OK; full Ruff check and
+    format-check passed for `python`, `tests`, `scripts`, and `.formowl/kg-eval`;
+    `python -m formowl_kg_eval summary` shows the three profiles and the
+    BERT/SentenceTransformer adapter slot. Follow-up experiment work should run
+    on a separate branch and persist BERT vs non-BERT ablation artifacts.
+
 ### Real Project and Wiki Integrations
 
 - [ ] Add real OpenProject adapter client, mapper, and tests with mocked HTTP.

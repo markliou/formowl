@@ -67,6 +67,7 @@ remaining_evidence
 preflight
 work_orders
 progress
+candidate_generation_capabilities
 integration_boundary
 ```
 
@@ -95,6 +96,32 @@ progress
 The command result carries `command`, `script`, `returncode`, `stdout`,
 `stderr`, and `passed`.
 
+## Candidate Generation Capability Profiles
+
+The package summary also exposes `candidate_generation_capabilities`. This is
+the stable handoff surface for heterogeneous remote computers:
+
+- `deterministic_cpu_candidate_generation_v1` is the low-spec path. It uses
+  rules, gazetteers, deterministic text markers, Unicode normalization, and
+  RapidFuzz-compatible lexical matching. It does not use neural networks.
+- `local_embedding_candidate_generation_v1` is the standard CPU path. It is the
+  adapter slot for SentenceTransformer or BERT-family encoder embeddings,
+  pgvector similarity candidates, and embedding-backed type alignment.
+- `accelerated_neural_candidate_generation_v1` is the high-spec worker path.
+  It is the adapter slot for BERT-family NER, BERT-family relation extraction,
+  local LLM graph extraction, multimodal semantic adapters, and large embedding
+  batches.
+
+All three profiles emit candidate-only records such as `SemanticMetadata`,
+`CandidateAtom`, `CandidateRelation`, `FusionCandidate`, and
+`TypeAlignmentCandidate`. None of the profiles may write canonical graph/type
+state or grant raw asset access.
+
+This section intentionally does not claim that a BERT model is already running
+in the default dev container. It records the integration contract that lets the
+System Backbone Agent route low-spec machines to deterministic generation and
+route high-spec or remote model workers to neural candidate adapters.
+
 ## System Backbone Integration Contract
 
 The System Backbone Agent should call the package facade, not repo-local
@@ -104,6 +131,7 @@ validator modules:
 System Backbone Agent
   -> formowl-kg-eval summary
   -> reads claim_boundary and total_acceptance
+  -> reads candidate_generation_capabilities for worker routing
   -> decides whether product-level integration can proceed
 ```
 

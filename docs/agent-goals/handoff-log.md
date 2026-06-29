@@ -1096,3 +1096,17 @@ status in each role's goal file and task completion in
   `docs/kg-eval-package.md` with the integration contract and
   `tests/test_kg_eval_package.py` for workspace resolution, authoritative
   script invocation, summary redaction, and CLI output.
+- 2026-06-29 KG candidate-generation capability profiles: added
+  `python/formowl_graph/capabilities.py` and surfaced
+  `candidate_generation_capabilities` through `formowl_kg_eval summary`.
+  The package now tells downstream integration which remote-worker tiers can
+  use deterministic CPU generation, local SentenceTransformer/BERT-family
+  embedding adapters, or accelerated neural adapters for BERT-family NER,
+  relation extraction, local LLM graph extraction, multimodal semantic
+  candidates, and large embedding batches. This is a candidate-only contract:
+  profiles forbid canonical graph/type writes and raw access, and no default
+  BERT runtime claim is made. Dev-container verification passed for focused
+  capability tests 5 OK, focused KG-eval package tests 4 OK, full main-repo
+  unittest 261 OK, full Ruff check/format-check, and package summary smoke.
+  Follow-up BERT vs non-BERT ablation work should start from the pushed commit
+  on a new experiment branch and persist benchmark artifacts.
