@@ -245,8 +245,12 @@ class GraphIndexStoreTests(unittest.TestCase):
         invalid_metadata_tuple_raw_locator["metadata"] = {
             "paths": ("smb://nas/share/file.txt",),
         }
-        unsafe_id = valid_record.to_dict()
-        unsafe_id["vector_id"] = "../escape"
+        unsafe_id_payloads = []
+        for unsafe_vector_id in _unsafe_index_ids("vec"):
+            unsafe_id = valid_record.to_dict()
+            unsafe_id["vector_id"] = unsafe_vector_id
+            unsafe_id_payloads.append(unsafe_id)
+        before_invalid_state = _tree_state(temp_dir)
 
         with self.assertRaises(ContractValidationError):
             store.create(invalid_embedding)
@@ -266,10 +270,13 @@ class GraphIndexStoreTests(unittest.TestCase):
             store.create(invalid_metadata_nested_non_string_key)
         with self.assertRaises(ContractValidationError):
             store.create(invalid_metadata_tuple_raw_locator)
-        with self.assertRaises(ValueError):
-            store.create(unsafe_id)
+        for unsafe_id in unsafe_id_payloads:
+            with self.subTest(vector_id=unsafe_id["vector_id"]):
+                with self.assertRaises(ValueError):
+                    store.create(unsafe_id)
 
         self.assertEqual([record.vector_id for record in store.list()], ["vec_valid"])
+        self.assertEqual(_tree_state(temp_dir), before_invalid_state)
 
     def test_graph_projection_store_filters_nodes_and_edges_by_permission(self) -> None:
         temp_dir = _paths.fresh_test_dir("graph-index-projection-permission")
@@ -555,6 +562,44 @@ class GraphIndexStoreTests(unittest.TestCase):
             permission_scope,
         ).to_dict()
         invalid_edge_relation_type["relation_type"] = "s3://bucket/key"
+        invalid_node_id_payloads = []
+        for unsafe_node_id in _unsafe_index_ids("node"):
+            invalid_node_id_payloads.append(
+                _projection_node(
+                    unsafe_node_id,
+                    "catom_invalid_node_id",
+                    permission_scope,
+                )
+            )
+        invalid_edge_id_payloads = []
+        for unsafe_edge_id in _unsafe_index_ids("edge"):
+            invalid_edge_id_payloads.append(
+                _projection_edge(
+                    unsafe_edge_id,
+                    "node_left",
+                    "node_right",
+                    permission_scope,
+                )
+            )
+        invalid_edge_endpoint_payloads = []
+        for index, unsafe_endpoint_id in enumerate(_unsafe_index_ids("endpoint"), start=1):
+            invalid_edge_endpoint_payloads.append(
+                _projection_edge(
+                    f"edge_invalid_source_endpoint_{index}",
+                    unsafe_endpoint_id,
+                    "node_right",
+                    permission_scope,
+                )
+            )
+            invalid_edge_endpoint_payloads.append(
+                _projection_edge(
+                    f"edge_invalid_target_endpoint_{index}",
+                    "node_left",
+                    unsafe_endpoint_id,
+                    permission_scope,
+                )
+            )
+        before_invalid_state = _tree_state(temp_dir)
 
         with self.assertRaises(ContractValidationError):
             store.create_node(invalid_node_source)
@@ -578,12 +623,25 @@ class GraphIndexStoreTests(unittest.TestCase):
             store.create_edge(invalid_edge_property_tuple)
         with self.assertRaises(ContractValidationError):
             store.create_edge(invalid_edge_relation_type)
+        for invalid_node in invalid_node_id_payloads:
+            with self.subTest(node_id=invalid_node.node_id):
+                with self.assertRaises(ValueError):
+                    store.create_node(invalid_node)
+        for invalid_edge in invalid_edge_id_payloads:
+            with self.subTest(edge_id=invalid_edge.edge_id):
+                with self.assertRaises(ValueError):
+                    store.create_edge(invalid_edge)
+        for invalid_edge in invalid_edge_endpoint_payloads:
+            with self.subTest(edge_id=invalid_edge.edge_id):
+                with self.assertRaises(ValueError):
+                    store.create_edge(invalid_edge)
 
         self.assertEqual(store.list_nodes(), [])
         self.assertEqual(store.list_edges(), [])
         projection_root = temp_dir / "graph" / "index" / "graph-projections"
         self.assertEqual(list(projection_root.rglob("*.json")), [])
         self.assertEqual(list(projection_root.rglob("*.tmp")), [])
+        self.assertEqual(_tree_state(temp_dir), before_invalid_state)
 
 
 def _vector_record(
@@ -661,6 +719,34 @@ def _project_grant(
         expires_at=expires_at,
         revoked_at=revoked_at,
     )
+
+
+def _unsafe_index_ids(prefix: str) -> tuple[str, ...]:
+    return (
+        ".",
+        "..",
+        ".hidden",
+        "-hidden",
+        "_hidden",
+        "+hidden",
+        f"../{prefix}",
+        rf"..\{prefix}",
+        f"{prefix}/path",
+        rf"{prefix}\path",
+    )
+
+
+def _tree_state(root) -> dict[str, str]:
+    if not root.exists():
+        return {}
+    state: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        relative_path = path.relative_to(root).as_posix()
+        if path.is_dir():
+            state[f"{relative_path}/"] = "<dir>"
+        else:
+            state[relative_path] = path.read_text(encoding="utf-8")
+    return state
 
 
 if __name__ == "__main__":

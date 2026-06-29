@@ -10,7 +10,9 @@ from typing import Any, Callable, Generic, TypeVar
 
 from formowl_contract import ContractValidationError, Grant, to_plain, validate_permission_scope
 
-_SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
+# File-backed index ids must not become dot entries, hidden files, or
+# traversal fragments when converted into JSON record paths.
+_SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _RAW_PATH_PATTERN = re.compile(r"^(?:/|\\\\|file://|[A-Za-z]:[\\/])")
 _RAW_STORAGE_URI_PATTERN = re.compile(
     r"^(?:abfs|dav|file|gs|http\+unix|minio|nfs|object|postgres|postgresql|s3|s3a|"
