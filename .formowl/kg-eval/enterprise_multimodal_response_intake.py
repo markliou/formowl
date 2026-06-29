@@ -18,6 +18,7 @@ from typing import Any
 import enterprise_multimodal_collection_packet_generator as work_packet_generator
 import enterprise_multimodal_packet_assembler as assembler
 import enterprise_multimodal_validation_validator as validator
+import public_reproducible_evidence as public_evidence
 
 
 ROOT = Path(__file__).resolve().parent
@@ -28,13 +29,21 @@ SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,96}$")
 ARTIFACT_FILENAMES = {
     "pilot_manifest_artifact": "pilot_manifest.json",
     "human_adjudication_artifact": "human_adjudication.json",
+    "llm_subagent_adjudication_artifact": "llm_subagent_adjudication.json",
     "business_decision_review_artifact": "business_decision_review.json",
     "permission_probe_artifact": "permission_probe.json",
+    "public_evidence_manifest_artifact": "public_evidence_manifest.json",
+}
+COMMON_ARTIFACT_FIELDS = {
+    "pilot_manifest_artifact",
+    "business_decision_review_artifact",
+    "permission_probe_artifact",
 }
 RESPONSE_PACKET_ALLOWED_FIELDS = {
     "response_packet_type",
     "operator_run_id",
     "validation_artifacts",
+    "evidence_source_mode",
     *ARTIFACT_FILENAMES,
 }
 RAW_INTERNAL_FIELD_NAMES = {
@@ -357,8 +366,78 @@ def _validation_payloads(response_packet: dict[str, Any]) -> list[dict[str, Any]
     ]
 
 
-def _planned_paths(output_dir: Path, validation_payloads: list[dict[str, Any]]) -> dict[str, Path]:
-    paths = {field: output_dir / filename for field, filename in ARTIFACT_FILENAMES.items()}
+def _uses_llm_adjudication_route(response_packet: dict[str, Any]) -> bool:
+    has_human = "human_adjudication_artifact" in response_packet
+    has_llm = "llm_subagent_adjudication_artifact" in response_packet
+    if has_human == has_llm:
+        raise IntakeError("response packet must supply exactly one adjudication route")
+    return has_llm
+
+
+def _evidence_source_mode(response_packet: dict[str, Any]) -> str | None:
+    mode = response_packet.get("evidence_source_mode")
+    has_public_manifest = "public_evidence_manifest_artifact" in response_packet
+    if mode is None and not has_public_manifest:
+        return None
+    if mode not in public_evidence.ALLOWED_MODES:
+        raise IntakeError("evidence_source_mode is unsupported")
+    if mode == public_evidence.PUBLIC_MODE and not has_public_manifest:
+        raise IntakeError("public evidence mode requires a public evidence manifest")
+    if mode == public_evidence.PRIVATE_MODE and has_public_manifest:
+        raise IntakeError("operator-private mode must not include a public evidence manifest")
+    return mode
+
+
+def _validate_route_review_flags(
+    *,
+    validation_payloads: list[dict[str, Any]],
+    business_review: dict[str, Any],
+    llm_route: bool,
+) -> None:
+    for entry in validation_payloads:
+        artifact = entry["artifact"]
+        rows = artifact.get("rows")
+        if not isinstance(rows, list):
+            raise IntakeError("validation artifact rows must be a list")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise IntakeError("validation artifact row must be a JSON object")
+            if llm_route:
+                if row.get("llm_subagent_adjudicated") is not True:
+                    raise IntakeError("validation row must be LLM subagent adjudicated")
+                if row.get("human_adjudicated") not in {None, False}:
+                    raise IntakeError("validation row must not claim human adjudication")
+            else:
+                if row.get("human_adjudicated") is not True:
+                    raise IntakeError("validation row must be human adjudicated")
+                if row.get("llm_subagent_adjudicated") not in {None, False}:
+                    raise IntakeError("validation row must not claim LLM subagent adjudication")
+    if llm_route:
+        if business_review.get("llm_subagent_reviewed") is not True:
+            raise IntakeError("business decision review must be LLM subagent reviewed")
+        if business_review.get("human_reviewed") not in {None, False}:
+            raise IntakeError("business decision review must not claim human review")
+    else:
+        if business_review.get("human_reviewed") is not True:
+            raise IntakeError("business decision review must be human reviewed")
+        if business_review.get("llm_subagent_reviewed") not in {None, False}:
+            raise IntakeError("business decision review must not claim LLM subagent review")
+
+
+def _planned_paths(
+    output_dir: Path,
+    validation_payloads: list[dict[str, Any]],
+    *,
+    llm_route: bool,
+    public_mode: bool = False,
+) -> dict[str, Path]:
+    route_field = (
+        "llm_subagent_adjudication_artifact" if llm_route else "human_adjudication_artifact"
+    )
+    fields = [*sorted(COMMON_ARTIFACT_FIELDS), route_field]
+    if public_mode:
+        fields.append("public_evidence_manifest_artifact")
+    paths = {field: output_dir / ARTIFACT_FILENAMES[field] for field in fields}
     for row in validation_payloads:
         modality = row["modality"]
         paths[f"validation::{modality}"] = output_dir / f"validation_{modality}.json"
@@ -411,10 +490,30 @@ def preflight_response_packet(
     )
 
     validation_payloads = _validation_payloads(response_packet)
-    for field in ARTIFACT_FILENAMES:
-        _artifact_payload(response_packet, field)
+    llm_route = _uses_llm_adjudication_route(response_packet)
+    evidence_mode = _evidence_source_mode(response_packet)
+    public_mode = evidence_mode == public_evidence.PUBLIC_MODE
+    business_review = _artifact_payload(response_packet, "business_decision_review_artifact")
+    route_field = (
+        "llm_subagent_adjudication_artifact" if llm_route else "human_adjudication_artifact"
+    )
+    for field in [*COMMON_ARTIFACT_FIELDS, route_field]:
+        if field != "business_decision_review_artifact":
+            _artifact_payload(response_packet, field)
+    _validate_route_review_flags(
+        validation_payloads=validation_payloads,
+        business_review=business_review,
+        llm_route=llm_route,
+    )
+    if public_mode:
+        _artifact_payload(response_packet, "public_evidence_manifest_artifact")
 
-    planned_paths = _planned_paths(output_path, validation_payloads)
+    planned_paths = _planned_paths(
+        output_path,
+        validation_payloads,
+        llm_route=llm_route,
+        public_mode=public_mode,
+    )
     if assembly_manifest_path is not None:
         planned_paths["assembly_manifest"] = assembly_manifest_path
     _ensure_no_overwrite(planned_paths)
@@ -439,8 +538,10 @@ def preflight_response_packet(
         "claim_boundary": {
             "supports_real_enterprise_multimodal_claim": False,
             "supports_multimodal_human_adjudication_completed_claim": False,
+            "supports_multimodal_llm_subagent_adjudication_completed_claim": False,
             "supports_cross_modal_permission_probe_claim": False,
             "supports_business_decision_review_claim": False,
+            public_evidence.CLAIM_FIELD: False,
             "supports_canonical_packet_written_claim": False,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
@@ -471,12 +572,15 @@ def build_intake_artifacts(
     )
 
     validation_payloads = _validation_payloads(response_packet)
+    llm_route = _uses_llm_adjudication_route(response_packet)
+    evidence_mode = _evidence_source_mode(response_packet)
+    public_mode = evidence_mode == public_evidence.PUBLIC_MODE
+    route_field = (
+        "llm_subagent_adjudication_artifact" if llm_route else "human_adjudication_artifact"
+    )
     payloads: dict[str, object] = {
         "pilot_manifest_artifact": _artifact_payload(response_packet, "pilot_manifest_artifact"),
-        "human_adjudication_artifact": _artifact_payload(
-            response_packet,
-            "human_adjudication_artifact",
-        ),
+        route_field: _artifact_payload(response_packet, route_field),
         "business_decision_review_artifact": _artifact_payload(
             response_packet,
             "business_decision_review_artifact",
@@ -485,10 +589,25 @@ def build_intake_artifacts(
             response_packet, "permission_probe_artifact"
         ),
     }
+    _validate_route_review_flags(
+        validation_payloads=validation_payloads,
+        business_review=payloads["business_decision_review_artifact"],
+        llm_route=llm_route,
+    )
+    if public_mode:
+        payloads["public_evidence_manifest_artifact"] = _artifact_payload(
+            response_packet,
+            "public_evidence_manifest_artifact",
+        )
     for row in validation_payloads:
         payloads[f"validation::{row['modality']}"] = row["artifact"]
 
-    planned_paths = _planned_paths(output_path, validation_payloads)
+    planned_paths = _planned_paths(
+        output_path,
+        validation_payloads,
+        llm_route=llm_route,
+        public_mode=public_mode,
+    )
     if assembly_manifest_path is not None:
         planned_paths["assembly_manifest"] = assembly_manifest_path
     _ensure_no_overwrite(planned_paths)
@@ -506,22 +625,30 @@ def build_intake_artifacts(
             }
             for row in validation_payloads
         ],
-        "human_adjudication_artifact": _artifact_ref(planned_paths["human_adjudication_artifact"]),
         "business_decision_review_artifact": _artifact_ref(
             planned_paths["business_decision_review_artifact"]
         ),
         "permission_probe_artifact": _artifact_ref(planned_paths["permission_probe_artifact"]),
         "claim_boundary": {
             "supports_real_enterprise_multimodal_claim": True,
-            "supports_multimodal_human_adjudication_completed_claim": True,
+            "supports_multimodal_human_adjudication_completed_claim": not llm_route,
+            "supports_multimodal_llm_subagent_adjudication_completed_claim": llm_route,
             "supports_cross_modal_permission_probe_claim": True,
             "supports_business_decision_review_claim": True,
             "supports_financial_advice_or_autonomous_business_judgment_claim": False,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
             "supports_raw_asset_access_claim": False,
+            public_evidence.CLAIM_FIELD: public_mode,
         },
     }
+    if evidence_mode is not None:
+        assembly_manifest["evidence_source_mode"] = evidence_mode
+    if public_mode:
+        assembly_manifest["public_evidence_manifest_artifact"] = _artifact_ref(
+            planned_paths["public_evidence_manifest_artifact"]
+        )
+    assembly_manifest[route_field] = _artifact_ref(planned_paths[route_field])
     created_paths: list[Path] = []
     try:
         for key, payload in payloads.items():
@@ -583,8 +710,10 @@ def build_intake_artifacts(
             "claim_boundary": {
                 "supports_real_enterprise_multimodal_claim": False,
                 "supports_multimodal_human_adjudication_completed_claim": False,
+                "supports_multimodal_llm_subagent_adjudication_completed_claim": False,
                 "supports_cross_modal_permission_probe_claim": False,
                 "supports_business_decision_review_claim": False,
+                public_evidence.CLAIM_FIELD: False,
                 "supports_canonical_packet_written_claim": False,
                 "supports_production_ready_claim": False,
                 "supports_top_tier_scientific_validation_claim": False,
@@ -621,8 +750,10 @@ def build_intake_artifacts(
             ],
             "supports_real_enterprise_multimodal_claim": False,
             "supports_multimodal_human_adjudication_completed_claim": False,
+            "supports_multimodal_llm_subagent_adjudication_completed_claim": False,
             "supports_cross_modal_permission_probe_claim": False,
             "supports_business_decision_review_claim": False,
+            public_evidence.CLAIM_FIELD: False,
             "supports_canonical_packet_written_claim": False,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,

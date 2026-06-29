@@ -30,7 +30,7 @@ WORK_PACKETS = ROOT / "work_packets"
 OUTPUT_PATH = RESULTS / "real_evidence_gate_progress.json"
 VALIDATION_REPORT_SUFFIX = "_candidate_validation_report.json"
 APPROVAL_NAME_MARKER = "approval"
-EXPECTED_GATE_IDS = [row.gate_id for row in submission_manifest.EXPECTED_SUBMISSIONS]
+HISTORICAL_GATE_IDS = list(preflight.EXPECTED_GATES)
 
 
 def sha256_json(payload: object) -> str:
@@ -132,6 +132,8 @@ def _validation_rows_by_gate(
             expected = submission_manifest.EXPECTED_BY_GATE.get(gate_id)
             if expected is None:
                 continue
+            if gate_id not in by_gate:
+                continue
             candidate_manifest = row.get("candidate_manifest")
             current_manifest_surface = candidate_manifest_surfaces.get(gate_id, {})
             current_manifest_sha = (
@@ -226,6 +228,8 @@ def _approval_rows_by_gate() -> tuple[dict[str, list[dict[str, Any]]], list[dict
         payload = _load_json(path)
         gate_id = payload.get("gate_id")
         if gate_id not in by_gate:
+            if gate_id in submission_manifest.EXPECTED_BY_GATE:
+                continue
             rejected_surfaces.append(
                 {
                     "approval_manifest": surface["path"],
@@ -273,6 +277,12 @@ def _source_report_contract(
 ) -> dict[str, Any]:
     preflight_summary = preflight_report.get("summary", {})
     work_order_summary = work_order_report.get("summary", {})
+    current_blocked_gate_ids = preflight_summary.get("blocked_gate_ids")
+    if not isinstance(current_blocked_gate_ids, list):
+        current_blocked_gate_ids = []
+    current_blocked_gate_ids = list(current_blocked_gate_ids)
+    preflight_gate_ids = _gate_ids_from_preflight(preflight_report)
+    work_order_gate_ids = _gate_ids_from_work_orders(work_order_report)
     checks = {
         "preflight_artifact_id": (
             preflight_report.get("artifact_id") == "kg_real_evidence_preflight_v1"
@@ -286,16 +296,17 @@ def _source_report_contract(
         "work_order_sync_synchronized": (
             work_order_report.get("sync", {}).get("status") == "synchronized"
         ),
-        "preflight_gate_ids_expected": _gate_ids_from_preflight(preflight_report)
-        == EXPECTED_GATE_IDS,
-        "work_order_gate_ids_expected": _gate_ids_from_work_orders(work_order_report)
-        == EXPECTED_GATE_IDS,
-        "blocked_gate_ids_match_expected": preflight_summary.get("blocked_gate_ids")
-        == EXPECTED_GATE_IDS,
+        "preflight_gate_ids_cover_historical_monitored_gates": preflight_gate_ids
+        == HISTORICAL_GATE_IDS,
+        "current_blocked_gate_ids_are_historical_subset": all(
+            gate_id in HISTORICAL_GATE_IDS for gate_id in current_blocked_gate_ids
+        ),
+        "work_order_gate_ids_match_current_blocked_gates": work_order_gate_ids
+        == current_blocked_gate_ids,
         "work_order_blocked_gate_ids_match_preflight": work_order_summary.get(
             "preflight_blocked_gate_ids"
         )
-        == preflight_summary.get("blocked_gate_ids"),
+        == current_blocked_gate_ids,
         "work_order_gate_status_hash_matches_preflight": work_order_summary.get(
             "gate_status_sha256"
         )
@@ -310,9 +321,11 @@ def _source_report_contract(
         "status": "valid" if not blockers else "invalid",
         "checks": checks,
         "blockers": blockers,
-        "expected_gate_ids": EXPECTED_GATE_IDS,
-        "preflight_gate_ids": _gate_ids_from_preflight(preflight_report),
-        "work_order_gate_ids": _gate_ids_from_work_orders(work_order_report),
+        "historical_monitored_gate_ids": HISTORICAL_GATE_IDS,
+        "current_blocked_gate_ids": current_blocked_gate_ids,
+        "expected_gate_ids": current_blocked_gate_ids,
+        "preflight_gate_ids": preflight_gate_ids,
+        "work_order_gate_ids": work_order_gate_ids,
     }
 
 
@@ -428,8 +441,10 @@ def build_report(
     validation_by_gate = _validation_rows_by_gate(candidate_manifests)
     approval_by_gate, rejected_approval_surfaces = _approval_rows_by_gate()
     gate_rows: list[dict[str, Any]] = []
-    for expected in submission_manifest.EXPECTED_SUBMISSIONS:
-        gate_id = expected.gate_id
+    for gate_id in source_contract["current_blocked_gate_ids"]:
+        expected = submission_manifest.EXPECTED_BY_GATE.get(gate_id)
+        if expected is None:
+            continue
         preflight_row = preflight_by_gate.get(gate_id, {})
         manifest_surface = candidate_manifests[gate_id]
         validation_rows = validation_by_gate.get(gate_id, [])

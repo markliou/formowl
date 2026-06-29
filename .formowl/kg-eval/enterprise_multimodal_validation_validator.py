@@ -14,6 +14,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+import llm_subagent_adjudication as llm_panel
+import public_reproducible_evidence as public_evidence
+
 
 ROOT = Path(__file__).resolve().parent
 INPUTS = ROOT / "inputs"
@@ -58,21 +61,26 @@ PACKET_ALLOWED_FIELDS = {
     "validation_artifacts",
     "human_adjudication_artifact",
     "human_adjudication_artifact_sha256",
+    "llm_subagent_adjudication_artifact",
+    "llm_subagent_adjudication_artifact_sha256",
     "business_decision_review_artifact",
     "business_decision_review_artifact_sha256",
     "permission_probe_artifact",
     "permission_probe_artifact_sha256",
     "claim_boundary",
+    *public_evidence.PACKET_FIELDS,
 }
 CLAIM_BOUNDARY_ALLOWED_FIELDS = {
     "supports_real_enterprise_multimodal_claim",
     "supports_multimodal_human_adjudication_completed_claim",
+    "supports_multimodal_llm_subagent_adjudication_completed_claim",
     "supports_cross_modal_permission_probe_claim",
     "supports_business_decision_review_claim",
     "supports_financial_advice_or_autonomous_business_judgment_claim",
     "supports_production_ready_claim",
     "supports_top_tier_scientific_validation_claim",
     "supports_raw_asset_access_claim",
+    public_evidence.CLAIM_FIELD,
 }
 SOURCE_ARTIFACT_ROW_ALLOWED_FIELDS = {
     "source_id",
@@ -114,6 +122,7 @@ ADJUDICATION_ARTIFACT_ALLOWED_FIELDS = {
 BUSINESS_REVIEW_ARTIFACT_ALLOWED_FIELDS = {
     "artifact_type",
     "human_reviewed",
+    "llm_subagent_reviewed",
     "autonomous_business_judgment",
     "financial_advice_or_execution",
     "adjudication_artifact_sha256",
@@ -136,6 +145,7 @@ VALIDATION_ROW_ALLOWED_FIELDS = {
     "candidate_id",
     "task",
     "human_adjudicated",
+    "llm_subagent_adjudicated",
     "row_sha256",
 }
 ADJUDICATION_ROW_ALLOWED_FIELDS = {
@@ -465,6 +475,7 @@ def _validate_validation_artifacts(
     sources_by_id: dict[str, dict[str, Any]],
     blockers: list[str],
     *,
+    llm_route: bool,
     allow_test_artifacts: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     refs = packet.get("validation_artifacts")
@@ -568,8 +579,24 @@ def _validate_validation_artifacts(
             for field in ("observation_id", "extractor_run_id", "candidate_id", "task"):
                 if not isinstance(row.get(field), str) or not row[field]:
                     blockers.append(f"enterprise multimodal validation {field} missing")
-            if row.get("human_adjudicated") is not True:
-                blockers.append("enterprise multimodal validation row is not human adjudicated")
+            if llm_route:
+                if row.get("llm_subagent_adjudicated") is not True:
+                    blockers.append(
+                        "enterprise multimodal validation row is not LLM subagent adjudicated"
+                    )
+                if row.get("human_adjudicated") not in {None, False}:
+                    blockers.append(
+                        "enterprise multimodal validation row must not claim human "
+                        "adjudication on LLM route"
+                    )
+            else:
+                if row.get("human_adjudicated") is not True:
+                    blockers.append("enterprise multimodal validation row is not human adjudicated")
+                if row.get("llm_subagent_adjudicated") not in {None, False}:
+                    blockers.append(
+                        "enterprise multimodal validation row must not claim LLM "
+                        "adjudication on human route"
+                    )
             all_rows.append(row)
     missing = sorted(set(REQUIRED_MODALITIES) - modalities)
     if missing:
@@ -656,6 +683,8 @@ def _validate_business_review(
     validation_rows: list[dict[str, Any]],
     adjudication_artifact_sha256: object,
     blockers: list[str],
+    *,
+    llm_route: bool,
 ) -> None:
     _reject_unsupported_artifact_fields(
         artifact,
@@ -663,8 +692,21 @@ def _validate_business_review(
         "enterprise business decision review artifact",
         blockers,
     )
-    if artifact.get("human_reviewed") is not True:
-        blockers.append("enterprise business decision review is not human reviewed")
+    if llm_route:
+        if artifact.get("llm_subagent_reviewed") is not True:
+            blockers.append("enterprise business decision review is not LLM subagent reviewed")
+        if artifact.get("human_reviewed") not in {None, False}:
+            blockers.append(
+                "enterprise business decision review must not claim human review on LLM route"
+            )
+    else:
+        if artifact.get("human_reviewed") is not True:
+            blockers.append("enterprise business decision review is not human reviewed")
+        if artifact.get("llm_subagent_reviewed") not in {None, False}:
+            blockers.append(
+                "enterprise business decision review must not claim LLM subagent review "
+                "on human route"
+            )
     if artifact.get("autonomous_business_judgment") is not False:
         blockers.append("enterprise business decision review allows autonomous judgment")
     if artifact.get("financial_advice_or_execution") is not False:
@@ -751,7 +793,92 @@ def _validate_permission_probe(
         blockers.append("enterprise multimodal permission probe exposed raw asset access")
 
 
-def _validate_claim_boundary(packet: dict[str, Any], blockers: list[str]) -> None:
+def _load_llm_panel_artifact(
+    packet: dict[str, Any],
+    blockers: list[str],
+    *,
+    allow_test_artifacts: bool = False,
+) -> dict[str, Any]:
+    path_blocker = artifact_path_rejection_reason(
+        packet.get("llm_subagent_adjudication_artifact"),
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    if path_blocker:
+        if path_blocker == "path missing or malformed":
+            blockers.append(
+                "enterprise multimodal four-specialist LLM subagent adjudication artifact "
+                "missing or hash mismatch"
+            )
+        else:
+            blockers.append(
+                "enterprise multimodal four-specialist LLM subagent adjudication artifact "
+                + path_blocker
+            )
+        return {}
+    if not artifact_matches_sha256(
+        packet.get("llm_subagent_adjudication_artifact"),
+        packet.get("llm_subagent_adjudication_artifact_sha256"),
+        allow_test_artifacts=allow_test_artifacts,
+    ):
+        blockers.append(
+            "enterprise multimodal four-specialist LLM subagent adjudication artifact "
+            "missing or hash mismatch"
+        )
+        return {}
+    return load_artifact(
+        packet.get("llm_subagent_adjudication_artifact"),
+        packet.get("llm_subagent_adjudication_artifact_sha256"),
+        allow_test_artifacts=allow_test_artifacts,
+    )
+
+
+def _validate_llm_adjudication(
+    packet: dict[str, Any],
+    validation_artifact_hashes: list[str],
+    blockers: list[str],
+    *,
+    allow_test_artifacts: bool = False,
+) -> None:
+    panel = _load_llm_panel_artifact(
+        packet,
+        blockers,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    expected_hashes = [
+        digest
+        for digest in [packet.get("pilot_manifest_artifact_sha256"), *validation_artifact_hashes]
+        if strong_hex64(digest)
+    ]
+    llm_panel.validate_four_specialist_panel(
+        panel,
+        blockers,
+        label="enterprise multimodal",
+        expected_target="multimodal_semantic_validation",
+        expected_input_sha256s=expected_hashes,
+    )
+
+
+def _public_evidence_hashes(packet: dict[str, Any]) -> list[str]:
+    hashes = []
+    for field in (
+        "pilot_manifest_artifact_sha256",
+        "human_adjudication_artifact_sha256",
+        "llm_subagent_adjudication_artifact_sha256",
+        "business_decision_review_artifact_sha256",
+        "permission_probe_artifact_sha256",
+    ):
+        digest = packet.get(field)
+        if strong_hex64(digest):
+            hashes.append(digest)
+    for ref in packet.get("validation_artifacts", []):
+        if isinstance(ref, dict) and strong_hex64(ref.get("artifact_sha256")):
+            hashes.append(ref["artifact_sha256"])
+    return sorted(set(hashes))
+
+
+def _validate_claim_boundary(
+    packet: dict[str, Any], blockers: list[str], *, llm_route: bool
+) -> None:
     claims = packet.get("claim_boundary")
     if not isinstance(claims, dict):
         blockers.append("enterprise multimodal packet claim boundary missing")
@@ -769,12 +896,36 @@ def _validate_claim_boundary(packet: dict[str, Any], blockers: list[str]) -> Non
             )
     for flag in (
         "supports_real_enterprise_multimodal_claim",
-        "supports_multimodal_human_adjudication_completed_claim",
         "supports_cross_modal_permission_probe_claim",
         "supports_business_decision_review_claim",
     ):
         if claims.get(flag) is not True:
             blockers.append(f"enterprise multimodal packet missing claim: {flag}")
+    if llm_route:
+        if claims.get("supports_multimodal_llm_subagent_adjudication_completed_claim") is not True:
+            blockers.append(
+                "enterprise multimodal packet missing claim: "
+                "supports_multimodal_llm_subagent_adjudication_completed_claim"
+            )
+        if claims.get("supports_multimodal_human_adjudication_completed_claim") is not False:
+            blockers.append(
+                "enterprise multimodal packet must not claim human adjudication "
+                "when using LLM subagent adjudication"
+            )
+    else:
+        if claims.get("supports_multimodal_human_adjudication_completed_claim") is not True:
+            blockers.append(
+                "enterprise multimodal packet missing claim: "
+                "supports_multimodal_human_adjudication_completed_claim"
+            )
+        if claims.get("supports_multimodal_llm_subagent_adjudication_completed_claim") not in {
+            None,
+            False,
+        }:
+            blockers.append(
+                "enterprise multimodal packet overclaims unsupported claim: "
+                "supports_multimodal_llm_subagent_adjudication_completed_claim"
+            )
     for flag in (
         "supports_financial_advice_or_autonomous_business_judgment_claim",
         "supports_production_ready_claim",
@@ -817,25 +968,20 @@ def validate_packet(
             "pilot_manifest_artifact",
             "validation_artifacts",
             "human_adjudication_artifact",
+            "llm_subagent_adjudication_artifact",
             "business_decision_review_artifact",
             "permission_probe_artifact",
         } and raw_source_value(value):
             blockers.append(
                 f"enterprise multimodal validation packet contains raw/internal value: {field}"
             )
-    _validate_claim_boundary(packet, blockers)
+    llm_route = bool(packet.get("llm_subagent_adjudication_artifact"))
+    _validate_claim_boundary(packet, blockers, llm_route=llm_route)
 
     manifest = _load_required_artifact(
         packet,
         "pilot_manifest_artifact",
         "enterprise_multimodal_pilot_manifest_v1",
-        blockers,
-        allow_test_artifacts=allow_test_artifacts,
-    )
-    adjudication = _load_required_artifact(
-        packet,
-        "human_adjudication_artifact",
-        "enterprise_multimodal_human_adjudication_v1",
         blockers,
         allow_test_artifacts=allow_test_artifacts,
     )
@@ -859,21 +1005,54 @@ def validate_packet(
         packet,
         sources_by_id,
         blockers,
+        llm_route=llm_route,
         allow_test_artifacts=allow_test_artifacts,
     )
-    _validate_human_adjudication(
-        adjudication,
-        validation_rows,
-        validation_artifact_hashes,
-        blockers,
-    )
+    if llm_route:
+        if packet.get("human_adjudication_artifact"):
+            blockers.append(
+                "enterprise multimodal packet must not mix human and LLM adjudication routes"
+            )
+        _validate_llm_adjudication(
+            packet,
+            validation_artifact_hashes,
+            blockers,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        adjudication_artifact_sha256 = packet.get("llm_subagent_adjudication_artifact_sha256")
+    else:
+        adjudication = _load_required_artifact(
+            packet,
+            "human_adjudication_artifact",
+            "enterprise_multimodal_human_adjudication_v1",
+            blockers,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        _validate_human_adjudication(
+            adjudication,
+            validation_rows,
+            validation_artifact_hashes,
+            blockers,
+        )
+        adjudication_artifact_sha256 = packet.get("human_adjudication_artifact_sha256")
     _validate_business_review(
         decision_review,
         validation_rows,
-        packet.get("human_adjudication_artifact_sha256"),
+        adjudication_artifact_sha256,
         blockers,
+        llm_route=llm_route,
     )
     _validate_permission_probe(permission_probe, sources_by_id, blockers)
+    public_evidence.validate_public_evidence_packet(
+        packet,
+        blockers,
+        gate_id="multimodal_semantic_validation",
+        artifact_path_rejection_reason=artifact_path_rejection_reason,
+        artifact_matches_sha256=artifact_matches_sha256,
+        load_artifact=load_artifact,
+        allow_test_artifacts=allow_test_artifacts,
+        expected_artifact_sha256s=_public_evidence_hashes(packet),
+    )
     return sorted(set(blockers))
 
 
@@ -885,6 +1064,9 @@ def build_report(
     packet = load_input_packet() if packet is None else packet
     blockers = validate_packet(packet, allow_test_artifacts=allow_test_artifacts)
     validation_refs = packet.get("validation_artifacts", []) if isinstance(packet, dict) else []
+    has_llm_panel = isinstance(packet, dict) and bool(
+        packet.get("llm_subagent_adjudication_artifact")
+    )
     report = {
         "artifact_id": "enterprise_multimodal_validation_validator_recovery_v1",
         "input_packet": "inputs/enterprise_multimodal_validation_packet.json",
@@ -901,6 +1083,7 @@ def build_report(
             "human_adjudication_present": bool(packet.get("human_adjudication_artifact"))
             if isinstance(packet, dict)
             else False,
+            "llm_subagent_adjudication_present": has_llm_panel,
             "business_decision_review_present": bool(
                 packet.get("business_decision_review_artifact")
             )
@@ -909,12 +1092,31 @@ def build_report(
             "permission_probe_present": bool(packet.get("permission_probe_artifact"))
             if isinstance(packet, dict)
             else False,
+            "evidence_source_mode": public_evidence.evidence_source_mode(packet)
+            if isinstance(packet, dict)
+            else public_evidence.PRIVATE_MODE,
+            "public_evidence_manifest_present": bool(
+                packet.get("public_evidence_manifest_artifact")
+            )
+            if isinstance(packet, dict)
+            else False,
         },
         "claim_boundary": {
             "supports_real_enterprise_multimodal_claim": not blockers,
-            "supports_multimodal_human_adjudication_completed_claim": not blockers,
+            "supports_multimodal_human_adjudication_completed_claim": (
+                not blockers and not has_llm_panel
+            ),
+            "supports_multimodal_llm_subagent_adjudication_completed_claim": (
+                not blockers and has_llm_panel
+            ),
             "supports_cross_modal_permission_probe_claim": not blockers,
             "supports_business_decision_review_claim": not blockers,
+            public_evidence.CLAIM_FIELD: (
+                not blockers
+                and public_evidence.evidence_source_mode(packet) == public_evidence.PUBLIC_MODE
+            )
+            if isinstance(packet, dict)
+            else False,
             "supports_financial_advice_or_autonomous_business_judgment_claim": False,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,

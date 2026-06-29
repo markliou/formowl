@@ -80,7 +80,7 @@ def _progress_report_section() -> list[str]:
         "## Gate Progress Report",
         "",
         "Use the progress report when you need a compact machine-readable",
-        "summary of the four remaining gate stages before or after candidate",
+        "summary of the current remaining gate stages before or after candidate",
         "intake. It reads persisted preflight/work-order reports plus safe",
         "work-packet surfaces, but it does not refresh preflight, read",
         "operator response packets, read candidate artifact contents, write",
@@ -279,7 +279,7 @@ def _submission_manifest_section() -> list[str]:
         "After manual governance review, fill an operator approval manifest",
         "from the tracked non-evidence approval template. The approval manifest",
         "must bind the candidate validation report hash, candidate manifest",
-        "hash, selected gate id, canonical packet target, and human reviewer",
+        "hash, selected gate id, canonical packet target, and governance",
         "approval controls.",
         "",
         "Check that the tracked governance approval template is current:",
@@ -312,12 +312,12 @@ def _submission_manifest_section() -> list[str]:
         "```",
         "",
         "The approval manifest remains non-evidence and does not count as an",
-        "acceptance gate. The governance runner refuses stale hashes, non-human",
+        "acceptance gate. The governance runner refuses stale hashes, unsupported",
         "approvers, pre-existing canonical packet targets, canonical packet path",
         "hazards, and validation reports that do not have a passing target gate",
         "row. During execution, the runner passes the approved candidate",
         "manifest hash to the assembler so the manifest bytes consumed for",
-        "promotion are bound to the human-reviewed approval. If execution fails",
+        "promotion are bound to the governance approval. If execution fails",
         "after creating the target canonical packet, the runner removes that",
         "newly created target packet before reporting failure. After any successful",
         "canonical packet update, rerun the specific broad validator and the",
@@ -374,8 +374,8 @@ def _gate_specific_requirements(order: dict[str, Any]) -> list[str]:
                 f"    - equalized hash: {field}"
                 for field in _as_list(row.get("required_equalized_hashes"))
             )
-        lines.append("- human answer adjudication:")
-        lines.extend(f"  - {item}" for item in _as_list(tasks.get("human_answer_adjudication")))
+        lines.append("- answer-quality adjudication:")
+        lines.extend(f"  - {item}" for item in _as_list(tasks.get("answer_quality_adjudication")))
         lines.append("- graph quality validation:")
         lines.extend(f"  - {item}" for item in _as_list(tasks.get("graph_quality_validation")))
         lines.append("- permission probe evidence:")
@@ -383,8 +383,8 @@ def _gate_specific_requirements(order: dict[str, Any]) -> list[str]:
     elif gate_id == "annotation_adjudication_protocol":
         lines.append("- required artifacts:")
         lines.extend(f"  - {item}" for item in _as_list(tasks.get("required_artifacts")))
-        lines.append("- human controls:")
-        lines.extend(f"  - {item}" for item in _as_list(tasks.get("human_controls")))
+        lines.append("- adjudication controls:")
+        lines.extend(f"  - {item}" for item in _as_list(tasks.get("adjudication_controls")))
         lines.append("- custody controls:")
         lines.extend(f"  - {item}" for item in _as_list(tasks.get("custody_controls")))
     elif gate_id == "multimodal_semantic_validation":
@@ -511,6 +511,12 @@ def _safety_section(order: dict[str, Any]) -> list[str]:
         "- forbidden sources:",
     ]
     lines.extend(f"  - {item}" for item in _as_list(safety.get("forbidden_sources")))
+    lines.append("- accepted evidence source modes:")
+    lines.extend(f"  - {item}" for item in _as_list(safety.get("accepted_evidence_source_modes")))
+    lines.append("- public reproducible mode requirements:")
+    lines.extend(
+        f"  - {item}" for item in _as_list(safety.get("public_reproducible_mode_requirements"))
+    )
     lines.append("- operator must not claim:")
     lines.extend(f"  - {item}" for item in _as_list(safety.get("operator_must_not_claim")))
     lines.append("")

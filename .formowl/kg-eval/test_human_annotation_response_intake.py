@@ -16,6 +16,7 @@ import human_annotation_adjudication_validator as validator
 import human_annotation_packet_assembler as assembler
 import human_annotation_response_intake as intake
 import human_annotation_work_packet_generator as work_packet_generator
+import test_human_annotation_adjudication_validator as adjudication_fixtures
 
 
 BASE = validator.REAL_ARTIFACT_ROOT_PATH / "intake_test"
@@ -100,6 +101,23 @@ def valid_response_packet(operator_run_id: str = "intake_test") -> dict[str, obj
                 }
             ],
         },
+    }
+
+
+def valid_llm_response_packet(operator_run_id: str = "intake_test") -> dict[str, object]:
+    work_packet = work_packet_generator.build_work_packet()
+    input_hashes = [
+        intake.sha256_artifact_payload(work_packet["manifest_artifact"]),
+        intake.sha256_artifact_payload(work_packet["work_orders_artifact"]),
+    ]
+    return {
+        "response_packet_type": "human_annotation_response_intake_v1",
+        "operator_run_id": operator_run_id,
+        "annotation_task_id": work_packet_generator.DEFAULT_ANNOTATION_TASK_ID,
+        "llm_subagent_adjudication_artifact": adjudication_fixtures.valid_llm_panel(
+            "annotation_adjudication_protocol",
+            input_hashes,
+        ),
     }
 
 
@@ -206,6 +224,37 @@ class HumanAnnotationResponseIntakeTest(unittest.TestCase):
                 "custody_receipt.json",
                 "first_pass_human_reviewer_alpha.json",
                 "first_pass_human_reviewer_beta.json",
+                "manifest.json",
+                "response_custody_receipt.json",
+                "work_orders.json",
+            ],
+        )
+        self.assert_canonical_unchanged()
+
+    def test_llm_subagent_response_intake_builds_validator_accepted_candidate(self) -> None:
+        response = valid_llm_response_packet()
+        result = intake.build_intake_artifacts(
+            work_packet=work_packet_generator.build_work_packet(),
+            response_packet=response,
+            output_dir="inputs/human_annotation_real/intake_test",
+            assembly_manifest_output="work_packets/test_human_annotation_response_intake_manifest.json",
+            allow_test_artifacts=True,
+        )
+
+        assembly_manifest = json.loads(ASSEMBLY_MANIFEST.read_text(encoding="utf-8"))
+        packet = assembler.assemble_packet(**assembly_manifest, allow_test_artifacts=True)
+        report = validator.build_report(packet, allow_test_artifacts=True)
+
+        self.assertTrue(result["validation_report"]["candidate_packet_validator_passed"])
+        self.assertTrue(report["passed"])
+        self.assertEqual(packet["artifact_id"], "llm_subagent_annotation_results_v1")
+        self.assertIn("llm_subagent_adjudication_artifact", assembly_manifest)
+        self.assertNotIn("first_pass_artifacts", assembly_manifest)
+        self.assertNotIn("adjudication_artifact", assembly_manifest)
+        self.assertEqual(
+            sorted(path.name for path in BASE.iterdir()),
+            [
+                "llm_subagent_adjudication.json",
                 "manifest.json",
                 "response_custody_receipt.json",
                 "work_orders.json",

@@ -3,8 +3,10 @@
 This document records the current Knowledge Graph Research Agent method for
 the FormOwl KG layer. It is an engineering and research acceptance artifact:
 it explains why the repository uses candidate-only extraction, scoped ontology
-governance, permission-aware fusion, and explicit human review before
-canonical graph or type mutation.
+governance, permission-aware fusion, and explicit adjudication before
+canonical graph or type mutation. The current Plan B adjudication route is a
+four-professional-specialist LLM subagent panel; legacy human review remains a
+backward-compatible route where already supported.
 
 ## External Literature And System Comparison
 
@@ -18,7 +20,7 @@ Current comparison date: 2026-06-27.
 | OAEI 2024 | Ontology alignment evaluation remains track-specific and benchmark-driven across anatomy, conference, food, digital humanities, knowledge graph, pharmacogenomics, and SemTab tasks. | Defer heavy ontology matchers for v1. Use a closed core lattice plus governed scoped alignment candidates, then add OAEI-style tracks only when stable datasets exist. |
 | RapidFuzz docs | RapidFuzz provides fuzzy string metrics and Python-friendly matching for labels. | Use RapidFuzz-compatible lexical matching as deterministic candidate generation only. It cannot grant access or merge canonical graph/type records. |
 | Splink docs | Splink is a probabilistic record-linkage package with evaluation, graph metrics, blocking, term-frequency adjustment, and scalable backends. | Use Splink-compatible linkage for structured candidate generation and clerical review packet export. Its output is not production adapter readiness without labels, backend-scale tests, and reviewer adjudication. |
-| RAGAS (2023), ARES (2023), and KILT (2020) | RAG/KG evaluation needs retrieval relevance, faithfulness, answer relevance, provenance, and human annotations or calibrated judges. | Acceptance records extraction coverage, fusion safety, ontology alignment, provenance completeness, permission safety, human review claims, ablations, and known missing latency/scalability evidence. |
+| RAGAS (2023), ARES (2023), and KILT (2020) | RAG/KG evaluation needs retrieval relevance, faithfulness, answer relevance, provenance, and human annotations or calibrated judges. | Acceptance records extraction coverage, fusion safety, ontology alignment, provenance completeness, permission safety, adjudication claim boundaries, ablations, and known missing latency/scalability evidence. |
 
 ## Ontology Integration Method
 
@@ -95,11 +97,13 @@ truth:
    `request_access_overlay`.
 4. Packet export can redact endpoints not visible to the assigned reviewer.
 5. The packet schema says adjudication is required before a gold label.
-6. The current claim boundary explicitly does not claim completed human review,
-   false-merge labels, canonical merge, or raw access.
+6. The current claim boundary explicitly does not claim completed legacy human
+   review, completed four-specialist LLM subagent adjudication, false-merge
+   labels, canonical merge, or raw access.
 
-Production human operations still need UI/task-card work, reviewer assignment
-state, adjudicator disagreement resolution records, and production labels.
+Production adjudication operations still need UI/task-card work, reviewer or
+subagent-panel assignment state, disagreement resolution records, and
+production labels.
 
 ## Production Adapter Gate
 
@@ -108,18 +112,55 @@ Production adapter readiness is split into two gates:
 - Candidate-only boundary gate: passed when external packages produce only
   candidates/review packets and their manifests forbid canonical writes and
   raw access.
-- Production readiness gate: failed until real backend adapters, enterprise
-  datasets, human-reviewed labels, latency/scalability runs, rollback evidence,
-  and end-to-end gateway behavior are complete.
+- Broad KG real-evidence production-adapter path gate: passed in the current
+  `.formowl/kg-eval` authority state through public reproducible evidence,
+  rollback/permission/audit artifacts, and four-specialist
+  LLM-subagent-reviewed labels using the fixed professional roles.
+- Full product production readiness gate: still intentionally unclaimed until
+  product-scale backend adapters, production-sized datasets, latency/scalability
+  runs, and end-to-end gateway behavior are complete. Legacy human-reviewed
+  labels remain accepted only for backwards compatibility where validators
+  already support them.
 
 The locked adapter stack smoke is useful boundary evidence. It does not claim:
 
 - production entity-resolution quality
-- completed human review
+- completed legacy human review or four-specialist LLM subagent adjudication
 - raw asset access
 - canonical graph commits
 - real OpenProject/wiki backend readiness
 - database-backed production throughput
+
+## Broad Real-Evidence Acceptance
+
+The stricter broad KG real-evidence harness under `.formowl/kg-eval` currently
+reports 12/12 broad gates passed:
+
+- `external_recent_literature_baseline_protocol`
+- `fair_baseline_config_artifact_content_binding`
+- `scoped_ontology_integration_method`
+- `different_user_kg_fusion_method`
+- `annotation_protocol_controls_recovery`
+- `multimodal_enterprise_controls_recovery`
+- `production_adapter_controls_recovery`
+- `fair_external_baseline_comparison`
+- `annotation_adjudication_protocol`
+- `multimodal_semantic_validation`
+- `production_adapter_paths`
+- `overclaim_guard`
+
+The authority hashes are:
+
+- gate status:
+  `9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba`
+- objective audit:
+  `b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d`
+
+This completion is scoped to broad KG real-evidence acceptance. It does not
+claim top-tier scientific validation, full product production readiness, raw
+asset access, canonical graph writes, autonomous business judgment, or
+enterprise-scale latency/scalability. The main repo deterministic method suite
+therefore still uses `passed_with_explicit_limits` for product-level limits.
 
 ## Metrics, Ablations, And Error Analysis
 
@@ -134,7 +175,7 @@ Current deterministic metrics:
   candidate provenance
 - permission safety: private endpoint is hidden unless both endpoints are
   visible
-- human review claim boundary: review packet export exists, completed label
+- adjudication claim boundary: review packet export exists, completed label
   claim is false
 
 Current ablations:
@@ -186,7 +227,7 @@ Current expected status:
 | ontology_integration_method | passed | `tests/test_ontology_contract.py` |
 | multi_user_kg_fusion_experiment | passed | `tests/test_graph_resolution.py` and acceptance suite |
 | multimodal_enterprise_resource_validation | passed | extractor fixture tests and acceptance suite |
-| human_review_annotation_adjudication_workflow | passed | review packet export and acceptance suite |
+| review_adjudication_claim_boundary | passed | review packet export and acceptance suite |
 | production_adapter_candidate_only_boundary | passed | package manifests and adapter stack smoke boundary |
 | production_adapter_readiness | failed | explicitly not claimed |
 | metrics_ablations_error_analysis | passed | this document and acceptance suite |

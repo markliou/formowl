@@ -165,6 +165,74 @@ class RealEvidenceOperatorGuideTest(unittest.TestCase):
         report = work_orders.build_report()
         mutated = deepcopy(report)
         mutated["report_sha256"] = "mutated-test-sha"
+        if not mutated["work_orders"]:
+            mutated["work_orders"] = [
+                {
+                    "work_order_id": "collect_multimodal_semantic_validation",
+                    "gate_id": "multimodal_semantic_validation",
+                    "requirement_id": "multimodal_enterprise_validation",
+                    "collection_status": "missing_real_artifacts_and_packet",
+                    "canonical_input_packet": (
+                        "inputs/enterprise_multimodal_validation_packet.json"
+                    ),
+                    "required_packet_artifact_id": ("enterprise_multimodal_validation_packet_v1"),
+                    "required_evidence_kind": "real_enterprise_multimodal_validation",
+                    "real_artifact_root": "inputs/enterprise_multimodal_real",
+                    "validator_module": "enterprise_multimodal_validation_validator.py",
+                    "assembler_module": "enterprise_multimodal_packet_assembler.py",
+                    "current_blockers": [],
+                    "operator_tasks": {
+                        "required_modalities": [],
+                        "required_artifacts": [],
+                        "controls": [],
+                        "response_packet_contract": {
+                            "response_packet_type": ("enterprise_multimodal_response_intake_v1"),
+                            "work_packet_path": (
+                                "work_packets/enterprise_multimodal_collection_packet_preview.json"
+                            ),
+                            "candidate_output_dir": (
+                                "inputs/enterprise_multimodal_real/OPERATOR_RUN_ID"
+                            ),
+                            "assembly_manifest_output": (
+                                "work_packets/"
+                                "multimodal_semantic_validation_candidate_manifest.json"
+                            ),
+                            "canonical_packet_not_written": (
+                                "inputs/enterprise_multimodal_validation_packet.json"
+                            ),
+                            "writes_canonical_packet": False,
+                            "promotes_evidence": False,
+                            "counts_as_acceptance_gate": False,
+                            "required_controls": [],
+                        },
+                    },
+                    "commands": {
+                        "preflight_enterprise_response_packet": (
+                            "python3 enterprise_multimodal_response_intake.py "
+                            "--preflight-response"
+                        ),
+                        "seal_enterprise_responses_into_candidate_artifacts": (
+                            "python3 enterprise_multimodal_response_intake.py"
+                        ),
+                        "validate_candidate_packet": (
+                            "python3 enterprise_multimodal_packet_assembler.py --validate"
+                        ),
+                        "generate_non_evidence_assembly_manifest_scaffold": (
+                            "python3 enterprise_multimodal_assembly_manifest_generator.py"
+                        ),
+                    },
+                    "safety": {
+                        "canonical_packet_must_be_created_only_by_assembler": (
+                            "inputs/enterprise_multimodal_validation_packet.json"
+                        ),
+                        "real_artifacts_must_live_under": ("inputs/enterprise_multimodal_real"),
+                        "assembly_manifest_must_not_live_under_real_artifact_root": True,
+                        "forbidden_sources": [],
+                        "accepted_evidence_source_modes": [],
+                        "operator_must_not_claim": [],
+                    },
+                }
+            ]
         mutated["work_orders"][0]["current_blockers"].append("operator test blocker")
         mutated["work_orders"][0]["operator_tasks"]["response_packet_contract"][
             "required_controls"

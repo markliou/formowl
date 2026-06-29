@@ -11,16 +11,22 @@ Durable role definition: `docs/agent-roles.md`.
 Complete the FormOwl Knowledge Graph method exploration and acceptance work:
 fill in external recent literature comparison, ontology integration method,
 multi-user KG and KG fusion experiments, multimodal enterprise-data validation,
-human operation / annotation / adjudication workflow, production adapter gate,
-and a total acceptance suite that clearly marks passed and failed items.
+annotation/adjudication workflow through either legacy human evidence or a
+four-professional-specialist LLM subagent panel, production adapter gate, and a
+total acceptance suite that clearly marks passed and failed items.
 
 Historical source: Codex session `019eda5f-7dd6-74a2-ac56-4f84e5d58560`.
 
-Status: `blocked`
+Status: `complete` for the broad KG real-evidence acceptance objective.
+Product-level production readiness, top-tier scientific validation, raw access,
+canonical graph writes, autonomous business judgment, and enterprise-scale
+latency/scalability remain outside this completion claim.
 
 ## Current Acceptance State
 
-Do not treat the current KG objective as complete.
+Treat the broad KG real-evidence acceptance objective as complete in the
+current local authority state. Do not broaden the completion claim beyond that
+scope.
 
 Two different acceptance layers currently exist:
 
@@ -30,52 +36,65 @@ Two different acceptance layers currently exist:
   fixtures, scoped ontology contracts, candidate-only package boundary, metrics,
   ablations, and explicit limitations are present.
 - Broad real-evidence KG acceptance:
-  `.formowl/kg-eval/results/kg_total_acceptance_snapshot.json` remains the
-  stricter recovery/real-evidence state for the user's full KG objective.
-  It currently has `overall_passed=false`, 8 passed gates, and 4 failed gates.
+  `.formowl/kg-eval/results/kg_total_acceptance_snapshot.json` is the stricter
+  recovery/real-evidence state for the user's full broad KG objective. It now
+  has `overall_passed=true`, 12 passed gates, 0 failed gates, and
+  `remaining_gates=[]`.
 
-The four failed broad real-evidence gates are:
+Current broad real-evidence evidence:
 
-- `fair_external_baseline_comparison`
-- `annotation_adjudication_protocol`
-- `multimodal_semantic_validation`
-- `production_adapter_paths`
+- `fair_external_baseline_comparison` has public reproducible evidence, a
+  validator-clear canonical packet, and four-specialist LLM subagent approval.
+- `annotation_adjudication_protocol` has an operator-private canonical packet,
+  validator-clear status, and four-specialist LLM subagent approval without
+  claiming completed human annotation.
+- `multimodal_semantic_validation` has public reproducible enterprise
+  multimodal evidence, validator-clear status, and four-specialist LLM subagent
+  approval.
+- `production_adapter_paths` has public reproducible production-adapter path
+  evidence, validator-clear status, rollback/permission/audit evidence, and
+  four-specialist LLM subagent approval.
 
-Current blocker, confirmed 2026-06-28 after commit `1e2010f`:
+Current authority hashes, refreshed 2026-06-28:
 
-- All four failed gates are still at `missing_operator_response`.
-- `inputs/fair_baseline_real/`, `inputs/human_annotation_real/`,
-  `inputs/enterprise_multimodal_real/`, and
-  `inputs/production_adapter_real/` contain no operator/user-supplied files.
-- No operator-filled submission manifest, candidate manifest, candidate
-  validation report, or approval manifest is present under the ignored
-  `work_packets/` operator surfaces.
-- The four canonical broad evidence packets remain absent:
-  `inputs/fair_external_baseline_run_packet.json`,
-  `inputs/human_annotation_results_v1.json`,
-  `inputs/enterprise_multimodal_validation_packet.json`, and
-  `inputs/production_adapter_evidence_packet.json`.
-- No further code or process hardening can make a broad gate pass or change the
-  gate stage until real operator/user response packets are supplied and then
-  validated, candidate-intaken, validate-only checked, governance-approved,
-  promoted, and accepted by the corresponding broad validator.
+- gate status:
+  `9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba`
+- objective audit:
+  `b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d`
 
-The goal is complete only when the broad real-evidence acceptance state proves
-all required gates, the main-repo acceptance suite has no failed or blocked
-requirements under strict mode, the work board reflects that state, and the
-configured reviewer gate has passed for every newly completed slice.
+Current status tools:
 
-`passed_with_explicit_limits` is not a completion status for this durable goal.
-It is a useful intermediate status that says known limits are explicitly
-reported.
+- `kg_objective_completion_audit.py`: `objective_complete=true`, 9 proved
+  requirements, 0 incomplete requirements.
+- `real_evidence_preflight.py`:
+  `preflight_state=validator_clear_for_all_broad_gates`, blocked gates `[]`.
+- `real_evidence_collection_work_orders.py`:
+  `work_order_state=no_remaining_work_orders_all_broad_gates_clear`,
+  `work_order_count=0`.
+- `real_evidence_gate_progress.py`: `gate_count=0`, blocked gates `[]`.
+
+The current Plan B route is four professional specialist LLM subagents, not a
+generic or single LLM judge. Accepted artifacts must use
+`four_specialist_llm_subagent_adjudication_v1` and include exactly four
+distinct specialist subagents with the fixed professional roles for baseline
+methodology, annotation adjudication, multimodal semantics, and production
+governance. All four must independently return `PASS`, bind reviewed artifact
+hashes, and have no blocking findings. This route remains LLM-subagent
+adjudication and must not be represented as completed human adjudication.
+
+`passed_with_explicit_limits` in the main repo KG method suite is a separate
+product-level limit boundary. It records that production adapter readiness and
+enterprise latency/scalability are not claimed by this broad KG real-evidence
+completion.
 
 ## Returned For Rework
 
 2026-06-27 review returned these claims/slices:
 
 - The `Complete KG research acceptance gate` completion claim is rejected for
-  the full KG objective. The stricter broad acceptance state is still
-  `overall_passed=false` with the four failed real-evidence gates listed above.
+  the full KG objective. At that checkpoint, the stricter broad acceptance
+  state was still `overall_passed=false` with four failed real-evidence gates;
+  the current state is summarized above.
 - The reviewed canonical graph commit workflow was returned for rework and the
   rework slice was completed on 2026-06-27. It now demonstrates incremental
   graph revisions that retain parent revision atoms, entities, and relations,
@@ -172,9 +191,21 @@ following:
   mail/conversation, project/wiki, and audio/video-style observations or
   fixtures. Claims about real enterprise validation require a validated real
   evidence packet, not only synthetic fixtures.
-- Human review, annotation, adjudication, reviewer-disagreement, custody, and
-  confusion-matrix evidence where governance claims depend on human judgment.
-  Review-queue export alone is not completed human annotation.
+- Annotation/adjudication evidence where governance claims depend on reviewer
+  behavior. Accepted routes are legacy human evidence or a
+  four-professional-specialist LLM subagent panel. The current Plan B target is
+  the LLM panel route; legacy human evidence remains validator-compatible only
+  for backwards compatibility. The LLM route is not a generic or single-LLM
+  judge: it must include exactly four distinct specialist subagents, cover
+  `baseline_methodology`, `annotation_adjudication`, `multimodal_semantics`,
+  and `production_governance`, use the fixed professional roles
+  `external_baseline_methodologist`,
+  `annotation_adjudication_protocol_specialist`,
+  `multimodal_semantics_validation_specialist`, and
+  `production_governance_adapter_specialist`, bind reviewed artifact hashes,
+  have all four subagents independently return `PASS`, and must not claim human
+  adjudication. Review-queue export alone is not completed adjudication
+  evidence.
 - A production adapter gate that clearly separates candidate-only algorithm
   outputs from canonical graph/type mutations and backend service readiness,
   and also proves non-synthetic adapter-path evidence before any production
@@ -1395,3 +1426,26 @@ Reviewer cost-control rules:
   empty real roots are present. Therefore Plan B is also blocked until at
   least operator/user response packets or candidate artifacts exist. The
   original human/real-evidence gates remain failed.
+- 2026-06-28 broad KG real-evidence completion checkpoint: this supersedes the
+  blocked-audit and 10/12 notes above. Current KG-eval authority is 12/12:
+  `kg_total_acceptance_suite.py` reports `overall_passed=true`, 12 passed
+  gates, and 0 failed gates; `remaining_evidence_checklist.json` reports
+  `remaining_gates=[]`; and `kg_objective_completion_audit.py` reports
+  `objective_complete=true`, 9 proved requirements, and 0 incomplete
+  requirements. Current hashes are gate status
+  `9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba` and
+  objective audit
+  `b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d`.
+  Preflight is `validator_clear_for_all_broad_gates`; work orders have count
+  0; progress has `gate_count=0`. Completion claim remains limited to broad KG
+  real-evidence acceptance and excludes full product production readiness,
+  top-tier scientific validation, raw access, canonical graph writes,
+  autonomous business judgment, and enterprise latency/scalability.
+- 2026-06-29 packaging handoff checkpoint: the broad KG research-evaluation
+  result now has a packaged integration facade. `python/formowl_kg_eval/`
+  exposes `build_acceptance_summary()`, `run_kg_eval_command()`, and the
+  `formowl-kg-eval` console script. Downstream system work should consume
+  `formowl-kg-eval summary` or the package API instead of importing
+  `.formowl/kg-eval` scripts. `docs/kg-eval-package.md` records the package
+  contract, CLI, Python API, claim boundary, and System Backbone integration
+  guidance.

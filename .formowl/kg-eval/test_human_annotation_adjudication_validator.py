@@ -8,9 +8,12 @@ import shutil
 import unittest
 
 import human_annotation_adjudication_validator as validator
+import llm_subagent_adjudication as llm_panel
+import public_reproducible_evidence as public_evidence
 
 
 BASE = validator.REAL_ARTIFACT_ROOT_PATH / "validator_fixture"
+LLM_PANEL_RUBRIC_SHA256 = "a1234567890bcdef" * 4
 
 
 def write_artifact(relative_name: str, payload: object) -> tuple[str, str]:
@@ -361,6 +364,115 @@ def valid_packet() -> dict:
     }
 
 
+def public_source_manifest(gate_id: str, covered_hashes: list[str]) -> dict:
+    sources = [
+        {
+            "source_id": f"public_{gate_id}_source",
+            "source_url": f"https://example.org/formowl/{gate_id}/annotation.json",
+            "source_type": "public_reproducible_annotation_source",
+            "source_usage_role": "annotation_item_source",
+            "license": "CC-BY-4.0",
+            "version_or_snapshot": "2026-06-28-snapshot",
+            "retrieved_at": "2026-06-28T00:00:00Z",
+            "content_sha256": "abc1234567890def" * 4,
+            "archive_sha256": "bcd1234567890efa" * 4,
+            "derived_artifact_sha256s": sorted(set(covered_hashes)),
+            "publicly_accessible": True,
+            "permission_allows_research_evaluation": True,
+            "non_synthetic": True,
+            "raw_private_payload": False,
+        }
+    ]
+    return public_evidence.build_manifest(
+        gate_id=gate_id,
+        retrieved_at="2026-06-28T00:00:00Z",
+        public_sources=sources,
+        covered_artifact_sha256s=covered_hashes,
+    )
+
+
+def add_public_evidence(packet: dict, gate_id: str, covered_hashes: list[str]) -> None:
+    manifest_path, manifest_sha = write_artifact(
+        "public_evidence_manifest.json",
+        public_source_manifest(gate_id, covered_hashes),
+    )
+    packet["evidence_source_mode"] = public_evidence.PUBLIC_MODE
+    packet["public_evidence_manifest_artifact"] = manifest_path
+    packet["public_evidence_manifest_artifact_sha256"] = manifest_sha
+    packet["claim_boundary"][public_evidence.CLAIM_FIELD] = True
+
+
+def valid_llm_panel(target: str, input_hashes: list[str]) -> dict:
+    panel = {
+        "artifact_type": llm_panel.PANEL_ARTIFACT_TYPE,
+        "panel_id": f"panel_{target}_001",
+        "adjudication_target": target,
+        "completed": True,
+        "final_decision": "PASS",
+        "human_adjudication_claimed": False,
+        "input_artifact_sha256s": sorted(input_hashes),
+        "rubric_sha256": LLM_PANEL_RUBRIC_SHA256,
+        "specialist_subagents": [
+            {
+                "subagent_id": f"{specialty}_subagent",
+                "specialty": specialty,
+                "professional_role": llm_panel.REQUIRED_PROFESSIONAL_ROLES[specialty],
+                "model_name": "codex-subagent",
+                "model_version": "2026-06-28",
+                "prompt_sha256": f"{index + 20:064x}",
+                "rubric_sha256": LLM_PANEL_RUBRIC_SHA256,
+                "run_id": f"run_{specialty}_001",
+                "temperature": 0,
+                "independent": True,
+                "decision": "PASS",
+                "blocking_findings": [],
+                "reviewed_artifact_sha256s": sorted(input_hashes),
+                "output_sha256": f"{index + 40:064x}",
+            }
+            for index, specialty in enumerate(llm_panel.REQUIRED_SPECIALTIES)
+        ],
+    }
+    panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+    return panel
+
+
+def convert_to_llm_subagent_route(packet: dict) -> dict:
+    for field in (
+        "first_pass_submission_artifacts",
+        "adjudication_artifact",
+        "adjudication_artifact_sha256",
+        "confusion_matrix_artifact",
+        "confusion_matrix_artifact_sha256",
+        "custody_receipt_artifact",
+        "custody_receipt_artifact_sha256",
+    ):
+        packet.pop(field, None)
+    packet["artifact_id"] = "llm_subagent_annotation_results_v1"
+    packet["evidence_kind"] = "four_specialist_llm_subagent_annotation_adjudication"
+    packet["claim_boundary"] = {
+        "supports_human_annotation_completed_claim": False,
+        "supports_human_adjudication_completed_claim": False,
+        "supports_llm_subagent_annotation_adjudication_completed_claim": True,
+        "supports_confusion_matrix_claim": False,
+        "supports_custody_receipt_claim": False,
+        "supports_synthetic_label_generation_claim": False,
+        "supports_template_as_human_evidence_claim": False,
+        "supports_production_ready_claim": False,
+        "supports_top_tier_scientific_validation_claim": False,
+    }
+    input_hashes = [
+        packet["manifest_artifact_sha256"],
+        packet["work_orders_artifact_sha256"],
+    ]
+    panel_artifact, panel_sha = write_artifact(
+        "llm_subagent_adjudication.json",
+        valid_llm_panel("annotation_adjudication_protocol", input_hashes),
+    )
+    packet["llm_subagent_adjudication_artifact"] = panel_artifact
+    packet["llm_subagent_adjudication_artifact_sha256"] = panel_sha
+    return packet
+
+
 class HumanAnnotationAdjudicationValidatorTest(unittest.TestCase):
     def setUp(self) -> None:
         shutil.rmtree(BASE, ignore_errors=True)
@@ -480,6 +592,94 @@ class HumanAnnotationAdjudicationValidatorTest(unittest.TestCase):
         self.assertEqual(report["metrics"]["first_pass_submission_artifact_count"], 2)
         self.assertTrue(report["claim_boundary"]["supports_human_adjudication_completed_claim"])
         self.assertFalse(report["claim_boundary"]["supports_production_ready_claim"])
+
+    def test_four_specialist_llm_subagent_route_passes_validator(self) -> None:
+        report = build_report_for_test(convert_to_llm_subagent_route(valid_packet()))
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["blockers"], [])
+        self.assertTrue(
+            report["claim_boundary"][
+                "supports_llm_subagent_annotation_adjudication_completed_claim"
+            ]
+        )
+        self.assertFalse(report["claim_boundary"]["supports_human_annotation_completed_claim"])
+        self.assertFalse(report["claim_boundary"]["supports_human_adjudication_completed_claim"])
+
+    def test_missing_llm_specialist_fails_validator(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        panel_path = validator.safe_relative_artifact_path(
+            packet["llm_subagent_adjudication_artifact"],
+            allow_test_artifacts=True,
+        )
+        assert panel_path is not None
+        panel = json.loads(panel_path.read_text(encoding="utf-8"))
+        panel["specialist_subagents"] = panel["specialist_subagents"][:1]
+        panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+        panel_path.write_text(json.dumps(panel, indent=2, sort_keys=True) + "\n")
+        packet["llm_subagent_adjudication_artifact_sha256"] = (
+            validator.sha256_file(panel_path) or ""
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "human annotation four-specialist LLM panel must include exactly four subagents",
+            report["blockers"],
+        )
+
+    def test_blocking_llm_specialist_fails_validator(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        panel_path = validator.safe_relative_artifact_path(
+            packet["llm_subagent_adjudication_artifact"],
+            allow_test_artifacts=True,
+        )
+        assert panel_path is not None
+        panel = json.loads(panel_path.read_text(encoding="utf-8"))
+        panel["specialist_subagents"][0]["decision"] = "BLOCK"
+        panel["specialist_subagents"][0]["blocking_findings"] = ["annotation mismatch"]
+        panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+        panel_path.write_text(json.dumps(panel, indent=2, sort_keys=True) + "\n")
+        packet["llm_subagent_adjudication_artifact_sha256"] = (
+            validator.sha256_file(panel_path) or ""
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "human annotation four-specialist LLM subagent decision is not PASS",
+            report["blockers"],
+        )
+
+    def test_llm_route_cannot_claim_legacy_human_evidence(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        packet["claim_boundary"]["supports_human_annotation_completed_claim"] = True
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "human annotation packet must not claim legacy human evidence "
+            "when using LLM subagent adjudication: supports_human_annotation_completed_claim",
+            report["blockers"],
+        )
+
+    def test_llm_route_cannot_mix_legacy_human_artifacts(self) -> None:
+        source_packet = valid_packet()
+        legacy_adjudication = source_packet["adjudication_artifact"]
+        packet = convert_to_llm_subagent_route(source_packet)
+        packet["adjudication_artifact"] = legacy_adjudication
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "human annotation packet must not mix legacy human artifacts "
+            "with LLM subagent adjudication route: adjudication_artifact",
+            report["blockers"],
+        )
 
     def test_default_validator_rejects_test_fixture_artifact_paths(self) -> None:
         report = validator.build_report(valid_packet())
@@ -748,6 +948,20 @@ class HumanAnnotationAdjudicationValidatorTest(unittest.TestCase):
             "human annotation results packet has unsupported fields: template_only",
             report["blockers"],
         )
+
+    def test_public_reproducible_manifest_can_bind_llm_annotation_packet(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        add_public_evidence(
+            packet,
+            "annotation_adjudication_protocol",
+            validator._public_evidence_hashes(packet),
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["metrics"]["evidence_source_mode"], public_evidence.PUBLIC_MODE)
+        self.assertTrue(report["claim_boundary"][public_evidence.CLAIM_FIELD])
 
 
 if __name__ == "__main__":

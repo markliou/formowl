@@ -14,6 +14,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+import llm_subagent_adjudication as llm_panel
+import public_reproducible_evidence as public_evidence
+
 
 ROOT = Path(__file__).resolve().parent
 INPUTS = ROOT / "inputs"
@@ -108,6 +111,8 @@ PACKET_ALLOWED_FIELDS = {
     "adapter_artifacts",
     "human_false_merge_label_artifact",
     "human_false_merge_label_artifact_sha256",
+    "llm_subagent_adjudication_artifact",
+    "llm_subagent_adjudication_artifact_sha256",
     "audit_trail_artifact",
     "audit_trail_artifact_sha256",
     "permission_probe_artifact",
@@ -115,17 +120,21 @@ PACKET_ALLOWED_FIELDS = {
     "rollback_smoke_artifact",
     "rollback_smoke_artifact_sha256",
     "claim_boundary",
+    *public_evidence.PACKET_FIELDS,
 }
 CLAIM_BOUNDARY_ALLOWED_FIELDS = {
     "supports_production_adapter_paths_claim",
     "supports_non_synthetic_deployment_claim",
     "supports_human_reviewed_false_merge_labels_claim",
+    "supports_llm_subagent_deployment_approval_claim",
+    "supports_llm_subagent_reviewed_false_merge_labels_claim",
     "supports_permission_probe_claim",
     "supports_rollback_smoke_claim",
     "supports_full_product_production_ready_claim",
     "supports_top_tier_scientific_validation_claim",
     "supports_canonical_write_claim",
     "supports_raw_access_claim",
+    public_evidence.CLAIM_FIELD,
 }
 ARTIFACT_REF_ALLOWED_FIELDS = {
     "component_id",
@@ -143,6 +152,7 @@ DEPLOYMENT_MANIFEST_ALLOWED_FIELDS = {
     "migration_manifest_sha256",
     "adapter_stack_sha256",
     "deployment_approved_by_human",
+    "deployment_approved_by_llm_subagent_panel",
     "raw_path_exposed",
 }
 ADAPTER_ARTIFACT_ALLOWED_FIELDS = {
@@ -163,6 +173,7 @@ FALSE_MERGE_LABEL_ARTIFACT_ALLOWED_FIELDS = {
     "artifact_type",
     "completed",
     "reviewer_type",
+    "llm_subagent_panel_reviewed",
     "synthetic_or_agent_generated",
     "deployment_id",
     "rows",
@@ -172,8 +183,10 @@ FALSE_MERGE_LABEL_ROW_ALLOWED_FIELDS = {
     "adapter_component_id",
     "candidate_pair_id",
     "human_reviewer_id",
+    "llm_subagent_panel_id",
     "reviewer_type",
     "human_reviewed",
+    "llm_subagent_reviewed",
     "false_merge_label",
     "candidate_pair_sha256",
     "source_candidate_sha256s",
@@ -482,7 +495,9 @@ def _load_required_artifact(
     return artifact
 
 
-def _validate_claim_boundary(packet: dict[str, Any], blockers: list[str]) -> None:
+def _validate_claim_boundary(
+    packet: dict[str, Any], blockers: list[str], *, llm_route: bool
+) -> None:
     claims = packet.get("claim_boundary")
     if not isinstance(claims, dict):
         blockers.append("production adapter packet claim boundary missing")
@@ -496,12 +511,35 @@ def _validate_claim_boundary(packet: dict[str, Any], blockers: list[str]) -> Non
     for flag in (
         "supports_production_adapter_paths_claim",
         "supports_non_synthetic_deployment_claim",
-        "supports_human_reviewed_false_merge_labels_claim",
         "supports_permission_probe_claim",
         "supports_rollback_smoke_claim",
     ):
         if claims.get(flag) is not True:
             blockers.append(f"production adapter packet missing claim: {flag}")
+    if llm_route:
+        for flag in (
+            "supports_llm_subagent_deployment_approval_claim",
+            "supports_llm_subagent_reviewed_false_merge_labels_claim",
+        ):
+            if claims.get(flag) is not True:
+                blockers.append(f"production adapter packet missing claim: {flag}")
+        if claims.get("supports_human_reviewed_false_merge_labels_claim") is not False:
+            blockers.append(
+                "production adapter packet must not claim human-reviewed false-merge labels "
+                "when using LLM subagent adjudication"
+            )
+    else:
+        if claims.get("supports_human_reviewed_false_merge_labels_claim") is not True:
+            blockers.append(
+                "production adapter packet missing claim: "
+                "supports_human_reviewed_false_merge_labels_claim"
+            )
+        for flag in (
+            "supports_llm_subagent_deployment_approval_claim",
+            "supports_llm_subagent_reviewed_false_merge_labels_claim",
+        ):
+            if claims.get(flag) not in {None, False}:
+                blockers.append(f"production adapter packet overclaims unsupported claim: {flag}")
     for flag in (
         "supports_full_product_production_ready_claim",
         "supports_top_tier_scientific_validation_claim",
@@ -512,12 +550,22 @@ def _validate_claim_boundary(packet: dict[str, Any], blockers: list[str]) -> Non
             blockers.append(f"production adapter packet overclaims unsupported claim: {flag}")
 
 
-def _validate_deployment_manifest(manifest: dict[str, Any], blockers: list[str]) -> str | None:
+def _validate_deployment_manifest(
+    manifest: dict[str, Any], blockers: list[str], *, llm_route: bool
+) -> str | None:
     if manifest.get("non_synthetic_deployment") is not True:
         blockers.append("production adapter deployment manifest is not non-synthetic")
     if manifest.get("synthetic_or_demo") is not False:
         blockers.append("production adapter deployment manifest is synthetic or demo")
-    if manifest.get("deployment_approved_by_human") is not True:
+    if llm_route:
+        if manifest.get("deployment_approved_by_llm_subagent_panel") is not True:
+            blockers.append("production adapter deployment is not LLM subagent approved")
+        if manifest.get("deployment_approved_by_human") is True:
+            blockers.append(
+                "production adapter deployment must not claim human approval "
+                "when using LLM subagent approval"
+            )
+    elif manifest.get("deployment_approved_by_human") is not True:
         blockers.append("production adapter deployment is not human approved")
     if manifest.get("raw_path_exposed") is not False:
         blockers.append("production adapter deployment exposes raw paths")
@@ -628,10 +676,17 @@ def _validate_false_merge_labels(
     artifact: dict[str, Any],
     deployment_id: str | None,
     blockers: list[str],
+    *,
+    llm_route: bool,
 ) -> None:
     if artifact.get("completed") is not True:
         blockers.append("production adapter false-merge label review is not complete")
-    if artifact.get("reviewer_type") != "human":
+    if llm_route:
+        if artifact.get("reviewer_type") != "four_specialist_llm_subagent_panel":
+            blockers.append("production adapter false-merge reviewer is not LLM subagent panel")
+        if artifact.get("llm_subagent_panel_reviewed") is not True:
+            blockers.append("production adapter false-merge labels are not LLM subagent reviewed")
+    elif artifact.get("reviewer_type") != "human":
         blockers.append("production adapter false-merge reviewer is not human")
     if artifact.get("synthetic_or_agent_generated") is not False:
         blockers.append("production adapter false-merge labels are synthetic or agent-generated")
@@ -663,11 +718,34 @@ def _validate_false_merge_labels(
         adapter_id = row.get("adapter_component_id")
         if adapter_id not in FALSE_MERGE_ADAPTERS:
             blockers.append("production adapter false-merge label adapter unsupported")
-        if row.get("reviewer_type") != "human" or row.get("human_reviewed") is not True:
+        if llm_route:
+            if row.get("human_reviewed") not in {None, False}:
+                blockers.append(
+                    "production adapter false-merge row must not claim human review " "on LLM route"
+                )
+            human_reviewer_id = row.get("human_reviewer_id")
+            if isinstance(human_reviewer_id, str) and human_reviewer_id:
+                blockers.append(
+                    "production adapter false-merge row must not retain a human reviewer id "
+                    "on LLM route"
+                )
+            if (
+                row.get("reviewer_type") != "four_specialist_llm_subagent_panel"
+                or row.get("llm_subagent_reviewed") is not True
+            ):
+                blockers.append("production adapter false-merge row is not LLM subagent reviewed")
+            if (
+                not isinstance(row.get("llm_subagent_panel_id"), str)
+                or not row["llm_subagent_panel_id"]
+            ):
+                blockers.append("production adapter false-merge LLM panel id missing")
+        elif row.get("reviewer_type") != "human" or row.get("human_reviewed") is not True:
             blockers.append("production adapter false-merge row is not human reviewed")
         if row.get("false_merge_label") is True:
             adapters_with_false_merge.add(adapter_id)
-        if not isinstance(row.get("human_reviewer_id"), str) or not row["human_reviewer_id"]:
+        if not llm_route and (
+            not isinstance(row.get("human_reviewer_id"), str) or not row["human_reviewer_id"]
+        ):
             blockers.append("production adapter false-merge human reviewer id missing")
         if not strong_hex64(row.get("candidate_pair_sha256")):
             blockers.append("production adapter false-merge candidate pair hash missing")
@@ -820,6 +898,98 @@ def _validate_rollback_smoke(
         blockers.append("production adapter rollback smoke run hash missing")
 
 
+def _load_llm_panel_artifact(
+    packet: dict[str, Any],
+    blockers: list[str],
+    *,
+    allow_test_artifacts: bool = False,
+) -> dict[str, Any]:
+    path_blocker = artifact_path_rejection_reason(
+        packet.get("llm_subagent_adjudication_artifact"),
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    if path_blocker:
+        if path_blocker == "path missing or malformed":
+            blockers.append(
+                "production adapter four-specialist LLM subagent adjudication artifact "
+                "missing or hash mismatch"
+            )
+        else:
+            blockers.append(
+                "production adapter four-specialist LLM subagent adjudication artifact "
+                + path_blocker
+            )
+        return {}
+    if not artifact_matches_sha256(
+        packet.get("llm_subagent_adjudication_artifact"),
+        packet.get("llm_subagent_adjudication_artifact_sha256"),
+        allow_test_artifacts=allow_test_artifacts,
+    ):
+        blockers.append(
+            "production adapter four-specialist LLM subagent adjudication artifact "
+            "missing or hash mismatch"
+        )
+        return {}
+    return load_artifact(
+        packet.get("llm_subagent_adjudication_artifact"),
+        packet.get("llm_subagent_adjudication_artifact_sha256"),
+        allow_test_artifacts=allow_test_artifacts,
+    )
+
+
+def _validate_llm_panel(
+    packet: dict[str, Any],
+    component_artifact_hashes: dict[str, str],
+    blockers: list[str],
+    *,
+    allow_test_artifacts: bool = False,
+) -> None:
+    panel = _load_llm_panel_artifact(
+        packet,
+        blockers,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    expected_hashes = [
+        digest
+        for digest in (
+            packet.get("deployment_manifest_artifact_sha256"),
+            *component_artifact_hashes.values(),
+            packet.get("human_false_merge_label_artifact_sha256"),
+            packet.get("audit_trail_artifact_sha256"),
+            packet.get("permission_probe_artifact_sha256"),
+            packet.get("rollback_smoke_artifact_sha256"),
+        )
+        if strong_hex64(digest)
+    ]
+    llm_panel.validate_four_specialist_panel(
+        panel,
+        blockers,
+        label="production adapter",
+        expected_target="production_adapter_paths",
+        expected_input_sha256s=expected_hashes,
+    )
+
+
+def _public_evidence_hashes(
+    packet: dict[str, Any],
+    component_artifact_hashes: dict[str, str],
+) -> list[str]:
+    hashes = []
+    for field in (
+        "deployment_manifest_artifact_sha256",
+        "human_false_merge_label_artifact_sha256",
+        "llm_subagent_adjudication_artifact_sha256",
+        "audit_trail_artifact_sha256",
+        "permission_probe_artifact_sha256",
+        "rollback_smoke_artifact_sha256",
+    ):
+        digest = packet.get(field)
+        if strong_hex64(digest):
+            hashes.append(digest)
+    hashes.extend(digest for digest in component_artifact_hashes.values() if strong_hex64(digest))
+    return sorted(set(hashes))
+
+
 def validate_packet(
     packet: dict[str, Any],
     *,
@@ -832,9 +1002,10 @@ def validate_packet(
         return [
             "production adapter evidence packet missing",
             "non-synthetic production deployment validation is not present",
-            "human-reviewed false-merge labels are not present",
+            "human or LLM-subagent-reviewed false-merge labels are not present",
             "permission probes, rollback smoke, and production audit artifacts are not present",
         ]
+    llm_route = bool(packet.get("llm_subagent_adjudication_artifact"))
     _reject_unsupported_fields(
         packet, PACKET_ALLOWED_FIELDS, "production adapter evidence packet", blockers
     )
@@ -844,7 +1015,7 @@ def validate_packet(
         blockers.append("production adapter evidence kind mismatch")
     if packet.get("recovered_after_tmp_loss") is not False:
         blockers.append("production adapter packet cannot rely on lost /tmp artifacts")
-    _validate_claim_boundary(packet, blockers)
+    _validate_claim_boundary(packet, blockers, llm_route=llm_route)
 
     manifest = _load_required_artifact(
         packet,
@@ -887,7 +1058,7 @@ def validate_packet(
         allow_test_artifacts=allow_test_artifacts,
     )
 
-    deployment_id = _validate_deployment_manifest(manifest, blockers)
+    deployment_id = _validate_deployment_manifest(manifest, blockers, llm_route=llm_route)
     component_artifacts, component_artifact_hashes = _validate_adapter_artifacts(
         packet,
         deployment_id,
@@ -898,10 +1069,27 @@ def validate_packet(
         actual_stack_digest = adapter_stack_digest(component_artifacts, component_artifact_hashes)
         if manifest.get("adapter_stack_sha256") != actual_stack_digest:
             blockers.append("production adapter manifest adapter stack digest mismatch")
-    _validate_false_merge_labels(labels, deployment_id, blockers)
+    _validate_false_merge_labels(labels, deployment_id, blockers, llm_route=llm_route)
     _validate_audit_trail(audit, deployment_id, blockers)
     _validate_permission_probe(permission_probe, deployment_id, blockers)
     _validate_rollback_smoke(rollback, deployment_id, blockers)
+    if llm_route:
+        _validate_llm_panel(
+            packet,
+            component_artifact_hashes,
+            blockers,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+    public_evidence.validate_public_evidence_packet(
+        packet,
+        blockers,
+        gate_id="production_adapter_paths",
+        artifact_path_rejection_reason=artifact_path_rejection_reason,
+        artifact_matches_sha256=artifact_matches_sha256,
+        load_artifact=load_artifact,
+        allow_test_artifacts=allow_test_artifacts,
+        expected_artifact_sha256s=_public_evidence_hashes(packet, component_artifact_hashes),
+    )
     return sorted(set(blockers))
 
 
@@ -913,6 +1101,9 @@ def build_report(
     packet = load_input_packet() if packet is None else packet
     blockers = validate_packet(packet, allow_test_artifacts=allow_test_artifacts)
     adapter_refs = packet.get("adapter_artifacts", []) if isinstance(packet, dict) else []
+    has_llm_panel = isinstance(packet, dict) and bool(
+        packet.get("llm_subagent_adjudication_artifact")
+    )
     report = {
         "artifact_id": "production_adapter_path_validator_recovery_v1",
         "input_packet": "inputs/production_adapter_evidence_packet.json",
@@ -929,6 +1120,7 @@ def build_report(
             )
             if isinstance(packet, dict)
             else False,
+            "llm_subagent_adjudication_present": has_llm_panel,
             "audit_trail_artifact_present": bool(packet.get("audit_trail_artifact"))
             if isinstance(packet, dict)
             else False,
@@ -938,13 +1130,33 @@ def build_report(
             "rollback_smoke_artifact_present": bool(packet.get("rollback_smoke_artifact"))
             if isinstance(packet, dict)
             else False,
+            "evidence_source_mode": public_evidence.evidence_source_mode(packet)
+            if isinstance(packet, dict)
+            else public_evidence.PRIVATE_MODE,
+            "public_evidence_manifest_present": bool(
+                packet.get("public_evidence_manifest_artifact")
+            )
+            if isinstance(packet, dict)
+            else False,
         },
         "claim_boundary": {
             "supports_production_adapter_paths_claim": not blockers,
             "supports_non_synthetic_deployment_claim": not blockers,
-            "supports_human_reviewed_false_merge_labels_claim": not blockers,
+            "supports_human_reviewed_false_merge_labels_claim": (
+                not blockers and not has_llm_panel
+            ),
+            "supports_llm_subagent_deployment_approval_claim": (not blockers and has_llm_panel),
+            "supports_llm_subagent_reviewed_false_merge_labels_claim": (
+                not blockers and has_llm_panel
+            ),
             "supports_permission_probe_claim": not blockers,
             "supports_rollback_smoke_claim": not blockers,
+            public_evidence.CLAIM_FIELD: (
+                not blockers
+                and public_evidence.evidence_source_mode(packet) == public_evidence.PUBLIC_MODE
+            )
+            if isinstance(packet, dict)
+            else False,
             "supports_full_product_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
             "supports_canonical_write_claim": False,

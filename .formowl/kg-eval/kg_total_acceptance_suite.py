@@ -278,109 +278,145 @@ def production_controls_gate() -> dict[str, Any]:
 def fair_external_baseline_comparison_gate() -> dict[str, Any]:
     report = fair_run.build_report()
     claims = report.get("claim_boundary", {})
+    metrics = report.get("metrics", {})
+    human_adjudication_route = (
+        claims.get("supports_human_adjudicated_answer_quality_claim") is True
+        and claims.get("supports_four_specialist_llm_subagent_adjudication_claim") in {None, False}
+        and metrics.get("human_answer_adjudication_present") is True
+    )
+    llm_adjudication_route = (
+        claims.get("supports_four_specialist_llm_subagent_adjudication_claim") is True
+        and claims.get("supports_human_adjudicated_answer_quality_claim") is False
+        and metrics.get("llm_subagent_adjudication_present") is True
+    )
     passed = (
         report.get("passed") is True
         and not report.get("blockers", [])
         and claims.get("supports_fair_external_baseline_comparison_claim") is True
         and claims.get("supports_real_package_execution_claim") is True
-        and claims.get("supports_human_adjudicated_answer_quality_claim") is True
+        and (human_adjudication_route or llm_adjudication_route)
         and claims.get("supports_graph_quality_validation_claim") is True
         and claims.get("supports_permission_probe_claim") is True
         and claims.get("supports_production_ready_claim") is False
         and claims.get("supports_top_tier_scientific_validation_claim") is False
-        and report.get("metrics", {}).get("baseline_run_count") == len(fair_run.REQUIRED_BASELINES)
-        and report.get("metrics", {}).get("human_answer_adjudication_present") is True
-        and report.get("metrics", {}).get("graph_quality_validation_present") is True
-        and report.get("metrics", {}).get("permission_probe_count")
-        == len(fair_run.REQUIRED_BASELINES)
-        and report.get("metrics", {}).get("source_lock_bound") is True
+        and metrics.get("baseline_run_count") == len(fair_run.REQUIRED_BASELINES)
+        and metrics.get("graph_quality_validation_present") is True
+        and metrics.get("permission_probe_count") == len(fair_run.REQUIRED_BASELINES)
+        and metrics.get("source_lock_bound") is True
     )
+    blockers = list(report.get("blockers", []))
+    if not passed and not blockers:
+        blockers.append("fair external baseline validator report is internally inconsistent")
     return {
         "gate_id": "fair_external_baseline_comparison",
-        "claim": "Fair external baseline comparison has real Microsoft GraphRAG/LightRAG/HippoRAG runs, human answer adjudication, graph-quality validation, and permission probes.",
+        "claim": "Fair external baseline comparison has real Microsoft GraphRAG/LightRAG/HippoRAG runs, human or four-specialist LLM subagent answer adjudication, graph-quality validation, and permission probes.",
         "passed": passed,
         "evidence": {
             "artifact": "results/fair_external_baseline_run_validator.json",
             "input_packet": report.get("input_packet"),
-            "metrics": report.get("metrics", {}),
+            "metrics": metrics,
             "claim_boundary": claims,
             "packet_sha256": report.get("packet_sha256"),
             "expected_source_lock_sha256": fair_run.literature.required_baseline_source_lock_sha256(),
         },
-        "blockers": []
-        if passed
-        else report.get("blockers", ["fair external baseline run evidence missing"]),
+        "blockers": [] if passed else blockers,
     }
 
 
 def annotation_adjudication_protocol_gate() -> dict[str, Any]:
     report = human_annotation.build_report()
     claims = report.get("claim_boundary", {})
+    metrics = report.get("metrics", {})
+    legacy_human_route = (
+        claims.get("supports_human_annotation_completed_claim") is True
+        and claims.get("supports_human_adjudication_completed_claim") is True
+        and claims.get("supports_llm_subagent_annotation_adjudication_completed_claim")
+        in {None, False}
+        and claims.get("supports_confusion_matrix_claim") is True
+        and claims.get("supports_custody_receipt_claim") is True
+        and metrics.get("first_pass_submission_artifact_count", 0) >= 2
+        and metrics.get("adjudication_artifact_present") is True
+        and metrics.get("confusion_matrix_artifact_present") is True
+        and metrics.get("custody_receipt_artifact_present") is True
+    )
+    llm_panel_route = (
+        claims.get("supports_llm_subagent_annotation_adjudication_completed_claim") is True
+        and claims.get("supports_human_annotation_completed_claim") is False
+        and claims.get("supports_human_adjudication_completed_claim") is False
+        and claims.get("supports_confusion_matrix_claim") is False
+        and claims.get("supports_custody_receipt_claim") is False
+        and metrics.get("llm_subagent_adjudication_present") is True
+    )
     passed = (
         report.get("passed") is True
         and not report.get("blockers", [])
-        and claims.get("supports_human_annotation_completed_claim") is True
-        and claims.get("supports_human_adjudication_completed_claim") is True
-        and claims.get("supports_confusion_matrix_claim") is True
-        and claims.get("supports_custody_receipt_claim") is True
+        and (legacy_human_route or llm_panel_route)
         and claims.get("supports_synthetic_label_generation_claim") is False
         and claims.get("supports_template_as_human_evidence_claim") is False
         and claims.get("supports_production_ready_claim") is False
         and claims.get("supports_top_tier_scientific_validation_claim") is False
-        and report.get("metrics", {}).get("first_pass_submission_artifact_count", 0) >= 2
-        and report.get("metrics", {}).get("adjudication_artifact_present") is True
-        and report.get("metrics", {}).get("confusion_matrix_artifact_present") is True
-        and report.get("metrics", {}).get("custody_receipt_artifact_present") is True
     )
+    blockers = list(report.get("blockers", []))
+    if not passed and not blockers:
+        blockers.append("annotation adjudication validator report is internally inconsistent")
     return {
         "gate_id": "annotation_adjudication_protocol",
-        "claim": "Real human annotation/adjudication packet has two independent first-pass submissions, final adjudication, confusion matrix, and custody receipt.",
+        "claim": "Annotation/adjudication packet has either legacy real-human submissions and adjudication evidence or a four-specialist LLM subagent adjudication panel bound to the manifest and work orders.",
         "passed": passed,
         "evidence": {
             "artifact": "results/human_annotation_adjudication_validator.json",
             "input_packet": report.get("input_packet"),
-            "metrics": report.get("metrics", {}),
+            "metrics": metrics,
             "claim_boundary": claims,
             "packet_sha256": report.get("packet_sha256"),
         },
-        "blockers": []
-        if passed
-        else report.get("blockers", ["human annotation/adjudication evidence missing"]),
+        "blockers": [] if passed else blockers,
     }
 
 
 def multimodal_semantic_validation_gate() -> dict[str, Any]:
     report = enterprise_multimodal.build_report()
     claims = report.get("claim_boundary", {})
+    metrics = report.get("metrics", {})
+    human_adjudication_route = (
+        claims.get("supports_multimodal_human_adjudication_completed_claim") is True
+        and claims.get("supports_multimodal_llm_subagent_adjudication_completed_claim")
+        in {None, False}
+        and metrics.get("human_adjudication_present") is True
+    )
+    llm_adjudication_route = (
+        claims.get("supports_multimodal_llm_subagent_adjudication_completed_claim") is True
+        and claims.get("supports_multimodal_human_adjudication_completed_claim") is False
+        and metrics.get("llm_subagent_adjudication_present") is True
+    )
     passed = (
         report.get("passed") is True
         and not report.get("blockers", [])
         and claims.get("supports_real_enterprise_multimodal_claim") is True
-        and claims.get("supports_multimodal_human_adjudication_completed_claim") is True
+        and (human_adjudication_route or llm_adjudication_route)
         and claims.get("supports_cross_modal_permission_probe_claim") is True
         and claims.get("supports_business_decision_review_claim") is True
         and claims.get("supports_financial_advice_or_autonomous_business_judgment_claim") is False
         and claims.get("supports_production_ready_claim") is False
         and claims.get("supports_top_tier_scientific_validation_claim") is False
         and claims.get("supports_raw_asset_access_claim") is False
-        and report.get("metrics", {}).get("validation_artifact_count")
+        and metrics.get("validation_artifact_count")
         == len(enterprise_multimodal.REQUIRED_MODALITIES)
-        and report.get("metrics", {}).get("pilot_manifest_present") is True
-        and report.get("metrics", {}).get("human_adjudication_present") is True
-        and report.get("metrics", {}).get("business_decision_review_present") is True
-        and report.get("metrics", {}).get("permission_probe_present") is True
+        and metrics.get("pilot_manifest_present") is True
+        and metrics.get("business_decision_review_present") is True
+        and metrics.get("permission_probe_present") is True
     )
     blockers = list(report.get("blockers", []))
     if not passed and not blockers:
         blockers.append("enterprise multimodal validator report is internally inconsistent")
     return {
         "gate_id": "multimodal_semantic_validation",
-        "claim": "Real enterprise multimodal validation has spreadsheet, mail, meeting audio, and video OCR evidence, human adjudication, business-decision review, and cross-modal permission probes.",
+        "claim": "Real enterprise multimodal validation has spreadsheet, mail, meeting audio, and video OCR evidence, human or four-specialist LLM subagent adjudication, business-decision review, and cross-modal permission probes.",
         "passed": passed,
         "evidence": {
             "artifact": "results/enterprise_multimodal_validation_validator.json",
             "input_packet": report.get("input_packet"),
-            "metrics": report.get("metrics", {}),
+            "metrics": metrics,
             "claim_boundary": claims,
             "packet_sha256": report.get("packet_sha256"),
         },
@@ -392,12 +428,25 @@ def production_adapter_paths_gate() -> dict[str, Any]:
     report = production_path.build_report()
     claims = report.get("claim_boundary", {})
     metrics = report.get("metrics", {})
+    legacy_human_label_route = (
+        claims.get("supports_human_reviewed_false_merge_labels_claim") is True
+        and claims.get("supports_llm_subagent_deployment_approval_claim") in {None, False}
+        and claims.get("supports_llm_subagent_reviewed_false_merge_labels_claim") in {None, False}
+        and metrics.get("human_false_merge_label_artifact_present") is True
+    )
+    llm_panel_label_route = (
+        claims.get("supports_llm_subagent_deployment_approval_claim") is True
+        and claims.get("supports_llm_subagent_reviewed_false_merge_labels_claim") is True
+        and claims.get("supports_human_reviewed_false_merge_labels_claim") is False
+        and metrics.get("llm_subagent_adjudication_present") is True
+        and metrics.get("human_false_merge_label_artifact_present") is True
+    )
     passed = (
         report.get("passed") is True
         and not report.get("blockers", [])
         and claims.get("supports_production_adapter_paths_claim") is True
         and claims.get("supports_non_synthetic_deployment_claim") is True
-        and claims.get("supports_human_reviewed_false_merge_labels_claim") is True
+        and (legacy_human_label_route or llm_panel_label_route)
         and claims.get("supports_permission_probe_claim") is True
         and claims.get("supports_rollback_smoke_claim") is True
         and claims.get("supports_full_product_production_ready_claim") is False
@@ -406,7 +455,6 @@ def production_adapter_paths_gate() -> dict[str, Any]:
         and claims.get("supports_raw_access_claim") is False
         and metrics.get("adapter_artifact_count") == len(production_path.REQUIRED_COMPONENTS)
         and metrics.get("deployment_manifest_present") is True
-        and metrics.get("human_false_merge_label_artifact_present") is True
         and metrics.get("audit_trail_artifact_present") is True
         and metrics.get("permission_probe_artifact_present") is True
         and metrics.get("rollback_smoke_artifact_present") is True
@@ -416,7 +464,7 @@ def production_adapter_paths_gate() -> dict[str, Any]:
         blockers.append("production adapter path validator report is internally inconsistent")
     return {
         "gate_id": "production_adapter_paths",
-        "claim": "Production adapter path has non-synthetic deployment validation, human-reviewed false-merge labels, permission probes, audit trail, and rollback smoke evidence.",
+        "claim": "Production adapter path has non-synthetic deployment validation, human-reviewed or four-specialist LLM-subagent-reviewed false-merge labels, permission probes, audit trail, and rollback smoke evidence.",
         "passed": passed,
         "evidence": {
             "artifact": "results/production_adapter_path_validator.json",

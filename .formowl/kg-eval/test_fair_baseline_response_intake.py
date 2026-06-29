@@ -15,6 +15,7 @@ import fair_baseline_response_intake as intake
 import fair_baseline_run_work_packet_generator as work_packet_generator
 import fair_external_baseline_packet_assembler as assembler
 import fair_external_baseline_run_validator as validator
+import public_reproducible_evidence as public_evidence
 import test_fair_external_baseline_run_validator as validator_fixtures
 
 
@@ -59,6 +60,48 @@ def valid_response_packet() -> dict:
         "graph_quality_validation": deepcopy(packet["graph_quality_validation"]),
         "permission_probes": deepcopy(packet["permission_probes"]),
     }
+
+
+def public_manifest_for_response(response: dict) -> dict:
+    hashes = [
+        response["source_lock_sha256"],
+        validator.sha256_json(response["run_environment"]),
+        validator.sha256_json(response["graph_quality_validation"]),
+        validator.sha256_json(response["permission_probes"]),
+    ]
+    adjudication = response.get("human_answer_adjudication")
+    if isinstance(adjudication, dict):
+        hashes.append(validator.sha256_json(adjudication))
+    panel = response.get("llm_subagent_adjudication")
+    if isinstance(panel, dict):
+        hashes.append(intake.sha256_artifact_payload(panel))
+    for run in response["baseline_runs"]:
+        for field in validator.RUN_ARTIFACT_FIELDS:
+            hashes.append(intake.sha256_artifact_payload(run[field]))
+    sources = [
+        {
+            "source_id": "public_fair_baseline_response_source",
+            "source_url": "https://example.org/formowl/fair-baseline/source.json",
+            "source_type": "public_reproducible_dataset",
+            "source_usage_role": "baseline_evaluation_input",
+            "license": "CC-BY-4.0",
+            "version_or_snapshot": "2026-06-28-snapshot",
+            "retrieved_at": "2026-06-28T00:00:00Z",
+            "content_sha256": "abc1234567890def" * 4,
+            "archive_sha256": "bcd1234567890efa" * 4,
+            "derived_artifact_sha256s": sorted(set(hashes)),
+            "publicly_accessible": True,
+            "permission_allows_research_evaluation": True,
+            "non_synthetic": True,
+            "raw_private_payload": False,
+        }
+    ]
+    return public_evidence.build_manifest(
+        gate_id="fair_external_baseline_comparison",
+        retrieved_at="2026-06-28T00:00:00Z",
+        public_sources=sources,
+        covered_artifact_sha256s=hashes,
+    )
 
 
 class FairBaselineResponseIntakeTest(unittest.TestCase):
@@ -183,6 +226,60 @@ class FairBaselineResponseIntakeTest(unittest.TestCase):
                 sorted(path.name for path in (BASE / baseline_id).iterdir()),
                 sorted(intake.RUN_ARTIFACT_FILENAMES.values()),
             )
+        self.assert_canonical_unchanged()
+
+    def test_llm_subagent_response_intake_builds_validator_accepted_candidate(self) -> None:
+        response = valid_response_packet()
+        llm_packet = validator_fixtures.convert_to_llm_subagent_route(
+            validator_fixtures.valid_packet()
+        )
+        response.pop("human_answer_adjudication")
+        response["llm_subagent_adjudication"] = _read_artifact(
+            llm_packet["llm_subagent_adjudication_artifact"]
+        )
+        response["graph_quality_validation"] = deepcopy(llm_packet["graph_quality_validation"])
+
+        result = intake.build_intake_artifacts(
+            work_packet=work_packet_generator.build_work_packet(),
+            response_packet=response,
+            output_dir=OUTPUT_DIR,
+            assembly_manifest_output="work_packets/test_fair_baseline_response_intake_manifest.json",
+            allow_test_artifacts=True,
+        )
+
+        assembly_manifest = json.loads(ASSEMBLY_MANIFEST.read_text(encoding="utf-8"))
+        packet = assembler.assemble_packet(**assembly_manifest, allow_test_artifacts=True)
+        report = validator.build_report(packet, allow_test_artifacts=True)
+
+        self.assertTrue(result["validation_report"]["candidate_packet_validator_passed"])
+        self.assertTrue(report["passed"])
+        self.assertIn("llm_subagent_adjudication", assembly_manifest)
+        self.assertNotIn("human_answer_adjudication", assembly_manifest)
+        self.assertIn("llm_subagent_adjudication_artifact", packet)
+        self.assert_canonical_unchanged()
+
+    def test_public_evidence_response_intake_builds_validator_accepted_candidate(self) -> None:
+        response = valid_response_packet()
+        response["evidence_source_mode"] = public_evidence.PUBLIC_MODE
+        response["public_evidence_manifest_artifact"] = public_manifest_for_response(response)
+
+        result = intake.build_intake_artifacts(
+            work_packet=work_packet_generator.build_work_packet(),
+            response_packet=response,
+            output_dir=OUTPUT_DIR,
+            assembly_manifest_output="work_packets/test_fair_baseline_response_intake_manifest.json",
+            allow_test_artifacts=True,
+        )
+
+        assembly_manifest = json.loads(ASSEMBLY_MANIFEST.read_text(encoding="utf-8"))
+        packet = assembler.assemble_packet(**assembly_manifest, allow_test_artifacts=True)
+        report = validator.build_report(packet, allow_test_artifacts=True)
+
+        self.assertTrue(result["validation_report"]["candidate_packet_validator_passed"])
+        self.assertTrue(report["passed"])
+        self.assertEqual(packet["evidence_source_mode"], public_evidence.PUBLIC_MODE)
+        self.assertTrue(packet["claim_boundary"][public_evidence.CLAIM_FIELD])
+        self.assertIn("public_evidence_manifest_artifact", assembly_manifest)
         self.assert_canonical_unchanged()
 
     def test_cli_preflight_response_validates_without_writing_artifacts(self) -> None:

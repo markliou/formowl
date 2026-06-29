@@ -86,6 +86,8 @@ EXPECTED_GATES = {
         "real_root_rel": "inputs/fair_baseline_real",
         "template": TEMPLATES / "fair_external_baseline_run_packet.template.json",
         "template_rel": "templates/fair_external_baseline_run_packet.template.json",
+        "expected_artifact_ids": ["fair_external_baseline_run_packet_v1"],
+        "expected_evidence_kinds": ["non_synthetic_external_baseline_run"],
     },
     "annotation_adjudication_protocol": {
         "requirement_id": "human_annotation_adjudication_protocol",
@@ -98,6 +100,14 @@ EXPECTED_GATES = {
         "real_root_rel": "inputs/human_annotation_real",
         "template": TEMPLATES / "human_annotation_results_v1.template.json",
         "template_rel": "templates/human_annotation_results_v1.template.json",
+        "expected_artifact_ids": [
+            "human_annotation_results_v1",
+            "llm_subagent_annotation_results_v1",
+        ],
+        "expected_evidence_kinds": [
+            "real_human_annotation_adjudication",
+            "four_specialist_llm_subagent_annotation_adjudication",
+        ],
     },
     "multimodal_semantic_validation": {
         "requirement_id": "multimodal_enterprise_validation",
@@ -110,6 +120,8 @@ EXPECTED_GATES = {
         "real_root_rel": "inputs/enterprise_multimodal_real",
         "template": TEMPLATES / "enterprise_multimodal_validation_packet.template.json",
         "template_rel": "templates/enterprise_multimodal_validation_packet.template.json",
+        "expected_artifact_ids": ["enterprise_multimodal_validation_packet_v1"],
+        "expected_evidence_kinds": ["real_enterprise_multimodal_validation"],
     },
     "production_adapter_paths": {
         "requirement_id": "production_adapter_gate",
@@ -122,6 +134,8 @@ EXPECTED_GATES = {
         "real_root_rel": "inputs/production_adapter_real",
         "template": TEMPLATES / "production_adapter_evidence_packet.template.json",
         "template_rel": "templates/production_adapter_evidence_packet.template.json",
+        "expected_artifact_ids": ["production_adapter_evidence_packet_v1"],
+        "expected_evidence_kinds": ["non_synthetic_production_adapter_validation"],
     },
 }
 
@@ -550,13 +564,19 @@ def packet_surface_report(
         _scan_text(packet_path) if packet_path.exists() and packet_error is None else {}
     )
     checklist_row = checklist_row_for_gate(gate_id)
+    expected_artifact_ids = gate.get("expected_artifact_ids", [])
+    expected_evidence_kinds = gate.get("expected_evidence_kinds", [])
     expected_artifact_id = checklist_row.get("required_packet_artifact_id")
+    if expected_artifact_id is not None:
+        expected_artifact_ids = [expected_artifact_id]
     expected_evidence_kind = checklist_row.get("required_evidence_kind")
+    if expected_evidence_kind is not None:
+        expected_evidence_kinds = [expected_evidence_kind]
     json_object = packet_error is None and isinstance(packet_payload, dict) and bool(packet_payload)
     packet_has_identity = (
         json_object
-        and packet_payload.get("artifact_id") == expected_artifact_id
-        and packet_payload.get("evidence_kind") == expected_evidence_kind
+        and packet_payload.get("artifact_id") in expected_artifact_ids
+        and packet_payload.get("evidence_kind") in expected_evidence_kinds
     )
     validator_clear = validator_report.get("passed") is True
     if path_state is not None:
@@ -586,9 +606,9 @@ def packet_surface_report(
         "non_regular_rejected": packet_state == "non_regular_rejected",
         "partial_packet": packet_state == "partial",
         "has_expected_artifact_id": json_object
-        and packet_payload.get("artifact_id") == expected_artifact_id,
+        and packet_payload.get("artifact_id") in expected_artifact_ids,
         "has_expected_evidence_kind": json_object
-        and packet_payload.get("evidence_kind") == expected_evidence_kind,
+        and packet_payload.get("evidence_kind") in expected_evidence_kinds,
         "contains_template_marker": bool(packet_text_scan.get("contains_template_marker")),
         "contains_placeholder_marker": bool(packet_text_scan.get("contains_placeholder_marker")),
         "contains_raw_internal_marker": bool(packet_text_scan.get("contains_raw_internal_marker")),
@@ -711,10 +731,12 @@ def build_report() -> dict[str, Any]:
 
     failed_gate_ids = summary.get("failed_gate_ids", [])
     expected_gate_ids = list(EXPECTED_GATES)
+    checklist_gate_ids = list(checklist_rows)
     checklist_sync = {
         "checklist_present": bool(checklist),
-        "checklist_gate_ids_match_expected": list(checklist_rows) == expected_gate_ids,
-        "checklist_failed_gate_ids_match_total": list(checklist_rows) == failed_gate_ids,
+        "checklist_gate_ids_match_expected": checklist_gate_ids == failed_gate_ids,
+        "checklist_gate_ids_match_current_failed_gates": checklist_gate_ids == failed_gate_ids,
+        "checklist_failed_gate_ids_match_total": checklist_gate_ids == failed_gate_ids,
         "checklist_counts_match_total": checklist.get("failed_gate_count")
         == summary.get("failed_gate_count")
         and checklist.get("passed_gate_count") == summary.get("passed_gate_count"),
@@ -728,6 +750,8 @@ def build_report() -> dict[str, Any]:
         == "results/kg_objective_completion_audit.json",
     }
     checklist_sync["status"] = "synchronized" if all(checklist_sync.values()) else "drifted"
+    checklist_sync["historical_monitored_gate_ids"] = expected_gate_ids
+    checklist_sync["current_expected_gate_ids"] = failed_gate_ids
 
     gate_reports = [
         gate_preflight_report(

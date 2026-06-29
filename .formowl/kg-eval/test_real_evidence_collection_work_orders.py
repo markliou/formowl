@@ -69,6 +69,160 @@ def load_json(path: Path) -> dict:
     return loaded
 
 
+BLOCKED_GATE_IDS = [
+    "multimodal_semantic_validation",
+    "production_adapter_paths",
+]
+
+
+def _base_remaining_gate_row(gate_id: str) -> dict:
+    gate = preflight.EXPECTED_GATES[gate_id]
+    expected_artifact_id = gate["expected_artifact_ids"][0]
+    expected_evidence_kind = gate["expected_evidence_kinds"][0]
+    row = {
+        "gate_id": gate_id,
+        "requirement_id": gate["requirement_id"],
+        "input_packet": gate["input_packet_rel"],
+        "required_packet_artifact_id": expected_artifact_id,
+        "required_evidence_kind": expected_evidence_kind,
+        "validator_module": gate["validator_module"],
+        "current_blockers": ["missing_operator_response"],
+        "must_not_claim": [
+            "production readiness",
+            "top-tier scientific validation",
+            "raw asset access",
+            "canonical writes",
+        ],
+    }
+    if gate_id == "multimodal_semantic_validation":
+        row.update(
+            {
+                "required_modalities": [
+                    "spreadsheet",
+                    "mail",
+                    "meeting_audio",
+                    "video_ocr",
+                ],
+                "required_artifacts": [
+                    "pilot_manifest",
+                    "validation_rows",
+                    "llm_subagent_adjudication",
+                    "business_decision_review",
+                    "permission_probe",
+                ],
+                "required_controls": [
+                    "cross-modal permission probe",
+                    "business decision review",
+                    "four-specialist LLM subagent panel",
+                ],
+            }
+        )
+    if gate_id == "production_adapter_paths":
+        row.update(
+            {
+                "required_components": [
+                    "postgres_metadata_store",
+                    "pgvector_index",
+                    "rapidfuzz_candidate_adapter",
+                    "splink_candidate_adapter",
+                    "retrieval_gateway",
+                    "semantic_gateway",
+                    "wiki_projection_adapter",
+                ],
+                "required_artifacts": [
+                    "deployment_manifest",
+                    "component_artifacts",
+                    "false_merge_labels",
+                    "audit_trail",
+                    "permission_probe",
+                    "rollback_smoke",
+                ],
+                "required_audit_actions": [
+                    "entity_match_without_grant",
+                    "raw_asset_read_denied",
+                    "canonical_write_guard",
+                ],
+                "required_controls": [
+                    "candidate-only adapters",
+                    "permission probes",
+                    "rollback smoke",
+                    "four-specialist LLM subagent panel",
+                ],
+            }
+        )
+    return row
+
+
+def blocked_checklist(gate_ids: list[str] | None = None) -> dict:
+    if gate_ids is None:
+        gate_ids = BLOCKED_GATE_IDS
+    return {
+        "artifact_id": "kg_remaining_evidence_checklist_v1",
+        "overall_passed": False,
+        "passed_gate_count": 12 - len(gate_ids),
+        "failed_gate_count": len(gate_ids),
+        "remaining_gates": [_base_remaining_gate_row(gate_id) for gate_id in gate_ids],
+        "gate_status_sha256": "test-blocked-gate-status",
+        "objective_audit_sha256": "test-blocked-objective-audit",
+        "source_snapshot": "results/kg_total_acceptance_snapshot.json",
+        "source_objective_audit": "results/kg_objective_completion_audit.json",
+    }
+
+
+def blocked_preflight(gate_ids: list[str] | None = None) -> dict:
+    if gate_ids is None:
+        gate_ids = BLOCKED_GATE_IDS
+    blocked = set(gate_ids)
+    report = deepcopy(preflight.build_report())
+    report["preflight_state"] = "blocked"
+    report["summary"]["blocked_gate_ids"] = list(gate_ids)
+    report["summary"]["blocked_gate_count"] = len(gate_ids)
+    report["summary"]["total_acceptance_state"] = "blocked"
+    report["summary"]["total_acceptance_failed_gate_ids"] = list(gate_ids)
+    report["summary"]["gate_status_sha256"] = "test-blocked-gate-status"
+    report["checklist_sync"]["status"] = "synchronized"
+    report["checklist_sync"]["current_expected_gate_ids"] = list(gate_ids)
+    for row in report["gates"]:
+        if row["gate_id"] not in blocked:
+            continue
+        row["current_total_gate_state"] = "blocked"
+        row["current_total_gate_blockers"] = ["missing_operator_response"]
+        row["validator_status"] = "blocked"
+        row["validator_blockers"] = ["missing_operator_response"]
+        row["collection_state"] = "missing_real_artifacts_and_packet"
+        row["packet_surface"].update(
+            {
+                "present": False,
+                "sha256": None,
+                "packet_state": "missing",
+                "partial_packet": False,
+                "artifact_references": {
+                    "reference_count": 0,
+                    "real_root_artifact_count": 0,
+                    "rejected_reference_count": 0,
+                    "rejected_statuses": [],
+                    "all_references_under_real_root": False,
+                    "references": [],
+                },
+            }
+        )
+        row["real_root_scan"] = {
+            "root_exists": True,
+            "root_ready": False,
+            "file_count": 0,
+            "candidate_artifact_count": 0,
+            "symlink_count": 0,
+            "disappeared_file_count": 0,
+            "test_or_sandbox_file_count": 0,
+            "template_marker_file_count": 0,
+            "placeholder_marker_file_count": 0,
+            "raw_internal_marker_file_count": 0,
+            "candidate_artifact_paths": [],
+            "disappeared_file_paths": [],
+        }
+    return report
+
+
 class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
     def setUp(self) -> None:
         self.snapshot_bytes = (
@@ -99,8 +253,14 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
     def _order(self, report: dict, gate_id: str) -> dict:
         return {row["gate_id"]: row for row in report["work_orders"]}[gate_id]
 
+    def _blocked_report(self, gate_ids: list[str] | None = None) -> dict:
+        return work_orders.build_report(
+            checklist_override=blocked_checklist(gate_ids),
+            preflight_report_override=blocked_preflight(gate_ids),
+        )
+
     def test_work_orders_cover_exact_remaining_gates_and_are_non_authoritative(self) -> None:
-        report = work_orders.build_report()
+        report = self._blocked_report()
 
         self.assertEqual(
             report["work_order_state"], "collection_blocked_until_real_evidence_exists"
@@ -132,8 +292,6 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertEqual(
             report["summary"]["work_order_gate_ids"],
             [
-                "fair_external_baseline_comparison",
-                "annotation_adjudication_protocol",
                 "multimodal_semantic_validation",
                 "production_adapter_paths",
             ],
@@ -144,12 +302,28 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         )
         self.assertEqual(report["sync"]["status"], "synchronized")
         self.assertFalse(report["sync"]["normal_work_orders_withheld"])
+        self.assertEqual(
+            report["sync"]["historical_monitored_gate_ids"],
+            [
+                "fair_external_baseline_comparison",
+                "annotation_adjudication_protocol",
+                "multimodal_semantic_validation",
+                "production_adapter_paths",
+            ],
+        )
+        self.assertEqual(
+            report["sync"]["current_expected_gate_ids"],
+            report["summary"]["preflight_blocked_gate_ids"],
+        )
 
     def test_work_orders_stay_synchronized_with_checklist_and_preflight(self) -> None:
-        checklist = work_orders.load_json(work_orders.CHECKLIST_PATH)
-        preflight_report = preflight.build_report()
+        checklist = blocked_checklist()
+        preflight_report = blocked_preflight()
         preflight_by_gate = {row["gate_id"]: row for row in preflight_report["gates"]}
-        report = work_orders.build_report()
+        report = work_orders.build_report(
+            checklist_override=checklist,
+            preflight_report_override=preflight_report,
+        )
 
         checklist_by_gate = {row["gate_id"]: row for row in checklist["remaining_gates"]}
         for gate_id, checklist_row in checklist_by_gate.items():
@@ -189,8 +363,21 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
                     preflight_row["real_root_scan"]["disappeared_file_count"],
                 )
 
-    def test_current_baseline_visibly_remains_missing_real_evidence(self) -> None:
+    def test_current_baseline_has_no_remaining_work_orders(self) -> None:
         report = work_orders.build_report()
+
+        self.assertEqual(
+            report["work_order_state"], "no_remaining_work_orders_all_broad_gates_clear"
+        )
+        self.assertEqual(report["summary"]["work_order_count"], 0)
+        self.assertEqual(report["summary"]["work_order_gate_ids"], [])
+        self.assertEqual(report["summary"]["preflight_blocked_gate_ids"], [])
+        self.assertEqual(report["sync"]["status"], "synchronized")
+        self.assertTrue(report["sync"]["normal_work_orders_withheld"])
+        self.assertEqual(report["work_orders"], [])
+
+    def test_blocked_fixture_visibly_remains_missing_real_evidence(self) -> None:
+        report = self._blocked_report()
 
         self.assertEqual(
             report["work_order_state"], "collection_blocked_until_real_evidence_exists"
@@ -207,11 +394,14 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
                 self.assertEqual(snapshot["real_root_disappeared_file_count"], 0)
 
     def test_checklist_or_preflight_drift_fails_closed_without_normal_work_orders(self) -> None:
-        checklist = work_orders.load_json(work_orders.CHECKLIST_PATH)
+        checklist = blocked_checklist()
         drifted_checklist = deepcopy(checklist)
         drifted_checklist["remaining_gates"] = drifted_checklist["remaining_gates"][:-1]
 
-        checklist_report = work_orders.build_report(checklist_override=drifted_checklist)
+        checklist_report = work_orders.build_report(
+            checklist_override=drifted_checklist,
+            preflight_report_override=blocked_preflight(),
+        )
 
         self.assertEqual(checklist_report["sync"]["status"], "drifted")
         self.assertTrue(checklist_report["sync"]["normal_work_orders_withheld"])
@@ -222,10 +412,13 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertEqual(checklist_report["summary"]["work_order_count"], 0)
         self.assertEqual(checklist_report["work_orders"], [])
 
-        drifted_preflight = preflight.build_report()
+        drifted_preflight = blocked_preflight()
         drifted_preflight["checklist_sync"]["status"] = "drifted"
 
-        preflight_report = work_orders.build_report(preflight_report_override=drifted_preflight)
+        preflight_report = work_orders.build_report(
+            checklist_override=checklist,
+            preflight_report_override=drifted_preflight,
+        )
 
         self.assertEqual(preflight_report["sync"]["status"], "drifted")
         self.assertTrue(preflight_report["sync"]["normal_work_orders_withheld"])
@@ -233,55 +426,67 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertEqual(preflight_report["work_orders"], [])
 
     def test_missing_or_malformed_preflight_gate_rows_fail_closed(self) -> None:
-        missing_gate = preflight.build_report()
+        missing_gate = blocked_preflight()
         missing_gate["gates"] = missing_gate["gates"][:-1]
 
-        missing_report = work_orders.build_report(preflight_report_override=missing_gate)
+        missing_report = work_orders.build_report(
+            checklist_override=blocked_checklist(),
+            preflight_report_override=missing_gate,
+        )
 
         self.assertEqual(missing_report["sync"]["status"], "drifted")
         self.assertFalse(missing_report["sync"]["per_gate_preflight_contract_valid"])
         self.assertTrue(missing_report["sync"]["normal_work_orders_withheld"])
         self.assertEqual(missing_report["work_orders"], [])
 
-        malformed_gate = preflight.build_report()
+        malformed_gate = blocked_preflight()
         malformed_gate["gates"][0].pop("packet_surface")
-        malformed_gate["gates"][1]["real_root_scan"] = {
+        malformed_gate["gates"][2]["real_root_scan"] = {
             "file_count": 0,
             "candidate_artifact_count": 0,
             "disappeared_file_count": "0",
             "root_ready": False,
         }
-        malformed_gate["gates"][2]["real_root_scan"].pop("disappeared_file_count")
+        malformed_gate["gates"][3]["real_root_scan"].pop("disappeared_file_count")
 
-        malformed_report = work_orders.build_report(preflight_report_override=malformed_gate)
+        malformed_report = work_orders.build_report(
+            checklist_override=blocked_checklist(),
+            preflight_report_override=malformed_gate,
+        )
 
         self.assertEqual(malformed_report["sync"]["status"], "drifted")
         self.assertFalse(malformed_report["sync"]["per_gate_preflight_contract_valid"])
         details = malformed_report["sync"]["per_gate_preflight_contract"]["details"]
         self.assertFalse(
-            details["annotation_adjudication_protocol"]["checks"][
+            details["multimodal_semantic_validation"]["checks"][
                 "real_root_disappeared_file_count_is_int"
             ]
         )
         self.assertFalse(
-            details["multimodal_semantic_validation"]["checks"][
-                "real_root_disappeared_file_count_is_int"
-            ]
+            details["production_adapter_paths"]["checks"]["real_root_disappeared_file_count_is_int"]
         )
         self.assertTrue(malformed_report["sync"]["normal_work_orders_withheld"])
         self.assertEqual(malformed_report["work_orders"], [])
 
     def test_disappeared_real_root_files_fail_closed_instead_of_collecting(self) -> None:
-        unstable_preflight = preflight.build_report()
-        unstable_scan = unstable_preflight["gates"][0]["real_root_scan"]
+        unstable_preflight = blocked_preflight()
+        unstable_row = next(
+            row
+            for row in unstable_preflight["gates"]
+            if row["gate_id"] == "multimodal_semantic_validation"
+        )
+        unstable_scan = unstable_row["real_root_scan"]
         unstable_scan["disappeared_file_count"] = 1
         unstable_scan["disappeared_file_paths"] = [
-            "inputs/fair_baseline_real/operator-run/transient.json"
+            "inputs/enterprise_multimodal_real/operator-run/transient.json"
         ]
 
-        report = work_orders.build_report(preflight_report_override=unstable_preflight)
+        report = work_orders.build_report(
+            checklist_override=blocked_checklist(),
+            preflight_report_override=unstable_preflight,
+        )
         checks = report["sync"]["per_gate_preflight_contract"]["details"][
-            "fair_external_baseline_comparison"
+            "multimodal_semantic_validation"
         ]["checks"]
 
         self.assertEqual(report["sync"]["status"], "drifted")
@@ -293,7 +498,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertEqual(report["work_orders"], [])
 
     def test_clear_preflight_gate_rows_fail_closed_instead_of_collecting(self) -> None:
-        clear_preflight = preflight.build_report()
+        clear_preflight = blocked_preflight()
         for gate in clear_preflight["gates"]:
             gate["collection_state"] = "clear"
             gate["current_total_gate_state"] = "clear"
@@ -303,7 +508,10 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             gate["real_root_scan"]["file_count"] = 1
             gate["real_root_scan"]["candidate_artifact_count"] = 1
 
-        report = work_orders.build_report(preflight_report_override=clear_preflight)
+        report = work_orders.build_report(
+            checklist_override=blocked_checklist(),
+            preflight_report_override=clear_preflight,
+        )
 
         self.assertEqual(report["sync"]["status"], "drifted")
         self.assertFalse(report["sync"]["per_gate_preflight_contract_valid"])
@@ -312,7 +520,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertEqual(report["work_orders"], [])
 
     def test_mocked_clear_validator_states_do_not_become_acceptance_claims(self) -> None:
-        mocked_preflight = preflight.build_report()
+        mocked_preflight = blocked_preflight()
         for gate in mocked_preflight["gates"]:
             gate["collection_state"] = "passed"
             gate["current_total_gate_state"] = "passed"
@@ -323,7 +531,10 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             gate["real_root_scan"]["candidate_artifact_count"] = 3
         mocked_preflight["summary"]["total_acceptance_state"] = "passed"
 
-        report = work_orders.build_report(preflight_report_override=mocked_preflight)
+        report = work_orders.build_report(
+            checklist_override=blocked_checklist(),
+            preflight_report_override=mocked_preflight,
+        )
 
         strings = nested_strings(report)
         self.assertFalse(report["work_order_authority"]["accepts_evidence"])
@@ -338,180 +549,20 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             )
 
     def test_gate_specific_requirements_are_not_dropped(self) -> None:
-        checklist = work_orders.load_json(work_orders.CHECKLIST_PATH)
+        checklist = blocked_checklist()
         checklist_by_gate = {row["gate_id"]: row for row in checklist["remaining_gates"]}
-        report = work_orders.build_report()
-
-        fair = self._order(report, "fair_external_baseline_comparison")
-        fair_checklist = checklist_by_gate["fair_external_baseline_comparison"]
-        self.assertEqual(
-            [row["baseline_id"] for row in fair["operator_tasks"]["baseline_package_runs"]],
-            fair_checklist["required_baselines"],
-        )
-        self.assertEqual(
-            fair["operator_tasks"]["source_lock"]["required_source_lock_sha256"],
-            fair_checklist["required_source_lock_sha256"],
-        )
-        self.assertTrue(fair["operator_tasks"]["source_lock"]["per_baseline_source_ids_required"])
-        for row in fair["operator_tasks"]["baseline_package_runs"]:
-            self.assertEqual(
-                row["required_artifact_fields"], fair_checklist["required_artifacts_per_baseline"]
-            )
-            self.assertEqual(
-                row["required_equalized_hashes"], fair_checklist["required_equalized_hashes"]
-            )
-            self.assertEqual(
-                row["required_source_ids"],
-                fair_checklist["required_source_ids_by_baseline"][row["baseline_id"]],
-            )
-        self.assertEqual(
-            fair["operator_tasks"]["human_answer_adjudication"],
-            fair_checklist["required_human_evidence"],
-        )
-        self.assertEqual(
-            fair["operator_tasks"]["graph_quality_validation"],
-            fair_checklist["required_graph_quality_evidence"],
-        )
-        self.assertEqual(
-            fair["operator_tasks"]["permission_probe_evidence"],
-            fair_checklist["required_permission_probe_evidence"],
-        )
-        self.assertEqual(
-            fair["operator_tasks"]["run_artifact_content_contract"],
-            fair_checklist["required_run_artifact_content_contract"],
-        )
-        self.assertIn(
-            "package_lock_artifact artifact_type == fair_baseline_package_lock_v1",
-            fair["operator_tasks"]["run_artifact_content_contract"],
-        )
-        fair_response_contract = fair["operator_tasks"]["response_packet_contract"]
-        self.assertEqual(
-            fair_response_contract["response_packet_type"], "fair_baseline_response_intake_v1"
-        )
-        self.assertEqual(
-            fair_response_contract["response_packet_placeholder"],
-            work_orders.FAIR_RESPONSE_PACKET_PLACEHOLDER,
-        )
-        self.assertEqual(
-            fair_response_contract["work_packet_path"],
-            work_orders.FAIR_RESPONSE_INTAKE_WORK_PACKET,
-        )
-        self.assertEqual(
-            fair_response_contract["candidate_output_dir"],
-            work_orders.FAIR_RESPONSE_INTAKE_OUTPUT_DIR,
-        )
-        self.assertEqual(
-            fair_response_contract["assembly_manifest_output"],
-            work_orders.FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT,
-        )
-        self.assertFalse(fair_response_contract["writes_canonical_packet"])
-        self.assertEqual(
-            fair_response_contract["canonical_packet_not_written"],
-            fair["canonical_input_packet"],
-        )
-        self.assertFalse(fair_response_contract["promotes_evidence"])
-        self.assertFalse(fair_response_contract["counts_as_acceptance_gate"])
-        self.assertIn(
-            "operator supplied real package run artifacts for every baseline",
-            fair_response_contract["required_controls"],
-        )
-        self.assertIn(
-            "operator_run_id matches the candidate output directory final segment",
-            fair_response_contract["required_controls"],
-        )
-        self.assertIn(
-            "candidate output dir is exactly inputs/fair_baseline_real/<operator_run_id> outside tests",
-            fair_response_contract["required_controls"],
-        )
-        self.assertIn(
-            "response packet top-level fields and baseline-run wrapper fields are allowlisted",
-            fair_response_contract["required_controls"],
-        )
-        self.assertIn(
-            "raw/internal field names are rejected throughout response payloads",
-            fair_response_contract["required_controls"],
-        )
-        self.assertIn(
-            "candidate artifact parent directories are preflighted before writes",
-            fair_response_contract["required_controls"],
-        )
-        self.assertIn(
-            "after-open partial output writes are cleaned up",
-            fair_response_contract["required_controls"],
-        )
-        self.assertIn(
-            (
-                "created candidate artifacts and optional candidate manifests are rolled back "
-                "when assembly or validation raises after writes"
-            ),
-            fair_response_contract["required_controls"],
-        )
-        self.assertIn(
-            "intake custody receipt binds response packet, candidate packet, and artifact hashes",
-            fair_response_contract["required_controls"],
-        )
-        self.assertIn(
-            "intake custody receipt binds optional assembly manifest hash when emitted",
-            fair_response_contract["required_controls"],
+        report = work_orders.build_report(
+            checklist_override=checklist,
+            preflight_report_override=blocked_preflight(),
         )
 
-        human = self._order(report, "annotation_adjudication_protocol")
-        human_checklist = checklist_by_gate["annotation_adjudication_protocol"]
-        self.assertEqual(
-            human["operator_tasks"]["required_artifacts"], human_checklist["required_artifacts"]
+        self.assertNotIn(
+            "fair_external_baseline_comparison",
+            report["summary"]["work_order_gate_ids"],
         )
-        self.assertEqual(
-            human["operator_tasks"]["human_controls"], human_checklist["required_human_controls"]
-        )
-        response_contract = human["operator_tasks"]["response_packet_contract"]
-        self.assertEqual(
-            response_contract["response_packet_type"], "human_annotation_response_intake_v1"
-        )
-        self.assertEqual(
-            response_contract["response_packet_placeholder"],
-            work_orders.HUMAN_RESPONSE_PACKET_PLACEHOLDER,
-        )
-        self.assertEqual(
-            response_contract["work_packet_path"],
-            work_orders.HUMAN_RESPONSE_INTAKE_WORK_PACKET,
-        )
-        self.assertEqual(
-            response_contract["candidate_output_dir"],
-            work_orders.HUMAN_RESPONSE_INTAKE_OUTPUT_DIR,
-        )
-        self.assertEqual(
-            response_contract["assembly_manifest_output"],
-            work_orders.HUMAN_RESPONSE_INTAKE_MANIFEST_OUTPUT,
-        )
-        self.assertFalse(response_contract["writes_canonical_packet"])
-        self.assertEqual(
-            response_contract["canonical_packet_not_written"], human["canonical_input_packet"]
-        )
-        self.assertFalse(response_contract["promotes_evidence"])
-        self.assertFalse(response_contract["counts_as_acceptance_gate"])
-        self.assertIn(
-            "at least one first-pass disagreement",
-            response_contract["required_controls"],
-        )
-        self.assertIn(
-            "generated_by_llm == false for every submission and adjudication row",
-            response_contract["required_controls"],
-        )
-        self.assertIn(
-            "operator_run_id matches the candidate output directory final segment",
-            response_contract["required_controls"],
-        )
-        self.assertIn(
-            "unsupported response packet fields and raw/internal field names are rejected",
-            response_contract["required_controls"],
-        )
-        self.assertIn(
-            "intake custody receipt binds response packet, candidate packet, and artifact hashes",
-            response_contract["required_controls"],
-        )
-        self.assertIn(
-            "intake custody receipt binds optional assembly manifest hash when emitted",
-            response_contract["required_controls"],
+        self.assertNotIn(
+            "annotation_adjudication_protocol",
+            report["summary"]["work_order_gate_ids"],
         )
 
         enterprise = self._order(report, "multimodal_semantic_validation")
@@ -708,17 +759,26 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
                                 self.assertIn(str(item), order_blob)
 
     def test_report_hash_binds_work_order_content(self) -> None:
-        checklist = work_orders.load_json(work_orders.CHECKLIST_PATH)
-        baseline = work_orders.build_report(checklist_override=checklist)
+        checklist = blocked_checklist()
+        baseline = work_orders.build_report(
+            checklist_override=checklist,
+            preflight_report_override=blocked_preflight(),
+        )
         mutated = deepcopy(checklist)
-        fair = next(
+        multimodal = next(
             row
             for row in mutated["remaining_gates"]
-            if row["gate_id"] == "fair_external_baseline_comparison"
+            if row["gate_id"] == "multimodal_semantic_validation"
         )
-        fair["required_source_ids_by_baseline"]["hipporag"] = ["hipporag_paper", "hipporag_repo"]
+        multimodal["required_artifacts"] = [
+            *multimodal["required_artifacts"],
+            "additional_operator_custody_artifact",
+        ]
 
-        changed = work_orders.build_report(checklist_override=mutated)
+        changed = work_orders.build_report(
+            checklist_override=mutated,
+            preflight_report_override=blocked_preflight(),
+        )
 
         self.assertNotEqual(baseline["work_orders"], changed["work_orders"])
         self.assertNotEqual(baseline["report_sha256"], changed["report_sha256"])
@@ -726,7 +786,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
     def test_commands_validate_intake_candidate_manifests_and_keep_scaffolds_non_evidence(
         self,
     ) -> None:
-        report = work_orders.build_report()
+        report = self._blocked_report()
 
         for row in report["work_orders"]:
             with self.subTest(gate_id=row["gate_id"]):
@@ -778,102 +838,43 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
                     self.assertNotIn(">> inputs/", command)
 
     def test_missing_response_intake_manifest_mapping_fails_closed(self) -> None:
-        report = work_orders.build_report()
-        fair = self._order(report, "fair_external_baseline_comparison")
+        report = self._blocked_report()
         mapping = dict(work_orders.RESPONSE_INTAKE_MANIFEST_OUTPUTS)
-        mapping.pop("fair_external_baseline_comparison")
+        mapping.pop("multimodal_semantic_validation")
         original = work_orders.RESPONSE_INTAKE_MANIFEST_OUTPUTS
 
         try:
             work_orders.RESPONSE_INTAKE_MANIFEST_OUTPUTS = mapping
             with self.assertRaises(KeyError):
                 work_orders._common_commands(
-                    fair,
-                    preflight.EXPECTED_GATES["fair_external_baseline_comparison"],
+                    self._order(report, "multimodal_semantic_validation"),
+                    preflight.EXPECTED_GATES["multimodal_semantic_validation"],
                 )
         finally:
             work_orders.RESPONSE_INTAKE_MANIFEST_OUTPUTS = original
 
-    def test_fair_work_order_includes_candidate_only_response_intake_command(self) -> None:
-        report = work_orders.build_report()
-        fair = self._order(report, "fair_external_baseline_comparison")
+    def test_clear_fair_gate_has_no_remaining_work_order(self) -> None:
+        report = self._blocked_report()
 
-        command = fair["commands"]["seal_fair_baseline_responses_into_candidate_artifacts"]
-        preflight_command = fair["commands"]["preflight_fair_baseline_response_packet"]
-
-        self.assertIn("python3 fair_baseline_response_intake.py", command)
-        self.assertEqual(preflight_command, f"{command} --preflight-response")
-        self.assertIn(f"--work-packet {work_orders.FAIR_RESPONSE_INTAKE_WORK_PACKET}", command)
+        self.assertNotIn(
+            "fair_external_baseline_comparison",
+            {row["gate_id"] for row in report["work_orders"]},
+        )
         self.assertIn(
-            f"--response-packet {work_orders.FAIR_RESPONSE_PACKET_PLACEHOLDER}",
-            command,
-        )
-        self.assertNotIn("<", command)
-        self.assertNotIn(">", command)
-        self.assertIn(f"--output-dir {work_orders.FAIR_RESPONSE_INTAKE_OUTPUT_DIR}", command)
-        self.assertTrue(
-            work_orders.FAIR_RESPONSE_INTAKE_OUTPUT_DIR.startswith(f"{fair['real_artifact_root']}/")
-        )
-        self.assertNotIn(fair["canonical_input_packet"], command)
-        self.assertIn(
-            f"--assembly-manifest-output {work_orders.FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT}",
-            command,
-        )
-        self.assertTrue(
-            work_orders.FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT.startswith("work_packets/")
+            "fair_external_baseline_comparison",
+            report["sync"]["historical_monitored_gate_ids"],
         )
         self.assertNotIn(
-            fair["real_artifact_root"], work_orders.FAIR_RESPONSE_INTAKE_MANIFEST_OUTPUT
+            "annotation_adjudication_protocol",
+            {row["gate_id"] for row in report["work_orders"]},
         )
-        self.assertNotIn("--promote", command)
-        self.assertNotIn("--promote", preflight_command)
-        self.assertFalse(fair["work_order_authority"]["accepts_evidence"])
-        self.assertFalse(fair["work_order_authority"]["promotes_evidence"])
-        self.assertFalse(fair["work_order_authority"]["writes_canonical_packet"])
-        self.assertFalse(fair["work_order_authority"]["counts_as_acceptance_gate"])
-
-    def test_human_work_order_includes_candidate_only_response_intake_command(self) -> None:
-        report = work_orders.build_report()
-        human = self._order(report, "annotation_adjudication_protocol")
-
-        command = human["commands"]["seal_human_responses_into_candidate_artifacts"]
-        preflight_command = human["commands"]["preflight_human_response_packet"]
-
-        self.assertIn("python3 human_annotation_response_intake.py", command)
-        self.assertEqual(preflight_command, f"{command} --preflight-response")
-        self.assertIn(f"--work-packet {work_orders.HUMAN_RESPONSE_INTAKE_WORK_PACKET}", command)
         self.assertIn(
-            f"--response-packet {work_orders.HUMAN_RESPONSE_PACKET_PLACEHOLDER}",
-            command,
+            "annotation_adjudication_protocol",
+            report["sync"]["historical_monitored_gate_ids"],
         )
-        self.assertNotIn("<", command)
-        self.assertNotIn(">", command)
-        self.assertIn(f"--output-dir {work_orders.HUMAN_RESPONSE_INTAKE_OUTPUT_DIR}", command)
-        self.assertTrue(
-            work_orders.HUMAN_RESPONSE_INTAKE_OUTPUT_DIR.startswith(
-                f"{human['real_artifact_root']}/"
-            )
-        )
-        self.assertNotIn(human["canonical_input_packet"], command)
-        self.assertIn(
-            f"--assembly-manifest-output {work_orders.HUMAN_RESPONSE_INTAKE_MANIFEST_OUTPUT}",
-            command,
-        )
-        self.assertTrue(
-            work_orders.HUMAN_RESPONSE_INTAKE_MANIFEST_OUTPUT.startswith("work_packets/")
-        )
-        self.assertNotIn(
-            human["real_artifact_root"], work_orders.HUMAN_RESPONSE_INTAKE_MANIFEST_OUTPUT
-        )
-        self.assertNotIn("--promote", command)
-        self.assertNotIn("--promote", preflight_command)
-        self.assertFalse(human["work_order_authority"]["accepts_evidence"])
-        self.assertFalse(human["work_order_authority"]["promotes_evidence"])
-        self.assertFalse(human["work_order_authority"]["writes_canonical_packet"])
-        self.assertFalse(human["work_order_authority"]["counts_as_acceptance_gate"])
 
     def test_enterprise_work_order_includes_candidate_only_response_intake_command(self) -> None:
-        report = work_orders.build_report()
+        report = self._blocked_report()
         enterprise = self._order(report, "multimodal_semantic_validation")
 
         command = enterprise["commands"]["seal_enterprise_responses_into_candidate_artifacts"]
@@ -917,7 +918,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertFalse(enterprise["work_order_authority"]["counts_as_acceptance_gate"])
 
     def test_production_work_order_includes_candidate_only_response_intake_command(self) -> None:
-        report = work_orders.build_report()
+        report = self._blocked_report()
         production = self._order(report, "production_adapter_paths")
 
         command = production["commands"][
@@ -994,7 +995,12 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertEqual(roots_after, roots_before)
 
     def test_safety_invariants_reject_templates_fixtures_raw_paths_and_overclaims(self) -> None:
-        report = work_orders.build_report()
+        checklist = blocked_checklist()
+        checklist_by_gate = {row["gate_id"]: row for row in checklist["remaining_gates"]}
+        report = work_orders.build_report(
+            checklist_override=checklist,
+            preflight_report_override=blocked_preflight(),
+        )
 
         for row in report["work_orders"]:
             safety = row["safety"]
@@ -1010,12 +1016,10 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             self.assertIn("raw filesystem paths", safety["forbidden_sources"])
             self.assertEqual(
                 safety["operator_must_not_claim"],
-                work_orders.load_json(work_orders.CHECKLIST_PATH)["remaining_gates"][
-                    report["summary"]["work_order_gate_ids"].index(row["gate_id"])
-                ]["must_not_claim"],
+                checklist_by_gate[row["gate_id"]]["must_not_claim"],
             )
         self.assertIn(
-            "Do not claim production readiness, top-tier validation, or completed human work from work orders.",
+            "Do not claim production readiness, top-tier validation, or completed adjudication from work orders.",
             report["global_safety_invariants"],
         )
         for row in report["work_orders"]:

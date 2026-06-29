@@ -196,6 +196,47 @@ class EnterpriseMultimodalResponseIntakeTest(unittest.TestCase):
         )
         self.assert_canonical_unchanged()
 
+    def test_llm_subagent_response_intake_builds_validator_accepted_candidate(self) -> None:
+        response = valid_response_packet()
+        llm_packet = validator_fixtures.convert_to_llm_subagent_route(
+            validator_fixtures.valid_packet()
+        )
+        response.pop("human_adjudication_artifact")
+        response["llm_subagent_adjudication_artifact"] = _read_artifact(
+            llm_packet["llm_subagent_adjudication_artifact"]
+        )
+        response["validation_artifacts"] = [
+            {
+                "modality": ref["modality"],
+                "artifact": _read_artifact(ref["artifact"]),
+            }
+            for ref in llm_packet["validation_artifacts"]
+        ]
+        response["business_decision_review_artifact"] = _read_artifact(
+            llm_packet["business_decision_review_artifact"]
+        )
+
+        result = intake.build_intake_artifacts(
+            work_packet=work_packet_generator.build_work_packet(),
+            response_packet=response,
+            output_dir=OUTPUT_DIR,
+            assembly_manifest_output=(
+                "work_packets/test_enterprise_multimodal_response_intake_manifest.json"
+            ),
+            allow_test_artifacts=True,
+        )
+
+        assembly_manifest = json.loads(ASSEMBLY_MANIFEST.read_text(encoding="utf-8"))
+        packet = assembler.assemble_packet(**assembly_manifest, allow_test_artifacts=True)
+        report = validator.build_report(packet, allow_test_artifacts=True)
+
+        self.assertTrue(result["validation_report"]["candidate_packet_validator_passed"])
+        self.assertTrue(report["passed"])
+        self.assertIn("llm_subagent_adjudication_artifact", assembly_manifest)
+        self.assertNotIn("human_adjudication_artifact", assembly_manifest)
+        self.assertIn("llm_subagent_adjudication_artifact", packet)
+        self.assert_canonical_unchanged()
+
     def test_cli_preflight_response_validates_without_writing_artifacts(self) -> None:
         WORK_PACKET_PATH.write_text(
             json.dumps(work_packet_generator.build_work_packet(), indent=2, sort_keys=True) + "\n",

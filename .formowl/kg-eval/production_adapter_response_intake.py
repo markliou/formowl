@@ -18,6 +18,7 @@ from typing import Any
 import production_adapter_collection_packet_generator as work_packet_generator
 import production_adapter_packet_assembler as assembler
 import production_adapter_path_validator as validator
+import public_reproducible_evidence as public_evidence
 
 
 ROOT = Path(__file__).resolve().parent
@@ -28,14 +29,24 @@ SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,96}$")
 ARTIFACT_FILENAMES = {
     "deployment_manifest_artifact": "deployment_manifest.json",
     "human_false_merge_label_artifact": "false_merge_labels.json",
+    "llm_subagent_adjudication_artifact": "llm_subagent_adjudication.json",
     "audit_trail_artifact": "audit_trail.json",
     "permission_probe_artifact": "permission_probe.json",
     "rollback_smoke_artifact": "rollback_smoke.json",
+    "public_evidence_manifest_artifact": "public_evidence_manifest.json",
+}
+COMMON_ARTIFACT_FIELDS = {
+    "deployment_manifest_artifact",
+    "human_false_merge_label_artifact",
+    "audit_trail_artifact",
+    "permission_probe_artifact",
+    "rollback_smoke_artifact",
 }
 RESPONSE_PACKET_ALLOWED_FIELDS = {
     "response_packet_type",
     "operator_run_id",
     "adapter_artifacts",
+    "evidence_source_mode",
     *ARTIFACT_FILENAMES,
 }
 RAW_INTERNAL_FIELD_NAMES = {
@@ -358,8 +369,79 @@ def _adapter_payloads(response_packet: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _planned_paths(output_dir: Path, adapter_payloads: list[dict[str, Any]]) -> dict[str, Path]:
-    paths = {field: output_dir / filename for field, filename in ARTIFACT_FILENAMES.items()}
+def _uses_llm_adjudication_route(response_packet: dict[str, Any]) -> bool:
+    return "llm_subagent_adjudication_artifact" in response_packet
+
+
+def _evidence_source_mode(response_packet: dict[str, Any]) -> str | None:
+    mode = response_packet.get("evidence_source_mode")
+    has_public_manifest = "public_evidence_manifest_artifact" in response_packet
+    if mode is None and not has_public_manifest:
+        return None
+    if mode not in public_evidence.ALLOWED_MODES:
+        raise IntakeError("evidence_source_mode is unsupported")
+    if mode == public_evidence.PUBLIC_MODE and not has_public_manifest:
+        raise IntakeError("public evidence mode requires a public evidence manifest")
+    if mode == public_evidence.PRIVATE_MODE and has_public_manifest:
+        raise IntakeError("operator-private mode must not include a public evidence manifest")
+    return mode
+
+
+def _validate_route_review_flags(
+    *,
+    deployment_manifest: dict[str, Any],
+    false_merge_labels: dict[str, Any],
+    llm_route: bool,
+) -> None:
+    if llm_route:
+        if deployment_manifest.get("deployment_approved_by_llm_subagent_panel") is not True:
+            raise IntakeError("deployment manifest must be LLM subagent approved")
+        if deployment_manifest.get("deployment_approved_by_human") is True:
+            raise IntakeError("deployment manifest must not claim human approval")
+        if false_merge_labels.get("reviewer_type") != "four_specialist_llm_subagent_panel":
+            raise IntakeError("false-merge labels must use the LLM subagent panel reviewer type")
+        if false_merge_labels.get("llm_subagent_panel_reviewed") is not True:
+            raise IntakeError("false-merge labels must be LLM subagent panel reviewed")
+        rows = false_merge_labels.get("rows")
+        if not isinstance(rows, list):
+            raise IntakeError("false-merge label rows must be a list")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise IntakeError("false-merge label row must be a JSON object")
+            if row.get("reviewer_type") != "four_specialist_llm_subagent_panel":
+                raise IntakeError("false-merge label row must use the LLM subagent reviewer type")
+            if row.get("llm_subagent_reviewed") is not True:
+                raise IntakeError("false-merge label row must be LLM subagent reviewed")
+            if row.get("human_reviewed") not in {None, False}:
+                raise IntakeError("false-merge label row must not claim human review")
+            human_reviewer_id = row.get("human_reviewer_id")
+            if isinstance(human_reviewer_id, str) and human_reviewer_id:
+                raise IntakeError("false-merge label row must not retain a human reviewer id")
+    else:
+        if deployment_manifest.get("deployment_approved_by_human") is not True:
+            raise IntakeError("deployment manifest must be human approved")
+        if deployment_manifest.get("deployment_approved_by_llm_subagent_panel") not in {
+            None,
+            False,
+        }:
+            raise IntakeError("deployment manifest must not claim LLM subagent approval")
+        if false_merge_labels.get("reviewer_type") != "human":
+            raise IntakeError("false-merge labels must use the human reviewer type")
+
+
+def _planned_paths(
+    output_dir: Path,
+    adapter_payloads: list[dict[str, Any]],
+    *,
+    llm_route: bool,
+    public_mode: bool = False,
+) -> dict[str, Path]:
+    fields = list(sorted(COMMON_ARTIFACT_FIELDS))
+    if llm_route:
+        fields.append("llm_subagent_adjudication_artifact")
+    if public_mode:
+        fields.append("public_evidence_manifest_artifact")
+    paths = {field: output_dir / ARTIFACT_FILENAMES[field] for field in fields}
     for row in adapter_payloads:
         component_id = row["component_id"]
         paths[f"adapter::{component_id}"] = output_dir / f"adapter_{component_id}.json"
@@ -412,10 +494,44 @@ def preflight_response_packet(
     )
 
     adapter_payloads = _adapter_payloads(response_packet)
-    for field in ARTIFACT_FILENAMES:
+    llm_route = _uses_llm_adjudication_route(response_packet)
+    evidence_mode = _evidence_source_mode(response_packet)
+    public_mode = evidence_mode == public_evidence.PUBLIC_MODE
+    deployment_manifest = _safe_payload(
+        response_packet.get("deployment_manifest_artifact"),
+        "deployment_manifest_artifact",
+    )
+    false_merge_labels = _safe_payload(
+        response_packet.get("human_false_merge_label_artifact"),
+        "human_false_merge_label_artifact",
+    )
+    for field in COMMON_ARTIFACT_FIELDS - {
+        "deployment_manifest_artifact",
+        "human_false_merge_label_artifact",
+    }:
         _safe_payload(response_packet.get(field), field)
+    if llm_route:
+        _safe_payload(
+            response_packet.get("llm_subagent_adjudication_artifact"),
+            "llm_subagent_adjudication_artifact",
+        )
+    _validate_route_review_flags(
+        deployment_manifest=deployment_manifest,
+        false_merge_labels=false_merge_labels,
+        llm_route=llm_route,
+    )
+    if public_mode:
+        _safe_payload(
+            response_packet.get("public_evidence_manifest_artifact"),
+            "public_evidence_manifest_artifact",
+        )
 
-    planned_paths = _planned_paths(output_path, adapter_payloads)
+    planned_paths = _planned_paths(
+        output_path,
+        adapter_payloads,
+        llm_route=llm_route,
+        public_mode=public_mode,
+    )
     if assembly_manifest_path is not None:
         planned_paths["assembly_manifest"] = assembly_manifest_path
     _ensure_no_overwrite(planned_paths)
@@ -441,8 +557,11 @@ def preflight_response_packet(
             "supports_production_adapter_paths_claim": False,
             "supports_non_synthetic_deployment_claim": False,
             "supports_human_reviewed_false_merge_labels_claim": False,
+            "supports_llm_subagent_deployment_approval_claim": False,
+            "supports_llm_subagent_reviewed_false_merge_labels_claim": False,
             "supports_permission_probe_claim": False,
             "supports_rollback_smoke_claim": False,
+            public_evidence.CLAIM_FIELD: False,
             "supports_canonical_packet_written_claim": False,
             "supports_full_product_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
@@ -473,13 +592,34 @@ def build_intake_artifacts(
     )
 
     adapter_payloads = _adapter_payloads(response_packet)
+    llm_route = _uses_llm_adjudication_route(response_packet)
+    evidence_mode = _evidence_source_mode(response_packet)
+    public_mode = evidence_mode == public_evidence.PUBLIC_MODE
+    payload_fields = list(COMMON_ARTIFACT_FIELDS)
+    if llm_route:
+        payload_fields.append("llm_subagent_adjudication_artifact")
     payloads: dict[str, object] = {
-        field: _safe_payload(response_packet.get(field), field) for field in ARTIFACT_FILENAMES
+        field: _safe_payload(response_packet.get(field), field) for field in payload_fields
     }
+    _validate_route_review_flags(
+        deployment_manifest=payloads["deployment_manifest_artifact"],
+        false_merge_labels=payloads["human_false_merge_label_artifact"],
+        llm_route=llm_route,
+    )
+    if public_mode:
+        payloads["public_evidence_manifest_artifact"] = _safe_payload(
+            response_packet.get("public_evidence_manifest_artifact"),
+            "public_evidence_manifest_artifact",
+        )
     for row in adapter_payloads:
         payloads[f"adapter::{row['component_id']}"] = row["artifact"]
 
-    planned_paths = _planned_paths(output_path, adapter_payloads)
+    planned_paths = _planned_paths(
+        output_path,
+        adapter_payloads,
+        llm_route=llm_route,
+        public_mode=public_mode,
+    )
     if assembly_manifest_path is not None:
         planned_paths["assembly_manifest"] = assembly_manifest_path
     _ensure_no_overwrite(planned_paths)
@@ -508,15 +648,28 @@ def build_intake_artifacts(
         "claim_boundary": {
             "supports_production_adapter_paths_claim": True,
             "supports_non_synthetic_deployment_claim": True,
-            "supports_human_reviewed_false_merge_labels_claim": True,
+            "supports_human_reviewed_false_merge_labels_claim": not llm_route,
+            "supports_llm_subagent_deployment_approval_claim": llm_route,
+            "supports_llm_subagent_reviewed_false_merge_labels_claim": llm_route,
             "supports_permission_probe_claim": True,
             "supports_rollback_smoke_claim": True,
             "supports_full_product_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
             "supports_canonical_write_claim": False,
             "supports_raw_access_claim": False,
+            public_evidence.CLAIM_FIELD: public_mode,
         },
     }
+    if evidence_mode is not None:
+        assembly_manifest["evidence_source_mode"] = evidence_mode
+    if public_mode:
+        assembly_manifest["public_evidence_manifest_artifact"] = _artifact_ref(
+            planned_paths["public_evidence_manifest_artifact"]
+        )
+    if llm_route:
+        assembly_manifest["llm_subagent_adjudication_artifact"] = _artifact_ref(
+            planned_paths["llm_subagent_adjudication_artifact"]
+        )
     created_paths: list[Path] = []
     try:
         for key, payload in payloads.items():
@@ -579,8 +732,11 @@ def build_intake_artifacts(
                 "supports_production_adapter_paths_claim": False,
                 "supports_non_synthetic_deployment_claim": False,
                 "supports_human_reviewed_false_merge_labels_claim": False,
+                "supports_llm_subagent_deployment_approval_claim": False,
+                "supports_llm_subagent_reviewed_false_merge_labels_claim": False,
                 "supports_permission_probe_claim": False,
                 "supports_rollback_smoke_claim": False,
+                public_evidence.CLAIM_FIELD: False,
                 "supports_canonical_packet_written_claim": False,
                 "supports_full_product_production_ready_claim": False,
                 "supports_top_tier_scientific_validation_claim": False,
@@ -618,8 +774,11 @@ def build_intake_artifacts(
             "supports_production_adapter_paths_claim": False,
             "supports_non_synthetic_deployment_claim": False,
             "supports_human_reviewed_false_merge_labels_claim": False,
+            "supports_llm_subagent_deployment_approval_claim": False,
+            "supports_llm_subagent_reviewed_false_merge_labels_claim": False,
             "supports_permission_probe_claim": False,
             "supports_rollback_smoke_claim": False,
+            public_evidence.CLAIM_FIELD: False,
             "supports_canonical_packet_written_claim": False,
             "supports_full_product_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,

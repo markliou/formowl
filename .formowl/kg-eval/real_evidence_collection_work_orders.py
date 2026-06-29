@@ -208,6 +208,18 @@ def _common_safety(row: dict[str, Any], gate_config: dict[str, Any]) -> dict[str
             "worker scratch paths",
             "lost /tmp artifacts",
         ],
+        "accepted_evidence_source_modes": [
+            "operator_private",
+            "public_reproducible",
+        ],
+        "public_reproducible_mode_requirements": [
+            "response packet may set evidence_source_mode == public_reproducible",
+            "public mode must include public_evidence_manifest_artifact in the response packet",
+            "public evidence manifest must use public_reproducible_evidence_sources_v1",
+            "every public source must bind https URL, license, version/snapshot, retrieval timestamp, source content hash, archive hash, and derived artifact hashes",
+            "single raw URLs or unpinned web pages are not accepted as evidence",
+            "public manifest covered_artifact_sha256s must cover the final candidate packet artifact hashes expected by the authoritative validator",
+        ],
         "operator_must_not_claim": _copy_list(row, "must_not_claim"),
     }
 
@@ -240,7 +252,11 @@ def _fair_tasks(row: dict[str, Any]) -> dict[str, Any]:
             }
             for baseline_id in _copy_list(row, "required_baselines")
         ],
-        "human_answer_adjudication": _copy_list(row, "required_human_evidence"),
+        "answer_quality_adjudication": _copy_list(
+            row,
+            "required_answer_quality_adjudication_evidence",
+        )
+        or _copy_list(row, "required_human_evidence"),
         "graph_quality_validation": _copy_list(row, "required_graph_quality_evidence"),
         "permission_probe_evidence": _copy_list(row, "required_permission_probe_evidence"),
         "run_artifact_content_contract": _copy_list(row, "required_run_artifact_content_contract"),
@@ -258,14 +274,16 @@ def _fair_tasks(row: dict[str, Any]) -> dict[str, Any]:
                 "operator_run_id matches the candidate output directory final segment",
                 "candidate output dir is exactly inputs/fair_baseline_real/<operator_run_id> outside tests",
                 "response packet top-level fields and baseline-run wrapper fields are allowlisted",
-                "human adjudication, graph-quality, and permission-probe wrapper fields are allowlisted",
+                "public reproducible mode is allowed only with a hash-bound public evidence manifest",
+                "answer adjudication, graph-quality, and permission-probe wrapper fields are allowlisted",
                 "raw/internal field names are rejected throughout response payloads",
                 "candidate artifact parent directories are preflighted before writes",
                 "after-open partial output writes are cleaned up",
                 "created candidate artifacts and optional candidate manifests are rolled back when assembly or validation raises after writes",
                 "operator supplied real package run artifacts for every baseline",
                 "operator supplied non-synthetic run environment",
-                "operator supplied human answer-quality adjudication",
+                "operator supplied four-specialist LLM subagent answer-quality adjudication with fixed professional roles",
+                "legacy human answer-quality adjudication remains accepted only for backwards compatibility",
                 "operator supplied graph-quality validation",
                 "operator supplied permission probes for every baseline",
                 "candidate packet validates before any manual governance promotion",
@@ -279,7 +297,8 @@ def _fair_tasks(row: dict[str, Any]) -> dict[str, Any]:
 def _human_tasks(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "required_artifacts": _copy_list(row, "required_artifacts"),
-        "human_controls": _copy_list(row, "required_human_controls"),
+        "adjudication_controls": _copy_list(row, "required_adjudication_controls")
+        or _copy_list(row, "required_human_controls"),
         "response_packet_contract": {
             "response_packet_type": "human_annotation_response_intake_v1",
             "response_packet_placeholder": HUMAN_RESPONSE_PACKET_PLACEHOLDER,
@@ -292,12 +311,14 @@ def _human_tasks(row: dict[str, Any]) -> dict[str, Any]:
             "counts_as_acceptance_gate": False,
             "required_controls": [
                 "operator_run_id matches the candidate output directory final segment",
-                "two independent first-pass human reviewer submissions",
-                "human adjudicator distinct from first-pass reviewers",
-                "at least one first-pass disagreement",
-                "adjudication rows exactly cover disagreed items",
-                "generated_by_llm == false for every submission and adjudication row",
-                "template_source is null for every submission and adjudication row",
+                "four-specialist LLM subagent panel is accepted as the preferred adjudication route",
+                "four-specialist LLM panel uses fixed professional roles for baseline methodology, annotation adjudication, multimodal semantics, and production governance",
+                "legacy human route still requires two independent first-pass reviewer submissions",
+                "legacy human route still requires a human adjudicator distinct from first-pass reviewers",
+                "legacy human route still requires at least one first-pass disagreement",
+                "four-specialist LLM panel route must bind manifest and work-order hashes",
+                "four-specialist LLM panel route must not claim human adjudication",
+                "public reproducible mode is allowed only with a hash-bound public evidence manifest",
                 "unsupported response packet fields and raw/internal field names are rejected",
                 "intake custody receipt binds response packet, candidate packet, and artifact hashes",
                 "intake custody receipt binds optional assembly manifest hash when emitted",
@@ -305,9 +326,10 @@ def _human_tasks(row: dict[str, Any]) -> dict[str, Any]:
         },
         "custody_controls": [
             "two independent first-pass submissions are sealed before adjudication",
-            "adjudicator is human and distinct from first-pass reviewers",
-            "confusion matrix is derived from sealed submissions and final adjudication",
-            "custody receipt binds every artifact hash",
+            "four-specialist LLM panel has exactly four professional specialist subagents",
+            "four-specialist LLM panel uses the fixed professional roles required by the shared panel contract",
+            "every LLM specialist independently returns PASS",
+            "legacy human route keeps adjudicator/confusion-matrix/custody controls",
         ],
     }
 
@@ -331,13 +353,15 @@ def _enterprise_tasks(row: dict[str, Any]) -> dict[str, Any]:
                 "operator_run_id matches the candidate output directory final segment",
                 "candidate output dir is exactly inputs/enterprise_multimodal_real/<operator_run_id> outside tests",
                 "response packet top-level fields and validation wrapper fields are allowlisted",
+                "public reproducible mode is allowed only with a hash-bound public evidence manifest",
                 "raw/internal field names are rejected throughout response payloads",
                 "candidate artifact parent directories are preflighted before writes",
                 "after-open partial output writes are cleaned up",
                 "created candidate artifacts and optional candidate manifests are rolled back when assembly, validation, custody hashing, or custody write raises after writes",
                 "operator supplied pilot manifest artifact",
                 "operator supplied validation artifacts for every required modality",
-                "operator supplied human adjudication artifact",
+                "operator supplied four-specialist LLM subagent adjudication artifact with fixed professional roles",
+                "legacy human adjudication artifact remains accepted only for backwards compatibility",
                 "operator supplied business decision review artifact",
                 "operator supplied permission probe artifact",
                 "candidate packet validates before any manual governance promotion",
@@ -381,13 +405,15 @@ def _production_tasks(row: dict[str, Any]) -> dict[str, Any]:
                 "operator_run_id matches the candidate output directory final segment",
                 "candidate output dir is exactly inputs/production_adapter_real/<operator_run_id> outside tests",
                 "response packet top-level fields and adapter wrapper fields are allowlisted",
+                "public reproducible mode is allowed only with a hash-bound public evidence manifest",
                 "raw/internal field names are rejected throughout response payloads",
                 "candidate artifact parent directories are preflighted before writes",
                 "after-open partial output writes are cleaned up",
                 "created candidate artifacts and optional candidate manifests are rolled back when assembly or validation raises after writes",
                 "operator supplied non-synthetic deployment manifest",
                 "operator supplied component artifacts for every required adapter",
-                "operator supplied human-reviewed false-merge labels for candidate adapters",
+                "operator supplied four-specialist LLM-subagent-reviewed false-merge labels with fixed professional roles for candidate adapters",
+                "legacy human-reviewed false-merge labels remain accepted only for backwards compatibility",
                 "operator supplied audit trail with every required action",
                 "operator supplied permission probe artifact",
                 "operator supplied rollback smoke artifact",
@@ -487,7 +513,7 @@ def _per_gate_preflight_contract(
     rows = [row for row in preflight_report.get("gates", []) if isinstance(row, dict)]
     row_ids = [row.get("gate_id") for row in rows]
     details: dict[str, Any] = {}
-    valid = len(rows) == len(expected_gate_ids) and row_ids == expected_gate_ids
+    valid = all(row_ids.count(gate_id) == 1 for gate_id in expected_gate_ids)
     for gate_id in expected_gate_ids:
         matching = [row for row in rows if row.get("gate_id") == gate_id]
         if len(matching) != 1:
@@ -548,7 +574,8 @@ def _sync_status(
     candidate_work_order_gate_ids: list[str],
 ) -> dict[str, Any]:
     checklist_gate_ids = _checklist_gate_ids(remaining)
-    expected_gate_ids = list(preflight.EXPECTED_GATES)
+    historical_gate_ids = list(preflight.EXPECTED_GATES)
+    expected_gate_ids = list(blocked_gate_ids)
     per_gate_contract = _per_gate_preflight_contract(preflight_report, expected_gate_ids)
     sync = {
         "checklist_present": bool(checklist),
@@ -559,6 +586,8 @@ def _sync_status(
         "checklist_remaining_gate_ids": checklist_gate_ids,
         "preflight_blocked_gate_ids": blocked_gate_ids,
         "candidate_work_order_gate_ids": candidate_work_order_gate_ids,
+        "historical_monitored_gate_ids": historical_gate_ids,
+        "current_expected_gate_ids": expected_gate_ids,
         "checklist_remaining_gate_ids_match_preflight_blocked_gates": checklist_gate_ids
         == blocked_gate_ids,
         "checklist_remaining_gate_ids_match_expected_gates": checklist_gate_ids
@@ -570,9 +599,16 @@ def _sync_status(
         "per_gate_preflight_contract_valid": per_gate_contract["valid"],
         "per_gate_preflight_contract": per_gate_contract,
     }
+    active_collection_state = preflight_report.get("preflight_state") == "blocked"
+    all_clear_state = (
+        preflight_report.get("preflight_state") == "validator_clear_for_all_broad_gates"
+        and checklist_gate_ids == []
+        and blocked_gate_ids == []
+        and candidate_work_order_gate_ids == []
+    )
     synchronized = (
         sync["checklist_present"]
-        and preflight_report.get("preflight_state") == "blocked"
+        and (active_collection_state or all_clear_state)
         and sync["checklist_sync_status"] == "synchronized"
         and sync["checklist_remaining_gate_ids_match_preflight_blocked_gates"]
         and sync["checklist_remaining_gate_ids_match_expected_gates"]
@@ -581,7 +617,7 @@ def _sync_status(
         and sync["per_gate_preflight_contract_valid"]
     )
     sync["status"] = "synchronized" if synchronized else "drifted"
-    sync["normal_work_orders_withheld"] = not synchronized
+    sync["normal_work_orders_withheld"] = all_clear_state or not synchronized
     return sync
 
 
@@ -617,16 +653,20 @@ def build_report(
         else []
     )
     work_order_gate_ids = [row["gate_id"] for row in work_orders]
+    if sync["status"] != "synchronized":
+        work_order_state = "withheld_due_to_checklist_or_preflight_drift"
+    elif not work_orders and preflight_report.get("preflight_state") == (
+        "validator_clear_for_all_broad_gates"
+    ):
+        work_order_state = "no_remaining_work_orders_all_broad_gates_clear"
+    else:
+        work_order_state = "collection_blocked_until_real_evidence_exists"
     report = {
         "artifact_id": "kg_real_evidence_collection_work_orders_v1",
         "workspace": ".formowl/kg-eval",
         "source_checklist": "remaining_evidence_checklist.json",
         "source_preflight": "results/real_evidence_preflight.json",
-        "work_order_state": (
-            "collection_blocked_until_real_evidence_exists"
-            if sync["status"] == "synchronized"
-            else "withheld_due_to_checklist_or_preflight_drift"
-        ),
+        "work_order_state": work_order_state,
         "work_order_authority": {
             "accepts_evidence": False,
             "promotes_evidence": False,
@@ -655,7 +695,7 @@ def build_report(
             "Do not store assembly manifests under inputs/*_real.",
             "Do not expose raw filesystem, NAS, object-store, database, or worker paths.",
             "Use validate-only command guidance from this report.",
-            "Do not claim production readiness, top-tier validation, or completed human work from work orders.",
+            "Do not claim production readiness, top-tier validation, or completed adjudication from work orders.",
         ],
         "work_orders": work_orders,
     }

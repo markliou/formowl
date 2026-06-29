@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 import external_literature_baseline_protocol_recovery as literature
+import llm_subagent_adjudication as llm_panel
+import public_reproducible_evidence as public_evidence
 
 
 ROOT = Path(__file__).resolve().parent
@@ -77,16 +79,22 @@ PACKET_ALLOWED_FIELDS = {
     "source_lock_sha256",
     "baseline_runs",
     "human_answer_adjudication",
+    "llm_subagent_adjudication_artifact",
+    "llm_subagent_adjudication_artifact_sha256",
     "graph_quality_validation",
     "permission_probes",
     "claim_boundary",
+    *public_evidence.PACKET_FIELDS,
 }
 CLAIM_BOUNDARY_ALLOWED_FIELDS = {
     "supports_fair_external_baseline_comparison_claim",
+    "supports_four_specialist_llm_subagent_adjudication_claim",
+    "supports_human_adjudicated_answer_quality_claim",
     "supports_production_ready_claim",
     "supports_top_tier_scientific_validation_claim",
     "supports_unreviewed_business_judgment_claim",
     "supports_unreviewed_canonical_merge_claim",
+    public_evidence.CLAIM_FIELD,
 }
 
 
@@ -263,6 +271,32 @@ def _validate_claim_boundary(packet: dict[str, Any], blockers: list[str]) -> Non
         )
     if claims.get("supports_fair_external_baseline_comparison_claim") is not True:
         blockers.append("fair baseline packet does not claim fair-baseline completion")
+    has_llm_panel = bool(packet.get("llm_subagent_adjudication_artifact"))
+    if has_llm_panel:
+        if claims.get("supports_four_specialist_llm_subagent_adjudication_claim") is not True:
+            blockers.append(
+                "fair baseline packet missing claim: "
+                "supports_four_specialist_llm_subagent_adjudication_claim"
+            )
+        if claims.get("supports_human_adjudicated_answer_quality_claim") is not False:
+            blockers.append(
+                "fair baseline packet must not claim human answer adjudication "
+                "when using LLM subagent adjudication"
+            )
+    else:
+        if claims.get("supports_human_adjudicated_answer_quality_claim") is not True:
+            blockers.append(
+                "fair baseline packet missing claim: "
+                "supports_human_adjudicated_answer_quality_claim"
+            )
+        if (
+            "supports_four_specialist_llm_subagent_adjudication_claim" in claims
+            and claims.get("supports_four_specialist_llm_subagent_adjudication_claim") is not False
+        ):
+            blockers.append(
+                "fair baseline packet overclaims unsupported claim: "
+                "supports_four_specialist_llm_subagent_adjudication_claim"
+            )
     for flag in (
         "supports_production_ready_claim",
         "supports_top_tier_scientific_validation_claim",
@@ -614,6 +648,98 @@ def _validate_human_answer_adjudication(
             )
 
 
+def _fair_llm_panel_input_hashes(packet: dict[str, Any]) -> list[str]:
+    hashes: list[str] = []
+    source_lock = packet.get("source_lock_sha256")
+    if strong_hex64(source_lock):
+        hashes.append(source_lock)
+    run_environment = packet.get("run_environment")
+    if isinstance(run_environment, dict):
+        hashes.append(sha256_json(run_environment))
+    for run in (
+        packet.get("baseline_runs", []) if isinstance(packet.get("baseline_runs"), list) else []
+    ):
+        if not isinstance(run, dict):
+            continue
+        for artifact_field in RUN_ARTIFACT_FIELDS:
+            digest = run.get(f"{artifact_field}_sha256")
+            if strong_hex64(digest):
+                hashes.append(digest)
+    graph_quality = packet.get("graph_quality_validation")
+    if isinstance(graph_quality, dict):
+        hashes.append(sha256_json(graph_quality))
+    permission_probes = packet.get("permission_probes")
+    if isinstance(permission_probes, list):
+        hashes.append(sha256_json(permission_probes))
+    return sorted(hashes)
+
+
+def _fair_public_evidence_hashes(packet: dict[str, Any]) -> list[str]:
+    hashes = _fair_llm_panel_input_hashes(packet)
+    adjudication = packet.get("human_answer_adjudication")
+    if isinstance(adjudication, dict):
+        hashes.append(sha256_json(adjudication))
+    return sorted(set(hashes))
+
+
+def _load_llm_panel_artifact(
+    packet: dict[str, Any],
+    blockers: list[str],
+    *,
+    allow_test_artifacts: bool = False,
+) -> dict[str, Any]:
+    path_blocker = artifact_path_rejection_reason(
+        packet.get("llm_subagent_adjudication_artifact"),
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    if path_blocker:
+        if path_blocker == "path missing or malformed":
+            blockers.append(
+                "fair baseline four-specialist LLM subagent adjudication artifact missing "
+                "or hash mismatch"
+            )
+        else:
+            blockers.append(
+                "fair baseline four-specialist LLM subagent adjudication artifact " + path_blocker
+            )
+        return {}
+    if not artifact_matches_sha256(
+        packet.get("llm_subagent_adjudication_artifact"),
+        packet.get("llm_subagent_adjudication_artifact_sha256"),
+        allow_test_artifacts=allow_test_artifacts,
+    ):
+        blockers.append(
+            "fair baseline four-specialist LLM subagent adjudication artifact missing "
+            "or hash mismatch"
+        )
+        return {}
+    return load_artifact(
+        packet.get("llm_subagent_adjudication_artifact"),
+        packet.get("llm_subagent_adjudication_artifact_sha256"),
+        allow_test_artifacts=allow_test_artifacts,
+    )
+
+
+def _validate_llm_answer_adjudication(
+    packet: dict[str, Any],
+    blockers: list[str],
+    *,
+    allow_test_artifacts: bool = False,
+) -> None:
+    panel = _load_llm_panel_artifact(
+        packet,
+        blockers,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    llm_panel.validate_four_specialist_panel(
+        panel,
+        blockers,
+        label="fair baseline",
+        expected_target="fair_external_baseline_comparison",
+        expected_input_sha256s=_fair_llm_panel_input_hashes(packet),
+    )
+
+
 def _validate_graph_quality(
     packet: dict[str, Any], run_by_baseline: dict[str, dict[str, Any]], blockers: list[str]
 ) -> None:
@@ -623,8 +749,19 @@ def _validate_graph_quality(
         return
     if graph_quality.get("completed") is not True:
         blockers.append("graph-quality validation is not complete")
-    if graph_quality.get("human_reviewed") is not True:
-        blockers.append("graph-quality validation is not human reviewed")
+    llm_route = bool(packet.get("llm_subagent_adjudication_artifact"))
+    if llm_route:
+        if graph_quality.get("llm_subagent_reviewed") is not True:
+            blockers.append("graph-quality validation is not LLM subagent reviewed")
+        if graph_quality.get("human_reviewed") not in {None, False}:
+            blockers.append("graph-quality validation must not claim human review on LLM route")
+    else:
+        if graph_quality.get("human_reviewed") is not True:
+            blockers.append("graph-quality validation is not human reviewed")
+        if graph_quality.get("llm_subagent_reviewed") not in {None, False}:
+            blockers.append(
+                "graph-quality validation must not claim LLM subagent review on human route"
+            )
     rows = graph_quality.get("per_baseline_rows")
     if not isinstance(rows, list):
         blockers.append("graph-quality per-baseline rows missing")
@@ -703,7 +840,7 @@ def validate_packet(
         return [
             "fair external baseline run packet missing",
             "real Microsoft GraphRAG/LightRAG/HippoRAG package runs are not present",
-            "human answer-quality adjudication packet is not present",
+            "answer-quality adjudication packet is not present",
             "graph-quality validation packet is not present",
             "permission leak probe results are not present",
         ]
@@ -727,9 +864,30 @@ def validate_packet(
         blockers,
         allow_test_artifacts=allow_test_artifacts,
     )
-    _validate_human_answer_adjudication(packet, run_by_baseline, blockers)
     _validate_graph_quality(packet, run_by_baseline, blockers)
+    if packet.get("llm_subagent_adjudication_artifact"):
+        if packet.get("human_answer_adjudication"):
+            blockers.append(
+                "fair baseline packet must not mix human and LLM answer adjudication routes"
+            )
+        _validate_llm_answer_adjudication(
+            packet,
+            blockers,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+    else:
+        _validate_human_answer_adjudication(packet, run_by_baseline, blockers)
     _validate_permission_probes(packet, run_by_baseline, blockers)
+    public_evidence.validate_public_evidence_packet(
+        packet,
+        blockers,
+        gate_id="fair_external_baseline_comparison",
+        artifact_path_rejection_reason=artifact_path_rejection_reason,
+        artifact_matches_sha256=artifact_matches_sha256,
+        load_artifact=load_artifact,
+        allow_test_artifacts=allow_test_artifacts,
+        expected_artifact_sha256s=_fair_public_evidence_hashes(packet),
+    )
     return sorted(set(blockers))
 
 
@@ -741,6 +899,12 @@ def build_report(
     packet = load_input_packet() if packet is None else packet
     blockers = validate_packet(packet, allow_test_artifacts=allow_test_artifacts)
     baseline_runs = packet.get("baseline_runs", []) if isinstance(packet, dict) else []
+    has_llm_panel = isinstance(packet, dict) and bool(
+        packet.get("llm_subagent_adjudication_artifact")
+    )
+    has_human_adjudication = isinstance(packet, dict) and isinstance(
+        packet.get("human_answer_adjudication"), dict
+    )
     report = {
         "artifact_id": "fair_external_baseline_run_validator_recovery_v1",
         "input_packet": "inputs/fair_external_baseline_run_packet.json",
@@ -754,6 +918,7 @@ def build_report(
             )
             if isinstance(packet, dict)
             else False,
+            "llm_subagent_adjudication_present": has_llm_panel,
             "graph_quality_validation_present": isinstance(
                 packet.get("graph_quality_validation"), dict
             )
@@ -767,13 +932,32 @@ def build_report(
             if isinstance(packet, dict)
             else False,
             "run_artifact_content_validation_required": True,
+            "evidence_source_mode": public_evidence.evidence_source_mode(packet)
+            if isinstance(packet, dict)
+            else public_evidence.PRIVATE_MODE,
+            "public_evidence_manifest_present": bool(
+                packet.get("public_evidence_manifest_artifact")
+            )
+            if isinstance(packet, dict)
+            else False,
         },
         "claim_boundary": {
             "supports_fair_external_baseline_comparison_claim": not blockers,
             "supports_real_package_execution_claim": not blockers,
-            "supports_human_adjudicated_answer_quality_claim": not blockers,
+            "supports_human_adjudicated_answer_quality_claim": (
+                not blockers and has_human_adjudication and not has_llm_panel
+            ),
+            "supports_four_specialist_llm_subagent_adjudication_claim": (
+                not blockers and has_llm_panel
+            ),
             "supports_graph_quality_validation_claim": not blockers,
             "supports_permission_probe_claim": not blockers,
+            public_evidence.CLAIM_FIELD: (
+                not blockers
+                and public_evidence.evidence_source_mode(packet) == public_evidence.PUBLIC_MODE
+            )
+            if isinstance(packet, dict)
+            else False,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
         },

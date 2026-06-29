@@ -1,7 +1,7 @@
 # Remaining KG Real-Evidence Operator Guide
 
 Source report: `kg_real_evidence_collection_work_orders_v1`
-Source report sha256: `f999fd978babd544370de7e58f03845c1d29882d670db4986212a46e06f0716c`
+Source report sha256: `450bba39d16a510af8d59480929cdc036e1ad2c4e7c088591c1a0454bd38c4ae`
 
 ## Authority Boundary
 
@@ -23,19 +23,17 @@ candidate artifacts into broad KG acceptance.
 - work-order state: collection_blocked_until_real_evidence_exists
 - preflight state: blocked
 - total acceptance state: blocked
-- work-order count: 4
+- work-order count: 2
 
 Blocked gate ids:
 
-- fair_external_baseline_comparison
-- annotation_adjudication_protocol
 - multimodal_semantic_validation
 - production_adapter_paths
 
 ## Gate Progress Report
 
 Use the progress report when you need a compact machine-readable
-summary of the four remaining gate stages before or after candidate
+summary of the current remaining gate stages before or after candidate
 intake. It reads persisted preflight/work-order reports plus safe
 work-packet surfaces, but it does not refresh preflight, read
 operator response packets, read candidate artifact contents, write
@@ -216,7 +214,7 @@ assembler result without writing canonical input packets.
 After manual governance review, fill an operator approval manifest
 from the tracked non-evidence approval template. The approval manifest
 must bind the candidate validation report hash, candidate manifest
-hash, selected gate id, canonical packet target, and human reviewer
+hash, selected gate id, canonical packet target, and governance
 approval controls.
 
 Check that the tracked governance approval template is current:
@@ -246,383 +244,16 @@ python3 real_evidence_governance_approval.py --approval-manifest work_packets/OP
 ```
 
 The approval manifest remains non-evidence and does not count as an
-acceptance gate. The governance runner refuses stale hashes, non-human
+acceptance gate. The governance runner refuses stale hashes, unsupported
 approvers, pre-existing canonical packet targets, canonical packet path
 hazards, and validation reports that do not have a passing target gate
 row. During execution, the runner passes the approved candidate
 manifest hash to the assembler so the manifest bytes consumed for
-promotion are bound to the human-reviewed approval. If execution fails
+promotion are bound to the governance approval. If execution fails
 after creating the target canonical packet, the runner removes that
 newly created target packet before reporting failure. After any successful
 canonical packet update, rerun the specific broad validator and the
 total acceptance reports.
-
-## fair_external_baseline_comparison
-
-- work order id: collect_fair_external_baseline_comparison
-- requirement id: fair_external_baseline_validation
-- collection status: missing_real_artifacts_and_packet
-- canonical input packet: inputs/fair_external_baseline_run_packet.json
-- required packet artifact id: fair_external_baseline_run_packet_v1
-- required evidence kind: non_synthetic_external_baseline_run
-- real artifact root: inputs/fair_baseline_real
-- validator module: fair_external_baseline_run_validator.py
-- assembler module: fair_external_baseline_packet_assembler.py
-
-Current blockers:
-
-- fair external baseline run packet missing
-- real Microsoft GraphRAG/LightRAG/HippoRAG package runs are not present
-- human answer-quality adjudication packet is not present
-- graph-quality validation packet is not present
-- permission leak probe results are not present
-
-Required evidence and controls:
-
-- required source lock sha256: addba921e9cc4ebc4ded09b26d23a25a29aeba4f0e15e4dacb711f29dcedb2da
-- baseline package runs:
-  - microsoft_graphrag
-    - source id: microsoft_graphrag_paper
-    - source id: microsoft_graphrag_repo
-    - source id: microsoft_graphrag_docs
-    - artifact field: package_lock_artifact
-    - artifact field: config_artifact
-    - artifact field: index_build_log_artifact
-    - artifact field: query_run_log_artifact
-    - artifact field: answer_output_artifact
-    - artifact field: graph_output_artifact
-    - artifact field: permission_probe_artifact
-    - equalized hash: corpus_export_sha256
-    - equalized hash: prompt_set_sha256
-    - equalized hash: evaluation_question_set_sha256
-    - equalized hash: access_policy_sha256
-    - equalized hash: completion_model_budget_sha256
-    - equalized hash: embedding_model_budget_sha256
-    - equalized hash: ontology_mapping_sha256
-  - lightrag
-    - source id: lightrag_paper
-    - source id: lightrag_repo
-    - artifact field: package_lock_artifact
-    - artifact field: config_artifact
-    - artifact field: index_build_log_artifact
-    - artifact field: query_run_log_artifact
-    - artifact field: answer_output_artifact
-    - artifact field: graph_output_artifact
-    - artifact field: permission_probe_artifact
-    - equalized hash: corpus_export_sha256
-    - equalized hash: prompt_set_sha256
-    - equalized hash: evaluation_question_set_sha256
-    - equalized hash: access_policy_sha256
-    - equalized hash: completion_model_budget_sha256
-    - equalized hash: embedding_model_budget_sha256
-    - equalized hash: ontology_mapping_sha256
-  - hipporag
-    - source id: hipporag_paper
-    - source id: hipporag2_paper
-    - source id: hipporag_repo
-    - artifact field: package_lock_artifact
-    - artifact field: config_artifact
-    - artifact field: index_build_log_artifact
-    - artifact field: query_run_log_artifact
-    - artifact field: answer_output_artifact
-    - artifact field: graph_output_artifact
-    - artifact field: permission_probe_artifact
-    - equalized hash: corpus_export_sha256
-    - equalized hash: prompt_set_sha256
-    - equalized hash: evaluation_question_set_sha256
-    - equalized hash: access_policy_sha256
-    - equalized hash: completion_model_budget_sha256
-    - equalized hash: embedding_model_budget_sha256
-    - equalized hash: ontology_mapping_sha256
-- human answer adjudication:
-  - human_answer_adjudication_results_v1
-  - at least two distinct human independent first-pass reviewers
-  - sealed submissions
-  - adjudicator id
-  - final adjudication hash
-  - custody receipt hash
-- graph quality validation:
-  - human-reviewed graph-quality rows for every baseline
-  - positive reviewed entity count
-  - positive reviewed relation count
-- permission probe evidence:
-  - revoked_grant_content_denied
-  - private_content_not_returned
-  - raw_asset_access_denied
-  - entity_match_does_not_grant_access
-  - private_leak_count == 0
-  - raw_asset_access_count == 0
-
-Response intake contract:
-
-- response packet type: fair_baseline_response_intake_v1
-- work packet: work_packets/fair_baseline_run_work_packet_preview.json
-- candidate output dir: inputs/fair_baseline_real/OPERATOR_RUN_ID
-- candidate manifest output: work_packets/fair_external_baseline_comparison_candidate_manifest.json
-- canonical packet not written: inputs/fair_external_baseline_run_packet.json
-- writes canonical packet: False
-- promotes evidence: False
-- counts as acceptance gate: False
-
-Required intake controls:
-
-- operator_run_id matches the candidate output directory final segment
-- candidate output dir is exactly inputs/fair_baseline_real/<operator_run_id> outside tests
-- response packet top-level fields and baseline-run wrapper fields are allowlisted
-- human adjudication, graph-quality, and permission-probe wrapper fields are allowlisted
-- raw/internal field names are rejected throughout response payloads
-- candidate artifact parent directories are preflighted before writes
-- after-open partial output writes are cleaned up
-- created candidate artifacts and optional candidate manifests are rolled back when assembly or validation raises after writes
-- operator supplied real package run artifacts for every baseline
-- operator supplied non-synthetic run environment
-- operator supplied human answer-quality adjudication
-- operator supplied graph-quality validation
-- operator supplied permission probes for every baseline
-- candidate packet validates before any manual governance promotion
-- intake custody receipt binds response packet, candidate packet, and artifact hashes
-- intake custody receipt binds optional assembly manifest hash when emitted
-
-Response packet preflight command:
-
-Run this first with the final operator response packet and output
-surface. It writes no candidate artifacts, no candidate manifest, and
-no canonical packet.
-
-```sh
-python3 fair_baseline_response_intake.py --work-packet work_packets/fair_baseline_run_work_packet_preview.json --response-packet OPERATOR_FAIR_BASELINE_RESPONSE_PACKET_JSON --output-dir inputs/fair_baseline_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/fair_external_baseline_comparison_candidate_manifest.json --preflight-response
-```
-
-Candidate-only intake command:
-
-Replace the operator placeholders with real response packet paths and
-a unique operator run id. This command writes only candidate artifacts.
-
-```sh
-python3 fair_baseline_response_intake.py --work-packet work_packets/fair_baseline_run_work_packet_preview.json --response-packet OPERATOR_FAIR_BASELINE_RESPONSE_PACKET_JSON --output-dir inputs/fair_baseline_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/fair_external_baseline_comparison_candidate_manifest.json
-```
-
-Optional non-evidence scaffold command:
-
-Use this only to inspect the expected assembly-manifest shape.
-It is not the candidate manifest emitted by response intake.
-
-```sh
-python3 fair_external_baseline_assembly_manifest_generator.py --output work_orders/fair_external_baseline_comparison_assembly_manifest.json
-```
-
-Candidate manifest emitted by intake:
-
-```text
-work_packets/fair_external_baseline_comparison_candidate_manifest.json
-```
-
-Validation sequence after candidate artifacts exist:
-
-validate_candidate_packet:
-```sh
-python3 fair_external_baseline_packet_assembler.py --assembly-manifest work_packets/fair_external_baseline_comparison_candidate_manifest.json --validate
-```
-
-run_gate_validator_after_manual_packet_review:
-```sh
-python3 fair_external_baseline_run_validator.py
-```
-
-rerun_total_acceptance:
-```sh
-python3 kg_total_acceptance_suite.py
-```
-
-rerun_objective_audit:
-```sh
-python3 kg_objective_completion_audit.py
-```
-
-rerun_preflight:
-```sh
-python3 real_evidence_preflight.py
-```
-
-Manual follow-up:
-
-- manual governance approval is required outside this work-order generator before any canonical packet update can affect acceptance
-
-Safety rules:
-
-- real artifacts must live under: inputs/fair_baseline_real
-- canonical packet must be created only by the assembler:
-  inputs/fair_external_baseline_run_packet.json
-- assembly manifest must not live under real root: True
-- forbidden sources:
-  - templates/
-  - inputs/test_*
-  - results/
-  - symlinks
-  - malformed JSON
-  - raw filesystem paths
-  - NAS/SMB/NFS/WebDAV paths
-  - object-store or database URIs
-  - worker scratch paths
-  - lost /tmp artifacts
-- operator must not claim:
-  - production_ready
-  - top_tier_scientific_validation
-  - unreviewed_business_judgment
-  - unreviewed_canonical_merge
-
-## annotation_adjudication_protocol
-
-- work order id: collect_annotation_adjudication_protocol
-- requirement id: human_annotation_adjudication_protocol
-- collection status: missing_real_artifacts_and_packet
-- canonical input packet: inputs/human_annotation_results_v1.json
-- required packet artifact id: human_annotation_results_v1
-- required evidence kind: real_human_annotation_adjudication
-- real artifact root: inputs/human_annotation_real
-- validator module: human_annotation_adjudication_validator.py
-- assembler module: human_annotation_packet_assembler.py
-
-Current blockers:
-
-- human annotation results packet missing
-- two independent first-pass human submissions are not present
-- adjudication-open receipt, final adjudication, confusion matrix, and custody receipt are not present
-
-Required evidence and controls:
-
-- required artifacts:
-  - manifest_artifact
-  - work_orders_artifact
-  - at least two first_pass_submission_artifacts
-  - adjudication_artifact
-  - confusion_matrix_artifact
-  - custody_receipt_artifact
-- human controls:
-  - two independent first-pass human reviewers
-  - sealed first-pass submissions
-  - human adjudicator distinct from first-pass reviewers
-  - adjudication opened after first-pass seal
-  - adjudication exactly covers sealed disagreement set
-  - confusion matrix derived from first-pass consensus and final adjudication
-  - custody receipt binds manifest, work orders, submissions, adjudication, and confusion matrix
-- custody controls:
-  - two independent first-pass submissions are sealed before adjudication
-  - adjudicator is human and distinct from first-pass reviewers
-  - confusion matrix is derived from sealed submissions and final adjudication
-  - custody receipt binds every artifact hash
-
-Response intake contract:
-
-- response packet type: human_annotation_response_intake_v1
-- work packet: work_packets/human_annotation_work_packet_preview.json
-- candidate output dir: inputs/human_annotation_real/OPERATOR_RUN_ID
-- candidate manifest output: work_packets/annotation_adjudication_protocol_candidate_manifest.json
-- canonical packet not written: inputs/human_annotation_results_v1.json
-- writes canonical packet: False
-- promotes evidence: False
-- counts as acceptance gate: False
-
-Required intake controls:
-
-- operator_run_id matches the candidate output directory final segment
-- two independent first-pass human reviewer submissions
-- human adjudicator distinct from first-pass reviewers
-- at least one first-pass disagreement
-- adjudication rows exactly cover disagreed items
-- generated_by_llm == false for every submission and adjudication row
-- template_source is null for every submission and adjudication row
-- unsupported response packet fields and raw/internal field names are rejected
-- intake custody receipt binds response packet, candidate packet, and artifact hashes
-- intake custody receipt binds optional assembly manifest hash when emitted
-
-Response packet preflight command:
-
-Run this first with the final operator response packet and output
-surface. It writes no candidate artifacts, no candidate manifest, and
-no canonical packet.
-
-```sh
-python3 human_annotation_response_intake.py --work-packet work_packets/human_annotation_work_packet_preview.json --response-packet OPERATOR_RESPONSE_PACKET_JSON --output-dir inputs/human_annotation_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/annotation_adjudication_protocol_candidate_manifest.json --preflight-response
-```
-
-Candidate-only intake command:
-
-Replace the operator placeholders with real response packet paths and
-a unique operator run id. This command writes only candidate artifacts.
-
-```sh
-python3 human_annotation_response_intake.py --work-packet work_packets/human_annotation_work_packet_preview.json --response-packet OPERATOR_RESPONSE_PACKET_JSON --output-dir inputs/human_annotation_real/OPERATOR_RUN_ID --assembly-manifest-output work_packets/annotation_adjudication_protocol_candidate_manifest.json
-```
-
-Optional non-evidence scaffold command:
-
-Use this only to inspect the expected assembly-manifest shape.
-It is not the candidate manifest emitted by response intake.
-
-```sh
-python3 human_annotation_assembly_manifest_generator.py --output work_orders/annotation_adjudication_protocol_assembly_manifest.json
-```
-
-Candidate manifest emitted by intake:
-
-```text
-work_packets/annotation_adjudication_protocol_candidate_manifest.json
-```
-
-Validation sequence after candidate artifacts exist:
-
-validate_candidate_packet:
-```sh
-python3 human_annotation_packet_assembler.py --assembly-manifest work_packets/annotation_adjudication_protocol_candidate_manifest.json --validate
-```
-
-run_gate_validator_after_manual_packet_review:
-```sh
-python3 human_annotation_adjudication_validator.py
-```
-
-rerun_total_acceptance:
-```sh
-python3 kg_total_acceptance_suite.py
-```
-
-rerun_objective_audit:
-```sh
-python3 kg_objective_completion_audit.py
-```
-
-rerun_preflight:
-```sh
-python3 real_evidence_preflight.py
-```
-
-Manual follow-up:
-
-- manual governance approval is required outside this work-order generator before any canonical packet update can affect acceptance
-
-Safety rules:
-
-- real artifacts must live under: inputs/human_annotation_real
-- canonical packet must be created only by the assembler:
-  inputs/human_annotation_results_v1.json
-- assembly manifest must not live under real root: True
-- forbidden sources:
-  - templates/
-  - inputs/test_*
-  - results/
-  - symlinks
-  - malformed JSON
-  - raw filesystem paths
-  - NAS/SMB/NFS/WebDAV paths
-  - object-store or database URIs
-  - worker scratch paths
-  - lost /tmp artifacts
-- operator must not claim:
-  - synthetic_label_generation
-  - template_as_human_evidence
-  - production_ready
-  - top_tier_scientific_validation
 
 ## multimodal_semantic_validation
 
@@ -653,7 +284,7 @@ Required evidence and controls:
 - required artifacts:
   - pilot_manifest_artifact
   - validation_artifacts for every modality
-  - human_adjudication_artifact
+  - human_adjudication_artifact or llm_subagent_adjudication_artifact
   - business_decision_review_artifact
   - permission_probe_artifact
 - controls:
@@ -662,8 +293,9 @@ Required evidence and controls:
   - no text-proxy-only source rows
   - FormOwl locator bound to asset id
   - validation rows bound to source asset hashes
-  - human adjudication covers every validation row exactly
-  - business decision review is human-reviewed and non-autonomous
+  - four-specialist LLM subagent panel covers every validation row exactly; legacy human adjudication remains accepted only for backwards compatibility
+  - LLM subagent panel uses professional roles external_baseline_methodologist, annotation_adjudication_protocol_specialist, multimodal_semantics_validation_specialist, production_governance_adapter_specialist
+  - business decision review is four-specialist LLM-subagent-reviewed and non-autonomous; legacy human review remains accepted only for backwards compatibility
   - permission probe denies revoked grants, private content, raw asset access, and entity-match-as-access
 
 Response intake contract:
@@ -682,13 +314,15 @@ Required intake controls:
 - operator_run_id matches the candidate output directory final segment
 - candidate output dir is exactly inputs/enterprise_multimodal_real/<operator_run_id> outside tests
 - response packet top-level fields and validation wrapper fields are allowlisted
+- public reproducible mode is allowed only with a hash-bound public evidence manifest
 - raw/internal field names are rejected throughout response payloads
 - candidate artifact parent directories are preflighted before writes
 - after-open partial output writes are cleaned up
 - created candidate artifacts and optional candidate manifests are rolled back when assembly, validation, custody hashing, or custody write raises after writes
 - operator supplied pilot manifest artifact
 - operator supplied validation artifacts for every required modality
-- operator supplied human adjudication artifact
+- operator supplied four-specialist LLM subagent adjudication artifact with fixed professional roles
+- legacy human adjudication artifact remains accepted only for backwards compatibility
 - operator supplied business decision review artifact
 - operator supplied permission probe artifact
 - candidate packet validates before any manual governance promotion
@@ -777,6 +411,16 @@ Safety rules:
   - object-store or database URIs
   - worker scratch paths
   - lost /tmp artifacts
+- accepted evidence source modes:
+  - operator_private
+  - public_reproducible
+- public reproducible mode requirements:
+  - response packet may set evidence_source_mode == public_reproducible
+  - public mode must include public_evidence_manifest_artifact in the response packet
+  - public evidence manifest must use public_reproducible_evidence_sources_v1
+  - every public source must bind https URL, license, version/snapshot, retrieval timestamp, source content hash, archive hash, and derived artifact hashes
+  - single raw URLs or unpinned web pages are not accepted as evidence
+  - public manifest covered_artifact_sha256s must cover the final candidate packet artifact hashes expected by the authoritative validator
 - operator must not claim:
   - financial_advice_or_autonomous_business_judgment
   - production_ready
@@ -799,7 +443,7 @@ Current blockers:
 
 - production adapter evidence packet missing
 - non-synthetic production deployment validation is not present
-- human-reviewed false-merge labels are not present
+- human or LLM-subagent-reviewed false-merge labels are not present
 - permission probes, rollback smoke, and production audit artifacts are not present
 
 Required evidence and controls:
@@ -832,11 +476,12 @@ Required evidence and controls:
   - rollback_smoke_completed
   - deploy_completed
 - controls:
-  - non-synthetic human-approved deployment manifest
+  - non-synthetic four-specialist LLM-subagent-approved deployment manifest; legacy human approval remains accepted only for backwards compatibility
   - manifest adapter stack digest bound to component artifacts
   - permission filters enabled on every adapter component
   - canonical writes disabled on adapter evidence path
-  - human-reviewed false-merge labels for RapidFuzz and Splink
+  - four-specialist LLM-subagent-reviewed false-merge labels for RapidFuzz and Splink; legacy human review remains accepted only for backwards compatibility
+  - LLM subagent panel uses professional roles external_baseline_methodologist, annotation_adjudication_protocol_specialist, multimodal_semantics_validation_specialist, production_governance_adapter_specialist
   - one request id, one resource ref, and one policy id across audit rows
   - revoked grant audit row binds grant_state == revoked
   - deny guards for private candidates, entity match without grant, raw asset reads, and canonical merge without review
@@ -860,13 +505,15 @@ Required intake controls:
 - operator_run_id matches the candidate output directory final segment
 - candidate output dir is exactly inputs/production_adapter_real/<operator_run_id> outside tests
 - response packet top-level fields and adapter wrapper fields are allowlisted
+- public reproducible mode is allowed only with a hash-bound public evidence manifest
 - raw/internal field names are rejected throughout response payloads
 - candidate artifact parent directories are preflighted before writes
 - after-open partial output writes are cleaned up
 - created candidate artifacts and optional candidate manifests are rolled back when assembly or validation raises after writes
 - operator supplied non-synthetic deployment manifest
 - operator supplied component artifacts for every required adapter
-- operator supplied human-reviewed false-merge labels for candidate adapters
+- operator supplied four-specialist LLM-subagent-reviewed false-merge labels with fixed professional roles for candidate adapters
+- legacy human-reviewed false-merge labels remain accepted only for backwards compatibility
 - operator supplied audit trail with every required action
 - operator supplied permission probe artifact
 - operator supplied rollback smoke artifact
@@ -956,6 +603,16 @@ Safety rules:
   - object-store or database URIs
   - worker scratch paths
   - lost /tmp artifacts
+- accepted evidence source modes:
+  - operator_private
+  - public_reproducible
+- public reproducible mode requirements:
+  - response packet may set evidence_source_mode == public_reproducible
+  - public mode must include public_evidence_manifest_artifact in the response packet
+  - public evidence manifest must use public_reproducible_evidence_sources_v1
+  - every public source must bind https URL, license, version/snapshot, retrieval timestamp, source content hash, archive hash, and derived artifact hashes
+  - single raw URLs or unpinned web pages are not accepted as evidence
+  - public manifest covered_artifact_sha256s must cover the final candidate packet artifact hashes expected by the authoritative validator
 - operator must not claim:
   - full_product_production_ready
   - top_tier_scientific_validation

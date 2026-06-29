@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import enterprise_multimodal_validation_validator as validator
+import public_reproducible_evidence as public_evidence
 
 
 ROOT = Path(__file__).resolve().parent
@@ -28,11 +29,15 @@ TEMPLATE_MARKERS = {"template_only", "do_not_submit_as_evidence"}
 PLACEHOLDER_MARKERS = ("fill-with-real", "path-to-real")
 POSITIVE_CLAIMS = {
     "supports_real_enterprise_multimodal_claim",
-    "supports_multimodal_human_adjudication_completed_claim",
     "supports_cross_modal_permission_probe_claim",
     "supports_business_decision_review_claim",
 }
-NEGATIVE_CLAIMS = validator.CLAIM_BOUNDARY_ALLOWED_FIELDS - POSITIVE_CLAIMS
+ROUTE_CLAIMS = {
+    "supports_multimodal_human_adjudication_completed_claim",
+    "supports_multimodal_llm_subagent_adjudication_completed_claim",
+    public_evidence.CLAIM_FIELD,
+}
+NEGATIVE_CLAIMS = validator.CLAIM_BOUNDARY_ALLOWED_FIELDS - POSITIVE_CLAIMS - ROUTE_CLAIMS
 MANIFEST_ALLOWED_FIELDS = {
     "artifact_id",
     "evidence_kind",
@@ -40,6 +45,19 @@ MANIFEST_ALLOWED_FIELDS = {
     "pilot_manifest_artifact",
     "validation_artifacts",
     "human_adjudication_artifact",
+    "llm_subagent_adjudication_artifact",
+    "business_decision_review_artifact",
+    "permission_probe_artifact",
+    "claim_boundary",
+    "evidence_source_mode",
+    "public_evidence_manifest_artifact",
+}
+MANIFEST_COMMON_REQUIRED_FIELDS = {
+    "artifact_id",
+    "evidence_kind",
+    "recovered_after_tmp_loss",
+    "pilot_manifest_artifact",
+    "validation_artifacts",
     "business_decision_review_artifact",
     "permission_probe_artifact",
     "claim_boundary",
@@ -157,22 +175,72 @@ def validation_ref(
     }
 
 
-def validate_claim_boundary(claim_boundary: Any) -> dict[str, bool]:
+def validate_claim_boundary(
+    claim_boundary: Any,
+    *,
+    llm_route: bool,
+    public_mode: bool,
+) -> dict[str, bool]:
     if not isinstance(claim_boundary, dict):
         raise AssemblyError("claim boundary must be supplied by the assembly manifest")
     unsupported_fields = sorted(set(claim_boundary) - validator.CLAIM_BOUNDARY_ALLOWED_FIELDS)
     if unsupported_fields:
         raise AssemblyError("claim boundary has unsupported fields")
-    missing_fields = sorted(validator.CLAIM_BOUNDARY_ALLOWED_FIELDS - set(claim_boundary))
+    required_fields = validator.CLAIM_BOUNDARY_ALLOWED_FIELDS - ROUTE_CLAIMS
+    missing_fields = sorted(required_fields - set(claim_boundary))
     if missing_fields:
         raise AssemblyError("claim boundary is missing required fields")
     for field in POSITIVE_CLAIMS:
         if claim_boundary.get(field) is not True:
             raise AssemblyError("claim boundary must explicitly support required enterprise claims")
+    if llm_route:
+        if (
+            claim_boundary.get("supports_multimodal_llm_subagent_adjudication_completed_claim")
+            is not True
+        ):
+            raise AssemblyError("claim boundary must explicitly support LLM subagent adjudication")
+        if (
+            claim_boundary.get("supports_multimodal_human_adjudication_completed_claim")
+            is not False
+        ):
+            raise AssemblyError("claim boundary must not claim human adjudication for LLM route")
+    else:
+        if claim_boundary.get("supports_multimodal_human_adjudication_completed_claim") is not True:
+            raise AssemblyError("claim boundary must explicitly support human adjudication")
+        if claim_boundary.get(
+            "supports_multimodal_llm_subagent_adjudication_completed_claim"
+        ) not in {
+            None,
+            False,
+        }:
+            raise AssemblyError("claim boundary must not claim LLM adjudication for human route")
     for field in NEGATIVE_CLAIMS:
         if claim_boundary.get(field) is not False:
             raise AssemblyError("claim boundary overclaims unsupported claims")
+    if public_mode:
+        if claim_boundary.get(public_evidence.CLAIM_FIELD) is not True:
+            raise AssemblyError("claim boundary must explicitly support public evidence")
+    elif claim_boundary.get(public_evidence.CLAIM_FIELD) is True:
+        raise AssemblyError("claim boundary must not claim public evidence on private route")
     return dict(claim_boundary)
+
+
+def validate_evidence_source_mode(
+    evidence_source_mode: str | None,
+    public_evidence_manifest_artifact: str | None,
+) -> str | None:
+    if evidence_source_mode is None and public_evidence_manifest_artifact is None:
+        return None
+    if evidence_source_mode not in public_evidence.ALLOWED_MODES:
+        raise AssemblyError("evidence source mode is unsupported")
+    if (
+        evidence_source_mode == public_evidence.PUBLIC_MODE
+        and not public_evidence_manifest_artifact
+    ):
+        raise AssemblyError("public evidence mode requires a public evidence manifest")
+    if evidence_source_mode == public_evidence.PRIVATE_MODE and public_evidence_manifest_artifact:
+        raise AssemblyError("operator-private mode must not include a public evidence manifest")
+    return evidence_source_mode
 
 
 def assemble_packet(
@@ -182,10 +250,13 @@ def assemble_packet(
     recovered_after_tmp_loss: bool,
     pilot_manifest_artifact: str,
     validation_artifacts: list[dict[str, Any]],
-    human_adjudication_artifact: str,
+    human_adjudication_artifact: str | None = None,
+    llm_subagent_adjudication_artifact: str | None = None,
     business_decision_review_artifact: str,
     permission_probe_artifact: str,
     claim_boundary: dict[str, bool] | None = None,
+    evidence_source_mode: str | None = None,
+    public_evidence_manifest_artifact: str | None = None,
     allow_test_artifacts: bool = False,
 ) -> dict[str, Any]:
     if artifact_id != "enterprise_multimodal_validation_packet_v1":
@@ -194,6 +265,13 @@ def assemble_packet(
         raise AssemblyError("evidence kind mismatch")
     if recovered_after_tmp_loss is not False:
         raise AssemblyError("packet cannot rely on lost /tmp artifacts")
+    llm_route = llm_subagent_adjudication_artifact is not None
+    evidence_mode = validate_evidence_source_mode(
+        evidence_source_mode,
+        public_evidence_manifest_artifact,
+    )
+    if llm_route == (human_adjudication_artifact is not None):
+        raise AssemblyError("enterprise multimodal packet must use exactly one adjudication route")
     if not isinstance(validation_artifacts, list):
         raise AssemblyError("validation artifacts must be a list")
     validation_refs = [
@@ -208,10 +286,6 @@ def assemble_packet(
         pilot_manifest_artifact,
         allow_test_artifacts=allow_test_artifacts,
     )
-    adjudication_path, adjudication_sha = artifact_ref(
-        human_adjudication_artifact,
-        allow_test_artifacts=allow_test_artifacts,
-    )
     business_path, business_sha = artifact_ref(
         business_decision_review_artifact,
         allow_test_artifacts=allow_test_artifacts,
@@ -221,21 +295,50 @@ def assemble_packet(
         allow_test_artifacts=allow_test_artifacts,
     )
 
-    return {
+    packet = {
         "artifact_id": artifact_id,
         "evidence_kind": evidence_kind,
         "recovered_after_tmp_loss": recovered_after_tmp_loss,
         "pilot_manifest_artifact": pilot_path,
         "pilot_manifest_artifact_sha256": pilot_sha,
         "validation_artifacts": validation_refs,
-        "human_adjudication_artifact": adjudication_path,
-        "human_adjudication_artifact_sha256": adjudication_sha,
         "business_decision_review_artifact": business_path,
         "business_decision_review_artifact_sha256": business_sha,
         "permission_probe_artifact": permission_path,
         "permission_probe_artifact_sha256": permission_sha,
-        "claim_boundary": validate_claim_boundary(claim_boundary),
+        "claim_boundary": validate_claim_boundary(
+            claim_boundary,
+            llm_route=llm_route,
+            public_mode=evidence_mode == public_evidence.PUBLIC_MODE,
+        ),
     }
+    if evidence_mode is not None:
+        packet["evidence_source_mode"] = evidence_mode
+    if evidence_mode == public_evidence.PUBLIC_MODE:
+        assert public_evidence_manifest_artifact is not None
+        public_path, public_sha = artifact_ref(
+            public_evidence_manifest_artifact,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        packet["public_evidence_manifest_artifact"] = public_path
+        packet["public_evidence_manifest_artifact_sha256"] = public_sha
+    if llm_route:
+        assert llm_subagent_adjudication_artifact is not None
+        panel_path, panel_sha = artifact_ref(
+            llm_subagent_adjudication_artifact,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        packet["llm_subagent_adjudication_artifact"] = panel_path
+        packet["llm_subagent_adjudication_artifact_sha256"] = panel_sha
+    else:
+        assert human_adjudication_artifact is not None
+        adjudication_path, adjudication_sha = artifact_ref(
+            human_adjudication_artifact,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        packet["human_adjudication_artifact"] = adjudication_path
+        packet["human_adjudication_artifact_sha256"] = adjudication_sha
+    return packet
 
 
 def validate_candidate(
@@ -302,9 +405,13 @@ def load_manifest(path: Path, *, expected_sha256: str | None = None) -> dict[str
     unsupported_fields = sorted(set(loaded) - MANIFEST_ALLOWED_FIELDS)
     if unsupported_fields:
         raise AssemblyError("assembly manifest has unsupported fields")
-    missing_fields = sorted(MANIFEST_ALLOWED_FIELDS - set(loaded))
+    missing_fields = sorted(MANIFEST_COMMON_REQUIRED_FIELDS - set(loaded))
     if missing_fields:
         raise AssemblyError("assembly manifest is missing required fields")
+    if ("human_adjudication_artifact" in loaded) == (
+        "llm_subagent_adjudication_artifact" in loaded
+    ):
+        raise AssemblyError("assembly manifest must supply exactly one adjudication route")
     return loaded
 
 

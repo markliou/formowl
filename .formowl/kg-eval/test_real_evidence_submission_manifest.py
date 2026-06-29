@@ -17,6 +17,7 @@ import real_evidence_submission_manifest as submission_manifest
 ROOT = submission_manifest.ROOT
 REPO_ROOT = ROOT.parents[1]
 TEMPLATE_PATH = submission_manifest.DEFAULT_TEMPLATE_OUTPUT
+EXPECTED_COUNT = len(submission_manifest.EXPECTED_SUBMISSIONS)
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -64,6 +65,10 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
                     "operator_supplied": True,
                 },
             )
+        for rel_path in self.before_candidate_manifests:
+            path = ROOT / rel_path
+            if path.exists() or path.is_symlink():
+                path.unlink()
 
     def tearDown(self) -> None:
         for path in self.created_validation_report_paths:
@@ -215,7 +220,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
 
         self.assertTrue(report["valid"])
         self.assertEqual(report["blockers"], [])
-        self.assertEqual(len(report["intake_commands"]), 4)
+        self.assertEqual(len(report["intake_commands"]), EXPECTED_COUNT)
         self.assertFalse(report["authority"]["writes_candidate_artifacts"])
         self.assertFalse(report["authority"]["writes_canonical_packets"])
         for expected, row, command in zip(
@@ -285,8 +290,8 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertEqual(plan["plan_output"], str(plan_output.relative_to(ROOT)))
         self.assertFalse(plan["authority"]["writes_candidate_artifacts"])
         self.assertFalse(plan["authority"]["writes_canonical_packets"])
-        self.assertEqual(len(plan["execution_plan"]), 4)
-        self.assertEqual(len(plan["preflight_commands"]), 4)
+        self.assertEqual(len(plan["execution_plan"]), EXPECTED_COUNT)
+        self.assertEqual(len(plan["preflight_commands"]), EXPECTED_COUNT)
         for expected, row in zip(
             submission_manifest.EXPECTED_SUBMISSIONS,
             plan["execution_plan"],
@@ -339,7 +344,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             )
 
         self.assertTrue(preflight["overall_success"])
-        self.assertEqual(preflight["executed_gate_count"], 4)
+        self.assertEqual(preflight["executed_gate_count"], EXPECTED_COUNT)
         self.assertFalse(preflight["authority"]["accepts_evidence"])
         self.assertFalse(preflight["authority"]["writes_candidate_artifacts"])
         self.assertFalse(preflight["authority"]["writes_canonical_packets"])
@@ -348,7 +353,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertFalse(preflight["preflight_effects"]["writes_candidate_manifest"])
         self.assertFalse(preflight["preflight_effects"]["counts_as_acceptance_gate"])
         self.assertTrue(preflight["response_output_integrity"]["passed"])
-        self.assertEqual(run_mock.call_count, 4)
+        self.assertEqual(run_mock.call_count, EXPECTED_COUNT)
         for expected, call, row in zip(
             submission_manifest.EXPECTED_SUBMISSIONS,
             run_mock.call_args_list,
@@ -545,14 +550,14 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             )
 
         self.assertTrue(execution["overall_success"])
-        self.assertEqual(execution["executed_gate_count"], 4)
+        self.assertEqual(execution["executed_gate_count"], EXPECTED_COUNT)
         self.assertFalse(execution["authority"]["accepts_evidence"])
         self.assertTrue(execution["authority"]["writes_candidate_artifacts"])
         self.assertFalse(execution["authority"]["writes_canonical_packets"])
         self.assertFalse(execution["authority"]["counts_as_acceptance_gate"])
         self.assertIn("stops on the first failed intake", execution["partial_execution_policy"])
         self.assertIn("remain for operator review", execution["partial_execution_policy"])
-        self.assertEqual(run_mock.call_count, 4)
+        self.assertEqual(run_mock.call_count, EXPECTED_COUNT)
         for expected, call in zip(
             submission_manifest.EXPECTED_SUBMISSIONS,
             run_mock.call_args_list,
@@ -785,7 +790,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         )
         self.assertFalse(plan["authority"]["writes_candidate_artifacts"])
         self.assertFalse(plan["authority"]["writes_canonical_packets"])
-        self.assertEqual(len(plan["validation_plan"]), 4)
+        self.assertEqual(len(plan["validation_plan"]), EXPECTED_COUNT)
         for expected, row in zip(
             submission_manifest.EXPECTED_SUBMISSIONS,
             plan["validation_plan"],
@@ -859,14 +864,14 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
 
         self.assertTrue(validation["overall_success"])
         self.assertTrue(validation["candidate_manifest_preflight_passed"])
-        self.assertEqual(validation["executed_gate_count"], 4)
+        self.assertEqual(validation["executed_gate_count"], EXPECTED_COUNT)
         self.assertFalse(validation["authority"]["writes_candidate_artifacts"])
         self.assertFalse(validation["authority"]["writes_canonical_packets"])
         self.assertTrue(validation["validation_effects"]["reads_candidate_manifest_contents"])
         self.assertTrue(validation["validation_effects"]["reads_candidate_artifacts"])
         self.assertFalse(validation["validation_effects"]["promotes_evidence"])
         self.assertFalse(validation["validation_effects"]["counts_as_acceptance_gate"])
-        self.assertEqual(run_mock.call_count, 4)
+        self.assertEqual(run_mock.call_count, EXPECTED_COUNT)
         self.assertNotIn("assembled packet should not be echoed", json.dumps(validation))
         for expected, call, row in zip(
             submission_manifest.EXPECTED_SUBMISSIONS,
@@ -925,7 +930,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             )
 
         self.assertFalse(validation["overall_success"])
-        self.assertEqual(validation["executed_gate_count"], 4)
+        self.assertEqual(validation["executed_gate_count"], EXPECTED_COUNT)
         self.assertTrue(all(row["status"] == "failed" for row in validation["validation_results"]))
         self.assertTrue(
             all(
@@ -1150,7 +1155,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             "work_packets/../work_packets/operator_manifest.json",
             "work_packets/./operator_manifest.json",
             "work_packets/operator_submission_preview.json",
-            "work_packets/fair_external_baseline_comparison_candidate_manifest.json",
+            "work_packets/multimodal_semantic_validation_candidate_manifest.json",
             "work_packets/OPERATOR_INTAKE_PLAN.json",
             "work_packets/remaining_real_evidence_submission_manifest.template.json",
             "work_packets/templates/operator_manifest.json",
@@ -1177,8 +1182,8 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             "./work_packets/intake_plan.json",
             "results/intake_plan.json",
             "inputs/intake_plan.json",
-            "work_packets/fair_baseline_run_work_packet_preview.json",
-            "work_packets/fair_external_baseline_comparison_candidate_manifest.json",
+            "work_packets/enterprise_multimodal_collection_packet_preview.json",
+            "work_packets/multimodal_semantic_validation_candidate_manifest.json",
             "work_packets/intake_plan.template.json",
             "work_packets/intake_plan_preview.json",
             "work_packets/nested/operatorpreflight_unitcase_intake_plan.json",
@@ -1215,8 +1220,8 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             "./work_packets/candidate_validation_report.json",
             "results/candidate_validation_report.json",
             "inputs/candidate_validation_report.json",
-            "work_packets/fair_baseline_run_work_packet_preview.json",
-            "work_packets/fair_external_baseline_comparison_candidate_manifest.json",
+            "work_packets/enterprise_multimodal_collection_packet_preview.json",
+            "work_packets/multimodal_semantic_validation_candidate_manifest.json",
             "work_packets/candidate_validation_report.template.json",
             "work_packets/candidate_validation_report_preview.json",
             "work_packets/operatorpreflight_unitcase_intake_plan.json",
@@ -1258,8 +1263,8 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         printed = json.loads(stdout.getvalue())
         self.assertEqual(printed, plan)
         self.assertEqual(plan["artifact_id"], "kg_real_evidence_candidate_intake_plan_v1")
-        self.assertEqual(len(plan["execution_plan"]), 4)
-        self.assertEqual(len(plan["preflight_commands"]), 4)
+        self.assertEqual(len(plan["execution_plan"]), EXPECTED_COUNT)
+        self.assertEqual(len(plan["preflight_commands"]), EXPECTED_COUNT)
         self.assertTrue(all("--preflight-response" in row for row in plan["preflight_commands"]))
         self.assertFalse(plan["authority"]["writes_candidate_artifacts"])
         self.assertFalse(plan["authority"]["writes_canonical_packets"])
@@ -1346,7 +1351,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertTrue(printed["authority"]["writes_candidate_artifacts"])
         self.assertFalse(printed["authority"]["writes_canonical_packets"])
         self.assertFalse(printed["authority"]["counts_as_acceptance_gate"])
-        self.assertEqual(run_mock.call_count, 4)
+        self.assertEqual(run_mock.call_count, EXPECTED_COUNT)
 
     def test_cli_preflight_responses_writes_no_candidate_or_canonical_packets(self) -> None:
         manifest_path = self.write_operator_manifest()
@@ -1382,7 +1387,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertFalse(printed["authority"]["writes_canonical_packets"])
         self.assertFalse(printed["authority"]["counts_as_acceptance_gate"])
         self.assertTrue(printed["preflight_effects"]["reads_response_packet_contents"])
-        self.assertEqual(run_mock.call_count, 4)
+        self.assertEqual(run_mock.call_count, EXPECTED_COUNT)
 
     def test_cli_validate_candidate_manifests_writes_no_artifacts_or_canonical_packets(
         self,
@@ -1421,7 +1426,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertFalse(printed["authority"]["writes_canonical_packets"])
         self.assertFalse(printed["authority"]["counts_as_acceptance_gate"])
         self.assertTrue(printed["validation_effects"]["reads_candidate_artifacts"])
-        self.assertEqual(run_mock.call_count, 4)
+        self.assertEqual(run_mock.call_count, EXPECTED_COUNT)
 
     def test_cli_validate_candidate_manifests_can_write_non_evidence_report(self) -> None:
         self.write_candidate_manifests()
@@ -1471,7 +1476,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         self.assertFalse(saved["authority"]["writes_candidate_artifacts"])
         self.assertFalse(saved["authority"]["writes_canonical_packets"])
         self.assertFalse(saved["authority"]["counts_as_acceptance_gate"])
-        self.assertEqual(run_mock.call_count, 4)
+        self.assertEqual(run_mock.call_count, EXPECTED_COUNT)
 
     def test_cli_validate_candidate_manifests_writes_failure_report_after_execution(
         self,
@@ -1627,7 +1632,9 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             "operatorpreflight_unitcase_invalid_validation_manifest.json"
         )
         loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
-        loaded["submissions"][0]["response_packet"] = "inputs/fair_baseline_real/missing.json"
+        loaded["submissions"][0]["response_packet"] = (
+            "inputs/enterprise_multimodal_real/missing.json"
+        )
         manifest_path.write_text(json.dumps(loaded), encoding="utf-8")
         report_path = (
             ROOT
@@ -1939,7 +1946,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         submissions = payload["submissions"]
         assert isinstance(submissions, list)
         submissions[0], submissions[1] = submissions[1], submissions[0]
-        submissions[2]["response_packet_type"] = "wrong_packet_type"
+        submissions[-1]["response_packet_type"] = "wrong_packet_type"
 
         report = submission_manifest.validate_manifest(payload)
 
@@ -1957,7 +1964,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         submissions = payload["submissions"]
         assert isinstance(submissions, list)
         submissions[0]["operator_run_id"] = "test_fixture_run"
-        submissions[0]["output_dir"] = "inputs/fair_baseline_real/nested/operator_run"
+        submissions[0]["output_dir"] = "inputs/enterprise_multimodal_real/nested/operator_run"
 
         report = submission_manifest.validate_manifest(payload)
 
@@ -1973,7 +1980,9 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         payload = self.valid_manifest()
         submissions = payload["submissions"]
         assert isinstance(submissions, list)
-        submissions[0]["response_packet"] = "inputs/fair_external_baseline_run_packet.json"
+        submissions[0]["response_packet"] = submission_manifest.EXPECTED_SUBMISSIONS[
+            0
+        ].canonical_packet
         submissions[1]["response_packet"] = "/tmp/operator_response.json"
 
         report = submission_manifest.validate_manifest(

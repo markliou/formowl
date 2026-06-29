@@ -211,7 +211,7 @@
       }
     ],
     "later_real_packet_requirements": [
-      "deployment must be human-approved and non-synthetic",
+      "deployment must be four-specialist LLM-subagent-approved and non-synthetic; legacy human approval remains a backward-compatible route",
       "component artifacts must cover every required adapter exactly once",
       "adapter stack digest must bind every component artifact",
       "component evidence must not expose raw paths or backend connection strings"
@@ -233,27 +233,27 @@
         "adapter_key": "rapidfuzz_candidate_adapter",
         "collection_task_id": "collect_false_merge_review_rapidfuzz_candidate_adapter",
         "minimum_review_checks": [
-          "collect human reviewer identity outside this packet",
+          "collect four-specialist LLM subagent panel identity outside this packet",
           "bind candidate-pair digest outside this packet",
           "bind two source-candidate digests outside this packet",
-          "ensure review is human and not agent-generated"
+          "ensure all four fixed professional roles independently pass; legacy human review remains a backward-compatible route"
         ],
-        "row_sha256": "bfa4ad42d233562f31e5ec4c9a4dd5acafe3177aecbe12d3346fd6e2f58c266a"
+        "row_sha256": "4039a32d7d02a0cb51abbea860b9628e60e92270b3ddb7da0d6618b469a52e8c"
       },
       {
         "adapter_key": "splink_candidate_adapter",
         "collection_task_id": "collect_false_merge_review_splink_candidate_adapter",
         "minimum_review_checks": [
-          "collect human reviewer identity outside this packet",
+          "collect four-specialist LLM subagent panel identity outside this packet",
           "bind candidate-pair digest outside this packet",
           "bind two source-candidate digests outside this packet",
-          "ensure review is human and not agent-generated"
+          "ensure all four fixed professional roles independently pass; legacy human review remains a backward-compatible route"
         ],
-        "row_sha256": "198d0ab92bf6f46ab880ee9aa43664839c464c64c4c79f3e867987441310e773"
+        "row_sha256": "c52f63515595906a3ffd7cfc15ce64c3216197f05a230708b8c7f880619fe470"
       }
     ],
     "later_real_packet_requirements": [
-      "false-merge labels must be human-reviewed for RapidFuzz and Splink adapters",
+      "false-merge labels must be reviewed by the four-specialist LLM subagent panel for RapidFuzz and Splink adapters; legacy human-reviewed labels remain a backward-compatible route",
       "permission probes must cover every required component",
       "rollback smoke must be tied to the same deployment evidence"
     ],
@@ -281,7 +281,7 @@
     "authoritative_validator_must_be_run_separately": true,
     "this_packet_is_sufficient_for_production_adapter_gate": false
   },
-  "work_packet_sha256": "71f8d98552807681ab51c53856ed3ea32f6bcabd4854c8156370e06c3f0b47a6",
+  "work_packet_sha256": "f58f2151c032bd1ca62c3d97b24f9371955dce2130914ddcf30e1c916bd09f2c",
   "work_packet_state": "operator_assignment_only",
   "work_packet_type": "production_adapter_collection_packet_preview_v1"
 }

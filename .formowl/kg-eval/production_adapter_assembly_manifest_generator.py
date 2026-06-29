@@ -69,7 +69,7 @@ def build_manifest_scaffold() -> dict[str, Any]:
         "claim_boundary": build_claim_boundary_scaffold(),
     }
     unsupported = sorted(set(manifest) - assembler.MANIFEST_ALLOWED_FIELDS)
-    missing = sorted(assembler.MANIFEST_ALLOWED_FIELDS - set(manifest))
+    missing = sorted(assembler.MANIFEST_COMMON_REQUIRED_FIELDS - set(manifest))
     if unsupported or missing:
         raise ManifestScaffoldError("manifest scaffold does not match assembler field contract")
     return manifest

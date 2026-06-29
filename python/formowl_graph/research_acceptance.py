@@ -107,7 +107,7 @@ def run_kg_research_acceptance_suite(
         _ontology_item(),
         _multi_user_fusion_item(),
         _multimodal_item(),
-        _human_adjudication_item(),
+        _adjudication_claim_boundary_item(),
         _production_adapter_boundary_item(),
         _production_adapter_readiness_item(),
         _metrics_and_ablations_item(),
@@ -295,7 +295,7 @@ def _multimodal_item() -> AcceptanceItem:
     )
 
 
-def _human_adjudication_item() -> AcceptanceItem:
+def _adjudication_claim_boundary_item() -> AcceptanceItem:
     policy = ResolutionPolicy(
         policy_id="resolution_policy_review_acceptance_v1",
         ontology_revision_id="ontology_rev_acceptance_001",
@@ -332,15 +332,18 @@ def _human_adjudication_item() -> AcceptanceItem:
         and export["redacted_item_count"] >= 1
     )
     return AcceptanceItem(
-        requirement_id="human_review_annotation_adjudication_workflow",
+        requirement_id="review_adjudication_claim_boundary",
         status="passed" if passed else "failed",
-        summary="Human review packet supports annotation and adjudication workflow without claiming completed labels.",
+        summary="Review packet export supports adjudication handoff without claiming completed legacy human labels or four-specialist LLM panel decisions.",
         evidence=["python/formowl_graph/resolution.py", "tests/test_graph_resolution.py"],
         metrics={
             "review_packet_count": 1,
             "review_items": export["item_count"],
             "redacted_items": export["redacted_item_count"],
-            "completed_human_review_claim": claim_boundary["supports_human_review_completed_claim"],
+            "completed_legacy_human_review_claim": claim_boundary[
+                "supports_human_review_completed_claim"
+            ],
+            "completed_four_specialist_llm_panel_claim": False,
         },
     )
 
@@ -388,7 +391,7 @@ def _production_adapter_readiness_item() -> AcceptanceItem:
         ],
         metrics={
             "real_backend_entity_resolution_quality_validated": False,
-            "completed_human_review_labels": False,
+            "completed_reviewed_labels": False,
             "canonical_graph_commit_in_adapter_stack": False,
             "raw_asset_access_in_adapter_stack": False,
         },
@@ -398,7 +401,7 @@ def _production_adapter_readiness_item() -> AcceptanceItem:
 def _metrics_and_ablations_item() -> AcceptanceItem:
     ablations = {
         "without_ontology_core_gate_false_merge_risk": True,
-        "without_candidate_review_human_label_claim_invalid": True,
+        "without_candidate_review_adjudicated_label_claim_invalid": True,
         "without_permission_filter_hidden_endpoint_visible": True,
         "without_provenance_alignment_not_reproducible": True,
     }

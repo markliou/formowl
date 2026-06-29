@@ -9,6 +9,8 @@ import shutil
 import unittest
 
 import fair_external_baseline_run_validator as validator
+import llm_subagent_adjudication as llm_panel
+import public_reproducible_evidence as public_evidence
 
 
 BASE = validator.REAL_ARTIFACT_ROOT_PATH / "validator_fixture"
@@ -22,6 +24,7 @@ SHARED_HASHES = {
     "ontology_mapping_sha256": "7890abcdef123456" * 4,
 }
 RUN_MANIFEST_SHA256 = "90abcdef12345678" * 4
+LLM_PANEL_RUBRIC_SHA256 = "a1234567890bcdef" * 4
 
 
 def write_artifact(relative_name: str, payload: object) -> tuple[str, str]:
@@ -241,12 +244,103 @@ def valid_packet() -> dict:
         ],
         "claim_boundary": {
             "supports_fair_external_baseline_comparison_claim": True,
+            "supports_human_adjudicated_answer_quality_claim": True,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
             "supports_unreviewed_business_judgment_claim": False,
             "supports_unreviewed_canonical_merge_claim": False,
         },
     }
+
+
+def public_source_manifest(gate_id: str, covered_hashes: list[str]) -> dict:
+    sources = [
+        {
+            "source_id": f"public_{gate_id}_source",
+            "source_url": f"https://example.org/formowl/{gate_id}/source.json",
+            "source_type": "public_reproducible_dataset",
+            "source_usage_role": "evaluation_input",
+            "license": "CC-BY-4.0",
+            "version_or_snapshot": "2026-06-28-snapshot",
+            "retrieved_at": "2026-06-28T00:00:00Z",
+            "content_sha256": "abc1234567890def" * 4,
+            "archive_sha256": "bcd1234567890efa" * 4,
+            "derived_artifact_sha256s": sorted(set(covered_hashes)),
+            "publicly_accessible": True,
+            "permission_allows_research_evaluation": True,
+            "non_synthetic": True,
+            "raw_private_payload": False,
+        }
+    ]
+    return public_evidence.build_manifest(
+        gate_id=gate_id,
+        retrieved_at="2026-06-28T00:00:00Z",
+        public_sources=sources,
+        covered_artifact_sha256s=covered_hashes,
+    )
+
+
+def add_public_evidence(packet: dict, gate_id: str, covered_hashes: list[str]) -> None:
+    manifest_path, manifest_sha = write_artifact(
+        "public_evidence_manifest.json",
+        public_source_manifest(gate_id, covered_hashes),
+    )
+    packet["evidence_source_mode"] = public_evidence.PUBLIC_MODE
+    packet["public_evidence_manifest_artifact"] = manifest_path
+    packet["public_evidence_manifest_artifact_sha256"] = manifest_sha
+    packet["claim_boundary"][public_evidence.CLAIM_FIELD] = True
+
+
+def valid_llm_panel(target: str, input_hashes: list[str]) -> dict:
+    panel = {
+        "artifact_type": llm_panel.PANEL_ARTIFACT_TYPE,
+        "panel_id": f"panel_{target}_001",
+        "adjudication_target": target,
+        "completed": True,
+        "final_decision": "PASS",
+        "human_adjudication_claimed": False,
+        "input_artifact_sha256s": sorted(input_hashes),
+        "rubric_sha256": LLM_PANEL_RUBRIC_SHA256,
+        "specialist_subagents": [
+            {
+                "subagent_id": f"{specialty}_subagent",
+                "specialty": specialty,
+                "professional_role": llm_panel.REQUIRED_PROFESSIONAL_ROLES[specialty],
+                "model_name": "codex-subagent",
+                "model_version": "2026-06-28",
+                "prompt_sha256": f"{index + 20:064x}",
+                "rubric_sha256": LLM_PANEL_RUBRIC_SHA256,
+                "run_id": f"run_{specialty}_001",
+                "temperature": 0,
+                "independent": True,
+                "decision": "PASS",
+                "blocking_findings": [],
+                "reviewed_artifact_sha256s": sorted(input_hashes),
+                "output_sha256": f"{index + 40:064x}",
+            }
+            for index, specialty in enumerate(llm_panel.REQUIRED_SPECIALTIES)
+        ],
+    }
+    panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+    return panel
+
+
+def convert_to_llm_subagent_route(packet: dict) -> dict:
+    packet.pop("human_answer_adjudication", None)
+    packet["graph_quality_validation"].pop("human_reviewed", None)
+    packet["graph_quality_validation"]["llm_subagent_reviewed"] = True
+    packet["claim_boundary"]["supports_four_specialist_llm_subagent_adjudication_claim"] = True
+    packet["claim_boundary"]["supports_human_adjudicated_answer_quality_claim"] = False
+    panel_artifact, panel_sha = write_artifact(
+        "llm_subagent_adjudication.json",
+        valid_llm_panel(
+            "fair_external_baseline_comparison",
+            validator._fair_llm_panel_input_hashes(packet),
+        ),
+    )
+    packet["llm_subagent_adjudication_artifact"] = panel_artifact
+    packet["llm_subagent_adjudication_artifact_sha256"] = panel_sha
+    return packet
 
 
 class FairExternalBaselineRunValidatorTest(unittest.TestCase):
@@ -332,6 +426,90 @@ class FairExternalBaselineRunValidatorTest(unittest.TestCase):
         self.assertEqual(report["metrics"]["baseline_run_count"], 3)
         self.assertTrue(report["claim_boundary"]["supports_real_package_execution_claim"])
         self.assertFalse(report["claim_boundary"]["supports_production_ready_claim"])
+
+    def test_four_specialist_llm_subagent_route_passes_validator(self) -> None:
+        report = build_report_for_test(convert_to_llm_subagent_route(valid_packet()))
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["blockers"], [])
+        self.assertTrue(
+            report["claim_boundary"]["supports_four_specialist_llm_subagent_adjudication_claim"]
+        )
+        self.assertFalse(
+            report["claim_boundary"]["supports_human_adjudicated_answer_quality_claim"]
+        )
+
+    def test_single_or_missing_llm_specialist_fails_validator(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        panel_path = validator.safe_relative_artifact_path(
+            packet["llm_subagent_adjudication_artifact"],
+            allow_test_artifacts=True,
+        )
+        assert panel_path is not None
+        panel = json.loads(panel_path.read_text(encoding="utf-8"))
+        panel["specialist_subagents"] = panel["specialist_subagents"][:1]
+        panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+        panel_path.write_text(json.dumps(panel, indent=2, sort_keys=True) + "\n")
+        packet["llm_subagent_adjudication_artifact_sha256"] = (
+            validator.sha256_file(panel_path) or ""
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "fair baseline four-specialist LLM panel must include exactly four subagents",
+            report["blockers"],
+        )
+
+    def test_any_blocking_llm_specialist_fails_validator(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        panel_path = validator.safe_relative_artifact_path(
+            packet["llm_subagent_adjudication_artifact"],
+            allow_test_artifacts=True,
+        )
+        assert panel_path is not None
+        panel = json.loads(panel_path.read_text(encoding="utf-8"))
+        panel["specialist_subagents"][0]["decision"] = "BLOCK"
+        panel["specialist_subagents"][0]["blocking_findings"] = ["missing fair baseline"]
+        panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+        panel_path.write_text(json.dumps(panel, indent=2, sort_keys=True) + "\n")
+        packet["llm_subagent_adjudication_artifact_sha256"] = (
+            validator.sha256_file(panel_path) or ""
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "fair baseline four-specialist LLM subagent decision is not PASS",
+            report["blockers"],
+        )
+
+    def test_llm_panel_cannot_claim_human_answer_adjudication(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        packet["claim_boundary"]["supports_human_adjudicated_answer_quality_claim"] = True
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "fair baseline packet must not claim human answer adjudication "
+            "when using LLM subagent adjudication",
+            report["blockers"],
+        )
+
+    def test_llm_panel_must_bind_to_current_artifact_hashes(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        packet["baseline_runs"][0]["answer_output_artifact_sha256"] = "abcdef1234567890" * 4
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "fair baseline four-specialist LLM panel input artifact binding mismatch",
+            report["blockers"],
+        )
 
     def test_default_validator_rejects_test_fixture_artifact_paths(self) -> None:
         report = validator.build_report(valid_packet())
@@ -659,6 +837,91 @@ class FairExternalBaselineRunValidatorTest(unittest.TestCase):
         self.assertFalse(report["passed"])
         self.assertIn(
             "fair baseline run packet has unsupported fields: template_only", report["blockers"]
+        )
+
+    def test_public_reproducible_manifest_can_bind_baseline_packet(self) -> None:
+        packet = valid_packet()
+        add_public_evidence(
+            packet,
+            "fair_external_baseline_comparison",
+            validator._fair_public_evidence_hashes(packet),
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["metrics"]["evidence_source_mode"], public_evidence.PUBLIC_MODE)
+        self.assertTrue(report["claim_boundary"][public_evidence.CLAIM_FIELD])
+
+    def test_public_mode_rejects_unbound_url_without_manifest(self) -> None:
+        packet = valid_packet()
+        packet["evidence_source_mode"] = public_evidence.PUBLIC_MODE
+        packet["public_source_url"] = "https://example.org/unbound.json"
+        packet["claim_boundary"][public_evidence.CLAIM_FIELD] = True
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "fair baseline run packet has unsupported fields: public_source_url",
+            report["blockers"],
+        )
+        self.assertIn(
+            "public evidence manifest artifact missing or hash mismatch",
+            report["blockers"],
+        )
+
+    def test_public_manifest_requires_license_and_expected_hash_coverage(self) -> None:
+        packet = valid_packet()
+        covered_hashes = validator._fair_public_evidence_hashes(packet)
+        manifest = public_source_manifest(
+            "fair_external_baseline_comparison",
+            covered_hashes[:-1],
+        )
+        manifest["public_sources"][0]["license"] = "unknown"
+        manifest["source_index_sha256"] = public_evidence.source_index_sha256(
+            manifest["public_sources"]
+        )
+        path, digest = write_artifact("public_evidence_bad_manifest.json", manifest)
+        packet["evidence_source_mode"] = public_evidence.PUBLIC_MODE
+        packet["public_evidence_manifest_artifact"] = path
+        packet["public_evidence_manifest_artifact_sha256"] = digest
+        packet["claim_boundary"][public_evidence.CLAIM_FIELD] = True
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "public evidence source license missing or unverified",
+            report["blockers"],
+        )
+        self.assertIn(
+            "public evidence manifest does not cover expected artifact hashes",
+            report["blockers"],
+        )
+
+    def test_private_route_rejects_public_evidence_claim(self) -> None:
+        packet = valid_packet()
+        packet["claim_boundary"][public_evidence.CLAIM_FIELD] = True
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "operator-private evidence packet must not claim public evidence",
+            report["blockers"],
+        )
+
+    def test_private_route_rejects_present_public_manifest_field(self) -> None:
+        packet = valid_packet()
+        packet["public_evidence_manifest_artifact"] = {}
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "operator-private evidence packet must not include public manifest",
+            report["blockers"],
         )
 
 

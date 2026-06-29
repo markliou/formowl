@@ -17,6 +17,7 @@ from typing import Any
 
 import human_annotation_adjudication_validator as validator
 import human_annotation_packet_assembler as assembler
+import public_reproducible_evidence as public_evidence
 
 
 ROOT = Path(__file__).resolve().parent
@@ -48,13 +49,25 @@ ARTIFACT_FILENAMES = {
     "adjudication_artifact": "adjudication.json",
     "confusion_matrix_artifact": "confusion_matrix.json",
     "custody_receipt_artifact": "custody_receipt.json",
+    "llm_subagent_adjudication_artifact": "llm_subagent_adjudication.json",
+    "public_evidence_manifest_artifact": "public_evidence_manifest.json",
 }
+COMMON_ARTIFACT_FIELDS = {"manifest_artifact", "work_orders_artifact"}
+HUMAN_ROUTE_ARTIFACT_FIELDS = {
+    "adjudication_artifact",
+    "confusion_matrix_artifact",
+    "custody_receipt_artifact",
+}
+LLM_ROUTE_ARTIFACT_FIELDS = {"llm_subagent_adjudication_artifact"}
 RESPONSE_PACKET_ALLOWED_FIELDS = {
     "response_packet_type",
     "operator_run_id",
     "annotation_task_id",
     "first_pass_submissions",
     "adjudication",
+    "llm_subagent_adjudication_artifact",
+    "evidence_source_mode",
+    "public_evidence_manifest_artifact",
 }
 FIRST_PASS_SUBMISSION_ALLOWED_FIELDS = {
     "reviewer_id",
@@ -379,6 +392,44 @@ def _human_attestation_is_present(value: object, field_name: str) -> None:
     _reject_forbidden_text(value, field_name)
 
 
+def _uses_llm_adjudication_route(response_packet: dict[str, Any]) -> bool:
+    has_llm = "llm_subagent_adjudication_artifact" in response_packet
+    has_human = "first_pass_submissions" in response_packet or "adjudication" in response_packet
+    if has_llm == has_human:
+        raise IntakeError("response packet must supply exactly one adjudication route")
+    return has_llm
+
+
+def _evidence_source_mode(response_packet: dict[str, Any]) -> str | None:
+    mode = response_packet.get("evidence_source_mode")
+    has_public_manifest = "public_evidence_manifest_artifact" in response_packet
+    if mode is None and not has_public_manifest:
+        return None
+    if mode not in public_evidence.ALLOWED_MODES:
+        raise IntakeError("evidence_source_mode is unsupported")
+    if mode == public_evidence.PUBLIC_MODE and not has_public_manifest:
+        raise IntakeError("public evidence mode requires a public evidence manifest")
+    if mode == public_evidence.PRIVATE_MODE and has_public_manifest:
+        raise IntakeError("operator-private mode must not include a public evidence manifest")
+    return mode
+
+
+def _llm_subagent_adjudication_payload(response_packet: dict[str, Any]) -> dict[str, Any]:
+    payload = response_packet.get("llm_subagent_adjudication_artifact")
+    if not isinstance(payload, dict):
+        raise IntakeError("llm_subagent_adjudication_artifact must be a JSON object")
+    _reject_raw_internal_fields(payload, label="llm_subagent_adjudication_artifact")
+    return payload
+
+
+def _public_evidence_manifest_payload(response_packet: dict[str, Any]) -> dict[str, Any]:
+    payload = response_packet.get("public_evidence_manifest_artifact")
+    if not isinstance(payload, dict):
+        raise IntakeError("public_evidence_manifest_artifact must be a JSON object")
+    _reject_raw_internal_fields(payload, label="public_evidence_manifest_artifact")
+    return payload
+
+
 def _validate_submission_header(
     submission: dict[str, Any],
     expected_role: str,
@@ -676,8 +727,22 @@ def build_custody_receipt_artifact(
     return receipt
 
 
-def _planned_paths(output_dir: Path, first_pass_artifacts: list[dict[str, Any]]) -> dict[str, Path]:
-    paths = {field: output_dir / filename for field, filename in ARTIFACT_FILENAMES.items()}
+def _planned_paths(
+    output_dir: Path,
+    first_pass_artifacts: list[dict[str, Any]],
+    *,
+    llm_route: bool,
+    public_mode: bool = False,
+) -> dict[str, Path]:
+    route_fields = LLM_ROUTE_ARTIFACT_FIELDS if llm_route else HUMAN_ROUTE_ARTIFACT_FIELDS
+    paths = {
+        field: output_dir / ARTIFACT_FILENAMES[field]
+        for field in sorted(COMMON_ARTIFACT_FIELDS | route_fields)
+    }
+    if public_mode:
+        paths["public_evidence_manifest_artifact"] = (
+            output_dir / ARTIFACT_FILENAMES["public_evidence_manifest_artifact"]
+        )
     for artifact in first_pass_artifacts:
         reviewer_id = artifact["reviewer_id"]
         paths[f"first_pass::{reviewer_id}"] = output_dir / f"first_pass_{reviewer_id}.json"
@@ -743,34 +808,51 @@ def preflight_response_packet(
     manifest, work_orders = _validated_work_packet(work_packet)
     if response_packet.get("annotation_task_id") != work_packet.get("annotation_task_id"):
         raise IntakeError("response packet annotation_task_id mismatch")
+    llm_route = _uses_llm_adjudication_route(response_packet)
+    evidence_mode = _evidence_source_mode(response_packet)
+    public_mode = evidence_mode == public_evidence.PUBLIC_MODE
     manifest_by_item, manifest_rows = _manifest_maps(manifest)
     work_order_by_id = _work_order_maps(work_orders, manifest_by_item)
-    first_pass_artifacts, first_pass_rows, rows_by_item = build_first_pass_artifacts(
-        response_packet=response_packet,
-        manifest_by_item=manifest_by_item,
-        work_order_by_id=work_order_by_id,
+    first_pass_artifacts: list[dict[str, Any]] = []
+    first_pass_rows: list[dict[str, Any]] = []
+    rows_by_item: dict[str, list[dict[str, Any]]] = {}
+    if llm_route:
+        _llm_subagent_adjudication_payload(response_packet)
+    else:
+        first_pass_artifacts, first_pass_rows, rows_by_item = build_first_pass_artifacts(
+            response_packet=response_packet,
+            manifest_by_item=manifest_by_item,
+            work_order_by_id=work_order_by_id,
+        )
+    if public_mode:
+        _public_evidence_manifest_payload(response_packet)
+    planned_paths = _planned_paths(
+        output_path,
+        first_pass_artifacts,
+        llm_route=llm_route,
+        public_mode=public_mode,
     )
-    planned_paths = _planned_paths(output_path, first_pass_artifacts)
     if assembly_manifest_path is not None:
         planned_paths["assembly_manifest"] = assembly_manifest_path
     _ensure_no_overwrite(planned_paths)
     _ensure_parent_dirs_available(planned_paths)
     manifest_sha = sha256_artifact_payload(manifest)
-    adjudication, adjudication_rows, _disagreement_sha = build_adjudication_artifact(
-        response_packet=response_packet,
-        manifest_by_item=manifest_by_item,
-        work_order_by_id=work_order_by_id,
-        first_pass_rows=first_pass_rows,
-        rows_by_item=rows_by_item,
-        manifest_sha256=manifest_sha,
-    )
-    adjudication_sha = sha256_artifact_payload(adjudication)
-    build_confusion_matrix_artifact(
-        manifest_rows=manifest_rows,
-        adjudication_rows=adjudication_rows,
-        rows_by_item=rows_by_item,
-        adjudication_sha256=adjudication_sha,
-    )
+    if not llm_route:
+        adjudication, adjudication_rows, _disagreement_sha = build_adjudication_artifact(
+            response_packet=response_packet,
+            manifest_by_item=manifest_by_item,
+            work_order_by_id=work_order_by_id,
+            first_pass_rows=first_pass_rows,
+            rows_by_item=rows_by_item,
+            manifest_sha256=manifest_sha,
+        )
+        adjudication_sha = sha256_artifact_payload(adjudication)
+        build_confusion_matrix_artifact(
+            manifest_rows=manifest_rows,
+            adjudication_rows=adjudication_rows,
+            rows_by_item=rows_by_item,
+            adjudication_sha256=adjudication_sha,
+        )
     return {
         "preflight_packet_type": "human_annotation_response_preflight_v1",
         "preflight_state": "operator_response_validated_without_writes",
@@ -791,8 +873,10 @@ def preflight_response_packet(
         "claim_boundary": {
             "supports_human_annotation_completed_claim": False,
             "supports_human_adjudication_completed_claim": False,
+            "supports_llm_subagent_annotation_adjudication_completed_claim": False,
             "supports_confusion_matrix_claim": False,
             "supports_custody_receipt_claim": False,
+            public_evidence.CLAIM_FIELD: False,
             "supports_canonical_packet_written_claim": False,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
@@ -825,15 +909,33 @@ def build_intake_artifacts(
     manifest, work_orders = _validated_work_packet(work_packet)
     if response_packet.get("annotation_task_id") != work_packet.get("annotation_task_id"):
         raise IntakeError("response packet annotation_task_id mismatch")
+    llm_route = _uses_llm_adjudication_route(response_packet)
+    evidence_mode = _evidence_source_mode(response_packet)
+    public_mode = evidence_mode == public_evidence.PUBLIC_MODE
     response_packet_sha = sha256_artifact_payload(response_packet)
     manifest_by_item, manifest_rows = _manifest_maps(manifest)
     work_order_by_id = _work_order_maps(work_orders, manifest_by_item)
-    first_pass_artifacts, first_pass_rows, rows_by_item = build_first_pass_artifacts(
-        response_packet=response_packet,
-        manifest_by_item=manifest_by_item,
-        work_order_by_id=work_order_by_id,
+    first_pass_artifacts: list[dict[str, Any]] = []
+    first_pass_rows: list[dict[str, Any]] = []
+    rows_by_item: dict[str, list[dict[str, Any]]] = {}
+    if llm_route:
+        llm_subagent_adjudication = _llm_subagent_adjudication_payload(response_packet)
+    else:
+        first_pass_artifacts, first_pass_rows, rows_by_item = build_first_pass_artifacts(
+            response_packet=response_packet,
+            manifest_by_item=manifest_by_item,
+            work_order_by_id=work_order_by_id,
+        )
+        llm_subagent_adjudication = None
+    public_evidence_manifest = (
+        _public_evidence_manifest_payload(response_packet) if public_mode else None
     )
-    planned_paths = _planned_paths(output_path, first_pass_artifacts)
+    planned_paths = _planned_paths(
+        output_path,
+        first_pass_artifacts,
+        llm_route=llm_route,
+        public_mode=public_mode,
+    )
     if assembly_manifest_path is not None:
         planned_paths["assembly_manifest"] = assembly_manifest_path
     _ensure_no_overwrite(planned_paths)
@@ -841,61 +943,83 @@ def build_intake_artifacts(
 
     manifest_sha = sha256_artifact_payload(manifest)
     work_orders_sha = sha256_artifact_payload(work_orders)
-    adjudication, adjudication_rows, _disagreement_sha = build_adjudication_artifact(
-        response_packet=response_packet,
-        manifest_by_item=manifest_by_item,
-        work_order_by_id=work_order_by_id,
-        first_pass_rows=first_pass_rows,
-        rows_by_item=rows_by_item,
-        manifest_sha256=manifest_sha,
-    )
-    adjudication_sha = sha256_artifact_payload(adjudication)
-    confusion_matrix = build_confusion_matrix_artifact(
-        manifest_rows=manifest_rows,
-        adjudication_rows=adjudication_rows,
-        rows_by_item=rows_by_item,
-        adjudication_sha256=adjudication_sha,
-    )
-    confusion_matrix_sha = sha256_artifact_payload(confusion_matrix)
 
     payloads: dict[str, object] = {
         "manifest_artifact": manifest,
         "work_orders_artifact": work_orders,
-        "adjudication_artifact": adjudication,
-        "confusion_matrix_artifact": confusion_matrix,
     }
     first_pass_manifest_refs = []
     first_pass_sha256s = []
-    for artifact in first_pass_artifacts:
-        reviewer_id = artifact["reviewer_id"]
-        path = planned_paths[f"first_pass::{reviewer_id}"]
-        digest = sha256_artifact_payload(artifact)
-        first_pass_sha256s.append(digest)
-        payloads[f"first_pass::{reviewer_id}"] = artifact
-        first_pass_manifest_refs.append(
-            {
-                "reviewer_id": reviewer_id,
-                "artifact": _artifact_ref(path),
-            }
-        )
-    custody = build_custody_receipt_artifact(
-        manifest_sha256=manifest_sha,
-        work_orders_sha256=work_orders_sha,
-        first_pass_sha256s=first_pass_sha256s,
-        adjudication_sha256=adjudication_sha,
-        confusion_matrix_sha256=confusion_matrix_sha,
-        response_packet_sha256=response_packet_sha,
-    )
-    payloads["custody_receipt_artifact"] = custody
 
     assembly_manifest = {
         "manifest_artifact": _artifact_ref(planned_paths["manifest_artifact"]),
         "work_orders_artifact": _artifact_ref(planned_paths["work_orders_artifact"]),
-        "first_pass_artifacts": first_pass_manifest_refs,
-        "adjudication_artifact": _artifact_ref(planned_paths["adjudication_artifact"]),
-        "confusion_matrix_artifact": _artifact_ref(planned_paths["confusion_matrix_artifact"]),
-        "custody_receipt_artifact": _artifact_ref(planned_paths["custody_receipt_artifact"]),
     }
+    if evidence_mode is not None:
+        assembly_manifest["evidence_source_mode"] = evidence_mode
+    if public_mode:
+        payloads["public_evidence_manifest_artifact"] = public_evidence_manifest
+        assembly_manifest["public_evidence_manifest_artifact"] = _artifact_ref(
+            planned_paths["public_evidence_manifest_artifact"]
+        )
+    if llm_route:
+        assert llm_subagent_adjudication is not None
+        payloads["llm_subagent_adjudication_artifact"] = llm_subagent_adjudication
+        assembly_manifest["llm_subagent_adjudication_artifact"] = _artifact_ref(
+            planned_paths["llm_subagent_adjudication_artifact"]
+        )
+    else:
+        adjudication, adjudication_rows, _disagreement_sha = build_adjudication_artifact(
+            response_packet=response_packet,
+            manifest_by_item=manifest_by_item,
+            work_order_by_id=work_order_by_id,
+            first_pass_rows=first_pass_rows,
+            rows_by_item=rows_by_item,
+            manifest_sha256=manifest_sha,
+        )
+        adjudication_sha = sha256_artifact_payload(adjudication)
+        confusion_matrix = build_confusion_matrix_artifact(
+            manifest_rows=manifest_rows,
+            adjudication_rows=adjudication_rows,
+            rows_by_item=rows_by_item,
+            adjudication_sha256=adjudication_sha,
+        )
+        confusion_matrix_sha = sha256_artifact_payload(confusion_matrix)
+        payloads["adjudication_artifact"] = adjudication
+        payloads["confusion_matrix_artifact"] = confusion_matrix
+        for artifact in first_pass_artifacts:
+            reviewer_id = artifact["reviewer_id"]
+            path = planned_paths[f"first_pass::{reviewer_id}"]
+            digest = sha256_artifact_payload(artifact)
+            first_pass_sha256s.append(digest)
+            payloads[f"first_pass::{reviewer_id}"] = artifact
+            first_pass_manifest_refs.append(
+                {
+                    "reviewer_id": reviewer_id,
+                    "artifact": _artifact_ref(path),
+                }
+            )
+        custody = build_custody_receipt_artifact(
+            manifest_sha256=manifest_sha,
+            work_orders_sha256=work_orders_sha,
+            first_pass_sha256s=first_pass_sha256s,
+            adjudication_sha256=adjudication_sha,
+            confusion_matrix_sha256=confusion_matrix_sha,
+            response_packet_sha256=response_packet_sha,
+        )
+        payloads["custody_receipt_artifact"] = custody
+        assembly_manifest.update(
+            {
+                "first_pass_artifacts": first_pass_manifest_refs,
+                "adjudication_artifact": _artifact_ref(planned_paths["adjudication_artifact"]),
+                "confusion_matrix_artifact": _artifact_ref(
+                    planned_paths["confusion_matrix_artifact"]
+                ),
+                "custody_receipt_artifact": _artifact_ref(
+                    planned_paths["custody_receipt_artifact"]
+                ),
+            }
+        )
     created_paths: list[Path] = []
     try:
         for key, payload in payloads.items():
@@ -953,6 +1077,8 @@ def build_intake_artifacts(
         "claim_boundary": {
             "supports_human_annotation_completed_claim": False,
             "supports_human_adjudication_completed_claim": False,
+            "supports_llm_subagent_annotation_adjudication_completed_claim": False,
+            public_evidence.CLAIM_FIELD: False,
             "supports_canonical_packet_written_claim": False,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
@@ -994,6 +1120,8 @@ def build_intake_artifacts(
             ],
             "supports_human_annotation_completed_claim": False,
             "supports_human_adjudication_completed_claim": False,
+            "supports_llm_subagent_annotation_adjudication_completed_claim": False,
+            public_evidence.CLAIM_FIELD: False,
             "supports_canonical_packet_written_claim": False,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,

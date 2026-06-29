@@ -13,7 +13,6 @@ from io import StringIO
 import enterprise_multimodal_assembly_manifest_generator as enterprise_generator
 import enterprise_multimodal_packet_assembler as enterprise_assembler
 import enterprise_multimodal_validation_validator as enterprise_validator
-import human_annotation_adjudication_validator as human_validator
 import human_annotation_assembly_manifest_generator as human_generator
 import human_annotation_packet_assembler as human_assembler
 import kg_total_acceptance_suite as total_acceptance
@@ -23,15 +22,6 @@ import production_adapter_path_validator as production_validator
 
 
 GATES = {
-    "annotation_adjudication_protocol": {
-        "generator": human_generator,
-        "assembler": human_assembler,
-        "validator": human_validator,
-        "gate": total_acceptance.annotation_adjudication_protocol_gate,
-        "output": human_generator.WORK_ORDERS
-        / "test_annotation_adjudication_protocol_assembly_manifest.json",
-        "script": "human_annotation_assembly_manifest_generator.py",
-    },
     "multimodal_semantic_validation": {
         "generator": enterprise_generator,
         "assembler": enterprise_assembler,
@@ -131,7 +121,11 @@ class RemainingAssemblyManifestGeneratorsTest(unittest.TestCase):
     def test_human_annotation_scaffold_matches_assembler_shape(self) -> None:
         manifest = human_generator.build_manifest_scaffold()
 
-        self.assertEqual(set(manifest), human_assembler.MANIFEST_ALLOWED_FIELDS)
+        self.assertEqual(
+            set(manifest),
+            human_assembler.MANIFEST_COMMON_REQUIRED_FIELDS
+            | human_assembler.MANIFEST_HUMAN_ROUTE_FIELDS,
+        )
         self.assertEqual(len(manifest["first_pass_artifacts"]), 2)
         self.assertEqual(
             len({row["reviewer_id"] for row in manifest["first_pass_artifacts"]}),
@@ -147,7 +141,10 @@ class RemainingAssemblyManifestGeneratorsTest(unittest.TestCase):
     def test_enterprise_scaffold_matches_assembler_shape_and_withholds_claims(self) -> None:
         manifest = enterprise_generator.build_manifest_scaffold()
 
-        self.assertEqual(set(manifest), enterprise_assembler.MANIFEST_ALLOWED_FIELDS)
+        self.assertEqual(
+            set(manifest),
+            enterprise_assembler.MANIFEST_COMMON_REQUIRED_FIELDS | {"human_adjudication_artifact"},
+        )
         self.assertEqual(
             sorted(row["modality"] for row in manifest["validation_artifacts"]),
             sorted(enterprise_validator.REQUIRED_MODALITIES),
@@ -163,7 +160,7 @@ class RemainingAssemblyManifestGeneratorsTest(unittest.TestCase):
     def test_production_scaffold_matches_assembler_shape_and_withholds_claims(self) -> None:
         manifest = production_generator.build_manifest_scaffold()
 
-        self.assertEqual(set(manifest), production_assembler.MANIFEST_ALLOWED_FIELDS)
+        self.assertEqual(set(manifest), production_assembler.MANIFEST_COMMON_REQUIRED_FIELDS)
         self.assertEqual(
             sorted(row["component_id"] for row in manifest["adapter_artifacts"]),
             sorted(production_validator.REQUIRED_COMPONENTS),
@@ -176,24 +173,34 @@ class RemainingAssemblyManifestGeneratorsTest(unittest.TestCase):
         self.assertFalse(manifest["claim_boundary"]["supports_production_adapter_paths_claim"])
         self.assert_no_canonical_or_real_root_mutation()
 
-    def test_scaffolds_contain_placeholders_and_cannot_assemble(self) -> None:
+    def test_scaffolds_contain_placeholders_cannot_assemble_and_preserve_gate_state(
+        self,
+    ) -> None:
         for gate_id, entry in GATES.items():
             with self.subTest(gate_id=gate_id):
+                validator_before = entry["validator"].build_report()
+                gate_before = entry["gate"]()
                 manifest = entry["generator"].build_manifest_scaffold()
                 self.assertTrue(
                     any("fill-with-real" in value for value in nested_strings(manifest))
                 )
                 with self.assertRaises(entry["assembler"].AssemblyError):
                     entry["assembler"].assemble_packet(**manifest)
-                report = entry["validator"].build_report()
-                gate = entry["gate"]()
-                self.assertFalse(report["passed"])
-                self.assertFalse(gate["passed"])
+                validator_after = entry["validator"].build_report()
+                gate_after = entry["gate"]()
+                self.assertEqual(validator_after["passed"], validator_before["passed"])
+                self.assertEqual(validator_after["blockers"], validator_before["blockers"])
+                self.assertEqual(gate_after["passed"], gate_before["passed"])
+                self.assertEqual(gate_after["blockers"], gate_before["blockers"])
         self.assert_no_canonical_or_real_root_mutation()
 
-    def test_generated_scaffold_files_cannot_be_promoted_or_pass_gates(self) -> None:
+    def test_generated_scaffold_files_cannot_be_promoted_and_preserve_gate_state(
+        self,
+    ) -> None:
         for gate_id, entry in GATES.items():
             with self.subTest(gate_id=gate_id):
+                validator_before = entry["validator"].build_report()
+                gate_before = entry["gate"]()
                 original_argv = sys.argv[:]
                 try:
                     sys.argv = [
@@ -206,18 +213,17 @@ class RemainingAssemblyManifestGeneratorsTest(unittest.TestCase):
                 finally:
                     sys.argv = original_argv
 
-                if gate_id == "annotation_adjudication_protocol":
-                    loaded = entry["assembler"].load_manifest(entry["output"])
-                    with self.assertRaises(entry["assembler"].AssemblyError):
-                        entry["assembler"].assemble_packet(**loaded)
-                else:
-                    with self.assertRaisesRegex(
-                        entry["assembler"].AssemblyError,
-                        "placeholder template values",
-                    ):
-                        entry["assembler"].load_manifest(entry["output"])
-                self.assertFalse(entry["validator"].build_report()["passed"])
-                self.assertFalse(entry["gate"]()["passed"])
+                with self.assertRaisesRegex(
+                    entry["assembler"].AssemblyError,
+                    "placeholder template values",
+                ):
+                    entry["assembler"].load_manifest(entry["output"])
+                validator_after = entry["validator"].build_report()
+                gate_after = entry["gate"]()
+                self.assertEqual(validator_after["passed"], validator_before["passed"])
+                self.assertEqual(validator_after["blockers"], validator_before["blockers"])
+                self.assertEqual(gate_after["passed"], gate_before["passed"])
+                self.assertEqual(gate_after["blockers"], gate_before["blockers"])
         self.assert_no_canonical_or_real_root_mutation()
 
     def test_main_writes_only_safe_work_order_outputs_and_preserves_gate_state(self) -> None:

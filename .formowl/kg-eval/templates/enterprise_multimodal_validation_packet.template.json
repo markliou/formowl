@@ -9,6 +9,8 @@
   "validation_artifacts": [],
   "human_adjudication_artifact": "inputs/path-to-real-human-adjudication.json",
   "human_adjudication_artifact_sha256": "fill-with-real-sha256",
+  "llm_subagent_adjudication_artifact": "inputs/path-to-real-four-specialist-llm-subagent-panel.json",
+  "llm_subagent_adjudication_artifact_sha256": "fill-with-real-sha256",
   "business_decision_review_artifact": "inputs/path-to-real-business-review.json",
   "business_decision_review_artifact_sha256": "fill-with-real-sha256",
   "permission_probe_artifact": "inputs/path-to-real-permission-probe.json",
@@ -16,9 +18,11 @@
   "claim_boundary": {
     "supports_real_enterprise_multimodal_claim": false,
     "supports_multimodal_human_adjudication_completed_claim": false,
+    "supports_multimodal_llm_subagent_adjudication_completed_claim": false,
     "supports_cross_modal_permission_probe_claim": false,
     "supports_business_decision_review_claim": false,
     "supports_financial_advice_or_autonomous_business_judgment_claim": false,
+    "supports_public_reproducible_evidence_claim": false,
     "supports_production_ready_claim": false,
     "supports_top_tier_scientific_validation_claim": false,
     "supports_raw_asset_access_claim": false

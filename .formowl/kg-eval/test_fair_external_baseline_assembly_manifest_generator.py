@@ -96,7 +96,10 @@ class FairExternalBaselineAssemblyManifestGeneratorTest(unittest.TestCase):
     def test_scaffold_has_exact_assembler_shape_and_source_lock(self) -> None:
         manifest = generator.build_manifest_scaffold()
 
-        self.assertEqual(set(manifest), assembler.MANIFEST_ALLOWED_FIELDS)
+        self.assertEqual(
+            set(manifest),
+            assembler.MANIFEST_REQUIRED_FIELDS | {"human_answer_adjudication"},
+        )
         self.assertEqual(
             manifest["source_lock_sha256"],
             validator.literature.required_baseline_source_lock_sha256(),
@@ -217,8 +220,6 @@ class FairExternalBaselineAssemblyManifestGeneratorTest(unittest.TestCase):
         self.assertEqual(validator_after["blockers"], validator_before["blockers"])
         self.assertEqual(gate_after["passed"], gate_before["passed"])
         self.assertEqual(gate_after["blockers"], gate_before["blockers"])
-        self.assertFalse(validator_after["passed"])
-        self.assertFalse(gate_after["passed"])
         self.assert_no_canonical_or_real_root_mutation()
 
     def test_main_writes_only_safe_work_order_output(self) -> None:

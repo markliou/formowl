@@ -95,13 +95,14 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   candidate-only package bindings, clerical-review packet export, and
   graph-derived wiki projection in the dev container. It is synthetic adapter
   boundary evidence only; it does not claim production readiness, enterprise
-  entity-resolution quality, completed human review, raw asset access, or
+  entity-resolution quality, completed adjudication, raw asset access, or
   canonical graph commits.
 - A deterministic KG research acceptance suite and method note covering recent
   literature comparison, scoped ontology integration, multi-user fusion,
-  multimodal enterprise fixtures, human review packet semantics, production
-  adapter gates, metrics, ablations, and explicit known failed or blocked
-  claims.
+  multimodal enterprise fixtures, four-specialist LLM subagent adjudication as
+  the current Plan B target, legacy human compatibility where already
+  supported, production adapter gates, metrics, ablations, and explicit known
+  failed or blocked claims.
 - ChatGPT-facing semantic gateway helpers with public tool schemas, safe error
   envelopes, proposal-only review/draft stubs, and bans on direct database,
   filesystem, raw SQL, worker-internal, and canonical mutation tools.
@@ -145,6 +146,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - `docs/wiki-draft-schema.md` - wiki draft and frontmatter schema.
 - `docs/kg-research-method.md` - KG research method, literature comparison,
   acceptance evidence, and known limits.
+- `docs/kg-eval-package.md` - packaged KG evaluation facade and integration
+  contract for the System Backbone Agent.
 - `docs/openproject-adapter.md` - OpenProject adapter mapping.
 - `docs/implementation-task-breakdown.md` - shared implementation checklist for contributors and agents.
 
@@ -183,11 +186,23 @@ such as production adapter readiness and enterprise latency/scalability.
 
 The stricter broad KG real-evidence harness lives under `.formowl/kg-eval`.
 Its code, fixtures, templates, work orders, preview packets, restart note, and
-non-authoritative blocked-state snapshots are tracked so the blocked broad
-gates are reproducible across sessions. Runtime `results/`, operator-supplied
-real evidence under `inputs/*_real/`, and canonical real evidence packets
-remain ignored unless a future governed evidence process explicitly decides
-otherwise.
+non-authoritative state snapshots are tracked so the broad gate authority is
+reproducible across sessions. Runtime `results/`, operator-supplied or public
+reproducible evidence under `inputs/*_real/`, and canonical real evidence
+packets remain ignored unless a governed evidence process explicitly decides
+otherwise. The current local authority state has the broad KG real-evidence
+gates clear at 12/12; this does not claim full product production readiness,
+top-tier scientific validation, raw asset access, canonical graph writes, or
+enterprise-scale latency/scalability.
+
+The packaged integration facade is `formowl_kg_eval`, with CLI entry point
+`formowl-kg-eval` after installation and `python -m formowl_kg_eval` as the
+module fallback. System integrations should consume the stable summary instead
+of importing repo-local harness scripts directly:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python -m formowl_kg_eval summary"
+```
 
 ```sh
 docker run --rm -v "$PWD:/workspace" -w /workspace/.formowl/kg-eval formowl-dev:local bash -c "python kg_total_acceptance_suite.py && python real_evidence_preflight.py"

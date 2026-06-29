@@ -21,8 +21,8 @@
   "real_evidence_root_not_written": "inputs/enterprise_multimodal_real",
   "review_collection_plan": {
     "later_real_packet_requirements": [
-      "human review must cover every future validation row",
-      "business decision review must stay human-reviewed and non-autonomous",
+      "four-specialist LLM subagent panel must cover every future validation row; legacy human adjudication remains a backward-compatible route",
+      "business decision review must be four-specialist LLM-subagent-reviewed and non-autonomous; legacy human review remains a backward-compatible route",
       "permission probes must deny revoked grants, private content, raw assets, and entity-match-as-access"
     ],
     "plan_type": "enterprise_multimodal_review_collection_plan_v1",
@@ -32,7 +32,7 @@
         "minimum_review_checks": [
           "validate observation identifier and extractor run binding",
           "compare extracted candidate against source-local locator evidence",
-          "route business-decision candidates to human review",
+          "route business-decision candidates to the four-specialist LLM subagent panel",
           "verify cross-modal access checks deny revoked or private content"
         ],
         "modality": "spreadsheet",
@@ -44,7 +44,7 @@
         "minimum_review_checks": [
           "validate observation identifier and extractor run binding",
           "compare extracted candidate against source-local locator evidence",
-          "route business-decision candidates to human review",
+          "route business-decision candidates to the four-specialist LLM subagent panel",
           "verify cross-modal access checks deny revoked or private content"
         ],
         "modality": "mail",
@@ -56,7 +56,7 @@
         "minimum_review_checks": [
           "validate observation identifier and extractor run binding",
           "compare extracted candidate against source-local locator evidence",
-          "route business-decision candidates to human review",
+          "route business-decision candidates to the four-specialist LLM subagent panel",
           "verify cross-modal access checks deny revoked or private content"
         ],
         "modality": "meeting_audio",
@@ -68,7 +68,7 @@
         "minimum_review_checks": [
           "validate observation identifier and extractor run binding",
           "compare extracted candidate against source-local locator evidence",
-          "route business-decision candidates to human review",
+          "route business-decision candidates to the four-specialist LLM subagent panel",
           "verify cross-modal access checks deny revoked or private content"
         ],
         "modality": "video_ocr",
@@ -183,7 +183,7 @@
     "authoritative_validator_must_be_run_separately": true,
     "this_packet_is_sufficient_for_multimodal_gate": false
   },
-  "work_packet_sha256": "90b548717fad64000c050a49f1408ddc4a88913714487b821abf106cd1d952ae",
+  "work_packet_sha256": "834285b62bd57d4a4a32964e291b2dfa4d79e1f46e9c79de0a7b70d5984bd394",
   "work_packet_state": "operator_assignment_only",
   "work_packet_type": "enterprise_multimodal_collection_packet_preview_v1"
 }

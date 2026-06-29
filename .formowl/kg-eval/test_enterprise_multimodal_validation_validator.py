@@ -8,9 +8,12 @@ import shutil
 import unittest
 
 import enterprise_multimodal_validation_validator as validator
+import llm_subagent_adjudication as llm_panel
+import public_reproducible_evidence as public_evidence
 
 
 BASE = validator.REAL_ARTIFACT_ROOT_PATH / "validator_fixture"
+LLM_PANEL_RUBRIC_SHA256 = "a1234567890bcdef" * 4
 
 
 def write_artifact(relative_name: str, payload: object) -> tuple[str, str]:
@@ -244,6 +247,117 @@ def valid_packet() -> dict:
     }
 
 
+def public_source_manifest(gate_id: str, covered_hashes: list[str]) -> dict:
+    sources = [
+        {
+            "source_id": f"public_{gate_id}_source",
+            "source_url": f"https://example.org/formowl/{gate_id}/multimodal.json",
+            "source_type": "public_reproducible_multimodal_corpus",
+            "source_usage_role": "multimodal_validation_source",
+            "license": "CC-BY-4.0",
+            "version_or_snapshot": "2026-06-28-snapshot",
+            "retrieved_at": "2026-06-28T00:00:00Z",
+            "content_sha256": "abc1234567890def" * 4,
+            "archive_sha256": "bcd1234567890efa" * 4,
+            "derived_artifact_sha256s": sorted(set(covered_hashes)),
+            "publicly_accessible": True,
+            "permission_allows_research_evaluation": True,
+            "non_synthetic": True,
+            "raw_private_payload": False,
+        }
+    ]
+    return public_evidence.build_manifest(
+        gate_id=gate_id,
+        retrieved_at="2026-06-28T00:00:00Z",
+        public_sources=sources,
+        covered_artifact_sha256s=covered_hashes,
+    )
+
+
+def add_public_evidence(packet: dict, gate_id: str, covered_hashes: list[str]) -> None:
+    manifest_path, manifest_sha = write_artifact(
+        "public_evidence_manifest.json",
+        public_source_manifest(gate_id, covered_hashes),
+    )
+    packet["evidence_source_mode"] = public_evidence.PUBLIC_MODE
+    packet["public_evidence_manifest_artifact"] = manifest_path
+    packet["public_evidence_manifest_artifact_sha256"] = manifest_sha
+    packet["claim_boundary"][public_evidence.CLAIM_FIELD] = True
+
+
+def valid_llm_panel(target: str, input_hashes: list[str]) -> dict:
+    panel = {
+        "artifact_type": llm_panel.PANEL_ARTIFACT_TYPE,
+        "panel_id": f"panel_{target}_001",
+        "adjudication_target": target,
+        "completed": True,
+        "final_decision": "PASS",
+        "human_adjudication_claimed": False,
+        "input_artifact_sha256s": sorted(input_hashes),
+        "rubric_sha256": LLM_PANEL_RUBRIC_SHA256,
+        "specialist_subagents": [
+            {
+                "subagent_id": f"{specialty}_subagent",
+                "specialty": specialty,
+                "professional_role": llm_panel.REQUIRED_PROFESSIONAL_ROLES[specialty],
+                "model_name": "codex-subagent",
+                "model_version": "2026-06-28",
+                "prompt_sha256": f"{index + 20:064x}",
+                "rubric_sha256": LLM_PANEL_RUBRIC_SHA256,
+                "run_id": f"run_{specialty}_001",
+                "temperature": 0,
+                "independent": True,
+                "decision": "PASS",
+                "blocking_findings": [],
+                "reviewed_artifact_sha256s": sorted(input_hashes),
+                "output_sha256": f"{index + 40:064x}",
+            }
+            for index, specialty in enumerate(llm_panel.REQUIRED_SPECIALTIES)
+        ],
+    }
+    panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+    return panel
+
+
+def convert_to_llm_subagent_route(packet: dict) -> dict:
+    packet.pop("human_adjudication_artifact", None)
+    packet.pop("human_adjudication_artifact_sha256", None)
+    for ref in packet["validation_artifacts"]:
+        path = validator.safe_relative_artifact_path(
+            ref["artifact"],
+            allow_test_artifacts=True,
+        )
+        assert path is not None
+        artifact = json.loads(path.read_text(encoding="utf-8"))
+        for row in artifact["rows"]:
+            row.pop("human_adjudicated", None)
+            row["llm_subagent_adjudicated"] = True
+            row["row_sha256"] = validator.row_hash(row)
+        path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
+        ref["artifact_sha256"] = validator.sha256_file(path) or ""
+
+    input_hashes = [
+        packet["pilot_manifest_artifact_sha256"],
+        *[ref["artifact_sha256"] for ref in packet["validation_artifacts"]],
+    ]
+    panel_artifact, panel_sha = write_artifact(
+        "llm_subagent_adjudication.json",
+        valid_llm_panel("multimodal_semantic_validation", input_hashes),
+    )
+    packet["llm_subagent_adjudication_artifact"] = panel_artifact
+    packet["llm_subagent_adjudication_artifact_sha256"] = panel_sha
+
+    def mutate_business(payload: dict) -> None:
+        payload.pop("human_reviewed", None)
+        payload["llm_subagent_reviewed"] = True
+        payload["adjudication_artifact_sha256"] = panel_sha
+
+    rewrite_packet_artifact(packet, "business_decision_review_artifact", mutate_business)
+    packet["claim_boundary"]["supports_multimodal_human_adjudication_completed_claim"] = False
+    packet["claim_boundary"]["supports_multimodal_llm_subagent_adjudication_completed_claim"] = True
+    return packet
+
+
 class EnterpriseMultimodalValidationValidatorTest(unittest.TestCase):
     def setUp(self) -> None:
         shutil.rmtree(BASE, ignore_errors=True)
@@ -335,6 +449,127 @@ class EnterpriseMultimodalValidationValidatorTest(unittest.TestCase):
             report["claim_boundary"][
                 "supports_financial_advice_or_autonomous_business_judgment_claim"
             ]
+        )
+
+    def test_four_specialist_llm_subagent_route_passes_validator(self) -> None:
+        report = build_report_for_test(convert_to_llm_subagent_route(valid_packet()))
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["blockers"], [])
+        self.assertTrue(
+            report["claim_boundary"][
+                "supports_multimodal_llm_subagent_adjudication_completed_claim"
+            ]
+        )
+        self.assertFalse(
+            report["claim_boundary"]["supports_multimodal_human_adjudication_completed_claim"]
+        )
+
+    def test_missing_llm_specialist_fails_validator(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        panel_path = validator.safe_relative_artifact_path(
+            packet["llm_subagent_adjudication_artifact"],
+            allow_test_artifacts=True,
+        )
+        assert panel_path is not None
+        panel = json.loads(panel_path.read_text(encoding="utf-8"))
+        panel["specialist_subagents"] = panel["specialist_subagents"][:1]
+        panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+        panel_path.write_text(json.dumps(panel, indent=2, sort_keys=True) + "\n")
+        packet["llm_subagent_adjudication_artifact_sha256"] = (
+            validator.sha256_file(panel_path) or ""
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "enterprise multimodal four-specialist LLM panel must include exactly four subagents",
+            report["blockers"],
+        )
+
+    def test_blocking_llm_specialist_fails_validator(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        panel_path = validator.safe_relative_artifact_path(
+            packet["llm_subagent_adjudication_artifact"],
+            allow_test_artifacts=True,
+        )
+        assert panel_path is not None
+        panel = json.loads(panel_path.read_text(encoding="utf-8"))
+        panel["specialist_subagents"][0]["decision"] = "BLOCK"
+        panel["specialist_subagents"][0]["blocking_findings"] = ["missing modality"]
+        panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+        panel_path.write_text(json.dumps(panel, indent=2, sort_keys=True) + "\n")
+        packet["llm_subagent_adjudication_artifact_sha256"] = (
+            validator.sha256_file(panel_path) or ""
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "enterprise multimodal four-specialist LLM subagent decision is not PASS",
+            report["blockers"],
+        )
+
+    def test_llm_route_cannot_claim_human_adjudication(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        packet["claim_boundary"]["supports_multimodal_human_adjudication_completed_claim"] = True
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "enterprise multimodal packet must not claim human adjudication "
+            "when using LLM subagent adjudication",
+            report["blockers"],
+        )
+
+    def test_llm_route_rejects_human_adjudicated_validation_rows(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+
+        def mutate(payload: dict) -> None:
+            payload["rows"][0]["human_adjudicated"] = True
+            payload["rows"][0]["row_sha256"] = validator.row_hash(payload["rows"][0])
+
+        rewrite_validation_artifact(packet, 0, mutate)
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "enterprise multimodal validation row must not claim human adjudication on LLM route",
+            report["blockers"],
+        )
+
+    def test_llm_route_rejects_human_reviewed_business_review(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+
+        def mutate(payload: dict) -> None:
+            payload["human_reviewed"] = True
+
+        rewrite_packet_artifact(packet, "business_decision_review_artifact", mutate)
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "enterprise business decision review must not claim human review on LLM route",
+            report["blockers"],
+        )
+
+    def test_llm_route_cannot_mix_human_adjudication_artifact(self) -> None:
+        source_packet = valid_packet()
+        legacy_adjudication = source_packet["human_adjudication_artifact"]
+        packet = convert_to_llm_subagent_route(source_packet)
+        packet["human_adjudication_artifact"] = legacy_adjudication
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "enterprise multimodal packet must not mix human and LLM adjudication routes",
+            report["blockers"],
         )
 
     def test_default_validator_rejects_test_fixture_artifact_paths(self) -> None:
@@ -867,6 +1102,20 @@ class EnterpriseMultimodalValidationValidatorTest(unittest.TestCase):
             "enterprise multimodal packet claim boundary has unsupported fields: supports_unreviewed_business_judgment_claim",
             report["blockers"],
         )
+
+    def test_public_reproducible_manifest_can_bind_llm_multimodal_packet(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        add_public_evidence(
+            packet,
+            "multimodal_semantic_validation",
+            validator._public_evidence_hashes(packet),
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["metrics"]["evidence_source_mode"], public_evidence.PUBLIC_MODE)
+        self.assertTrue(report["claim_boundary"][public_evidence.CLAIM_FIELD])
 
 
 if __name__ == "__main__":

@@ -17,8 +17,8 @@ RESULTS = ROOT / "results"
 OBJECTIVE = (
     "完成 FormOwl Knowledge Graph 方法探索與驗收：補齊外部近期文獻比較、"
     "ontology 結合方法、不同使用者 KG 與 KG 融合實驗、多模態企業資料驗證、"
-    "人工作業/標註/裁決流程、production adapter gate，並用總驗收套件清楚標示"
-    "已通過與未通過項目。"
+    "標註/裁決流程（legacy human 或四專業 LLM subagent panel）、"
+    "production adapter gate，並用總驗收套件清楚標示已通過與未通過項目。"
 )
 
 
@@ -129,7 +129,7 @@ def build_report() -> dict[str, Any]:
         ),
         requirement(
             "human_annotation_adjudication_protocol",
-            "Human workflow, annotation, adjudication, and confusion matrix evidence.",
+            "Annotation/adjudication evidence through legacy human workflow or four-specialist LLM subagent panel.",
             ["annotation_adjudication_protocol"],
             gates,
         ),

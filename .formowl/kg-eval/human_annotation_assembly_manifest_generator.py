@@ -58,8 +58,10 @@ def build_manifest_scaffold() -> dict[str, Any]:
         "custody_receipt_artifact": _real_placeholder("custody-receipt"),
     }
     unsupported = sorted(set(manifest) - assembler.MANIFEST_ALLOWED_FIELDS)
-    missing = sorted(assembler.MANIFEST_ALLOWED_FIELDS - set(manifest))
-    if unsupported or missing:
+    missing = sorted(assembler.MANIFEST_COMMON_REQUIRED_FIELDS - set(manifest))
+    missing_human_route = sorted(assembler.MANIFEST_HUMAN_ROUTE_FIELDS - set(manifest))
+    has_llm_route = bool(assembler.MANIFEST_LLM_ROUTE_FIELDS & set(manifest))
+    if unsupported or missing or missing_human_route or has_llm_route:
         raise ManifestScaffoldError("manifest scaffold does not match assembler field contract")
     return manifest
 

@@ -15,7 +15,7 @@ import real_evidence_governance_approval as approval
 
 
 ROOT = approval.ROOT
-EXPECTED = approval.submission_manifest.EXPECTED_BY_GATE["annotation_adjudication_protocol"]
+EXPECTED = approval.submission_manifest.EXPECTED_BY_GATE["multimodal_semantic_validation"]
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -48,6 +48,10 @@ class RealEvidenceGovernanceApprovalTest(unittest.TestCase):
                 path.unlink()
         if self.candidate_manifest.exists() or self.candidate_manifest.is_symlink():
             self.candidate_manifest.unlink()
+        for rel_path in approval.submission_manifest.CANONICAL_INPUT_PACKETS:
+            path = ROOT / rel_path
+            if path.exists() or path.is_symlink():
+                path.unlink()
 
     def tearDown(self) -> None:
         for path in self.created_paths:

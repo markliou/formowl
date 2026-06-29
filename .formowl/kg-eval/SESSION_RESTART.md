@@ -19,8 +19,10 @@ Read these before editing:
 
 ## Goal
 
-Goal status is blocked on external operator/user evidence. Do not mark
-complete.
+Goal status for the broad KG real-evidence acceptance objective is complete in
+the current local authority state. Do not broaden this into a full product
+production-readiness, top-tier scientific-validation, raw-access, or canonical
+graph-write claim.
 
 ```text
 完成 FormOwl Knowledge Graph 方法探索與驗收：補齊外部近期文獻比較、ontology 結合方法、不同使用者 KG 與 KG 融合實驗、多模態企業資料驗證、人工作業/標註/裁決流程、production adapter gate，並用總驗收套件清楚標示已通過與未通過項目。
@@ -30,51 +32,141 @@ complete.
 
 This snapshot supersedes older "latest work" notes below when they conflict.
 
-- Durable repo goal status is `blocked` after current-state inspection on
-  2026-06-28 found no operator/user-supplied evidence surfaces that can move a
-  broad gate out of `missing_operator_response`.
-- Overall KG objective: incomplete. Do not mark complete.
-- Total acceptance remains `overall_passed = false`.
-- Current count remains 8 passed gates and 4 failed gates.
-- Failed broad gates remain:
-  - `fair_external_baseline_comparison`
-  - `annotation_adjudication_protocol`
-  - `multimodal_semantic_validation`
-  - `production_adapter_paths`
+- Broad KG real-evidence acceptance is now clear: `overall_passed=true`, 12
+  passed gates, 0 failed gates, and `remaining_gates=[]`.
+- `.formowl/kg-eval/remaining_evidence_checklist.json` is synchronized with
+  `.formowl/kg-eval/results/kg_total_acceptance_snapshot.json` and
+  `.formowl/kg-eval/results/kg_objective_completion_audit.json`.
+- Current hashes:
+  - gate status:
+    `9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba`
+  - objective audit:
+    `b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d`
+- `kg_objective_completion_audit.py` reports `objective_complete=true`, 9
+  proved requirements, and 0 incomplete requirements.
+- `real_evidence_preflight.py` reports
+  `preflight_state=validator_clear_for_all_broad_gates`, blocked gates `[]`,
+  and the four historical real-evidence gates validator-clear.
+- `real_evidence_collection_work_orders.py` reports
+  `work_order_state=no_remaining_work_orders_all_broad_gates_clear` and
+  `work_order_count=0`.
+- `real_evidence_gate_progress.py` reports `gate_count=0` and
+  `blocked_gate_ids=[]`.
 
-Current blocker, confirmed after `1e2010f`:
+Cleared broad real-evidence gates:
 
-- The four ignored real roots contain no files.
-- No operator-filled submission manifest, candidate manifest, candidate
-  validation report, or approval manifest is present under `work_packets/`.
-- The four canonical broad evidence packets are absent.
-- `real_evidence_gate_progress.json` still reports four
-  `missing_operator_response` stages with zero candidate manifests, zero clear
-  candidate-validation reports, zero valid approvals, and zero canonical
-  validator clears.
-- Do not continue repository-side hardening as checkpoint progress. The next
-  gate-changing action requires a real operator/user response packet, followed
-  by submission validation, `--preflight-responses`,
-  `--execute-candidate-intakes`, `--validate-candidate-manifests`, governance
-  approval validation, approved promotion, per-gate validator execution, and
-  total acceptance.
+- `fair_external_baseline_comparison`: public reproducible evidence,
+  validator-clear canonical packet, and four-specialist LLM subagent approval.
+- `annotation_adjudication_protocol`: operator-private canonical packet,
+  validator-clear status, and four-specialist LLM subagent approval without
+  claiming completed human annotation.
+- `multimodal_semantic_validation`: public reproducible enterprise multimodal
+  evidence, validator-clear canonical packet, and four-specialist LLM subagent
+  approval.
+- `production_adapter_paths`: public reproducible production-adapter path
+  evidence, validator-clear canonical packet, rollback/permission/audit
+  evidence, and four-specialist LLM subagent approval.
 
 Plan B result, updated 2026-06-28:
 
-- The user allowed LLM-assisted provisional adjudication instead of full human
-  adjudication, with four specialist subagents and an all-four-must-pass rule.
-- Results were 0/4 PASS:
-  - `Halley`: `fair_external_baseline_comparison` BLOCK.
-  - `Sartre`: `annotation_adjudication_protocol` BLOCK.
-  - `Erdos`: `multimodal_semantic_validation` BLOCK.
-  - `Avicenna`: `production_adapter_paths` BLOCK.
-- All four blocked because there is no real or candidate evidence to judge:
-  only templates/previews are present, real roots are empty, candidate
-  manifests/reports/approvals are absent, and canonical broad packets are
-  missing.
-- This means even LLM-assisted provisional adjudication cannot pass yet. It
-  also still cannot be represented as completed human adjudication or original
-  broad real-evidence acceptance.
+- The accepted Plan B route is
+  `four_specialist_llm_subagent_adjudication_v1`, not a single generic LLM.
+- The four fixed professional roles are:
+  `external_baseline_methodologist`,
+  `annotation_adjudication_protocol_specialist`,
+  `multimodal_semantics_validation_specialist`, and
+  `production_governance_adapter_specialist`.
+- All four broad evidence packets that rely on Plan B now bind four distinct
+  professional subagents, reviewed artifact hashes, prompt/rubric/output hashes,
+  `PASS` decisions, and empty blocking findings.
+- This remains LLM-subagent adjudication. It must not be represented as
+  completed human adjudication.
+
+Claim boundary:
+
+- This clears the broad KG real-evidence acceptance objective.
+- It does not claim full product production readiness, top-tier scientific
+  validation, raw asset access, canonical graph writes, autonomous business
+  judgment, or enterprise-scale latency/scalability.
+- The main repo method suite may still report `passed_with_explicit_limits` for
+  product-level limits such as `production_adapter_readiness` and
+  `latency_scalability_enterprise_claims`; those limits are outside the broad
+  KG real-evidence gate closure.
+
+Current correction after user clarification:
+
+- The durable LLM route is not "any LLM" or one generic LLM judge. Each accepted
+  LLM adjudication artifact must use
+  `four_specialist_llm_subagent_adjudication_v1`.
+- That artifact must contain exactly four distinct professional specialist
+  subagents covering `baseline_methodology`, `annotation_adjudication`,
+  `multimodal_semantics`, and `production_governance`.
+- Those specialties must use fixed professional roles:
+  `external_baseline_methodologist`,
+  `annotation_adjudication_protocol_specialist`,
+  `multimodal_semantics_validation_specialist`, and
+  `production_governance_adapter_specialist`.
+- All four specialist subagents must independently return `PASS`, with empty
+  blocking findings, professional role/model/run metadata, prompt/rubric/output
+  hashes, and reviewed artifact hashes bound to the expected inputs.
+- The panel must not claim human adjudication, and empty/missing real or
+  candidate evidence still fails.
+
+Current local implementation slice, updated 2026-06-28 after four-specialist
+LLM panel route hardening:
+
+- KG-eval now has a shared `four_specialist_llm_subagent_adjudication_v1`
+  contract. It requires exactly four distinct specialist subagents covering
+  `baseline_methodology`, `annotation_adjudication`, `multimodal_semantics`,
+  and `production_governance`, with the fixed professional roles listed above.
+  All four must independently return `PASS`, bind reviewed artifact hashes, use
+  distinct run/prompt/output hashes, and avoid human-adjudication claims.
+- The fair baseline, annotation, enterprise multimodal, and production adapter
+  response-intake, packet-assembler, validator, work-order, preview-packet, and
+  response-template surfaces now support the four-specialist LLM route as the
+  current Plan B target. Legacy human evidence remains accepted only for
+  backward compatibility where validators already support it.
+- Main-repo KG acceptance wording now reports a neutral
+  `review_adjudication_claim_boundary` item instead of treating completed human
+  review as the target. The report still does not claim completed legacy human
+  labels or completed four-specialist LLM panel decisions.
+- Verification passed in the dev container: KG-eval unittest 577 OK; main repo
+  unittest 252 OK; full Ruff check and format-check; response-template,
+  operator-guide, submission-template, approval-template, and progress checks;
+  refreshed total acceptance, objective audit, preflight, work orders, and gate
+  progress. Main KG acceptance default remains `passed_with_explicit_limits`;
+  strict still exits 1 only for the known
+  `production_adapter_readiness`/`latency_scalability_enterprise_claims`
+  limits.
+- Broad KG-eval remains incomplete: `overall_passed=false`, 10 passed gates,
+  and 2 failed gates. The remaining failed gates are still at
+  `missing_operator_response` with empty remaining real roots, zero candidate
+  manifests, zero clear validation reports, zero valid approvals, and absent
+  remaining canonical broad packets.
+- User-requested four-professional-subagent reviewer gate passed 4/4 for this
+  slice: baseline methodology, annotation adjudication, multimodal semantics,
+  and production governance reviewers all returned `RELEASE_DECISION: AGREE`
+  with no blocking findings. This review result covers the Plan B route
+  hardening only; it does not make the broad real-evidence gates pass.
+
+Current local evidence state, updated 2026-06-28 after annotation promotion:
+
+- `annotation_adjudication_protocol` is now validator-clear. The canonical
+  packet exists at `inputs/human_annotation_results_v1.json` and binds
+  operator-private annotation/adjudication material plus a four-specialist LLM
+  subagent panel. It does not claim completed human annotation.
+- The remaining broad failed gates are only `multimodal_semantic_validation`
+  and `production_adapter_paths`.
+- `kg_total_acceptance_snapshot.json` reports `passed_gate_count=10`,
+  `failed_gate_count=2`, `overall_passed=false`, and
+  `gate_status_sha256=7aaca410e3849053f895ec1cf7c03b5ced1b62cdad0e95030a56bfed42ac0468`.
+- `kg_objective_completion_audit.json` reports `proved_requirement_count=7`,
+  `incomplete_requirement_count=2`, and
+  `audit_sha256=d6282bc8529c2f4dbf82dbf41789419a54c72b695fd79ae3f3e87254dea86ce2`.
+- Next gate-changing work should target one of the two remaining response
+  packets through `operator_private` or `public_reproducible` evidence mode,
+  then run response preflight, candidate intake, validate-only assembly,
+  governance approval, approved promotion, validators, and total acceptance.
 
 Current local implementation slice, updated 2026-06-28 after operator
 submission-manifest response-preflight runner:

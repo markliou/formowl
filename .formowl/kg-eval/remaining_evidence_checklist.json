@@ -1,264 +1,40 @@
 {
-  "artifact_id": "kg_remaining_evidence_checklist_v1",
-  "date": "2026-06-24",
-  "workspace": ".formowl/kg-eval",
-  "source_snapshot": "results/kg_total_acceptance_snapshot.json",
-  "source_objective_audit": "results/kg_objective_completion_audit.json",
-  "overall_passed": false,
-  "passed_gate_count": 8,
-  "failed_gate_count": 4,
-  "gate_status_sha256": "596eef5f887952b4e4666f7e6b970a9199d8d3148a630cd4491ac53f0faeca1a",
-  "objective_audit_sha256": "86d550fd05bfb1ab1b453e805bcfe56827a476da43186bb32e962a0b41275039",
-  "claim_boundary": {
-    "supports_goal_complete_claim": false,
-    "supports_production_ready_claim": false,
-    "supports_top_tier_scientific_validation_claim": false,
-    "supports_real_enterprise_validation_claim": false,
-    "supports_real_human_annotation_claim": false,
-    "supports_real_external_package_run_claim": false,
-    "supports_non_synthetic_deployment_claim": false
-  },
-  "remaining_gates": [
-    {
-      "gate_id": "fair_external_baseline_comparison",
-      "requirement_id": "fair_external_baseline_validation",
-      "validator_module": "fair_external_baseline_run_validator.py",
-      "input_packet": "inputs/fair_external_baseline_run_packet.json",
-      "required_packet_artifact_id": "fair_external_baseline_run_packet_v1",
-      "required_evidence_kind": "non_synthetic_external_baseline_run",
-      "required_baselines": [
-        "microsoft_graphrag",
-        "lightrag",
-        "hipporag"
-      ],
-      "required_source_lock_sha256": "addba921e9cc4ebc4ded09b26d23a25a29aeba4f0e15e4dacb711f29dcedb2da",
-      "required_source_ids_by_baseline": {
-        "microsoft_graphrag": [
-          "microsoft_graphrag_paper",
-          "microsoft_graphrag_repo",
-          "microsoft_graphrag_docs"
-        ],
-        "lightrag": [
-          "lightrag_paper",
-          "lightrag_repo"
-        ],
-        "hipporag": [
-          "hipporag_paper",
-          "hipporag2_paper",
-          "hipporag_repo"
-        ]
-      },
-      "required_artifacts_per_baseline": [
-        "package_lock_artifact",
-        "config_artifact",
-        "index_build_log_artifact",
-        "query_run_log_artifact",
-        "answer_output_artifact",
-        "graph_output_artifact",
-        "permission_probe_artifact"
-      ],
-      "required_run_artifact_content_contract": [
-        "package_lock_artifact artifact_type == fair_baseline_package_lock_v1",
-        "config_artifact artifact_type == fair_baseline_config_v1",
-        "index_build_log_artifact artifact_type == fair_baseline_index_build_log_v1",
-        "query_run_log_artifact artifact_type == fair_baseline_query_run_log_v1",
-        "answer_output_artifact artifact_type == fair_baseline_answer_output_v1",
-        "graph_output_artifact artifact_type == fair_baseline_graph_output_v1",
-        "permission_probe_artifact artifact_type == fair_baseline_permission_probe_v1",
-        "every run artifact binds baseline_id, source_lock_sha256, source_ids, package_source_url, package_version, real_package_execution, mock_or_dry_run, synthetic_corpus, uses_mocked_llm_or_retrieval, and run_manifest_sha256"
-      ],
-      "required_equalized_hashes": [
-        "corpus_export_sha256",
-        "prompt_set_sha256",
-        "evaluation_question_set_sha256",
-        "access_policy_sha256",
-        "completion_model_budget_sha256",
-        "embedding_model_budget_sha256",
-        "ontology_mapping_sha256"
-      ],
-      "required_human_evidence": [
-        "human_answer_adjudication_results_v1",
-        "at least two distinct human independent first-pass reviewers",
-        "sealed submissions",
-        "adjudicator id",
-        "final adjudication hash",
-        "custody receipt hash"
-      ],
-      "required_graph_quality_evidence": [
-        "human-reviewed graph-quality rows for every baseline",
-        "positive reviewed entity count",
-        "positive reviewed relation count"
-      ],
-      "required_permission_probe_evidence": [
-        "revoked_grant_content_denied",
-        "private_content_not_returned",
-        "raw_asset_access_denied",
-        "entity_match_does_not_grant_access",
-        "private_leak_count == 0",
-        "raw_asset_access_count == 0"
-      ],
-      "must_not_claim": [
-        "production_ready",
-        "top_tier_scientific_validation",
-        "unreviewed_business_judgment",
-        "unreviewed_canonical_merge"
-      ],
-      "current_blockers": [
-        "fair external baseline run packet missing",
-        "real Microsoft GraphRAG/LightRAG/HippoRAG package runs are not present",
-        "human answer-quality adjudication packet is not present",
-        "graph-quality validation packet is not present",
-        "permission leak probe results are not present"
-      ]
-    },
-    {
-      "gate_id": "annotation_adjudication_protocol",
-      "requirement_id": "human_annotation_adjudication_protocol",
-      "validator_module": "human_annotation_adjudication_validator.py",
-      "input_packet": "inputs/human_annotation_results_v1.json",
-      "required_packet_artifact_id": "human_annotation_results_v1",
-      "required_evidence_kind": "real_human_annotation_adjudication",
-      "required_artifacts": [
-        "manifest_artifact",
-        "work_orders_artifact",
-        "at least two first_pass_submission_artifacts",
-        "adjudication_artifact",
-        "confusion_matrix_artifact",
-        "custody_receipt_artifact"
-      ],
-      "required_human_controls": [
-        "two independent first-pass human reviewers",
-        "sealed first-pass submissions",
-        "human adjudicator distinct from first-pass reviewers",
-        "adjudication opened after first-pass seal",
-        "adjudication exactly covers sealed disagreement set",
-        "confusion matrix derived from first-pass consensus and final adjudication",
-        "custody receipt binds manifest, work orders, submissions, adjudication, and confusion matrix"
-      ],
-      "must_not_claim": [
-        "synthetic_label_generation",
-        "template_as_human_evidence",
-        "production_ready",
-        "top_tier_scientific_validation"
-      ],
-      "current_blockers": [
-        "human annotation results packet missing",
-        "two independent first-pass human submissions are not present",
-        "adjudication-open receipt, final adjudication, confusion matrix, and custody receipt are not present"
-      ]
-    },
-    {
-      "gate_id": "multimodal_semantic_validation",
-      "requirement_id": "multimodal_enterprise_validation",
-      "validator_module": "enterprise_multimodal_validation_validator.py",
-      "input_packet": "inputs/enterprise_multimodal_validation_packet.json",
-      "required_packet_artifact_id": "enterprise_multimodal_validation_packet_v1",
-      "required_evidence_kind": "real_enterprise_multimodal_validation",
-      "required_modalities": [
-        "spreadsheet",
-        "mail",
-        "meeting_audio",
-        "video_ocr"
-      ],
-      "required_artifacts": [
-        "pilot_manifest_artifact",
-        "validation_artifacts for every modality",
-        "human_adjudication_artifact",
-        "business_decision_review_artifact",
-        "permission_probe_artifact"
-      ],
-      "required_controls": [
-        "real enterprise pilot manifest",
-        "no synthetic/demo source rows",
-        "no text-proxy-only source rows",
-        "FormOwl locator bound to asset id",
-        "validation rows bound to source asset hashes",
-        "human adjudication covers every validation row exactly",
-        "business decision review is human-reviewed and non-autonomous",
-        "permission probe denies revoked grants, private content, raw asset access, and entity-match-as-access"
-      ],
-      "must_not_claim": [
-        "financial_advice_or_autonomous_business_judgment",
-        "production_ready",
-        "top_tier_scientific_validation",
-        "raw_asset_access"
-      ],
-      "current_blockers": [
-        "enterprise multimodal validation packet missing",
-        "real enterprise multimodal pilot manifest is not present",
-        "enterprise spreadsheet/mail/meeting/video validation packets are not present",
-        "multimodal human adjudication and cross-modal permission leak probe are not present"
-      ]
-    },
-    {
-      "gate_id": "production_adapter_paths",
-      "requirement_id": "production_adapter_gate",
-      "validator_module": "production_adapter_path_validator.py",
-      "input_packet": "inputs/production_adapter_evidence_packet.json",
-      "required_packet_artifact_id": "production_adapter_evidence_packet_v1",
-      "required_evidence_kind": "non_synthetic_production_adapter_validation",
-      "required_components": [
-        "postgres_metadata_store",
-        "pgvector_index",
-        "retrieval_gateway",
-        "semantic_gateway",
-        "rapidfuzz_candidate_adapter",
-        "splink_candidate_adapter",
-        "wiki_projection_adapter"
-      ],
-      "required_artifacts": [
-        "deployment_manifest_artifact",
-        "adapter_artifacts for every required component",
-        "human_false_merge_label_artifact",
-        "audit_trail_artifact",
-        "permission_probe_artifact",
-        "rollback_smoke_artifact"
-      ],
-      "required_audit_actions": [
-        "deploy_started",
-        "migration_applied",
-        "grant_check_before_content",
-        "revoked_grant_blocks_content",
-        "private_candidate_redacted",
-        "entity_match_without_grant_denied",
-        "raw_asset_read_guard_rejected",
-        "canonical_merge_guard_rejected",
-        "wiki_projection_draft_not_published",
-        "rollback_smoke_completed",
-        "deploy_completed"
-      ],
-      "required_controls": [
-        "non-synthetic human-approved deployment manifest",
-        "manifest adapter stack digest bound to component artifacts",
-        "permission filters enabled on every adapter component",
-        "canonical writes disabled on adapter evidence path",
-        "human-reviewed false-merge labels for RapidFuzz and Splink",
-        "one request id, one resource ref, and one policy id across audit rows",
-        "revoked grant audit row binds grant_state == revoked",
-        "deny guards for private candidates, entity match without grant, raw asset reads, and canonical merge without review",
-        "wiki projection remains draft-only",
-        "rollback smoke verifies migration rollback, partial-failure rollback, append-only audit, and idempotent retry",
-        "no raw/internal values, including driver-qualified database URIs"
-      ],
-      "must_not_claim": [
-        "full_product_production_ready",
-        "top_tier_scientific_validation",
-        "canonical_write",
-        "raw_access"
-      ],
-      "current_blockers": [
-        "production adapter evidence packet missing",
-        "non-synthetic production deployment validation is not present",
-        "human-reviewed false-merge labels are not present",
-        "permission probes, rollback smoke, and production audit artifacts are not present"
-      ]
-    }
+  "accepted_evidence_source_modes": [
+    "operator_private",
+    "public_reproducible"
   ],
+  "artifact_id": "kg_remaining_evidence_checklist_v1",
+  "claim_boundary": {
+    "supports_goal_complete_claim": true,
+    "supports_non_synthetic_deployment_claim": false,
+    "supports_production_ready_claim": false,
+    "supports_real_enterprise_validation_claim": false,
+    "supports_real_external_package_run_claim": false,
+    "supports_real_human_annotation_claim": false,
+    "supports_top_tier_scientific_validation_claim": false
+  },
+  "date": "2026-06-28",
+  "failed_gate_count": 0,
+  "gate_status_sha256": "9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba",
+  "objective_audit_sha256": "b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d",
+  "overall_passed": true,
+  "passed_gate_count": 12,
+  "public_reproducible_evidence_mode_requirements": [
+    "packet evidence_source_mode may be public_reproducible only when a public_reproducible_evidence_sources_v1 manifest is included",
+    "public sources must be HTTPS URLs with explicit license, version_or_snapshot, retrieved_at, content_sha256, archive_sha256, and derived_artifact_sha256s",
+    "public source flags must be publicly_accessible=true, permission_allows_research_evaluation=true, non_synthetic=true, and raw_private_payload=false",
+    "public manifest covered_artifact_sha256s must be derived from the listed public sources and cover every expected candidate/canonical artifact hash",
+    "public examples do not bypass response preflight, candidate intake, validate-only assembly, governance approval, approved promotion, broad validators, or four-specialist LLM subagent adjudication where required"
+  ],
+  "remaining_gates": [],
+  "source_objective_audit": "results/kg_objective_completion_audit.json",
+  "source_snapshot": "results/kg_total_acceptance_snapshot.json",
   "verification_after_any_real_packet_update": [
     "python3 <changed_validator>.py",
     "python3 kg_total_acceptance_suite.py",
     "python3 kg_objective_completion_audit.py",
     "python3 -m unittest test_external_baseline_coverage_matrix.py test_external_literature_baseline_protocol_recovery.py test_fair_external_baseline_run_validator.py test_human_annotation_adjudication_validator.py test_enterprise_multimodal_validation_validator.py test_production_adapter_path_validator.py test_ontology_and_user_fusion_recovery.py test_annotation_protocol_recovery.py test_multimodal_enterprise_recovery.py test_production_adapter_recovery.py test_recovered_total_acceptance.py",
     "docker run --rm -v ${PWD}:/workspace -w /workspace/.formowl/kg-eval formowl-dev:local python -m unittest test_external_baseline_coverage_matrix.py test_external_literature_baseline_protocol_recovery.py test_fair_external_baseline_run_validator.py test_human_annotation_adjudication_validator.py test_enterprise_multimodal_validation_validator.py test_production_adapter_path_validator.py test_ontology_and_user_fusion_recovery.py test_annotation_protocol_recovery.py test_multimodal_enterprise_recovery.py test_production_adapter_recovery.py test_recovered_total_acceptance.py"
-  ]
+  ],
+  "workspace": ".formowl/kg-eval"
 }

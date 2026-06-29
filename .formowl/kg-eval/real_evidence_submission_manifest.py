@@ -104,7 +104,7 @@ class ExpectedSubmission:
         return f"{self.output_dir_for(operator_run_id)}/{OPERATOR_RESPONSE_PACKET_FILENAME}"
 
 
-EXPECTED_SUBMISSIONS = [
+HISTORICAL_EXPECTED_SUBMISSIONS = [
     ExpectedSubmission(
         gate_id="fair_external_baseline_comparison",
         intake_script="fair_baseline_response_intake.py",
@@ -156,7 +156,14 @@ EXPECTED_SUBMISSIONS = [
         canonical_packet="inputs/production_adapter_evidence_packet.json",
     ),
 ]
-EXPECTED_BY_GATE = {row.gate_id: row for row in EXPECTED_SUBMISSIONS}
+CURRENT_REMAINING_GATE_IDS = {
+    "multimodal_semantic_validation",
+    "production_adapter_paths",
+}
+EXPECTED_SUBMISSIONS = [
+    row for row in HISTORICAL_EXPECTED_SUBMISSIONS if row.gate_id in CURRENT_REMAINING_GATE_IDS
+]
+EXPECTED_BY_GATE = {row.gate_id: row for row in HISTORICAL_EXPECTED_SUBMISSIONS}
 
 
 class ManifestError(ValueError):

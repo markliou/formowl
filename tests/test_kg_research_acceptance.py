@@ -24,7 +24,7 @@ class KGResearchAcceptanceTests(unittest.TestCase):
             "ontology_integration_method": "passed",
             "multi_user_kg_fusion_experiment": "passed",
             "multimodal_enterprise_resource_validation": "passed",
-            "human_review_annotation_adjudication_workflow": "passed",
+            "review_adjudication_claim_boundary": "passed",
             "production_adapter_candidate_only_boundary": "passed",
             "production_adapter_readiness": "failed",
             "metrics_ablations_error_analysis": "passed",

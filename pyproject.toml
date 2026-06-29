@@ -22,6 +22,7 @@ graph-adapters = [
 ]
 
 [project.scripts]
+formowl-kg-eval = "formowl_kg_eval.cli:main"
 formowl-project-mcp = "formowl_project_mcp.server:main"
 formowl-wiki-mcp = "formowl_wiki_mcp.server:main"
 

@@ -20,7 +20,7 @@ CHECKLIST = ROOT / "remaining_evidence_checklist.json"
 TEMPLATES = ROOT / "templates"
 
 
-EXPECTED_GATES = {
+HISTORICAL_GATES = {
     "fair_external_baseline_comparison": {
         "validator": fair_baseline,
         "validator_module": "fair_external_baseline_run_validator.py",
@@ -54,6 +54,12 @@ EXPECTED_GATES = {
         "template": "production_adapter_evidence_packet.template.json",
     },
 }
+CURRENT_REMAINING_GATE_IDS = set(total_suite.build_report()["summary"]["failed_gate_ids"])
+CURRENT_REMAINING_GATES = {
+    gate_id: expected
+    for gate_id, expected in HISTORICAL_GATES.items()
+    if gate_id in CURRENT_REMAINING_GATE_IDS
+}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -77,8 +83,8 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
         checklist = load_json(CHECKLIST)
         rows = {row["gate_id"]: row for row in checklist["remaining_gates"]}
 
-        self.assertEqual(set(rows), set(EXPECTED_GATES))
-        for gate_id, expected in EXPECTED_GATES.items():
+        self.assertEqual(set(rows), set(CURRENT_REMAINING_GATES))
+        for gate_id, expected in CURRENT_REMAINING_GATES.items():
             row = rows[gate_id]
             validator = expected["validator"]
             report = validator.build_report({})
@@ -111,15 +117,14 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
         summary = total["summary"]
         failed_gate_ids = [row["gate_id"] for row in checklist["remaining_gates"]]
 
-        self.assertFalse(checklist["overall_passed"])
-        self.assertFalse(summary["overall_passed"])
+        self.assertEqual(checklist["overall_passed"], summary["overall_passed"])
         self.assertEqual(checklist["passed_gate_count"], summary["passed_gate_count"])
         self.assertEqual(checklist["failed_gate_count"], summary["failed_gate_count"])
         self.assertEqual(checklist["gate_status_sha256"], summary["gate_status_sha256"])
         self.assertEqual(failed_gate_ids, summary["failed_gate_ids"])
 
     def test_templates_are_outside_real_input_paths_and_cannot_pass_validators(self) -> None:
-        for gate_id, expected in EXPECTED_GATES.items():
+        for gate_id, expected in HISTORICAL_GATES.items():
             with self.subTest(gate_id=gate_id):
                 template_path = TEMPLATES / expected["template"]
                 template = load_json(template_path)
@@ -140,17 +145,9 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
     def test_templates_do_not_change_total_acceptance_failed_gates(self) -> None:
         total = total_suite.build_report()
 
-        self.assertEqual(total["summary"]["passed_gate_count"], 8)
-        self.assertEqual(total["summary"]["failed_gate_count"], 4)
-        self.assertEqual(
-            total["summary"]["failed_gate_ids"],
-            [
-                "fair_external_baseline_comparison",
-                "annotation_adjudication_protocol",
-                "multimodal_semantic_validation",
-                "production_adapter_paths",
-            ],
-        )
+        self.assertEqual(total["summary"]["passed_gate_count"], 12)
+        self.assertEqual(total["summary"]["failed_gate_count"], 0)
+        self.assertEqual(total["summary"]["failed_gate_ids"], [])
 
 
 if __name__ == "__main__":

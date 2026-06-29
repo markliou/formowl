@@ -7,10 +7,13 @@ import json
 import shutil
 import unittest
 
+import llm_subagent_adjudication as llm_panel
 import production_adapter_path_validator as validator
+import public_reproducible_evidence as public_evidence
 
 
 BASE = validator.REAL_ARTIFACT_ROOT_PATH / "validator_fixture"
+LLM_PANEL_RUBRIC_SHA256 = "a1234567890bcdef" * 4
 
 
 def write_artifact(relative_name: str, payload: object) -> tuple[str, str]:
@@ -243,6 +246,120 @@ def valid_packet() -> dict:
     }
 
 
+def public_source_manifest(gate_id: str, covered_hashes: list[str]) -> dict:
+    sources = [
+        {
+            "source_id": f"public_{gate_id}_source",
+            "source_url": f"https://example.org/formowl/{gate_id}/adapter.json",
+            "source_type": "public_reproducible_adapter_release",
+            "source_usage_role": "production_adapter_evidence_source",
+            "license": "Apache-2.0",
+            "version_or_snapshot": "2026-06-28-snapshot",
+            "retrieved_at": "2026-06-28T00:00:00Z",
+            "content_sha256": "abc1234567890def" * 4,
+            "archive_sha256": "bcd1234567890efa" * 4,
+            "derived_artifact_sha256s": sorted(set(covered_hashes)),
+            "publicly_accessible": True,
+            "permission_allows_research_evaluation": True,
+            "non_synthetic": True,
+            "raw_private_payload": False,
+        }
+    ]
+    return public_evidence.build_manifest(
+        gate_id=gate_id,
+        retrieved_at="2026-06-28T00:00:00Z",
+        public_sources=sources,
+        covered_artifact_sha256s=covered_hashes,
+    )
+
+
+def add_public_evidence(packet: dict, gate_id: str, covered_hashes: list[str]) -> None:
+    manifest_path, manifest_sha = write_artifact(
+        "public_evidence_manifest.json",
+        public_source_manifest(gate_id, covered_hashes),
+    )
+    packet["evidence_source_mode"] = public_evidence.PUBLIC_MODE
+    packet["public_evidence_manifest_artifact"] = manifest_path
+    packet["public_evidence_manifest_artifact_sha256"] = manifest_sha
+    packet["claim_boundary"][public_evidence.CLAIM_FIELD] = True
+
+
+def valid_llm_panel(target: str, input_hashes: list[str]) -> dict:
+    panel = {
+        "artifact_type": llm_panel.PANEL_ARTIFACT_TYPE,
+        "panel_id": f"panel_{target}_001",
+        "adjudication_target": target,
+        "completed": True,
+        "final_decision": "PASS",
+        "human_adjudication_claimed": False,
+        "input_artifact_sha256s": sorted(input_hashes),
+        "rubric_sha256": LLM_PANEL_RUBRIC_SHA256,
+        "specialist_subagents": [
+            {
+                "subagent_id": f"{specialty}_subagent",
+                "specialty": specialty,
+                "professional_role": llm_panel.REQUIRED_PROFESSIONAL_ROLES[specialty],
+                "model_name": "codex-subagent",
+                "model_version": "2026-06-28",
+                "prompt_sha256": f"{index + 20:064x}",
+                "rubric_sha256": LLM_PANEL_RUBRIC_SHA256,
+                "run_id": f"run_{specialty}_001",
+                "temperature": 0,
+                "independent": True,
+                "decision": "PASS",
+                "blocking_findings": [],
+                "reviewed_artifact_sha256s": sorted(input_hashes),
+                "output_sha256": f"{index + 40:064x}",
+            }
+            for index, specialty in enumerate(llm_panel.REQUIRED_SPECIALTIES)
+        ],
+    }
+    panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+    return panel
+
+
+def convert_to_llm_subagent_route(packet: dict) -> dict:
+    def mutate_manifest(payload: dict) -> None:
+        payload["deployment_approved_by_human"] = False
+        payload["deployment_approved_by_llm_subagent_panel"] = True
+
+    rewrite_packet_artifact(packet, "deployment_manifest_artifact", mutate_manifest)
+
+    panel_id = "panel_production_adapter_paths_001"
+
+    def mutate_labels(payload: dict) -> None:
+        payload["reviewer_type"] = "four_specialist_llm_subagent_panel"
+        payload["llm_subagent_panel_reviewed"] = True
+        for row in payload["rows"]:
+            row.pop("human_reviewer_id", None)
+            row.pop("human_reviewed", None)
+            row["llm_subagent_panel_id"] = panel_id
+            row["reviewer_type"] = "four_specialist_llm_subagent_panel"
+            row["llm_subagent_reviewed"] = True
+            row["row_sha256"] = validator.row_hash(row)
+
+    rewrite_packet_artifact(packet, "human_false_merge_label_artifact", mutate_labels)
+
+    input_hashes = [
+        packet["deployment_manifest_artifact_sha256"],
+        *[ref["artifact_sha256"] for ref in packet["adapter_artifacts"]],
+        packet["human_false_merge_label_artifact_sha256"],
+        packet["audit_trail_artifact_sha256"],
+        packet["permission_probe_artifact_sha256"],
+        packet["rollback_smoke_artifact_sha256"],
+    ]
+    panel = valid_llm_panel("production_adapter_paths", input_hashes)
+    panel["panel_id"] = panel_id
+    panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+    panel_artifact, panel_sha = write_artifact("llm_subagent_adjudication.json", panel)
+    packet["llm_subagent_adjudication_artifact"] = panel_artifact
+    packet["llm_subagent_adjudication_artifact_sha256"] = panel_sha
+    packet["claim_boundary"]["supports_human_reviewed_false_merge_labels_claim"] = False
+    packet["claim_boundary"]["supports_llm_subagent_deployment_approval_claim"] = True
+    packet["claim_boundary"]["supports_llm_subagent_reviewed_false_merge_labels_claim"] = True
+    return packet
+
+
 class ProductionAdapterPathValidatorTest(unittest.TestCase):
     def setUp(self) -> None:
         shutil.rmtree(BASE, ignore_errors=True)
@@ -334,6 +451,119 @@ class ProductionAdapterPathValidatorTest(unittest.TestCase):
             report["claim_boundary"]["supports_human_reviewed_false_merge_labels_claim"]
         )
         self.assertFalse(report["claim_boundary"]["supports_full_product_production_ready_claim"])
+
+    def test_four_specialist_llm_subagent_route_passes_validator(self) -> None:
+        report = build_report_for_test(convert_to_llm_subagent_route(valid_packet()))
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["blockers"], [])
+        self.assertTrue(report["claim_boundary"]["supports_llm_subagent_deployment_approval_claim"])
+        self.assertTrue(
+            report["claim_boundary"]["supports_llm_subagent_reviewed_false_merge_labels_claim"]
+        )
+        self.assertFalse(
+            report["claim_boundary"]["supports_human_reviewed_false_merge_labels_claim"]
+        )
+
+    def test_missing_llm_specialist_fails_validator(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        panel_path = validator.safe_relative_artifact_path(
+            packet["llm_subagent_adjudication_artifact"],
+            allow_test_artifacts=True,
+        )
+        assert panel_path is not None
+        panel = json.loads(panel_path.read_text(encoding="utf-8"))
+        panel["specialist_subagents"] = panel["specialist_subagents"][:1]
+        panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+        panel_path.write_text(json.dumps(panel, indent=2, sort_keys=True) + "\n")
+        packet["llm_subagent_adjudication_artifact_sha256"] = (
+            validator.sha256_file(panel_path) or ""
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "production adapter four-specialist LLM panel must include exactly four subagents",
+            report["blockers"],
+        )
+
+    def test_blocking_llm_specialist_fails_validator(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        panel_path = validator.safe_relative_artifact_path(
+            packet["llm_subagent_adjudication_artifact"],
+            allow_test_artifacts=True,
+        )
+        assert panel_path is not None
+        panel = json.loads(panel_path.read_text(encoding="utf-8"))
+        panel["specialist_subagents"][0]["decision"] = "BLOCK"
+        panel["specialist_subagents"][0]["blocking_findings"] = ["deployment gap"]
+        panel["panel_decision_sha256"] = llm_panel.panel_decision_sha256(panel)
+        panel_path.write_text(json.dumps(panel, indent=2, sort_keys=True) + "\n")
+        packet["llm_subagent_adjudication_artifact_sha256"] = (
+            validator.sha256_file(panel_path) or ""
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "production adapter four-specialist LLM subagent decision is not PASS",
+            report["blockers"],
+        )
+
+    def test_llm_route_cannot_claim_human_false_merge_review(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        packet["claim_boundary"]["supports_human_reviewed_false_merge_labels_claim"] = True
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "production adapter packet must not claim human-reviewed false-merge labels "
+            "when using LLM subagent adjudication",
+            report["blockers"],
+        )
+
+    def test_llm_route_cannot_keep_human_deployment_approval(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+
+        def mutate(payload: dict) -> None:
+            payload["deployment_approved_by_human"] = True
+
+        rewrite_packet_artifact(packet, "deployment_manifest_artifact", mutate)
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "production adapter deployment must not claim human approval "
+            "when using LLM subagent approval",
+            report["blockers"],
+        )
+
+    def test_llm_route_rejects_human_false_merge_row_claims(self) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+
+        def mutate(payload: dict) -> None:
+            row = payload["rows"][0]
+            row["human_reviewed"] = True
+            row["human_reviewer_id"] = "human_reviewer_retained"
+            row["row_sha256"] = validator.row_hash(row)
+
+        rewrite_packet_artifact(packet, "human_false_merge_label_artifact", mutate)
+
+        report = build_report_for_test(packet)
+
+        self.assertFalse(report["passed"])
+        self.assertIn(
+            "production adapter false-merge row must not claim human review on LLM route",
+            report["blockers"],
+        )
+        self.assertIn(
+            "production adapter false-merge row must not retain a human reviewer id on LLM route",
+            report["blockers"],
+        )
 
     def test_default_validator_rejects_test_fixture_artifact_paths(self) -> None:
         report = validator.build_report(valid_packet())
@@ -704,6 +934,25 @@ class ProductionAdapterPathValidatorTest(unittest.TestCase):
             "production adapter packet overclaims unsupported claim: supports_full_product_production_ready_claim",
             report["blockers"],
         )
+
+    def test_public_reproducible_manifest_can_bind_llm_production_adapter_packet(
+        self,
+    ) -> None:
+        packet = convert_to_llm_subagent_route(valid_packet())
+        component_hashes = {
+            ref["component_id"]: ref["artifact_sha256"] for ref in packet["adapter_artifacts"]
+        }
+        add_public_evidence(
+            packet,
+            "production_adapter_paths",
+            validator._public_evidence_hashes(packet, component_hashes),
+        )
+
+        report = build_report_for_test(packet)
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["metrics"]["evidence_source_mode"], public_evidence.PUBLIC_MODE)
+        self.assertTrue(report["claim_boundary"][public_evidence.CLAIM_FIELD])
 
 
 if __name__ == "__main__":

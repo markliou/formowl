@@ -14,6 +14,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+import llm_subagent_adjudication as llm_panel
+import public_reproducible_evidence as public_evidence
+
 
 ROOT = Path(__file__).resolve().parent
 INPUTS = ROOT / "inputs"
@@ -39,17 +42,22 @@ PACKET_ALLOWED_FIELDS = {
     "confusion_matrix_artifact_sha256",
     "custody_receipt_artifact",
     "custody_receipt_artifact_sha256",
+    "llm_subagent_adjudication_artifact",
+    "llm_subagent_adjudication_artifact_sha256",
     "claim_boundary",
+    *public_evidence.PACKET_FIELDS,
 }
 CLAIM_BOUNDARY_ALLOWED_FIELDS = {
     "supports_human_annotation_completed_claim",
     "supports_human_adjudication_completed_claim",
+    "supports_llm_subagent_annotation_adjudication_completed_claim",
     "supports_confusion_matrix_claim",
     "supports_custody_receipt_claim",
     "supports_synthetic_label_generation_claim",
     "supports_template_as_human_evidence_claim",
     "supports_production_ready_claim",
     "supports_top_tier_scientific_validation_claim",
+    public_evidence.CLAIM_FIELD,
 }
 
 
@@ -565,7 +573,9 @@ def _validate_custody(
         blockers.append("custody receipt hash missing")
 
 
-def _validate_claim_boundary(packet: dict[str, Any], blockers: list[str]) -> None:
+def _validate_claim_boundary(
+    packet: dict[str, Any], blockers: list[str], *, llm_route: bool
+) -> None:
     claims = packet.get("claim_boundary")
     if not isinstance(claims, dict):
         blockers.append("human annotation packet claim boundary missing")
@@ -576,14 +586,40 @@ def _validate_claim_boundary(packet: dict[str, Any], blockers: list[str]) -> Non
             "human annotation packet claim boundary has unsupported fields: "
             + ", ".join(unsupported_fields)
         )
-    for flag in (
-        "supports_human_annotation_completed_claim",
-        "supports_human_adjudication_completed_claim",
-        "supports_confusion_matrix_claim",
-        "supports_custody_receipt_claim",
-    ):
-        if claims.get(flag) is not True:
-            blockers.append(f"human annotation packet missing claim: {flag}")
+    if llm_route:
+        if claims.get("supports_llm_subagent_annotation_adjudication_completed_claim") is not True:
+            blockers.append(
+                "human annotation packet missing claim: "
+                "supports_llm_subagent_annotation_adjudication_completed_claim"
+            )
+        for flag in (
+            "supports_human_annotation_completed_claim",
+            "supports_human_adjudication_completed_claim",
+            "supports_confusion_matrix_claim",
+            "supports_custody_receipt_claim",
+        ):
+            if claims.get(flag) is not False:
+                blockers.append(
+                    "human annotation packet must not claim legacy human evidence "
+                    f"when using LLM subagent adjudication: {flag}"
+                )
+    else:
+        for flag in (
+            "supports_human_annotation_completed_claim",
+            "supports_human_adjudication_completed_claim",
+            "supports_confusion_matrix_claim",
+            "supports_custody_receipt_claim",
+        ):
+            if claims.get(flag) is not True:
+                blockers.append(f"human annotation packet missing claim: {flag}")
+        if claims.get("supports_llm_subagent_annotation_adjudication_completed_claim") not in {
+            None,
+            False,
+        }:
+            blockers.append(
+                "human annotation packet overclaims unsupported claim: "
+                "supports_llm_subagent_annotation_adjudication_completed_claim"
+            )
     for flag in (
         "supports_synthetic_label_generation_claim",
         "supports_template_as_human_evidence_claim",
@@ -592,6 +628,108 @@ def _validate_claim_boundary(packet: dict[str, Any], blockers: list[str]) -> Non
     ):
         if claims.get(flag) is not False:
             blockers.append(f"human annotation packet overclaims unsupported claim: {flag}")
+
+
+def _load_llm_panel_artifact(
+    packet: dict[str, Any],
+    blockers: list[str],
+    *,
+    allow_test_artifacts: bool = False,
+) -> dict[str, Any]:
+    path_blocker = artifact_path_rejection_reason(
+        packet.get("llm_subagent_adjudication_artifact"),
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    if path_blocker:
+        if path_blocker == "path missing or malformed":
+            blockers.append(
+                "human annotation four-specialist LLM subagent adjudication artifact "
+                "missing or hash mismatch"
+            )
+        else:
+            blockers.append(
+                "human annotation four-specialist LLM subagent adjudication artifact "
+                + path_blocker
+            )
+        return {}
+    if not artifact_matches_sha256(
+        packet.get("llm_subagent_adjudication_artifact"),
+        packet.get("llm_subagent_adjudication_artifact_sha256"),
+        allow_test_artifacts=allow_test_artifacts,
+    ):
+        blockers.append(
+            "human annotation four-specialist LLM subagent adjudication artifact "
+            "missing or hash mismatch"
+        )
+        return {}
+    return load_artifact(
+        packet.get("llm_subagent_adjudication_artifact"),
+        packet.get("llm_subagent_adjudication_artifact_sha256"),
+        allow_test_artifacts=allow_test_artifacts,
+    )
+
+
+def _validate_llm_subagent_annotation_packet(
+    packet: dict[str, Any],
+    blockers: list[str],
+    *,
+    allow_test_artifacts: bool = False,
+) -> None:
+    manifest = _load_required_artifact(
+        packet,
+        "manifest_artifact",
+        "human_annotation_manifest_v1",
+        blockers,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    work_orders = _load_required_artifact(
+        packet,
+        "work_orders_artifact",
+        "human_annotation_work_orders_v1",
+        blockers,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    manifest_by_item, _manifest_rows = _validate_manifest(manifest, blockers)
+    _validate_work_orders(work_orders, manifest_by_item, blockers)
+    panel = _load_llm_panel_artifact(
+        packet,
+        blockers,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    expected_hashes = [
+        digest
+        for digest in (
+            packet.get("manifest_artifact_sha256"),
+            packet.get("work_orders_artifact_sha256"),
+        )
+        if strong_hex64(digest)
+    ]
+    llm_panel.validate_four_specialist_panel(
+        panel,
+        blockers,
+        label="human annotation",
+        expected_target="annotation_adjudication_protocol",
+        expected_input_sha256s=expected_hashes,
+    )
+
+
+def _public_evidence_hashes(packet: dict[str, Any]) -> list[str]:
+    hashes = []
+    for field in (
+        "manifest_artifact_sha256",
+        "work_orders_artifact_sha256",
+        "adjudication_artifact_sha256",
+        "confusion_matrix_artifact_sha256",
+        "custody_receipt_artifact_sha256",
+        "llm_subagent_adjudication_artifact_sha256",
+    ):
+        digest = packet.get(field)
+        if strong_hex64(digest):
+            hashes.append(digest)
+    for ref in packet.get("first_pass_submission_artifacts", []):
+        if isinstance(ref, dict) and strong_hex64(ref.get("artifact_sha256")):
+            hashes.append(ref["artifact_sha256"])
+    return sorted(set(hashes))
 
 
 def validate_packet(
@@ -606,11 +744,26 @@ def validate_packet(
         return [
             "human annotation results packet missing",
             "two independent first-pass human submissions are not present",
-            "adjudication-open receipt, final adjudication, confusion matrix, and custody receipt are not present",
+            "adjudication-open receipt, final adjudication, confusion matrix, custody receipt, or four-specialist LLM subagent panel are not present",
         ]
-    if packet.get("artifact_id") != "human_annotation_results_v1":
+    llm_route = packet.get(
+        "evidence_kind"
+    ) == "four_specialist_llm_subagent_annotation_adjudication" or bool(
+        packet.get("llm_subagent_adjudication_artifact")
+    )
+    expected_artifact_ids = (
+        {"human_annotation_results_v1", "llm_subagent_annotation_results_v1"}
+        if llm_route
+        else {"human_annotation_results_v1"}
+    )
+    if packet.get("artifact_id") not in expected_artifact_ids:
         blockers.append("human annotation results packet artifact id mismatch")
-    if packet.get("evidence_kind") != "real_human_annotation_adjudication":
+    expected_evidence_kind = (
+        "four_specialist_llm_subagent_annotation_adjudication"
+        if llm_route
+        else "real_human_annotation_adjudication"
+    )
+    if packet.get("evidence_kind") != expected_evidence_kind:
         blockers.append("human annotation results evidence kind mismatch")
     unsupported_fields = sorted(set(packet) - PACKET_ALLOWED_FIELDS)
     if unsupported_fields:
@@ -620,7 +773,40 @@ def validate_packet(
         )
     if packet.get("recovered_after_tmp_loss") is not False:
         blockers.append("human annotation packet cannot rely on lost /tmp artifacts")
-    _validate_claim_boundary(packet, blockers)
+    _validate_claim_boundary(packet, blockers, llm_route=llm_route)
+
+    if llm_route:
+        if packet.get("first_pass_submission_artifacts"):
+            blockers.append(
+                "human annotation packet must not mix first-pass human submissions "
+                "with LLM subagent adjudication route"
+            )
+        for field in (
+            "adjudication_artifact",
+            "confusion_matrix_artifact",
+            "custody_receipt_artifact",
+        ):
+            if packet.get(field):
+                blockers.append(
+                    "human annotation packet must not mix legacy human artifacts "
+                    f"with LLM subagent adjudication route: {field}"
+                )
+        _validate_llm_subagent_annotation_packet(
+            packet,
+            blockers,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        public_evidence.validate_public_evidence_packet(
+            packet,
+            blockers,
+            gate_id="annotation_adjudication_protocol",
+            artifact_path_rejection_reason=artifact_path_rejection_reason,
+            artifact_matches_sha256=artifact_matches_sha256,
+            load_artifact=load_artifact,
+            allow_test_artifacts=allow_test_artifacts,
+            expected_artifact_sha256s=_public_evidence_hashes(packet),
+        )
+        return sorted(set(blockers))
 
     manifest = _load_required_artifact(
         packet,
@@ -689,6 +875,16 @@ def validate_packet(
         blockers,
     )
     _validate_custody(custody, packet, first_pass_hashes, blockers)
+    public_evidence.validate_public_evidence_packet(
+        packet,
+        blockers,
+        gate_id="annotation_adjudication_protocol",
+        artifact_path_rejection_reason=artifact_path_rejection_reason,
+        artifact_matches_sha256=artifact_matches_sha256,
+        load_artifact=load_artifact,
+        allow_test_artifacts=allow_test_artifacts,
+        expected_artifact_sha256s=_public_evidence_hashes(packet),
+    )
     return sorted(set(blockers))
 
 
@@ -701,6 +897,9 @@ def build_report(
     blockers = validate_packet(packet, allow_test_artifacts=allow_test_artifacts)
     first_pass_refs = (
         packet.get("first_pass_submission_artifacts", []) if isinstance(packet, dict) else []
+    )
+    has_llm_panel = isinstance(packet, dict) and bool(
+        packet.get("llm_subagent_adjudication_artifact")
     )
     report = {
         "artifact_id": "human_annotation_adjudication_validator_recovery_v1",
@@ -723,14 +922,32 @@ def build_report(
             "custody_receipt_artifact_present": bool(packet.get("custody_receipt_artifact"))
             if isinstance(packet, dict)
             else False,
+            "llm_subagent_adjudication_present": has_llm_panel,
+            "evidence_source_mode": public_evidence.evidence_source_mode(packet)
+            if isinstance(packet, dict)
+            else public_evidence.PRIVATE_MODE,
+            "public_evidence_manifest_present": bool(
+                packet.get("public_evidence_manifest_artifact")
+            )
+            if isinstance(packet, dict)
+            else False,
         },
         "claim_boundary": {
-            "supports_human_annotation_completed_claim": not blockers,
-            "supports_human_adjudication_completed_claim": not blockers,
-            "supports_confusion_matrix_claim": not blockers,
-            "supports_custody_receipt_claim": not blockers,
+            "supports_human_annotation_completed_claim": not blockers and not has_llm_panel,
+            "supports_human_adjudication_completed_claim": not blockers and not has_llm_panel,
+            "supports_llm_subagent_annotation_adjudication_completed_claim": (
+                not blockers and has_llm_panel
+            ),
+            "supports_confusion_matrix_claim": not blockers and not has_llm_panel,
+            "supports_custody_receipt_claim": not blockers and not has_llm_panel,
             "supports_synthetic_label_generation_claim": False,
             "supports_template_as_human_evidence_claim": False,
+            public_evidence.CLAIM_FIELD: (
+                not blockers
+                and public_evidence.evidence_source_mode(packet) == public_evidence.PUBLIC_MODE
+            )
+            if isinstance(packet, dict)
+            else False,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
         },

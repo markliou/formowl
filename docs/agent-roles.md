@@ -97,8 +97,12 @@ research track must eventually provide:
   provenance completeness, access-safety behavior, latency, and scalability.
 - Ablations for ontology guidance, policy gates, candidate review, and
   permission-aware filtering.
-- Human review or adjudication evidence where governance claims depend on
-  reviewer behavior.
+- Legacy human review or four-specialist LLM subagent adjudication evidence
+  where governance claims depend on reviewer behavior; the current Plan B
+  target is the four-specialist LLM panel route. A single generic LLM decision
+  is not enough, and the panel must use the fixed professional roles for
+  baseline methodology, annotation adjudication, multimodal semantics, and
+  production governance.
 - Error analysis and explicit limitations.
 
 ## FormOwl System Backbone Agent

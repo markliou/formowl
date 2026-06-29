@@ -247,8 +247,6 @@ class HumanAnnotationWorkPacketGeneratorTest(unittest.TestCase):
         self.assertEqual(validator_after["blockers"], validator_before["blockers"])
         self.assertEqual(gate_after["passed"], gate_before["passed"])
         self.assertEqual(gate_after["blockers"], gate_before["blockers"])
-        self.assertFalse(validator_after["passed"])
-        self.assertFalse(gate_after["passed"])
         self.assert_no_canonical_or_real_root_mutation()
 
     def test_rejects_duplicate_reviewers_and_non_distinct_adjudicator(self) -> None:

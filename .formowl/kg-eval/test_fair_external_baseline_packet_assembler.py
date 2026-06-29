@@ -72,6 +72,53 @@ def copy_validator_fixture_artifacts() -> dict[str, object]:
     return manifest
 
 
+def copy_validator_fixture_llm_artifacts() -> dict[str, object]:
+    packet = validator_fixtures.convert_to_llm_subagent_route(validator_fixtures.valid_packet())
+    manifest: dict[str, object] = {
+        "artifact_id": packet["artifact_id"],
+        "evidence_kind": packet["evidence_kind"],
+        "recovered_after_tmp_loss": packet["recovered_after_tmp_loss"],
+        "run_environment": dict(packet["run_environment"]),
+        "source_lock_sha256": packet["source_lock_sha256"],
+        "llm_subagent_adjudication": "",
+        "graph_quality_validation": json.loads(json.dumps(packet["graph_quality_validation"])),
+        "permission_probes": json.loads(json.dumps(packet["permission_probes"])),
+        "claim_boundary": dict(packet["claim_boundary"]),
+    }
+    panel_source = validator.safe_relative_artifact_path(
+        packet["llm_subagent_adjudication_artifact"],
+        allow_test_artifacts=True,
+    )
+    assert panel_source is not None
+    panel_payload = json.loads(panel_source.read_text(encoding="utf-8"))
+    manifest["llm_subagent_adjudication"] = write_json(
+        "llm_subagent_adjudication.json",
+        panel_payload,
+    )
+    baseline_runs = []
+    for run in packet["baseline_runs"]:
+        copied = {
+            key: value
+            for key, value in run.items()
+            if not key.endswith("_artifact_sha256")
+            and key not in {f"{field}_sha256" for field in validator.RUN_ARTIFACT_FIELDS}
+        }
+        for artifact_field in validator.RUN_ARTIFACT_FIELDS:
+            source = validator.safe_relative_artifact_path(
+                run[artifact_field],
+                allow_test_artifacts=True,
+            )
+            assert source is not None
+            payload = json.loads(source.read_text(encoding="utf-8"))
+            copied[artifact_field] = write_json(
+                f"llm_{run['baseline_id']}/{artifact_field}.json",
+                payload,
+            )
+        baseline_runs.append(copied)
+    manifest["baseline_runs"] = baseline_runs
+    return manifest
+
+
 def valid_assembly_manifest() -> dict[str, object]:
     return copy_validator_fixture_artifacts()
 
@@ -135,6 +182,30 @@ class FairExternalBaselinePacketAssemblerTest(unittest.TestCase):
         self.assertTrue(output.exists())
         promoted = json.loads(output.read_text(encoding="utf-8"))
         self.assertEqual(promoted, packet)
+
+    def test_four_specialist_llm_route_assembles_and_validates(self) -> None:
+        manifest = copy_validator_fixture_llm_artifacts()
+
+        packet = assembler.assemble_packet(**manifest, allow_test_artifacts=True)
+        report = assembler.validate_candidate(packet, allow_test_artifacts=True)
+
+        self.assertTrue(report["passed"])
+        self.assertIn("llm_subagent_adjudication_artifact", packet)
+        self.assertNotIn("human_answer_adjudication", packet)
+        self.assertTrue(
+            packet["claim_boundary"]["supports_four_specialist_llm_subagent_adjudication_claim"]
+        )
+        self.assertFalse(
+            packet["claim_boundary"]["supports_human_adjudicated_answer_quality_claim"]
+        )
+
+    def test_manifest_must_not_mix_human_and_llm_adjudication_routes(self) -> None:
+        manifest = valid_assembly_manifest()
+        llm_manifest = copy_validator_fixture_llm_artifacts()
+        manifest["llm_subagent_adjudication"] = llm_manifest["llm_subagent_adjudication"]
+
+        with self.assertRaisesRegex(assembler.AssemblyError, "exactly one"):
+            assembler.assemble_packet(**manifest, allow_test_artifacts=True)
 
     def test_load_manifest_rejects_bytes_that_do_not_match_approved_sha(self) -> None:
         manifest_path = BASE / "assembly_manifest.json"

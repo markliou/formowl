@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import human_annotation_adjudication_validator as validator
+import public_reproducible_evidence as public_evidence
 
 
 ROOT = Path(__file__).resolve().parent
@@ -31,7 +32,21 @@ MANIFEST_ALLOWED_FIELDS = {
     "adjudication_artifact",
     "confusion_matrix_artifact",
     "custody_receipt_artifact",
+    "llm_subagent_adjudication_artifact",
+    "evidence_source_mode",
+    "public_evidence_manifest_artifact",
 }
+MANIFEST_COMMON_REQUIRED_FIELDS = {
+    "manifest_artifact",
+    "work_orders_artifact",
+}
+MANIFEST_HUMAN_ROUTE_FIELDS = {
+    "first_pass_artifacts",
+    "adjudication_artifact",
+    "confusion_matrix_artifact",
+    "custody_receipt_artifact",
+}
+MANIFEST_LLM_ROUTE_FIELDS = {"llm_subagent_adjudication_artifact"}
 
 
 class AssemblyError(ValueError):
@@ -97,6 +112,24 @@ def artifact_ref(path_value: str, *, allow_test_artifacts: bool = False) -> tupl
     return str(path.relative_to(ROOT)), validator.sha256_file(path) or ""
 
 
+def validate_evidence_source_mode(
+    evidence_source_mode: str | None,
+    public_evidence_manifest_artifact: str | None,
+) -> str | None:
+    if evidence_source_mode is None and public_evidence_manifest_artifact is None:
+        return None
+    if evidence_source_mode not in public_evidence.ALLOWED_MODES:
+        raise AssemblyError("evidence source mode is unsupported")
+    if (
+        evidence_source_mode == public_evidence.PUBLIC_MODE
+        and not public_evidence_manifest_artifact
+    ):
+        raise AssemblyError("public evidence mode requires a public evidence manifest")
+    if evidence_source_mode == public_evidence.PRIVATE_MODE and public_evidence_manifest_artifact:
+        raise AssemblyError("operator-private mode must not include a public evidence manifest")
+    return evidence_source_mode
+
+
 def first_pass_ref(
     reviewer_id: str,
     artifact: str,
@@ -120,17 +153,37 @@ def assemble_packet(
     *,
     manifest_artifact: str,
     work_orders_artifact: str,
-    first_pass_artifacts: list[dict[str, str]],
-    adjudication_artifact: str,
-    confusion_matrix_artifact: str,
-    custody_receipt_artifact: str,
+    first_pass_artifacts: list[dict[str, str]] | None = None,
+    adjudication_artifact: str | None = None,
+    confusion_matrix_artifact: str | None = None,
+    custody_receipt_artifact: str | None = None,
+    llm_subagent_adjudication_artifact: str | None = None,
+    evidence_source_mode: str | None = None,
+    public_evidence_manifest_artifact: str | None = None,
     allow_test_artifacts: bool = False,
 ) -> dict[str, Any]:
-    if len(first_pass_artifacts) < 2:
-        raise AssemblyError("at least two first-pass artifacts are required")
-    reviewer_ids = [entry.get("reviewer_id", "") for entry in first_pass_artifacts]
-    if len(set(reviewer_ids)) != len(reviewer_ids):
-        raise AssemblyError("first-pass reviewer ids must be distinct")
+    llm_route = llm_subagent_adjudication_artifact is not None
+    evidence_mode = validate_evidence_source_mode(
+        evidence_source_mode,
+        public_evidence_manifest_artifact,
+    )
+    human_route_supplied = any(
+        value is not None
+        for value in (
+            first_pass_artifacts,
+            adjudication_artifact,
+            confusion_matrix_artifact,
+            custody_receipt_artifact,
+        )
+    )
+    if llm_route == human_route_supplied:
+        raise AssemblyError("human annotation packet must use exactly one adjudication route")
+    if not llm_route:
+        if not isinstance(first_pass_artifacts, list) or len(first_pass_artifacts) < 2:
+            raise AssemblyError("at least two first-pass artifacts are required")
+        reviewer_ids = [entry.get("reviewer_id", "") for entry in first_pass_artifacts]
+        if len(set(reviewer_ids)) != len(reviewer_ids):
+            raise AssemblyError("first-pass reviewer ids must be distinct")
 
     manifest_path, manifest_sha = artifact_ref(
         manifest_artifact,
@@ -140,6 +193,56 @@ def assemble_packet(
         work_orders_artifact,
         allow_test_artifacts=allow_test_artifacts,
     )
+    packet = {
+        "artifact_id": "llm_subagent_annotation_results_v1"
+        if llm_route
+        else "human_annotation_results_v1",
+        "evidence_kind": "four_specialist_llm_subagent_annotation_adjudication"
+        if llm_route
+        else "real_human_annotation_adjudication",
+        "recovered_after_tmp_loss": False,
+        "manifest_artifact": manifest_path,
+        "manifest_artifact_sha256": manifest_sha,
+        "work_orders_artifact": work_orders_path,
+        "work_orders_artifact_sha256": work_orders_sha,
+        "claim_boundary": {},
+    }
+    if evidence_mode is not None:
+        packet["evidence_source_mode"] = evidence_mode
+    if evidence_mode == public_evidence.PUBLIC_MODE:
+        assert public_evidence_manifest_artifact is not None
+        public_path, public_sha = artifact_ref(
+            public_evidence_manifest_artifact,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        packet["public_evidence_manifest_artifact"] = public_path
+        packet["public_evidence_manifest_artifact_sha256"] = public_sha
+    if llm_route:
+        assert llm_subagent_adjudication_artifact is not None
+        panel_path, panel_sha = artifact_ref(
+            llm_subagent_adjudication_artifact,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        packet["llm_subagent_adjudication_artifact"] = panel_path
+        packet["llm_subagent_adjudication_artifact_sha256"] = panel_sha
+        packet["claim_boundary"] = {
+            "supports_human_annotation_completed_claim": False,
+            "supports_human_adjudication_completed_claim": False,
+            "supports_llm_subagent_annotation_adjudication_completed_claim": True,
+            "supports_confusion_matrix_claim": False,
+            "supports_custody_receipt_claim": False,
+            "supports_synthetic_label_generation_claim": False,
+            "supports_template_as_human_evidence_claim": False,
+            public_evidence.CLAIM_FIELD: evidence_mode == public_evidence.PUBLIC_MODE,
+            "supports_production_ready_claim": False,
+            "supports_top_tier_scientific_validation_claim": False,
+        }
+        return packet
+
+    assert first_pass_artifacts is not None
+    assert adjudication_artifact is not None
+    assert confusion_matrix_artifact is not None
+    assert custody_receipt_artifact is not None
     adjudication_path, adjudication_sha = artifact_ref(
         adjudication_artifact,
         allow_test_artifacts=allow_test_artifacts,
@@ -160,33 +263,30 @@ def assemble_packet(
         )
         for entry in first_pass_artifacts
     ]
-
-    return {
-        "artifact_id": "human_annotation_results_v1",
-        "evidence_kind": "real_human_annotation_adjudication",
-        "recovered_after_tmp_loss": False,
-        "manifest_artifact": manifest_path,
-        "manifest_artifact_sha256": manifest_sha,
-        "work_orders_artifact": work_orders_path,
-        "work_orders_artifact_sha256": work_orders_sha,
-        "first_pass_submission_artifacts": first_pass_refs,
-        "adjudication_artifact": adjudication_path,
-        "adjudication_artifact_sha256": adjudication_sha,
-        "confusion_matrix_artifact": matrix_path,
-        "confusion_matrix_artifact_sha256": matrix_sha,
-        "custody_receipt_artifact": custody_path,
-        "custody_receipt_artifact_sha256": custody_sha,
-        "claim_boundary": {
-            "supports_human_annotation_completed_claim": True,
-            "supports_human_adjudication_completed_claim": True,
-            "supports_confusion_matrix_claim": True,
-            "supports_custody_receipt_claim": True,
-            "supports_synthetic_label_generation_claim": False,
-            "supports_template_as_human_evidence_claim": False,
-            "supports_production_ready_claim": False,
-            "supports_top_tier_scientific_validation_claim": False,
-        },
-    }
+    packet.update(
+        {
+            "first_pass_submission_artifacts": first_pass_refs,
+            "adjudication_artifact": adjudication_path,
+            "adjudication_artifact_sha256": adjudication_sha,
+            "confusion_matrix_artifact": matrix_path,
+            "confusion_matrix_artifact_sha256": matrix_sha,
+            "custody_receipt_artifact": custody_path,
+            "custody_receipt_artifact_sha256": custody_sha,
+            "claim_boundary": {
+                "supports_human_annotation_completed_claim": True,
+                "supports_human_adjudication_completed_claim": True,
+                "supports_llm_subagent_annotation_adjudication_completed_claim": False,
+                "supports_confusion_matrix_claim": True,
+                "supports_custody_receipt_claim": True,
+                "supports_synthetic_label_generation_claim": False,
+                "supports_template_as_human_evidence_claim": False,
+                public_evidence.CLAIM_FIELD: evidence_mode == public_evidence.PUBLIC_MODE,
+                "supports_production_ready_claim": False,
+                "supports_top_tier_scientific_validation_claim": False,
+            },
+        }
+    )
+    return packet
 
 
 def validate_candidate(
@@ -249,8 +349,24 @@ def load_manifest(path: Path, *, expected_sha256: str | None = None) -> dict[str
     loaded = json.loads(raw.decode("utf-8"))
     if not isinstance(loaded, dict):
         raise AssemblyError("assembly manifest must be a JSON object")
-    if set(loaded) - MANIFEST_ALLOWED_FIELDS:
+    unsupported_fields = sorted(set(loaded) - MANIFEST_ALLOWED_FIELDS)
+    if unsupported_fields:
         raise AssemblyError("assembly manifest has unsupported fields")
+    missing_common = sorted(MANIFEST_COMMON_REQUIRED_FIELDS - set(loaded))
+    if missing_common:
+        raise AssemblyError("assembly manifest is missing required common fields")
+    has_llm_route = bool(MANIFEST_LLM_ROUTE_FIELDS & set(loaded))
+    has_human_route = bool(MANIFEST_HUMAN_ROUTE_FIELDS & set(loaded))
+    if has_llm_route == has_human_route:
+        raise AssemblyError("assembly manifest must supply exactly one adjudication route")
+    if has_human_route:
+        missing_human = sorted(MANIFEST_HUMAN_ROUTE_FIELDS - set(loaded))
+        if missing_human:
+            raise AssemblyError("assembly manifest is missing required human route fields")
+    if has_llm_route:
+        missing_llm = sorted(MANIFEST_LLM_ROUTE_FIELDS - set(loaded))
+        if missing_llm:
+            raise AssemblyError("assembly manifest is missing required LLM route fields")
     return loaded
 
 

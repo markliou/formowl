@@ -156,7 +156,7 @@ def build_component_collection_plan(
         "required_component_count": len(validator.REQUIRED_COMPONENTS),
         "component_rows": rows,
         "later_real_packet_requirements": [
-            "deployment must be human-approved and non-synthetic",
+            "deployment must be four-specialist LLM-subagent-approved and non-synthetic; legacy human approval remains a backward-compatible route",
             "component artifacts must cover every required adapter exactly once",
             "adapter stack digest must bind every component artifact",
             "component evidence must not expose raw paths or backend connection strings",
@@ -208,10 +208,10 @@ def build_review_and_probe_collection_plan() -> dict[str, Any]:
             "adapter_key": adapter_key,
             "collection_task_id": f"collect_false_merge_review_{adapter_key}",
             "minimum_review_checks": [
-                "collect human reviewer identity outside this packet",
+                "collect four-specialist LLM subagent panel identity outside this packet",
                 "bind candidate-pair digest outside this packet",
                 "bind two source-candidate digests outside this packet",
-                "ensure review is human and not agent-generated",
+                "ensure all four fixed professional roles independently pass; legacy human review remains a backward-compatible route",
             ],
         }
         row["row_sha256"] = sha256_json(row)
@@ -237,7 +237,7 @@ def build_review_and_probe_collection_plan() -> dict[str, Any]:
             "idempotent retry verified",
         ],
         "later_real_packet_requirements": [
-            "false-merge labels must be human-reviewed for RapidFuzz and Splink adapters",
+            "false-merge labels must be reviewed by the four-specialist LLM subagent panel for RapidFuzz and Splink adapters; legacy human-reviewed labels remain a backward-compatible route",
             "permission probes must cover every required component",
             "rollback smoke must be tied to the same deployment evidence",
         ],

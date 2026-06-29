@@ -230,7 +230,7 @@ def build_review_collection_plan(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "minimum_review_checks": [
                     "validate observation identifier and extractor run binding",
                     "compare extracted candidate against source-local locator evidence",
-                    "route business-decision candidates to human review",
+                    "route business-decision candidates to the four-specialist LLM subagent panel",
                     "verify cross-modal access checks deny revoked or private content",
                 ],
                 "row_sha256": sha256_json(
@@ -244,8 +244,8 @@ def build_review_collection_plan(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for row in rows
         ],
         "later_real_packet_requirements": [
-            "human review must cover every future validation row",
-            "business decision review must stay human-reviewed and non-autonomous",
+            "four-specialist LLM subagent panel must cover every future validation row; legacy human adjudication remains a backward-compatible route",
+            "business decision review must be four-specialist LLM-subagent-reviewed and non-autonomous; legacy human review remains a backward-compatible route",
             "permission probes must deny revoked grants, private content, raw assets, and entity-match-as-access",
         ],
     }

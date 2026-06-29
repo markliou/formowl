@@ -18,6 +18,7 @@ from typing import Any
 import fair_baseline_run_work_packet_generator as work_packet_generator
 import fair_external_baseline_packet_assembler as assembler
 import fair_external_baseline_run_validator as validator
+import public_reproducible_evidence as public_evidence
 
 
 ROOT = Path(__file__).resolve().parent
@@ -41,8 +42,11 @@ RESPONSE_PACKET_ALLOWED_FIELDS = {
     "source_lock_sha256",
     "baseline_runs",
     "human_answer_adjudication",
+    "llm_subagent_adjudication",
     "graph_quality_validation",
     "permission_probes",
+    "evidence_source_mode",
+    "public_evidence_manifest_artifact",
 }
 RUN_ENVIRONMENT_ALLOWED_FIELDS = {
     "container_image_digest_sha256",
@@ -76,6 +80,7 @@ HUMAN_ANSWER_ROW_ALLOWED_FIELDS = {
 GRAPH_QUALITY_VALIDATION_ALLOWED_FIELDS = {
     "completed",
     "human_reviewed",
+    "llm_subagent_reviewed",
     "per_baseline_rows",
 }
 GRAPH_QUALITY_ROW_ALLOWED_FIELDS = {
@@ -113,6 +118,7 @@ RAW_INTERNAL_FIELD_NAMES = {
     "worker_scratch_path",
 }
 CUSTODY_RECEIPT_FILENAME = "response_custody_receipt.json"
+PUBLIC_EVIDENCE_MANIFEST_FILENAME = "public_evidence_manifest.json"
 
 
 class IntakeError(ValueError):
@@ -441,6 +447,13 @@ def _human_answer_adjudication(response_packet: dict[str, Any]) -> dict[str, Any
     return payload
 
 
+def _llm_subagent_adjudication(response_packet: dict[str, Any]) -> dict[str, Any]:
+    return _safe_payload(
+        response_packet.get("llm_subagent_adjudication"),
+        "llm_subagent_adjudication",
+    )
+
+
 def _graph_quality_validation(response_packet: dict[str, Any]) -> dict[str, Any]:
     payload = _safe_payload(
         response_packet.get("graph_quality_validation"),
@@ -484,15 +497,48 @@ def _permission_probes(response_packet: dict[str, Any]) -> list[dict[str, Any]]:
     return permission_probes
 
 
-def _planned_paths(output_dir: Path, baseline_runs: list[dict[str, Any]]) -> dict[str, Path]:
+def _uses_llm_adjudication_route(response_packet: dict[str, Any]) -> bool:
+    has_human = "human_answer_adjudication" in response_packet
+    has_llm = "llm_subagent_adjudication" in response_packet
+    if has_human == has_llm:
+        raise IntakeError("response packet must supply exactly one adjudication route")
+    return has_llm
+
+
+def _evidence_source_mode(response_packet: dict[str, Any]) -> str | None:
+    mode = response_packet.get("evidence_source_mode")
+    has_public_manifest = "public_evidence_manifest_artifact" in response_packet
+    if mode is None and not has_public_manifest:
+        return None
+    if mode not in public_evidence.ALLOWED_MODES:
+        raise IntakeError("evidence_source_mode is unsupported")
+    if mode == public_evidence.PUBLIC_MODE and not has_public_manifest:
+        raise IntakeError("public evidence mode requires a public evidence manifest")
+    if mode == public_evidence.PRIVATE_MODE and has_public_manifest:
+        raise IntakeError("operator-private mode must not include a public evidence manifest")
+    return mode
+
+
+def _planned_paths(
+    output_dir: Path,
+    baseline_runs: list[dict[str, Any]],
+    *,
+    llm_route: bool,
+    public_mode: bool = False,
+) -> dict[str, Path]:
     paths: dict[str, Path] = {}
     for run in baseline_runs:
         baseline_id = str(run["baseline_id"])
         for field, filename in RUN_ARTIFACT_FILENAMES.items():
             paths[f"{baseline_id}::{field}"] = output_dir / baseline_id / filename
-    paths["human_answer_adjudication"] = output_dir / "human_answer_adjudication.json"
+    if llm_route:
+        paths["llm_subagent_adjudication"] = output_dir / "llm_subagent_adjudication.json"
+    else:
+        paths["human_answer_adjudication"] = output_dir / "human_answer_adjudication.json"
     paths["graph_quality_validation"] = output_dir / "graph_quality_validation.json"
     paths["permission_probes"] = output_dir / "permission_probes.json"
+    if public_mode:
+        paths["public_evidence_manifest_artifact"] = output_dir / PUBLIC_EVIDENCE_MANIFEST_FILENAME
     paths["response_custody_receipt"] = output_dir / CUSTODY_RECEIPT_FILENAME
     return paths
 
@@ -561,10 +607,31 @@ def preflight_response_packet(
     )
 
     baseline_runs = _baseline_runs(response_packet)
+    llm_route = _uses_llm_adjudication_route(response_packet)
+    evidence_mode = _evidence_source_mode(response_packet)
+    public_mode = evidence_mode == public_evidence.PUBLIC_MODE
     _run_environment(response_packet)
-    _human_answer_adjudication(response_packet)
-    _graph_quality_validation(response_packet)
+    if llm_route:
+        _llm_subagent_adjudication(response_packet)
+    else:
+        _human_answer_adjudication(response_packet)
+    graph_quality_validation = _graph_quality_validation(response_packet)
+    if llm_route:
+        if graph_quality_validation.get("llm_subagent_reviewed") is not True:
+            raise IntakeError("graph_quality_validation must be LLM subagent reviewed")
+        if graph_quality_validation.get("human_reviewed") not in {None, False}:
+            raise IntakeError("graph_quality_validation must not claim human review")
+    else:
+        if graph_quality_validation.get("human_reviewed") is not True:
+            raise IntakeError("graph_quality_validation must be human reviewed")
+        if graph_quality_validation.get("llm_subagent_reviewed") not in {None, False}:
+            raise IntakeError("graph_quality_validation must not claim LLM subagent review")
     _permission_probes(response_packet)
+    if public_mode:
+        _safe_payload(
+            response_packet.get("public_evidence_manifest_artifact"),
+            "public_evidence_manifest_artifact",
+        )
     try:
         assembler.validate_source_lock_sha256(response_packet.get("source_lock_sha256"))
     except assembler.AssemblyError as exc:
@@ -573,7 +640,12 @@ def preflight_response_packet(
         for field in validator.RUN_ARTIFACT_FIELDS:
             _safe_payload(run[field], field)
 
-    planned_paths = _planned_paths(output_path, baseline_runs)
+    planned_paths = _planned_paths(
+        output_path,
+        baseline_runs,
+        llm_route=llm_route,
+        public_mode=public_mode,
+    )
     if assembly_manifest_path is not None:
         planned_paths["assembly_manifest"] = assembly_manifest_path
     _ensure_no_overwrite(planned_paths)
@@ -599,8 +671,10 @@ def preflight_response_packet(
             "supports_fair_external_baseline_comparison_claim": False,
             "supports_real_package_execution_claim": False,
             "supports_human_adjudicated_answer_quality_claim": False,
+            "supports_four_specialist_llm_subagent_adjudication_claim": False,
             "supports_graph_quality_validation_claim": False,
             "supports_permission_probe_claim": False,
+            public_evidence.CLAIM_FIELD: False,
             "supports_canonical_packet_written_claim": False,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
@@ -632,16 +706,47 @@ def build_intake_artifacts(
     )
 
     baseline_runs = _baseline_runs(response_packet)
+    llm_route = _uses_llm_adjudication_route(response_packet)
+    evidence_mode = _evidence_source_mode(response_packet)
+    public_mode = evidence_mode == public_evidence.PUBLIC_MODE
     run_environment = _run_environment(response_packet)
-    human_answer_adjudication = _human_answer_adjudication(response_packet)
+    human_answer_adjudication = None
+    llm_subagent_adjudication = None
+    if llm_route:
+        llm_subagent_adjudication = _llm_subagent_adjudication(response_packet)
+    else:
+        human_answer_adjudication = _human_answer_adjudication(response_packet)
     graph_quality_validation = _graph_quality_validation(response_packet)
+    if llm_route:
+        if graph_quality_validation.get("llm_subagent_reviewed") is not True:
+            raise IntakeError("graph_quality_validation must be LLM subagent reviewed")
+        if graph_quality_validation.get("human_reviewed") not in {None, False}:
+            raise IntakeError("graph_quality_validation must not claim human review")
+    else:
+        if graph_quality_validation.get("human_reviewed") is not True:
+            raise IntakeError("graph_quality_validation must be human reviewed")
+        if graph_quality_validation.get("llm_subagent_reviewed") not in {None, False}:
+            raise IntakeError("graph_quality_validation must not claim LLM subagent review")
     permission_probes = _permission_probes(response_packet)
+    public_evidence_manifest = (
+        _safe_payload(
+            response_packet.get("public_evidence_manifest_artifact"),
+            "public_evidence_manifest_artifact",
+        )
+        if public_mode
+        else None
+    )
     try:
         assembler.validate_source_lock_sha256(response_packet.get("source_lock_sha256"))
     except assembler.AssemblyError as exc:
         raise IntakeError(str(exc)) from exc
 
-    planned_paths = _planned_paths(output_path, baseline_runs)
+    planned_paths = _planned_paths(
+        output_path,
+        baseline_runs,
+        llm_route=llm_route,
+        public_mode=public_mode,
+    )
     if assembly_manifest_path is not None:
         planned_paths["assembly_manifest"] = assembly_manifest_path
     _ensure_no_overwrite(planned_paths)
@@ -654,17 +759,31 @@ def build_intake_artifacts(
         "run_environment": run_environment,
         "source_lock_sha256": response_packet.get("source_lock_sha256"),
         "baseline_runs": _assembly_baseline_runs(baseline_runs, planned_paths),
-        "human_answer_adjudication": human_answer_adjudication,
         "graph_quality_validation": graph_quality_validation,
         "permission_probes": permission_probes,
         "claim_boundary": {
             "supports_fair_external_baseline_comparison_claim": True,
+            "supports_human_adjudicated_answer_quality_claim": not llm_route,
+            "supports_four_specialist_llm_subagent_adjudication_claim": llm_route,
             "supports_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
             "supports_unreviewed_business_judgment_claim": False,
             "supports_unreviewed_canonical_merge_claim": False,
+            public_evidence.CLAIM_FIELD: public_mode,
         },
     }
+    if evidence_mode is not None:
+        assembly_manifest["evidence_source_mode"] = evidence_mode
+    if public_mode:
+        assembly_manifest["public_evidence_manifest_artifact"] = _artifact_ref(
+            planned_paths["public_evidence_manifest_artifact"]
+        )
+    if llm_route:
+        assembly_manifest["llm_subagent_adjudication"] = _artifact_ref(
+            planned_paths["llm_subagent_adjudication"]
+        )
+    else:
+        assembly_manifest["human_answer_adjudication"] = human_answer_adjudication
     created_paths: list[Path] = []
     try:
         for run in baseline_runs:
@@ -673,12 +792,22 @@ def build_intake_artifacts(
                 path = planned_paths[f"{baseline_id}::{field}"]
                 _write_json(path, _safe_payload(run[field], field))
                 created_paths.append(path)
-        _write_json(planned_paths["human_answer_adjudication"], human_answer_adjudication)
-        created_paths.append(planned_paths["human_answer_adjudication"])
+        if llm_route:
+            _write_json(planned_paths["llm_subagent_adjudication"], llm_subagent_adjudication)
+            created_paths.append(planned_paths["llm_subagent_adjudication"])
+        else:
+            _write_json(planned_paths["human_answer_adjudication"], human_answer_adjudication)
+            created_paths.append(planned_paths["human_answer_adjudication"])
         _write_json(planned_paths["graph_quality_validation"], graph_quality_validation)
         created_paths.append(planned_paths["graph_quality_validation"])
         _write_json(planned_paths["permission_probes"], permission_probes)
         created_paths.append(planned_paths["permission_probes"])
+        if public_mode:
+            _write_json(
+                planned_paths["public_evidence_manifest_artifact"],
+                public_evidence_manifest,
+            )
+            created_paths.append(planned_paths["public_evidence_manifest_artifact"])
         if assembly_manifest_path is not None:
             _write_json(assembly_manifest_path, assembly_manifest)
             created_paths.append(assembly_manifest_path)
@@ -731,6 +860,7 @@ def build_intake_artifacts(
             "supports_fair_external_baseline_comparison_claim": False,
             "supports_real_package_execution_claim": False,
             "supports_human_adjudicated_answer_quality_claim": False,
+            "supports_four_specialist_llm_subagent_adjudication_claim": False,
             "supports_graph_quality_validation_claim": False,
             "supports_permission_probe_claim": False,
             "supports_canonical_packet_written_claim": False,
@@ -773,6 +903,7 @@ def build_intake_artifacts(
             "supports_fair_external_baseline_comparison_claim": False,
             "supports_real_package_execution_claim": False,
             "supports_human_adjudicated_answer_quality_claim": False,
+            "supports_four_specialist_llm_subagent_adjudication_claim": False,
             "supports_graph_quality_validation_claim": False,
             "supports_permission_probe_claim": False,
             "supports_canonical_packet_written_claim": False,

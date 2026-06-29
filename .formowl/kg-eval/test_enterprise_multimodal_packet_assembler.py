@@ -74,6 +74,45 @@ def copy_validator_fixture_artifacts() -> dict[str, object]:
     return mapping
 
 
+def copy_validator_fixture_llm_artifacts() -> dict[str, object]:
+    packet = validator_fixtures.convert_to_llm_subagent_route(validator_fixtures.valid_packet())
+    mapping: dict[str, object] = {
+        "artifact_id": packet["artifact_id"],
+        "evidence_kind": packet["evidence_kind"],
+        "recovered_after_tmp_loss": packet["recovered_after_tmp_loss"],
+        "claim_boundary": dict(packet["claim_boundary"]),
+    }
+    for field in (
+        "pilot_manifest_artifact",
+        "llm_subagent_adjudication_artifact",
+        "business_decision_review_artifact",
+        "permission_probe_artifact",
+    ):
+        source = validator.safe_relative_artifact_path(
+            packet[field],
+            allow_test_artifacts=True,
+        )
+        assert source is not None
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        mapping[field] = write_json(f"{field}.json", payload)
+    validation_artifacts = []
+    for ref in packet["validation_artifacts"]:
+        source = validator.safe_relative_artifact_path(
+            ref["artifact"],
+            allow_test_artifacts=True,
+        )
+        assert source is not None
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        validation_artifacts.append(
+            {
+                "modality": ref["modality"],
+                "artifact": write_json(f"llm_validation_{ref['modality']}.json", payload),
+            }
+        )
+    mapping["validation_artifacts"] = validation_artifacts
+    return mapping
+
+
 def valid_assembly_manifest() -> dict[str, object]:
     return copy_validator_fixture_artifacts()
 
@@ -125,6 +164,34 @@ class EnterpriseMultimodalPacketAssemblerTest(unittest.TestCase):
         self.assertTrue(output.exists())
         promoted = json.loads(output.read_text(encoding="utf-8"))
         self.assertEqual(promoted, packet)
+
+    def test_four_specialist_llm_route_assembles_and_validates(self) -> None:
+        manifest = copy_validator_fixture_llm_artifacts()
+
+        packet = assembler.assemble_packet(**manifest, allow_test_artifacts=True)
+        report = assembler.validate_candidate(packet, allow_test_artifacts=True)
+
+        self.assertTrue(report["passed"])
+        self.assertIn("llm_subagent_adjudication_artifact", packet)
+        self.assertNotIn("human_adjudication_artifact", packet)
+        self.assertTrue(
+            packet["claim_boundary"][
+                "supports_multimodal_llm_subagent_adjudication_completed_claim"
+            ]
+        )
+        self.assertFalse(
+            packet["claim_boundary"]["supports_multimodal_human_adjudication_completed_claim"]
+        )
+
+    def test_manifest_must_not_mix_human_and_llm_adjudication_routes(self) -> None:
+        manifest = valid_assembly_manifest()
+        llm_manifest = copy_validator_fixture_llm_artifacts()
+        manifest["llm_subagent_adjudication_artifact"] = llm_manifest[
+            "llm_subagent_adjudication_artifact"
+        ]
+
+        with self.assertRaisesRegex(assembler.AssemblyError, "exactly one adjudication route"):
+            assembler.assemble_packet(**manifest, allow_test_artifacts=True)
 
     def test_load_manifest_rejects_bytes_that_do_not_match_approved_sha(self) -> None:
         manifest_path = BASE / "assembly_manifest.json"

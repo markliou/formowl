@@ -16,7 +16,9 @@ from typing import Any
 
 import enterprise_multimodal_validation_validator as enterprise_validator
 import fair_external_baseline_run_validator as fair_validator
+import llm_subagent_adjudication as llm_panel
 import production_adapter_path_validator as production_validator
+import public_reproducible_evidence as public_evidence
 
 
 ROOT = Path(__file__).resolve().parent
@@ -60,9 +62,70 @@ def _template_header(gate_id: str) -> dict[str, Any]:
             "Copy this template to inputs/*_real/<operator_run_id>/operator_response_packet.json.",
             "Replace every OPERATOR_* placeholder with real reviewed values.",
             "Remove template_only, do_not_submit_as_evidence, gate_id, claim_boundary, and operator_instructions before intake.",
+            "For public reproducible mode, replace public_evidence_manifest_artifact with URL/license/snapshot/hash-bound sources; for private operator evidence, remove evidence_source_mode and public_evidence_manifest_artifact.",
             "Run real_evidence_submission_manifest.py before candidate intake.",
         ],
     }
+
+
+def _llm_panel_template(target: str) -> dict[str, Any]:
+    return {
+        "artifact_type": llm_panel.PANEL_ARTIFACT_TYPE,
+        "panel_id": "OPERATOR_PANEL_ID",
+        "adjudication_target": target,
+        "completed": True,
+        "final_decision": "PASS",
+        "human_adjudication_claimed": False,
+        "input_artifact_sha256s": ["OPERATOR_REVIEWED_INPUT_ARTIFACT_64_HEX_SHA256"],
+        "rubric_sha256": "OPERATOR_PANEL_RUBRIC_64_HEX_SHA256",
+        "specialist_subagents": [
+            {
+                "subagent_id": f"OPERATOR_{specialty.upper()}_SUBAGENT_ID",
+                "specialty": specialty,
+                "professional_role": llm_panel.REQUIRED_PROFESSIONAL_ROLES[specialty],
+                "model_name": "OPERATOR_MODEL_NAME",
+                "model_version": "OPERATOR_MODEL_VERSION",
+                "prompt_sha256": "OPERATOR_DISTINCT_PROMPT_64_HEX_SHA256",
+                "rubric_sha256": "OPERATOR_PANEL_RUBRIC_64_HEX_SHA256",
+                "run_id": f"OPERATOR_{specialty.upper()}_RUN_ID",
+                "temperature": 0,
+                "independent": True,
+                "decision": "PASS",
+                "blocking_findings": [],
+                "reviewed_artifact_sha256s": ["OPERATOR_REVIEWED_INPUT_ARTIFACT_64_HEX_SHA256"],
+                "output_sha256": "OPERATOR_DISTINCT_OUTPUT_64_HEX_SHA256",
+            }
+            for specialty in llm_panel.REQUIRED_SPECIALTIES
+        ],
+        "panel_decision_sha256": "OPERATOR_PANEL_DECISION_64_HEX_SHA256",
+    }
+
+
+def _public_evidence_manifest_template(gate_id: str) -> dict[str, Any]:
+    sources = [
+        {
+            "source_id": "OPERATOR_PUBLIC_SOURCE_ID",
+            "source_url": "https://OPERATOR_PUBLIC_SOURCE_URL",
+            "source_type": "OPERATOR_PUBLIC_SOURCE_TYPE",
+            "source_usage_role": "OPERATOR_PUBLIC_SOURCE_USAGE_ROLE",
+            "license": "OPERATOR_PUBLIC_LICENSE",
+            "version_or_snapshot": "OPERATOR_PUBLIC_VERSION_OR_SNAPSHOT",
+            "retrieved_at": "OPERATOR_RETRIEVED_AT_UTC",
+            "content_sha256": "OPERATOR_PUBLIC_SOURCE_CONTENT_64_HEX_SHA256",
+            "archive_sha256": "OPERATOR_PUBLIC_SOURCE_ARCHIVE_64_HEX_SHA256",
+            "derived_artifact_sha256s": ["OPERATOR_DERIVED_CANDIDATE_ARTIFACT_64_HEX_SHA256"],
+            "publicly_accessible": True,
+            "permission_allows_research_evaluation": True,
+            "non_synthetic": True,
+            "raw_private_payload": False,
+        }
+    ]
+    return public_evidence.build_manifest(
+        gate_id=gate_id,
+        retrieved_at="OPERATOR_RETRIEVED_AT_UTC",
+        public_sources=sources,
+        covered_artifact_sha256s=["OPERATOR_DERIVED_CANDIDATE_ARTIFACT_64_HEX_SHA256"],
+    )
 
 
 def _fair_baseline_template() -> dict[str, Any]:
@@ -71,6 +134,10 @@ def _fair_baseline_template() -> dict[str, Any]:
         {
             "response_packet_type": "fair_baseline_response_intake_v1",
             "operator_run_id": "OPERATOR_RUN_ID",
+            "evidence_source_mode": public_evidence.PUBLIC_MODE,
+            "public_evidence_manifest_artifact": _public_evidence_manifest_template(
+                "fair_external_baseline_comparison"
+            ),
             "run_environment": {
                 "container_image_digest_sha256": "OPERATOR_64_HEX_CONTAINER_DIGEST",
                 "non_synthetic_benchmark_context": True,
@@ -104,40 +171,11 @@ def _fair_baseline_template() -> dict[str, Any]:
                 }
                 for baseline_id in fair_validator.REQUIRED_BASELINES
             ],
-            "human_answer_adjudication": {
-                "artifact_id": "human_answer_adjudication_results_v1",
-                "completed": True,
-                "synthetic_or_agent_generated": False,
-                "question_set_sha256": "OPERATOR_64_HEX_QUESTION_SET",
-                "adjudicator_id": "OPERATOR_HUMAN_ADJUDICATOR_ID",
-                "final_adjudication_sha256": "OPERATOR_64_HEX_FINAL_ADJUDICATION",
-                "custody_receipt_sha256": "OPERATOR_64_HEX_CUSTODY",
-                "reviewers": [
-                    {
-                        "reviewer_id": "OPERATOR_HUMAN_REVIEWER_A",
-                        "reviewer_type": "human",
-                        "independent_first_pass": True,
-                        "sealed_submission_sha256": "OPERATOR_64_HEX_SEALED_A",
-                    },
-                    {
-                        "reviewer_id": "OPERATOR_HUMAN_REVIEWER_B",
-                        "reviewer_type": "human",
-                        "independent_first_pass": True,
-                        "sealed_submission_sha256": "OPERATOR_64_HEX_SEALED_B",
-                    },
-                ],
-                "per_baseline_rows": [
-                    {
-                        "baseline_id": baseline_id,
-                        "question_count": "OPERATOR_POSITIVE_INTEGER",
-                        "answer_output_artifact_sha256": "OPERATOR_64_HEX_ANSWER_OUTPUT",
-                    }
-                    for baseline_id in fair_validator.REQUIRED_BASELINES
-                ],
-            },
+            "llm_subagent_adjudication": _llm_panel_template("fair_external_baseline_comparison"),
             "graph_quality_validation": {
                 "completed": True,
-                "human_reviewed": True,
+                "human_reviewed": False,
+                "llm_subagent_reviewed": True,
                 "per_baseline_rows": [
                     {
                         "baseline_id": baseline_id,
@@ -169,57 +207,14 @@ def _human_annotation_template() -> dict[str, Any]:
         {
             "response_packet_type": "human_annotation_response_intake_v1",
             "operator_run_id": "OPERATOR_RUN_ID",
+            "evidence_source_mode": public_evidence.PUBLIC_MODE,
+            "public_evidence_manifest_artifact": _public_evidence_manifest_template(
+                "annotation_adjudication_protocol"
+            ),
             "annotation_task_id": "OPERATOR_ANNOTATION_TASK_ID",
-            "first_pass_submissions": [
-                {
-                    "reviewer_id": "OPERATOR_HUMAN_REVIEWER_A",
-                    "reviewer_type": "human",
-                    "independent_first_pass": True,
-                    "generated_by_llm": False,
-                    "template_source": None,
-                    "human_attestation": "OPERATOR_HUMAN_ATTESTATION_A",
-                    "rows": [
-                        {
-                            "item_id": "OPERATOR_ITEM_ID",
-                            "label": "OPERATOR_LABEL",
-                            "generated_by_llm": False,
-                            "template_source": None,
-                        }
-                    ],
-                },
-                {
-                    "reviewer_id": "OPERATOR_HUMAN_REVIEWER_B",
-                    "reviewer_type": "human",
-                    "independent_first_pass": True,
-                    "generated_by_llm": False,
-                    "template_source": None,
-                    "human_attestation": "OPERATOR_HUMAN_ATTESTATION_B",
-                    "rows": [
-                        {
-                            "item_id": "OPERATOR_ITEM_ID",
-                            "label": "OPERATOR_SECOND_LABEL",
-                            "generated_by_llm": False,
-                            "template_source": None,
-                        }
-                    ],
-                },
-            ],
-            "adjudication": {
-                "adjudicator_id": "OPERATOR_HUMAN_ADJUDICATOR_ID",
-                "reviewer_type": "human",
-                "opened_after_first_pass_seal": True,
-                "generated_by_llm": False,
-                "template_source": None,
-                "human_attestation": "OPERATOR_HUMAN_ADJUDICATION_ATTESTATION",
-                "rows": [
-                    {
-                        "item_id": "OPERATOR_ITEM_ID_WITH_DISAGREEMENT",
-                        "final_label": "OPERATOR_FINAL_LABEL",
-                        "generated_by_llm": False,
-                        "template_source": None,
-                    }
-                ],
-            },
+            "llm_subagent_adjudication_artifact": _llm_panel_template(
+                "annotation_adjudication_protocol"
+            ),
         }
     )
     return payload
@@ -231,6 +226,10 @@ def _enterprise_multimodal_template() -> dict[str, Any]:
         {
             "response_packet_type": "enterprise_multimodal_response_intake_v1",
             "operator_run_id": "OPERATOR_RUN_ID",
+            "evidence_source_mode": public_evidence.PUBLIC_MODE,
+            "public_evidence_manifest_artifact": _public_evidence_manifest_template(
+                "multimodal_semantic_validation"
+            ),
             "pilot_manifest_artifact": {"artifact_type": "enterprise_multimodal_pilot_manifest_v1"},
             "validation_artifacts": [
                 {
@@ -242,11 +241,13 @@ def _enterprise_multimodal_template() -> dict[str, Any]:
                 }
                 for modality in enterprise_validator.REQUIRED_MODALITIES
             ],
-            "human_adjudication_artifact": {
-                "artifact_type": "enterprise_multimodal_human_adjudication_v1"
-            },
+            "llm_subagent_adjudication_artifact": _llm_panel_template(
+                "multimodal_semantic_validation"
+            ),
             "business_decision_review_artifact": {
-                "artifact_type": "enterprise_multimodal_business_decision_review_v1"
+                "artifact_type": "enterprise_business_decision_review_v1",
+                "human_reviewed": False,
+                "llm_subagent_reviewed": True,
             },
             "permission_probe_artifact": {
                 "artifact_type": "enterprise_multimodal_permission_probe_v1"
@@ -262,6 +263,10 @@ def _production_adapter_template() -> dict[str, Any]:
         {
             "response_packet_type": "production_adapter_response_intake_v1",
             "operator_run_id": "OPERATOR_RUN_ID",
+            "evidence_source_mode": public_evidence.PUBLIC_MODE,
+            "public_evidence_manifest_artifact": _public_evidence_manifest_template(
+                "production_adapter_paths"
+            ),
             "deployment_manifest_artifact": {
                 "artifact_type": "production_adapter_deployment_manifest_v1"
             },
@@ -276,8 +281,11 @@ def _production_adapter_template() -> dict[str, Any]:
                 for component_id in production_validator.REQUIRED_COMPONENTS
             ],
             "human_false_merge_label_artifact": {
-                "artifact_type": "production_adapter_false_merge_labels_v1"
+                "artifact_type": "production_adapter_false_merge_labels_v1",
+                "reviewer_type": "four_specialist_llm_subagent_panel",
+                "llm_subagent_panel_reviewed": True,
             },
+            "llm_subagent_adjudication_artifact": _llm_panel_template("production_adapter_paths"),
             "audit_trail_artifact": {"artifact_type": "production_adapter_audit_trail_v1"},
             "permission_probe_artifact": {
                 "artifact_type": "production_adapter_permission_probe_v1"

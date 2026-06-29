@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import fair_external_baseline_run_validator as validator
+import public_reproducible_evidence as public_evidence
 
 
 ROOT = Path(__file__).resolve().parent
@@ -43,7 +44,12 @@ FORBIDDEN_RAW_PREFIXES = (
     "jdbc:",
 )
 POSITIVE_CLAIMS = {"supports_fair_external_baseline_comparison_claim"}
-NEGATIVE_CLAIMS = validator.CLAIM_BOUNDARY_ALLOWED_FIELDS - POSITIVE_CLAIMS
+OPTIONAL_CLAIMS = {
+    "supports_four_specialist_llm_subagent_adjudication_claim",
+    "supports_human_adjudicated_answer_quality_claim",
+    public_evidence.CLAIM_FIELD,
+}
+NEGATIVE_CLAIMS = validator.CLAIM_BOUNDARY_ALLOWED_FIELDS - POSITIVE_CLAIMS - OPTIONAL_CLAIMS
 RUN_SOURCE_ALLOWED_FIELDS = {
     "baseline_id",
     "package_source_url",
@@ -63,6 +69,20 @@ MANIFEST_ALLOWED_FIELDS = {
     "source_lock_sha256",
     "baseline_runs",
     "human_answer_adjudication",
+    "llm_subagent_adjudication",
+    "graph_quality_validation",
+    "permission_probes",
+    "claim_boundary",
+    "evidence_source_mode",
+    "public_evidence_manifest_artifact",
+}
+MANIFEST_REQUIRED_FIELDS = {
+    "artifact_id",
+    "evidence_kind",
+    "recovered_after_tmp_loss",
+    "run_environment",
+    "source_lock_sha256",
+    "baseline_runs",
     "graph_quality_validation",
     "permission_probes",
     "claim_boundary",
@@ -213,21 +233,68 @@ def artifact_ref(path_value: str, *, allow_test_artifacts: bool = False) -> tupl
     return str(path.relative_to(ROOT)), validator.sha256_file(path) or ""
 
 
-def validate_claim_boundary(claim_boundary: Any) -> dict[str, bool]:
+def validate_claim_boundary(
+    claim_boundary: Any,
+    *,
+    llm_route: bool,
+    public_mode: bool,
+) -> dict[str, bool]:
     if not isinstance(claim_boundary, dict):
         raise AssemblyError("claim boundary must be supplied by the assembly manifest")
     unsupported_fields = sorted(set(claim_boundary) - validator.CLAIM_BOUNDARY_ALLOWED_FIELDS)
     if unsupported_fields:
         raise AssemblyError("claim boundary has unsupported fields")
-    missing_fields = sorted(validator.CLAIM_BOUNDARY_ALLOWED_FIELDS - set(claim_boundary))
+    required_fields = validator.CLAIM_BOUNDARY_ALLOWED_FIELDS - OPTIONAL_CLAIMS
+    missing_fields = sorted(required_fields - set(claim_boundary))
     if missing_fields:
         raise AssemblyError("claim boundary is missing required fields")
     if claim_boundary.get("supports_fair_external_baseline_comparison_claim") is not True:
         raise AssemblyError("claim boundary must explicitly support required fair baseline claim")
+    if llm_route:
+        if (
+            claim_boundary.get("supports_four_specialist_llm_subagent_adjudication_claim")
+            is not True
+        ):
+            raise AssemblyError(
+                "claim boundary must explicitly support four-specialist LLM adjudication"
+            )
+        if claim_boundary.get("supports_human_adjudicated_answer_quality_claim") is not False:
+            raise AssemblyError("claim boundary must not claim human adjudication for LLM route")
+    else:
+        if claim_boundary.get("supports_human_adjudicated_answer_quality_claim") is not True:
+            raise AssemblyError("claim boundary must explicitly support human adjudication")
+        if claim_boundary.get("supports_four_specialist_llm_subagent_adjudication_claim") not in {
+            None,
+            False,
+        }:
+            raise AssemblyError("claim boundary must not claim LLM adjudication for human route")
     for field in NEGATIVE_CLAIMS:
         if claim_boundary.get(field) is not False:
             raise AssemblyError("claim boundary overclaims unsupported claims")
+    if public_mode:
+        if claim_boundary.get(public_evidence.CLAIM_FIELD) is not True:
+            raise AssemblyError("claim boundary must explicitly support public evidence")
+    elif claim_boundary.get(public_evidence.CLAIM_FIELD) is True:
+        raise AssemblyError("claim boundary must not claim public evidence on private route")
     return dict(claim_boundary)
+
+
+def validate_evidence_source_mode(
+    evidence_source_mode: str | None,
+    public_evidence_manifest_artifact: str | None,
+) -> str | None:
+    if evidence_source_mode is None and public_evidence_manifest_artifact is None:
+        return None
+    if evidence_source_mode not in public_evidence.ALLOWED_MODES:
+        raise AssemblyError("evidence source mode is unsupported")
+    if (
+        evidence_source_mode == public_evidence.PUBLIC_MODE
+        and not public_evidence_manifest_artifact
+    ):
+        raise AssemblyError("public evidence mode requires a public evidence manifest")
+    if evidence_source_mode == public_evidence.PRIVATE_MODE and public_evidence_manifest_artifact:
+        raise AssemblyError("operator-private mode must not include a public evidence manifest")
+    return evidence_source_mode
 
 
 def validate_source_lock_sha256(source_lock_sha256: Any) -> str:
@@ -273,10 +340,13 @@ def assemble_packet(
     run_environment: dict[str, Any],
     source_lock_sha256: str,
     baseline_runs: list[dict[str, Any]],
-    human_answer_adjudication: dict[str, Any],
-    graph_quality_validation: dict[str, Any],
-    permission_probes: list[dict[str, Any]],
+    human_answer_adjudication: dict[str, Any] | None = None,
+    llm_subagent_adjudication: str | None = None,
+    graph_quality_validation: dict[str, Any] | None = None,
+    permission_probes: list[dict[str, Any]] | None = None,
     claim_boundary: dict[str, bool] | None = None,
+    evidence_source_mode: str | None = None,
+    public_evidence_manifest_artifact: str | None = None,
     allow_test_artifacts: bool = False,
 ) -> dict[str, Any]:
     if artifact_id != "fair_external_baseline_run_packet_v1":
@@ -285,9 +355,19 @@ def assemble_packet(
         raise AssemblyError("evidence kind mismatch")
     if recovered_after_tmp_loss is not False:
         raise AssemblyError("packet cannot rely on lost /tmp artifacts")
+    llm_route = llm_subagent_adjudication is not None
+    evidence_mode = validate_evidence_source_mode(
+        evidence_source_mode,
+        public_evidence_manifest_artifact,
+    )
+    if llm_route == (human_answer_adjudication is not None):
+        raise AssemblyError("fair baseline packet must use exactly one answer adjudication route")
+    if graph_quality_validation is None:
+        raise AssemblyError("graph quality validation must be supplied by the assembly manifest")
+    if permission_probes is None:
+        raise AssemblyError("permission probes must be supplied by the assembly manifest")
     for label, value, expected_type in (
         ("run environment", run_environment, dict),
-        ("human answer adjudication", human_answer_adjudication, dict),
         ("graph quality validation", graph_quality_validation, dict),
         ("permission probes", permission_probes, list),
         ("baseline runs", baseline_runs, list),
@@ -296,30 +376,60 @@ def assemble_packet(
             raise AssemblyError(f"{label} must be supplied by the assembly manifest")
     for label, value in (
         ("run environment", run_environment),
-        ("human answer adjudication", human_answer_adjudication),
         ("graph quality validation", graph_quality_validation),
         ("permission probes", permission_probes),
     ):
         reject_template_or_placeholder_payload(value, label=label)
         reject_raw_internal_payload(value, label=label)
+    if human_answer_adjudication is not None:
+        reject_template_or_placeholder_payload(
+            human_answer_adjudication,
+            label="human answer adjudication",
+        )
+        reject_raw_internal_payload(human_answer_adjudication, label="human answer adjudication")
     runs = [
         baseline_run(entry, allow_test_artifacts=allow_test_artifacts) for entry in baseline_runs
     ]
     baseline_ids = [entry["baseline_id"] for entry in runs]
     if sorted(baseline_ids) != sorted(validator.REQUIRED_BASELINES):
         raise AssemblyError("baseline runs must cover each required baseline exactly once")
-    return {
+    packet = {
         "artifact_id": artifact_id,
         "evidence_kind": evidence_kind,
         "recovered_after_tmp_loss": recovered_after_tmp_loss,
         "run_environment": dict(run_environment),
         "source_lock_sha256": validate_source_lock_sha256(source_lock_sha256),
         "baseline_runs": runs,
-        "human_answer_adjudication": dict(human_answer_adjudication),
         "graph_quality_validation": dict(graph_quality_validation),
         "permission_probes": list(permission_probes),
-        "claim_boundary": validate_claim_boundary(claim_boundary),
+        "claim_boundary": validate_claim_boundary(
+            claim_boundary,
+            llm_route=llm_route,
+            public_mode=evidence_mode == public_evidence.PUBLIC_MODE,
+        ),
     }
+    if evidence_mode is not None:
+        packet["evidence_source_mode"] = evidence_mode
+    if evidence_mode == public_evidence.PUBLIC_MODE:
+        assert public_evidence_manifest_artifact is not None
+        public_path, public_sha = artifact_ref(
+            public_evidence_manifest_artifact,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        packet["public_evidence_manifest_artifact"] = public_path
+        packet["public_evidence_manifest_artifact_sha256"] = public_sha
+    if llm_route:
+        assert llm_subagent_adjudication is not None
+        panel_path, panel_sha = artifact_ref(
+            llm_subagent_adjudication,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        packet["llm_subagent_adjudication_artifact"] = panel_path
+        packet["llm_subagent_adjudication_artifact_sha256"] = panel_sha
+    else:
+        assert human_answer_adjudication is not None
+        packet["human_answer_adjudication"] = dict(human_answer_adjudication)
+    return packet
 
 
 def validate_candidate(
@@ -386,9 +496,11 @@ def load_manifest(path: Path, *, expected_sha256: str | None = None) -> dict[str
     unsupported_fields = sorted(set(loaded) - MANIFEST_ALLOWED_FIELDS)
     if unsupported_fields:
         raise AssemblyError("assembly manifest has unsupported fields")
-    missing_fields = sorted(MANIFEST_ALLOWED_FIELDS - set(loaded))
+    missing_fields = sorted(MANIFEST_REQUIRED_FIELDS - set(loaded))
     if missing_fields:
         raise AssemblyError("assembly manifest is missing required fields")
+    if ("human_answer_adjudication" in loaded) == ("llm_subagent_adjudication" in loaded):
+        raise AssemblyError("assembly manifest must supply exactly one adjudication route")
     return loaded
 
 
