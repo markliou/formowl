@@ -68,6 +68,12 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   metadata-store migration's partial-failure rollback behavior for graph and
   audit rows. This is not end-to-end PostgreSQL/pgvector production adapter
   readiness.
+- PostgreSQL-backed ingestion record store adapters for assets, ingestion jobs,
+  extractor runs, observations, and upload sessions behind the same create/get/list
+  surfaces as the current file-backed stores. These use the internal
+  connection protocol and parameterized SQL over validated contract payloads;
+  they are mocked-connection adapter evidence, not live PostgreSQL readiness or
+  a ChatGPT-facing database control surface.
 - Candidate-only graph resolution helpers that produce fusion proposals,
   score breakdowns, ontology revision pins, clerical review items, and
   permission-aware human review queue exports without granting raw access or

@@ -86,6 +86,14 @@ It processes pending `IngestionJob` records through the existing
 lease/retry policy out of the job contract until database-backed coordination
 lands.
 
+PostgreSQL-backed ingestion record stores now exist behind the same
+create/get/list surfaces as the file-backed `AssetStore`, `JobStore`,
+`ExtractorRunStore`, `ObservationStore`, and `UploadSessionStore`. This is a
+mocked-connection adapter-contract slice using parameterized SQL statements,
+validated contract payloads, safe record ids, and the existing
+`PostgreSQLUnitOfWork` rollback boundary. It does not expose database controls
+through MCP or claim live PostgreSQL readiness.
+
 ## Owner Paths
 
 - `python/formowl_project_mcp/adapters/openproject/`
@@ -94,6 +102,8 @@ lands.
 - `docs/openproject-adapter.md`
 - `tests/test_openproject_adapter.py`
 - `python/formowl_ingestion/storage/config.py`
+- `python/formowl_ingestion/storage/postgres.py`
+- `python/formowl_graph/storage/migrations/003_ingestion_records.sql`
 - `python/formowl_worker/`
 - `docs/implementation-task-breakdown.md`
 
@@ -147,6 +157,12 @@ Latest verification:
 - Ingestion worker focused tests: 3 tests OK.
 - Worker changed-file Ruff check and format check: passed.
 - Full canonical dev-container suite after worker boundary: 292 tests OK.
+- PostgreSQL ingestion store focused tests: 20 tests OK.
+- Ingestion package export regression after PostgreSQL store exports:
+  1 test OK.
+- PostgreSQL ingestion store touched-file Ruff check and format check: passed.
+- Full canonical dev-container suite after PostgreSQL ingestion store slice:
+  302 tests OK.
 
 ## Known Blockers And Dependencies
 
@@ -168,8 +184,10 @@ Latest verification:
 ## Next Action
 
 Pick the next unchecked System Backbone work-board item. The strongest next
-candidate is database-backed stores behind the same interfaces as the current
-file-backed stores.
+candidate remains database-backed stores behind the same interfaces as the
+current file-backed stores, now focused on the remaining graph/canonical/job
+repository path and production end-to-end adapter evidence after the ingestion
+record store contract slice.
 
 ## Handoff Notes For KG Research Agent
 

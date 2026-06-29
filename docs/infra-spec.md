@@ -1076,6 +1076,14 @@ FORMOWL_EXTRACTOR_WORKER_CONCURRENCY
 
 The current file-backed `FORMOWL_DATA_DIR` behavior is acceptable for early MCP prototypes. Team deployments should move source-of-truth metadata to PostgreSQL and raw or large payloads to object storage.
 
+The current PostgreSQL ingestion-store adapter slice provides database-backed
+create/get/list surfaces for validated `Asset`, `IngestionJob`, `ExtractorRun`,
+`Observation`, and `UploadSession` payloads through an internal connection
+protocol. It is intentionally tested with mocked connections and parameterized
+SQL statement capture; it does not expose PostgreSQL credentials or database
+operations through MCP and does not by itself claim live PostgreSQL deployment
+readiness.
+
 Storage backend registry configuration is loaded through the
 `formowl_ingestion.storage` configuration helpers. The local-first path uses
 `FORMOWL_DATA_DIR` plus `FORMOWL_STORAGE_BACKEND_ROOT` to create a

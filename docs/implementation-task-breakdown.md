@@ -2088,6 +2088,19 @@ These groups can be split across multiple agents after Slice 1 is stable.
     guards. Leave this unchecked until the remaining container-backed
     repository tests and the production end-to-end adapter path pass through
     the same interfaces.
+  - 2026-06-29 update: added PostgreSQL-backed ingestion record stores behind
+    the existing file-backed `AssetStore`, `JobStore`, `ExtractorRunStore`,
+    `ObservationStore`, and `UploadSessionStore` surfaces. The new
+    `formowl_ingestion.storage.postgres` slice uses the internal connection
+    protocol, parameterized SQL statements, validated contract payloads, safe
+    record ids, transaction rollback through `PostgreSQLUnitOfWork`, and
+    migration `003_ingestion_records.sql` with scope/asset indexes. This is
+    still an adapter-contract and mocked-connection slice; it does not expose
+    database controls through MCP, claim live PostgreSQL readiness, or close
+    the full database-backed stores item. Dev-container verification passed:
+    focused `test_postgres*.py` ran 20 tests OK, ingestion package export
+    regression ran 1 test OK, touched-file Ruff check/format check passed, and
+    full `python -m unittest discover -s tests` ran 302 tests OK.
 - [x] Add vector and optional graph storage after candidate review workflows
   stabilize.
   - Owner paths: graph/index modules

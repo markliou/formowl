@@ -75,6 +75,11 @@ class IngestionPackageTests(unittest.TestCase):
                 "FileObjectStore",
                 "JobStore",
                 "ObservationStore",
+                "PostgreSQLAssetStore",
+                "PostgreSQLExtractorRunStore",
+                "PostgreSQLJobStore",
+                "PostgreSQLObservationStore",
+                "PostgreSQLUploadSessionStore",
                 "StorageBackendConfig",
                 "StoredObject",
                 "StorageBackendRegistry",
@@ -82,6 +87,7 @@ class IngestionPackageTests(unittest.TestCase):
                 "configure_storage_backend_registry",
                 "configure_storage_backend_registry_from_env",
                 "load_storage_backend_configs_from_env",
+                "postgre_sql_ingestion_store_interfaces",
             ],
         )
         self.assertEqual(uploads.__all__, ["create_upload_session", "upload_asset_reference"])

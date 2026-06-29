@@ -1189,3 +1189,17 @@ status in each role's goal file and task completion in
   and the full `python -m unittest discover -s tests` suite ran 292 OK. Next
   backbone target: database-backed stores behind the existing file-store
   interfaces.
+- 2026-06-29 System Backbone PostgreSQL ingestion-store contract slice:
+  added `python/formowl_ingestion/storage/postgres.py` plus migration
+  `003_ingestion_records.sql` for database-backed `AssetStore`, `JobStore`,
+  `ExtractorRunStore`, `ObservationStore`, and `UploadSessionStore`
+  create/get/list surfaces over the internal connection protocol. The slice
+  uses parameterized SQL, validated contract payloads, safe record ids, scope
+  and asset indexes, and `PostgreSQLUnitOfWork` rollback behavior under mocked
+  connection tests. It does not expose database controls through MCP and does
+  not claim live PostgreSQL readiness. Dev-container verification passed:
+  focused `test_postgres*.py` ran 20 OK, ingestion package export regression
+  ran 1 OK, touched-file Ruff check/format check passed, and full
+  `python -m unittest discover -s tests` ran 302 OK. The database-backed
+  stores work-board item remains unchecked pending remaining repository and
+  production end-to-end adapter evidence.

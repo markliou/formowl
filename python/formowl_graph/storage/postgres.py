@@ -292,6 +292,8 @@ def postgre_sql_connection_configuration(
 def grant_audit_query_indexes() -> tuple[str, ...]:
     return (
         "idx_formowl_graph_records_scope",
+        "idx_formowl_ingestion_records_scope",
+        "idx_formowl_ingestion_records_asset",
         "idx_formowl_grants_effective_scope",
         "idx_formowl_audit_log_actor_target",
     )
