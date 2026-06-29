@@ -147,13 +147,15 @@ Current CPU neural result:
 experiments/kg_bert_ablation/results/kg_bert_ablation_bert_cpu.json
 ```
 
-Observed CPU BERT/SentenceTransformer result on the same fixture:
+Observed CPU BERT/SentenceTransformer plus core-type gate result on the same
+fixture:
 
 ```text
-precision=0.888889
+precision=1.0
 recall=0.8
-f1=0.842105
-accuracy=0.8125
+f1=0.888889
+accuracy=0.875
+false_positive=0
 ```
 
 Current host GPU neural result:
@@ -162,37 +164,46 @@ Current host GPU neural result:
 experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu126_host.json
 ```
 
-Observed GPU BERT/SentenceTransformer result on the same fixture:
+Observed GPU BERT/SentenceTransformer plus core-type gate result on the same
+fixture:
 
 ```text
-precision=0.888889
+precision=1.0
 recall=0.8
-f1=0.842105
-accuracy=0.8125
+f1=0.888889
+accuracy=0.875
+false_positive=0
 model_device=cuda:0
 torch=2.10.0+cu126
 cuda_available=true
 visible_devices=2 x NVIDIA GeForce GTX 1080 Ti
 ```
 
+The type gate prevents pure BERT string/semantic similarity from merging
+different ontology core supertypes. In the fixture, `Maya Chen` vs `Maya Chen`
+keeps its raw cosine score of `1.0`, but it is correctly marked
+`type_mismatch` because the left side is `Person` and the right side is
+`Project`.
+
 On this small 16-pair fixture, total runtime is dominated by model load and
-CUDA initialization, not embedding. The recorded breakdown is:
+CUDA initialization, not embedding. The current recorded breakdown is:
 
 ```text
-CPU BERT: total=90750.609ms, model_load=90247.466ms, embedding=499.969ms
-GPU BERT: total=94100.002ms, model_load=93879.685ms, embedding=217.73ms
+CPU BERT: total=119943.05ms, model_load=119794.55ms, embedding=145.185ms
+GPU BERT: total=156686.003ms, model_load=156482.759ms, embedding=200.693ms
 ```
 
-Interpretation: GPU embedding is faster on this fixture, but the fixture is too
-small to amortize startup cost. Use the JSON artifacts for exact comparison and
-do not claim GPU end-to-end latency is faster from this small fixture alone.
+Interpretation: this fixture is too small and too startup-heavy for GPU latency
+claims. Use the JSON artifacts for exact comparison and do not claim GPU
+end-to-end latency is faster from this small fixture alone.
 
 Comparison against the lexical baseline:
 
 ```text
-f1_delta_bert_minus_non_bert=0.660287
+accuracy_delta_bert_minus_non_bert=0.4375
+f1_delta_bert_minus_non_bert=0.707071
 recall_delta_bert_minus_non_bert=0.7
-precision_delta_bert_minus_non_bert=-0.111111
+precision_delta_bert_minus_non_bert=0.0
 ```
 
 Historical GPU runtime validation blocker:

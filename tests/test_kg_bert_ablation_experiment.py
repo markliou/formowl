@@ -37,6 +37,18 @@ class KGBertAblationExperimentTests(unittest.TestCase):
         self.assertFalse(any(row["status"] == "type_mismatch" for row in run["pair_results"][:-1]))
         self.assertEqual(run["pair_results"][-1]["status"], "type_mismatch")
 
+    def test_bert_type_gate_uses_pair_core_supertypes(self) -> None:
+        module = _load_module()
+        pair = module.DATASET[-1]
+
+        self.assertEqual(pair.pair_id, "negative_person_project_same_label")
+        self.assertEqual(module._core_supertype_for_pair(pair, side="left"), "Person")
+        self.assertEqual(module._core_supertype_for_pair(pair, side="right"), "Project")
+        self.assertEqual(
+            module._semantic_status(predicted_same=False, type_gate_passed=False),
+            "type_mismatch",
+        )
+
     def test_missing_sentence_transformer_dependency_is_preserved_as_data(self) -> None:
         module = _load_module()
 

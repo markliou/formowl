@@ -217,8 +217,8 @@ Observed fixture result:
 
 ```text
 non-BERT lexical: precision=1.0, recall=0.1, f1=0.181818, accuracy=0.4375
-CPU BERT: precision=0.888889, recall=0.8, f1=0.842105, accuracy=0.8125
-GPU BERT: precision=0.888889, recall=0.8, f1=0.842105, accuracy=0.8125
+CPU BERT + core type gate: precision=1.0, recall=0.8, f1=0.888889, accuracy=0.875
+GPU BERT + core type gate: precision=1.0, recall=0.8, f1=0.888889, accuracy=0.875
 ```
 
 The completed host GPU BERT artifact is:
@@ -230,13 +230,19 @@ experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu126_host.json
 It records `model_device=cuda:0`, `torch=2.10.0+cu126`, CUDA 12.6 available,
 and two visible `NVIDIA GeForce GTX 1080 Ti` devices.
 
+The current BERT algorithm is
+`sentence_transformer_cosine_similarity_with_core_type_gate_v2`: BERT cosine
+similarity proposes semantic matches, but ontology core-supertype compatibility
+can still block a match. This removes the fixture's previous false positive
+where identical text `Maya Chen` was wrongly matched across `Person` and
+`Project`.
+
 On the small 16-pair fixture, GPU total runtime is not faster because model
-load and CUDA initialization dominate the run. The useful inference comparison
-is the embedding phase:
+load and CUDA initialization dominate the run. The current recorded timing is:
 
 ```text
-CPU BERT embedding: 499.969ms
-GPU BERT embedding: 217.73ms
+CPU BERT: total=119943.05ms, model_load=119794.55ms, embedding=145.185ms
+GPU BERT: total=156686.003ms, model_load=156482.759ms, embedding=200.693ms
 ```
 
 Do not claim GPU end-to-end latency superiority from this small fixture alone.

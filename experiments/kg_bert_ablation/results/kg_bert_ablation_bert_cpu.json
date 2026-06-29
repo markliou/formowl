@@ -9,14 +9,14 @@
     "stakeholder_evidence_artifact": true
   },
   "comparison": {
-    "f1_delta_bert_minus_non_bert": 0.660287,
-    "latency_ms_delta_bert_minus_non_bert": 90744.37,
-    "precision_delta_bert_minus_non_bert": -0.111111,
+    "f1_delta_bert_minus_non_bert": 0.707071,
+    "latency_ms_delta_bert_minus_non_bert": 119936.536,
+    "precision_delta_bert_minus_non_bert": 0.0,
     "recall_delta_bert_minus_non_bert": 0.7,
     "status": "completed",
-    "throughput_ratio_bert_over_non_bert": 6.9e-05
+    "throughput_ratio_bert_over_non_bert": 5.4e-05
   },
-  "created_at": "2026-06-29T09:01:03+00:00",
+  "created_at": "2026-06-29T09:23:06+00:00",
   "dataset": {
     "dataset_id": "kg_matching_synonym_ablation_fixture_v1",
     "dataset_sha256": "sha256:1ea22ef1399560409a165ebcc9f8d3b3343a0fe5b157614873714b88e6cbc5a5",
@@ -154,7 +154,7 @@
   "runs": [
     {
       "algorithm": "rapidfuzz_compatible_lexical_v1",
-      "latency_ms": 6.239,
+      "latency_ms": 6.514,
       "metrics": {
         "accuracy": 0.4375,
         "f1": 0.181818,
@@ -375,28 +375,28 @@
           "status": "type_mismatch"
         }
       ],
-      "pairs_per_second": 2564.588356,
+      "pairs_per_second": 2456.414381,
       "run_id": "non_bert_lexical_baseline_v1",
       "status": "completed",
       "threshold": 0.7,
       "uses_neural_networks": false
     },
     {
-      "algorithm": "sentence_transformer_cosine_similarity_v1",
+      "algorithm": "sentence_transformer_cosine_similarity_with_core_type_gate_v2",
       "latency_breakdown_ms": {
-        "embedding": 499.969,
-        "model_load": 90247.466,
-        "scoring": 3.15
+        "embedding": 145.185,
+        "model_load": 119794.55,
+        "scoring": 3.288
       },
-      "latency_ms": 90750.609,
+      "latency_ms": 119943.05,
       "metrics": {
-        "accuracy": 0.8125,
-        "f1": 0.842105,
+        "accuracy": 0.875,
+        "f1": 0.888889,
         "false_negative": 2,
-        "false_positive": 1,
-        "precision": 0.888889,
+        "false_positive": 0,
+        "precision": 1.0,
         "recall": 0.8,
-        "true_negative": 5,
+        "true_negative": 6,
         "true_positive": 8
       },
       "model_device": "cpu",
@@ -413,6 +413,8 @@
           "score": 0.644205,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.644205,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -425,6 +427,8 @@
           "score": 0.787399,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.787399,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -437,6 +441,8 @@
           "score": 0.639438,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.639438,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -449,6 +455,8 @@
           "score": 0.834053,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.834053,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -461,6 +469,8 @@
           "score": 0.763071,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.763071,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -473,6 +483,8 @@
           "score": 0.83222,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.83222,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -485,6 +497,8 @@
           "score": 0.805722,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.805722,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -497,6 +511,8 @@
           "score": 0.724624,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.724624,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -509,6 +525,8 @@
           "score": 0.777162,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.777162,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -521,6 +539,8 @@
           "score": 0.975521,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.975521,
+            "left_core_supertype": "Organization",
+            "right_core_supertype": "Organization",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -533,6 +553,8 @@
           "score": 0.479787,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.479787,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -545,6 +567,8 @@
           "score": 0.491282,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.491282,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -557,6 +581,8 @@
           "score": 0.523695,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.523695,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -569,6 +595,8 @@
           "score": 0.669285,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.669285,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -581,6 +609,8 @@
           "score": 0.694453,
           "score_breakdown": {
             "embedding_cosine_similarity": 0.694453,
+            "left_core_supertype": "Concept",
+            "right_core_supertype": "Concept",
             "threshold": 0.7,
             "type_gate_passed": true
           },
@@ -589,17 +619,19 @@
         {
           "expected_same": false,
           "pair_id": "negative_person_project_same_label",
-          "predicted_same": true,
+          "predicted_same": false,
           "score": 1.0,
           "score_breakdown": {
             "embedding_cosine_similarity": 1.0,
+            "left_core_supertype": "Person",
+            "right_core_supertype": "Project",
             "threshold": 0.7,
-            "type_gate_passed": true
+            "type_gate_passed": false
           },
-          "status": "same_as_candidate"
+          "status": "type_mismatch"
         }
       ],
-      "pairs_per_second": 0.176307,
+      "pairs_per_second": 0.133397,
       "run_id": "bert_sentence_transformer_embedding_v1",
       "status": "completed",
       "threshold": 0.7,
@@ -614,5 +646,5 @@
       "uses_neural_networks": true
     }
   ],
-  "started_at": "2026-06-29T08:59:27+00:00"
+  "started_at": "2026-06-29T09:21:04+00:00"
 }

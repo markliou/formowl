@@ -45,6 +45,20 @@ status in each role's goal file and task completion in
   total runtime is still dominated by model load/CUDA initialization on this
   tiny 16-pair fixture, so do not use it to claim end-to-end GPU latency
   superiority.
+- 2026-06-29 BERT hit-rate improvement: the ablation harness now gates BERT
+  cosine-similarity matches through ontology core-supertype compatibility.
+  This changed the neural algorithm id to
+  `sentence_transformer_cosine_similarity_with_core_type_gate_v2`. The prior
+  false positive `Maya Chen` versus `Maya Chen` is now preserved as
+  `type_mismatch` because the fixture types are `Person` and `Project`.
+  Regenerated CPU/GPU artifacts now report precision 1.0, recall 0.8,
+  F1 0.888889, accuracy 0.875, and false positives 0. Compared with the
+  non-BERT lexical baseline, overall accuracy rises from 0.4375 to 0.875
+  (+43.75 percentage points), while positive-pair recall rises from 0.1 to
+  0.8 (+70 percentage points). GPU remains confirmed with `model_device=cuda:0`
+  in `kg_bert_ablation_bert_gpu_cu126_host.json`; current tiny-fixture latency
+  remains startup dominated and should not be used for end-to-end GPU speed
+  claims.
 
 ## 2026-06-27
 

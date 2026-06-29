@@ -243,7 +243,7 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
             "run_id": "bert_sentence_transformer_embedding_v1",
             "status": "blocked_missing_dependency",
             "uses_neural_networks": True,
-            "algorithm": "sentence_transformer_cosine_similarity_v1",
+            "algorithm": "sentence_transformer_cosine_similarity_with_core_type_gate_v2",
             "threshold": threshold,
             "model_name": model_name,
             "package_status": package_status,
@@ -271,7 +271,7 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
             "run_id": "bert_sentence_transformer_embedding_v1",
             "status": "blocked_model_execution_error",
             "uses_neural_networks": True,
-            "algorithm": "sentence_transformer_cosine_similarity_v1",
+            "algorithm": "sentence_transformer_cosine_similarity_with_core_type_gate_v2",
             "threshold": threshold,
             "model_name": model_name,
             "package_status": package_status,
@@ -287,18 +287,26 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
         left_embedding = _embedding_to_list(embeddings[index * 2])
         right_embedding = _embedding_to_list(embeddings[index * 2 + 1])
         score = _cosine(left_embedding, right_embedding)
-        predicted_same = score >= threshold
+        left_core_supertype = _core_supertype_for_pair(pair, side="left")
+        right_core_supertype = _core_supertype_for_pair(pair, side="right")
+        type_gate_passed = left_core_supertype == right_core_supertype
+        predicted_same = type_gate_passed and score >= threshold
         pair_results.append(
             {
                 "pair_id": pair.pair_id,
                 "expected_same": pair.expected_same,
                 "predicted_same": predicted_same,
                 "score": round(score, 6),
-                "status": "same_as_candidate" if predicted_same else "below_threshold",
+                "status": _semantic_status(
+                    predicted_same=predicted_same,
+                    type_gate_passed=type_gate_passed,
+                ),
                 "score_breakdown": {
                     "embedding_cosine_similarity": round(score, 6),
                     "threshold": threshold,
-                    "type_gate_passed": True,
+                    "type_gate_passed": type_gate_passed,
+                    "left_core_supertype": left_core_supertype,
+                    "right_core_supertype": right_core_supertype,
                 },
             }
         )
@@ -308,7 +316,7 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
         "run_id": "bert_sentence_transformer_embedding_v1",
         "status": "completed",
         "uses_neural_networks": True,
-        "algorithm": "sentence_transformer_cosine_similarity_v1",
+        "algorithm": "sentence_transformer_cosine_similarity_with_core_type_gate_v2",
         "threshold": threshold,
         "model_name": model_name,
         "package_status": package_status,
@@ -397,9 +405,7 @@ def write_report(path: Path, report: dict[str, Any]) -> None:
 
 def _record(pair: LabeledPair, *, side: str) -> ResolutionRecord:
     label = pair.left_label if side == "left" else pair.right_label
-    core_supertype = pair.core_supertype
-    if pair.pair_id == "negative_person_project_same_label" and side == "right":
-        core_supertype = "Project"
+    core_supertype = _core_supertype_for_pair(pair, side=side)
     return ResolutionRecord.from_candidate_atom(
         record_id=f"{side}_{pair.pair_id}",
         label=label,
@@ -410,6 +416,20 @@ def _record(pair: LabeledPair, *, side: str) -> ResolutionRecord:
         source_candidate_atom_id=f"catom_{side}_{pair.pair_id}",
         source_observation_ids=(f"obs_{side}_{pair.pair_id}",),
     )
+
+
+def _core_supertype_for_pair(pair: LabeledPair, *, side: str) -> str:
+    if pair.pair_id == "negative_person_project_same_label" and side == "right":
+        return "Project"
+    return pair.core_supertype
+
+
+def _semantic_status(*, predicted_same: bool, type_gate_passed: bool) -> str:
+    if not type_gate_passed:
+        return "type_mismatch"
+    if predicted_same:
+        return "same_as_candidate"
+    return "below_threshold"
 
 
 def _metrics(pair_results: list[dict[str, Any]]) -> dict[str, Any]:
