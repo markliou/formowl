@@ -1,0 +1,200 @@
+{
+  "artifact_id": "kg_objective_completion_audit_recovery_v1",
+  "audit_sha256": "86d550fd05bfb1ab1b453e805bcfe56827a476da43186bb32e962a0b41275039",
+  "claim_boundary": {
+    "supports_goal_complete_claim": false,
+    "supports_objective_completion_audit_claim": true,
+    "supports_production_ready_claim": false,
+    "supports_top_tier_scientific_validation_claim": false,
+    "supports_unreviewed_business_judgment_claim": false,
+    "supports_unreviewed_cross_user_merge_claim": false
+  },
+  "failed_gate_ids": [
+    "fair_external_baseline_comparison",
+    "annotation_adjudication_protocol",
+    "multimodal_semantic_validation",
+    "production_adapter_paths"
+  ],
+  "incomplete_requirement_count": 4,
+  "objective": "\u5b8c\u6210 FormOwl Knowledge Graph \u65b9\u6cd5\u63a2\u7d22\u8207\u9a57\u6536\uff1a\u88dc\u9f4a\u5916\u90e8\u8fd1\u671f\u6587\u737b\u6bd4\u8f03\u3001ontology \u7d50\u5408\u65b9\u6cd5\u3001\u4e0d\u540c\u4f7f\u7528\u8005 KG \u8207 KG \u878d\u5408\u5be6\u9a57\u3001\u591a\u6a21\u614b\u4f01\u696d\u8cc7\u6599\u9a57\u8b49\u3001\u4eba\u5de5\u4f5c\u696d/\u6a19\u8a3b/\u88c1\u6c7a\u6d41\u7a0b\u3001production adapter gate\uff0c\u4e26\u7528\u7e3d\u9a57\u6536\u5957\u4ef6\u6e05\u695a\u6a19\u793a\u5df2\u901a\u904e\u8207\u672a\u901a\u904e\u9805\u76ee\u3002",
+  "objective_complete": false,
+  "proved_requirement_count": 5,
+  "requirement_count": 9,
+  "requirement_rows": [
+    {
+      "blockers": [],
+      "description": "External recent literature comparison and baseline-selection rationale.",
+      "proved": true,
+      "required_gate_results": [
+        {
+          "blockers": [],
+          "gate_id": "external_recent_literature_baseline_protocol",
+          "passed": true,
+          "present": true
+        }
+      ],
+      "requirement_id": "external_recent_literature_comparison",
+      "status": "proved"
+    },
+    {
+      "blockers": [
+        "fair_external_baseline_comparison: fair external baseline run packet missing",
+        "fair_external_baseline_comparison: real Microsoft GraphRAG/LightRAG/HippoRAG package runs are not present",
+        "fair_external_baseline_comparison: human answer-quality adjudication packet is not present",
+        "fair_external_baseline_comparison: graph-quality validation packet is not present",
+        "fair_external_baseline_comparison: permission leak probe results are not present"
+      ],
+      "description": "Fair external baseline validation with real package runs and adjudication.",
+      "proved": false,
+      "required_gate_results": [
+        {
+          "blockers": [
+            "fair external baseline run packet missing",
+            "real Microsoft GraphRAG/LightRAG/HippoRAG package runs are not present",
+            "human answer-quality adjudication packet is not present",
+            "graph-quality validation packet is not present",
+            "permission leak probe results are not present"
+          ],
+          "gate_id": "fair_external_baseline_comparison",
+          "passed": false,
+          "present": true
+        }
+      ],
+      "requirement_id": "fair_external_baseline_validation",
+      "status": "incomplete"
+    },
+    {
+      "blockers": [],
+      "description": "Ontology integration method and type-governed graph validation.",
+      "proved": true,
+      "required_gate_results": [
+        {
+          "blockers": [],
+          "gate_id": "scoped_ontology_integration_method",
+          "passed": true,
+          "present": true
+        }
+      ],
+      "requirement_id": "ontology_integration_method",
+      "status": "proved"
+    },
+    {
+      "blockers": [],
+      "description": "Different-user KG and KG fusion experiment evidence.",
+      "proved": true,
+      "required_gate_results": [
+        {
+          "blockers": [],
+          "gate_id": "different_user_kg_fusion_method",
+          "passed": true,
+          "present": true
+        }
+      ],
+      "requirement_id": "different_user_kg_and_fusion",
+      "status": "proved"
+    },
+    {
+      "blockers": [
+        "multimodal_semantic_validation: enterprise multimodal validation packet missing",
+        "multimodal_semantic_validation: real enterprise multimodal pilot manifest is not present",
+        "multimodal_semantic_validation: enterprise spreadsheet/mail/meeting/video validation packets are not present",
+        "multimodal_semantic_validation: multimodal human adjudication and cross-modal permission leak probe are not present"
+      ],
+      "description": "Multimodal enterprise data validation.",
+      "proved": false,
+      "required_gate_results": [
+        {
+          "blockers": [
+            "enterprise multimodal validation packet missing",
+            "real enterprise multimodal pilot manifest is not present",
+            "enterprise spreadsheet/mail/meeting/video validation packets are not present",
+            "multimodal human adjudication and cross-modal permission leak probe are not present"
+          ],
+          "gate_id": "multimodal_semantic_validation",
+          "passed": false,
+          "present": true
+        }
+      ],
+      "requirement_id": "multimodal_enterprise_validation",
+      "status": "incomplete"
+    },
+    {
+      "blockers": [
+        "annotation_adjudication_protocol: human annotation results packet missing",
+        "annotation_adjudication_protocol: two independent first-pass human submissions are not present",
+        "annotation_adjudication_protocol: adjudication-open receipt, final adjudication, confusion matrix, and custody receipt are not present"
+      ],
+      "description": "Human workflow, annotation, adjudication, and confusion matrix evidence.",
+      "proved": false,
+      "required_gate_results": [
+        {
+          "blockers": [
+            "human annotation results packet missing",
+            "two independent first-pass human submissions are not present",
+            "adjudication-open receipt, final adjudication, confusion matrix, and custody receipt are not present"
+          ],
+          "gate_id": "annotation_adjudication_protocol",
+          "passed": false,
+          "present": true
+        }
+      ],
+      "requirement_id": "human_annotation_adjudication_protocol",
+      "status": "incomplete"
+    },
+    {
+      "blockers": [
+        "production_adapter_paths: production adapter evidence packet missing",
+        "production_adapter_paths: non-synthetic production deployment validation is not present",
+        "production_adapter_paths: human-reviewed false-merge labels are not present",
+        "production_adapter_paths: permission probes, rollback smoke, and production audit artifacts are not present"
+      ],
+      "description": "Production adapter path and non-synthetic deployment evidence.",
+      "proved": false,
+      "required_gate_results": [
+        {
+          "blockers": [
+            "production adapter evidence packet missing",
+            "non-synthetic production deployment validation is not present",
+            "human-reviewed false-merge labels are not present",
+            "permission probes, rollback smoke, and production audit artifacts are not present"
+          ],
+          "gate_id": "production_adapter_paths",
+          "passed": false,
+          "present": true
+        }
+      ],
+      "requirement_id": "production_adapter_gate",
+      "status": "incomplete"
+    },
+    {
+      "blockers": [],
+      "description": "Total acceptance suite clearly marks passed and failed gates.",
+      "proved": true,
+      "required_gate_results": [
+        {
+          "blockers": [],
+          "gate_id": "overclaim_guard",
+          "passed": true,
+          "present": true
+        }
+      ],
+      "requirement_id": "total_acceptance_reporting",
+      "status": "proved"
+    },
+    {
+      "blockers": [],
+      "description": "Recovered current state rejects unsupported production/top-tier/autonomous claims.",
+      "proved": true,
+      "required_gate_results": [
+        {
+          "blockers": [],
+          "gate_id": "overclaim_guard",
+          "passed": true,
+          "present": true
+        }
+      ],
+      "requirement_id": "current_recovery_overclaim_boundary",
+      "status": "proved"
+    }
+  ]
+}

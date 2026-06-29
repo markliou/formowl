@@ -1,0 +1,18 @@
+{
+  "artifact_type": "enterprise_multimodal_validation_rows_v1",
+  "modality": "video_ocr",
+  "rows": [
+    {
+      "candidate_id": "cand_video_ocr_001",
+      "extractor_run_id": "run_video_ocr_001",
+      "human_adjudicated": true,
+      "modality": "video_ocr",
+      "observation_id": "obs_video_ocr_001",
+      "row_sha256": "883448ed460be4ca0ddbe3c627a203d432f1c1ce83da4c51785d47f0a39342ac",
+      "source_asset_sha256": "0000000000000000000000000000000000000000000000000000000000000004",
+      "source_id": "src_video_ocr_001",
+      "task": "video_ocr_semantic_validation",
+      "validation_id": "val_video_ocr_001"
+    }
+  ]
+}

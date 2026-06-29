@@ -1,0 +1,213 @@
+{
+  "artifact_boundary": {
+    "counts_as_acceptance_gate": false,
+    "creates_graph_quality_review": false,
+    "creates_human_adjudication": false,
+    "creates_permission_probe_results": false,
+    "creates_run_artifacts": false,
+    "executes_packages": false,
+    "touches_real_evidence_root": false,
+    "writes_canonical_packet": false
+  },
+  "canonical_packet_not_written": "inputs/fair_external_baseline_run_packet.json",
+  "evidence_state": "non_evidence",
+  "forbidden_output_roots": [
+    "inputs/fair_baseline_real/",
+    "inputs/test_*",
+    "results/",
+    "templates/"
+  ],
+  "real_evidence_root_not_written": "inputs/fair_baseline_real",
+  "run_assignments_artifact": {
+    "artifact_type": "fair_external_baseline_run_assignments_v1",
+    "assignment_count": 3,
+    "assignment_rows": [
+      {
+        "baseline_id": "microsoft_graphrag",
+        "equalized_surface_contract_sha256s": {
+          "access_policy_sha256": "7c074ccf00f0d2d95c844494ab4d999bcacd6f285208b3e8752bfea4177e230d",
+          "completion_model_budget_sha256": "1c839ae3609025cc07d89ea0763e865dadfd95e4ccd8c4c11463ba48edb39f93",
+          "corpus_export_sha256": "c1ab4a9de28b845a885550c83b420a31ca75b69f131affae5558aff08d8eaf80",
+          "embedding_model_budget_sha256": "e637b9c7dd63db3bcc1b863d732b7c3e146cae2ca3632bfa50efff65c6fe7cda",
+          "evaluation_question_set_sha256": "ae23b0d66460203d8cefe128178a70907daa38824106c84f9ad87e53f431459f",
+          "ontology_mapping_sha256": "6e7ca1e504f56bed57f72c8aff308f161c2403eb379e97cd8f0fd5900b52574c",
+          "prompt_set_sha256": "e3c23626402a396b2b634975637d16b4a7903d71498c79314a84571b57c15389"
+        },
+        "package_source_url": "https://github.com/microsoft/graphrag",
+        "permission_probe_names": [
+          "revoked_grant_content_denied",
+          "private_content_not_returned",
+          "raw_asset_access_denied",
+          "entity_match_does_not_grant_access"
+        ],
+        "row_sha256": "82d032147f4e351c8db5b93516b7022d882a2dd806058b74197c494ef2e604d0",
+        "run_artifact_field_names": [
+          "package_lock_artifact",
+          "config_artifact",
+          "index_build_log_artifact",
+          "query_run_log_artifact",
+          "answer_output_artifact",
+          "graph_output_artifact",
+          "permission_probe_artifact"
+        ],
+        "source_ids": [
+          "microsoft_graphrag_paper",
+          "microsoft_graphrag_repo",
+          "microsoft_graphrag_docs"
+        ],
+        "source_urls": [
+          "https://arxiv.org/abs/2404.16130",
+          "https://github.com/microsoft/graphrag",
+          "https://microsoft.github.io/graphrag/"
+        ]
+      },
+      {
+        "baseline_id": "lightrag",
+        "equalized_surface_contract_sha256s": {
+          "access_policy_sha256": "7c074ccf00f0d2d95c844494ab4d999bcacd6f285208b3e8752bfea4177e230d",
+          "completion_model_budget_sha256": "1c839ae3609025cc07d89ea0763e865dadfd95e4ccd8c4c11463ba48edb39f93",
+          "corpus_export_sha256": "c1ab4a9de28b845a885550c83b420a31ca75b69f131affae5558aff08d8eaf80",
+          "embedding_model_budget_sha256": "e637b9c7dd63db3bcc1b863d732b7c3e146cae2ca3632bfa50efff65c6fe7cda",
+          "evaluation_question_set_sha256": "ae23b0d66460203d8cefe128178a70907daa38824106c84f9ad87e53f431459f",
+          "ontology_mapping_sha256": "6e7ca1e504f56bed57f72c8aff308f161c2403eb379e97cd8f0fd5900b52574c",
+          "prompt_set_sha256": "e3c23626402a396b2b634975637d16b4a7903d71498c79314a84571b57c15389"
+        },
+        "package_source_url": "https://github.com/HKUDS/LightRAG",
+        "permission_probe_names": [
+          "revoked_grant_content_denied",
+          "private_content_not_returned",
+          "raw_asset_access_denied",
+          "entity_match_does_not_grant_access"
+        ],
+        "row_sha256": "f815dc00c861578a0e9add4f8e0ddb9a2dba7afc031d0d98005227bdb5680e6d",
+        "run_artifact_field_names": [
+          "package_lock_artifact",
+          "config_artifact",
+          "index_build_log_artifact",
+          "query_run_log_artifact",
+          "answer_output_artifact",
+          "graph_output_artifact",
+          "permission_probe_artifact"
+        ],
+        "source_ids": [
+          "lightrag_paper",
+          "lightrag_repo"
+        ],
+        "source_urls": [
+          "https://arxiv.org/abs/2410.05779",
+          "https://github.com/HKUDS/LightRAG"
+        ]
+      },
+      {
+        "baseline_id": "hipporag",
+        "equalized_surface_contract_sha256s": {
+          "access_policy_sha256": "7c074ccf00f0d2d95c844494ab4d999bcacd6f285208b3e8752bfea4177e230d",
+          "completion_model_budget_sha256": "1c839ae3609025cc07d89ea0763e865dadfd95e4ccd8c4c11463ba48edb39f93",
+          "corpus_export_sha256": "c1ab4a9de28b845a885550c83b420a31ca75b69f131affae5558aff08d8eaf80",
+          "embedding_model_budget_sha256": "e637b9c7dd63db3bcc1b863d732b7c3e146cae2ca3632bfa50efff65c6fe7cda",
+          "evaluation_question_set_sha256": "ae23b0d66460203d8cefe128178a70907daa38824106c84f9ad87e53f431459f",
+          "ontology_mapping_sha256": "6e7ca1e504f56bed57f72c8aff308f161c2403eb379e97cd8f0fd5900b52574c",
+          "prompt_set_sha256": "e3c23626402a396b2b634975637d16b4a7903d71498c79314a84571b57c15389"
+        },
+        "package_source_url": "https://github.com/OSU-NLP-Group/HippoRAG",
+        "permission_probe_names": [
+          "revoked_grant_content_denied",
+          "private_content_not_returned",
+          "raw_asset_access_denied",
+          "entity_match_does_not_grant_access"
+        ],
+        "row_sha256": "451ff39026b2513811d4e9aff69eb67dc90297cd45394af5ddc3a98bdafe407b",
+        "run_artifact_field_names": [
+          "package_lock_artifact",
+          "config_artifact",
+          "index_build_log_artifact",
+          "query_run_log_artifact",
+          "answer_output_artifact",
+          "graph_output_artifact",
+          "permission_probe_artifact"
+        ],
+        "source_ids": [
+          "hipporag_paper",
+          "hipporag2_paper",
+          "hipporag_repo"
+        ],
+        "source_urls": [
+          "https://arxiv.org/abs/2405.14831",
+          "https://arxiv.org/abs/2502.14802",
+          "https://github.com/OSU-NLP-Group/HippoRAG"
+        ]
+      }
+    ],
+    "assignments_sha256": "6f16d3a33dcb9159329a54f8504d9a54d3bc6496891b2ecb283497655aeaf0a0",
+    "manifest_sha256": "ce7f2c1b08173c95b2ce1bfd30ca40e4c2159e32de0d98e60d86738017508f3d"
+  },
+  "run_manifest_artifact": {
+    "artifact_type": "fair_external_baseline_run_manifest_v1",
+    "baseline_ids": [
+      "microsoft_graphrag",
+      "lightrag",
+      "hipporag"
+    ],
+    "equalized_surface_contract_sha256s": {
+      "access_policy_sha256": "7c074ccf00f0d2d95c844494ab4d999bcacd6f285208b3e8752bfea4177e230d",
+      "completion_model_budget_sha256": "1c839ae3609025cc07d89ea0763e865dadfd95e4ccd8c4c11463ba48edb39f93",
+      "corpus_export_sha256": "c1ab4a9de28b845a885550c83b420a31ca75b69f131affae5558aff08d8eaf80",
+      "embedding_model_budget_sha256": "e637b9c7dd63db3bcc1b863d732b7c3e146cae2ca3632bfa50efff65c6fe7cda",
+      "evaluation_question_set_sha256": "ae23b0d66460203d8cefe128178a70907daa38824106c84f9ad87e53f431459f",
+      "ontology_mapping_sha256": "6e7ca1e504f56bed57f72c8aff308f161c2403eb379e97cd8f0fd5900b52574c",
+      "prompt_set_sha256": "e3c23626402a396b2b634975637d16b4a7903d71498c79314a84571b57c15389"
+    },
+    "locked_baselines": [
+      {
+        "baseline_id": "microsoft_graphrag",
+        "package_source_url": "https://github.com/microsoft/graphrag",
+        "source_ids": [
+          "microsoft_graphrag_paper",
+          "microsoft_graphrag_repo",
+          "microsoft_graphrag_docs"
+        ],
+        "source_urls": [
+          "https://arxiv.org/abs/2404.16130",
+          "https://github.com/microsoft/graphrag",
+          "https://microsoft.github.io/graphrag/"
+        ]
+      },
+      {
+        "baseline_id": "lightrag",
+        "package_source_url": "https://github.com/HKUDS/LightRAG",
+        "source_ids": [
+          "lightrag_paper",
+          "lightrag_repo"
+        ],
+        "source_urls": [
+          "https://arxiv.org/abs/2410.05779",
+          "https://github.com/HKUDS/LightRAG"
+        ]
+      },
+      {
+        "baseline_id": "hipporag",
+        "package_source_url": "https://github.com/OSU-NLP-Group/HippoRAG",
+        "source_ids": [
+          "hipporag_paper",
+          "hipporag2_paper",
+          "hipporag_repo"
+        ],
+        "source_urls": [
+          "https://arxiv.org/abs/2405.14831",
+          "https://arxiv.org/abs/2502.14802",
+          "https://github.com/OSU-NLP-Group/HippoRAG"
+        ]
+      }
+    ],
+    "manifest_sha256": "ce7f2c1b08173c95b2ce1bfd30ca40e4c2159e32de0d98e60d86738017508f3d",
+    "source_lock_sha256": "addba921e9cc4ebc4ded09b26d23a25a29aeba4f0e15e4dacb711f29dcedb2da"
+  },
+  "safe_output_root": "work_packets/",
+  "validator_expectation": {
+    "authoritative_validator_must_be_run_separately": true,
+    "this_packet_is_sufficient_for_fair_baseline_gate": false
+  },
+  "work_packet_sha256": "37d5c1aaf85bf2237cc69acedd3ede426e97a55f7a99d6712222279441336387",
+  "work_packet_state": "operator_assignment_only",
+  "work_packet_type": "fair_baseline_run_work_packet_preview_v1"
+}

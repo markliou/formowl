@@ -1,0 +1,33 @@
+{
+  "approval_scope": {
+    "confirmed_authoritative_validator_required_after_promotion": true,
+    "confirmed_candidate_only_boundary": true,
+    "confirmed_no_raw_internal_paths": true,
+    "confirmed_no_templates_fixtures_or_sandbox_artifacts": true,
+    "reviewed_candidate_manifest": true,
+    "reviewed_candidate_validation_report": true,
+    "reviewed_real_artifacts": true
+  },
+  "approval_timestamp_utc": "YYYY-MM-DDTHH:MM:SSZ",
+  "approved_by": "human:REVIEWER_ID",
+  "candidate_manifest": "work_packets/annotation_adjudication_protocol_candidate_manifest.json",
+  "candidate_manifest_sha256": "fill-with-64-hex-candidate-manifest-sha256",
+  "candidate_validation_report": "work_packets/OPERATOR_candidate_validation_report.json",
+  "candidate_validation_report_sha256": "fill-with-64-hex-report-sha256",
+  "canonical_packet": "inputs/human_annotation_results_v1.json",
+  "canonical_packet_update_approved": true,
+  "claim_boundary": {
+    "approval_manifest_is_evidence": false,
+    "authoritative_validators_required_after_promotion": true,
+    "candidate_validation_report_is_evidence": false,
+    "execute_mode_counts_as_acceptance_gate": false,
+    "execute_mode_promotes_canonical_packet": true,
+    "execute_mode_writes_canonical_packet": true
+  },
+  "do_not_submit_as_evidence": true,
+  "gate_id": "annotation_adjudication_protocol",
+  "manifest_type": "kg_real_evidence_governance_approval_v1",
+  "manual_governance_review_completed": true,
+  "target_candidate_validation_passed": true,
+  "template_only": true
+}

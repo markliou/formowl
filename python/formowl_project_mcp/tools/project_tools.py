@@ -55,7 +55,7 @@ class ProjectMcpTools:
             return envelope
 
         work_item = context["work_item"]
-        source_refs = [work_item["source_ref"]]
+        source_refs = _collect_context_source_refs(context)
         permission_scope = work_item.get("permission_scope")
         context_markdown = build_context_markdown(context)
         evidence_snapshot_ids: list[str] = []
@@ -97,7 +97,7 @@ class ProjectMcpTools:
         started = time.perf_counter()
         activities = self.adapter.list_work_item_activities(input_data)
         evidence_snapshot_ids: list[str] = []
-        source_refs = [input_data.get("source_ref", {})]
+        source_refs = _collect_activity_source_refs(input_data, activities)
         if input_data.get("create_evidence_snapshot", False):
             normalized = build_activities_markdown(activities)
             snapshot_ref = self._create_evidence_snapshot(
@@ -122,13 +122,26 @@ class ProjectMcpTools:
     def list_work_item_relations(self, input_data: dict[str, Any]) -> dict[str, Any]:
         started = time.perf_counter()
         relations = self.adapter.list_work_item_relations(input_data)
+        source_refs = _collect_relation_source_refs(input_data, relations)
+        evidence_snapshot_ids: list[str] = []
+        if input_data.get("create_evidence_snapshot", False):
+            snapshot_ref = self._create_evidence_snapshot(
+                "list_work_item_relations",
+                input_data,
+                {"relations": relations},
+                build_relations_markdown(relations),
+                source_refs,
+                None,
+            )
+            evidence_snapshot_ids.append(snapshot_ref["evidence_snapshot_id"])
         envelope = _envelope(
             "work_item_relations",
             "ok",
             {"relations": relations},
-            source_refs=[input_data.get("source_ref", {})],
+            source_refs=source_refs,
+            evidence_snapshot_ids=evidence_snapshot_ids,
         )
-        self._log("list_work_item_relations", input_data, envelope, started)
+        self._log("list_work_item_relations", input_data, envelope, started, evidence_snapshot_ids)
         return envelope
 
     def get_project_status(self, input_data: dict[str, Any]) -> dict[str, Any]:
@@ -263,6 +276,87 @@ def build_activities_markdown(activities: list[dict[str, Any]]) -> str:
         label = activity.get("activity_id", "activity")
         lines.append(f"- {label}: {activity.get('body', '')}")
     return "\n".join(lines).strip() + "\n"
+
+
+def build_relations_markdown(relations: list[dict[str, Any]]) -> str:
+    lines = ["# Work Item Relations", ""]
+    for relation in relations:
+        relation_id = relation.get("relation_id", "relation")
+        target = relation.get("target_ref", {})
+        target_label = target.get("source_key") or target.get("source_id") or "unknown target"
+        lines.append(f"- {relation_id}: {relation.get('relation_type', 'related')} {target_label}")
+    return "\n".join(lines).strip() + "\n"
+
+
+def _collect_context_source_refs(context: dict[str, Any]) -> list[dict[str, Any]]:
+    # Context packages and evidence snapshots must preserve all returned
+    # OpenProject evidence refs, not only the top-level work package.
+    source_refs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_ref(value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+        key = sha256_json(value)
+        if key not in seen:
+            seen.add(key)
+            source_refs.append(value)
+
+    add_ref(context.get("work_item", {}).get("source_ref"))
+    for comment in context.get("comments", []):
+        add_ref(comment.get("source_ref"))
+    for activity in context.get("activities", []):
+        add_ref(activity.get("source_ref"))
+    for relation in context.get("relations", []):
+        add_ref(relation.get("relation_source_ref"))
+        add_ref(relation.get("source_ref"))
+        add_ref(relation.get("target_ref"))
+    for attachment in context.get("attachments", []):
+        add_ref(attachment.get("source_ref"))
+    return source_refs
+
+
+def _collect_activity_source_refs(
+    input_data: dict[str, Any], activities: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    refs = [input_data.get("source_ref", {})]
+    refs.extend(activity.get("source_ref") for activity in activities)
+    return _dedupe_source_refs(refs)
+
+
+def _collect_relation_source_refs(
+    input_data: dict[str, Any], relations: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    refs: list[Any] = []
+    for relation in relations:
+        refs.extend(
+            [
+                relation.get("source_ref"),
+                relation.get("relation_source_ref"),
+                relation.get("target_ref"),
+            ]
+        )
+    if not refs:
+        refs.append(input_data.get("source_ref", {}))
+    return _dedupe_source_refs(refs)
+
+
+def _dedupe_source_refs(values: list[Any]) -> list[dict[str, Any]]:
+    source_refs: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        key = (
+            str(value.get("source_system") or ""),
+            str(value.get("source_type") or ""),
+            str(value.get("source_id") or ""),
+        )
+        if not all(key) or key in seen:
+            continue
+        seen.add(key)
+        source_refs.append(value)
+    return source_refs
 
 
 def _append_comment_section(

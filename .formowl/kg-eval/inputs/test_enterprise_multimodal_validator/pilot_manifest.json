@@ -1,0 +1,55 @@
+{
+  "artifact_type": "enterprise_multimodal_pilot_manifest_v1",
+  "real_enterprise_pilot": true,
+  "source_artifacts": [
+    {
+      "asset_id": "asset_spreadsheet_001",
+      "asset_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+      "formowl_locator": "formowl://asset/asset_spreadsheet_001",
+      "modality": "spreadsheet",
+      "permission_scope_id": "workspace_finance_ops",
+      "raw_path_exposed": false,
+      "real_enterprise_data": true,
+      "row_sha256": "1609d5241c6ebbe5c8716dbba789ce2d23e0e615ec55ea7277b44f1c9a18c490",
+      "source_id": "src_spreadsheet_001",
+      "text_proxy_only": false
+    },
+    {
+      "asset_id": "asset_mail_001",
+      "asset_sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "formowl_locator": "formowl://asset/asset_mail_001",
+      "modality": "mail",
+      "permission_scope_id": "workspace_finance_ops",
+      "raw_path_exposed": false,
+      "real_enterprise_data": true,
+      "row_sha256": "610a71b77194a463442cce0676623f11d1499b6aaab2efd6f905293aa79b265b",
+      "source_id": "src_mail_001",
+      "text_proxy_only": false
+    },
+    {
+      "asset_id": "asset_meeting_audio_001",
+      "asset_sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+      "formowl_locator": "formowl://asset/asset_meeting_audio_001",
+      "modality": "meeting_audio",
+      "permission_scope_id": "workspace_finance_ops",
+      "raw_path_exposed": false,
+      "real_enterprise_data": true,
+      "row_sha256": "29dac92ad98808645568a21e1863a99a5fc3c8e774cb1267fe474913f8339e2f",
+      "source_id": "src_meeting_audio_001",
+      "text_proxy_only": false
+    },
+    {
+      "asset_id": "asset_video_ocr_001",
+      "asset_sha256": "0000000000000000000000000000000000000000000000000000000000000004",
+      "formowl_locator": "formowl://asset/asset_video_ocr_001",
+      "modality": "video_ocr",
+      "permission_scope_id": "workspace_finance_ops",
+      "raw_path_exposed": false,
+      "real_enterprise_data": true,
+      "row_sha256": "5a83990fac4d8e48bc8b73d65ab8b4615d2504579cc4bd6f7a013299535055db",
+      "source_id": "src_video_ocr_001",
+      "text_proxy_only": false
+    }
+  ],
+  "synthetic_or_demo": false
+}

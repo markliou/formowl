@@ -1,0 +1,16 @@
+{
+  "artifact_type": "enterprise_multimodal_permission_probe_v1",
+  "completed": true,
+  "cross_modal_private_leak_count": 0,
+  "entity_match_does_not_grant_access": true,
+  "private_content_not_returned": true,
+  "raw_asset_access_count": 0,
+  "raw_asset_access_denied": true,
+  "revoked_grant_content_denied": true,
+  "source_ids": [
+    "src_mail_001",
+    "src_meeting_audio_001",
+    "src_spreadsheet_001",
+    "src_video_ocr_001"
+  ]
+}

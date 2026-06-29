@@ -1,0 +1,831 @@
+#!/usr/bin/env python3
+"""Seal production adapter operator responses into candidate artifacts.
+
+This helper bridges non-evidence production adapter collection packets and the
+authoritative production adapter validator. It writes candidate artifacts only
+under the real production adapter root and never promotes canonical packets.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+import production_adapter_collection_packet_generator as work_packet_generator
+import production_adapter_packet_assembler as assembler
+import production_adapter_path_validator as validator
+import public_reproducible_evidence as public_evidence
+
+
+ROOT = Path(__file__).resolve().parent
+REAL_ROOT = validator.REAL_ARTIFACT_ROOT_PATH
+REAL_ROOT_PARTS = tuple(Path(validator.REAL_ARTIFACT_ROOT).parts)
+WORK_PACKETS = ROOT / "work_packets"
+SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,96}$")
+ARTIFACT_FILENAMES = {
+    "deployment_manifest_artifact": "deployment_manifest.json",
+    "human_false_merge_label_artifact": "false_merge_labels.json",
+    "llm_subagent_adjudication_artifact": "llm_subagent_adjudication.json",
+    "audit_trail_artifact": "audit_trail.json",
+    "permission_probe_artifact": "permission_probe.json",
+    "rollback_smoke_artifact": "rollback_smoke.json",
+    "public_evidence_manifest_artifact": "public_evidence_manifest.json",
+}
+COMMON_ARTIFACT_FIELDS = {
+    "deployment_manifest_artifact",
+    "human_false_merge_label_artifact",
+    "audit_trail_artifact",
+    "permission_probe_artifact",
+    "rollback_smoke_artifact",
+}
+RESPONSE_PACKET_ALLOWED_FIELDS = {
+    "response_packet_type",
+    "operator_run_id",
+    "adapter_artifacts",
+    "evidence_source_mode",
+    *ARTIFACT_FILENAMES,
+}
+RAW_INTERNAL_FIELD_NAMES = {
+    "absolute_path",
+    "backend_path",
+    "bucket",
+    "backend_connection_string",
+    "connection_dsn",
+    "connection_string",
+    "connection_uri",
+    "database_uri",
+    "database_url",
+    "db_uri",
+    "db_url",
+    "dsn",
+    "file_path",
+    "filesystem_path",
+    "jdbc_url",
+    "local_path",
+    "nas_path",
+    "nfs_path",
+    "object_key",
+    "object_store_uri",
+    "object_store_url",
+    "object_uri",
+    "postgres_uri",
+    "postgresql_uri",
+    "raw_path",
+    "raw_paths",
+    "raw_sql",
+    "s3_uri",
+    "scratch_path",
+    "sql",
+    "storage_uri",
+    "worker_scratch_path",
+}
+CUSTODY_RECEIPT_FILENAME = "response_custody_receipt.json"
+
+
+class IntakeError(ValueError):
+    """Raised when production adapter response intake would be unsafe or invalid."""
+
+
+def _artifact_json_text(payload: object) -> str:
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def sha256_artifact_payload(payload: object) -> str:
+    return hashlib.sha256(_artifact_json_text(payload).encode("utf-8")).hexdigest()
+
+
+def load_json_file(path: Path) -> dict[str, Any]:
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise IntakeError("input JSON must be an object")
+    return loaded
+
+
+def _artifact_ref(path: Path) -> str:
+    return str(path.relative_to(ROOT))
+
+
+def _relative_artifact_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _ensure_safe_identifier(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise IntakeError(f"{field_name} must be a non-empty string")
+    if not SAFE_ID_RE.match(value):
+        raise IntakeError(f"{field_name} must be a safe identifier")
+    lowered = value.lower()
+    if any(marker in lowered for marker in ("test_", "fixture", "template")):
+        raise IntakeError(f"{field_name} must not use test fixture or template markers")
+    return value
+
+
+def _is_test_or_sandbox_path_parts(parts: tuple[str, ...]) -> bool:
+    return any(
+        part == "assembler_test"
+        or part == "sandbox"
+        or part.startswith("sandbox_")
+        or part.endswith("_sandbox")
+        or part.startswith("test_")
+        or part.endswith("_test")
+        or part.startswith("preflight_test")
+        or part == "validator_fixture"
+        for part in parts
+    )
+
+
+def safe_real_output_dir(path_value: str, *, allow_test_artifacts: bool = False) -> Path:
+    if not isinstance(path_value, str) or not path_value.strip():
+        raise IntakeError("output_dir must be a non-empty string")
+    path = Path(path_value)
+    if path.is_absolute() or ".." in path.parts or "." in path.parts:
+        raise IntakeError("output_dir must be a safe relative path")
+    if (
+        len(path.parts) <= len(REAL_ROOT_PARTS)
+        or path.parts[: len(REAL_ROOT_PARTS)] != REAL_ROOT_PARTS
+    ):
+        raise IntakeError(f"output_dir must live under {validator.REAL_ARTIFACT_ROOT}")
+    real_root_relative_parts = path.parts[len(REAL_ROOT_PARTS) :]
+    if any(
+        part == "templates" or part.endswith(".template.json") for part in real_root_relative_parts
+    ):
+        raise IntakeError("output_dir must not use template paths")
+    if not allow_test_artifacts and _is_test_or_sandbox_path_parts(real_root_relative_parts):
+        raise IntakeError("output_dir must not use test or sandbox paths")
+    if not allow_test_artifacts and len(real_root_relative_parts) != 1:
+        raise IntakeError(
+            f"output_dir must be exactly {validator.REAL_ARTIFACT_ROOT}/<operator_run_id>"
+        )
+    current = ROOT
+    for part in path.parts:
+        current = current / part
+        if current.is_symlink():
+            raise IntakeError("output_dir symlinks are not accepted")
+    resolved = (ROOT / path).resolve()
+    try:
+        resolved.relative_to(REAL_ROOT.resolve())
+    except ValueError as exc:
+        raise IntakeError("output_dir escapes the real production adapter root") from exc
+    return resolved
+
+
+def safe_work_packet_output_path(path_value: str) -> Path:
+    if not isinstance(path_value, str) or not path_value.strip():
+        raise IntakeError("assembly manifest output path must be a non-empty string")
+    path = Path(path_value)
+    if path.is_absolute() or ".." in path.parts or "." in path.parts:
+        raise IntakeError("assembly manifest output path must be a safe relative path")
+    if not path.parts or path.parts[0] != "work_packets":
+        raise IntakeError("assembly manifest output path must live under work_packets/")
+    current = ROOT
+    for part in path.parts:
+        current = current / part
+        if current.is_symlink():
+            raise IntakeError("assembly manifest output symlinks are not accepted")
+    resolved = (ROOT / path).resolve()
+    try:
+        resolved.relative_to(WORK_PACKETS.resolve())
+    except ValueError as exc:
+        raise IntakeError("assembly manifest output escapes work_packets/") from exc
+    return resolved
+
+
+def _reject_symlink_components(path: Path, field_name: str) -> None:
+    rel_path = path.relative_to(ROOT)
+    current = ROOT
+    for part in rel_path.parts:
+        current = current / part
+        if current.is_symlink():
+            raise IntakeError(f"{field_name} symlinks are not accepted")
+
+
+def _write_json(path: Path, payload: object) -> None:
+    _reject_symlink_components(path, "intake output")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _reject_symlink_components(path, "intake output")
+    created = False
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            created = True
+            handle.write(_artifact_json_text(payload))
+    except FileExistsError as exc:
+        raise IntakeError(
+            f"intake output would overwrite existing artifact: {_relative_artifact_path(path)}"
+        ) from exc
+    except Exception as exc:
+        if created:
+            try:
+                if path.is_symlink() or path.is_file():
+                    path.unlink()
+            except FileNotFoundError:
+                pass
+        raise IntakeError(f"intake output write failed: {_relative_artifact_path(path)}") from exc
+
+
+def _cleanup_created_outputs(created_paths: list[Path], output_path: Path) -> None:
+    for path in reversed(created_paths):
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+        except FileNotFoundError:
+            pass
+    output_dirs = {
+        path.parent
+        for path in created_paths
+        if path.parent == output_path or output_path in path.parents
+    }
+    output_dirs.add(output_path)
+    for path in sorted(output_dirs, key=lambda item: len(item.parts), reverse=True):
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+
+
+def _ensure_parent_dirs_available(paths: dict[str, Path]) -> None:
+    for path in paths.values():
+        try:
+            rel_parent = path.parent.relative_to(ROOT)
+        except ValueError as exc:
+            raise IntakeError("intake output parent escapes workspace") from exc
+        current = ROOT
+        for part in rel_parent.parts:
+            current = current / part
+            if current.is_symlink():
+                raise IntakeError("intake output parent symlinks are not accepted")
+            if current.exists() and not current.is_dir():
+                raise IntakeError("intake output parent must be a directory")
+
+
+def _ensure_no_overwrite(paths: dict[str, Path]) -> None:
+    existing = [
+        _relative_artifact_path(path)
+        for path in paths.values()
+        if path.exists() or path.is_symlink()
+    ]
+    if existing:
+        raise IntakeError(
+            "intake output would overwrite existing artifacts: " + ", ".join(sorted(existing))
+        )
+
+
+def _validated_work_packet(work_packet: dict[str, Any]) -> None:
+    if work_packet.get("work_packet_type") != "production_adapter_collection_packet_preview_v1":
+        raise IntakeError("work packet type mismatch")
+    boundary = work_packet.get("artifact_boundary")
+    if not isinstance(boundary, dict):
+        raise IntakeError("work packet artifact boundary missing")
+    for field in (
+        "creates_deployment_manifest",
+        "creates_component_evidence",
+        "creates_human_label_results",
+        "creates_audit_events",
+        "creates_permission_probe_results",
+        "creates_rollback_smoke_results",
+        "writes_assembly_manifest",
+        "writes_canonical_packet",
+        "touches_real_evidence_root",
+        "counts_as_acceptance_gate",
+    ):
+        if boundary.get(field) is not False:
+            raise IntakeError(f"work packet {field} must be false")
+    expected = work_packet_generator.build_work_packet()
+    for field in (
+        "work_packet_state",
+        "evidence_state",
+        "safe_output_root",
+        "forbidden_output_roots",
+        "canonical_packet_not_written",
+        "real_evidence_root_not_written",
+        "component_collection_plan",
+        "audit_collection_plan",
+        "review_probe_collection_plan",
+        "validator_expectation",
+        "work_packet_sha256",
+    ):
+        if work_packet.get(field) != expected[field]:
+            raise IntakeError(f"work packet {field} mismatch")
+
+
+def _validate_response_packet_fields(response_packet: dict[str, Any]) -> None:
+    unsupported = sorted(set(response_packet) - RESPONSE_PACKET_ALLOWED_FIELDS)
+    if unsupported:
+        raise IntakeError("response packet has unsupported fields: " + ", ".join(unsupported))
+
+
+def _reject_raw_internal_fields(payload: Any, *, label: str) -> None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if isinstance(key, str) and key in RAW_INTERNAL_FIELD_NAMES:
+                raise IntakeError(f"{label} contains raw/internal artifact field: {key}")
+            _reject_raw_internal_fields(value, label=label)
+    elif isinstance(payload, list):
+        for value in payload:
+            _reject_raw_internal_fields(value, label=label)
+
+
+def _safe_payload(payload: object, field_name: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise IntakeError(f"{field_name} must be a JSON object")
+    try:
+        assembler.reject_template_or_placeholder_payload(payload, label=field_name)
+        assembler.reject_raw_internal_payload(payload, label=field_name)
+    except assembler.AssemblyError as exc:
+        raise IntakeError(str(exc)) from exc
+    _reject_raw_internal_fields(payload, label=field_name)
+    return payload
+
+
+def _adapter_payloads(response_packet: dict[str, Any]) -> list[dict[str, Any]]:
+    entries = response_packet.get("adapter_artifacts")
+    if not isinstance(entries, list):
+        raise IntakeError("adapter_artifacts must be a list")
+    by_component: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise IntakeError("adapter artifact entry must be a JSON object")
+        unsupported = sorted(set(entry) - {"component_id", "artifact"})
+        if unsupported:
+            raise IntakeError("adapter artifact entry has unsupported fields")
+        component_id = entry.get("component_id")
+        if component_id not in validator.REQUIRED_COMPONENTS:
+            raise IntakeError("adapter artifact component is unsupported")
+        if component_id in by_component:
+            raise IntakeError("adapter artifacts must be distinct by component_id")
+        by_component[component_id] = _safe_payload(entry.get("artifact"), "adapter artifact")
+    missing = sorted(set(validator.REQUIRED_COMPONENTS) - set(by_component))
+    if missing:
+        raise IntakeError("adapter artifacts missing components: " + ", ".join(missing))
+    return [
+        {"component_id": component_id, "artifact": by_component[component_id]}
+        for component_id in validator.REQUIRED_COMPONENTS
+    ]
+
+
+def _uses_llm_adjudication_route(response_packet: dict[str, Any]) -> bool:
+    return "llm_subagent_adjudication_artifact" in response_packet
+
+
+def _evidence_source_mode(response_packet: dict[str, Any]) -> str | None:
+    mode = response_packet.get("evidence_source_mode")
+    has_public_manifest = "public_evidence_manifest_artifact" in response_packet
+    if mode is None and not has_public_manifest:
+        return None
+    if mode not in public_evidence.ALLOWED_MODES:
+        raise IntakeError("evidence_source_mode is unsupported")
+    if mode == public_evidence.PUBLIC_MODE and not has_public_manifest:
+        raise IntakeError("public evidence mode requires a public evidence manifest")
+    if mode == public_evidence.PRIVATE_MODE and has_public_manifest:
+        raise IntakeError("operator-private mode must not include a public evidence manifest")
+    return mode
+
+
+def _validate_route_review_flags(
+    *,
+    deployment_manifest: dict[str, Any],
+    false_merge_labels: dict[str, Any],
+    llm_route: bool,
+) -> None:
+    if llm_route:
+        if deployment_manifest.get("deployment_approved_by_llm_subagent_panel") is not True:
+            raise IntakeError("deployment manifest must be LLM subagent approved")
+        if deployment_manifest.get("deployment_approved_by_human") is True:
+            raise IntakeError("deployment manifest must not claim human approval")
+        if false_merge_labels.get("reviewer_type") != "four_specialist_llm_subagent_panel":
+            raise IntakeError("false-merge labels must use the LLM subagent panel reviewer type")
+        if false_merge_labels.get("llm_subagent_panel_reviewed") is not True:
+            raise IntakeError("false-merge labels must be LLM subagent panel reviewed")
+        rows = false_merge_labels.get("rows")
+        if not isinstance(rows, list):
+            raise IntakeError("false-merge label rows must be a list")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise IntakeError("false-merge label row must be a JSON object")
+            if row.get("reviewer_type") != "four_specialist_llm_subagent_panel":
+                raise IntakeError("false-merge label row must use the LLM subagent reviewer type")
+            if row.get("llm_subagent_reviewed") is not True:
+                raise IntakeError("false-merge label row must be LLM subagent reviewed")
+            if row.get("human_reviewed") not in {None, False}:
+                raise IntakeError("false-merge label row must not claim human review")
+            human_reviewer_id = row.get("human_reviewer_id")
+            if isinstance(human_reviewer_id, str) and human_reviewer_id:
+                raise IntakeError("false-merge label row must not retain a human reviewer id")
+    else:
+        if deployment_manifest.get("deployment_approved_by_human") is not True:
+            raise IntakeError("deployment manifest must be human approved")
+        if deployment_manifest.get("deployment_approved_by_llm_subagent_panel") not in {
+            None,
+            False,
+        }:
+            raise IntakeError("deployment manifest must not claim LLM subagent approval")
+        if false_merge_labels.get("reviewer_type") != "human":
+            raise IntakeError("false-merge labels must use the human reviewer type")
+
+
+def _planned_paths(
+    output_dir: Path,
+    adapter_payloads: list[dict[str, Any]],
+    *,
+    llm_route: bool,
+    public_mode: bool = False,
+) -> dict[str, Path]:
+    fields = list(sorted(COMMON_ARTIFACT_FIELDS))
+    if llm_route:
+        fields.append("llm_subagent_adjudication_artifact")
+    if public_mode:
+        fields.append("public_evidence_manifest_artifact")
+    paths = {field: output_dir / ARTIFACT_FILENAMES[field] for field in fields}
+    for row in adapter_payloads:
+        component_id = row["component_id"]
+        paths[f"adapter::{component_id}"] = output_dir / f"adapter_{component_id}.json"
+    paths["response_custody_receipt"] = output_dir / CUSTODY_RECEIPT_FILENAME
+    return paths
+
+
+def _artifact_receipts(paths: dict[str, Path]) -> list[dict[str, str]]:
+    receipts = []
+    for key, path in sorted(paths.items()):
+        if key == "response_custody_receipt":
+            continue
+        row: dict[str, str] = {
+            "field": key,
+            "path": _artifact_ref(path),
+            "sha256": validator.sha256_file(path) or "",
+        }
+        if key.startswith("adapter::"):
+            row["component_id"] = key.split("::", 1)[1]
+            row["artifact_field"] = "adapter_artifact"
+        receipts.append(row)
+    return receipts
+
+
+def _planned_artifact_refs(planned_paths: dict[str, Path]) -> list[str]:
+    return sorted(_artifact_ref(path) for path in planned_paths.values())
+
+
+def preflight_response_packet(
+    *,
+    work_packet: dict[str, Any],
+    response_packet: dict[str, Any],
+    output_dir: str,
+    assembly_manifest_output: str | None = None,
+    allow_test_artifacts: bool = False,
+) -> dict[str, Any]:
+    _validated_work_packet(work_packet)
+    if response_packet.get("response_packet_type") != "production_adapter_response_intake_v1":
+        raise IntakeError("response packet type mismatch")
+    _validate_response_packet_fields(response_packet)
+    _reject_raw_internal_fields(response_packet, label="response packet")
+    run_id = _ensure_safe_identifier(response_packet.get("operator_run_id"), "operator_run_id")
+    output_path = safe_real_output_dir(output_dir, allow_test_artifacts=allow_test_artifacts)
+    if output_path.name != run_id:
+        raise IntakeError("output_dir final segment must match operator_run_id")
+    assembly_manifest_path = (
+        safe_work_packet_output_path(assembly_manifest_output)
+        if assembly_manifest_output is not None
+        else None
+    )
+
+    adapter_payloads = _adapter_payloads(response_packet)
+    llm_route = _uses_llm_adjudication_route(response_packet)
+    evidence_mode = _evidence_source_mode(response_packet)
+    public_mode = evidence_mode == public_evidence.PUBLIC_MODE
+    deployment_manifest = _safe_payload(
+        response_packet.get("deployment_manifest_artifact"),
+        "deployment_manifest_artifact",
+    )
+    false_merge_labels = _safe_payload(
+        response_packet.get("human_false_merge_label_artifact"),
+        "human_false_merge_label_artifact",
+    )
+    for field in COMMON_ARTIFACT_FIELDS - {
+        "deployment_manifest_artifact",
+        "human_false_merge_label_artifact",
+    }:
+        _safe_payload(response_packet.get(field), field)
+    if llm_route:
+        _safe_payload(
+            response_packet.get("llm_subagent_adjudication_artifact"),
+            "llm_subagent_adjudication_artifact",
+        )
+    _validate_route_review_flags(
+        deployment_manifest=deployment_manifest,
+        false_merge_labels=false_merge_labels,
+        llm_route=llm_route,
+    )
+    if public_mode:
+        _safe_payload(
+            response_packet.get("public_evidence_manifest_artifact"),
+            "public_evidence_manifest_artifact",
+        )
+
+    planned_paths = _planned_paths(
+        output_path,
+        adapter_payloads,
+        llm_route=llm_route,
+        public_mode=public_mode,
+    )
+    if assembly_manifest_path is not None:
+        planned_paths["assembly_manifest"] = assembly_manifest_path
+    _ensure_no_overwrite(planned_paths)
+    _ensure_parent_dirs_available(planned_paths)
+    return {
+        "preflight_packet_type": "production_adapter_response_preflight_v1",
+        "preflight_state": "operator_response_validated_without_writes",
+        "response_packet_valid_for_candidate_intake": True,
+        "writes_candidate_artifacts": False,
+        "writes_canonical_packet": False,
+        "canonical_packet_not_written": str(assembler.CANONICAL_PACKET_PATH.relative_to(ROOT)),
+        "counts_as_acceptance_gate": False,
+        "candidate_packet_validator_run": False,
+        "output_dir": str(output_path.relative_to(ROOT)),
+        "operator_run_id": run_id,
+        "response_packet_sha256": sha256_artifact_payload(response_packet),
+        "planned_artifact_count": len(planned_paths),
+        "planned_artifacts": _planned_artifact_refs(planned_paths),
+        "assembly_manifest_output": str(assembly_manifest_path.relative_to(ROOT))
+        if assembly_manifest_path is not None
+        else None,
+        "claim_boundary": {
+            "supports_production_adapter_paths_claim": False,
+            "supports_non_synthetic_deployment_claim": False,
+            "supports_human_reviewed_false_merge_labels_claim": False,
+            "supports_llm_subagent_deployment_approval_claim": False,
+            "supports_llm_subagent_reviewed_false_merge_labels_claim": False,
+            "supports_permission_probe_claim": False,
+            "supports_rollback_smoke_claim": False,
+            public_evidence.CLAIM_FIELD: False,
+            "supports_canonical_packet_written_claim": False,
+            "supports_full_product_production_ready_claim": False,
+            "supports_top_tier_scientific_validation_claim": False,
+        },
+    }
+
+
+def build_intake_artifacts(
+    *,
+    work_packet: dict[str, Any],
+    response_packet: dict[str, Any],
+    output_dir: str,
+    assembly_manifest_output: str | None = None,
+    allow_test_artifacts: bool = False,
+) -> dict[str, Any]:
+    _validated_work_packet(work_packet)
+    if response_packet.get("response_packet_type") != "production_adapter_response_intake_v1":
+        raise IntakeError("response packet type mismatch")
+    _validate_response_packet_fields(response_packet)
+    run_id = _ensure_safe_identifier(response_packet.get("operator_run_id"), "operator_run_id")
+    output_path = safe_real_output_dir(output_dir, allow_test_artifacts=allow_test_artifacts)
+    if output_path.name != run_id:
+        raise IntakeError("output_dir final segment must match operator_run_id")
+    assembly_manifest_path = (
+        safe_work_packet_output_path(assembly_manifest_output)
+        if assembly_manifest_output is not None
+        else None
+    )
+
+    adapter_payloads = _adapter_payloads(response_packet)
+    llm_route = _uses_llm_adjudication_route(response_packet)
+    evidence_mode = _evidence_source_mode(response_packet)
+    public_mode = evidence_mode == public_evidence.PUBLIC_MODE
+    payload_fields = list(COMMON_ARTIFACT_FIELDS)
+    if llm_route:
+        payload_fields.append("llm_subagent_adjudication_artifact")
+    payloads: dict[str, object] = {
+        field: _safe_payload(response_packet.get(field), field) for field in payload_fields
+    }
+    _validate_route_review_flags(
+        deployment_manifest=payloads["deployment_manifest_artifact"],
+        false_merge_labels=payloads["human_false_merge_label_artifact"],
+        llm_route=llm_route,
+    )
+    if public_mode:
+        payloads["public_evidence_manifest_artifact"] = _safe_payload(
+            response_packet.get("public_evidence_manifest_artifact"),
+            "public_evidence_manifest_artifact",
+        )
+    for row in adapter_payloads:
+        payloads[f"adapter::{row['component_id']}"] = row["artifact"]
+
+    planned_paths = _planned_paths(
+        output_path,
+        adapter_payloads,
+        llm_route=llm_route,
+        public_mode=public_mode,
+    )
+    if assembly_manifest_path is not None:
+        planned_paths["assembly_manifest"] = assembly_manifest_path
+    _ensure_no_overwrite(planned_paths)
+    _ensure_parent_dirs_available(planned_paths)
+
+    assembly_manifest = {
+        "artifact_id": "production_adapter_evidence_packet_v1",
+        "evidence_kind": "non_synthetic_production_adapter_validation",
+        "recovered_after_tmp_loss": False,
+        "deployment_manifest_artifact": _artifact_ref(
+            planned_paths["deployment_manifest_artifact"]
+        ),
+        "adapter_artifacts": [
+            {
+                "component_id": row["component_id"],
+                "artifact": _artifact_ref(planned_paths[f"adapter::{row['component_id']}"]),
+            }
+            for row in adapter_payloads
+        ],
+        "human_false_merge_label_artifact": _artifact_ref(
+            planned_paths["human_false_merge_label_artifact"]
+        ),
+        "audit_trail_artifact": _artifact_ref(planned_paths["audit_trail_artifact"]),
+        "permission_probe_artifact": _artifact_ref(planned_paths["permission_probe_artifact"]),
+        "rollback_smoke_artifact": _artifact_ref(planned_paths["rollback_smoke_artifact"]),
+        "claim_boundary": {
+            "supports_production_adapter_paths_claim": True,
+            "supports_non_synthetic_deployment_claim": True,
+            "supports_human_reviewed_false_merge_labels_claim": not llm_route,
+            "supports_llm_subagent_deployment_approval_claim": llm_route,
+            "supports_llm_subagent_reviewed_false_merge_labels_claim": llm_route,
+            "supports_permission_probe_claim": True,
+            "supports_rollback_smoke_claim": True,
+            "supports_full_product_production_ready_claim": False,
+            "supports_top_tier_scientific_validation_claim": False,
+            "supports_canonical_write_claim": False,
+            "supports_raw_access_claim": False,
+            public_evidence.CLAIM_FIELD: public_mode,
+        },
+    }
+    if evidence_mode is not None:
+        assembly_manifest["evidence_source_mode"] = evidence_mode
+    if public_mode:
+        assembly_manifest["public_evidence_manifest_artifact"] = _artifact_ref(
+            planned_paths["public_evidence_manifest_artifact"]
+        )
+    if llm_route:
+        assembly_manifest["llm_subagent_adjudication_artifact"] = _artifact_ref(
+            planned_paths["llm_subagent_adjudication_artifact"]
+        )
+    created_paths: list[Path] = []
+    try:
+        for key, payload in payloads.items():
+            _write_json(planned_paths[key], payload)
+            created_paths.append(planned_paths[key])
+        if assembly_manifest_path is not None:
+            _write_json(assembly_manifest_path, assembly_manifest)
+            created_paths.append(assembly_manifest_path)
+
+        packet = assembler.assemble_packet(
+            **assembly_manifest,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        validation_report = assembler.validate_candidate(
+            packet,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+    except (assembler.AssemblyError, IntakeError, OSError) as exc:
+        _cleanup_created_outputs(created_paths, output_path)
+        if isinstance(exc, IntakeError):
+            raise
+        raise IntakeError(str(exc)) from exc
+
+    validation_summary = {
+        "candidate_packet_validator_passed": validation_report.get("passed") is True,
+        "blocker_count": len(validation_report.get("blockers", []))
+        if isinstance(validation_report.get("blockers"), list)
+        else 0,
+        "metrics": validation_report.get("metrics", {}),
+        "authoritative_validator_report_embedded": False,
+        "counts_as_acceptance_gate": False,
+    }
+    response_packet_sha = sha256_artifact_payload(response_packet)
+    candidate_packet_sha = validator.sha256_json(packet)
+    try:
+        assembly_manifest_sha = (
+            validator.sha256_file(assembly_manifest_path)
+            if assembly_manifest_path is not None
+            else None
+        )
+        custody_receipt = {
+            "artifact_type": "production_adapter_response_custody_receipt_v1",
+            "operator_run_id": run_id,
+            "response_packet_type": response_packet["response_packet_type"],
+            "response_packet_sha256": response_packet_sha,
+            "candidate_packet_sha256": candidate_packet_sha,
+            "candidate_packet_validator_passed": validation_summary[
+                "candidate_packet_validator_passed"
+            ],
+            "blocker_count": validation_summary["blocker_count"],
+            "written_artifacts": _artifact_receipts(planned_paths),
+            "assembly_manifest_output": str(assembly_manifest_path.relative_to(ROOT))
+            if assembly_manifest_path is not None
+            else None,
+            "assembly_manifest_sha256": assembly_manifest_sha,
+            "writes_canonical_packet": False,
+            "canonical_packet_not_written": str(assembler.CANONICAL_PACKET_PATH.relative_to(ROOT)),
+            "counts_as_acceptance_gate": False,
+            "claim_boundary": {
+                "supports_production_adapter_paths_claim": False,
+                "supports_non_synthetic_deployment_claim": False,
+                "supports_human_reviewed_false_merge_labels_claim": False,
+                "supports_llm_subagent_deployment_approval_claim": False,
+                "supports_llm_subagent_reviewed_false_merge_labels_claim": False,
+                "supports_permission_probe_claim": False,
+                "supports_rollback_smoke_claim": False,
+                public_evidence.CLAIM_FIELD: False,
+                "supports_canonical_packet_written_claim": False,
+                "supports_full_product_production_ready_claim": False,
+                "supports_top_tier_scientific_validation_claim": False,
+            },
+        }
+        _write_json(planned_paths["response_custody_receipt"], custody_receipt)
+        created_paths.append(planned_paths["response_custody_receipt"])
+        custody_receipt_sha = validator.sha256_file(planned_paths["response_custody_receipt"]) or ""
+    except (IntakeError, OSError) as exc:
+        _cleanup_created_outputs(created_paths, output_path)
+        if isinstance(exc, IntakeError):
+            raise
+        raise IntakeError(str(exc)) from exc
+    return {
+        "intake_packet_type": "production_adapter_response_intake_result_v1",
+        "evidence_state": "candidate_artifacts_written",
+        "writes_canonical_packet": False,
+        "canonical_packet_not_written": str(assembler.CANONICAL_PACKET_PATH.relative_to(ROOT)),
+        "output_dir": str(output_path.relative_to(ROOT)),
+        "operator_run_id": run_id,
+        "response_packet_sha256": response_packet_sha,
+        "custody_receipt_artifact": _artifact_ref(planned_paths["response_custody_receipt"]),
+        "custody_receipt_sha256": custody_receipt_sha,
+        "assembly_manifest": assembly_manifest,
+        "assembly_manifest_output": str(assembly_manifest_path.relative_to(ROOT))
+        if assembly_manifest_path is not None
+        else None,
+        "assembly_manifest_sha256": assembly_manifest_sha,
+        "candidate_packet_sha256": candidate_packet_sha,
+        "validation_report": validation_summary,
+        "claim_boundary": {
+            "candidate_packet_validator_passed": validation_summary[
+                "candidate_packet_validator_passed"
+            ],
+            "supports_production_adapter_paths_claim": False,
+            "supports_non_synthetic_deployment_claim": False,
+            "supports_human_reviewed_false_merge_labels_claim": False,
+            "supports_llm_subagent_deployment_approval_claim": False,
+            "supports_llm_subagent_reviewed_false_merge_labels_claim": False,
+            "supports_permission_probe_claim": False,
+            "supports_rollback_smoke_claim": False,
+            public_evidence.CLAIM_FIELD: False,
+            "supports_canonical_packet_written_claim": False,
+            "supports_full_product_production_ready_claim": False,
+            "supports_top_tier_scientific_validation_claim": False,
+        },
+    }
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--work-packet", required=True, help="production adapter work packet JSON")
+    parser.add_argument(
+        "--response-packet", required=True, help="real production adapter response JSON"
+    )
+    parser.add_argument(
+        "--output-dir",
+        required=True,
+        help="safe relative path under inputs/production_adapter_real/",
+    )
+    parser.add_argument(
+        "--assembly-manifest-output",
+        help="optional safe relative output path under work_packets/",
+    )
+    parser.add_argument(
+        "--preflight-response",
+        action="store_true",
+        help="validate response packet and planned output surface without writing artifacts",
+    )
+    parser.add_argument("--allow-test-artifacts", action="store_true", help=argparse.SUPPRESS)
+    return parser
+
+
+def main() -> int:
+    args = build_arg_parser().parse_args()
+    payload = {
+        "work_packet": load_json_file(Path(args.work_packet)),
+        "response_packet": load_json_file(Path(args.response_packet)),
+        "output_dir": args.output_dir,
+        "assembly_manifest_output": args.assembly_manifest_output,
+        "allow_test_artifacts": args.allow_test_artifacts,
+    }
+    if args.preflight_response:
+        result = preflight_response_packet(**payload)
+    else:
+        result = build_intake_artifacts(**payload)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

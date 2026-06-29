@@ -1,0 +1,17 @@
+{
+  "adjudication_artifact": "inputs/human_annotation_real/fill-with-real-human-adjudication.json",
+  "confusion_matrix_artifact": "inputs/human_annotation_real/fill-with-real-confusion-matrix.json",
+  "custody_receipt_artifact": "inputs/human_annotation_real/fill-with-real-custody-receipt.json",
+  "first_pass_artifacts": [
+    {
+      "artifact": "inputs/human_annotation_real/fill-with-real-first-pass-reviewer-alpha-submission.json",
+      "reviewer_id": "fill-with-real-first-pass-human-reviewer-alpha-id"
+    },
+    {
+      "artifact": "inputs/human_annotation_real/fill-with-real-first-pass-reviewer-beta-submission.json",
+      "reviewer_id": "fill-with-real-first-pass-human-reviewer-beta-id"
+    }
+  ],
+  "manifest_artifact": "inputs/human_annotation_real/fill-with-real-annotation-manifest.json",
+  "work_orders_artifact": "inputs/human_annotation_real/fill-with-real-annotation-work-orders.json"
+}

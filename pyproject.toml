@@ -12,11 +12,17 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
+  "coverage[toml]>=7.6",
   "pre-commit>=4.0",
   "ruff==0.8.6"
 ]
+graph-adapters = [
+  "rapidfuzz>=3.14,<4",
+  "splink>=4,<5"
+]
 
 [project.scripts]
+formowl-kg-eval = "formowl_kg_eval.cli:main"
 formowl-project-mcp = "formowl_project_mcp.server:main"
 formowl-wiki-mcp = "formowl_wiki_mcp.server:main"
 
@@ -26,6 +32,17 @@ where = ["python"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["python"]
+
+[tool.coverage.run]
+branch = true
+source = [
+  "python"
+]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = false
 
 [tool.ruff]
 line-length = 100

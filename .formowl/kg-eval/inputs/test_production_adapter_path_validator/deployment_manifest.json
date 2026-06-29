@@ -1,0 +1,13 @@
+{
+  "adapter_stack_sha256": "701eaea99700e5797762871150c5111e5ab0b1f7172d51e1d5d20a7d4d29c98a",
+  "artifact_type": "production_adapter_deployment_manifest_v1",
+  "container_image_digest_sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+  "deployment_approved_by_human": true,
+  "deployment_id": "deploy_prod_adapter_001",
+  "environment_id": "closed_beta_prod_like",
+  "migration_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+  "non_synthetic_deployment": true,
+  "raw_path_exposed": false,
+  "release_artifact_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+  "synthetic_or_demo": false
+}

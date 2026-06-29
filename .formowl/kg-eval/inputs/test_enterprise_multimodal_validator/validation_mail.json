@@ -1,0 +1,18 @@
+{
+  "artifact_type": "enterprise_multimodal_validation_rows_v1",
+  "modality": "mail",
+  "rows": [
+    {
+      "candidate_id": "cand_mail_001",
+      "extractor_run_id": "run_mail_001",
+      "human_adjudicated": true,
+      "modality": "mail",
+      "observation_id": "obs_mail_001",
+      "row_sha256": "8087a921d8aa6b6e5351e4032b3f666fac5e4d4b07b5a52c0811bd2db8b2423e",
+      "source_asset_sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "source_id": "src_mail_001",
+      "task": "mail_semantic_validation",
+      "validation_id": "val_mail_001"
+    }
+  ]
+}

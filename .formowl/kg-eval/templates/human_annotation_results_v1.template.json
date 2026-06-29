@@ -1,0 +1,32 @@
+{
+  "template_only": true,
+  "do_not_submit_as_evidence": true,
+  "artifact_id": "human_annotation_results_v1",
+  "evidence_kind": "real_human_annotation_adjudication",
+  "recovered_after_tmp_loss": false,
+  "manifest_artifact": "inputs/path-to-real-manifest.json",
+  "manifest_artifact_sha256": "fill-with-real-sha256",
+  "work_orders_artifact": "inputs/path-to-real-work-orders.json",
+  "work_orders_artifact_sha256": "fill-with-real-sha256",
+  "first_pass_submission_artifacts": [],
+  "adjudication_artifact": "inputs/path-to-real-adjudication.json",
+  "adjudication_artifact_sha256": "fill-with-real-sha256",
+  "confusion_matrix_artifact": "inputs/path-to-real-confusion-matrix.json",
+  "confusion_matrix_artifact_sha256": "fill-with-real-sha256",
+  "custody_receipt_artifact": "inputs/path-to-real-custody.json",
+  "custody_receipt_artifact_sha256": "fill-with-real-sha256",
+  "llm_subagent_adjudication_artifact": "inputs/path-to-real-four-specialist-llm-subagent-panel.json",
+  "llm_subagent_adjudication_artifact_sha256": "fill-with-real-sha256",
+  "claim_boundary": {
+    "supports_human_annotation_completed_claim": false,
+    "supports_human_adjudication_completed_claim": false,
+    "supports_llm_subagent_annotation_adjudication_completed_claim": false,
+    "supports_confusion_matrix_claim": false,
+    "supports_custody_receipt_claim": false,
+    "supports_public_reproducible_evidence_claim": false,
+    "supports_synthetic_label_generation_claim": false,
+    "supports_template_as_human_evidence_claim": false,
+    "supports_production_ready_claim": false,
+    "supports_top_tier_scientific_validation_claim": false
+  }
+}

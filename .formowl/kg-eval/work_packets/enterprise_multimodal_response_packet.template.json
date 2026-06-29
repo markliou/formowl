@@ -1,0 +1,181 @@
+{
+  "business_decision_review_artifact": {
+    "artifact_type": "enterprise_business_decision_review_v1",
+    "human_reviewed": false,
+    "llm_subagent_reviewed": true
+  },
+  "claim_boundary": {
+    "accepts_evidence": false,
+    "counts_as_acceptance_gate": false,
+    "promotes_evidence": false,
+    "writes_candidate_artifacts": false,
+    "writes_canonical_packets": false
+  },
+  "do_not_submit_as_evidence": true,
+  "evidence_source_mode": "public_reproducible",
+  "gate_id": "multimodal_semantic_validation",
+  "llm_subagent_adjudication_artifact": {
+    "adjudication_target": "multimodal_semantic_validation",
+    "artifact_type": "four_specialist_llm_subagent_adjudication_v1",
+    "completed": true,
+    "final_decision": "PASS",
+    "human_adjudication_claimed": false,
+    "input_artifact_sha256s": [
+      "OPERATOR_REVIEWED_INPUT_ARTIFACT_64_HEX_SHA256"
+    ],
+    "panel_decision_sha256": "OPERATOR_PANEL_DECISION_64_HEX_SHA256",
+    "panel_id": "OPERATOR_PANEL_ID",
+    "rubric_sha256": "OPERATOR_PANEL_RUBRIC_64_HEX_SHA256",
+    "specialist_subagents": [
+      {
+        "blocking_findings": [],
+        "decision": "PASS",
+        "independent": true,
+        "model_name": "OPERATOR_MODEL_NAME",
+        "model_version": "OPERATOR_MODEL_VERSION",
+        "output_sha256": "OPERATOR_DISTINCT_OUTPUT_64_HEX_SHA256",
+        "professional_role": "external_baseline_methodologist",
+        "prompt_sha256": "OPERATOR_DISTINCT_PROMPT_64_HEX_SHA256",
+        "reviewed_artifact_sha256s": [
+          "OPERATOR_REVIEWED_INPUT_ARTIFACT_64_HEX_SHA256"
+        ],
+        "rubric_sha256": "OPERATOR_PANEL_RUBRIC_64_HEX_SHA256",
+        "run_id": "OPERATOR_BASELINE_METHODOLOGY_RUN_ID",
+        "specialty": "baseline_methodology",
+        "subagent_id": "OPERATOR_BASELINE_METHODOLOGY_SUBAGENT_ID",
+        "temperature": 0
+      },
+      {
+        "blocking_findings": [],
+        "decision": "PASS",
+        "independent": true,
+        "model_name": "OPERATOR_MODEL_NAME",
+        "model_version": "OPERATOR_MODEL_VERSION",
+        "output_sha256": "OPERATOR_DISTINCT_OUTPUT_64_HEX_SHA256",
+        "professional_role": "annotation_adjudication_protocol_specialist",
+        "prompt_sha256": "OPERATOR_DISTINCT_PROMPT_64_HEX_SHA256",
+        "reviewed_artifact_sha256s": [
+          "OPERATOR_REVIEWED_INPUT_ARTIFACT_64_HEX_SHA256"
+        ],
+        "rubric_sha256": "OPERATOR_PANEL_RUBRIC_64_HEX_SHA256",
+        "run_id": "OPERATOR_ANNOTATION_ADJUDICATION_RUN_ID",
+        "specialty": "annotation_adjudication",
+        "subagent_id": "OPERATOR_ANNOTATION_ADJUDICATION_SUBAGENT_ID",
+        "temperature": 0
+      },
+      {
+        "blocking_findings": [],
+        "decision": "PASS",
+        "independent": true,
+        "model_name": "OPERATOR_MODEL_NAME",
+        "model_version": "OPERATOR_MODEL_VERSION",
+        "output_sha256": "OPERATOR_DISTINCT_OUTPUT_64_HEX_SHA256",
+        "professional_role": "multimodal_semantics_validation_specialist",
+        "prompt_sha256": "OPERATOR_DISTINCT_PROMPT_64_HEX_SHA256",
+        "reviewed_artifact_sha256s": [
+          "OPERATOR_REVIEWED_INPUT_ARTIFACT_64_HEX_SHA256"
+        ],
+        "rubric_sha256": "OPERATOR_PANEL_RUBRIC_64_HEX_SHA256",
+        "run_id": "OPERATOR_MULTIMODAL_SEMANTICS_RUN_ID",
+        "specialty": "multimodal_semantics",
+        "subagent_id": "OPERATOR_MULTIMODAL_SEMANTICS_SUBAGENT_ID",
+        "temperature": 0
+      },
+      {
+        "blocking_findings": [],
+        "decision": "PASS",
+        "independent": true,
+        "model_name": "OPERATOR_MODEL_NAME",
+        "model_version": "OPERATOR_MODEL_VERSION",
+        "output_sha256": "OPERATOR_DISTINCT_OUTPUT_64_HEX_SHA256",
+        "professional_role": "production_governance_adapter_specialist",
+        "prompt_sha256": "OPERATOR_DISTINCT_PROMPT_64_HEX_SHA256",
+        "reviewed_artifact_sha256s": [
+          "OPERATOR_REVIEWED_INPUT_ARTIFACT_64_HEX_SHA256"
+        ],
+        "rubric_sha256": "OPERATOR_PANEL_RUBRIC_64_HEX_SHA256",
+        "run_id": "OPERATOR_PRODUCTION_GOVERNANCE_RUN_ID",
+        "specialty": "production_governance",
+        "subagent_id": "OPERATOR_PRODUCTION_GOVERNANCE_SUBAGENT_ID",
+        "temperature": 0
+      }
+    ]
+  },
+  "operator_instructions": [
+    "Copy this template to inputs/*_real/<operator_run_id>/operator_response_packet.json.",
+    "Replace every OPERATOR_* placeholder with real reviewed values.",
+    "Remove template_only, do_not_submit_as_evidence, gate_id, claim_boundary, and operator_instructions before intake.",
+    "For public reproducible mode, replace public_evidence_manifest_artifact with URL/license/snapshot/hash-bound sources; for private operator evidence, remove evidence_source_mode and public_evidence_manifest_artifact.",
+    "Run real_evidence_submission_manifest.py before candidate intake."
+  ],
+  "operator_run_id": "OPERATOR_RUN_ID",
+  "permission_probe_artifact": {
+    "artifact_type": "enterprise_multimodal_permission_probe_v1"
+  },
+  "pilot_manifest_artifact": {
+    "artifact_type": "enterprise_multimodal_pilot_manifest_v1"
+  },
+  "public_evidence_manifest_artifact": {
+    "artifact_type": "public_reproducible_evidence_sources_v1",
+    "covered_artifact_sha256s": [
+      "OPERATOR_DERIVED_CANDIDATE_ARTIFACT_64_HEX_SHA256"
+    ],
+    "evidence_source_mode": "public_reproducible",
+    "gate_id": "multimodal_semantic_validation",
+    "public_sources": [
+      {
+        "archive_sha256": "OPERATOR_PUBLIC_SOURCE_ARCHIVE_64_HEX_SHA256",
+        "content_sha256": "OPERATOR_PUBLIC_SOURCE_CONTENT_64_HEX_SHA256",
+        "derived_artifact_sha256s": [
+          "OPERATOR_DERIVED_CANDIDATE_ARTIFACT_64_HEX_SHA256"
+        ],
+        "license": "OPERATOR_PUBLIC_LICENSE",
+        "non_synthetic": true,
+        "permission_allows_research_evaluation": true,
+        "publicly_accessible": true,
+        "raw_private_payload": false,
+        "retrieved_at": "OPERATOR_RETRIEVED_AT_UTC",
+        "source_id": "OPERATOR_PUBLIC_SOURCE_ID",
+        "source_type": "OPERATOR_PUBLIC_SOURCE_TYPE",
+        "source_url": "https://OPERATOR_PUBLIC_SOURCE_URL",
+        "source_usage_role": "OPERATOR_PUBLIC_SOURCE_USAGE_ROLE",
+        "version_or_snapshot": "OPERATOR_PUBLIC_VERSION_OR_SNAPSHOT"
+      }
+    ],
+    "retrieved_at": "OPERATOR_RETRIEVED_AT_UTC",
+    "source_count": 1,
+    "source_index_sha256": "4e06235744e07c48d2dd0c19abb8f12cb526e5757f779be33fee0e52b749b97f"
+  },
+  "response_packet_type": "enterprise_multimodal_response_intake_v1",
+  "template_only": true,
+  "validation_artifacts": [
+    {
+      "artifact": {
+        "artifact_type": "enterprise_multimodal_validation_artifact_v1",
+        "modality": "spreadsheet"
+      },
+      "modality": "spreadsheet"
+    },
+    {
+      "artifact": {
+        "artifact_type": "enterprise_multimodal_validation_artifact_v1",
+        "modality": "mail"
+      },
+      "modality": "mail"
+    },
+    {
+      "artifact": {
+        "artifact_type": "enterprise_multimodal_validation_artifact_v1",
+        "modality": "meeting_audio"
+      },
+      "modality": "meeting_audio"
+    },
+    {
+      "artifact": {
+        "artifact_type": "enterprise_multimodal_validation_artifact_v1",
+        "modality": "video_ocr"
+      },
+      "modality": "video_ocr"
+    }
+  ]
+}

@@ -1,0 +1,411 @@
+#!/usr/bin/env python3
+"""Assemble real human annotation evidence packets from supplied artifacts.
+
+This helper computes artifact SHA256 references and optionally validates the
+assembled packet in memory. It does not generate labels, row hashes,
+adjudication rows, confusion matrices, or custody receipts.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+import human_annotation_adjudication_validator as validator
+import public_reproducible_evidence as public_evidence
+
+
+ROOT = Path(__file__).resolve().parent
+INPUTS = ROOT / "inputs"
+REAL_INPUT_PREFIX = ("inputs", "human_annotation_real")
+REAL_INPUT_ROOT = INPUTS / "human_annotation_real"
+CANONICAL_PACKET_PATH = INPUTS / "human_annotation_results_v1.json"
+TEMPLATE_MARKERS = {"template_only", "do_not_submit_as_evidence"}
+MANIFEST_ALLOWED_FIELDS = {
+    "manifest_artifact",
+    "work_orders_artifact",
+    "first_pass_artifacts",
+    "adjudication_artifact",
+    "confusion_matrix_artifact",
+    "custody_receipt_artifact",
+    "llm_subagent_adjudication_artifact",
+    "evidence_source_mode",
+    "public_evidence_manifest_artifact",
+}
+MANIFEST_COMMON_REQUIRED_FIELDS = {
+    "manifest_artifact",
+    "work_orders_artifact",
+}
+MANIFEST_HUMAN_ROUTE_FIELDS = {
+    "first_pass_artifacts",
+    "adjudication_artifact",
+    "confusion_matrix_artifact",
+    "custody_receipt_artifact",
+}
+MANIFEST_LLM_ROUTE_FIELDS = {"llm_subagent_adjudication_artifact"}
+
+
+class AssemblyError(ValueError):
+    """Raised when supplied artifacts cannot be safely assembled."""
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise AssemblyError("artifact payload must be a JSON object")
+    return loaded
+
+
+def _is_test_or_sandbox_path_parts(parts: tuple[str, ...]) -> bool:
+    return any(
+        part == "assembler_test"
+        or part.startswith("test_")
+        or part.endswith("_test")
+        or part.startswith("preflight_test")
+        or part == "validator_fixture"
+        for part in parts
+    )
+
+
+def safe_real_artifact_path(path_value: str, *, allow_test_artifacts: bool = False) -> Path:
+    if not isinstance(path_value, str) or not path_value.strip():
+        raise AssemblyError("artifact path must be a non-empty string")
+    path = Path(path_value)
+    if path.name.endswith(".template.json") or "templates" in path.parts:
+        raise AssemblyError("template artifact paths are not accepted")
+    if path.is_absolute() or ".." in path.parts or "." in path.parts:
+        raise AssemblyError("artifact path must be a safe relative path")
+    if path.parts[:2] != REAL_INPUT_PREFIX:
+        raise AssemblyError("artifact path must live under inputs/human_annotation_real")
+    real_root_relative_parts = path.parts[len(REAL_INPUT_PREFIX) :]
+    if not allow_test_artifacts and _is_test_or_sandbox_path_parts(real_root_relative_parts):
+        raise AssemblyError("test or sandbox artifact paths are not accepted")
+    unresolved = ROOT / path
+    current = ROOT
+    for part in path.parts:
+        current = current / part
+        if current.is_symlink():
+            raise AssemblyError("artifact symlinks are not accepted")
+    if unresolved.is_symlink():
+        raise AssemblyError("artifact symlinks are not accepted")
+    resolved = unresolved.resolve()
+    try:
+        resolved.relative_to(REAL_INPUT_ROOT.resolve())
+    except ValueError as exc:
+        raise AssemblyError("artifact path escapes the real human annotation input root") from exc
+    if resolved.is_symlink():
+        raise AssemblyError("artifact symlinks are not accepted")
+    if not resolved.is_file():
+        raise AssemblyError("artifact path does not exist")
+    return resolved
+
+
+def artifact_ref(path_value: str, *, allow_test_artifacts: bool = False) -> tuple[str, str]:
+    path = safe_real_artifact_path(path_value, allow_test_artifacts=allow_test_artifacts)
+    payload = load_json(path)
+    if TEMPLATE_MARKERS & set(payload):
+        raise AssemblyError("template markers are not accepted in real artifacts")
+    return str(path.relative_to(ROOT)), validator.sha256_file(path) or ""
+
+
+def validate_evidence_source_mode(
+    evidence_source_mode: str | None,
+    public_evidence_manifest_artifact: str | None,
+) -> str | None:
+    if evidence_source_mode is None and public_evidence_manifest_artifact is None:
+        return None
+    if evidence_source_mode not in public_evidence.ALLOWED_MODES:
+        raise AssemblyError("evidence source mode is unsupported")
+    if (
+        evidence_source_mode == public_evidence.PUBLIC_MODE
+        and not public_evidence_manifest_artifact
+    ):
+        raise AssemblyError("public evidence mode requires a public evidence manifest")
+    if evidence_source_mode == public_evidence.PRIVATE_MODE and public_evidence_manifest_artifact:
+        raise AssemblyError("operator-private mode must not include a public evidence manifest")
+    return evidence_source_mode
+
+
+def first_pass_ref(
+    reviewer_id: str,
+    artifact: str,
+    *,
+    allow_test_artifacts: bool = False,
+) -> dict[str, str]:
+    if not isinstance(reviewer_id, str) or not reviewer_id:
+        raise AssemblyError("first-pass reviewer id must be a non-empty string")
+    artifact_path, artifact_sha = artifact_ref(
+        artifact,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    return {
+        "reviewer_id": reviewer_id,
+        "artifact": artifact_path,
+        "artifact_sha256": artifact_sha,
+    }
+
+
+def assemble_packet(
+    *,
+    manifest_artifact: str,
+    work_orders_artifact: str,
+    first_pass_artifacts: list[dict[str, str]] | None = None,
+    adjudication_artifact: str | None = None,
+    confusion_matrix_artifact: str | None = None,
+    custody_receipt_artifact: str | None = None,
+    llm_subagent_adjudication_artifact: str | None = None,
+    evidence_source_mode: str | None = None,
+    public_evidence_manifest_artifact: str | None = None,
+    allow_test_artifacts: bool = False,
+) -> dict[str, Any]:
+    llm_route = llm_subagent_adjudication_artifact is not None
+    evidence_mode = validate_evidence_source_mode(
+        evidence_source_mode,
+        public_evidence_manifest_artifact,
+    )
+    human_route_supplied = any(
+        value is not None
+        for value in (
+            first_pass_artifacts,
+            adjudication_artifact,
+            confusion_matrix_artifact,
+            custody_receipt_artifact,
+        )
+    )
+    if llm_route == human_route_supplied:
+        raise AssemblyError("human annotation packet must use exactly one adjudication route")
+    if not llm_route:
+        if not isinstance(first_pass_artifacts, list) or len(first_pass_artifacts) < 2:
+            raise AssemblyError("at least two first-pass artifacts are required")
+        reviewer_ids = [entry.get("reviewer_id", "") for entry in first_pass_artifacts]
+        if len(set(reviewer_ids)) != len(reviewer_ids):
+            raise AssemblyError("first-pass reviewer ids must be distinct")
+
+    manifest_path, manifest_sha = artifact_ref(
+        manifest_artifact,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    work_orders_path, work_orders_sha = artifact_ref(
+        work_orders_artifact,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    packet = {
+        "artifact_id": "llm_subagent_annotation_results_v1"
+        if llm_route
+        else "human_annotation_results_v1",
+        "evidence_kind": "four_specialist_llm_subagent_annotation_adjudication"
+        if llm_route
+        else "real_human_annotation_adjudication",
+        "recovered_after_tmp_loss": False,
+        "manifest_artifact": manifest_path,
+        "manifest_artifact_sha256": manifest_sha,
+        "work_orders_artifact": work_orders_path,
+        "work_orders_artifact_sha256": work_orders_sha,
+        "claim_boundary": {},
+    }
+    if evidence_mode is not None:
+        packet["evidence_source_mode"] = evidence_mode
+    if evidence_mode == public_evidence.PUBLIC_MODE:
+        assert public_evidence_manifest_artifact is not None
+        public_path, public_sha = artifact_ref(
+            public_evidence_manifest_artifact,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        packet["public_evidence_manifest_artifact"] = public_path
+        packet["public_evidence_manifest_artifact_sha256"] = public_sha
+    if llm_route:
+        assert llm_subagent_adjudication_artifact is not None
+        panel_path, panel_sha = artifact_ref(
+            llm_subagent_adjudication_artifact,
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        packet["llm_subagent_adjudication_artifact"] = panel_path
+        packet["llm_subagent_adjudication_artifact_sha256"] = panel_sha
+        packet["claim_boundary"] = {
+            "supports_human_annotation_completed_claim": False,
+            "supports_human_adjudication_completed_claim": False,
+            "supports_llm_subagent_annotation_adjudication_completed_claim": True,
+            "supports_confusion_matrix_claim": False,
+            "supports_custody_receipt_claim": False,
+            "supports_synthetic_label_generation_claim": False,
+            "supports_template_as_human_evidence_claim": False,
+            public_evidence.CLAIM_FIELD: evidence_mode == public_evidence.PUBLIC_MODE,
+            "supports_production_ready_claim": False,
+            "supports_top_tier_scientific_validation_claim": False,
+        }
+        return packet
+
+    assert first_pass_artifacts is not None
+    assert adjudication_artifact is not None
+    assert confusion_matrix_artifact is not None
+    assert custody_receipt_artifact is not None
+    adjudication_path, adjudication_sha = artifact_ref(
+        adjudication_artifact,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    matrix_path, matrix_sha = artifact_ref(
+        confusion_matrix_artifact,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    custody_path, custody_sha = artifact_ref(
+        custody_receipt_artifact,
+        allow_test_artifacts=allow_test_artifacts,
+    )
+    first_pass_refs = [
+        first_pass_ref(
+            entry.get("reviewer_id", ""),
+            entry.get("artifact", ""),
+            allow_test_artifacts=allow_test_artifacts,
+        )
+        for entry in first_pass_artifacts
+    ]
+    packet.update(
+        {
+            "first_pass_submission_artifacts": first_pass_refs,
+            "adjudication_artifact": adjudication_path,
+            "adjudication_artifact_sha256": adjudication_sha,
+            "confusion_matrix_artifact": matrix_path,
+            "confusion_matrix_artifact_sha256": matrix_sha,
+            "custody_receipt_artifact": custody_path,
+            "custody_receipt_artifact_sha256": custody_sha,
+            "claim_boundary": {
+                "supports_human_annotation_completed_claim": True,
+                "supports_human_adjudication_completed_claim": True,
+                "supports_llm_subagent_annotation_adjudication_completed_claim": False,
+                "supports_confusion_matrix_claim": True,
+                "supports_custody_receipt_claim": True,
+                "supports_synthetic_label_generation_claim": False,
+                "supports_template_as_human_evidence_claim": False,
+                public_evidence.CLAIM_FIELD: evidence_mode == public_evidence.PUBLIC_MODE,
+                "supports_production_ready_claim": False,
+                "supports_top_tier_scientific_validation_claim": False,
+            },
+        }
+    )
+    return packet
+
+
+def validate_candidate(
+    packet: dict[str, Any],
+    *,
+    allow_test_artifacts: bool = False,
+) -> dict[str, Any]:
+    return validator.build_report(packet, allow_test_artifacts=allow_test_artifacts)
+
+
+def _targets_canonical_packet(path: Path) -> bool:
+    if path.resolve() == CANONICAL_PACKET_PATH.resolve():
+        return True
+    try:
+        return (
+            path.exists()
+            and CANONICAL_PACKET_PATH.exists()
+            and path.samefile(CANONICAL_PACKET_PATH)
+        )
+    except OSError:
+        return False
+
+
+def promote_packet(
+    packet: dict[str, Any],
+    *,
+    output_path: Path = CANONICAL_PACKET_PATH,
+    allow_test_artifacts: bool = False,
+) -> None:
+    if allow_test_artifacts and _targets_canonical_packet(output_path):
+        raise AssemblyError("test artifact packets cannot be promoted to canonical input")
+    report = validate_candidate(packet, allow_test_artifacts=allow_test_artifacts)
+    if report.get("passed") is not True:
+        raise AssemblyError("candidate packet failed validation and cannot be promoted")
+    if output_path.exists() or output_path.is_symlink():
+        raise AssemblyError("canonical packet output already exists")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = output_path.with_name(f".{output_path.name}.tmp")
+    if temp_path.exists() or temp_path.is_symlink():
+        raise AssemblyError("canonical packet temporary output already exists")
+    try:
+        with temp_path.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(packet, indent=2, sort_keys=True) + "\n")
+        try:
+            os.link(temp_path, output_path)
+        except FileExistsError as exc:
+            raise AssemblyError("canonical packet output already exists") from exc
+    except Exception:
+        if temp_path.exists() or temp_path.is_symlink():
+            temp_path.unlink()
+        raise
+    else:
+        temp_path.unlink()
+
+
+def load_manifest(path: Path, *, expected_sha256: str | None = None) -> dict[str, Any]:
+    raw = path.read_bytes()
+    if expected_sha256 is not None and hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise AssemblyError("assembly manifest sha256 mismatch")
+    loaded = json.loads(raw.decode("utf-8"))
+    if not isinstance(loaded, dict):
+        raise AssemblyError("assembly manifest must be a JSON object")
+    unsupported_fields = sorted(set(loaded) - MANIFEST_ALLOWED_FIELDS)
+    if unsupported_fields:
+        raise AssemblyError("assembly manifest has unsupported fields")
+    missing_common = sorted(MANIFEST_COMMON_REQUIRED_FIELDS - set(loaded))
+    if missing_common:
+        raise AssemblyError("assembly manifest is missing required common fields")
+    has_llm_route = bool(MANIFEST_LLM_ROUTE_FIELDS & set(loaded))
+    has_human_route = bool(MANIFEST_HUMAN_ROUTE_FIELDS & set(loaded))
+    if has_llm_route == has_human_route:
+        raise AssemblyError("assembly manifest must supply exactly one adjudication route")
+    if has_human_route:
+        missing_human = sorted(MANIFEST_HUMAN_ROUTE_FIELDS - set(loaded))
+        if missing_human:
+            raise AssemblyError("assembly manifest is missing required human route fields")
+    if has_llm_route:
+        missing_llm = sorted(MANIFEST_LLM_ROUTE_FIELDS - set(loaded))
+        if missing_llm:
+            raise AssemblyError("assembly manifest is missing required LLM route fields")
+    return loaded
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--assembly-manifest", required=True, help="JSON manifest listing real artifact paths"
+    )
+    parser.add_argument(
+        "--assembly-manifest-sha256",
+        help="expected sha256 of the assembly manifest bytes approved for promotion",
+    )
+    parser.add_argument(
+        "--validate", action="store_true", help="validate the assembled packet in memory"
+    )
+    parser.add_argument(
+        "--promote",
+        action="store_true",
+        help="write inputs/human_annotation_results_v1.json only if validation passes",
+    )
+    return parser
+
+
+def main() -> int:
+    args = build_arg_parser().parse_args()
+    assembly_manifest = load_manifest(
+        Path(args.assembly_manifest),
+        expected_sha256=args.assembly_manifest_sha256,
+    )
+    packet = assemble_packet(**assembly_manifest)
+    report = validate_candidate(packet) if args.validate or args.promote else None
+    if args.promote:
+        promote_packet(packet)
+    output = {"packet": packet}
+    if report is not None:
+        output["validation_report"] = report
+    print(json.dumps(output, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

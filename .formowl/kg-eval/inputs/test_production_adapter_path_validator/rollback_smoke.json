@@ -1,0 +1,11 @@
+{
+  "artifact_type": "production_adapter_rollback_smoke_v1",
+  "audit_append_only_verified": true,
+  "completed": true,
+  "deployment_id": "deploy_prod_adapter_001",
+  "idempotent_retry_verified": true,
+  "migration_rollback_verified": true,
+  "non_synthetic_deployment": true,
+  "partial_failure_rollback_verified": true,
+  "rollback_run_sha256": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff1"
+}

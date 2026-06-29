@@ -1,0 +1,39 @@
+{
+  "artifact_type": "production_adapter_false_merge_labels_v1",
+  "completed": true,
+  "deployment_id": "deploy_prod_adapter_001",
+  "reviewer_type": "human",
+  "rows": [
+    {
+      "adapter_component_id": "rapidfuzz_candidate_adapter",
+      "candidate_pair_id": "pair_rapidfuzz_candidate_adapter",
+      "candidate_pair_sha256": "0000000000000000000000000000000000000000000000000000000000000046",
+      "false_merge_label": true,
+      "human_reviewed": true,
+      "human_reviewer_id": "human_reviewer_0",
+      "label_id": "label_rapidfuzz_candidate_adapter",
+      "reviewer_type": "human",
+      "row_sha256": "ce3c8b7b179bfd1cc42ccd484f157009f4652c49bfe3b8d1bb984711568331e9",
+      "source_candidate_sha256s": [
+        "0000000000000000000000000000000000000000000000000000000000000050",
+        "000000000000000000000000000000000000000000000000000000000000005a"
+      ]
+    },
+    {
+      "adapter_component_id": "splink_candidate_adapter",
+      "candidate_pair_id": "pair_splink_candidate_adapter",
+      "candidate_pair_sha256": "0000000000000000000000000000000000000000000000000000000000000047",
+      "false_merge_label": true,
+      "human_reviewed": true,
+      "human_reviewer_id": "human_reviewer_1",
+      "label_id": "label_splink_candidate_adapter",
+      "reviewer_type": "human",
+      "row_sha256": "1b564d3aaefbd438b1e3afcb4996134f5c4b0f1ff523b8a65ec89e1ccc4165e2",
+      "source_candidate_sha256s": [
+        "0000000000000000000000000000000000000000000000000000000000000051",
+        "000000000000000000000000000000000000000000000000000000000000005b"
+      ]
+    }
+  ],
+  "synthetic_or_agent_generated": false
+}

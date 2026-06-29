@@ -1,0 +1,189 @@
+{
+  "artifact_boundary": {
+    "counts_as_acceptance_gate": false,
+    "creates_business_review_results": false,
+    "creates_human_review_results": false,
+    "creates_permission_probe_results": false,
+    "creates_real_source_rows": false,
+    "creates_real_validation_rows": false,
+    "touches_real_evidence_root": false,
+    "writes_assembly_manifest": false,
+    "writes_canonical_packet": false
+  },
+  "canonical_packet_not_written": "inputs/enterprise_multimodal_validation_packet.json",
+  "evidence_state": "non_evidence",
+  "forbidden_output_roots": [
+    "inputs/enterprise_multimodal_real/",
+    "inputs/test_*",
+    "results/",
+    "templates/"
+  ],
+  "real_evidence_root_not_written": "inputs/enterprise_multimodal_real",
+  "review_collection_plan": {
+    "later_real_packet_requirements": [
+      "four-specialist LLM subagent panel must cover every future validation row; legacy human adjudication remains a backward-compatible route",
+      "business decision review must be four-specialist LLM-subagent-reviewed and non-autonomous; legacy human review remains a backward-compatible route",
+      "permission probes must deny revoked grants, private content, raw assets, and entity-match-as-access"
+    ],
+    "plan_type": "enterprise_multimodal_review_collection_plan_v1",
+    "required_modality_count": 4,
+    "review_rows": [
+      {
+        "minimum_review_checks": [
+          "validate observation identifier and extractor run binding",
+          "compare extracted candidate against source-local locator evidence",
+          "route business-decision candidates to the four-specialist LLM subagent panel",
+          "verify cross-modal access checks deny revoked or private content"
+        ],
+        "modality": "spreadsheet",
+        "review_task_id": "review_collect_spreadsheet_finance_tables",
+        "row_sha256": "aa279e5df229f9669f04ff99963ea0450ee3dda68f7b7476ab51e5109d3f0867",
+        "source_collection_row_sha256": "044a1daf6b52ca3b04a95c0c9230c9e3e4de8cdb812e76ca3449b6017df59a23"
+      },
+      {
+        "minimum_review_checks": [
+          "validate observation identifier and extractor run binding",
+          "compare extracted candidate against source-local locator evidence",
+          "route business-decision candidates to the four-specialist LLM subagent panel",
+          "verify cross-modal access checks deny revoked or private content"
+        ],
+        "modality": "mail",
+        "review_task_id": "review_collect_mail_thread_obligations",
+        "row_sha256": "e11d8738b03ba1c6e5d197b4cef478afe09ea526289d0c8fefe516d182c9587b",
+        "source_collection_row_sha256": "33b4280717f6b7dd1bf8b2d09745ed7d809884dee5cf14733366572d7e6bbb11"
+      },
+      {
+        "minimum_review_checks": [
+          "validate observation identifier and extractor run binding",
+          "compare extracted candidate against source-local locator evidence",
+          "route business-decision candidates to the four-specialist LLM subagent panel",
+          "verify cross-modal access checks deny revoked or private content"
+        ],
+        "modality": "meeting_audio",
+        "review_task_id": "review_collect_meeting_audio_decisions",
+        "row_sha256": "85e1ad296ec63cd9ffbce0b2071000d270e970ce26a299c791752f5b743bc1af",
+        "source_collection_row_sha256": "ce3a3da08ae5d7662b70f75f405296ae36eb0045c301f719dc84609f856412a8"
+      },
+      {
+        "minimum_review_checks": [
+          "validate observation identifier and extractor run binding",
+          "compare extracted candidate against source-local locator evidence",
+          "route business-decision candidates to the four-specialist LLM subagent panel",
+          "verify cross-modal access checks deny revoked or private content"
+        ],
+        "modality": "video_ocr",
+        "review_task_id": "review_collect_video_keyframe_ocr_status",
+        "row_sha256": "ba35640dfe836f13964f3a15c19c16496431301c264c870d764955e41f09d8b5",
+        "source_collection_row_sha256": "5c5b89c6ad6df88ff23970b19fb8dde505b1b9a0152a1a14a1e913ac9c4a2102"
+      }
+    ]
+  },
+  "safe_output_root": "work_packets/",
+  "source_collection_plan": {
+    "later_real_packet_requirements": [
+      "real enterprise pilot source rows must be supplied through the assembler path",
+      "source rows must bind FormOwl asset locators to registered asset identifiers",
+      "source rows must not use synthetic, demo, or text-proxy-only data",
+      "source rows must not expose raw filesystem, storage, database, or worker paths"
+    ],
+    "modality_rows": [
+      {
+        "collection_task_id": "collect_spreadsheet_finance_tables",
+        "locator_fields": [
+          "sheet",
+          "table_index",
+          "row_index",
+          "column_index",
+          "cell_address"
+        ],
+        "modality": "spreadsheet",
+        "operator_checks": [
+          "register the original workbook or CSV as a FormOwl asset",
+          "bind every candidate to an observation id and extractor run id",
+          "keep formulas, merged cells, and hidden sheets reviewable"
+        ],
+        "row_sha256": "044a1daf6b52ca3b04a95c0c9230c9e3e4de8cdb812e76ca3449b6017df59a23",
+        "source_family": "finance_table_asset",
+        "validation_focus": [
+          "amount due extraction",
+          "currency and date normalization",
+          "row-to-claim traceability"
+        ]
+      },
+      {
+        "collection_task_id": "collect_mail_thread_obligations",
+        "locator_fields": [
+          "message_id",
+          "mailbox_id",
+          "folder_path_hash",
+          "uri_fragment",
+          "attachment_index"
+        ],
+        "modality": "mail",
+        "operator_checks": [
+          "register mail archives and attachments through FormOwl assets",
+          "preserve message occurrence separate from attachment identity",
+          "bind candidate claims to message-body or attachment observations"
+        ],
+        "row_sha256": "33b4280717f6b7dd1bf8b2d09745ed7d809884dee5cf14733366572d7e6bbb11",
+        "source_family": "mail_thread_or_archive_asset",
+        "validation_focus": [
+          "thread-level obligation evidence",
+          "sender and recipient identity consistency",
+          "attachment occurrence binding"
+        ]
+      },
+      {
+        "collection_task_id": "collect_meeting_audio_decisions",
+        "locator_fields": [
+          "start_sec",
+          "end_sec",
+          "speaker"
+        ],
+        "modality": "meeting_audio",
+        "operator_checks": [
+          "register original audio or extracted audio as a FormOwl asset",
+          "preserve ASR segment timing and speaker labels",
+          "mark low-confidence transcript spans for human review"
+        ],
+        "row_sha256": "ce3a3da08ae5d7662b70f75f405296ae36eb0045c301f719dc84609f856412a8",
+        "source_family": "meeting_audio_asset",
+        "validation_focus": [
+          "decision transcript support",
+          "speaker attribution uncertainty",
+          "cross-reference to mail or spreadsheet evidence"
+        ]
+      },
+      {
+        "collection_task_id": "collect_video_keyframe_ocr_status",
+        "locator_fields": [
+          "timestamp_sec",
+          "frame_index",
+          "bbox"
+        ],
+        "modality": "video_ocr",
+        "operator_checks": [
+          "register original video as a FormOwl asset",
+          "preserve keyframe time, frame index, and OCR bounding boxes",
+          "review OCR text against the visual frame before graph use"
+        ],
+        "row_sha256": "5c5b89c6ad6df88ff23970b19fb8dde505b1b9a0152a1a14a1e913ac9c4a2102",
+        "source_family": "meeting_or_screen_video_asset",
+        "validation_focus": [
+          "keyframe OCR status extraction",
+          "screen-step or slide evidence binding",
+          "visual text versus transcript disagreement"
+        ]
+      }
+    ],
+    "plan_type": "enterprise_multimodal_source_collection_plan_v1",
+    "required_modality_count": 4
+  },
+  "validator_expectation": {
+    "authoritative_validator_must_be_run_separately": true,
+    "this_packet_is_sufficient_for_multimodal_gate": false
+  },
+  "work_packet_sha256": "834285b62bd57d4a4a32964e291b2dfa4d79e1f46e9c79de0a7b70d5984bd394",
+  "work_packet_state": "operator_assignment_only",
+  "work_packet_type": "enterprise_multimodal_collection_packet_preview_v1"
+}

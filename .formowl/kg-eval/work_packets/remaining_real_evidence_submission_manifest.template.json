@@ -1,0 +1,30 @@
+{
+  "claim_boundary": {
+    "accepts_evidence": false,
+    "counts_as_acceptance_gate": false,
+    "promotes_evidence": false,
+    "writes_candidate_artifacts": false,
+    "writes_canonical_packets": false
+  },
+  "do_not_submit_as_evidence": true,
+  "manifest_type": "kg_remaining_real_evidence_submission_manifest_v1",
+  "submissions": [
+    {
+      "assembly_manifest_output": "work_packets/multimodal_semantic_validation_candidate_manifest.json",
+      "gate_id": "multimodal_semantic_validation",
+      "operator_run_id": "OPERATOR_RUN_ID",
+      "output_dir": "inputs/enterprise_multimodal_real/OPERATOR_RUN_ID",
+      "response_packet": "inputs/enterprise_multimodal_real/OPERATOR_RUN_ID/operator_response_packet.json",
+      "response_packet_type": "enterprise_multimodal_response_intake_v1"
+    },
+    {
+      "assembly_manifest_output": "work_packets/production_adapter_paths_candidate_manifest.json",
+      "gate_id": "production_adapter_paths",
+      "operator_run_id": "OPERATOR_RUN_ID",
+      "output_dir": "inputs/production_adapter_real/OPERATOR_RUN_ID",
+      "response_packet": "inputs/production_adapter_real/OPERATOR_RUN_ID/operator_response_packet.json",
+      "response_packet_type": "production_adapter_response_intake_v1"
+    }
+  ],
+  "template_only": true
+}

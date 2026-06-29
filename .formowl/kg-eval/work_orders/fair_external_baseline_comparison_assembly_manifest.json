@@ -1,0 +1,198 @@
+{
+  "artifact_id": "fair_external_baseline_run_packet_v1",
+  "baseline_runs": [
+    {
+      "access_policy_sha256": "fill-with-real-access-policy-sha256",
+      "answer_output_artifact": "inputs/fair_baseline_real/microsoft_graphrag/answer_output_artifact.json",
+      "baseline_id": "microsoft_graphrag",
+      "completion_model_budget_sha256": "fill-with-real-completion-model-budget-sha256",
+      "config_artifact": "inputs/fair_baseline_real/microsoft_graphrag/config_artifact.json",
+      "corpus_export_sha256": "fill-with-real-corpus-export-sha256",
+      "embedding_model_budget_sha256": "fill-with-real-embedding-model-budget-sha256",
+      "evaluation_question_set_sha256": "fill-with-real-evaluation-question-set-sha256",
+      "graph_output_artifact": "inputs/fair_baseline_real/microsoft_graphrag/graph_output_artifact.json",
+      "index_build_log_artifact": "inputs/fair_baseline_real/microsoft_graphrag/index_build_log_artifact.json",
+      "mock_or_dry_run": "fill-with-real-boolean-false-after-real-run",
+      "ontology_mapping_sha256": "fill-with-real-ontology-mapping-sha256",
+      "package_lock_artifact": "inputs/fair_baseline_real/microsoft_graphrag/package_lock_artifact.json",
+      "package_source_url": "https://github.com/microsoft/graphrag",
+      "package_version": "fill-with-real-microsoft-graphrag-package-version",
+      "permission_probe_artifact": "inputs/fair_baseline_real/microsoft_graphrag/permission_probe_artifact.json",
+      "prompt_set_sha256": "fill-with-real-prompt-set-sha256",
+      "query_run_log_artifact": "inputs/fair_baseline_real/microsoft_graphrag/query_run_log_artifact.json",
+      "real_package_execution": "fill-with-real-boolean-true-after-real-run",
+      "source_ids": [
+        "microsoft_graphrag_paper",
+        "microsoft_graphrag_repo",
+        "microsoft_graphrag_docs"
+      ],
+      "synthetic_corpus": "fill-with-real-boolean-false-after-corpus-review"
+    },
+    {
+      "access_policy_sha256": "fill-with-real-access-policy-sha256",
+      "answer_output_artifact": "inputs/fair_baseline_real/lightrag/answer_output_artifact.json",
+      "baseline_id": "lightrag",
+      "completion_model_budget_sha256": "fill-with-real-completion-model-budget-sha256",
+      "config_artifact": "inputs/fair_baseline_real/lightrag/config_artifact.json",
+      "corpus_export_sha256": "fill-with-real-corpus-export-sha256",
+      "embedding_model_budget_sha256": "fill-with-real-embedding-model-budget-sha256",
+      "evaluation_question_set_sha256": "fill-with-real-evaluation-question-set-sha256",
+      "graph_output_artifact": "inputs/fair_baseline_real/lightrag/graph_output_artifact.json",
+      "index_build_log_artifact": "inputs/fair_baseline_real/lightrag/index_build_log_artifact.json",
+      "mock_or_dry_run": "fill-with-real-boolean-false-after-real-run",
+      "ontology_mapping_sha256": "fill-with-real-ontology-mapping-sha256",
+      "package_lock_artifact": "inputs/fair_baseline_real/lightrag/package_lock_artifact.json",
+      "package_source_url": "https://github.com/HKUDS/LightRAG",
+      "package_version": "fill-with-real-lightrag-package-version",
+      "permission_probe_artifact": "inputs/fair_baseline_real/lightrag/permission_probe_artifact.json",
+      "prompt_set_sha256": "fill-with-real-prompt-set-sha256",
+      "query_run_log_artifact": "inputs/fair_baseline_real/lightrag/query_run_log_artifact.json",
+      "real_package_execution": "fill-with-real-boolean-true-after-real-run",
+      "source_ids": [
+        "lightrag_paper",
+        "lightrag_repo"
+      ],
+      "synthetic_corpus": "fill-with-real-boolean-false-after-corpus-review"
+    },
+    {
+      "access_policy_sha256": "fill-with-real-access-policy-sha256",
+      "answer_output_artifact": "inputs/fair_baseline_real/hipporag/answer_output_artifact.json",
+      "baseline_id": "hipporag",
+      "completion_model_budget_sha256": "fill-with-real-completion-model-budget-sha256",
+      "config_artifact": "inputs/fair_baseline_real/hipporag/config_artifact.json",
+      "corpus_export_sha256": "fill-with-real-corpus-export-sha256",
+      "embedding_model_budget_sha256": "fill-with-real-embedding-model-budget-sha256",
+      "evaluation_question_set_sha256": "fill-with-real-evaluation-question-set-sha256",
+      "graph_output_artifact": "inputs/fair_baseline_real/hipporag/graph_output_artifact.json",
+      "index_build_log_artifact": "inputs/fair_baseline_real/hipporag/index_build_log_artifact.json",
+      "mock_or_dry_run": "fill-with-real-boolean-false-after-real-run",
+      "ontology_mapping_sha256": "fill-with-real-ontology-mapping-sha256",
+      "package_lock_artifact": "inputs/fair_baseline_real/hipporag/package_lock_artifact.json",
+      "package_source_url": "https://github.com/OSU-NLP-Group/HippoRAG",
+      "package_version": "fill-with-real-hipporag-package-version",
+      "permission_probe_artifact": "inputs/fair_baseline_real/hipporag/permission_probe_artifact.json",
+      "prompt_set_sha256": "fill-with-real-prompt-set-sha256",
+      "query_run_log_artifact": "inputs/fair_baseline_real/hipporag/query_run_log_artifact.json",
+      "real_package_execution": "fill-with-real-boolean-true-after-real-run",
+      "source_ids": [
+        "hipporag_paper",
+        "hipporag2_paper",
+        "hipporag_repo"
+      ],
+      "synthetic_corpus": "fill-with-real-boolean-false-after-corpus-review"
+    }
+  ],
+  "claim_boundary": {
+    "supports_fair_external_baseline_comparison_claim": false,
+    "supports_production_ready_claim": false,
+    "supports_top_tier_scientific_validation_claim": false,
+    "supports_unreviewed_business_judgment_claim": false,
+    "supports_unreviewed_canonical_merge_claim": false
+  },
+  "evidence_kind": "non_synthetic_external_baseline_run",
+  "graph_quality_validation": {
+    "completed": "fill-with-real-boolean-true-after-graph-quality-review",
+    "human_reviewed": "fill-with-real-boolean-true-after-human-graph-review",
+    "per_baseline_rows": [
+      {
+        "baseline_id": "microsoft_graphrag",
+        "graph_output_artifact_sha256": "fill-with-real-microsoft-graphrag-graph-output-artifact-sha256",
+        "reviewed_entity_count": "fill-with-real-microsoft-graphrag-reviewed-entity-count",
+        "reviewed_relation_count": "fill-with-real-microsoft-graphrag-reviewed-relation-count"
+      },
+      {
+        "baseline_id": "lightrag",
+        "graph_output_artifact_sha256": "fill-with-real-lightrag-graph-output-artifact-sha256",
+        "reviewed_entity_count": "fill-with-real-lightrag-reviewed-entity-count",
+        "reviewed_relation_count": "fill-with-real-lightrag-reviewed-relation-count"
+      },
+      {
+        "baseline_id": "hipporag",
+        "graph_output_artifact_sha256": "fill-with-real-hipporag-graph-output-artifact-sha256",
+        "reviewed_entity_count": "fill-with-real-hipporag-reviewed-entity-count",
+        "reviewed_relation_count": "fill-with-real-hipporag-reviewed-relation-count"
+      }
+    ]
+  },
+  "human_answer_adjudication": {
+    "adjudicator_id": "fill-with-real-human-adjudicator-id",
+    "artifact_id": "human_answer_adjudication_results_v1",
+    "completed": "fill-with-real-boolean-true-after-human-adjudication",
+    "custody_receipt_sha256": "fill-with-real-custody-receipt-sha256",
+    "final_adjudication_sha256": "fill-with-real-final-adjudication-sha256",
+    "per_baseline_rows": [
+      {
+        "answer_output_artifact_sha256": "fill-with-real-microsoft-graphrag-answer-output-artifact-sha256",
+        "baseline_id": "microsoft_graphrag",
+        "question_count": "fill-with-real-microsoft-graphrag-question-count"
+      },
+      {
+        "answer_output_artifact_sha256": "fill-with-real-lightrag-answer-output-artifact-sha256",
+        "baseline_id": "lightrag",
+        "question_count": "fill-with-real-lightrag-question-count"
+      },
+      {
+        "answer_output_artifact_sha256": "fill-with-real-hipporag-answer-output-artifact-sha256",
+        "baseline_id": "hipporag",
+        "question_count": "fill-with-real-hipporag-question-count"
+      }
+    ],
+    "question_set_sha256": "fill-with-real-evaluation-question-set-sha256",
+    "reviewers": [
+      {
+        "independent_first_pass": "fill-with-real-boolean-true-after-sealed-first-pass-alpha",
+        "reviewer_id": "fill-with-real-human-reviewer-alpha-id",
+        "reviewer_type": "human",
+        "sealed_submission_sha256": "fill-with-real-human-reviewer-alpha-sealed-submission-sha256"
+      },
+      {
+        "independent_first_pass": "fill-with-real-boolean-true-after-sealed-first-pass-beta",
+        "reviewer_id": "fill-with-real-human-reviewer-beta-id",
+        "reviewer_type": "human",
+        "sealed_submission_sha256": "fill-with-real-human-reviewer-beta-sealed-submission-sha256"
+      }
+    ],
+    "synthetic_or_agent_generated": "fill-with-real-boolean-false-after-human-custody-review"
+  },
+  "permission_probes": [
+    {
+      "baseline_id": "microsoft_graphrag",
+      "entity_match_does_not_grant_access": "fill-with-real-microsoft-graphrag-entity-match-does-not-grant-access-true",
+      "permission_probe_artifact_sha256": "fill-with-real-microsoft-graphrag-permission-probe-artifact-sha256",
+      "private_content_leak_count": "fill-with-real-microsoft-graphrag-private-content-leak-count-zero",
+      "private_content_not_returned": "fill-with-real-microsoft-graphrag-private-content-not-returned-true",
+      "raw_asset_access_count": "fill-with-real-microsoft-graphrag-raw-asset-access-count-zero",
+      "raw_asset_access_denied": "fill-with-real-microsoft-graphrag-raw-asset-access-denied-true",
+      "revoked_grant_content_denied": "fill-with-real-microsoft-graphrag-revoked-grant-content-denied-true"
+    },
+    {
+      "baseline_id": "lightrag",
+      "entity_match_does_not_grant_access": "fill-with-real-lightrag-entity-match-does-not-grant-access-true",
+      "permission_probe_artifact_sha256": "fill-with-real-lightrag-permission-probe-artifact-sha256",
+      "private_content_leak_count": "fill-with-real-lightrag-private-content-leak-count-zero",
+      "private_content_not_returned": "fill-with-real-lightrag-private-content-not-returned-true",
+      "raw_asset_access_count": "fill-with-real-lightrag-raw-asset-access-count-zero",
+      "raw_asset_access_denied": "fill-with-real-lightrag-raw-asset-access-denied-true",
+      "revoked_grant_content_denied": "fill-with-real-lightrag-revoked-grant-content-denied-true"
+    },
+    {
+      "baseline_id": "hipporag",
+      "entity_match_does_not_grant_access": "fill-with-real-hipporag-entity-match-does-not-grant-access-true",
+      "permission_probe_artifact_sha256": "fill-with-real-hipporag-permission-probe-artifact-sha256",
+      "private_content_leak_count": "fill-with-real-hipporag-private-content-leak-count-zero",
+      "private_content_not_returned": "fill-with-real-hipporag-private-content-not-returned-true",
+      "raw_asset_access_count": "fill-with-real-hipporag-raw-asset-access-count-zero",
+      "raw_asset_access_denied": "fill-with-real-hipporag-raw-asset-access-denied-true",
+      "revoked_grant_content_denied": "fill-with-real-hipporag-revoked-grant-content-denied-true"
+    }
+  ],
+  "recovered_after_tmp_loss": false,
+  "run_environment": {
+    "container_image_digest_sha256": "fill-with-real-container-image-digest-sha256",
+    "non_synthetic_benchmark_context": "fill-with-real-boolean-true-after-non-synthetic-corpus-review",
+    "run_manifest_sha256": "fill-with-real-run-manifest-sha256",
+    "uses_mocked_llm_or_retrieval": "fill-with-real-boolean-false-after-run-log-review",
+    "uses_real_external_packages": "fill-with-real-boolean-true-after-real-package-execution"
+  },
+  "source_lock_sha256": "addba921e9cc4ebc4ded09b26d23a25a29aeba4f0e15e4dacb711f29dcedb2da"
+}

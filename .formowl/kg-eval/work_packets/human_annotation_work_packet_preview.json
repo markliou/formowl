@@ -1,0 +1,101 @@
+{
+  "annotation_task_id": "kg_eval_human_annotation_v1",
+  "artifact_boundary": {
+    "accepts_human_responses": false,
+    "counts_as_acceptance_gate": false,
+    "creates_downstream_evidence_artifacts": false,
+    "touches_real_evidence_root": false,
+    "writes_canonical_packet": false
+  },
+  "canonical_packet_not_written": "inputs/human_annotation_results_v1.json",
+  "evidence_state": "non_evidence",
+  "forbidden_output_roots": [
+    "inputs/human_annotation_real/",
+    "inputs/test_*",
+    "results/",
+    "templates/"
+  ],
+  "manifest_artifact": {
+    "annotation_task_id": "kg_eval_human_annotation_v1",
+    "artifact_type": "human_annotation_manifest_v1",
+    "item_count": 2,
+    "items": [
+      {
+        "item_id": "ann_finance_table_revenue_001",
+        "row_sha256": "7d85d2cb8011df7b7622c291d371af783a0e1c5e828237274c3f3bcfcd04c1a9",
+        "source_observation_id": "obs_finance_table_revenue_001",
+        "source_ref": "formowl://observation/obs_finance_table_revenue_001",
+        "task_id": "evidence_supported_claim"
+      },
+      {
+        "item_id": "ann_meeting_decision_001",
+        "row_sha256": "37bbf79ce057e87995fff2df58c6814e1173b1cfcb2752477efca689ec25c39b",
+        "source_observation_id": "obs_meeting_decision_001",
+        "source_ref": "formowl://observation/obs_meeting_decision_001",
+        "task_id": "business_decision_candidate"
+      }
+    ]
+  },
+  "real_evidence_root_not_written": "inputs/human_annotation_real",
+  "safe_output_root": "work_packets/",
+  "validator_expectation": {
+    "authoritative_validator_must_be_run_separately": true,
+    "this_packet_is_sufficient_for_human_gate": false
+  },
+  "work_orders_artifact": {
+    "artifact_type": "human_annotation_work_orders_v1",
+    "work_orders": [
+      {
+        "item_id": "ann_finance_table_revenue_001",
+        "manifest_row_sha256": "7d85d2cb8011df7b7622c291d371af783a0e1c5e828237274c3f3bcfcd04c1a9",
+        "reviewer_id": "human_reviewer_alpha",
+        "role": "first_pass",
+        "row_sha256": "d7cbd4f184ca604683446c473b2b44121f24b333f7e8ad887a7a09b7861328e9",
+        "work_order_id": "wo_first_pass_f963f48f4b21"
+      },
+      {
+        "item_id": "ann_finance_table_revenue_001",
+        "manifest_row_sha256": "7d85d2cb8011df7b7622c291d371af783a0e1c5e828237274c3f3bcfcd04c1a9",
+        "reviewer_id": "human_reviewer_beta",
+        "role": "first_pass",
+        "row_sha256": "46395ec3240cf39c8d9878f69fbad4bb9f1cf8a7e9b529f2466dbc72030b9665",
+        "work_order_id": "wo_first_pass_abe89d36ebe3"
+      },
+      {
+        "item_id": "ann_finance_table_revenue_001",
+        "manifest_row_sha256": "7d85d2cb8011df7b7622c291d371af783a0e1c5e828237274c3f3bcfcd04c1a9",
+        "reviewer_id": "human_adjudicator_gamma",
+        "role": "adjudicator",
+        "row_sha256": "f44224dec2040c7983cd4964ee62b5726aa457f6418f46f60c38d5ec5d4985d4",
+        "work_order_id": "wo_adjudicator_ce3da148a409"
+      },
+      {
+        "item_id": "ann_meeting_decision_001",
+        "manifest_row_sha256": "37bbf79ce057e87995fff2df58c6814e1173b1cfcb2752477efca689ec25c39b",
+        "reviewer_id": "human_reviewer_alpha",
+        "role": "first_pass",
+        "row_sha256": "94327101f0ac4cac4b88220fc903a9471fa4e3926ea7ab5e3b2f8e42bdc76386",
+        "work_order_id": "wo_first_pass_9ede5241be11"
+      },
+      {
+        "item_id": "ann_meeting_decision_001",
+        "manifest_row_sha256": "37bbf79ce057e87995fff2df58c6814e1173b1cfcb2752477efca689ec25c39b",
+        "reviewer_id": "human_reviewer_beta",
+        "role": "first_pass",
+        "row_sha256": "1d891479217709cda2c36eafa747f064b9cbd0f0928a5457f22d81f62ca1042c",
+        "work_order_id": "wo_first_pass_840664832867"
+      },
+      {
+        "item_id": "ann_meeting_decision_001",
+        "manifest_row_sha256": "37bbf79ce057e87995fff2df58c6814e1173b1cfcb2752477efca689ec25c39b",
+        "reviewer_id": "human_adjudicator_gamma",
+        "role": "adjudicator",
+        "row_sha256": "648c62985da004f92ddde5113fa88b0f229893263986bb7970b2a4bcb42f9902",
+        "work_order_id": "wo_adjudicator_b60fef6c2d13"
+      }
+    ]
+  },
+  "work_packet_sha256": "f77e4d3ec85b5013b0ee6df51538ce36a2341101cf9e332b1e00aca8fd2c850f",
+  "work_packet_state": "operator_assignment_only",
+  "work_packet_type": "human_annotation_work_packet_preview_v1"
+}

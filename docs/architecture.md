@@ -6,6 +6,18 @@ FormOwl uses a container-first architecture and a graph-governed knowledge pipel
 
 The canonical development, test, and deployment environment is a container. Host-installed runtimes are optional conveniences, not required assumptions.
 
+## Implementation Ownership
+
+FormOwl development is split between the Knowledge Graph Research Agent and the
+FormOwl System Backbone Agent. The durable role definition, current session
+assignment, ownership boundaries, and handoff rules live in
+`docs/agent-roles.md`.
+
+Architecture changes should preserve that split: graph and ontology research
+work defines source-preserving KG behavior and research evidence, while system
+backbone work provides safe service, storage, transport, and runtime boundaries
+for that research layer.
+
 The central identity rule is:
 
 ```text
@@ -174,6 +186,11 @@ LifecyclePolicy
 UserGraphAssemblyPolicy
 WikiProjectionPolicy
 ```
+
+The current contract layer includes versioned policy records for extraction,
+atom granularity, entity resolution, relation resolution, lifecycle, and wiki
+projection. Ontology policy and user graph assembly policy remain separate
+future slices so type governance and user graph assembly stay decoupled.
 
 External extractors and LLM graph tools may create observations, candidate atoms, candidate relations, or external graph imports. They must not directly mutate canonical graph state.
 
