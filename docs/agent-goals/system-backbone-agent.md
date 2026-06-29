@@ -45,8 +45,10 @@ real-backend adapter milestone, the Project/Wiki MCP JSON-RPC compatibility
 gateway, and public tool schemas/error envelopes for the current gateway
 surface, and retrieval gateway completion for governed evidence/raw-asset
 access, plus storage backend registry configuration for local-first and
-metadata-only object-store descriptors. The next backbone focus should move to
-the remaining database-backed stores.
+metadata-only object-store descriptors, worker execution, PostgreSQL-backed
+ingestion record stores, and the closed-beta readiness smoke. The next
+backbone focus should move to the remaining closed-beta blockers without
+claiming production readiness.
 
 ## Current Status
 
@@ -94,6 +96,14 @@ validated contract payloads, safe record ids, and the existing
 `PostgreSQLUnitOfWork` rollback boundary. It does not expose database controls
 through MCP or claim live PostgreSQL readiness.
 
+The closed-beta readiness smoke now exists as a synthetic, trusted internal
+gate. It composes Project/Wiki JSON-RPC, storage backend public-envelope
+redaction, worker ingestion, observation-to-wiki draft bridging, governed
+retrieval grant checks and raw-asset references, and the packaged KG-eval
+facade. It does not claim production readiness, live database readiness,
+automatic publishing, raw asset content access, canonical graph writes, or mail
+adapter readiness.
+
 ## Owner Paths
 
 - `python/formowl_project_mcp/adapters/openproject/`
@@ -105,7 +115,11 @@ through MCP or claim live PostgreSQL readiness.
 - `python/formowl_ingestion/storage/postgres.py`
 - `python/formowl_graph/storage/migrations/003_ingestion_records.sql`
 - `python/formowl_worker/`
+- `scripts/closed_beta_smoke.py`
+- `tests/test_closed_beta_smoke_script.py`
+- `docs/closed-beta-runbook.md`
 - `docs/implementation-task-breakdown.md`
+- `README.md`
 
 ## Acceptance Criteria
 
@@ -120,6 +134,9 @@ through MCP or claim live PostgreSQL readiness.
 - Full test suite passes in the dev container.
 - The user-requested 6-reviewer OpenProject gate remains recorded with no
   blocking findings.
+- Closed-beta smoke passes in the dev container while preserving proposal-only
+  publishing, raw/internal leak guards, governed raw-asset references, KG-eval
+  facade boundaries, and no canonical graph writes.
 
 Canonical verification commands:
 
@@ -129,6 +146,9 @@ docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
 
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
   python -m unittest discover -s tests
+
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
+  python scripts/closed_beta_smoke.py --output /tmp/formowl-closed-beta-smoke.json
 ```
 
 Latest verification:
@@ -163,6 +183,13 @@ Latest verification:
 - PostgreSQL ingestion store touched-file Ruff check and format check: passed.
 - Full canonical dev-container suite after PostgreSQL ingestion store slice:
   302 tests OK.
+- Closed-beta smoke focused tests: 7 tests OK.
+- Closed-beta smoke CLI:
+  `python scripts/closed_beta_smoke.py --output /tmp/formowl-closed-beta-smoke.json`
+  exited 0 in the dev container.
+- Ruff check and format check for `python`, `tests`, and `scripts`: passed.
+- Full canonical dev-container suite after closed-beta smoke slice:
+  309 tests OK.
 
 ## Known Blockers And Dependencies
 
@@ -177,17 +204,18 @@ Latest verification:
 
 ## Last Verified Commit And Branch
 
-- Branch: `complete-slice-1`
-- Merged remote commit: `9ba1528`
-- Canonical dev-container verification passed after the merge.
+- Branch: `closed-beta-readiness`
+- Base remote commit: `4525aa1`
+- Canonical dev-container verification passed after the closed-beta smoke
+  slice.
 
 ## Next Action
 
-Pick the next unchecked System Backbone work-board item. The strongest next
-candidate remains database-backed stores behind the same interfaces as the
-current file-backed stores, now focused on the remaining graph/canonical/job
-repository path and production end-to-end adapter evidence after the ingestion
-record store contract slice.
+Pick the next unchecked System Backbone work-board item that materially moves
+closed beta forward. The strongest next candidates are the backend-specific
+wiki adapter behind proposal-only publishing and the remaining database-backed
+store/live adapter evidence. Do not start the mail adapter / issue #5 work
+until the PM schedule assigns it.
 
 ## Handoff Notes For KG Research Agent
 

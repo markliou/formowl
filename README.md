@@ -122,6 +122,13 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   boundary evidence only; it does not claim production readiness, enterprise
   entity-resolution quality, completed adjudication, raw asset access, or
   canonical graph commits.
+- A closed-beta readiness smoke harness can compose the current trusted
+  internal path through Project/Wiki JSON-RPC, storage backend configuration,
+  worker ingestion, observation-to-wiki draft bridging, governed retrieval, and
+  the packaged KG-eval facade. It is synthetic closed-beta gate evidence only;
+  it does not claim production readiness, live database readiness, automatic
+  publishing, raw asset content access, canonical graph writes, or mail adapter
+  readiness.
 - A deterministic KG research acceptance suite and method note covering recent
   literature comparison, scoped ontology integration, multi-user fusion,
   multimodal enterprise fixtures, four-specialist LLM subagent adjudication as
@@ -178,6 +185,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   acceptance evidence, and known limits.
 - `docs/kg-eval-package.md` - packaged KG evaluation facade and integration
   contract for the System Backbone Agent.
+- `docs/closed-beta-runbook.md` - trusted internal closed-beta smoke command,
+  pass criteria, and explicit exclusions.
 - `docs/openproject-adapter.md` - OpenProject adapter mapping.
 - `docs/implementation-task-breakdown.md` - shared implementation checklist for contributors and agents.
 
@@ -245,6 +254,12 @@ Run lint and formatting checks inside the dev container:
 
 ```sh
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "ruff check python tests scripts && ruff format --check python tests scripts"
+```
+
+Run the closed-beta readiness smoke inside the dev container:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/closed_beta_smoke.py --output /tmp/formowl-closed-beta-smoke.json"
 ```
 
 ## Repository Skills

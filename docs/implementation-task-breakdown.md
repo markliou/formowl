@@ -2072,6 +2072,26 @@ These groups can be split across multiple agents after Slice 1 is stable.
     passed: `test_worker_ingestion.py` ran 3 tests OK, worker Ruff
     check/format check passed, and the full
     `python -m unittest discover -s tests` suite ran 292 tests OK.
+- [x] Add closed-beta readiness smoke harness and runbook.
+  - Owner paths: `scripts/closed_beta_smoke.py`,
+    `tests/test_closed_beta_smoke_script.py`, `docs/closed-beta-runbook.md`,
+    `README.md`, this file
+  - Proof: a dev-container smoke exercises Project/Wiki JSON-RPC, storage
+    config redaction, worker ingestion, observation-to-wiki draft bridging,
+    governed retrieval grants/raw-asset references, KG-eval facade integration,
+    public output leak guards, and no canonical graph writes without claiming
+    production readiness.
+  - Note: completed with `scripts/closed_beta_smoke.py`,
+    `tests/test_closed_beta_smoke_script.py`, and
+    `docs/closed-beta-runbook.md`. The smoke uses synthetic fixtures only and
+    validates the current trusted internal closed-beta backbone path without
+    claiming production readiness, live database readiness, automatic
+    publishing, raw asset content access, canonical graph writes, or mail
+    adapter readiness. Dev-container verification passed: focused
+    `test_closed_beta_smoke_script.py` ran 7 OK; `python
+    scripts/closed_beta_smoke.py --output /tmp/formowl-closed-beta-smoke.json`
+    exited 0; Ruff check and format-check passed for `python`, `tests`, and
+    `scripts`; full `python -m unittest discover -s tests` ran 309 OK.
 - [ ] Add database-backed stores after file-backed stores stabilize.
   - Owner paths: storage modules, migrations
   - Proof: tests run against file stores and database stores through the same
