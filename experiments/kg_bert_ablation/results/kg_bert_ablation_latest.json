@@ -1,0 +1,389 @@
+{
+  "artifact_id": "formowl_kg_bert_ablation_result_v1",
+  "claim_boundary": {
+    "candidate_only": true,
+    "canonical_graph_write_allowed": false,
+    "canonical_type_write_allowed": false,
+    "production_quality_claim": false,
+    "raw_access_allowed": false,
+    "stakeholder_evidence_artifact": true
+  },
+  "comparison": {
+    "reason": "BERT/SentenceTransformer run did not complete in this environment",
+    "status": "incomplete"
+  },
+  "created_at": "2026-06-29T07:05:56+00:00",
+  "dataset": {
+    "dataset_id": "kg_matching_synonym_ablation_fixture_v1",
+    "dataset_sha256": "sha256:1ea22ef1399560409a165ebcc9f8d3b3343a0fe5b157614873714b88e6cbc5a5",
+    "negative_pair_count": 6,
+    "pair_count": 16,
+    "pairs": [
+      {
+        "core_supertype": "Concept",
+        "expected_same": true,
+        "left_label": "customer escalation policy",
+        "pair_id": "positive_customer_escalation",
+        "right_label": "client complaint handling procedure"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": true,
+        "left_label": "refund approval workflow",
+        "pair_id": "positive_refund_approval",
+        "right_label": "reimbursement authorization process"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": true,
+        "left_label": "project launch date",
+        "pair_id": "positive_launch_date",
+        "right_label": "go-live schedule"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": true,
+        "left_label": "data retention rule",
+        "pair_id": "positive_data_retention",
+        "right_label": "information preservation policy"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": true,
+        "left_label": "vendor onboarding checklist",
+        "pair_id": "positive_vendor_onboarding",
+        "right_label": "supplier intake requirements"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": true,
+        "left_label": "security review gate",
+        "pair_id": "positive_security_review",
+        "right_label": "risk assessment checkpoint"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": true,
+        "left_label": "meeting action item",
+        "pair_id": "positive_meeting_action",
+        "right_label": "follow-up task from discussion"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": true,
+        "left_label": "invoice payment delay",
+        "pair_id": "positive_invoice_delay",
+        "right_label": "late accounts payable settlement"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": true,
+        "left_label": "contract renewal reminder",
+        "pair_id": "positive_contract_renewal",
+        "right_label": "agreement extension notice"
+      },
+      {
+        "core_supertype": "Organization",
+        "expected_same": true,
+        "left_label": "Acme Corp",
+        "pair_id": "positive_customer_org",
+        "right_label": "ACME Corporation"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": false,
+        "left_label": "customer escalation policy",
+        "pair_id": "negative_customer_vs_security",
+        "right_label": "security review gate"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": false,
+        "left_label": "refund approval workflow",
+        "pair_id": "negative_refund_vs_launch",
+        "right_label": "project launch date"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": false,
+        "left_label": "vendor onboarding checklist",
+        "pair_id": "negative_vendor_vs_invoice",
+        "right_label": "invoice payment delay"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": false,
+        "left_label": "contract renewal reminder",
+        "pair_id": "negative_contract_vs_action",
+        "right_label": "meeting action item"
+      },
+      {
+        "core_supertype": "Concept",
+        "expected_same": false,
+        "left_label": "data retention rule",
+        "pair_id": "negative_data_vs_vendor",
+        "right_label": "supplier intake requirements"
+      },
+      {
+        "core_supertype": "Person",
+        "expected_same": false,
+        "left_label": "Maya Chen",
+        "pair_id": "negative_person_project_same_label",
+        "right_label": "Maya Chen"
+      }
+    ],
+    "positive_pair_count": 10
+  },
+  "environment": {
+    "default_model": "sentence-transformers/bert-base-nli-mean-tokens",
+    "python_version": "3.13.14",
+    "sentence_transformers_available": false
+  },
+  "runs": [
+    {
+      "algorithm": "rapidfuzz_compatible_lexical_v1",
+      "latency_ms": 6.117,
+      "metrics": {
+        "accuracy": 0.4375,
+        "f1": 0.181818,
+        "false_negative": 9,
+        "false_positive": 0,
+        "precision": 1.0,
+        "recall": 0.1,
+        "true_negative": 6,
+        "true_positive": 1
+      },
+      "pair_results": [
+        {
+          "expected_same": true,
+          "pair_id": "positive_customer_escalation",
+          "predicted_same": false,
+          "score": 0.42623,
+          "score_breakdown": {
+            "label_similarity": 0.42623,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_refund_approval",
+          "predicted_same": false,
+          "score": 0.305085,
+          "score_breakdown": {
+            "label_similarity": 0.305085,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_launch_date",
+          "predicted_same": false,
+          "score": 0.4,
+          "score_breakdown": {
+            "label_similarity": 0.4,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_data_retention",
+          "predicted_same": false,
+          "score": 0.32,
+          "score_breakdown": {
+            "label_similarity": 0.32,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_vendor_onboarding",
+          "predicted_same": false,
+          "score": 0.109091,
+          "score_breakdown": {
+            "label_similarity": 0.109091,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_security_review",
+          "predicted_same": false,
+          "score": 0.217391,
+          "score_breakdown": {
+            "label_similarity": 0.217391,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_meeting_action",
+          "predicted_same": false,
+          "score": 0.244898,
+          "score_breakdown": {
+            "label_similarity": 0.244898,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_invoice_delay",
+          "predicted_same": false,
+          "score": 0.339623,
+          "score_breakdown": {
+            "label_similarity": 0.339623,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_contract_renewal",
+          "predicted_same": false,
+          "score": 0.196078,
+          "score_breakdown": {
+            "label_similarity": 0.196078,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": true,
+          "pair_id": "positive_customer_org",
+          "predicted_same": true,
+          "score": 1.0,
+          "score_breakdown": {
+            "label_similarity": 1.0,
+            "threshold": 0.7,
+            "token_jaccard": 1.0,
+            "type_gate_passed": true
+          },
+          "status": "same_as_candidate"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_customer_vs_security",
+          "predicted_same": false,
+          "score": 0.304348,
+          "score_breakdown": {
+            "label_similarity": 0.304348,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_refund_vs_launch",
+          "predicted_same": false,
+          "score": 0.232558,
+          "score_breakdown": {
+            "label_similarity": 0.232558,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_vendor_vs_invoice",
+          "predicted_same": false,
+          "score": 0.208333,
+          "score_breakdown": {
+            "label_similarity": 0.208333,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_contract_vs_action",
+          "predicted_same": false,
+          "score": 0.318182,
+          "score_breakdown": {
+            "label_similarity": 0.318182,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_data_vs_vendor",
+          "predicted_same": false,
+          "score": 0.340426,
+          "score_breakdown": {
+            "label_similarity": 0.340426,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": true
+          },
+          "status": "below_threshold"
+        },
+        {
+          "expected_same": false,
+          "pair_id": "negative_person_project_same_label",
+          "predicted_same": false,
+          "score": 0.0,
+          "score_breakdown": {
+            "label_similarity": 0.0,
+            "threshold": 0.7,
+            "token_jaccard": 0.0,
+            "type_gate_passed": false
+          },
+          "status": "type_mismatch"
+        }
+      ],
+      "pairs_per_second": 2615.679661,
+      "run_id": "non_bert_lexical_baseline_v1",
+      "status": "completed",
+      "threshold": 0.7,
+      "uses_neural_networks": false
+    },
+    {
+      "algorithm": "sentence_transformer_cosine_similarity_v1",
+      "blocker": "sentence_transformers is not installed in the execution environment",
+      "metrics": null,
+      "model_name": "sentence-transformers/bert-base-nli-mean-tokens",
+      "package_status": {
+        "available": false,
+        "package_version": null
+      },
+      "pair_results": [],
+      "run_id": "bert_sentence_transformer_embedding_v1",
+      "status": "blocked_missing_dependency",
+      "threshold": 0.7,
+      "uses_neural_networks": true
+    }
+  ],
+  "started_at": "2026-06-29T07:05:56+00:00"
+}
