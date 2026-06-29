@@ -155,6 +155,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   acceptance evidence, and known limits.
 - `docs/kg-eval-package.md` - packaged KG evaluation facade and integration
   contract for the System Backbone Agent.
+- `docs/kg-bert-runtime.md` - optional BERT/SentenceTransformer KG
+  candidate-generation runtimes, CPU/GPU Dockerfiles, and artifact rules.
 - `docs/openproject-adapter.md` - OpenProject adapter mapping.
 - `docs/implementation-task-breakdown.md` - shared implementation checklist for contributors and agents.
 

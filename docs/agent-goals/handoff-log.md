@@ -4,6 +4,27 @@ Use this log for short cross-session and cross-machine notes. Keep detailed
 status in each role's goal file and task completion in
 `docs/implementation-task-breakdown.md`.
 
+## 2026-06-29
+
+- KG BERT ablation follow-up on branch `kg-bert-ablation-experiment`: added
+  stable optional neural runtimes instead of ad hoc host installs. CPU runtime
+  `containers/kg-bert-cpu/Dockerfile` built as `formowl-kg-bert-cpu:local`,
+  imported `sentence_transformers 3.3.1`, `torch 2.5.1+cpu`, and
+  `transformers 4.46.3`, and produced
+  `experiments/kg_bert_ablation/results/kg_bert_ablation_bert_cpu.json`.
+  On the fixed 16-pair fixture, lexical non-BERT scored
+  precision 1.0, recall 0.1, F1 0.181818, accuracy 0.4375; CPU BERT scored
+  precision 0.888889, recall 0.8, F1 0.842105, accuracy 0.8125. Added GPU
+  runtime files under `containers/kg-bert-gpu/` using
+  `pytorch/pytorch:2.5.1-cuda11.8-cudnn9-runtime` for GTX 10-series
+  compatibility. This host has two GTX 1080 Ti GPUs and driver `580.159.04`,
+  but `docker run --gpus all` is blocked before FormOwl code runs by NVIDIA
+  Container Toolkit `ldconfig` config looking for `/sbin/ldconfig.real`.
+  Blocker artifact:
+  `experiments/kg_bert_ablation/results/kg_bert_ablation_gpu_runtime_2026-06-29_blocked_nvidia_ldconfig.json`.
+  The GPU image manifest resolved, but the local image build was stopped after
+  a slow 3.17GB base-layer download; no Dockerfile failure was observed.
+
 ## 2026-06-27
 
 - Created durable goal registry under `docs/agent-goals/`.

@@ -30,7 +30,11 @@ To run the neural side after dependencies and model files are available:
 
 ```sh
 FORMOWL_BERT_ABLATION_MODEL=sentence-transformers/bert-base-nli-mean-tokens \
-docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
+docker run --rm \
+  -v "$PWD:/workspace" \
+  -v formowl-hf-cache:/models/huggingface \
+  -w /workspace \
+  formowl-kg-bert-cpu:local \
   python experiments/kg_bert_ablation/run_ablation.py \
     --output experiments/kg_bert_ablation/results/kg_bert_ablation_latest.json \
     --fail-if-bert-unavailable
@@ -38,6 +42,36 @@ docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
 
 `FORMOWL_BERT_ABLATION_MODEL` may point to a local model directory or a model
 name resolvable by `sentence_transformers`.
+
+Build the neural CPU runtime first:
+
+```sh
+docker build \
+  -f containers/kg-bert-cpu/Dockerfile \
+  -t formowl-kg-bert-cpu:local \
+  .
+```
+
+For a GPU machine with NVIDIA Container Toolkit:
+
+```sh
+docker build \
+  -f containers/kg-bert-gpu/Dockerfile \
+  -t formowl-kg-bert-gpu:cu118 \
+  .
+```
+
+```sh
+FORMOWL_BERT_ABLATION_MODEL=sentence-transformers/bert-base-nli-mean-tokens \
+docker run --rm --gpus all \
+  -v "$PWD:/workspace" \
+  -v formowl-hf-cache:/models/huggingface \
+  -w /workspace \
+  formowl-kg-bert-gpu:cu118 \
+  python experiments/kg_bert_ablation/run_ablation.py \
+    --output experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu118.json \
+    --fail-if-bert-unavailable
+```
 
 ## Metrics
 
@@ -76,13 +110,40 @@ not include `sentence_transformers`, `transformers`, or `torch`.
 
 A temporary attempt to install `sentence-transformers` inside the dev container
 started pulling large CUDA/PyTorch artifacts and was intentionally stopped. The
-next real BERT run should use either:
+next real BERT run should use `containers/kg-bert-cpu/Dockerfile`, or a remote
+model worker that exposes embeddings to this harness without changing the core
+FormOwl dev container.
 
-- a CPU-only neural experiment image with compatible `torch` and
-  `sentence_transformers` wheels already installed; or
-- a remote model worker that exposes embeddings to this harness without
-  changing the core FormOwl dev container.
+Current CPU neural result:
 
-After that environment exists, rerun the same command with
-`--fail-if-bert-unavailable` and commit the resulting JSON artifact beside the
-current baseline artifact.
+```text
+experiments/kg_bert_ablation/results/kg_bert_ablation_bert_cpu.json
+```
+
+Observed CPU BERT/SentenceTransformer result on the same fixture:
+
+```text
+precision=0.888889
+recall=0.8
+f1=0.842105
+accuracy=0.8125
+```
+
+Comparison against the lexical baseline:
+
+```text
+f1_delta_bert_minus_non_bert=0.660287
+recall_delta_bert_minus_non_bert=0.7
+precision_delta_bert_minus_non_bert=-0.111111
+```
+
+Current GPU runtime validation status:
+
+```text
+experiments/kg_bert_ablation/results/kg_bert_ablation_gpu_runtime_2026-06-29_blocked_nvidia_ldconfig.json
+```
+
+The host has GTX 1080 Ti GPUs, but `docker run --gpus all` is blocked before
+FormOwl code starts by the NVIDIA Container Toolkit `ldconfig` path. Repair the
+host GPU container runtime, then rerun the GPU command above and commit the
+resulting `kg_bert_ablation_bert_gpu_cu118.json` artifact.

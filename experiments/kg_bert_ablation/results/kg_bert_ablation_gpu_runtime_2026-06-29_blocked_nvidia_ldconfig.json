@@ -1,0 +1,47 @@
+{
+  "artifact_id": "formowl_kg_bert_gpu_runtime_validation_v1",
+  "claim_boundary": {
+    "candidate_only": true,
+    "canonical_graph_write_allowed": false,
+    "canonical_type_write_allowed": false,
+    "production_quality_claim": false,
+    "raw_access_allowed": false,
+    "stakeholder_evidence_artifact": true
+  },
+  "created_at": "2026-06-29T07:35:00+00:00",
+  "docker_runtime": {
+    "nvidia_container_cli_version": "1.13.5",
+    "nvidia_runtime_available": true
+  },
+  "host_gpu": {
+    "driver_version": "580.159.04",
+    "gpu_count": 2,
+    "gpu_name": "NVIDIA GeForce GTX 1080 Ti",
+    "reported_cuda_version": "13.0"
+  },
+  "image_build_attempt": {
+    "base_image": "pytorch/pytorch:2.5.1-cuda11.8-cudnn9-runtime",
+    "base_manifest_resolved": true,
+    "local_build_status": "canceled_slow_registry_download",
+    "note": "The local build was manually stopped after about 15 minutes with the 3.17GB base layer at about 2.20GB downloaded. This did not indicate a Dockerfile or dependency failure."
+  },
+  "next_action": "Repair the host NVIDIA Container Toolkit ldconfig setting, then rerun the GPU ablation command from containers/kg-bert-gpu/README.md.",
+  "status": "blocked_host_nvidia_container_runtime",
+  "validation_attempts": [
+    {
+      "command_summary": "docker run --rm --gpus all nvidia/cuda:11.8.0-devel-ubuntu22.04 nvidia-smi",
+      "error": "nvidia-container-cli: ldcache error: open failed: /sbin/ldconfig.real: no such file or directory",
+      "status": "blocked_container_startup"
+    },
+    {
+      "command_summary": "docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi",
+      "error": "nvidia-container-cli: ldcache error: open failed: /sbin/ldconfig.real: no such file or directory",
+      "status": "blocked_container_startup"
+    },
+    {
+      "command_summary": "docker run --rm --gpus all pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime python -c 'import torch; ...'",
+      "error": "nvidia-container-cli: ldcache error: open failed: /sbin/ldconfig.real: no such file or directory",
+      "status": "blocked_container_startup"
+    }
+  ]
+}
