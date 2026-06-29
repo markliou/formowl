@@ -1,0 +1,141 @@
+{
+  "artifact_id": "formowl_kg_public_enterprise_benchmark_manifest_v1",
+  "created_at": "2026-06-29T00:00:00+00:00",
+  "purpose": "Select a public, reproducible, enterprise-shaped benchmark pool for KG candidate matching and embedding-model selection.",
+  "claim_boundary": {
+    "benchmark_sources_selected": true,
+    "raw_data_downloaded_by_this_artifact": false,
+    "large_benchmark_executed_by_this_artifact": false,
+    "model_quality_result_claim": false,
+    "production_quality_claim": false,
+    "candidate_only": true,
+    "canonical_graph_write_allowed": false,
+    "canonical_type_write_allowed": false,
+    "raw_access_allowed": false
+  },
+  "minimum_pair_count_for_model_selection": 10000,
+  "recommended_pair_count_for_stakeholder_claim": 50000,
+  "target_source_record_floor": 1070000,
+  "source_family_targets": [
+    "mail_conversation",
+    "office_document",
+    "financial_qa",
+    "financial_report",
+    "contract_document"
+  ],
+  "labeled_pair_generation": {
+    "positive_pair_sources": [
+      "same public entity id, same message thread id, same SEC CIK or ticker, same contract clause category, or known qrel relevance label"
+    ],
+    "negative_pair_sources": [
+      "same source family but different public entity id, same surface label with different FormOwl core supertype, same industry but different SEC CIK, or unrelated qrel/non-qrel pairs"
+    ],
+    "hard_negative_minimum_fraction": 0.3,
+    "cross_source_pair_minimum_fraction": 0.2,
+    "type_gate_regression_required": true,
+    "four_specialist_or_human_adjudication_required_for_ambiguous_labels": true
+  },
+  "recommended_strata": [
+    {
+      "stratum_id": "email_identity_and_thread_matching",
+      "source_family": "mail_conversation",
+      "minimum_pairs": 2000,
+      "positive_signal": "same normalized email address or thread id",
+      "hard_negative_signal": "same display name or organization domain but different message identity"
+    },
+    {
+      "stratum_id": "office_document_type_and_entity_matching",
+      "source_family": "office_document",
+      "minimum_pairs": 2000,
+      "positive_signal": "same document class or extracted organization/person anchor",
+      "hard_negative_signal": "visually or lexically similar document class with different FormOwl core supertype"
+    },
+    {
+      "stratum_id": "financial_question_answer_relevance",
+      "source_family": "financial_qa",
+      "minimum_pairs": 2000,
+      "positive_signal": "public relevance qrel",
+      "hard_negative_signal": "same finance vocabulary without qrel relevance"
+    },
+    {
+      "stratum_id": "sec_company_filing_entity_resolution",
+      "source_family": "financial_report",
+      "minimum_pairs": 2000,
+      "positive_signal": "same CIK or ticker-bound issuer",
+      "hard_negative_signal": "same industry or similar issuer name with different CIK"
+    },
+    {
+      "stratum_id": "contract_clause_semantic_matching",
+      "source_family": "contract_document",
+      "minimum_pairs": 2000,
+      "positive_signal": "same clause category or annotated answer span",
+      "hard_negative_signal": "nearby legal clause with different obligation/risk category"
+    }
+  ],
+  "sources": [
+    {
+      "source_id": "enron_email_dataset_cmu",
+      "source_family": "mail_conversation",
+      "source_url": "https://www.cs.cmu.edu/~enron/",
+      "public_size_note": "about 500,000 messages",
+      "source_record_floor": 500000,
+      "formowl_use": "email identity, thread, person, organization, topic, and hard-negative matching",
+      "license_or_access_note": "public research corpus; verify redistribution terms before bundling raw data"
+    },
+    {
+      "source_id": "rvl_cdip_document_images",
+      "source_family": "office_document",
+      "source_url": "https://adamharley.com/rvl-cdip/",
+      "public_size_note": "400,000 grayscale document images across 16 classes",
+      "source_record_floor": 400000,
+      "formowl_use": "office-document source distribution, OCR/text extraction stress, ontology type-gate and document-class hard negatives",
+      "license_or_access_note": "public benchmark; keep raw images outside the repo and store only hashes/manifests"
+    },
+    {
+      "source_id": "beir_fiqa_2018",
+      "source_family": "financial_qa",
+      "source_url": "https://huggingface.co/datasets/BeIR/fiqa",
+      "public_size_note": "financial question answering retrieval benchmark with corpus, queries, and qrels",
+      "source_record_floor": 57000,
+      "formowl_use": "finance-domain semantic relevance, query-document matching, and hard negatives",
+      "license_or_access_note": "use dataset card/license metadata during downloader implementation"
+    },
+    {
+      "source_id": "sec_edgar_company_facts_and_submissions",
+      "source_family": "financial_report",
+      "source_url": "https://www.sec.gov/search-filings/edgar-application-programming-interfaces",
+      "public_size_note": "official SEC data APIs and bulk data for company submissions and XBRL company facts",
+      "source_record_floor": 100000,
+      "formowl_use": "issuer identity matching, CIK/ticker aliasing, fiscal-report entity resolution, same-industry hard negatives",
+      "license_or_access_note": "respect SEC fair-access guidance and user-agent requirements"
+    },
+    {
+      "source_id": "cuad_contract_understanding_atticus_dataset",
+      "source_family": "contract_document",
+      "source_url": "https://www.atticusprojectai.org/cuad",
+      "public_size_note": "contract understanding dataset with hundreds of contracts and more than ten thousand expert annotations",
+      "source_record_floor": 13000,
+      "formowl_use": "office/legal document semantic matching, clause type alignment, obligation/risk hard negatives",
+      "license_or_access_note": "verify current dataset terms before mirroring raw contracts"
+    }
+  ],
+  "execution_requirements": {
+    "raw_data_storage": "keep downloaded public corpora outside git; store FormOwl locators, source locks, checksums, and sampling manifests only",
+    "result_artifact_directory": "experiments/kg_bert_ablation/results/",
+    "minimum_artifacts_per_run": [
+      "source_lock_manifest",
+      "sampling_manifest",
+      "pair_manifest",
+      "model_run_manifest",
+      "metrics_json",
+      "error_analysis_json"
+    ],
+    "must_not_claim": [
+      "production readiness",
+      "top-tier scientific validation",
+      "canonical graph writes",
+      "raw access grants",
+      "large benchmark result before the benchmark is actually executed"
+    ]
+  }
+}

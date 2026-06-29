@@ -79,8 +79,8 @@ This is a feature boundary for heterogeneous remote computers:
 | Profile | Intended worker | Neural network use | Output |
 | --- | --- | --- | --- |
 | `deterministic_cpu_candidate_generation_v1` | low-spec CPU worker | no | lexical, rule, gazetteer, and RapidFuzz-compatible `FusionCandidate` / candidate graph proposals |
-| `local_embedding_candidate_generation_v1` | standard CPU worker with local model files | yes, optional | SentenceTransformer or BERT-family embeddings, pgvector similarity candidates, embedding score breakdowns, and type-alignment candidates |
-| `accelerated_neural_candidate_generation_v1` | GPU or remote model worker | yes, optional | BERT-family NER, BERT-family relation extraction, local LLM graph extraction, multimodal semantic candidates, and large embedding batches |
+| `local_embedding_candidate_generation_v1` | standard CPU worker with local model files | yes, optional | SentenceTransformer or BERT-family embeddings, pgvector similarity candidates, embedding score breakdowns, and type-alignment candidates. The preserved CPU fallback model profile is `legacy_cpu_bert` / `sentence-transformers/bert-base-nli-mean-tokens` with threshold `0.70`. |
+| `accelerated_neural_candidate_generation_v1` | GPU or remote model worker | yes, optional | BERT-family NER, BERT-family relation extraction, local LLM graph extraction, multimodal semantic candidates, and large embedding batches. The current GPU default profile is `gpu_bge_large_en_v1_5` / `BAAI/bge-large-en-v1.5`, with threshold `0.62` and a one-GTX-1080-Ti / 11GB-VRAM local floor. |
 
 All profiles preserve the same governance boundary:
 
@@ -98,6 +98,57 @@ deterministic baseline path. It does not claim that BERT inference is enabled
 by default. A follow-up BERT ablation branch should compare the deterministic
 profile against a neural profile and persist the benchmark artifacts so the
 team can evaluate the cost/quality tradeoff with evidence.
+
+The BERT ablation branch now carries a public enterprise benchmark source
+manifest at `experiments/kg_bert_ablation/public_enterprise_benchmark_manifest.json`.
+That manifest selects mail/conversation, office document, financial QA,
+financial report, and contract-document sources. The first completed run is a
+10,000-pair model-selection benchmark preserved at
+`experiments/kg_bert_ablation/results/kg_public_enterprise_benchmark_2026-06-29_bge_gpu_cu126_host.json`.
+It currently uses CUAD and SEC labeled pairs; FiQA, Enron, and RVL-CDIP are
+source-locked/probed but not yet labeled in the runner.
+
+The larger completed run reaches the manifest's 50,000-pair stakeholder
+evidence target and is preserved at
+`experiments/kg_bert_ablation/results/kg_public_enterprise_benchmark_2026-06-29_bge_gpu_50k_cu126_host.json`.
+It uses CUAD contract, SEC financial-report/company, and BEIR FiQA
+financial-QA pairs.
+
+| Run | Pairs | Accuracy | Precision | Recall | F1 | Claim |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| lexical baseline | 10,000 | 0.5216 | 0.940367 | 0.041198 | 0.078937 | deterministic low-spec path |
+| BGE large GPU | 10,000 | 0.7183 | 0.931627 | 0.468248 | 0.623245 | neural model-selection evidence |
+| lexical baseline | 50,000 | 0.5225 | 0.921930 | 0.042316 | 0.080918 | deterministic stakeholder benchmark baseline |
+| BGE large GPU | 50,000 | 0.79986 | 0.945935 | 0.633289 | 0.758664 | neural stakeholder benchmark evidence |
+
+BGE improves accuracy by `+0.196700`, recall by `+0.427050`, and F1 by
+`+0.544308`, while precision drops by `-0.008740`. The existing 16-pair fixture
+remains only a smoke/regression fixture. The 10,000-pair result is not the
+50,000-pair stakeholder-grade benchmark and does not claim production latency,
+canonical graph writes, canonical type writes, or raw-access authority.
+
+On the 50,000-pair run, BGE improves accuracy by `+0.277360`, recall by
+`+0.590973`, F1 by `+0.677746`, and precision by `+0.024005` over the lexical
+baseline. This result sets `stakeholder_grade_claim=true` inside the artifact
+only because it reaches the benchmark size target; it still does not claim
+production readiness, production latency, canonical graph writes, canonical
+type writes, raw-access authority, or completed human adjudication. The chart
+artifact is
+`experiments/kg_bert_ablation/results/charts/kg_public_enterprise_benchmark_2026-06-29_bge_gpu_50k_cu126_host_metrics.svg`.
+
+The ontology-guidance ablation is preserved at
+`experiments/kg_bert_ablation/results/kg_ontology_ablation_2026-06-29_bge_gpu_cu126_host.json`.
+It adds 10,000 cross-type hard negatives to the same public enterprise source
+families. BGE-only scores accuracy `0.3999`, precision `0.235272`, recall
+`0.631759`, and F1 `0.342860`, with `10177` false positives. BGE plus the
+hard ontology gate scores accuracy `0.8999`, precision `0.946493`, recall
+`0.631759`, and F1 `0.757744`, with `177` false positives. The ontology gate
+therefore improves F1 by `+0.414884`, precision by `+0.711221`, and removes
+`10000` cross-type false positives without lowering recall on this mixed
+slice. The charts are
+`experiments/kg_bert_ablation/results/charts/kg_ontology_ablation_2026-06-29_bge_gpu_cu126_host_metrics.svg`
+and
+`experiments/kg_bert_ablation/results/charts/kg_ontology_ablation_2026-06-29_bge_gpu_cu126_host_ontology_stress.svg`.
 
 ## Multimodal Enterprise-Data Validation
 
@@ -213,6 +264,10 @@ Current ablations:
 
 - Without the core supertype gate, type alignment can produce false merges
   across incompatible classes.
+- In the 20,000-pair ontology ablation, BGE-only produces `10000` false
+  positives on the cross-type stress slice; BGE plus hard or soft ontology
+  guidance reduces stress false positives to `0` and raises overall F1 from
+  `0.342860` to `0.757744`.
 - Without candidate review, package outputs would be overclaimed as truth.
 - Without permission-aware rendering, hidden endpoints leak through fusion
   candidates.

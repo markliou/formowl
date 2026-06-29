@@ -1,0 +1,110 @@
+# FormOwl KG BERT GPU Container
+
+This container is the CUDA runtime for FormOwl KG neural candidate-generation
+experiments. It is separate from `formowl-dev:local` and from the CPU neural
+image so customer deployments can choose the right runtime for the available
+hardware.
+
+The default GPU image uses PyTorch 2.5.1 with CUDA 11.8:
+
+```text
+pytorch/pytorch:2.5.1-cuda11.8-cudnn9-runtime
+```
+
+CUDA 11.8 is the conservative default for GTX 10-series and other older NVIDIA
+deployments. Newer GPU worker images can be added later, for example CUDA 12.4,
+without replacing this compatibility path.
+
+The default model profile is now:
+
+```text
+FORMOWL_BERT_ABLATION_MODEL_PROFILE=gpu_bge_large_en_v1_5
+FORMOWL_BERT_ABLATION_MODEL=BAAI/bge-large-en-v1.5
+FORMOWL_KG_BERT_MIN_GPU_CLASS=gtx_1080_ti_11gb
+```
+
+The minimum supported local GPU target for this profile is one NVIDIA GeForce
+GTX 1080 Ti class device with 11GB VRAM. Keep the CPU container's
+`legacy_cpu_bert` profile for neural matching on machines without GPU runtime.
+The BGE profile's preliminary small-fixture threshold is `0.62`; recalibrate on
+the large public benchmark before making stakeholder quality claims.
+
+## Build
+
+```sh
+docker build \
+  -f containers/kg-bert-gpu/Dockerfile \
+  -t formowl-kg-bert-gpu:cu118 \
+  .
+```
+
+The default build is the conservative CUDA 11.8 / PyTorch 2.5.1 target. For a
+host that already has another compatible PyTorch CUDA base image cached, build a
+host-specific tag with explicit compatibility assertions:
+
+```sh
+docker build \
+  -f containers/kg-bert-gpu/Dockerfile \
+  --build-arg FORMOWL_KG_BERT_GPU_BASE=pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel \
+  --build-arg FORMOWL_KG_BERT_EXPECTED_TORCH_PREFIX=2.10.0 \
+  --build-arg FORMOWL_KG_BERT_EXPECTED_CUDA=12.6 \
+  -t formowl-kg-bert-gpu:cu126-host \
+  .
+```
+
+## Run The Ablation
+
+```sh
+docker run --rm --gpus all \
+  -v "$PWD:/workspace" \
+  -v formowl-hf-cache:/models/huggingface \
+  -w /workspace \
+  formowl-kg-bert-gpu:cu118 \
+  python experiments/kg_bert_ablation/run_ablation.py \
+    --output experiments/kg_bert_ablation/results/kg_bert_ablation_bge_large_gpu_cu118.json \
+    --fail-if-bert-unavailable
+```
+
+For the host-specific CUDA 12.6 tag, change the image and output path:
+
+```sh
+docker run --rm --gpus all \
+  -v "$PWD:/workspace" \
+  -v formowl-hf-cache:/models/huggingface \
+  -w /workspace \
+  formowl-kg-bert-gpu:cu126-host \
+  python experiments/kg_bert_ablation/run_ablation.py \
+    --output experiments/kg_bert_ablation/results/kg_bert_ablation_bge_large_gpu_cu126_host.json \
+    --fail-if-bert-unavailable
+```
+
+Override the model with:
+
+```sh
+-e FORMOWL_BERT_ABLATION_MODEL_PROFILE=gpu_bge_large_en_v1_5
+-e FORMOWL_BERT_ABLATION_MODEL=BAAI/bge-large-en-v1.5
+```
+
+`FORMOWL_BERT_ABLATION_MODEL` may also point to a mounted local model directory
+for offline customer deployments. Use
+`FORMOWL_BERT_ABLATION_MODEL_PROFILE=legacy_cpu_bert` only when deliberately
+rerunning the old BERT baseline for comparison.
+
+## Host Requirements
+
+The host must have:
+
+- an NVIDIA driver compatible with CUDA 11.8 containers;
+- NVIDIA Container Toolkit configured for Docker;
+- `docker run --gpus all ...` working before FormOwl-specific tests are run.
+
+If `nvidia-smi` works on the host but `docker run --gpus all` fails, fix the
+host NVIDIA Container Toolkit first. That is a host runtime problem, not a KG
+algorithm result.
+
+## Governance Boundary
+
+The runtime remains candidate-only. It may produce embeddings, semantic
+similarity scores, candidate atoms, candidate relations, fusion candidates, or
+type-alignment candidates. It must not write canonical graph/type state and
+must not grant raw asset access.

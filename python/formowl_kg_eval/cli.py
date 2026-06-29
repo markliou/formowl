@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import sys
 
+from .benchmarks import build_benchmark_summary
 from .runner import KG_EVAL_COMMANDS, build_acceptance_summary, run_kg_eval_command
 
 
@@ -24,6 +25,9 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("summary", help="Print a stable JSON summary for system integration.")
+    subparsers.add_parser(
+        "benchmarks", help="Print the KG benchmark and ontology-ablation summary."
+    )
     subparsers.add_parser("all", help="Run total, objective, preflight, work-orders, and progress.")
     for command in sorted(KG_EVAL_COMMANDS):
         subparsers.add_parser(command, help=f"Run the authoritative {command} KG eval script.")
@@ -33,6 +37,13 @@ def main(argv: list[str] | None = None) -> int:
         print(
             json.dumps(
                 build_acceptance_summary(repository_root=args.repo_root), indent=2, sort_keys=True
+            )
+        )
+        return 0
+    if args.command == "benchmarks":
+        print(
+            json.dumps(
+                build_benchmark_summary(repository_root=args.repo_root), indent=2, sort_keys=True
             )
         )
         return 0
