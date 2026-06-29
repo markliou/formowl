@@ -23,7 +23,9 @@ class WikiMcpServer:
             {"name": "get_wiki_page", "description": "Retrieve one wiki or markdown page."},
             {
                 "name": "generate_wiki_draft",
-                "description": "Generate a markdown draft from a context package.",
+                "description": (
+                    "Generate a markdown draft from a context package or WikiProjectionSpec."
+                ),
             },
             {
                 "name": "generate_wiki_draft_from_graph_view",
