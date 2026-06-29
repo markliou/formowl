@@ -43,6 +43,11 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - File-backed audit logs for actor selection, asset registration, ingestion job creation, evidence fetches, permission denials, and upload session creation.
 - Controlled `upload_asset_reference` imports for trusted backend references that still create asset, permission, and audit records.
 - ChatGPT session capture helper that turns the current conversation into a registered asset and ingestion job.
+- Trusted local data resource inbox scanning for internal deployments. Stable
+  files can become normal `Asset` and `IngestionJob` records, and configured
+  `.txt` / `.md` inputs can run through the deterministic text extractor to
+  produce `ExtractorRun` and `Observation` records without exposing local
+  folder paths in the public scan report.
 - Deterministic file technical metadata extractor for file size, MIME type, content hash, and FormOwl object locator observations.
 - Deterministic fixture adapters for document structure, OCR text, audio transcripts, video scene/keyframe observations, and mail/archive observations.
 - Candidate graph contract models for `CandidateAtom`, `CandidateRelation`, and `ExternalGraphImport` proposal records.
@@ -187,6 +192,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   contract for the System Backbone Agent.
 - `docs/closed-beta-runbook.md` - trusted internal closed-beta smoke command,
   pass criteria, and explicit exclusions.
+- `docs/local-data-resource-inbox.md` - trusted local folder ingress behavior,
+  stability policy, idempotency, and public report boundary.
 - `docs/openproject-adapter.md` - OpenProject adapter mapping.
 - `docs/implementation-task-breakdown.md` - shared implementation checklist for contributors and agents.
 

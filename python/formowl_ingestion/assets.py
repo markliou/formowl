@@ -32,6 +32,7 @@ def register_asset_from_local_file(
     permission_scope: PermissionScope | dict[str, object],
     source_ref: SourceRef | dict[str, object] | None = None,
     mime_type: str | None = None,
+    expected_content_hash: str | None = None,
     project_id: str | None = None,
     created_at: str | None = None,
     registered_at: str | None = None,
@@ -79,6 +80,7 @@ def register_asset_from_local_file(
         source,
         storage_backend_id=storage_backend_id,
         workspace_id=workspace_id,
+        expected_content_hash=expected_content_hash,
         original_filename=source.name,
     )
     asset = Asset(
