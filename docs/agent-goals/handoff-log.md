@@ -29,6 +29,22 @@ status in each role's goal file and task completion in
   mount attempt to provide `/sbin/ldconfig.real` inside the container also
   failed before container mounts took effect. This confirms the blocker is host
   NVIDIA Container Toolkit configuration, not the Codex sandbox.
+- 2026-06-29 GPU follow-up after operator fixed NVIDIA Docker: `docker run
+  --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi` now succeeds and
+  sees two GTX 1080 Ti GPUs. The default 2.5.1/cu118 GPU Dockerfile remains in
+  place, and it now supports build args for host-specific CUDA bases. The local
+  host-specific image `formowl-kg-bert-gpu:cu126-host` was built from
+  `pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel`, with pinned
+  `sentence-transformers==3.3.1` and `transformers==4.46.3`. The GPU ablation
+  artifact
+  `experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu126_host.json`
+  completed with `model_device=cuda:0`, `torch=2.10.0+cu126`, CUDA 12.6, and
+  two visible GTX 1080 Ti devices. Matching quality equals the CPU BERT result
+  on the fixed fixture: precision 0.888889, recall 0.8, F1 0.842105, accuracy
+  0.8125. Embedding latency improved from CPU 499.969ms to GPU 217.73ms, but
+  total runtime is still dominated by model load/CUDA initialization on this
+  tiny 16-pair fixture, so do not use it to claim end-to-end GPU latency
+  superiority.
 
 ## 2026-06-27
 

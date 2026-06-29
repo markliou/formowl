@@ -24,6 +24,20 @@ docker build \
   .
 ```
 
+The default build is the conservative CUDA 11.8 / PyTorch 2.5.1 target. For a
+host that already has another compatible PyTorch CUDA base image cached, build a
+host-specific tag with explicit compatibility assertions:
+
+```sh
+docker build \
+  -f containers/kg-bert-gpu/Dockerfile \
+  --build-arg FORMOWL_KG_BERT_GPU_BASE=pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel \
+  --build-arg FORMOWL_KG_BERT_EXPECTED_TORCH_PREFIX=2.10.0 \
+  --build-arg FORMOWL_KG_BERT_EXPECTED_CUDA=12.6 \
+  -t formowl-kg-bert-gpu:cu126-host \
+  .
+```
+
 ## Run The Ablation
 
 ```sh
@@ -34,6 +48,19 @@ docker run --rm --gpus all \
   formowl-kg-bert-gpu:cu118 \
   python experiments/kg_bert_ablation/run_ablation.py \
     --output experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu118.json \
+    --fail-if-bert-unavailable
+```
+
+For the host-specific CUDA 12.6 tag, change the image and output path:
+
+```sh
+docker run --rm --gpus all \
+  -v "$PWD:/workspace" \
+  -v formowl-hf-cache:/models/huggingface \
+  -w /workspace \
+  formowl-kg-bert-gpu:cu126-host \
+  python experiments/kg_bert_ablation/run_ablation.py \
+    --output experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu126_host.json \
     --fail-if-bert-unavailable
 ```
 

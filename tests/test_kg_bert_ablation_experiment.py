@@ -69,6 +69,8 @@ class KGBertAblationExperimentTests(unittest.TestCase):
             self.assertEqual(payload["dataset"]["pair_count"], 16)
             self.assertEqual(payload["runs"][0]["status"], "completed")
             self.assertIn(payload["runs"][1]["status"], {"blocked_missing_dependency", "completed"})
+            self.assertIn("torch", payload["environment"])
+            self.assertIn("torch_status", payload["runs"][1])
             if payload["runs"][1]["status"] != "completed":
                 self.assertEqual(payload["comparison"]["status"], "incomplete")
 

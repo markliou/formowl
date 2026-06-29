@@ -25,8 +25,9 @@
     "local_build_status": "canceled_slow_registry_download",
     "note": "The local build was manually stopped after about 15 minutes with the 3.17GB base layer at about 2.20GB downloaded. This did not indicate a Dockerfile or dependency failure."
   },
-  "next_action": "Repair the host NVIDIA Container Toolkit ldconfig setting, then rerun the GPU ablation command from containers/kg-bert-gpu/README.md.",
-  "status": "blocked_host_nvidia_container_runtime",
+  "next_action": "Historical blocker retained for audit. Use kg_bert_ablation_bert_gpu_cu126_host.json for the current successful host GPU run.",
+  "status": "superseded_by_successful_host_gpu_run",
+  "superseded_by": "experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu126_host.json",
   "validation_attempts": [
     {
       "command_summary": "docker run --rm --gpus all nvidia/cuda:11.8.0-devel-ubuntu22.04 nvidia-smi",

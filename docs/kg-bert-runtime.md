@@ -83,6 +83,20 @@ docker build \
   .
 ```
 
+The Dockerfile defaults to CUDA 11.8 / PyTorch 2.5.1, but it also supports
+explicit build args for host-specific CUDA bases. This is useful when a customer
+or test host already has a different compatible PyTorch CUDA image cached:
+
+```sh
+docker build \
+  -f containers/kg-bert-gpu/Dockerfile \
+  --build-arg FORMOWL_KG_BERT_GPU_BASE=pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel \
+  --build-arg FORMOWL_KG_BERT_EXPECTED_TORCH_PREFIX=2.10.0 \
+  --build-arg FORMOWL_KG_BERT_EXPECTED_CUDA=12.6 \
+  -t formowl-kg-bert-gpu:cu126-host \
+  .
+```
+
 Run the current BERT ablation harness on GPU:
 
 ```sh
@@ -93,6 +107,19 @@ docker run --rm --gpus all \
   formowl-kg-bert-gpu:cu118 \
   python experiments/kg_bert_ablation/run_ablation.py \
     --output experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu118.json \
+    --fail-if-bert-unavailable
+```
+
+For the host-specific CUDA 12.6 tag:
+
+```sh
+docker run --rm --gpus all \
+  -v "$PWD:/workspace" \
+  -v formowl-hf-cache:/models/huggingface \
+  -w /workspace \
+  formowl-kg-bert-gpu:cu126-host \
+  python experiments/kg_bert_ablation/run_ablation.py \
+    --output experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu126_host.json \
     --fail-if-bert-unavailable
 ```
 
@@ -138,6 +165,7 @@ The artifact must record:
 - dataset id and dataset hash;
 - model name or local model path;
 - package availability and versions;
+- torch version, CUDA availability, CUDA version, and visible device names;
 - precision, recall, F1, accuracy, TP, FP, TN, FN;
 - latency and pair throughput;
 - candidate-only claim boundary;
@@ -174,8 +202,10 @@ The experiment branch currently has:
 - a non-BERT baseline artifact from the default dev container;
 - a completed CPU BERT/SentenceTransformer artifact from
   `formowl-kg-bert-cpu:local`;
-- a GPU runtime validation blocker artifact showing that this host's NVIDIA
-  Container Toolkit must be repaired before GPU ablation can run.
+- a completed host GPU BERT/SentenceTransformer artifact from
+  `formowl-kg-bert-gpu:cu126-host`;
+- a historical GPU runtime validation blocker artifact from before the host
+  NVIDIA Container Toolkit fix.
 
 The completed CPU BERT artifact is:
 
@@ -188,11 +218,30 @@ Observed fixture result:
 ```text
 non-BERT lexical: precision=1.0, recall=0.1, f1=0.181818, accuracy=0.4375
 CPU BERT: precision=0.888889, recall=0.8, f1=0.842105, accuracy=0.8125
+GPU BERT: precision=0.888889, recall=0.8, f1=0.842105, accuracy=0.8125
 ```
 
-The next GPU action is to repair the host NVIDIA runtime and rerun the GPU
-ablation command above, preserving
-`kg_bert_ablation_bert_gpu_cu118.json`.
+The completed host GPU BERT artifact is:
+
+```text
+experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu126_host.json
+```
+
+It records `model_device=cuda:0`, `torch=2.10.0+cu126`, CUDA 12.6 available,
+and two visible `NVIDIA GeForce GTX 1080 Ti` devices.
+
+On the small 16-pair fixture, GPU total runtime is not faster because model
+load and CUDA initialization dominate the run. The useful inference comparison
+is the embedding phase:
+
+```text
+CPU BERT embedding: 499.969ms
+GPU BERT embedding: 217.73ms
+```
+
+Do not claim GPU end-to-end latency superiority from this small fixture alone.
+For throughput claims, add a larger batched fixture or repeat/stress benchmark
+and preserve its JSON artifact.
 
 The GPU base image manifest for
 `pytorch/pytorch:2.5.1-cuda11.8-cudnn9-runtime` resolved successfully on

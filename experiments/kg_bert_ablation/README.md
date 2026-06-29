@@ -61,6 +61,19 @@ docker build \
   .
 ```
 
+For this host, a cached PyTorch CUDA 12.6 base image can build a host-specific
+tag without waiting for the CUDA 11.8 base image download:
+
+```sh
+docker build \
+  -f containers/kg-bert-gpu/Dockerfile \
+  --build-arg FORMOWL_KG_BERT_GPU_BASE=pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel \
+  --build-arg FORMOWL_KG_BERT_EXPECTED_TORCH_PREFIX=2.10.0 \
+  --build-arg FORMOWL_KG_BERT_EXPECTED_CUDA=12.6 \
+  -t formowl-kg-bert-gpu:cu126-host \
+  .
+```
+
 ```sh
 FORMOWL_BERT_ABLATION_MODEL=sentence-transformers/bert-base-nli-mean-tokens \
 docker run --rm --gpus all \
@@ -70,6 +83,20 @@ docker run --rm --gpus all \
   formowl-kg-bert-gpu:cu118 \
   python experiments/kg_bert_ablation/run_ablation.py \
     --output experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu118.json \
+    --fail-if-bert-unavailable
+```
+
+For this host-specific tag:
+
+```sh
+FORMOWL_BERT_ABLATION_MODEL=sentence-transformers/bert-base-nli-mean-tokens \
+docker run --rm --gpus all \
+  -v "$PWD:/workspace" \
+  -v formowl-hf-cache:/models/huggingface \
+  -w /workspace \
+  formowl-kg-bert-gpu:cu126-host \
+  python experiments/kg_bert_ablation/run_ablation.py \
+    --output experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu126_host.json \
     --fail-if-bert-unavailable
 ```
 
@@ -129,6 +156,37 @@ f1=0.842105
 accuracy=0.8125
 ```
 
+Current host GPU neural result:
+
+```text
+experiments/kg_bert_ablation/results/kg_bert_ablation_bert_gpu_cu126_host.json
+```
+
+Observed GPU BERT/SentenceTransformer result on the same fixture:
+
+```text
+precision=0.888889
+recall=0.8
+f1=0.842105
+accuracy=0.8125
+model_device=cuda:0
+torch=2.10.0+cu126
+cuda_available=true
+visible_devices=2 x NVIDIA GeForce GTX 1080 Ti
+```
+
+On this small 16-pair fixture, total runtime is dominated by model load and
+CUDA initialization, not embedding. The recorded breakdown is:
+
+```text
+CPU BERT: total=90750.609ms, model_load=90247.466ms, embedding=499.969ms
+GPU BERT: total=94100.002ms, model_load=93879.685ms, embedding=217.73ms
+```
+
+Interpretation: GPU embedding is faster on this fixture, but the fixture is too
+small to amortize startup cost. Use the JSON artifacts for exact comparison and
+do not claim GPU end-to-end latency is faster from this small fixture alone.
+
 Comparison against the lexical baseline:
 
 ```text
@@ -137,13 +195,13 @@ recall_delta_bert_minus_non_bert=0.7
 precision_delta_bert_minus_non_bert=-0.111111
 ```
 
-Current GPU runtime validation status:
+Historical GPU runtime validation blocker:
 
 ```text
 experiments/kg_bert_ablation/results/kg_bert_ablation_gpu_runtime_2026-06-29_blocked_nvidia_ldconfig.json
 ```
 
-The host has GTX 1080 Ti GPUs, but `docker run --gpus all` is blocked before
-FormOwl code starts by the NVIDIA Container Toolkit `ldconfig` path. Repair the
-host GPU container runtime, then rerun the GPU command above and commit the
-resulting `kg_bert_ablation_bert_gpu_cu118.json` artifact.
+The host previously had GTX 1080 Ti GPUs but `docker run --gpus all` was
+blocked before FormOwl code started by the NVIDIA Container Toolkit `ldconfig`
+path. That host issue was fixed by the operator, and the GPU artifact above now
+supersedes the blocker for this host.

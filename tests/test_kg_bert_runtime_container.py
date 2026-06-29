@@ -42,9 +42,15 @@ class KGBertRuntimeContainerTests(unittest.TestCase):
     def test_gpu_dockerfile_preserves_cuda_runtime_boundary(self) -> None:
         dockerfile = GPU_DOCKERFILE.read_text(encoding="utf-8")
 
-        self.assertIn("FROM pytorch/pytorch:2.5.1-cuda11.8-cudnn9-runtime", dockerfile)
-        self.assertIn('torch.__version__.startswith("2.5.1")', dockerfile)
-        self.assertIn('torch.version.cuda == "11.8"', dockerfile)
+        self.assertIn(
+            "ARG FORMOWL_KG_BERT_GPU_BASE=pytorch/pytorch:2.5.1-cuda11.8-cudnn9-runtime",
+            dockerfile,
+        )
+        self.assertIn("FROM ${FORMOWL_KG_BERT_GPU_BASE}", dockerfile)
+        self.assertIn("ARG FORMOWL_KG_BERT_EXPECTED_TORCH_PREFIX=2.5.1", dockerfile)
+        self.assertIn("ARG FORMOWL_KG_BERT_EXPECTED_CUDA=11.8", dockerfile)
+        self.assertIn("torch.__version__.startswith(expected_torch_prefix)", dockerfile)
+        self.assertIn("torch.version.cuda == expected_cuda", dockerfile)
         self.assertIn("FORMOWL_BERT_ABLATION_MODEL", dockerfile)
         self.assertIn("sentence-transformers/bert-base-nli-mean-tokens", dockerfile)
         self.assertNotIn("torch==2.5.1+cpu", dockerfile)
@@ -63,6 +69,7 @@ class KGBertRuntimeContainerTests(unittest.TestCase):
         self.assertIn("containers/kg-bert-gpu/Dockerfile", combined)
         self.assertIn("formowl-kg-bert-cpu:local", combined)
         self.assertIn("formowl-kg-bert-gpu:cu118", combined)
+        self.assertIn("formowl-kg-bert-gpu:cu126-host", combined)
         self.assertIn("--gpus all", combined)
         self.assertIn("kg_bert_ablation/run_ablation.py", combined)
         self.assertIn("candidate-only", combined)

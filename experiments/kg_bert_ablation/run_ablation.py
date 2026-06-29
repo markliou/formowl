@@ -237,6 +237,7 @@ def run_lexical_baseline(threshold: float) -> dict[str, Any]:
 
 def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, Any]:
     package_status = _sentence_transformer_status()
+    torch_status = _torch_status()
     if not package_status["available"]:
         return {
             "run_id": "bert_sentence_transformer_embedding_v1",
@@ -246,17 +247,25 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
             "threshold": threshold,
             "model_name": model_name,
             "package_status": package_status,
+            "torch_status": torch_status,
             "metrics": None,
             "pair_results": [],
             "blocker": "sentence_transformers is not installed in the execution environment",
         }
 
     started = time.perf_counter()
+    model_load_latency_ms = None
+    embedding_latency_ms = None
     try:
+        model_load_started = time.perf_counter()
         sentence_transformers = importlib.import_module("sentence_transformers")
         model = sentence_transformers.SentenceTransformer(model_name)
+        model_device = str(getattr(model, "device", "unknown"))
+        model_load_latency_ms = (time.perf_counter() - model_load_started) * 1000.0
         texts = [text for pair in DATASET for text in (pair.left_label, pair.right_label)]
+        embedding_started = time.perf_counter()
         embeddings = model.encode(texts, normalize_embeddings=True)
+        embedding_latency_ms = (time.perf_counter() - embedding_started) * 1000.0
     except Exception as exc:  # pragma: no cover - only exercised with optional package.
         return {
             "run_id": "bert_sentence_transformer_embedding_v1",
@@ -266,11 +275,13 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
             "threshold": threshold,
             "model_name": model_name,
             "package_status": package_status,
+            "torch_status": torch_status,
             "metrics": None,
             "pair_results": [],
             "blocker": f"{exc.__class__.__name__}: {exc}",
         }
 
+    scoring_started = time.perf_counter()
     pair_results = []
     for index, pair in enumerate(DATASET):
         left_embedding = _embedding_to_list(embeddings[index * 2])
@@ -291,6 +302,7 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
                 },
             }
         )
+    scoring_latency_ms = (time.perf_counter() - scoring_started) * 1000.0
     latency_ms = (time.perf_counter() - started) * 1000.0
     return {
         "run_id": "bert_sentence_transformer_embedding_v1",
@@ -300,7 +312,14 @@ def run_sentence_transformer(*, threshold: float, model_name: str) -> dict[str, 
         "threshold": threshold,
         "model_name": model_name,
         "package_status": package_status,
+        "torch_status": torch_status,
+        "model_device": model_device,
         "latency_ms": round(latency_ms, 3),
+        "latency_breakdown_ms": {
+            "model_load": round(model_load_latency_ms, 3),
+            "embedding": round(embedding_latency_ms, 3),
+            "scoring": round(scoring_latency_ms, 3),
+        },
         "pairs_per_second": _throughput(len(DATASET), latency_ms),
         "metrics": _metrics(pair_results),
         "pair_results": pair_results,
@@ -332,6 +351,7 @@ def build_report(*, started_at: str, runs: list[dict[str, Any]]) -> dict[str, An
         "environment": {
             "python_version": sys.version.split()[0],
             "sentence_transformers_available": _sentence_transformer_status()["available"],
+            "torch": _torch_status(),
             "default_model": _default_bert_model(),
         },
         "runs": runs,
@@ -421,6 +441,29 @@ def _sentence_transformer_status() -> dict[str, Any]:
     }
 
 
+def _torch_status() -> dict[str, Any]:
+    if importlib.util.find_spec("torch") is None:
+        return {
+            "available": False,
+            "package_version": None,
+            "cuda_available": False,
+            "cuda_version": None,
+            "device_count": 0,
+            "device_names": [],
+        }
+    torch = importlib.import_module("torch")
+    cuda_available = bool(torch.cuda.is_available())
+    device_count = int(torch.cuda.device_count()) if cuda_available else 0
+    return {
+        "available": True,
+        "package_version": str(getattr(torch, "__version__", "unknown")),
+        "cuda_available": cuda_available,
+        "cuda_version": str(getattr(torch.version, "cuda", None)),
+        "device_count": device_count,
+        "device_names": [str(torch.cuda.get_device_name(index)) for index in range(device_count)],
+    }
+
+
 def _package_version(package_name: str) -> str | None:
     try:
         return metadata.version(package_name)
@@ -471,6 +514,8 @@ def _compact_stdout(report: dict[str, Any]) -> dict[str, Any]:
                 "uses_neural_networks": run["uses_neural_networks"],
                 "metrics": run["metrics"],
                 "latency_ms": run.get("latency_ms"),
+                "model_device": run.get("model_device"),
+                "torch_status": run.get("torch_status"),
             }
             for run in report["runs"]
         ],
