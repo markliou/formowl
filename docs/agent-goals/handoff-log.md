@@ -1203,3 +1203,21 @@ status in each role's goal file and task completion in
   `python -m unittest discover -s tests` ran 302 OK. The database-backed
   stores work-board item remains unchecked pending remaining repository and
   production end-to-end adapter evidence.
+- 2026-06-29 System Backbone closed-beta readiness smoke:
+  added `scripts/closed_beta_smoke.py`, `tests/test_closed_beta_smoke_script.py`,
+  and `docs/closed-beta-runbook.md`. The smoke uses synthetic fixtures to
+  validate the trusted internal closed-beta backbone path through Project/Wiki
+  JSON-RPC, storage backend public-envelope redaction, worker ingestion,
+  observation-to-wiki draft bridging, governed retrieval grant checks and
+  raw-asset references, and the packaged KG-eval facade. It explicitly does
+  not claim production readiness, live database readiness, automatic
+  publishing, raw asset content access, canonical graph writes, or mail adapter
+  readiness. Dev-container verification passed after reviewer-driven
+  validation hardening: focused closed-beta smoke tests 14 OK; smoke CLI exited
+  0; Ruff check and format-check passed for
+  `python`, `tests`, and `scripts`; full `python -m unittest discover -s tests`
+  ran 316 OK. The user-authorized 3-reviewer test-hardening gate passed 3/3:
+  `closed_beta_reviewer_engineering`, `closed_beta_reviewer_safety`, and
+  `closed_beta_reviewer_release` all returned `RELEASE_DECISION: AGREE` after
+  validation/status blockers were fixed and re-reviewed. The closed-beta smoke
+  work-board item is checked complete.
