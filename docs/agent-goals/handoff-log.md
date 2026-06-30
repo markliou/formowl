@@ -1400,3 +1400,26 @@ status in each role's goal file and task completion in
   `folder_inbox_gate_safety_v2`, and `folder_inbox_gate_release_v3`; the
   safety blocker about public `source_file_token` exposure was fixed and
   re-reviewed.
+- 2026-06-30 System Backbone remaining backbone slices complete on branch
+  `complete-remaining-backbone-slices`: added backend-specific Wiki MCP publish
+  proposal adapters under `python/formowl_wiki_mcp/adapters/`, wired
+  `publish_wiki_page` through `WikiPublishAdapterRegistry`, and added an
+  OpenProject Wiki `upsert_wiki_page` proposal adapter that keeps
+  `publish_mode=proposal_only`, `automatic_publish_enabled=false`, and
+  `external_write_performed=false` while omitting target API URLs, tokens, raw
+  paths, SQL-like values, and backend-internal fields from public proposals.
+  Also added shared ingestion record store protocols and a same-workflow test
+  proving asset registration, job creation, extractor execution, run
+  persistence, and observation persistence run against both file-backed stores
+  and PostgreSQL-backed stores. This closes the database-backed stores item as
+  container-backed same-interface adapter evidence only; it still does not
+  claim live PostgreSQL readiness or expose database controls through MCP.
+  Dev-container verification passed: focused Wiki tests 4 OK, database
+  workflow tests 3 OK, ingestion package export regression 1 OK,
+  Project/Wiki JSON-RPC regression 4 OK, closed-beta smoke script tests 14 OK,
+  closed-beta smoke CLI exited 0, Ruff check/format-check passed, and full
+  `python -m unittest discover -s tests` ran 352 OK. User-requested
+  3-reviewer gate passed 3/3 with
+  `remaining_slices_engineering_reviewer`,
+  `remaining_slices_safety_reviewer`, and
+  `remaining_slices_release_reviewer`; no blocking findings remained.

@@ -18,14 +18,14 @@ from formowl_contract import (
 )
 from formowl_auth.audit import FileAuditLogStore, record_asset_registration
 
-from .storage import AssetStore, FileObjectStore
+from .storage import AssetRecordStore, FileObjectStore
 
 
 def register_asset_from_local_file(
     source_path: str | Path,
     *,
     object_store: FileObjectStore,
-    asset_store: AssetStore,
+    asset_store: AssetRecordStore,
     storage_backend_id: str,
     workspace_id: str,
     owner_user_id: str,

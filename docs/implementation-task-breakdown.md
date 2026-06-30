@@ -2050,9 +2050,24 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `test_openproject_adapter.py` ran 22 tests OK; OpenProject Ruff check and
     format check passed; full `python -m unittest discover -s tests` ran
     278 tests OK.
-- [ ] Add backend-specific wiki adapter behind proposal-only publishing.
+- [x] Add backend-specific wiki adapter behind proposal-only publishing.
   - Owner paths: `python/formowl_wiki_mcp/`
   - Proof: automatic publish remains disabled unless explicitly configured.
+  - Note: completed with `WikiPublishAdapterRegistry` and the
+    `OpenProjectWikiPublishProposalAdapter`. `publish_wiki_page` now returns a
+    backend-specific `upsert_wiki_page` proposal with a sanitized target
+    summary, content/diff hashes, `publish_mode: proposal_only`,
+    `automatic_publish_enabled: false`, and `external_write_performed: false`.
+    Unsafe required target values are rejected before publish side effects, and
+    backend-internal target fields such as API URLs and tokens are omitted from
+    public proposals. Dev-container verification passed: focused
+    `test_wiki_mcp.py` ran 4 OK, Project/Wiki JSON-RPC regression ran 4 OK,
+    closed-beta smoke script tests ran 14 OK, the closed-beta smoke CLI exited
+    0, Ruff check/format-check passed, and full
+    `python -m unittest discover -s tests` ran 352 OK. Reviewer gate passed
+    3/3 with `remaining_slices_engineering_reviewer`,
+    `remaining_slices_safety_reviewer`, and
+    `remaining_slices_release_reviewer`.
 - [x] Add retrieval gateway for evidence snippets and raw assets.
   - Owner paths: gateway/retrieval modules
   - Proof: retrieval uses FormOwl locators and permission checks, not raw paths.
@@ -2195,7 +2210,7 @@ These groups can be split across multiple agents after Slice 1 is stable.
     `folder_inbox_gate_safety_v2`, and `folder_inbox_gate_release_v3`; the
     safety reviewer blocker about public `source_file_token` exposure was fixed
     and re-reviewed.
-- [ ] Add database-backed stores after file-backed stores stabilize.
+- [x] Add database-backed stores after file-backed stores stabilize.
   - Owner paths: storage modules, migrations
   - Proof: tests run against file stores and database stores through the same
     interfaces.
@@ -2224,6 +2239,26 @@ These groups can be split across multiple agents after Slice 1 is stable.
     focused `test_postgres*.py` ran 20 tests OK, ingestion package export
     regression ran 1 test OK, touched-file Ruff check/format check passed, and
     full `python -m unittest discover -s tests` ran 302 tests OK.
+  - 2026-06-30 completion: added shared ingestion record store protocols for
+    `Asset`, `IngestionJob`, `ExtractorRun`, `Observation`, and
+    `UploadSession` stores, retyped the ingestion asset/job helpers to those
+    protocols, and added a same-workflow test that runs
+    `register_asset_from_local_file()` -> `create_ingestion_job()` ->
+    `run_ingestion_job()` against both file-backed stores and the
+    PostgreSQL-backed stores. The PostgreSQL failure-path test verifies no run
+    or observation side effects and no raw path/DSN leakage in captured
+    adapter statements. This completes the database-backed store item as
+    container-backed same-interface adapter evidence; it still does not expose
+    database controls through MCP or claim live PostgreSQL production
+    readiness. Dev-container verification passed: focused
+    `test_database_backed_ingestion_workflow.py` ran 3 OK,
+    `test_ingestion_package.py` ran 1 OK, existing `test_postgres*.py`
+    coverage remains in the full suite, Ruff check/format-check passed,
+    closed-beta smoke CLI exited 0, and full
+    `python -m unittest discover -s tests` ran 352 OK. Reviewer gate passed
+    3/3 with `remaining_slices_engineering_reviewer`,
+    `remaining_slices_safety_reviewer`, and
+    `remaining_slices_release_reviewer`.
 - [x] Add vector and optional graph storage after candidate review workflows
   stabilize.
   - Owner paths: graph/index modules

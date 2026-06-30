@@ -78,7 +78,119 @@ class WikiMcpTests(unittest.TestCase):
 
         self.assertEqual(publish["status"], "pending_review")
         self.assertEqual(publish["data"]["draft_id"], draft_id)
+        self.assertEqual(publish["data"]["backend"]["publish_mode"], "proposal_only")
+        self.assertFalse(publish["data"]["backend"]["external_write_performed"])
+        self.assertFalse(publish["data"]["backend"]["automatic_publish_enabled"])
         self.assertIn("No wiki page was published", publish["warnings"][0])
+
+    def test_openproject_wiki_publish_adapter_returns_safe_backend_specific_proposal(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("wiki-openproject-publish-proposal")
+        server = create_default_server(temp_dir)
+        draft = server.call_tool(
+            "generate_wiki_draft",
+            {
+                "page_type": "adr",
+                "title": "OpenProject Wiki Proposal",
+                "context_package": sample_context_package(),
+            },
+        )
+
+        publish = server.call_tool(
+            "publish_wiki_page",
+            {
+                "draft_id": draft["data"]["draft_id"],
+                "target": {
+                    "target_system": "openproject_wiki",
+                    "source_instance": "openproject_primary",
+                    "project_id": "formowl",
+                    "page_slug": "openproject-wiki-proposal",
+                    "api_url": "https://openproject.example.test/api/v3",
+                    "api_token": "secret-token",
+                },
+                "auto_publish": True,
+                "require_review": False,
+            },
+        )
+
+        rendered = str(publish)
+        self.assertEqual(publish["status"], "pending_review")
+        self.assertEqual(
+            publish["data"]["target"],
+            {
+                "target_system": "openproject_wiki",
+                "source_instance": "openproject_primary",
+                "project_id": "formowl",
+                "page_slug": "openproject-wiki-proposal",
+            },
+        )
+        self.assertEqual(publish["data"]["backend"]["type"], "openproject_wiki")
+        self.assertEqual(publish["data"]["backend"]["operation"], "upsert_wiki_page")
+        self.assertEqual(
+            publish["data"]["backend"]["source_ref"]["source_id"],
+            "formowl:openproject-wiki-proposal",
+        )
+        self.assertTrue(publish["data"]["backend"]["automatic_publish_requested"])
+        self.assertFalse(publish["data"]["backend"]["automatic_publish_enabled"])
+        self.assertFalse(publish["data"]["backend"]["external_write_performed"])
+        self.assertIn("Automatic wiki publishing is disabled", publish["warnings"][1])
+        self.assertIn("unsafe target fields were omitted", publish["warnings"][2])
+        self.assertNotIn("/api/v3", rendered)
+        self.assertNotIn("secret-token", rendered)
+
+    def test_publish_target_rejects_unsafe_required_fields_without_side_effects(self) -> None:
+        temp_dir = _paths.fresh_test_dir("wiki-openproject-unsafe-target")
+        server = create_default_server(temp_dir)
+        draft = server.call_tool(
+            "generate_wiki_draft",
+            {
+                "page_type": "adr",
+                "title": "Unsafe OpenProject Wiki Proposal",
+                "context_package": sample_context_package(),
+            },
+        )
+
+        publish = server.call_tool(
+            "publish_wiki_page",
+            {
+                "draft_id": draft["data"]["draft_id"],
+                "target": {
+                    "target_system": "openproject_wiki",
+                    "project_id": "formowl",
+                    "page_slug": "../private-page",
+                },
+            },
+        )
+
+        self.assertEqual(publish["status"], "error")
+        self.assertEqual(publish["data"]["error_code"], "invalid_publish_target")
+        self.assertNotIn("../private-page", str(publish))
+
+    def test_publish_target_rejects_non_mapping_target_without_side_effects(self) -> None:
+        temp_dir = _paths.fresh_test_dir("wiki-non-mapping-target")
+        server = create_default_server(temp_dir)
+        draft = server.call_tool(
+            "generate_wiki_draft",
+            {
+                "page_type": "adr",
+                "title": "Non Mapping Target",
+                "context_package": sample_context_package(),
+            },
+        )
+
+        publish = server.call_tool(
+            "publish_wiki_page",
+            {
+                "draft_id": draft["data"]["draft_id"],
+                "target": "postgresql://internal/wiki",
+                "auto_publish": True,
+            },
+        )
+
+        self.assertEqual(publish["status"], "error")
+        self.assertEqual(publish["data"]["error_code"], "invalid_publish_target")
+        self.assertNotIn("postgresql://internal/wiki", str(publish))
 
 
 if __name__ == "__main__":

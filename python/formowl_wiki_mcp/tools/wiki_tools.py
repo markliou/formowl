@@ -6,6 +6,7 @@ from typing import Any
 from formowl_contract import McpResultEnvelope, now_iso, sha256_json
 from formowl_core import diff_lines, sha256_prefixed
 
+from ..adapters import WikiPublishAdapterRegistry
 from ..markdown import MarkdownDraftRenderer, MarkdownFrontmatterBuilder, slugify
 from ..projection import build_graph_projection_draft
 
@@ -18,12 +19,14 @@ class WikiMcpTools:
         logger: Any,
         frontmatter_builder: MarkdownFrontmatterBuilder | None = None,
         draft_renderer: MarkdownDraftRenderer | None = None,
+        publish_adapter_registry: WikiPublishAdapterRegistry | None = None,
     ) -> None:
         self.draft_store = draft_store
         self.wiki_snapshot_store = wiki_snapshot_store
         self.logger = logger
         self.frontmatter_builder = frontmatter_builder or MarkdownFrontmatterBuilder()
         self.draft_renderer = draft_renderer or MarkdownDraftRenderer(self.frontmatter_builder)
+        self.publish_adapter_registry = publish_adapter_registry or WikiPublishAdapterRegistry()
 
     def search_wiki_pages(self, input_data: dict[str, Any]) -> dict[str, Any]:
         started = time.perf_counter()
@@ -201,12 +204,47 @@ class WikiMcpTools:
             return envelope
 
         target = input_data.get("target") or {}
-        diff = diff_lines(
-            "", draft["markdown"], fromfile="empty", tofile=target.get("page_slug", draft_id)
-        )
+        if not isinstance(target, dict):
+            envelope = _envelope(
+                "publish_proposal",
+                "error",
+                {"error_code": "invalid_publish_target"},
+                source_refs=draft.get("source_refs", []),
+                evidence_snapshot_ids=draft.get("evidence_snapshot_ids", []),
+                citations=draft.get("citations", []),
+                permission_scope=draft.get("frontmatter", {}).get("permission_scope"),
+                warnings=["Wiki publish target was rejected before any publish side effect."],
+            )
+            self._log("publish_wiki_page", input_data, envelope, started, wiki_draft_id=draft_id)
+            return envelope
+        diff = diff_lines("", draft["markdown"], fromfile="empty", tofile=draft_id)
+        try:
+            adapter = self.publish_adapter_registry.resolve(target)
+            backend_proposal = adapter.prepare_publish_proposal(
+                draft=draft,
+                target=target,
+                diff_markdown=diff,
+                automatic_publish_requested=bool(
+                    input_data.get("auto_publish") or input_data.get("publish_mode") == "automatic"
+                ),
+            )
+        except ValueError:
+            envelope = _envelope(
+                "publish_proposal",
+                "error",
+                {"error_code": "invalid_publish_target"},
+                source_refs=draft.get("source_refs", []),
+                evidence_snapshot_ids=draft.get("evidence_snapshot_ids", []),
+                citations=draft.get("citations", []),
+                permission_scope=draft.get("frontmatter", {}).get("permission_scope"),
+                warnings=["Wiki publish target was rejected before any publish side effect."],
+            )
+            self._log("publish_wiki_page", input_data, envelope, started, wiki_draft_id=draft_id)
+            return envelope
         proposal = {
             "proposal_id": _proposal_id("proposal_publish", draft_id, target),
-            "target": target,
+            "target": backend_proposal.target,
+            "backend": backend_proposal.backend,
             "diff_markdown": f"```diff\n{diff}```",
             "draft_id": draft_id,
             "revision_id": draft.get("frontmatter", {}).get("revision_id"),
@@ -219,7 +257,7 @@ class WikiMcpTools:
             evidence_snapshot_ids=draft.get("evidence_snapshot_ids", []),
             citations=draft.get("citations", []),
             permission_scope=draft.get("frontmatter", {}).get("permission_scope"),
-            warnings=["This is proposal-only. No wiki page was published."],
+            warnings=backend_proposal.warnings,
         )
         self._log("publish_wiki_page", input_data, envelope, started, wiki_draft_id=draft_id)
         return envelope

@@ -77,8 +77,10 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   extractor runs, observations, and upload sessions behind the same create/get/list
   surfaces as the current file-backed stores. These use the internal
   connection protocol and parameterized SQL over validated contract payloads;
-  they are mocked-connection adapter evidence, not live PostgreSQL readiness or
-  a ChatGPT-facing database control surface.
+  the same asset/job/run/observation workflow now runs against both file-backed
+  stores and PostgreSQL-backed stores through shared store protocols. This is
+  container-backed same-interface adapter evidence, not live PostgreSQL
+  readiness or a ChatGPT-facing database control surface.
 - Candidate-only graph resolution helpers that produce fusion proposals,
   score breakdowns, ontology revision pins, clerical review items, and
   permission-aware human review queue exports without granting raw access or
@@ -177,6 +179,11 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - Canonical graph contract models for atoms, entities, relations, and graph revisions, with stable canonical object IDs across revisions.
 - Project MCP with a mocked OpenProject adapter, evidence snapshot file storage, context package generation, and proposal-only work item comments.
 - Wiki MCP with markdown draft generation, frontmatter provenance, draft storage, wiki snapshot capture, and proposal-only publishing.
+- Wiki MCP publish proposals route through a backend-specific adapter registry.
+  The current OpenProject Wiki adapter prepares safe `upsert_wiki_page`
+  proposals with content hashes and revision ids while keeping automatic
+  publishing disabled and omitting API URLs, credentials, raw paths, SQL, and
+  other backend internals from public results.
 - Dockerfile-managed dev/runtime containers and `.devcontainer/devcontainer.json`.
 
 ## Architecture Direction
