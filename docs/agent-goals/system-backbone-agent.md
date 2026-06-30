@@ -291,12 +291,12 @@ Latest verification:
 
 ## Next Action
 
-Push `complete-remaining-backbone-slices` and open the main PR when requested.
-The user explicitly assigned issue #5 follow-up on 2026-06-30. Only the
-Mail Evidence Adapter boundary documentation item is now in scope/completed;
-do not treat the production PST/EML parser, normalized mail schema,
-retrieval/index flow, candidate bridge, case-progress QA, or preflight
-readiness work as started without a separate assignment.
+The user explicitly assigned issue #5 follow-up on 2026-06-30. The synthetic
+mail phase is now implemented in repository code, tests, and docs: normalized
+fixture observations, local evidence packs/search, candidate-only bridge,
+case-progress QA, integration coverage, and preflight readiness artifact. Do
+not treat this as production PST/OST/MSG/EML parser readiness or real mailbox
+support; that remains a separate future assignment.
 
 ## Handoff Notes For KG Research Agent
 

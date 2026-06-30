@@ -438,6 +438,46 @@ class ExtractionEdgeCaseTests(unittest.TestCase):
                 ),
                 "message_id",
             ),
+            (
+                "mail-non-string-thread",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-thread.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "thread_id": 1,
+                                "folder_path_hash": "sha256:folder-inbox",
+                            }
+                        ],
+                    }
+                ),
+                "thread_id",
+            ),
+            (
+                "mail-invalid-headers",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-headers.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "headers": "not-a-header-object",
+                            }
+                        ],
+                    }
+                ),
+                "headers",
+            ),
         ]
 
         for case_name, adapter, filename, mime_type, content, expected_error in cases:
