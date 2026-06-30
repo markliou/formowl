@@ -630,6 +630,65 @@ email_attachment_occurrence
 mail_folder_occurrence
 ```
 
+#### Official FormOwl Mail Evidence Adapter boundary
+
+The FormOwl Mail Evidence Adapter is an `ExtractorAdapter` boundary for
+registered mail assets. It begins after a mail source has already been captured
+as a governed `Asset` through `UploadSession`, the trusted local folder ingress,
+or another controlled import path. It ends after the adapter has produced a
+versioned `ExtractorRun`, persisted mail observations, and any attachment asset
+records required by the ingestion policy.
+
+The boundary accepts only FormOwl-managed asset references and extraction
+inputs. A mail adapter may parse PST, OST, MSG, EML, MBOX, or synthetic fixture
+archives, but it must receive FormOwl identifiers such as `asset_id`,
+`object_uri`, `storage_backend_id`, `permission_scope`, `workspace_id`, and
+`source_ref`. It must not use raw local paths, NAS paths, mailbox account
+credentials, or parser scratch locations as public identity.
+
+Within this boundary a mail adapter may:
+
+- read the immutable registered mail asset through the object-store layer;
+- parse folders, messages, headers, body segments, threads, and attachments;
+- normalize mail identity and fingerprint inputs;
+- emit `mail_folder_occurrence`, `email_message`, `email_header`,
+  `email_body_segment`, `email_attachment_occurrence`, and `email_thread`
+  observations when the implementation supports them;
+- create attachment assets when extraction policy treats attachment bytes as
+  independent resources;
+- preserve archive, mailbox, folder, message, thread, body segment, attachment,
+  and occurrence identity separately; and
+- report parser warnings or failures on the `ExtractorRun` without overwriting
+  earlier runs.
+
+The mail adapter must not:
+
+- watch or mutate user mail folders directly;
+- implement a mail-only folder scanner separate from the shared asset ingress
+  pipeline;
+- expose raw file paths, PST locations, object-store roots, parser scratch
+  paths, SQL, backend endpoints, or mailbox credentials through MCP-facing
+  records;
+- drop occurrence lineage during deduplication;
+- grant access to another user's mail evidence;
+- create `SemanticMetadata`, `CandidateAtom`, `CandidateRelation`, canonical
+  graph records, user graph revisions, wiki revisions, or project/wiki writes
+  as a side effect of parsing; or
+- decide case-progress answers directly.
+
+Mail semantic metadata, candidate graph proposals, case-progress QA, retrieval
+indexes, and wiki projection are downstream consumers of mail observations.
+They must remain separate workflows with their own permission checks, review
+state, and tests.
+
+The current `FixtureMailArchiveExtractor` is the official synthetic conformance
+baseline for this boundary. It proves archive, mailbox, folder, message, body
+segment, attachment occurrence, source provenance, permission scope, stable
+observation IDs, and raw-path non-exposure for JSON-backed mail fixtures. It is
+not a production PST/EML parser, and it does not complete the normalized mail
+schema, retrieval, candidate bridge, case-progress QA, or preflight readiness
+work.
+
 ### 4.8 Semantic metadata and candidate graph extraction
 
 Input:

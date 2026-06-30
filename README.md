@@ -50,6 +50,12 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   folder paths in the public scan report.
 - Deterministic file technical metadata extractor for file size, MIME type, content hash, and FormOwl object locator observations.
 - Deterministic fixture adapters for document structure, OCR text, audio transcripts, video scene/keyframe observations, and mail/archive observations.
+- Official Mail Evidence Adapter boundary documented in
+  `RESOURCE_EXTRACTION_SPEC.md` and `docs/workflows.md`: mail parsing starts
+  from registered `Asset` / `IngestionJob` records, writes versioned
+  `ExtractorRun` / `Observation` outputs, preserves occurrence identity, and
+  does not create candidate graph, canonical graph, wiki, or case-progress QA
+  outputs as a parsing side effect.
 - Candidate graph contract models for `CandidateAtom`, `CandidateRelation`, and `ExternalGraphImport` proposal records.
 - Canonical graph contract models for `CanonicalAtom`, `CanonicalEntity`,
   `CanonicalRelation`, and `CanonicalGraphRevision`; canonical commit workflow
