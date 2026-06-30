@@ -253,6 +253,26 @@ archive/message/occurrence identity and raw-path non-exposure for fixtures. It
 is not the normalized mail schema, mail retrieval/index workflow, candidate
 bridge, case-progress QA workflow, or production parser readiness review.
 
+The completed synthetic mail workflow is:
+
+```text
+JSON mail archive fixture
+  -> Asset / IngestionJob
+  -> FixtureMailArchiveExtractor
+  -> email_thread / email_header / email_message / email_body_segment /
+     email_attachment_occurrence / mail_folder_occurrence Observations
+  -> MailEvidencePackStore and deterministic mail search index
+  -> reviewable SemanticMetadata, CandidateAtom, and CandidateRelation proposals
+  -> case-progress answer with observation citations
+  -> synthetic-phase preflight readiness artifact
+```
+
+This workflow keeps the layers separate. The evidence pack reads persisted
+observations and exposes safe snippets; the candidate bridge writes only
+proposal records; the case-progress answer is a cited read model; and the
+preflight artifact records that real PST/OST/MSG/EML parser readiness remains a
+future assignment.
+
 ## Candidate Graph Contracts
 
 The current candidate graph layer has contract models for `CandidateAtom`,

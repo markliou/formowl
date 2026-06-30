@@ -689,6 +689,32 @@ not a production PST/EML parser, and it does not complete the normalized mail
 schema, retrieval, candidate bridge, case-progress QA, or preflight readiness
 work.
 
+#### Synthetic mail phase completion profile
+
+The synthetic `formowl-mail` phase completes the repository-side contracts and
+workflow proof for JSON-backed fixtures, not real mailbox ingestion. In this
+profile:
+
+- `FixtureMailArchiveExtractor` emits `email_thread`, `email_header`,
+  `email_message`, `email_body_segment`, `email_attachment_occurrence`, and
+  `mail_folder_occurrence` observations.
+- Message payloads carry a `formowl_mail_fingerprint_v1` fingerprint,
+  normalized subject, thread id, and message occurrence id. Duplicate message
+  appearances preserve separate occurrence ids even when the message
+  fingerprint is the same.
+- `formowl_mail.build_mail_evidence_pack()` groups persisted mail observations
+  into local evidence packs with a deterministic search index over safe mail
+  metadata and body snippets.
+- `formowl_mail.extract_and_store_mail_candidates()` converts selected mail
+  evidence into reviewable `SemanticMetadata`, `CandidateAtom`, and
+  `CandidateRelation` proposals. It does not commit canonical graph state.
+- `formowl_mail.build_case_progress_answer()` answers case-progress questions
+  from cited mail observations for updates, blockers, responsible parties,
+  next actions, and deadlines.
+- `formowl_mail.build_mail_preflight_readiness_review()` records the readiness
+  artifact for the synthetic phase and explicitly defers real PST/OST/MSG/EML
+  parser readiness.
+
 ### 4.8 Semantic metadata and candidate graph extraction
 
 Input:
