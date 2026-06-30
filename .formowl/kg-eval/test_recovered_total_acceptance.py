@@ -15,26 +15,27 @@ import production_adapter_path_validator as production_path
 import multimodal_enterprise_recovery as multimodal
 
 
+CURRENT_FAILED_GATE_IDS = [
+    "fair_external_baseline_comparison",
+    "annotation_adjudication_protocol",
+    "multimodal_semantic_validation",
+    "production_adapter_paths",
+]
+
+
 class RecoveredTotalAcceptanceTest(unittest.TestCase):
-    def test_recovered_total_suite_reports_all_broad_gates_clear(self) -> None:
+    def test_recovered_total_suite_reports_current_blocked_broad_gates(self) -> None:
         report = suite.build_report()
         gates = {gate["gate_id"]: gate for gate in report["gates"]}
 
-        self.assertTrue(report["summary"]["overall_passed"])
-        self.assertEqual(report["summary"]["passed_gate_count"], 12)
-        self.assertEqual(report["summary"]["failed_gate_count"], 0)
-        self.assertEqual(report["summary"]["failed_gate_ids"], [])
-        self.assertTrue(gates["fair_external_baseline_comparison"]["passed"])
-        self.assertEqual(gates["fair_external_baseline_comparison"]["blockers"], [])
-        self.assertTrue(gates["annotation_adjudication_protocol"]["passed"])
-        self.assertEqual(gates["annotation_adjudication_protocol"]["blockers"], [])
-        for gate_id in (
-            "multimodal_semantic_validation",
-            "production_adapter_paths",
-        ):
+        self.assertFalse(report["summary"]["overall_passed"])
+        self.assertEqual(report["summary"]["passed_gate_count"], 8)
+        self.assertEqual(report["summary"]["failed_gate_count"], 4)
+        self.assertEqual(report["summary"]["failed_gate_ids"], CURRENT_FAILED_GATE_IDS)
+        for gate_id in CURRENT_FAILED_GATE_IDS:
             self.assertIn(gate_id, gates)
-            self.assertTrue(gates[gate_id]["passed"])
-            self.assertEqual(gates[gate_id]["blockers"], [])
+            self.assertFalse(gates[gate_id]["passed"])
+            self.assertTrue(gates[gate_id]["blockers"])
         self.assertTrue(gates["scoped_ontology_integration_method"]["passed"])
         self.assertTrue(gates["external_recent_literature_baseline_protocol"]["passed"])
         self.assertTrue(gates["different_user_kg_fusion_method"]["passed"])
@@ -43,25 +44,25 @@ class RecoveredTotalAcceptanceTest(unittest.TestCase):
         self.assertTrue(gates["production_adapter_controls_recovery"]["passed"])
         self.assertTrue(gates["overclaim_guard"]["passed"])
 
-    def test_recovered_objective_audit_claims_goal_completion_with_limits(self) -> None:
+    def test_recovered_objective_audit_reports_current_blocked_requirements(self) -> None:
         report = audit.build_report()
 
-        self.assertTrue(report["objective_complete"])
-        self.assertEqual(report["proved_requirement_count"], 9)
-        self.assertEqual(report["incomplete_requirement_count"], 0)
+        self.assertFalse(report["objective_complete"])
+        self.assertEqual(report["proved_requirement_count"], 5)
+        self.assertEqual(report["incomplete_requirement_count"], 4)
         self.assertFalse(report["claim_boundary"]["supports_goal_complete_claim"])
         self.assertTrue(report["claim_boundary"]["supports_objective_completion_audit_claim"])
         self.assertFalse(report["claim_boundary"]["supports_production_ready_claim"])
         self.assertFalse(report["claim_boundary"]["supports_top_tier_scientific_validation_claim"])
-        self.assertNotIn("fair_external_baseline_comparison", report["failed_gate_ids"])
-        self.assertEqual(report["failed_gate_ids"], [])
+        self.assertEqual(report["failed_gate_ids"], CURRENT_FAILED_GATE_IDS)
         rows = {row["requirement_id"]: row for row in report["requirement_rows"]}
         self.assertEqual(rows["external_recent_literature_comparison"]["status"], "proved")
-        self.assertEqual(rows["fair_external_baseline_validation"]["status"], "proved")
+        self.assertEqual(rows["fair_external_baseline_validation"]["status"], "incomplete")
         self.assertEqual(rows["ontology_integration_method"]["status"], "proved")
         self.assertEqual(rows["different_user_kg_and_fusion"]["status"], "proved")
-        self.assertEqual(rows["multimodal_enterprise_validation"]["status"], "proved")
-        self.assertEqual(rows["production_adapter_gate"]["status"], "proved")
+        self.assertEqual(rows["human_annotation_adjudication_protocol"]["status"], "incomplete")
+        self.assertEqual(rows["multimodal_enterprise_validation"]["status"], "incomplete")
+        self.assertEqual(rows["production_adapter_gate"]["status"], "incomplete")
 
     def test_external_literature_gate_rejects_real_run_overclaim(self) -> None:
         report = literature.build_report()

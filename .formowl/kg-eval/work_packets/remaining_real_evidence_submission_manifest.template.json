@@ -10,6 +10,22 @@
   "manifest_type": "kg_remaining_real_evidence_submission_manifest_v1",
   "submissions": [
     {
+      "assembly_manifest_output": "work_packets/fair_external_baseline_comparison_candidate_manifest.json",
+      "gate_id": "fair_external_baseline_comparison",
+      "operator_run_id": "OPERATOR_RUN_ID",
+      "output_dir": "inputs/fair_baseline_real/OPERATOR_RUN_ID",
+      "response_packet": "inputs/fair_baseline_real/OPERATOR_RUN_ID/operator_response_packet.json",
+      "response_packet_type": "fair_baseline_response_intake_v1"
+    },
+    {
+      "assembly_manifest_output": "work_packets/annotation_adjudication_protocol_candidate_manifest.json",
+      "gate_id": "annotation_adjudication_protocol",
+      "operator_run_id": "OPERATOR_RUN_ID",
+      "output_dir": "inputs/human_annotation_real/OPERATOR_RUN_ID",
+      "response_packet": "inputs/human_annotation_real/OPERATOR_RUN_ID/operator_response_packet.json",
+      "response_packet_type": "human_annotation_response_intake_v1"
+    },
+    {
       "assembly_manifest_output": "work_packets/multimodal_semantic_validation_candidate_manifest.json",
       "gate_id": "multimodal_semantic_validation",
       "operator_run_id": "OPERATOR_RUN_ID",

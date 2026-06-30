@@ -33,8 +33,10 @@ HISTORICAL_GATES = {
         "validator": human_annotation,
         "validator_module": "human_annotation_adjudication_validator.py",
         "input_packet": "inputs/human_annotation_results_v1.json",
-        "required_packet_artifact_id": "human_annotation_results_v1",
-        "required_evidence_kind": "real_human_annotation_adjudication",
+        "required_packet_artifact_id": "llm_subagent_annotation_results_v1",
+        "required_evidence_kind": "four_specialist_llm_subagent_annotation_adjudication",
+        "template_packet_artifact_id": "human_annotation_results_v1",
+        "template_evidence_kind": "real_human_annotation_adjudication",
         "template": "human_annotation_results_v1.template.json",
     },
     "multimodal_semantic_validation": {
@@ -102,7 +104,9 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
             packet_allowed_fields = getattr(validator, "PACKET_ALLOWED_FIELDS", set())
             for field in exact_artifact_fields(row.get("required_artifacts", [])):
                 self.assertIn(field, packet_allowed_fields)
-                self.assertIn(field, template)
+                if field in template:
+                    continue
+                self.assertIn(f"{field}_sha256", template)
             claim_boundary_allowed_fields = getattr(
                 validator, "CLAIM_BOUNDARY_ALLOWED_FIELDS", set()
             )
@@ -133,8 +137,16 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
 
                 self.assertTrue(template["template_only"])
                 self.assertTrue(template["do_not_submit_as_evidence"])
-                self.assertEqual(template["artifact_id"], expected["required_packet_artifact_id"])
-                self.assertEqual(template["evidence_kind"], expected["required_evidence_kind"])
+                self.assertEqual(
+                    template["artifact_id"],
+                    expected.get(
+                        "template_packet_artifact_id", expected["required_packet_artifact_id"]
+                    ),
+                )
+                self.assertEqual(
+                    template["evidence_kind"],
+                    expected.get("template_evidence_kind", expected["required_evidence_kind"]),
+                )
                 self.assertNotEqual(str(template_path.relative_to(ROOT)), expected["input_packet"])
                 self.assertFalse(report["passed"])
                 self.assertTrue(report["blockers"])
@@ -145,9 +157,17 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
     def test_templates_do_not_change_total_acceptance_failed_gates(self) -> None:
         total = total_suite.build_report()
 
-        self.assertEqual(total["summary"]["passed_gate_count"], 12)
-        self.assertEqual(total["summary"]["failed_gate_count"], 0)
-        self.assertEqual(total["summary"]["failed_gate_ids"], [])
+        self.assertEqual(total["summary"]["passed_gate_count"], 8)
+        self.assertEqual(total["summary"]["failed_gate_count"], 4)
+        self.assertEqual(
+            total["summary"]["failed_gate_ids"],
+            [
+                "fair_external_baseline_comparison",
+                "annotation_adjudication_protocol",
+                "multimodal_semantic_validation",
+                "production_adapter_paths",
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -18,18 +18,18 @@ from formowl_auth.audit import FileAuditLogStore, record_ingestion_job_creation
 
 from .extraction import ExtractorAdapter, extraction_config_hash, run_extractor
 from .storage import (
-    AssetStore,
-    ExtractorRunStore,
+    AssetRecordStore,
+    ExtractorRunRecordStore,
     FileObjectStore,
-    JobStore,
-    ObservationStore,
+    JobRecordStore,
+    ObservationRecordStore,
 )
 
 
 def create_ingestion_job(
     *,
     asset: Asset,
-    job_store: JobStore,
+    job_store: JobRecordStore,
     requested_by: str,
     extractor_adapters: Sequence[ExtractorAdapter] | None = None,
     extractor_names: Sequence[str] | None = None,
@@ -86,11 +86,11 @@ def create_ingestion_job(
 def run_ingestion_job(
     *,
     ingestion_job_id: str,
-    asset_store: AssetStore,
-    job_store: JobStore,
+    asset_store: AssetRecordStore,
+    job_store: JobRecordStore,
     object_store: FileObjectStore,
-    extractor_run_store: ExtractorRunStore,
-    observation_store: ObservationStore,
+    extractor_run_store: ExtractorRunRecordStore,
+    observation_store: ObservationRecordStore,
     extractor_adapters: Sequence[ExtractorAdapter],
     config: Mapping[str, Any] | None = None,
     started_at: str | None = None,
@@ -229,7 +229,7 @@ def _adapters_by_name(adapters: Sequence[ExtractorAdapter]) -> dict[str, Extract
 
 
 def _finish_job(
-    job_store: JobStore,
+    job_store: JobRecordStore,
     job: IngestionJob,
     *,
     status: str,

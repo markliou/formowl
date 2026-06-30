@@ -147,19 +147,31 @@ def build_acceptance_summary(*, repository_root: Path | str | None = None) -> di
     preflight_summary = _dict_at(preflight, "summary")
     work_order_summary = _dict_at(work_orders, "summary")
     progress_summary = _dict_at(progress, "summary")
+    authority_state = _build_authority_state(
+        total_summary=total_summary,
+        objective=objective,
+        preflight=preflight,
+        preflight_summary=preflight_summary,
+        work_orders=work_orders,
+        work_order_summary=work_order_summary,
+        progress=progress,
+        progress_summary=progress_summary,
+        checklist=checklist,
+    )
 
     return {
         "artifact_id": "formowl_kg_eval_acceptance_summary_v1",
         "claim_boundary": {
-            "supports_broad_kg_real_evidence_acceptance_claim": bool(
-                total_summary.get("overall_passed")
-            ),
+            "supports_broad_kg_real_evidence_acceptance_claim": authority_state[
+                "completion_claim_supported"
+            ],
             "supports_full_product_production_ready_claim": False,
             "supports_top_tier_scientific_validation_claim": False,
             "supports_raw_asset_access_claim": False,
             "supports_canonical_graph_write_claim": False,
             "supports_enterprise_latency_scalability_claim": False,
         },
+        "authority_state": authority_state,
         "total_acceptance": {
             "overall_passed": total_summary.get("overall_passed"),
             "passed_gate_count": total_summary.get("passed_gate_count"),
@@ -210,6 +222,127 @@ def _dict_at(payload: dict[str, Any], key: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
     return value
+
+
+def _build_authority_state(
+    *,
+    total_summary: dict[str, Any],
+    objective: dict[str, Any],
+    preflight: dict[str, Any],
+    preflight_summary: dict[str, Any],
+    work_orders: dict[str, Any],
+    work_order_summary: dict[str, Any],
+    progress: dict[str, Any],
+    progress_summary: dict[str, Any],
+    checklist: dict[str, Any],
+) -> dict[str, Any]:
+    total_failed_gate_ids = _string_list(total_summary.get("failed_gate_ids", []))
+    checklist_remaining_gate_ids = _gate_ids(checklist.get("remaining_gates", []))
+    preflight_blocked_gate_ids = _string_list(preflight_summary.get("blocked_gate_ids", []))
+    work_order_gate_ids = _string_list(work_order_summary.get("work_order_gate_ids", []))
+    progress_blocked_gate_ids = _string_list(progress_summary.get("blocked_gate_ids", []))
+    total_passed = total_summary.get("overall_passed") is True
+    objective_complete = objective.get("objective_complete") is True
+    checklist_overall_passed = checklist.get("overall_passed") is True
+
+    checks = {
+        "total_overall_passed": total_passed,
+        "objective_complete": objective_complete,
+        "objective_incomplete_count_zero": objective.get("incomplete_requirement_count") == 0,
+        "preflight_clear": preflight.get("preflight_state")
+        == "validator_clear_for_all_broad_gates",
+        "preflight_blocked_gate_count_zero": preflight_summary.get("blocked_gate_count") == 0,
+        "preflight_blocked_gate_ids_empty": preflight_blocked_gate_ids == [],
+        "preflight_checklist_sync_synchronized": (
+            preflight_summary.get("checklist_sync_status") == "synchronized"
+            or preflight.get("checklist_sync", {}).get("status") == "synchronized"
+        ),
+        "work_order_count_zero": work_order_summary.get("work_order_count") == 0,
+        "work_order_gate_ids_empty": work_order_gate_ids == [],
+        "work_order_state_clear": work_orders.get("work_order_state")
+        in {None, "no_remaining_work_orders_all_broad_gates_clear"},
+        "work_order_sync_synchronized": work_orders.get("sync", {}).get("status")
+        in {None, "synchronized"},
+        "progress_gate_count_zero": progress_summary.get("gate_count") == 0,
+        "progress_blocked_gate_ids_empty": progress_blocked_gate_ids == [],
+        "progress_source_contract_valid": progress.get("source_report_contract", {}).get(
+            "valid", True
+        )
+        is True,
+        "checklist_overall_passed": checklist_overall_passed,
+        "checklist_failed_count_matches_total": checklist.get("failed_gate_count")
+        == total_summary.get("failed_gate_count"),
+        "checklist_passed_count_matches_total": checklist.get("passed_gate_count")
+        == total_summary.get("passed_gate_count"),
+        "checklist_remaining_gates_match_total_failed_gates": checklist_remaining_gate_ids
+        == total_failed_gate_ids,
+        "checklist_gate_status_sha256_matches_total": checklist.get("gate_status_sha256")
+        == total_summary.get("gate_status_sha256"),
+        "checklist_objective_audit_sha256_matches_current": checklist.get("objective_audit_sha256")
+        == objective.get("audit_sha256"),
+        "checklist_source_snapshot_path_matches": checklist.get("source_snapshot")
+        == "results/kg_total_acceptance_snapshot.json",
+        "checklist_source_objective_audit_path_matches": checklist.get("source_objective_audit")
+        == "results/kg_objective_completion_audit.json",
+    }
+
+    drift_checks = {
+        "checklist_failed_count_matches_total": checks["checklist_failed_count_matches_total"],
+        "checklist_passed_count_matches_total": checks["checklist_passed_count_matches_total"],
+        "checklist_remaining_gates_match_total_failed_gates": checks[
+            "checklist_remaining_gates_match_total_failed_gates"
+        ],
+        "checklist_gate_status_sha256_matches_total": checks[
+            "checklist_gate_status_sha256_matches_total"
+        ],
+        "checklist_objective_audit_sha256_matches_current": checks[
+            "checklist_objective_audit_sha256_matches_current"
+        ],
+        "checklist_source_snapshot_path_matches": checks["checklist_source_snapshot_path_matches"],
+        "checklist_source_objective_audit_path_matches": checks[
+            "checklist_source_objective_audit_path_matches"
+        ],
+        "preflight_checklist_sync_synchronized": checks["preflight_checklist_sync_synchronized"],
+        "work_order_sync_synchronized": checks["work_order_sync_synchronized"],
+        "progress_source_contract_valid": checks["progress_source_contract_valid"],
+    }
+    consistency_ok = all(drift_checks.values())
+    completion_claim_supported = consistency_ok and all(checks.values())
+    if completion_claim_supported:
+        state = "clear"
+    elif not consistency_ok:
+        state = "drifted"
+    else:
+        state = "blocked"
+    blocking_reasons = [name for name, passed in checks.items() if not passed]
+    return {
+        "state": state,
+        "consistent": consistency_ok,
+        "completion_claim_supported": completion_claim_supported,
+        "blocking_reasons": blocking_reasons,
+        "total_failed_gate_ids": total_failed_gate_ids,
+        "checklist_remaining_gate_ids": checklist_remaining_gate_ids,
+        "preflight_blocked_gate_ids": preflight_blocked_gate_ids,
+        "work_order_gate_ids": work_order_gate_ids,
+        "progress_blocked_gate_ids": progress_blocked_gate_ids,
+        "checks": checks,
+    }
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _gate_ids(rows: Any) -> list[str]:
+    if not isinstance(rows, list):
+        return []
+    return [
+        row["gate_id"]
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("gate_id"), str)
+    ]
 
 
 def _redact_local_paths(

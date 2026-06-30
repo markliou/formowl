@@ -17,6 +17,12 @@ import real_evidence_gate_progress as progress
 
 ROOT = Path(__file__).resolve().parent
 BLOCKED_GATE_IDS = ["multimodal_semantic_validation"]
+CURRENT_BLOCKED_GATE_IDS = [
+    "fair_external_baseline_comparison",
+    "annotation_adjudication_protocol",
+    "multimodal_semantic_validation",
+    "production_adapter_paths",
+]
 
 
 def blocked_preflight_report() -> dict:
@@ -218,7 +224,7 @@ class RealEvidenceGateProgressTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_current_baseline_reports_no_remaining_gate_progress(self) -> None:
+    def test_current_baseline_reports_all_remaining_gate_progress(self) -> None:
         report = progress.build_report()
 
         self.assertEqual(report["artifact_id"], "kg_real_evidence_gate_progress_v1")
@@ -229,10 +235,10 @@ class RealEvidenceGateProgressTest(unittest.TestCase):
         self.assertFalse(report["progress_authority"]["writes_canonical_packets"])
         self.assertFalse(report["progress_authority"]["promotes_evidence"])
         self.assertFalse(report["progress_authority"]["counts_as_acceptance_gate"])
-        self.assertEqual(report["summary"]["gate_count"], 0)
-        self.assertEqual(report["summary"]["gate_ids"], [])
-        self.assertEqual(report["summary"]["blocked_gate_ids"], [])
-        self.assertEqual(report["summary"]["stage_counts"], {})
+        self.assertEqual(report["summary"]["gate_count"], 4)
+        self.assertEqual(report["summary"]["gate_ids"], CURRENT_BLOCKED_GATE_IDS)
+        self.assertEqual(report["summary"]["blocked_gate_ids"], CURRENT_BLOCKED_GATE_IDS)
+        self.assertEqual(report["summary"]["stage_counts"], {"missing_operator_response": 4})
         self.assertEqual(report["summary"]["candidate_manifest_regular_gate_count"], 0)
         self.assertEqual(report["summary"]["candidate_validation_clear_gate_count"], 0)
         self.assertEqual(report["summary"]["valid_approval_manifest_gate_count"], 0)
@@ -242,16 +248,11 @@ class RealEvidenceGateProgressTest(unittest.TestCase):
         self.assertTrue(report["source_report_contract"]["valid"])
         self.assertEqual(
             report["source_report_contract"]["historical_monitored_gate_ids"],
-            [
-                "fair_external_baseline_comparison",
-                "annotation_adjudication_protocol",
-                "multimodal_semantic_validation",
-                "production_adapter_paths",
-            ],
+            CURRENT_BLOCKED_GATE_IDS,
         )
         self.assertEqual(
             report["source_report_contract"]["current_blocked_gate_ids"],
-            [],
+            CURRENT_BLOCKED_GATE_IDS,
         )
         root_text = str(ROOT)
         self.assertFalse(
@@ -260,7 +261,11 @@ class RealEvidenceGateProgressTest(unittest.TestCase):
                 for value in nested_strings(report)
             )
         )
-        self.assertEqual(report["gate_progress"], [])
+        self.assertEqual(
+            [row["gate_id"] for row in report["gate_progress"]], CURRENT_BLOCKED_GATE_IDS
+        )
+        for row in report["gate_progress"]:
+            self.assertEqual(row["stage"], "missing_operator_response")
 
     def test_build_report_uses_persisted_reports_without_refreshing_preflight(self) -> None:
         original_preflight_build = progress.preflight.build_report
@@ -278,7 +283,7 @@ class RealEvidenceGateProgressTest(unittest.TestCase):
             progress.work_orders.build_report = original_work_order_build
 
         self.assertEqual(report["artifact_id"], "kg_real_evidence_gate_progress_v1")
-        self.assertEqual(report["summary"]["gate_count"], 0)
+        self.assertEqual(report["summary"]["gate_count"], 4)
         self.assertFalse(report["progress_authority"]["reads_candidate_artifact_contents"])
 
     def test_missing_source_reports_withhold_gate_progress(self) -> None:

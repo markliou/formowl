@@ -123,3 +123,19 @@ revision_backend:
 ```
 
 `revision_backend.type` may be `database`, `git`, `markdown-store`, `openproject_wiki`, `confluence`, `notion`, or another implementation-specific backend.
+
+## Backend-Specific Publish Adapter Boundary
+
+Wiki publishing targets are backend-specific, but normal users should still see
+reviewable wiki actions rather than backend controls. The current Wiki MCP
+routes `publish_wiki_page` through a publish adapter registry. The
+OpenProject Wiki adapter prepares a backend-specific `upsert_wiki_page`
+proposal with a safe target summary, content hashes, revision IDs, and source
+references, but it does not write to OpenProject.
+
+Automatic publishing remains disabled by default. If a caller asks for
+automatic publishing without an explicitly approved backend configuration, the
+tool still returns `pending_review`, records `publish_mode: proposal_only`,
+sets `external_write_performed: false`, and omits backend-internal fields such
+as API URLs, credentials, raw paths, SQL, or object-store details from the
+public proposal.

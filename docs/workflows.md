@@ -269,6 +269,13 @@ User asks for a wiki update in natural language
   -> Publish adapter writes to the target wiki if approved
 ```
 
+The current backend-specific publish adapter slice implements the proposal
+preparation step for OpenProject Wiki. `publish_wiki_page` returns a safe
+backend proposal with `publish_mode: proposal_only` and
+`external_write_performed: false`; it does not perform the final adapter write.
+Automatic publishing must remain off unless a later approved backend
+configuration explicitly enables it.
+
 ## User-Facing Actions
 
 ```text

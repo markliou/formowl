@@ -1080,9 +1080,11 @@ The current PostgreSQL ingestion-store adapter slice provides database-backed
 create/get/list surfaces for validated `Asset`, `IngestionJob`, `ExtractorRun`,
 `Observation`, and `UploadSession` payloads through an internal connection
 protocol. It is intentionally tested with mocked connections and parameterized
-SQL statement capture; it does not expose PostgreSQL credentials or database
-operations through MCP and does not by itself claim live PostgreSQL deployment
-readiness.
+SQL statement capture. The current same-interface workflow test runs asset
+registration, ingestion job creation, extractor execution, run persistence, and
+observation persistence against both file-backed stores and PostgreSQL-backed
+stores. This does not expose PostgreSQL credentials or database operations
+through MCP and does not by itself claim live PostgreSQL deployment readiness.
 
 Storage backend registry configuration is loaded through the
 `formowl_ingestion.storage` configuration helpers. The local-first path uses

@@ -77,8 +77,10 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   extractor runs, observations, and upload sessions behind the same create/get/list
   surfaces as the current file-backed stores. These use the internal
   connection protocol and parameterized SQL over validated contract payloads;
-  they are mocked-connection adapter evidence, not live PostgreSQL readiness or
-  a ChatGPT-facing database control surface.
+  the same asset/job/run/observation workflow now runs against both file-backed
+  stores and PostgreSQL-backed stores through shared store protocols. This is
+  container-backed same-interface adapter evidence, not live PostgreSQL
+  readiness or a ChatGPT-facing database control surface.
 - Candidate-only graph resolution helpers that produce fusion proposals,
   score breakdowns, ontology revision pins, clerical review items, and
   permission-aware human review queue exports without granting raw access or
@@ -177,6 +179,11 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - Canonical graph contract models for atoms, entities, relations, and graph revisions, with stable canonical object IDs across revisions.
 - Project MCP with a mocked OpenProject adapter, evidence snapshot file storage, context package generation, and proposal-only work item comments.
 - Wiki MCP with markdown draft generation, frontmatter provenance, draft storage, wiki snapshot capture, and proposal-only publishing.
+- Wiki MCP publish proposals route through a backend-specific adapter registry.
+  The current OpenProject Wiki adapter prepares safe `upsert_wiki_page`
+  proposals with content hashes and revision IDs while keeping automatic
+  publishing disabled and omitting API URLs, credentials, raw paths, SQL, and
+  other backend internals from public results.
 - Dockerfile-managed dev/runtime containers and `.devcontainer/devcontainer.json`.
 
 ## Architecture Direction
@@ -254,15 +261,20 @@ non-authoritative state snapshots are tracked so the broad gate authority is
 reproducible across sessions. Runtime `results/`, operator-supplied or public
 reproducible evidence under `inputs/*_real/`, and canonical real evidence
 packets remain ignored unless a governed evidence process explicitly decides
-otherwise. The current local authority state has the broad KG real-evidence
-gates clear at 12/12; this does not claim full product production readiness,
-top-tier scientific validation, raw asset access, canonical graph writes, or
-enterprise-scale latency/scalability.
+otherwise. The current local authority state is blocked at 8/12: the remaining
+gates are `fair_external_baseline_comparison`,
+`annotation_adjudication_protocol`, `multimodal_semantic_validation`, and
+`production_adapter_paths`. This does not claim full product production
+readiness, top-tier scientific validation, raw asset access, canonical graph
+writes, or enterprise-scale latency/scalability.
 
 The packaged integration facade is `formowl_kg_eval`, with CLI entry point
 `formowl-kg-eval` after installation and `python -m formowl_kg_eval` as the
 module fallback. System integrations should consume the stable summary instead
-of importing repo-local harness scripts directly. The summary also includes
+of importing repo-local harness scripts directly. The summary includes an
+`authority_state` consistency gate and supports the broad completion claim only
+when total acceptance, objective audit, preflight, work orders, progress, and
+the tracked checklist are all synchronized and passing. The summary also includes
 `candidate_generation_capabilities`, which maps low-spec, standard CPU, GPU,
 and remote model workers to deterministic or neural candidate-generation
 profiles. It also includes `kg_benchmark_results`; integrations that only need
@@ -341,18 +353,20 @@ pre-commit run trufflehog-history --hook-stage manual
 
 The dev container installs Gitleaks for commit-time scanning. TruffleHog remains manual because it is heavier; this repo runs it with verification disabled so the scan stays local.
 
-## MCP JSON Line Entry Points
+## MCP JSON Line Compatibility Entry Points
 
 The legacy Python MCP server modules still accept one JSON request per stdin
-line and print one JSON response per line for local testing. The FormOwl
-gateway package now provides a JSON-RPC compatibility wrapper for existing MCP
-server objects and semantic gateway tools; Project/Wiki behavior is preserved
-through transport tests.
+line and print one JSON response per line for local compatibility testing only.
+Packaged console scripts use explicit compatibility names:
+`formowl-project-mcp-jsonline-compat` and
+`formowl-wiki-mcp-jsonline-compat`. The FormOwl gateway package provides the
+JSON-RPC compatibility wrapper for existing MCP server objects and semantic
+gateway tools; Project/Wiki behavior is preserved through transport tests.
 
-Project MCP example:
+Project MCP compatibility example:
 
 ```sh
-python -m formowl_project_mcp
+formowl-project-mcp-jsonline-compat
 ```
 
 Request:
@@ -375,10 +389,10 @@ Request:
 }
 ```
 
-Wiki MCP example:
+Wiki MCP compatibility example:
 
 ```sh
-python -m formowl_wiki_mcp
+formowl-wiki-mcp-jsonline-compat
 ```
 
 Set `FORMOWL_DATA_DIR` to control evidence, draft, snapshot, and tool-call log storage. The default is `.formowl/data`.

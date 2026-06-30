@@ -17,16 +17,20 @@ total acceptance suite that clearly marks passed and failed items.
 
 Historical source: Codex session `019eda5f-7dd6-74a2-ac56-4f84e5d58560`.
 
-Status: `complete` for the broad KG real-evidence acceptance objective.
-Product-level production readiness, top-tier scientific validation, raw access,
-canonical graph writes, autonomous business judgment, and enterprise-scale
-latency/scalability remain outside this completion claim.
+Status: `blocked` for the broad KG real-evidence acceptance objective. Current
+repo-side tooling is synchronized, but four broad real-evidence gates still
+require operator-supplied or public reproducible evidence before completion can
+be claimed. Product-level production readiness, top-tier scientific validation,
+raw access, canonical graph writes, autonomous business judgment, and
+enterprise-scale latency/scalability remain outside any future completion
+claim.
 
 ## Current Acceptance State
 
-Treat the broad KG real-evidence acceptance objective as complete in the
-current local authority state. Do not broaden the completion claim beyond that
-scope.
+Do not treat the broad KG real-evidence acceptance objective as complete in the
+current authority state. The stricter current state is blocked, and no broad
+completion claim is supported until the four remaining gates have accepted
+canonical packets and all authority reports are synchronized and passing.
 
 Two different acceptance layers currently exist:
 
@@ -38,40 +42,51 @@ Two different acceptance layers currently exist:
 - Broad real-evidence KG acceptance:
   `.formowl/kg-eval/results/kg_total_acceptance_snapshot.json` is the stricter
   recovery/real-evidence state for the user's full broad KG objective. It now
-  has `overall_passed=true`, 12 passed gates, 0 failed gates, and
-  `remaining_gates=[]`.
+  has `overall_passed=false`, 8 passed gates, 4 failed gates, and remaining
+  gates `fair_external_baseline_comparison`,
+  `annotation_adjudication_protocol`, `multimodal_semantic_validation`, and
+  `production_adapter_paths`.
 
-Current broad real-evidence evidence:
+Current broad real-evidence blockers:
 
-- `fair_external_baseline_comparison` has public reproducible evidence, a
-  validator-clear canonical packet, and four-specialist LLM subagent approval.
-- `annotation_adjudication_protocol` has an operator-private canonical packet,
-  validator-clear status, and four-specialist LLM subagent approval without
-  claiming completed human annotation.
-- `multimodal_semantic_validation` has public reproducible enterprise
-  multimodal evidence, validator-clear status, and four-specialist LLM subagent
-  approval.
-- `production_adapter_paths` has public reproducible production-adapter path
-  evidence, validator-clear status, rollback/permission/audit evidence, and
-  four-specialist LLM subagent approval.
+- `fair_external_baseline_comparison`: real Microsoft GraphRAG, LightRAG, and
+  HippoRAG package runs, answer-quality adjudication, graph-quality
+  validation, and permission probes are absent.
+- `annotation_adjudication_protocol`: the annotation packet is absent, and
+  neither the legacy human route nor the four-specialist LLM subagent panel
+  route has complete accepted evidence.
+- `multimodal_semantic_validation`: real enterprise multimodal pilot,
+  modality validation packets, adjudication, business-decision review, and
+  cross-modal permission probes are absent.
+- `production_adapter_paths`: non-synthetic deployment evidence, reviewed
+  false-merge labels, permission probes, rollback smoke, and production audit
+  artifacts are absent.
 
-Current authority hashes, refreshed 2026-06-28:
+Current authority hashes, refreshed 2026-06-30 after #13 correction:
 
 - gate status:
-  `9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba`
+  `596eef5f887952b4e4666f7e6b970a9199d8d3148a630cd4491ac53f0faeca1a`
 - objective audit:
-  `b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d`
+  `86d550fd05bfb1ab1b453e805bcfe56827a476da43186bb32e962a0b41275039`
 
 Current status tools:
 
-- `kg_objective_completion_audit.py`: `objective_complete=true`, 9 proved
-  requirements, 0 incomplete requirements.
+- `kg_objective_completion_audit.py`: `objective_complete=false`, 5 proved
+  requirements, 4 incomplete requirements.
 - `real_evidence_preflight.py`:
-  `preflight_state=validator_clear_for_all_broad_gates`, blocked gates `[]`.
+  `preflight_state=blocked`, blocked gates
+  `fair_external_baseline_comparison`, `annotation_adjudication_protocol`,
+  `multimodal_semantic_validation`, and `production_adapter_paths`.
 - `real_evidence_collection_work_orders.py`:
-  `work_order_state=no_remaining_work_orders_all_broad_gates_clear`,
-  `work_order_count=0`.
-- `real_evidence_gate_progress.py`: `gate_count=0`, blocked gates `[]`.
+  `work_order_state=collection_blocked_until_real_evidence_exists`,
+  `work_order_count=4`.
+- `real_evidence_gate_progress.py`: `gate_count=4`, all four gates at
+  `missing_operator_response`.
+
+The packaged `formowl_kg_eval summary` now exposes `authority_state` and fails
+closed: it supports the broad completion claim only when total acceptance,
+objective audit, preflight, work orders, progress, and tracked checklist are
+all passing and synchronized.
 
 The current Plan B route is four professional specialist LLM subagents, not a
 generic or single LLM judge. Accepted artifacts must use
@@ -1426,21 +1441,15 @@ Reviewer cost-control rules:
   empty real roots are present. Therefore Plan B is also blocked until at
   least operator/user response packets or candidate artifacts exist. The
   original human/real-evidence gates remain failed.
-- 2026-06-28 broad KG real-evidence completion checkpoint: this supersedes the
-  blocked-audit and 10/12 notes above. Current KG-eval authority is 12/12:
-  `kg_total_acceptance_suite.py` reports `overall_passed=true`, 12 passed
-  gates, and 0 failed gates; `remaining_evidence_checklist.json` reports
-  `remaining_gates=[]`; and `kg_objective_completion_audit.py` reports
-  `objective_complete=true`, 9 proved requirements, and 0 incomplete
-  requirements. Current hashes are gate status
+- 2026-06-28 broad KG real-evidence completion checkpoint, retracted
+  2026-06-30: this historical note previously recorded a local 12/12 state,
+  `overall_passed=true`, hashes
   `9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba` and
-  objective audit
-  `b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d`.
-  Preflight is `validator_clear_for_all_broad_gates`; work orders have count
-  0; progress has `gate_count=0`. Completion claim remains limited to broad KG
-  real-evidence acceptance and excludes full product production readiness,
-  top-tier scientific validation, raw access, canonical graph writes,
-  autonomous business judgment, and enterprise latency/scalability.
+  `b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d`,
+  `validator_clear_for_all_broad_gates`, zero work orders, and zero progress
+  gates. Treat that note as stale and superseded by the current 2026-06-30
+  #13 authority correction at the top of this file. It is not current
+  authority and supports no broad completion claim.
 - 2026-06-29 packaging handoff checkpoint: the broad KG research-evaluation
   result now has a packaged integration facade. `python/formowl_kg_eval/`
   exposes `build_acceptance_summary()`, `run_kg_eval_command()`, and the

@@ -46,9 +46,11 @@ gateway, and public tool schemas/error envelopes for the current gateway
 surface, and retrieval gateway completion for governed evidence/raw-asset
 access, plus storage backend registry configuration for local-first and
 metadata-only object-store descriptors, worker execution, PostgreSQL-backed
-ingestion record stores, the closed-beta readiness smoke, and the local data
-resource folder ingestion MVP. The next backbone focus should move to the
-remaining closed-beta blockers without claiming production readiness.
+ingestion record stores, the closed-beta readiness smoke, the local data
+resource folder ingestion MVP, backend-specific Wiki MCP publish proposals, and
+database-backed ingestion store same-interface workflow evidence. The remaining
+work-board backbone blockers are complete on branch
+`complete-remaining-backbone-slices` without claiming production readiness.
 
 ## Current Status
 
@@ -116,6 +118,23 @@ stability tokens. This is generic infrastructure only; it does not implement
 mail parsing, financial reconciliation, canonical graph writes, or wiki
 publishing.
 
+Backend-specific Wiki MCP publish proposals now route through
+`WikiPublishAdapterRegistry`. The current OpenProject Wiki adapter prepares
+safe `upsert_wiki_page` proposals with sanitized target fields, content/diff
+hashes, source references, `publish_mode: proposal_only`,
+`automatic_publish_enabled: false`, and `external_write_performed: false`.
+Target API URLs, tokens, raw paths, SQL-like values, and backend-internal fields
+are omitted or rejected before any publish side effect. This does not implement
+automatic publishing or live OpenProject Wiki writes.
+
+The database-backed store item is now closed as container-backed
+same-interface adapter evidence. The ingestion helpers depend on shared store
+protocols, and the same asset registration, job creation, extractor execution,
+run persistence, and observation persistence workflow runs against both
+file-backed stores and PostgreSQL-backed stores. This remains an internal
+adapter boundary: it does not expose database controls through MCP and does not
+claim live PostgreSQL deployment or production readiness.
+
 ## Owner Paths
 
 - `python/formowl_project_mcp/adapters/openproject/`
@@ -131,8 +150,16 @@ publishing.
 - `tests/test_closed_beta_smoke_script.py`
 - `docs/closed-beta-runbook.md`
 - `python/formowl_ingestion/folder_inbox.py`
+- `python/formowl_ingestion/storage/interfaces.py`
+- `python/formowl_wiki_mcp/adapters/`
+- `python/formowl_wiki_mcp/tools/wiki_tools.py`
 - `tests/test_local_folder_ingestion.py`
+- `tests/test_database_backed_ingestion_workflow.py`
+- `tests/test_wiki_mcp.py`
 - `docs/local-data-resource-inbox.md`
+- `docs/wiki-draft-schema.md`
+- `docs/workflows.md`
+- `docs/infra-spec.md`
 - `docs/implementation-task-breakdown.md`
 - `README.md`
 
@@ -155,6 +182,12 @@ publishing.
 - Local folder inbox MVP passes focused and full dev-container checks, defers
   unstable files with zero durable side effects, keeps public scan output
   redacted, and passes the default 3-reviewer gate.
+- Wiki publish adapters return backend-specific proposals while preserving
+  proposal-only publishing, automatic-publish disablement, safe target
+  redaction, and no external write side effects.
+- File-backed and PostgreSQL-backed ingestion record stores pass the same
+  asset/job/run/observation workflow through shared interfaces without
+  exposing database controls or claiming live PostgreSQL readiness.
 
 Canonical verification commands:
 
@@ -221,6 +254,22 @@ Latest verification:
   `folder_inbox_gate_engineering_v2`, `folder_inbox_gate_safety_v2`, and
   `folder_inbox_gate_release_v3`; the safety blocker about public
   `source_file_token` exposure was fixed and re-reviewed.
+- Backend-specific Wiki MCP publish adapter focused tests: 4 tests OK.
+- Database-backed same-interface ingestion workflow focused tests: 3 tests OK.
+- Ingestion package export regression after store protocol exports: 1 test OK.
+- Project/Wiki JSON-RPC regression after Wiki publish adapter change:
+  4 tests OK.
+- Closed-beta smoke script regression after remaining slices: 14 tests OK.
+- Closed-beta smoke CLI after remaining slices:
+  `python scripts/closed_beta_smoke.py --output /tmp/formowl-closed-beta-smoke.json`
+  exited 0 in the dev container.
+- Ruff check and format-check for `python`, `tests`, and `scripts`: passed.
+- Full canonical dev-container suite after remaining backbone slices:
+  352 tests OK.
+- Remaining backbone slices 3-reviewer gate: passed 3/3 with
+  `remaining_slices_engineering_reviewer`,
+  `remaining_slices_safety_reviewer`, and
+  `remaining_slices_release_reviewer`; no blocking findings remained.
 
 ## Known Blockers And Dependencies
 
@@ -235,19 +284,15 @@ Latest verification:
 
 ## Last Verified Commit And Branch
 
-- Branch: `local-folder-ingestion-mvp`
-- Base remote commit: `d0942c5`
-- Canonical dev-container verification passed after the local folder inbox
-  slice.
+- Branch: `complete-remaining-backbone-slices`
+- Base remote commit: `e469a0e`
+- Canonical dev-container verification passed after the backend-specific Wiki
+  adapter and database-backed store same-interface workflow slices.
 
 ## Next Action
 
-Push the local folder inbox branch and open the main PR if not already done,
-then pick the next unchecked System Backbone work-board item that materially
-moves closed beta forward. The strongest next candidates are the
-backend-specific wiki adapter behind proposal-only publishing and the remaining
-database-backed store/live adapter evidence. Do not start the mail adapter /
-issue #5 work until the PM schedule assigns it.
+Push `complete-remaining-backbone-slices` and open the main PR when requested.
+Do not start the mail adapter / issue #5 work until the PM schedule assigns it.
 
 ## Handoff Notes For KG Research Agent
 
