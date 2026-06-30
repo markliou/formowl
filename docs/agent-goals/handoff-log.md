@@ -1435,3 +1435,12 @@ status in each role's goal file and task completion in
   `remaining_slices_engineering_reviewer`,
   `remaining_slices_safety_reviewer`, and
   `remaining_slices_release_reviewer`; no blocking findings remained.
+- 2026-06-30 Issue #5 mail adapter boundary checkpoint: by explicit user
+  assignment, the Mail Evidence Adapter scope was documented as an official
+  `ExtractorAdapter` boundary in `RESOURCE_EXTRACTION_SPEC.md`, with workflow
+  and README entry points. This completes only the OpenProject child item `828`
+  scope/contract alignment: mail parsing starts from governed `Asset` /
+  `IngestionJob` records and ends at versioned `ExtractorRun`, mail
+  `Observation`, and attachment asset outputs. It does not start or complete
+  the production PST/EML parser, normalized mail schema, retrieval/index flow,
+  candidate bridge, case-progress QA, or preflight readiness work.

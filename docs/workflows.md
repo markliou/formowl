@@ -236,6 +236,23 @@ These are not replacements for Docling, Tesseract, Whisper, FFmpeg, or
 PySceneDetect, nor are they a PST/EML parser. Later adapters can use those tools
 behind the same `ExtractorAdapter` boundary and write to the same stores.
 
+### FormOwl Mail Evidence Adapter Boundary
+
+The official mail adapter boundary is defined in
+`RESOURCE_EXTRACTION_SPEC.md#47-mail-and-pst-ingestion`. Mail parsing starts
+only after an upload, trusted folder scan, or controlled import has registered a
+mail source as an `Asset` and created an `IngestionJob`. A mail adapter writes
+`ExtractorRun` and `Observation` records through the normal stores; it does not
+watch mail folders directly, expose parser-local paths, create graph
+candidates, answer case-progress questions, publish wiki pages, or mutate
+canonical graph state.
+
+The JSON-backed `FixtureMailArchiveExtractor` is the current synthetic
+conformance baseline for that boundary. It is enough to prove deterministic
+archive/message/occurrence identity and raw-path non-exposure for fixtures. It
+is not the normalized mail schema, mail retrieval/index workflow, candidate
+bridge, case-progress QA workflow, or production parser readiness review.
+
 ## Candidate Graph Contracts
 
 The current candidate graph layer has contract models for `CandidateAtom`,
