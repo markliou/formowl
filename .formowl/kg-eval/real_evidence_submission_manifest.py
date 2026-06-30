@@ -157,6 +157,8 @@ HISTORICAL_EXPECTED_SUBMISSIONS = [
     ),
 ]
 CURRENT_REMAINING_GATE_IDS = {
+    "fair_external_baseline_comparison",
+    "annotation_adjudication_protocol",
     "multimodal_semantic_validation",
     "production_adapter_paths",
 }
@@ -172,6 +174,10 @@ class ManifestError(ValueError):
 
 def _json_text(payload: object) -> str:
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def _repo_relative_posix(path: Path) -> str:
+    return path.relative_to(ROOT).as_posix()
 
 
 def load_json_file(path: Path) -> dict[str, Any]:
@@ -238,19 +244,22 @@ def _safe_relative_path(value: object, field_name: str) -> tuple[Path | None, li
     blockers: list[str] = []
     if not isinstance(value, str) or not value.strip():
         return None, [f"{field_name} must be a non-empty string"]
-    if _forbidden_marker(value):
+    normalized_value = value.replace("\\", "/")
+    if re.match(r"^[A-Za-z]:[\\/]", value):
         blockers.append(f"{field_name} must be a safe repo-relative path")
-    raw_parts = tuple(value.split("/"))
+    if _forbidden_marker(normalized_value):
+        blockers.append(f"{field_name} must be a safe repo-relative path")
+    raw_parts = tuple(normalized_value.split("/"))
     if any(part in {"", ".", ".."} for part in raw_parts):
         blockers.append(f"{field_name} must not use empty or dot path segments")
-    path = Path(value)
+    path = Path(normalized_value)
     if path.is_absolute() or "." in path.parts or ".." in path.parts:
         blockers.append(f"{field_name} must not be absolute or use dot segments")
     if not path.parts:
         blockers.append(f"{field_name} must include a path")
     if _path_parts_are_test_or_template(path.parts):
         blockers.append(f"{field_name} must not use templates, results, test, or sandbox paths")
-    rel = str(path)
+    rel = path.as_posix()
     if rel in CANONICAL_INPUT_PACKETS:
         blockers.append(f"{field_name} must not target canonical input packets")
     resolved = (ROOT / path).resolve()
@@ -279,6 +288,10 @@ def _safe_work_packets_path(value: object, field_name: str) -> tuple[Path | None
     except ValueError:
         blockers.append(f"{field_name} escapes work_packets/")
     return path, blockers
+
+
+def _repo_relative_posix(path: Path) -> str:
+    return path.relative_to(ROOT).as_posix()
 
 
 def _existing_regular_file_blockers(path: Path, field_name: str) -> list[str]:
@@ -382,7 +395,7 @@ def _validate_submission(
     )
     blockers.extend(response_blockers)
     if response_path is not None:
-        if str(response_path) == expected.response_packet_for("OPERATOR_RUN_ID"):
+        if response_path.as_posix() == expected.response_packet_for("OPERATOR_RUN_ID"):
             blockers.append(f"{expected.gate_id}: response_packet placeholder was not replaced")
         if output_path is not None:
             if response_path.parent != output_path:
@@ -408,7 +421,7 @@ def _validate_submission(
     )
     blockers.extend(manifest_blockers)
     if manifest_path is not None:
-        if str(manifest_path) != expected.assembly_manifest_output:
+        if manifest_path.as_posix() != expected.assembly_manifest_output:
             blockers.append(f"{expected.gate_id}: assembly_manifest_output mismatch")
 
     if blockers:
@@ -420,17 +433,17 @@ def _validate_submission(
     command = (
         f"python3 {expected.intake_script} "
         f"--work-packet {expected.work_packet_path} "
-        f"--response-packet {response_path} "
-        f"--output-dir {output_path} "
-        f"--assembly-manifest-output {manifest_path}"
+        f"--response-packet {response_path.as_posix()} "
+        f"--output-dir {output_path.as_posix()} "
+        f"--assembly-manifest-output {manifest_path.as_posix()}"
     )
     return {
         "gate_id": expected.gate_id,
         "operator_run_id": run_id,
-        "response_packet": str(response_path),
+        "response_packet": response_path.as_posix(),
         "response_packet_type": expected.response_packet_type,
-        "output_dir": str(output_path),
-        "assembly_manifest_output": str(manifest_path),
+        "output_dir": output_path.as_posix(),
+        "assembly_manifest_output": manifest_path.as_posix(),
         "intake_command": command,
         "writes_canonical_packet": False,
         "canonical_packet_not_written": expected.canonical_packet,
@@ -655,8 +668,8 @@ def build_intake_plan(
         )
     return {
         "artifact_id": "kg_real_evidence_candidate_intake_plan_v1",
-        "manifest": str(manifest_path.relative_to(ROOT)),
-        "plan_output": str(plan_output.relative_to(ROOT)) if plan_output else None,
+        "manifest": _repo_relative_posix(manifest_path),
+        "plan_output": _repo_relative_posix(plan_output) if plan_output else None,
         "valid_manifest": True,
         "authority": {
             "accepts_evidence": False,
@@ -871,7 +884,7 @@ def _path_surface(path: Path) -> dict[str, Any]:
 
 def _tree_snapshot(path: Path) -> dict[str, dict[str, Any]]:
     snapshot: dict[str, dict[str, Any]] = {
-        str(path.relative_to(ROOT)): _path_surface(path),
+        _repo_relative_posix(path): _path_surface(path),
     }
     try:
         path_stat = path.lstat()
@@ -880,7 +893,7 @@ def _tree_snapshot(path: Path) -> dict[str, dict[str, Any]]:
     if not stat.S_ISDIR(path_stat.st_mode) or stat.S_ISLNK(path_stat.st_mode):
         return snapshot
     for child in sorted(path.rglob("*")):
-        snapshot[str(child.relative_to(ROOT))] = _path_surface(child)
+        snapshot[_repo_relative_posix(child)] = _path_surface(child)
     return snapshot
 
 
@@ -900,7 +913,7 @@ def _response_preflight_output_snapshot(
             snapshot.update(_tree_snapshot(ROOT / output_dir))
         if isinstance(assembly_manifest_output, str):
             manifest_path = ROOT / assembly_manifest_output
-            snapshot[str(manifest_path.relative_to(ROOT))] = _path_surface(manifest_path)
+            snapshot[_repo_relative_posix(manifest_path)] = _path_surface(manifest_path)
     return snapshot
 
 
@@ -916,9 +929,7 @@ def _response_preflight_output_integrity(
             except OSError:
                 continue
             if stat.S_ISDIR(output_stat.st_mode) and not stat.S_ISLNK(output_stat.st_mode):
-                tracked_paths.update(
-                    str(child.relative_to(ROOT)) for child in output_dir.rglob("*")
-                )
+                tracked_paths.update(_repo_relative_posix(child) for child in output_dir.rglob("*"))
     changed_surfaces: list[dict[str, Any]] = []
     for rel_path in sorted(tracked_paths):
         before_surface = before.get(
@@ -984,7 +995,7 @@ def preflight_operator_responses(
     if not canonical_baseline["passed"]:
         return {
             "artifact_id": "kg_real_evidence_response_preflight_execution_v1",
-            "manifest": str(manifest_path.relative_to(ROOT)),
+            "manifest": _repo_relative_posix(manifest_path),
             "valid_manifest": True,
             "overall_success": False,
             "stopped_after_failure": True,
@@ -1076,7 +1087,7 @@ def preflight_operator_responses(
     final_output_integrity = _response_preflight_output_integrity(output_snapshot)
     return {
         "artifact_id": "kg_real_evidence_response_preflight_execution_v1",
-        "manifest": str(manifest_path.relative_to(ROOT)),
+        "manifest": _repo_relative_posix(manifest_path),
         "valid_manifest": True,
         "overall_success": overall_success,
         "stopped_after_failure": not overall_success,
@@ -1124,7 +1135,7 @@ def execute_candidate_intakes(
     if not canonical_baseline["passed"]:
         return {
             "artifact_id": "kg_real_evidence_candidate_intake_execution_v1",
-            "manifest": str(manifest_path.relative_to(ROOT)),
+            "manifest": _repo_relative_posix(manifest_path),
             "valid_manifest": True,
             "overall_success": False,
             "stopped_after_failure": True,
@@ -1199,7 +1210,7 @@ def execute_candidate_intakes(
     final_canonical_integrity = _canonical_packet_integrity(canonical_snapshot)
     return {
         "artifact_id": "kg_real_evidence_candidate_intake_execution_v1",
-        "manifest": str(manifest_path.relative_to(ROOT)),
+        "manifest": _repo_relative_posix(manifest_path),
         "valid_manifest": True,
         "overall_success": overall_success,
         "stopped_after_failure": not overall_success,
@@ -1239,7 +1250,7 @@ def _candidate_manifest_blockers(expected: ExpectedSubmission) -> list[str]:
     path, blockers = _safe_work_packets_path(expected.assembly_manifest_output, field_name)
     if path is None:
         return blockers
-    if str(path) != expected.assembly_manifest_output:
+    if path.as_posix() != expected.assembly_manifest_output:
         blockers.append(f"{field_name} path mismatch")
     if not path.name.endswith("_candidate_manifest.json"):
         blockers.append(f"{field_name} must use generated candidate-manifest naming")
@@ -1292,7 +1303,7 @@ def build_candidate_validation_plan(
         )
     return {
         "artifact_id": "kg_real_evidence_candidate_manifest_validation_plan_v1",
-        "manifest": str(manifest_path.relative_to(ROOT)),
+        "manifest": _repo_relative_posix(manifest_path),
         "valid_manifest": True,
         "authority": {
             "accepts_evidence": False,
@@ -1318,7 +1329,7 @@ def validate_candidate_manifests(
     if not canonical_baseline["passed"]:
         return {
             "artifact_id": "kg_real_evidence_candidate_manifest_validation_v1",
-            "manifest": str(manifest_path.relative_to(ROOT)),
+            "manifest": _repo_relative_posix(manifest_path),
             "valid_manifest": True,
             "overall_success": False,
             "candidate_manifest_preflight_passed": False,
@@ -1351,7 +1362,7 @@ def validate_candidate_manifests(
     if blockers:
         return {
             "artifact_id": "kg_real_evidence_candidate_manifest_validation_v1",
-            "manifest": str(manifest_path.relative_to(ROOT)),
+            "manifest": _repo_relative_posix(manifest_path),
             "valid_manifest": True,
             "overall_success": False,
             "candidate_manifest_preflight_passed": False,
@@ -1420,7 +1431,7 @@ def validate_candidate_manifests(
     final_canonical_integrity = _canonical_packet_integrity(canonical_snapshot)
     return {
         "artifact_id": "kg_real_evidence_candidate_manifest_validation_v1",
-        "manifest": str(manifest_path.relative_to(ROOT)),
+        "manifest": _repo_relative_posix(manifest_path),
         "valid_manifest": True,
         "overall_success": overall_success,
         "candidate_manifest_preflight_passed": True,
@@ -1453,9 +1464,10 @@ def validate_candidate_manifests(
 def safe_template_output(path_value: str) -> Path:
     if not isinstance(path_value, str) or not path_value.strip():
         raise ManifestError("template output must be a non-empty string")
-    if _forbidden_marker(path_value):
+    normalized_value = path_value.replace("\\", "/")
+    if re.match(r"^[A-Za-z]:[\\/]", path_value) or _forbidden_marker(normalized_value):
         raise ManifestError("template output must be a safe repo-relative path")
-    path = Path(path_value)
+    path = Path(normalized_value)
     if path.is_absolute() or "." in path.parts or ".." in path.parts:
         raise ManifestError("template output must not be absolute or use dot segments")
     if not path.parts or path.parts[0] != "work_packets":
@@ -1553,7 +1565,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--template-output",
-        default=str(DEFAULT_TEMPLATE_OUTPUT.relative_to(ROOT)),
+        default=_repo_relative_posix(DEFAULT_TEMPLATE_OUTPUT),
         help="tracked submission manifest template output path",
     )
     parser.add_argument(

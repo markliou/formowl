@@ -70,6 +70,8 @@ def load_json(path: Path) -> dict:
 
 
 BLOCKED_GATE_IDS = [
+    "fair_external_baseline_comparison",
+    "annotation_adjudication_protocol",
     "multimodal_semantic_validation",
     "production_adapter_paths",
 ]
@@ -291,10 +293,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         self.assertFalse(any("--promote" in value for value in strings))
         self.assertEqual(
             report["summary"]["work_order_gate_ids"],
-            [
-                "multimodal_semantic_validation",
-                "production_adapter_paths",
-            ],
+            BLOCKED_GATE_IDS,
         )
         self.assertEqual(
             report["summary"]["work_order_gate_ids"],
@@ -363,18 +362,18 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
                     preflight_row["real_root_scan"]["disappeared_file_count"],
                 )
 
-    def test_current_baseline_has_no_remaining_work_orders(self) -> None:
+    def test_current_baseline_has_remaining_work_orders_for_all_blocked_gates(self) -> None:
         report = work_orders.build_report()
 
         self.assertEqual(
-            report["work_order_state"], "no_remaining_work_orders_all_broad_gates_clear"
+            report["work_order_state"], "collection_blocked_until_real_evidence_exists"
         )
-        self.assertEqual(report["summary"]["work_order_count"], 0)
-        self.assertEqual(report["summary"]["work_order_gate_ids"], [])
-        self.assertEqual(report["summary"]["preflight_blocked_gate_ids"], [])
+        self.assertEqual(report["summary"]["work_order_count"], 4)
+        self.assertEqual(report["summary"]["work_order_gate_ids"], BLOCKED_GATE_IDS)
+        self.assertEqual(report["summary"]["preflight_blocked_gate_ids"], BLOCKED_GATE_IDS)
         self.assertEqual(report["sync"]["status"], "synchronized")
-        self.assertTrue(report["sync"]["normal_work_orders_withheld"])
-        self.assertEqual(report["work_orders"], [])
+        self.assertFalse(report["sync"]["normal_work_orders_withheld"])
+        self.assertEqual([row["gate_id"] for row in report["work_orders"]], BLOCKED_GATE_IDS)
 
     def test_blocked_fixture_visibly_remains_missing_real_evidence(self) -> None:
         report = self._blocked_report()
@@ -556,14 +555,9 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             preflight_report_override=blocked_preflight(),
         )
 
-        self.assertNotIn(
-            "fair_external_baseline_comparison",
-            report["summary"]["work_order_gate_ids"],
-        )
-        self.assertNotIn(
-            "annotation_adjudication_protocol",
-            report["summary"]["work_order_gate_ids"],
-        )
+        self.assertEqual(report["summary"]["work_order_gate_ids"], BLOCKED_GATE_IDS)
+        self.assertIn("fair_external_baseline_comparison", report["summary"]["work_order_gate_ids"])
+        self.assertIn("annotation_adjudication_protocol", report["summary"]["work_order_gate_ids"])
 
         enterprise = self._order(report, "multimodal_semantic_validation")
         enterprise_checklist = checklist_by_gate["multimodal_semantic_validation"]
@@ -853,10 +847,10 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
         finally:
             work_orders.RESPONSE_INTAKE_MANIFEST_OUTPUTS = original
 
-    def test_clear_fair_gate_has_no_remaining_work_order(self) -> None:
+    def test_blocked_fixture_includes_fair_and_annotation_work_orders(self) -> None:
         report = self._blocked_report()
 
-        self.assertNotIn(
+        self.assertIn(
             "fair_external_baseline_comparison",
             {row["gate_id"] for row in report["work_orders"]},
         )
@@ -864,7 +858,7 @@ class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
             "fair_external_baseline_comparison",
             report["sync"]["historical_monitored_gate_ids"],
         )
-        self.assertNotIn(
+        self.assertIn(
             "annotation_adjudication_protocol",
             {row["gate_id"] for row in report["work_orders"]},
         )

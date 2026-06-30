@@ -216,7 +216,10 @@ The locked adapter stack smoke is useful boundary evidence. It does not claim:
 ## Broad Real-Evidence Acceptance
 
 The stricter broad KG real-evidence harness under `.formowl/kg-eval` currently
-reports 12/12 broad gates passed:
+reports blocked broad authority: 8 gates passed, 4 gates failed, and no broad
+completion claim is supported.
+
+Current passed gates:
 
 - `external_recent_literature_baseline_protocol`
 - `fair_baseline_config_artifact_content_binding`
@@ -225,24 +228,29 @@ reports 12/12 broad gates passed:
 - `annotation_protocol_controls_recovery`
 - `multimodal_enterprise_controls_recovery`
 - `production_adapter_controls_recovery`
+- `overclaim_guard`
+
+Current failed real-evidence gates:
+
 - `fair_external_baseline_comparison`
 - `annotation_adjudication_protocol`
 - `multimodal_semantic_validation`
 - `production_adapter_paths`
-- `overclaim_guard`
 
 The authority hashes are:
 
 - gate status:
-  `9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba`
+  `596eef5f887952b4e4666f7e6b970a9199d8d3148a630cd4491ac53f0faeca1a`
 - objective audit:
-  `b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d`
+  `86d550fd05bfb1ab1b453e805bcfe56827a476da43186bb32e962a0b41275039`
 
-This completion is scoped to broad KG real-evidence acceptance. It does not
-claim top-tier scientific validation, full product production readiness, raw
-asset access, canonical graph writes, autonomous business judgment, or
-enterprise-scale latency/scalability. The main repo deterministic method suite
-therefore still uses `passed_with_explicit_limits` for product-level limits.
+Current status tools report `overall_passed=false`,
+`objective_complete=false`, `preflight_state=blocked`, four remaining work
+orders, and four progress rows at `missing_operator_response`. This blocked
+state does not claim top-tier scientific validation, full product production
+readiness, raw asset access, canonical graph writes, autonomous business
+judgment, or enterprise-scale latency/scalability. The main repo deterministic
+method suite still uses `passed_with_explicit_limits` for product-level limits.
 
 ## Metrics, Ablations, And Error Analysis
 

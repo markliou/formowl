@@ -1111,45 +1111,49 @@ These groups can be split across multiple agents after Slice 1 is stable.
     focused ontology tests ran 4 OK, and full dev-container unittest ran
     246 tests OK.
 
-- [x] Complete the full KG real-evidence objective across sessions.
+- [ ] Complete the full KG real-evidence objective across sessions.
   - Owner paths: `docs/agent-goals/`, `.formowl/kg-eval/`, KG-owned graph,
     ontology, evaluation, and test files.
-  - Proof: `.formowl/kg-eval/results/kg_total_acceptance_snapshot.json`
-    reports `overall_passed=true`, 12 passed gates, and 0 failed gates;
-    `.formowl/kg-eval/remaining_evidence_checklist.json` reports
+  - Proof required before checking this item: `.formowl/kg-eval/results/kg_total_acceptance_snapshot.json`
+    must report `overall_passed=true`, 12 passed gates, and 0 failed gates;
+    `.formowl/kg-eval/remaining_evidence_checklist.json` must report
     `remaining_gates=[]`; `.formowl/kg-eval/results/kg_objective_completion_audit.json`
-    reports `objective_complete=true` with 9 proved requirements and 0
+    must report `objective_complete=true` with 9 proved requirements and 0
     incomplete requirements; canonical dev-container KG-eval and main-repo
-    tests pass; broad preflight/work-order/progress reports show no remaining
-    broad real-evidence work; and the four-professional-specialist LLM subagent
-    adjudication route is bound into the accepted evidence where Plan B is used.
+    tests must pass; broad preflight/work-order/progress reports must show no
+    remaining broad real-evidence work; and the four-professional-specialist
+    LLM subagent adjudication route must be bound into the accepted evidence
+    where Plan B is used.
     Main-repo `scripts/kg_research_acceptance_suite.py --strict` still exits 1
     for the intentionally unclaimed product-level limits
     `production_adapter_readiness` and `latency_scalability_enterprise_claims`;
     that strict product boundary is not part of this broad KG real-evidence
     completion claim.
-  - Current failed broad gates: none.
-  - Current cleared broad gates:
+  - Current failed broad gates:
     `fair_external_baseline_comparison`, `annotation_adjudication_protocol`,
-    `multimodal_semantic_validation`, and `production_adapter_paths` all have
-    accepted canonical packets, validator-clear status, and four-specialist LLM
-    subagent approval where Plan B adjudication is used. The annotation route
-    does not claim completed human annotation.
-  - 2026-06-28 broad KG real-evidence completion sync:
-    Broad KG-eval is now `overall_passed=true` with 12 passed gates and 0
-    failed gates. `remaining_evidence_checklist.json` has
-    `overall_passed=true`, `passed_gate_count=12`, `failed_gate_count=0`, and
-    `remaining_gates=[]`. Current hashes: gate status
-    `9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba`,
-    objective audit
+    `multimodal_semantic_validation`, and `production_adapter_paths`.
+  - 2026-06-30 #13 authority correction:
+    Regenerated current KG-eval authority is blocked, not complete:
+    `overall_passed=false`, `passed_gate_count=8`, `failed_gate_count=4`,
+    `objective_complete=false`, 5 proved requirements, and 4 incomplete
+    requirements. `remaining_evidence_checklist.json` is synchronized to this
+    stricter blocked state with gate status hash
+    `596eef5f887952b4e4666f7e6b970a9199d8d3148a630cd4491ac53f0faeca1a` and
+    objective audit hash
+    `86d550fd05bfb1ab1b453e805bcfe56827a476da43186bb32e962a0b41275039`.
+    `formowl_kg_eval summary` now exposes `authority_state` and supports the
+    broad completion claim only when total, objective, preflight, work-order,
+    progress, and checklist reports are all passing and synchronized. Current
+    work orders and gate progress show four gates at
+    `missing_operator_response`; no completion claim is supported.
+  - 2026-06-28 broad KG real-evidence completion sync, retracted 2026-06-30:
+    This historical note previously recorded a local `overall_passed=true`
+    12/12 state with hashes
+    `9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba` and
     `b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d`.
-    `real_evidence_preflight.py` reports
-    `preflight_state=validator_clear_for_all_broad_gates`; work orders report
-    `work_order_count=0`; gate progress reports `gate_count=0`. Claim boundary:
-    this closes KG broad real-evidence acceptance only, not full product
-    production readiness, top-tier scientific validation, raw asset access,
-    canonical graph writes, autonomous business judgment, or enterprise-scale
-    latency/scalability.
+    Treat that note as stale and superseded by the 2026-06-30 #13 authority
+    correction above. It is not current authority and does not support a broad
+    completion claim.
   - 2026-06-29 package facade handoff:
     added the `formowl_kg_eval` package and `formowl-kg-eval` CLI as the stable
     integration facade over the `.formowl/kg-eval` research harness. The System
@@ -1160,15 +1164,17 @@ These groups can be split across multiple agents after Slice 1 is stable.
     workspace resolution, authoritative script invocation, redacted summary
     shape, and CLI JSON output.
   - 2026-06-28 annotation-promotion status sync:
-    Broad KG-eval is now `overall_passed=false` with 10 passed gates and 2
-    failed gates. The remaining failed gates are
-    `multimodal_semantic_validation` and `production_adapter_paths`; both are
+    At that checkpoint, broad KG-eval was recorded as
+    `overall_passed=false` with 10 passed gates and 2 failed gates. The
+    remaining failed gates were
+    `multimodal_semantic_validation` and `production_adapter_paths`; both were
     still at `missing_operator_response`, with empty real roots and absent
     canonical packets. The objective audit is still incomplete with 7 proved
     requirements and 2 incomplete requirements. Do not mark this work-board
     item complete until both remaining gates have accepted canonical packets
-    and strict acceptance passes. This note is superseded by the 12/12 broad KG
-    real-evidence completion sync above.
+    and strict acceptance passes. This note is also superseded by the
+    2026-06-30 #13 authority correction above, which restores the current
+    blocked four-gate state.
   - 2026-06-28 earlier status-tool drift fix:
     KG-eval preflight, work orders, gate progress, and dependent tests now use
     the non-cleared failed gate set for remaining work while still monitoring
@@ -1177,7 +1183,7 @@ These groups can be split across multiple agents after Slice 1 is stable.
     252 OK, refreshed broad reports, guide/template/progress checks, and full
     Ruff check/format-check. At that checkpoint broad KG-eval was
     `overall_passed=false`, 9 passed gates, and 3 failed gates; this is
-    superseded by the 10/12 annotation-promotion status sync above.
+    historical and superseded by the 2026-06-30 #13 authority correction above.
   - 2026-06-28 operator response-packet preflight note:
     the four candidate-only response-intake CLIs now support
     `--preflight-response`, and the submission-manifest intake plan, work

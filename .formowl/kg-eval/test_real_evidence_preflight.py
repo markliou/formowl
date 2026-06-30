@@ -18,6 +18,12 @@ import test_enterprise_multimodal_validation_validator as enterprise_fixtures
 
 
 CANONICAL_PACKETS = [gate["input_packet"] for gate in preflight.EXPECTED_GATES.values()]
+CURRENT_BLOCKED_GATE_IDS = [
+    "fair_external_baseline_comparison",
+    "annotation_adjudication_protocol",
+    "multimodal_semantic_validation",
+    "production_adapter_paths",
+]
 
 
 def remove_packet_path(path: Path) -> None:
@@ -137,34 +143,21 @@ class RealEvidencePreflightTest(unittest.TestCase):
                 stack.enter_context(patcher)
             yield
 
-    def test_current_packets_keep_preflight_all_clear_and_match_total_snapshot(
+    def test_current_packets_keep_preflight_blocked_and_match_total_snapshot(
         self,
     ) -> None:
         report = preflight.build_report()
 
-        self.assertEqual(report["preflight_state"], "validator_clear_for_all_broad_gates")
+        self.assertEqual(report["preflight_state"], "blocked")
         self.assertFalse(report["preflight_authority"]["accepts_evidence"])
         self.assertFalse(report["preflight_authority"]["promotes_evidence"])
-        self.assertEqual(report["summary"]["validator_clear_gate_count"], 4)
-        self.assertEqual(
-            report["summary"]["validator_clear_gate_ids"],
-            [
-                "fair_external_baseline_comparison",
-                "annotation_adjudication_protocol",
-                "multimodal_semantic_validation",
-                "production_adapter_paths",
-            ],
-        )
-        self.assertEqual(report["summary"]["blocked_gate_ids"], [])
+        self.assertEqual(report["summary"]["validator_clear_gate_count"], 0)
+        self.assertEqual(report["summary"]["validator_clear_gate_ids"], [])
+        self.assertEqual(report["summary"]["blocked_gate_ids"], CURRENT_BLOCKED_GATE_IDS)
         self.assertEqual(report["checklist_sync"]["status"], "synchronized")
         self.assertEqual(
             report["checklist_sync"]["historical_monitored_gate_ids"],
-            [
-                "fair_external_baseline_comparison",
-                "annotation_adjudication_protocol",
-                "multimodal_semantic_validation",
-                "production_adapter_paths",
-            ],
+            CURRENT_BLOCKED_GATE_IDS,
         )
         self.assertEqual(
             report["checklist_sync"]["current_expected_gate_ids"],
@@ -178,22 +171,22 @@ class RealEvidencePreflightTest(unittest.TestCase):
         self.assertNotIn("claim_boundary", report)
         self.assertFalse(any(key.startswith("supports_") for key in nested_keys(report)))
         fair_row = self._gate(report, "fair_external_baseline_comparison")
-        self.assertEqual(fair_row["validator_status"], "clear")
-        self.assertTrue(fair_row["packet_surface"]["present"])
-        self.assertEqual(fair_row["packet_surface"]["packet_state"], "validator_clear")
-        self.assertEqual(fair_row["collection_state"], "canonical_packet_validator_clear")
+        self.assertEqual(fair_row["validator_status"], "blocked")
+        self.assertFalse(fair_row["packet_surface"]["present"])
+        self.assertEqual(fair_row["packet_surface"]["packet_state"], "missing")
+        self.assertEqual(fair_row["collection_state"], "missing_real_artifacts_and_packet")
         annotation_row = self._gate(report, "annotation_adjudication_protocol")
-        self.assertEqual(annotation_row["validator_status"], "clear")
-        self.assertTrue(annotation_row["packet_surface"]["present"])
-        self.assertEqual(annotation_row["packet_surface"]["packet_state"], "validator_clear")
-        self.assertEqual(annotation_row["collection_state"], "canonical_packet_validator_clear")
+        self.assertEqual(annotation_row["validator_status"], "blocked")
+        self.assertFalse(annotation_row["packet_surface"]["present"])
+        self.assertEqual(annotation_row["packet_surface"]["packet_state"], "missing")
+        self.assertEqual(annotation_row["collection_state"], "missing_real_artifacts_and_packet")
         for row in report["gates"]:
-            self.assertEqual(row["validator_status"], "clear")
-            self.assertTrue(row["packet_surface"]["present"])
-            self.assertEqual(row["packet_surface"]["packet_state"], "validator_clear")
-            self.assertEqual(row["collection_state"], "canonical_packet_validator_clear")
-            self.assertEqual(row["validator_blockers"], [])
-            self.assertTrue(row["real_root_scan"]["root_ready"])
+            self.assertEqual(row["validator_status"], "blocked")
+            self.assertFalse(row["packet_surface"]["present"])
+            self.assertEqual(row["packet_surface"]["packet_state"], "missing")
+            self.assertEqual(row["collection_state"], "missing_real_artifacts_and_packet")
+            self.assertTrue(row["validator_blockers"])
+            self.assertFalse(row["real_root_scan"]["root_ready"])
 
     def test_preflight_fails_closed_when_mocked_validators_would_clear_templates(self) -> None:
         fake_report = {"passed": True, "blockers": [], "metrics": {}, "packet_sha256": "a" * 64}
@@ -214,7 +207,7 @@ class RealEvidencePreflightTest(unittest.TestCase):
         self.assertEqual(report["preflight_state"], "blocked")
         self.assertEqual(report["summary"]["broad_validator_status"], "clear")
         self.assertEqual(report["summary"]["template_guard_status"], "blocked")
-        self.assertEqual(report["summary"]["canonical_collection_status"], "clear")
+        self.assertEqual(report["summary"]["canonical_collection_status"], "blocked")
         self.assertFalse(any(key.startswith("supports_") for key in nested_keys(report)))
 
     def test_templates_are_reported_as_non_evidence_and_rejected_by_validators(self) -> None:
@@ -311,7 +304,7 @@ class RealEvidencePreflightTest(unittest.TestCase):
         )
         self.assertIn(
             "inputs/enterprise_multimodal_real/release_artifacts/manifest.json",
-            row["real_root_scan"]["candidate_artifact_paths"],
+            [path.replace("\\", "/") for path in row["real_root_scan"]["candidate_artifact_paths"]],
         )
         self.assertFalse(row["real_root_scan"]["root_ready"])
         self.assertFalse(report["summary"]["no_packet_or_artifact_hazards"])
@@ -356,7 +349,7 @@ class RealEvidencePreflightTest(unittest.TestCase):
             baseline["disappeared_file_count"] + 1,
         )
         self.assertEqual(
-            row["real_root_scan"]["disappeared_file_paths"],
+            [path.replace("\\", "/") for path in row["real_root_scan"]["disappeared_file_paths"]],
             ["inputs/enterprise_multimodal_real/release_artifacts/manifest.json"],
         )
         self.assertFalse(row["real_root_scan"]["root_ready"])
@@ -400,7 +393,7 @@ class RealEvidencePreflightTest(unittest.TestCase):
             baseline["disappeared_file_count"] + 1,
         )
         self.assertEqual(
-            row["real_root_scan"]["disappeared_file_paths"],
+            [path.replace("\\", "/") for path in row["real_root_scan"]["disappeared_file_paths"]],
             ["inputs/enterprise_multimodal_real/release_artifacts/manifest.json"],
         )
         self.assertFalse(row["real_root_scan"]["root_ready"])
@@ -669,7 +662,7 @@ class RealEvidencePreflightTest(unittest.TestCase):
             report["checklist_sync"]["checklist_objective_audit_sha256_matches_current"]
         )
         self.assertFalse(report["checklist_sync"]["checklist_source_snapshot_path_matches"])
-        self.assertEqual(report["summary"]["blocked_gate_ids"], [])
+        self.assertEqual(report["summary"]["blocked_gate_ids"], CURRENT_BLOCKED_GATE_IDS)
 
     def test_main_writes_preflight_result_without_mutating_acceptance_snapshot(self) -> None:
         snapshot_path = preflight.RESULTS / "kg_total_acceptance_snapshot.json"
@@ -680,8 +673,9 @@ class RealEvidencePreflightTest(unittest.TestCase):
 
         self.assertEqual(snapshot_path.read_bytes(), before_snapshot)
         self.assertEqual(output["artifact_id"], "kg_real_evidence_preflight_v1")
-        self.assertEqual(output["preflight_state"], "validator_clear_for_all_broad_gates")
-        self.assertEqual(output["summary"]["blocked_gate_count"], 0)
+        self.assertEqual(output["preflight_state"], "blocked")
+        self.assertEqual(output["summary"]["blocked_gate_count"], 4)
+        self.assertEqual(output["summary"]["blocked_gate_ids"], CURRENT_BLOCKED_GATE_IDS)
 
 
 if __name__ == "__main__":

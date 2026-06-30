@@ -4,6 +4,29 @@ Use this log for short cross-session and cross-machine notes. Keep detailed
 status in each role's goal file and task completion in
 `docs/implementation-task-breakdown.md`.
 
+## 2026-06-30
+
+- #13 code-review follow-up on branch `complete-remaining-backbone-slices`:
+  current KG-eval authority was corrected back to blocked 8/12 with failed
+  gates `fair_external_baseline_comparison`,
+  `annotation_adjudication_protocol`, `multimodal_semantic_validation`, and
+  `production_adapter_paths`. `formowl_kg_eval summary` now fails closed with
+  `authority_state.state=blocked`, `consistent=true`, and
+  `completion_claim_supported=false`; stale 9/12, 10/12, and 12/12 notes are
+  marked historical/superseded. Legacy JSON-line Project/Wiki MCP console
+  scripts were renamed to explicit `*-jsonline-compat` entry points, and the
+  contract primitive hash/id/serialization helpers were split from
+  `formowl_contract.models` into `formowl_contract.primitives` while preserving
+  existing imports. Ignored `.test-tmp/` and interrupted KG-eval real-root test
+  artifacts were removed after verification. Dev-container verification
+  passed: focused #13 KG-eval unittest 132 OK, full main repo unittest 353 OK,
+  package summary reported blocked/consistent with four work orders and four
+  progress gates, refreshed broad reports were synchronized, gate progress
+  `--check` returned `up_to_date=true`, and Ruff check/format-check passed.
+  Full KG-eval unittest discovery was attempted twice but exceeded 10 and 15
+  minute timeouts; the timed-out container was stopped and its ignored test
+  artifacts were cleaned.
+
 ## 2026-06-29
 
 - Public enterprise 50,000-pair BGE benchmark and ontology-guidance ablation
@@ -1173,8 +1196,9 @@ status in each role's goal file and task completion in
   production governance reviewers each returned `RELEASE_DECISION: AGREE` with
   no blocking findings. This does not change broad acceptance: KG-eval remains
   8/12 with four failed gates, all still `missing_operator_response`.
-- 2026-06-28 fair-baseline cleared and status-tool drift fix: at this
-  checkpoint broad KG-eval moved to 9/12, not 8/12.
+- 2026-06-28 fair-baseline cleared and status-tool drift fix, historical and
+  superseded by the 2026-06-30 #13 authority correction: at this checkpoint
+  broad KG-eval moved to 9/12, not 8/12.
   `fair_external_baseline_comparison` has
   public reproducible evidence, a validator-clear canonical packet, and
   four-specialist LLM subagent approval. Remaining failed gates are
@@ -1190,9 +1214,11 @@ status in each role's goal file and task completion in
   packets through `operator_private` or `public_reproducible` evidence mode for
   one of the remaining three gates, then run candidate intake, validate-only
   assembly, governance approval, approved promotion, per-gate validators, and
-  total acceptance. This is superseded by the 10/12 annotation-gate note below.
-- 2026-06-28 annotation gate cleared and remaining-gate contraction: current
-  broad KG-eval is now 10/12. `annotation_adjudication_protocol` has an
+  total acceptance. This is no longer current authority; the 2026-06-30 #13
+  correction restores the current blocked state to 8/12 with four failed gates.
+- 2026-06-28 annotation gate cleared and remaining-gate contraction,
+  historical and superseded by the 2026-06-30 #13 authority correction: broad
+  KG-eval was recorded as 10/12 at that checkpoint. `annotation_adjudication_protocol` has an
   operator-private canonical packet at `inputs/human_annotation_results_v1.json`,
   validator-clear status, and four-specialist LLM subagent approval without
   claiming completed human annotation. Remaining failed gates are only
@@ -1202,33 +1228,19 @@ status in each role's goal file and task completion in
   absent canonical packets. Current hashes: gate status
   `7aaca410e3849053f895ec1cf7c03b5ced1b62cdad0e95030a56bfed42ac0468`,
   objective audit `d6282bc8529c2f4dbf82dbf41789419a54c72b695fd79ae3f3e87254dea86ce2`.
-  Next gate-changing work is to create or collect evidence for one of those two
-  gates and run the full response-preflight, candidate-intake, validate-only,
-  governance-approval, approved-promotion, validator, and total-acceptance
-  chain.
-- 2026-06-28 broad KG real-evidence completion: current local KG-eval authority
-  is now 12/12. `kg_total_acceptance_suite.py` reports `overall_passed=true`,
-  12 passed gates, and 0 failed gates. `remaining_evidence_checklist.json`
-  reports `remaining_gates=[]`, `passed_gate_count=12`, `failed_gate_count=0`,
-  gate status hash
-  `9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba`,
-  and objective audit hash
-  `b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d`.
-  `kg_objective_completion_audit.py` reports `objective_complete=true` with
-  9 proved requirements and 0 incomplete requirements. Preflight reports
-  `validator_clear_for_all_broad_gates`; work orders report
-  `work_order_count=0`; gate progress reports `gate_count=0`. The claim is
-  limited to broad KG real-evidence acceptance. It does not claim full product
-  production readiness, top-tier scientific validation, raw asset access,
-  canonical graph writes, autonomous business judgment, or enterprise-scale
-  latency/scalability. Main-repo strict KG method acceptance still exits 1 for
-  intentionally unclaimed product-level limits
-  `production_adapter_readiness` and `latency_scalability_enterprise_claims`.
-  Host KG-eval verification passed after test-state updates: full KG-eval
-  unittest 586 OK, focused remaining-assembly unittest 9 OK, and refreshed
-  total/objective/preflight/work-order/progress reports exited 0. Canonical
-  dev-container verification passed so far: full KG-eval unittest 586 OK and
-  main repo unittest 252 OK.
+  That 10/12 status is stale and supports no current completion claim. Current
+  gate-changing work must use the four failed gates listed in the 2026-06-30
+  #13 correction.
+- 2026-06-28 broad KG real-evidence completion, retracted 2026-06-30:
+  this historical entry previously recorded a local 12/12 state,
+  `overall_passed=true`, `passed_gate_count=12`, `failed_gate_count=0`, hashes
+  `9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba` and
+  `b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d`,
+  `validator_clear_for_all_broad_gates`, `work_order_count=0`, and
+  `gate_count=0`. Treat this entry as stale and superseded by the 2026-06-30
+  #13 authority correction: current KG-eval authority is blocked at 8/12 with
+  four failed gates. The historical 12/12 note is not current authority and
+  supports no broad completion claim.
 - 2026-06-29 KG eval package facade for system integration: added
   `python/formowl_kg_eval/` and the `formowl-kg-eval` console script as a thin
   packaged facade over `.formowl/kg-eval`. The stable downstream entry is

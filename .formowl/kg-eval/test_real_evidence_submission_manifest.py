@@ -20,6 +20,10 @@ TEMPLATE_PATH = submission_manifest.DEFAULT_TEMPLATE_OUTPUT
 EXPECTED_COUNT = len(submission_manifest.EXPECTED_SUBMISSIONS)
 
 
+def rel_posix(path: Path) -> str:
+    return path.relative_to(ROOT).as_posix()
+
+
 def write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -286,8 +290,8 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         )
 
         self.assertEqual(plan["artifact_id"], "kg_real_evidence_candidate_intake_plan_v1")
-        self.assertEqual(plan["manifest"], str(manifest_path.relative_to(ROOT)))
-        self.assertEqual(plan["plan_output"], str(plan_output.relative_to(ROOT)))
+        self.assertEqual(plan["manifest"], rel_posix(manifest_path))
+        self.assertEqual(plan["plan_output"], rel_posix(plan_output))
         self.assertFalse(plan["authority"]["writes_candidate_artifacts"])
         self.assertFalse(plan["authority"]["writes_canonical_packets"])
         self.assertEqual(len(plan["execution_plan"]), EXPECTED_COUNT)
@@ -475,7 +479,7 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
         changed_paths = {
             row["path"] for row in preflight["response_output_integrity"]["changed_surfaces"]
         }
-        self.assertIn(str(leaked_candidate.relative_to(ROOT)), changed_paths)
+        self.assertIn(rel_posix(leaked_candidate), changed_paths)
         self.assertEqual(preflight["preflight_results"][0]["status"], "failed")
 
     def test_preflight_operator_responses_fails_if_subprocess_changes_canonical_packet(
@@ -1973,7 +1977,10 @@ class RealEvidenceSubmissionManifestTest(unittest.TestCase):
             any("operator_run_id must not use test" in blocker for blocker in report["blockers"])
         )
         self.assertTrue(
-            any("output_dir must be exactly" in blocker for blocker in report["blockers"])
+            any(
+                "output_dir must be exactly" in blocker or "output_dir must live under" in blocker
+                for blocker in report["blockers"]
+            )
         )
 
     def test_manifest_rejects_canonical_and_raw_response_packet_paths(self) -> None:

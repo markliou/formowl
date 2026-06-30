@@ -13,10 +13,11 @@ to import repo-local scripts directly.
 - Reading persisted broad acceptance reports.
 - Producing a redacted summary for downstream integration.
 - Preserving the research claim boundary:
-  broad KG real-evidence acceptance may be complete while full product
-  production readiness, top-tier scientific validation, raw asset access,
-  canonical graph writes, autonomous business judgment, and enterprise-scale
-  latency/scalability remain unclaimed.
+  broad KG real-evidence acceptance may be complete only when the authority
+  reports are synchronized and passing, while full product production
+  readiness, top-tier scientific validation, raw asset access, canonical graph
+  writes, autonomous business judgment, and enterprise-scale latency/scalability
+  remain unclaimed.
 
 ## What This Package Does Not Own
 
@@ -66,6 +67,7 @@ product integration.
 ```text
 artifact_id
 claim_boundary
+authority_state
 total_acceptance
 objective_audit
 remaining_evidence
@@ -78,7 +80,10 @@ integration_boundary
 ```
 
 The summary intentionally reports no raw workspace path. It points downstream
-systems to the stable authority workspace `.formowl/kg-eval`.
+systems to the stable authority workspace `.formowl/kg-eval`. The
+`authority_state` section fails closed: the broad completion claim is supported
+only when total acceptance, objective audit, preflight, work orders, progress,
+and the tracked checklist are all synchronized and passing.
 
 Use `benchmarks` when the integration only needs the BGE, lexical, and ontology
 ablation evidence:
@@ -194,7 +199,7 @@ validator modules:
 ```text
 System Backbone Agent
   -> formowl-kg-eval summary
-  -> reads claim_boundary and total_acceptance
+  -> reads authority_state, claim_boundary, and total_acceptance
   -> reads candidate_generation_capabilities for worker routing
   -> optionally reads kg_benchmark_results or formowl-kg-eval benchmarks
   -> decides whether product-level integration can proceed
@@ -208,20 +213,33 @@ graph write controls.
 
 ## Current Authority State
 
-The current local broad KG real-evidence state is 12/12:
+The current local broad KG real-evidence state is blocked at 8/12:
 
 ```text
-overall_passed=true
-passed_gate_count=12
-failed_gate_count=0
-remaining_gates=[]
+overall_passed=false
+passed_gate_count=8
+failed_gate_count=4
+remaining_gates=[
+  fair_external_baseline_comparison,
+  annotation_adjudication_protocol,
+  multimodal_semantic_validation,
+  production_adapter_paths
+]
 ```
 
 Current hashes:
 
 ```text
-gate_status_sha256=9e68c2a78681c86ff52f6ef25f20d3f6112183dcb681f137f6d349e7e4c96aba
-objective_audit_sha256=b37edc1a2cf5d9891557f91f669608204998d3a8112fa0a299e3a99d082bb44d
+gate_status_sha256=596eef5f887952b4e4666f7e6b970a9199d8d3148a630cd4491ac53f0faeca1a
+objective_audit_sha256=86d550fd05bfb1ab1b453e805bcfe56827a476da43186bb32e962a0b41275039
+```
+
+`formowl-kg-eval summary` currently reports:
+
+```text
+authority_state.state=blocked
+authority_state.consistent=true
+claim_boundary.supports_broad_kg_real_evidence_acceptance_claim=false
 ```
 
 ## Verification

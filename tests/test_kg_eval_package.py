@@ -111,9 +111,11 @@ class KGEvalPackageTests(unittest.TestCase):
                 results / "real_evidence_preflight.json",
                 {
                     "preflight_state": "validator_clear_for_all_broad_gates",
+                    "checklist_sync": {"status": "synchronized"},
                     "summary": {
                         "blocked_gate_count": 0,
                         "blocked_gate_ids": [],
+                        "checklist_sync_status": "synchronized",
                         "validator_clear_gate_ids": ["production_adapter_paths"],
                     },
                 },
@@ -139,6 +141,10 @@ class KGEvalPackageTests(unittest.TestCase):
                     "passed_gate_count": 12,
                     "failed_gate_count": 0,
                     "remaining_gates": [],
+                    "gate_status_sha256": "gatehash",
+                    "objective_audit_sha256": "audithash",
+                    "source_snapshot": "results/kg_total_acceptance_snapshot.json",
+                    "source_objective_audit": "results/kg_objective_completion_audit.json",
                 },
             )
             _write_minimal_benchmark_artifacts(repo_root)
@@ -146,6 +152,11 @@ class KGEvalPackageTests(unittest.TestCase):
             summary = build_acceptance_summary(repository_root=repo_root)
 
             rendered = json.dumps(summary, sort_keys=True)
+            self.assertEqual(summary["authority_state"]["state"], "clear")
+            self.assertTrue(summary["authority_state"]["consistent"])
+            self.assertTrue(
+                summary["claim_boundary"]["supports_broad_kg_real_evidence_acceptance_claim"]
+            )
             self.assertEqual(summary["total_acceptance"]["passed_gate_count"], 12)
             self.assertEqual(summary["work_orders"]["work_order_count"], 0)
             self.assertEqual(
@@ -176,6 +187,100 @@ class KGEvalPackageTests(unittest.TestCase):
             )
             self.assertNotIn(str(repo_root), rendered)
             self.assertNotIn("pair_result_sample", rendered)
+
+    def test_acceptance_summary_detects_stale_checklist_and_fails_closed(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            workspace = repo_root / ".formowl" / "kg-eval"
+            results = workspace / "results"
+            results.mkdir(parents=True)
+            failed_gate_ids = [
+                "fair_external_baseline_comparison",
+                "annotation_adjudication_protocol",
+                "multimodal_semantic_validation",
+                "production_adapter_paths",
+            ]
+            _write_json(
+                results / "kg_total_acceptance_snapshot.json",
+                {
+                    "summary": {
+                        "overall_passed": False,
+                        "passed_gate_count": 8,
+                        "failed_gate_count": 4,
+                        "failed_gate_ids": failed_gate_ids,
+                        "gate_status_sha256": "blocked-gatehash",
+                    }
+                },
+            )
+            _write_json(
+                results / "kg_objective_completion_audit.json",
+                {
+                    "objective_complete": False,
+                    "proved_requirement_count": 5,
+                    "incomplete_requirement_count": 4,
+                    "audit_sha256": "blocked-audithash",
+                },
+            )
+            _write_json(
+                results / "real_evidence_preflight.json",
+                {
+                    "preflight_state": "blocked",
+                    "checklist_sync": {"status": "drifted"},
+                    "summary": {
+                        "blocked_gate_count": 4,
+                        "blocked_gate_ids": failed_gate_ids,
+                        "checklist_sync_status": "drifted",
+                        "total_acceptance_state": "blocked",
+                    },
+                },
+            )
+            _write_json(
+                results / "real_evidence_collection_work_orders.json",
+                {
+                    "work_order_state": "withheld_due_to_checklist_or_preflight_drift",
+                    "sync": {"status": "drifted"},
+                    "summary": {"work_order_count": 0, "work_order_gate_ids": []},
+                },
+            )
+            _write_json(
+                results / "real_evidence_gate_progress.json",
+                {
+                    "source_report_contract": {"valid": False},
+                    "summary": {
+                        "gate_count": 0,
+                        "blocked_gate_ids": [],
+                        "total_acceptance_state": None,
+                    },
+                },
+            )
+            _write_json(
+                workspace / "remaining_evidence_checklist.json",
+                {
+                    "overall_passed": True,
+                    "passed_gate_count": 12,
+                    "failed_gate_count": 0,
+                    "remaining_gates": [],
+                    "gate_status_sha256": "stale-gatehash",
+                    "objective_audit_sha256": "stale-audithash",
+                    "source_snapshot": "results/kg_total_acceptance_snapshot.json",
+                    "source_objective_audit": "results/kg_objective_completion_audit.json",
+                },
+            )
+            _write_minimal_benchmark_artifacts(repo_root)
+
+            summary = build_acceptance_summary(repository_root=repo_root)
+
+            self.assertEqual(summary["authority_state"]["state"], "drifted")
+            self.assertFalse(summary["authority_state"]["consistent"])
+            self.assertFalse(
+                summary["claim_boundary"]["supports_broad_kg_real_evidence_acceptance_claim"]
+            )
+            self.assertTrue(summary["remaining_evidence"]["overall_passed"])
+            self.assertFalse(summary["total_acceptance"]["overall_passed"])
+            self.assertIn(
+                "checklist_remaining_gates_match_total_failed_gates",
+                summary["authority_state"]["blocking_reasons"],
+            )
 
     def test_benchmark_summary_redacts_pairs_and_exposes_chart_paths(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -248,7 +353,15 @@ def _write_minimal_reports(workspace: Path) -> None:
     results = workspace / "results"
     _write_json(
         results / "kg_total_acceptance_snapshot.json",
-        {"summary": {"overall_passed": True, "passed_gate_count": 12, "failed_gate_count": 0}},
+        {
+            "summary": {
+                "overall_passed": True,
+                "passed_gate_count": 12,
+                "failed_gate_count": 0,
+                "failed_gate_ids": [],
+                "gate_status_sha256": "gatehash",
+            }
+        },
     )
     _write_json(
         results / "kg_objective_completion_audit.json",
@@ -256,12 +369,49 @@ def _write_minimal_reports(workspace: Path) -> None:
             "objective_complete": True,
             "proved_requirement_count": 9,
             "incomplete_requirement_count": 0,
+            "audit_sha256": "audithash",
         },
     )
-    _write_json(results / "real_evidence_preflight.json", {"summary": {}})
-    _write_json(results / "real_evidence_collection_work_orders.json", {"summary": {}})
-    _write_json(results / "real_evidence_gate_progress.json", {"summary": {}})
-    _write_json(workspace / "remaining_evidence_checklist.json", {"remaining_gates": []})
+    _write_json(
+        results / "real_evidence_preflight.json",
+        {
+            "preflight_state": "validator_clear_for_all_broad_gates",
+            "checklist_sync": {"status": "synchronized"},
+            "summary": {
+                "blocked_gate_count": 0,
+                "blocked_gate_ids": [],
+                "checklist_sync_status": "synchronized",
+            },
+        },
+    )
+    _write_json(
+        results / "real_evidence_collection_work_orders.json",
+        {
+            "work_order_state": "no_remaining_work_orders_all_broad_gates_clear",
+            "sync": {"status": "synchronized"},
+            "summary": {"work_order_count": 0, "work_order_gate_ids": []},
+        },
+    )
+    _write_json(
+        results / "real_evidence_gate_progress.json",
+        {
+            "source_report_contract": {"valid": True},
+            "summary": {"gate_count": 0, "blocked_gate_ids": []},
+        },
+    )
+    _write_json(
+        workspace / "remaining_evidence_checklist.json",
+        {
+            "overall_passed": True,
+            "passed_gate_count": 12,
+            "failed_gate_count": 0,
+            "remaining_gates": [],
+            "gate_status_sha256": "gatehash",
+            "objective_audit_sha256": "audithash",
+            "source_snapshot": "results/kg_total_acceptance_snapshot.json",
+            "source_objective_audit": "results/kg_objective_completion_audit.json",
+        },
+    )
 
 
 def _write_minimal_benchmark_artifacts(repo_root: Path) -> None:
