@@ -181,7 +181,7 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - Wiki MCP with markdown draft generation, frontmatter provenance, draft storage, wiki snapshot capture, and proposal-only publishing.
 - Wiki MCP publish proposals route through a backend-specific adapter registry.
   The current OpenProject Wiki adapter prepares safe `upsert_wiki_page`
-  proposals with content hashes and revision ids while keeping automatic
+  proposals with content hashes and revision IDs while keeping automatic
   publishing disabled and omitting API URLs, credentials, raw paths, SQL, and
   other backend internals from public results.
 - Dockerfile-managed dev/runtime containers and `.devcontainer/devcontainer.json`.

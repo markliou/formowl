@@ -130,7 +130,7 @@ Wiki publishing targets are backend-specific, but normal users should still see
 reviewable wiki actions rather than backend controls. The current Wiki MCP
 routes `publish_wiki_page` through a publish adapter registry. The
 OpenProject Wiki adapter prepares a backend-specific `upsert_wiki_page`
-proposal with a safe target summary, content hashes, revision ids, and source
+proposal with a safe target summary, content hashes, revision IDs, and source
 references, but it does not write to OpenProject.
 
 Automatic publishing remains disabled by default. If a caller asks for

@@ -191,6 +191,10 @@ class WikiMcpTests(unittest.TestCase):
         self.assertEqual(publish["status"], "error")
         self.assertEqual(publish["data"]["error_code"], "invalid_publish_target")
         self.assertNotIn("postgresql://internal/wiki", str(publish))
+        self.assertIn(
+            "Wiki publish target was rejected before any publish side effect.",
+            publish["warnings"],
+        )
 
 
 if __name__ == "__main__":
