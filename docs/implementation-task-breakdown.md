@@ -254,6 +254,19 @@ These groups can be split across multiple agents after Slice 1 is stable.
   - Owner paths: `python/formowl_ingestion/extractors/mail/`
   - Proof: messages, attachments, occurrences, and archive identity remain
     distinct assets or observations.
+  - 2026-06-30 issue #5 synthetic mail phase completion: the JSON-backed
+    `FixtureMailArchiveExtractor` now emits normalized thread, header,
+    message, body segment, attachment occurrence, and folder occurrence
+    observations with `formowl_mail_fingerprint_v1` message fingerprints and
+    message occurrence ids. `python/formowl_mail/` adds local mail evidence
+    packs, deterministic mail search, candidate-only semantic/candidate graph
+    proposals, case-progress QA answers with observation citations, and a
+    synthetic-phase preflight readiness artifact. This closes issue #5 child
+    work packages `829`, `831`, `832`, `833`, `834`, and `835` for synthetic
+    fixtures only; real PST/OST/MSG/EML parser readiness remains explicitly
+    deferred. Canonical dev-container verification passed: focused mail tests
+    ran 15 OK; Ruff check/format-check passed; full
+    `python -m unittest discover -s tests` ran 355 OK.
 
 ### Semantic Metadata and Candidate Graph
 

@@ -36,10 +36,17 @@ class MailExtractionTests(unittest.TestCase):
             "messages": [
                 {
                     "message_id": "<msg-001@example.test>",
+                    "thread_id": "thread_launch",
                     "folder_path_hash": "sha256:folder-inbox",
                     "subject": "Launch checklist",
                     "sender": "pm@example.test",
                     "sent_at": "2026-06-17T10:00:00+00:00",
+                    "headers": {
+                        "Message-ID": "<msg-001@example.test>",
+                        "From": "pm@example.test",
+                        "Subject": "Launch checklist",
+                        "Date": "2026-06-17T10:00:00+00:00",
+                    },
                     "body": "Review source preservation.\n\nConfirm audit records.",
                     "body_hash": "sha256:body001",
                     "attachments": [
@@ -94,17 +101,33 @@ class MailExtractionTests(unittest.TestCase):
         self.assertEqual(stored.extractor_run.status, "succeeded")
         self.assertEqual(stored.extractor_run.extractor_type, "mail_archive")
         self.assertEqual(len(by_type["mail_folder_occurrence"]), 1)
+        self.assertEqual(len(by_type["email_thread"]), 1)
         self.assertEqual(len(by_type["email_message"]), 1)
+        self.assertEqual(len(by_type["email_header"]), 4)
         self.assertEqual(len(by_type["email_body_segment"]), 2)
         self.assertEqual(len(by_type["email_attachment_occurrence"]), 1)
 
+        thread = by_type["email_thread"][0]
         message = by_type["email_message"][0]
+        headers = by_type["email_header"]
         attachment = by_type["email_attachment_occurrence"][0]
+        self.assertEqual(thread.location["thread_id"], "thread_launch")
+        self.assertEqual(thread.payload["message_ids"], ["<msg-001@example.test>"])
         self.assertEqual(message.location["archive_id"], "archive_001")
         self.assertEqual(message.location["mailbox_id"], "mailbox_yifan")
         self.assertEqual(message.location["folder_path_hash"], "sha256:folder-inbox")
         self.assertEqual(message.location["message_id"], "<msg-001@example.test>")
+        self.assertEqual(message.location["thread_id"], "thread_launch")
+        self.assertEqual(message.payload["normalized_subject"], "launch checklist")
+        self.assertEqual(message.payload["fingerprint_policy"], "formowl_mail_fingerprint_v1")
+        self.assertIn("message_fingerprint", message.payload)
+        self.assertIn("message_occurrence_id", message.payload)
+        self.assertEqual(
+            {header.payload["header_name"] for header in headers},
+            {"date", "from", "message-id", "subject"},
+        )
         self.assertEqual(attachment.location["attachment_id"], "att_001")
+        self.assertEqual(attachment.location["thread_id"], "thread_launch")
         self.assertEqual(attachment.payload["content_hash"], "sha256:attachment001")
         self.assertEqual(attachment.payload["source_ref"], source_ref.to_dict())
         self.assertNotIn(str(source_path), json.dumps(attachment.to_dict(), sort_keys=True))

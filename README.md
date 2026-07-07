@@ -56,6 +56,13 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   `ExtractorRun` / `Observation` outputs, preserves occurrence identity, and
   does not create candidate graph, canonical graph, wiki, or case-progress QA
   outputs as a parsing side effect.
+- Synthetic `formowl-mail` workflow helpers in `formowl_mail`: JSON-backed mail
+  fixtures now emit thread, header, message, body, attachment, folder,
+  fingerprint, and occurrence observations; local mail evidence packs provide a
+  deterministic search index; mail evidence can become reviewable semantic
+  metadata and candidate graph proposals; case-progress answers cite mail
+  observations; and a preflight artifact marks synthetic readiness while
+  deferring production PST/OST/MSG/EML parser readiness.
 - Candidate graph contract models for `CandidateAtom`, `CandidateRelation`, and `ExternalGraphImport` proposal records.
 - Canonical graph contract models for `CanonicalAtom`, `CanonicalEntity`,
   `CanonicalRelation`, and `CanonicalGraphRevision`; canonical commit workflow

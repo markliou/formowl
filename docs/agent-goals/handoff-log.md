@@ -1444,3 +1444,19 @@ status in each role's goal file and task completion in
   `Observation`, and attachment asset outputs. It does not start or complete
   the production PST/EML parser, normalized mail schema, retrieval/index flow,
   candidate bridge, case-progress QA, or preflight readiness work.
+- 2026-06-30 Issue #5 synthetic mail phase completion: by explicit user
+  assignment, the remaining formowl-mail checklist items were completed for
+  synthetic JSON-backed fixtures. `FixtureMailArchiveExtractor` now emits
+  `email_thread`, `email_header`, fingerprinted `email_message`,
+  `email_body_segment`, `email_attachment_occurrence`, and
+  `mail_folder_occurrence` observations while preserving duplicate occurrence
+  ids. `python/formowl_mail/` adds mail evidence pack/search helpers,
+  candidate-only semantic/candidate proposal bridging, case-progress QA with
+  observation citations, and a preflight readiness artifact. Docs now include
+  the synthetic completion profile and `docs/mail-preflight-readiness.md`.
+  Verification passed in the canonical dev container: focused mail tests ran
+  15 OK, Ruff check/format-check passed, and full
+  `python -m unittest discover -s tests` ran 355 OK. Claim boundary: this
+  closes issue #5 child items `829`, `831`, `832`, `833`, `834`, and `835` for
+  synthetic fixtures only; real PST/OST/MSG/EML parser readiness and real
+  mailbox support remain deferred.
