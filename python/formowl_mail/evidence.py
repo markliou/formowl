@@ -190,8 +190,7 @@ def build_mail_evidence_pack(
     if not records:
         warnings.append("no_mail_evidence_records")
     query_index = {record.record_key: _query_terms(record) for record in records}
-    pack_id = stable_resource_contract_id(
-        "mailpack",
+    pack_id = _stable_mail_evidence_pack_id(
         "MailEvidencePack",
         {
             "source_observation_ids": source_observation_ids,
@@ -373,6 +372,15 @@ def _record_path(base_dir: Path, record_id: str) -> Path:
     if not isinstance(record_id, str) or not _SAFE_RECORD_ID.fullmatch(record_id):
         raise ValueError("mail_evidence_pack_id must be a safe file name")
     return base_dir / f"{record_id}.json"
+
+
+def _stable_mail_evidence_pack_id(contract_name: str, payload: Any) -> str:
+    pack_id = stable_resource_contract_id("mailpack", contract_name, payload)
+    if not _SAFE_RECORD_ID.fullmatch(pack_id):
+        raise ContractValidationError(
+            "mail_evidence_pack_id generator produced an unsafe file name"
+        )
+    return pack_id
 
 
 def _read_json(path: Path) -> dict[str, Any]:

@@ -167,6 +167,98 @@ These fixtures validate contract shape and provenance. They are not claims
 that production OCR, ASR, diarization, video understanding, or enterprise mail
 quality has been achieved.
 
+### Full-PST Mail KG Fusion Rescore Without BERT
+
+On 2026-07-07, the #21 hard-domain full-PST baseline was rescored through a
+non-BERT candidate-only KG fusion probe. The experiment reuses the preserved
+full-PST domain-hard work directory and private manifest from checkpoint S, so
+it does not reparse the PST and does not create new raw-mail artifacts. Public
+results remain hash/status/count/timing only.
+
+The tested graph method is intentionally narrow:
+
+- each email body observation is treated as a candidate graph node;
+- observations sharing a thread identifier are connected into candidate
+  components;
+- observations sharing bounded domain/conflict vocabulary terms are connected
+  when the term is not too common; and
+- hard-domain cases are rescored by whether the required evidence can be
+  reached from the ranked candidate components.
+
+This is not the full FormOwl ontology integration method. It does not use
+`TypeDefinition`, the closed core supertype lattice, scoped extension/promoted
+types, `TypeAlignmentCandidate`, ontology revision pins, BERT,
+SentenceTransformer, torch, transformers, canonical KG writes, user graph
+assembly, or wiki projection. It is best understood as a deterministic
+candidate-graph structure ablation over mail observations.
+
+The first preserved-workdir non-BERT KG run improved the domain-hard baseline
+from 20/100 to 30/100. Positive evidence retrieval improved to 20/80,
+permission-denied cases remained 10/10, and no-match near-miss cases remained
+0/10. The KG graph summary had 4,965 candidate nodes, 3,460 candidate
+relations, 1,505 components, largest component size 1,193, largest component
+share 2,402 basis points, zero oversized components, and 103 searchable terms.
+Host timing for the rescore path was 14,060 ms observation loading, 44 ms graph
+build, 83 ms scoring, and 14,360 ms total, compared with the baseline import
+bottleneck of 3,160,357 ms. The canonical dev-container bind-mount rerun
+preserved the same counts but took 190,596 ms total, dominated by 190,366 ms
+observation loading; KG build and scoring were only 28 ms and 60 ms.
+
+A follow-up ontology-guided ablation compared the same 100 case hashes across
+three arms: baseline retrieval, non-BERT candidate KG, and ontology-guided
+non-BERT candidate KG. The ontology arm uses FormOwl `TypeDefinition` and
+`TypeMapping` contracts, maps the ten business-function lenses into the closed
+core supertype lattice as `Concept`, records a hash-bound ontology revision,
+and uses type evidence as a candidate scoring/gating signal only.
+
+That ontology-guided arm did not improve quality. It scored 29/100, compared
+with 20/100 for baseline retrieval and 30/100 for the simpler candidate KG. It
+kept permission-denied probes at 10/10 and no-match probes at 0/10, but
+positive evidence retrieval fell from 20/80 in the pure KG arm to 19/80. The
+ontology summary had 10 type definitions, 10 type mappings, zero invalid
+mappings, 784 typed candidate nodes, 229 typed components, 1,571
+ontology-supported relations, 1,579 basis points type-evidence coverage, 4,181
+missing type-evidence nodes, and 412 conflicting type-evidence nodes.
+The canonical dev-container bind-mount run preserved the same counts and took
+190,695 ms total, with 190,371 ms observation loading, 70 ms KG/ontology build,
+and 127 ms scoring.
+
+The result is useful but still weak: candidate graph structure recovered 13
+cases that the baseline missed, but the ontology-guided variant recovered 12
+and lost one case that the simpler KG arm passed. This means the current
+ontology use is valid as a candidate-only ablation, but too shallow to improve
+hard mail evidence retrieval. The next research step should type observations
+more precisely than broad business-function lenses, test incompatible-core
+pruning on real false-positive components, and preserve ontology revision pins
+without writing canonical graph/type state.
+
+A second follow-up factorial experiment tested whether simply combining more
+deterministic ontology operators would fix the quality gap. The script
+`scripts/mail_full_pst_domain_hard_ontology_factorial_eval.py` evaluates every
+ordered subset of five non-neural operators in one shared-load run:
+`broad_domain`, `skos_expansion`, `fine_type`, `relation_slot`, and
+`shacl_pruning`. With five operators this produces 326 KG arms, including the
+empty operator sequence as the KG-only control. The canonical dev-container
+run over the same preserved work directory completed and validated with no
+blockers. Results: baseline retrieval 20/100, KG-only 30/100, best factorial
+arm 30/100, best delta versus KG-only 0. Thirty-seven arms tied KG-only at
+30/100 and 289 arms scored 29/100; no ordered ontology combination beat the
+existing KG-only control. The best arm by the configured tie-breaker was the
+empty KG-only sequence. Positive, no-match, and permission-denied counts for
+the best arm remained 20/80, 0/10, and 10/10. The factorial run took 332,262 ms
+total in the dev container, dominated by 310,180 ms observation loading; KG
+build took 63 ms and all 326 arm scorings took 21,893 ms.
+
+This does not prove ontology is useless. It proves that these five lightweight
+operators, implemented as deterministic query expansion, broad/fine type
+scoring, relation-slot scoring, and SHACL-style pruning over the current
+candidate components, still do not add enough evidence-specific structure. The
+next useful ontology attempt needs stronger typed candidate extraction from
+mail content itself: explicit entities, documents, decisions, blockers,
+commitments, dates, owners, customer/vendor/supplier roles, and typed relations
+between them. Merely rearranging vocabulary-based ontology operators is now a
+measured dead end for this 100-case benchmark.
+
 ## Human Operation, Annotation, And Adjudication Workflow
 
 Human governance evidence is modeled as a review packet, not as completed
@@ -276,6 +368,19 @@ Current ablations:
   positives on the cross-type stress slice; BGE plus hard or soft ontology
   guidance reduces stress false positives to `0` and raises overall F1 from
   `0.342860` to `0.757744`.
+- In the #21 full-PST domain-hard mail comparison, deterministic candidate
+  graph componenting without BERT improved the retrieval score from 20/100 to
+  30/100, but no-match near-miss cases still scored 0/10 and total quality
+  remains far below the user's earlier 99/100 target.
+- In the same #21 comparison, ontology-guided non-BERT candidate scoring with
+  formal `TypeDefinition`/`TypeMapping` contracts scored 29/100. This is a
+  negative ablation result: the current broad business-function ontology lens
+  did not beat the simpler candidate KG structure.
+- That negative #21 ontology result is now treated as KG-first evidence only.
+  The next registered method is `docs/mail-ontology-native-factorial-design.md`:
+  it builds typed mail frames, slots, values, and relations before graph fusion
+  and evaluates a 324-arm ontology-native grid plus 8 controls on identical
+  hard-domain case hashes.
 - Without candidate review, package outputs would be overclaimed as truth.
 - Without permission-aware rendering, hidden endpoints leak through fusion
   candidates.
@@ -290,6 +395,8 @@ Current error analysis cases:
 | hidden_endpoint_visible_without_grant | A requester-visible fusion candidate exposes the other user's private endpoint. | Permission-aware rendering redacts hidden endpoints and asks for an access overlay. |
 | package_output_treated_as_truth | RapidFuzz, Splink, or an LLM output is treated as canonical state. | Adapter manifests and claim boundaries keep output in candidate or review packet stores. |
 | alignment_without_provenance | A type decision cannot be traced to observations or candidate records. | Extension and promoted type validators require source provenance before acceptance. |
+| full_pst_mail_component_overreach | Deterministic thread/domain-term components retrieve related but insufficient evidence for hard business questions. | Public row-derived metrics show the 30/100 baseline, no-match failures, component size, and no canonical KG/write claim; next ablation must add ontology pins and stricter candidate typing. |
+| full_pst_mail_broad_ontology_lens | A broad business-function lens maps many mail observations to `Concept` but does not distinguish the evidence relation needed by hard questions. | The ontology-guided ablation scores 29/100 versus 30/100 for pure candidate KG; future work needs finer typed atoms/relations and real false-positive pruning evidence. |
 
 Known limitations:
 
@@ -300,6 +407,12 @@ Known limitations:
 - No production-sized latency/scalability benchmark is available.
 - RapidFuzz and Splink package bindings are candidate-only boundaries, not
   enterprise matching quality evidence.
+- The full-PST mail KG fusion rescore is candidate-only and non-BERT; it does
+  not yet prove ontology-aware mail reasoning, business answer generation, raw
+  mail access, canonical graph writes, wiki projection, or production readiness.
+- The ontology-native #21 factorial plan is only a pre-registered design until
+  its harness, public report validation, reviewer share-back, and any required
+  reruns are complete.
 
 ## Total Acceptance Suite
 

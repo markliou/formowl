@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 import unittest
 
 import _paths  # noqa: F401
@@ -187,6 +188,31 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
         self.assertEqual(conflicting_dual_ids["blockers"], [])
         self.assertEqual(conflicting_dual_ids["citations"], [])
         self.assertNotIn("Waiting on audit approval", str(conflicting_dual_ids))
+
+    def test_mail_case_progress_pack_id_generation_blocks_unsafe_future_stable_ids(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-case-progress-unsafe-pack-id")
+        bundle = _mail_bundle(temp_dir)
+        gateway = MailCaseProgressGateway([bundle])
+
+        with patch(
+            "formowl_mail.evidence.stable_resource_contract_id",
+            return_value="mailpack:unsafe",
+        ):
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "mail_evidence_pack_id generator produced an unsafe file name",
+            ):
+                gateway.answer_case_progress(
+                    case_id="case_launch",
+                    requester_user_id="user_yifan",
+                    workspace_id="workspace_formowl",
+                    session_id="session_owner",
+                    mail_import_session_id=(bundle.mail_import_session.mail_import_session_id),
+                    now=NOW,
+                    generated_at=NOW,
+                )
 
     def test_mail_case_progress_answer_denies_invalid_grants_without_content(
         self,

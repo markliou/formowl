@@ -14,7 +14,12 @@ from formowl_contract import (
 
 from ._guards import assert_public_payload_safe, safe_public_string
 from .bundle import MailEvidenceBundle
-from .evidence import MailBodySegment, MailEvidencePack, MailEvidenceRecord
+from .evidence import (
+    MailBodySegment,
+    MailEvidencePack,
+    MailEvidenceRecord,
+    _stable_mail_evidence_pack_id,
+)
 
 _MAIL_CASE_PROGRESS_PERMISSIONS = {"read", "evidence_snippet", "mail_evidence_read"}
 _FORBIDDEN_TRUE_CLAIMS = {
@@ -340,8 +345,7 @@ def _mail_evidence_pack_from_bundle(bundle: MailEvidenceBundle) -> MailEvidenceP
         {segment.source_observation_id for segment in bundle.body_segments}
     )
     pack = MailEvidencePack(
-        mail_evidence_pack_id=stable_resource_contract_id(
-            "mailpack",
+        mail_evidence_pack_id=_stable_mail_evidence_pack_id(
             "MailCaseProgressPack",
             {
                 "mail_evidence_bundle_id": bundle.mail_evidence_bundle_id,

@@ -956,6 +956,42 @@ production iframe readiness, live PostgreSQL readiness, production worker
 leasing, raw mail access, delete-after-success retention, KG writes, wiki
 projection, or production readiness.
 
+2026-07-07 checkpoint S records the harder full-PST domain baseline requested
+after checkpoint R. `scripts/mail_full_pst_domain_hard_case_eval.py` builds 100
+harder governed retrieval cases across ten business-function lenses, preserves
+the private manifest and work directory under `.test-tmp`, and emits only
+hash/status/count/timing public report data. Latest dev-container baseline and
+saved-report validation both exited 0 with `blockers=[]`. Safe results:
+100 cases scored, 20 passed, 80 failed, pass rate `2000` basis points, 80
+positive cases, 10 no-match cases, 10 permission-denied cases, all
+permission-denied probes redacted, all no-match near-miss probes failed,
+duplicate response hash count `0`, message count `2746`, observation count
+`28163`, mail evidence row count `13861`, parse warning count `3350`, upload
+`308409ms`, import `3160357ms`, bundle read `50147ms`, manifest generation
+`1938ms`, scoring `66156ms`, query loop `65824ms`, staging/scratch leftovers
+`0`, and work dir cleaned false. Focused hard-domain tests ran 11 OK in the dev
+container, and touched-file Ruff check/format-check passed. This is a baseline
+measurement only; it does not claim 99/100 quality, business answer generation,
+general parser readiness, actual ChatGPT upload/file transfer, production
+iframe readiness, live PostgreSQL readiness, production worker leasing, raw mail
+access, KG writes, wiki projection, or production readiness.
+
+2026-07-07 KG follow-up checkpoints T/U are measurement-only for the preserved
+checkpoint S intermediate data. Non-BERT candidate KG rescore improved the
+hard-domain score from 20/100 to 30/100. The ontology-guided non-BERT
+candidate arm used formal FormOwl `TypeDefinition`/`TypeMapping` contracts and
+a hash-bound ontology revision as candidate scoring/gating only, but scored
+29/100, so it did not beat the simpler candidate KG arm. Permission-denied
+cases stayed 10/10, and no-match near-miss cases stayed 0/10. This does not
+change system readiness: no PST reparse, no BERT/neural runtime, no canonical
+KG/type writes, no user graph writes, no grants/raw access, no wiki projection,
+and no business answer generation or production readiness claim.
+Canonical dev-container verification for the T/U measurement slice passed:
+focused KG tests 9 OK, focused ontology-ablation tests 9 OK, saved-report
+validation for both container-generated reports with `blockers=[]`, full
+unittest 573 OK in 835.841s, and full Ruff check/format-check with 217 files
+already formatted. The #21 reviewer gate passed 6/6 with no blocking findings.
+
 ## Handoff Notes For KG Research Agent
 
 The System Backbone Agent will not edit KG-eval internals or expose
