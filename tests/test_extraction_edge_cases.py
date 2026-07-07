@@ -77,6 +77,28 @@ class ExtractionEdgeCaseTests(unittest.TestCase):
         self.assertEqual(stored.observations, [])
         self.assertEqual(context.observation_store.list(), [])
 
+    def test_fixture_mail_extractor_does_not_claim_rfc822_support(self) -> None:
+        adapter = FixtureMailArchiveExtractor()
+        self.assertNotIn("message/rfc822", adapter.supported_mime_types())
+        context = _ExtractionContext.create(
+            "extraction-edge-mail-rfc822-unsupported",
+            filename="message.eml",
+            mime_type="message/rfc822",
+            content="From: pm@example.test\nSubject: Launch\n\nBody\n",
+        )
+
+        with self.assertRaises(ValueError):
+            run_extractor(
+                asset=context.asset,
+                object_store=context.object_store,
+                extractor_run_store=context.run_store,
+                observation_store=context.observation_store,
+                adapter=adapter,
+            )
+
+        self.assertEqual(context.run_store.list(), [])
+        self.assertEqual(context.observation_store.list(), [])
+
     def test_adapter_exception_persists_failed_run_without_observations(self) -> None:
         context = _ExtractionContext.create(
             "extraction-edge-adapter-exception",
@@ -477,6 +499,593 @@ class ExtractionEdgeCaseTests(unittest.TestCase):
                     }
                 ),
                 "headers",
+            ),
+            (
+                "mail-raw-archive-id",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-raw-archive.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "object://mail/raw/archive",
+                        "mailbox_id": "mailbox_yifan",
+                    }
+                ),
+                "archive_id",
+            ),
+            (
+                "mail-mysql-archive-id",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-mysql-archive.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "mysql://mail-db/archive",
+                        "mailbox_id": "mailbox_yifan",
+                    }
+                ),
+                "archive_id",
+            ),
+            (
+                "mail-raw-mailbox-id",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-raw-mailbox.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "C:\\raw\\mailbox",
+                    }
+                ),
+                "mailbox_id",
+            ),
+            (
+                "mail-sqlite-mailbox-id",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-sqlite-mailbox.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "sqlite://mailbox.db",
+                    }
+                ),
+                "mailbox_id",
+            ),
+            (
+                "mail-raw-folder-path",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-raw-folder.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "folders": [{"folder_path_hash": "object://mail/raw/folder"}],
+                    }
+                ),
+                "folder_path_hash",
+            ),
+            (
+                "mail-raw-message-id",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-raw-message.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "object://mail/raw/message",
+                                "folder_path_hash": "sha256:folder-inbox",
+                            }
+                        ],
+                    }
+                ),
+                "message_id",
+            ),
+            (
+                "mail-raw-thread-id",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-raw-thread.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "thread_id": "object://mail/raw/thread",
+                                "folder_path_hash": "sha256:folder-inbox",
+                            }
+                        ],
+                    }
+                ),
+                "thread_id",
+            ),
+            (
+                "mail-raw-subject",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-raw-subject.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "See object://mail/raw/subject",
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-equals-windows-path-subject",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-equals-windows-path-subject.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "path=C:\\secret\\mail.pst",
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-equals-posix-path-subject",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-equals-posix-path-subject.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "path=/var/mail/archive.pst",
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-equals-unc-path-subject",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-equals-unc-path-subject.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "unc=\\\\server\\share\\mail.pst",
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-colon-windows-path-subject",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-colon-windows-path-subject.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "path:C:\\secret\\mail.pst",
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-colon-posix-path-subject",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-colon-posix-path-subject.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "path:/var/mail/archive.pst",
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-colon-unc-path-subject",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-colon-unc-path-subject.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "unc:\\\\server\\share\\mail.pst",
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-comma-windows-path-subject",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-comma-windows-path-subject.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "x,C:\\raw\\mail.pst",
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-semicolon-posix-path-subject",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-semicolon-posix-path-subject.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "x;/var/mail/archive.pst",
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-raw-header",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-raw-header.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "sent_at": "2026-06-17T10:00:00+00:00",
+                                "headers": {
+                                    "Message-ID": "<msg-001@example.test>",
+                                    "Subject": "(object://mail/raw/header)",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-secret-header-name",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-secret-header-name.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "sent_at": "2026-06-17T10:00:00+00:00",
+                                "headers": {
+                                    "Message-ID": "<msg-001@example.test>",
+                                    "api_key": "not-public",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-prefixed-secret-header-name",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-prefixed-secret-header-name.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "sent_at": "2026-06-17T10:00:00+00:00",
+                                "headers": {
+                                    "Message-ID": "<msg-001@example.test>",
+                                    "X-Api-Key": "not-public",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-camel-api-key-header-name",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-camel-api-key-header-name.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "sent_at": "2026-06-17T10:00:00+00:00",
+                                "headers": {
+                                    "Message-ID": "<msg-001@example.test>",
+                                    "ApiKey": "not-public",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-compact-prefixed-api-key-header-name",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-compact-prefixed-api-key-header-name.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "sent_at": "2026-06-17T10:00:00+00:00",
+                                "headers": {
+                                    "Message-ID": "<msg-001@example.test>",
+                                    "XApiKey": "not-public",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-access-token-header-name",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-access-token-header-name.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "sent_at": "2026-06-17T10:00:00+00:00",
+                                "headers": {
+                                    "Message-ID": "<msg-001@example.test>",
+                                    "accessToken": "not-public",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-compact-prefixed-auth-token-header-name",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-compact-prefixed-auth-token-header-name.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "sent_at": "2026-06-17T10:00:00+00:00",
+                                "headers": {
+                                    "Message-ID": "<msg-001@example.test>",
+                                    "xAuthToken": "not-public",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-client-secret-header-name",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-client-secret-header-name.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "sent_at": "2026-06-17T10:00:00+00:00",
+                                "headers": {
+                                    "Message-ID": "<msg-001@example.test>",
+                                    "clientSecret": "not-public",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-private-key-header-name",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-private-key-header-name.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "sent_at": "2026-06-17T10:00:00+00:00",
+                                "headers": {
+                                    "Message-ID": "<msg-001@example.test>",
+                                    "privateKey": "not-public",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-bearer-token-header-name",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-bearer-token-header-name.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "sent_at": "2026-06-17T10:00:00+00:00",
+                                "headers": {
+                                    "Message-ID": "<msg-001@example.test>",
+                                    "bearerToken": "not-public",
+                                },
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-raw-attachment",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-raw-attachment.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "sent_at": "2026-06-17T10:00:00+00:00",
+                                "headers": {
+                                    "Message-ID": "<msg-001@example.test>",
+                                    "Subject": "Launch checklist",
+                                },
+                                "attachments": [
+                                    {
+                                        "filename": "C:\\raw\\brief.pdf",
+                                        "content_hash": "sha256:attachment001",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
+            ),
+            (
+                "mail-raw-body-hash",
+                FixtureMailArchiveExtractor(),
+                "bad-mail-raw-body-hash.json",
+                "application/vnd.formowl.mail-archive+json",
+                json.dumps(
+                    {
+                        "archive_id": "archive_001",
+                        "mailbox_id": "mailbox_yifan",
+                        "messages": [
+                            {
+                                "message_id": "<msg-001@example.test>",
+                                "folder_path_hash": "sha256:folder-inbox",
+                                "subject": "Launch checklist",
+                                "body_hash": "object://mail/raw/body-hash",
+                            }
+                        ],
+                    }
+                ),
+                "public payload",
             ),
         ]
 

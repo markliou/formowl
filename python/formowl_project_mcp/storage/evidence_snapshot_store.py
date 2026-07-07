@@ -52,10 +52,16 @@ class FileEvidenceSnapshotStore:
                 {"snapshot": snapshot, "metadata": write.get("metadata", {})},
             )
             _write_json(temporary_directory / "snapshot.json", snapshot)
-            temporary_directory.rename(directory)
+            _publish_snapshot_directory(
+                temporary_directory,
+                directory,
+                snapshot_id=snapshot_id,
+            )
         except BaseException:
             shutil.rmtree(temporary_directory, ignore_errors=True)
             raise
+        finally:
+            shutil.rmtree(temporary_directory, ignore_errors=True)
         return {"evidence_snapshot_id": snapshot_id, "storage_uri": storage_uri}
 
     def get_snapshot(
@@ -150,6 +156,39 @@ def _write_json(path: Path, payload: Any) -> None:
         json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+
+def _publish_snapshot_directory(
+    temporary_directory: Path,
+    directory: Path,
+    *,
+    snapshot_id: str,
+) -> None:
+    try:
+        temporary_directory.rename(directory)
+        return
+    except OSError as exc:
+        if directory.exists():
+            if _is_complete_snapshot_directory(directory):
+                return
+            raise RuntimeError(f"Evidence snapshot directory is incomplete: {snapshot_id}") from exc
+        try:
+            shutil.copytree(temporary_directory, directory)
+        except FileExistsError as copy_exc:
+            if directory.exists() and _is_complete_snapshot_directory(directory):
+                return
+            if directory.exists():
+                shutil.rmtree(directory, ignore_errors=True)
+            raise RuntimeError(
+                f"Evidence snapshot directory is incomplete: {snapshot_id}"
+            ) from copy_exc
+        except BaseException:
+            if directory.exists() and not _is_complete_snapshot_directory(directory):
+                shutil.rmtree(directory, ignore_errors=True)
+            raise
+        if not _is_complete_snapshot_directory(directory):
+            shutil.rmtree(directory, ignore_errors=True)
+            raise RuntimeError(f"Evidence snapshot directory is incomplete: {snapshot_id}")
 
 
 _REQUIRED_SNAPSHOT_FILES = {

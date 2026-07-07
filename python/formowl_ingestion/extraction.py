@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+import re
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from formowl_contract import (
@@ -153,7 +154,7 @@ def run_extractor(
             status="failed",
             started_at=run_started_at,
             completed_at=completed_at or now_iso(),
-            errors=[str(exc)],
+            errors=[_safe_extractor_error(exc)],
         )
         extractor_run_store.create(failed_run)
         raise
@@ -205,6 +206,24 @@ def _validate_optional_timestamp(field_name: str, value: str | None) -> None:
             datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError as exc:
             raise ContractValidationError(f"{field_name} must be an ISO timestamp") from exc
+
+
+def _safe_extractor_error(exc: Exception) -> str:
+    text = str(exc)
+    if _looks_like_raw_diagnostic(text):
+        return exc.__class__.__name__
+    return text or exc.__class__.__name__
+
+
+def _looks_like_raw_diagnostic(value: str) -> bool:
+    lowered = value.lower()
+    return bool(
+        re.search(r"(^|[\s'\"([{=,:;])(/|[a-z]:[\\/]|\\\\)", value, re.IGNORECASE)
+        or "formowl://object" in lowered
+        or "payload.bin" in lowered
+        or "traceback" in lowered
+        or re.search(r"\b(select\s+.+\s+from|insert\s+into|update\s+\w+\s+set)\b", lowered)
+    )
 
 
 __all__ = [

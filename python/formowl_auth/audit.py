@@ -29,6 +29,11 @@ class FileAuditLogStore:
             return None
         return AuditLog.from_dict(_read_json(path))
 
+    def delete(self, audit_log_id: str) -> None:
+        path = self._record_path(audit_log_id)
+        if path.exists():
+            path.unlink()
+
     def list(self) -> list[AuditLog]:
         return [
             AuditLog.from_dict(_read_json(path)) for path in sorted(self.base_dir.glob("*.json"))
@@ -278,6 +283,37 @@ def record_upload_session_creation(
         timestamp=timestamp,
         status=status,
         audit_log_id=audit_log_id,
+    )
+
+
+def record_upload_session_file_received(
+    audit_store: FileAuditLogStore,
+    *,
+    actor_user_id: str,
+    upload_session_id: str,
+    asset_id: str,
+    workspace_id: str,
+    session_id: str,
+    accepted_file_type: str,
+    file_size_bytes: int,
+    timestamp: str | None = None,
+    status: str = "ok",
+) -> AuditLog:
+    return write_audit_log(
+        audit_store,
+        actor_user_id=actor_user_id,
+        action="upload_session_file_received",
+        target_type="upload_session",
+        target_id=upload_session_id,
+        session_id=session_id,
+        workspace_id=workspace_id,
+        timestamp=timestamp,
+        status=status,
+        metadata={
+            "asset_id": asset_id,
+            "accepted_file_type": accepted_file_type,
+            "file_size_bytes": file_size_bytes,
+        },
     )
 
 

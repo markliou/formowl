@@ -5,6 +5,8 @@ from typing import Any
 
 from formowl_contract import now_iso, stable_resource_contract_id, to_plain
 
+from ._guards import assert_public_payload_safe
+
 
 @dataclass(frozen=True)
 class MailPreflightReadinessReview:
@@ -20,7 +22,9 @@ class MailPreflightReadinessReview:
     production_expansion_blockers: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return to_plain(self)
+        payload = to_plain(self)
+        assert_public_payload_safe(payload, "mail_preflight_readiness_review")
+        return payload
 
 
 def build_mail_preflight_readiness_review(
@@ -29,7 +33,7 @@ def build_mail_preflight_readiness_review(
 ) -> MailPreflightReadinessReview:
     resolved_reviewed_at = reviewed_at or now_iso()
     payload = {
-        "completed_work_packages": ["828", "829", "830", "831", "832", "833", "834", "835"],
+        "completed_work_packages": ["828", "829", "831", "832", "833", "834", "835"],
         "scope": [
             "synthetic JSON mail archive fixture ingestion",
             "normalized mail observation schema for thread, header, message, body, and attachment",
@@ -50,8 +54,10 @@ def build_mail_preflight_readiness_review(
             "attachment extraction policy must decide when bytes become independent assets",
         ],
         "privacy_guardrails": [
-            "raw mailbox paths, account credentials, object-store roots, SQL, and scratch paths stay out of public records",
-            "mail evidence search returns observation-backed snippets rather than raw archive bytes",
+            "raw mailbox paths, account credentials, object-store roots, SQL, "
+            "and scratch paths stay out of public records",
+            "mail evidence search returns observation-backed snippets rather than "
+            "raw archive bytes",
             "candidate bridge writes only reviewable proposals and never canonical graph state",
             "case-progress answers cite mail observations and do not grant raw asset access",
         ],

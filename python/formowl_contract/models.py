@@ -1855,6 +1855,7 @@ class UploadSession:
     status: UploadSessionStatus
     created_at: str
     audit_log_id: str
+    session_id: str | None = None
     project_id: str | None = None
     customer_id: str | None = None
     asset_id: str | None = None
@@ -1881,6 +1882,7 @@ class UploadSession:
             status=upload_session["status"],
             created_at=str(upload_session["created_at"]),
             audit_log_id=str(upload_session["audit_log_id"]),
+            session_id=upload_session.get("session_id"),
             project_id=upload_session.get("project_id"),
             customer_id=upload_session.get("customer_id"),
             asset_id=upload_session.get("asset_id"),
@@ -3934,7 +3936,14 @@ def validate_upload_session(value: Any) -> dict[str, Any]:
     )
     _validate_optional_string_fields(
         upload_session,
-        ("project_id", "customer_id", "asset_id", "ingestion_job_id", "completed_at"),
+        (
+            "session_id",
+            "project_id",
+            "customer_id",
+            "asset_id",
+            "ingestion_job_id",
+            "completed_at",
+        ),
         "UploadSession",
     )
     if upload_session["status"] not in UPLOAD_SESSION_STATUS_VALUES:

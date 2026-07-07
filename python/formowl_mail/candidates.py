@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import re
 from typing import Sequence
 
 from formowl_contract import (
@@ -17,6 +16,7 @@ from formowl_contract import (
 )
 from formowl_graph.storage import CandidateAtomStore, CandidateRelationStore, SemanticMetadataStore
 
+from ._guards import assert_public_payload_safe
 from .evidence import MailEvidenceRecord, build_mail_evidence_pack
 
 _MARKERS = {
@@ -31,10 +31,6 @@ _MARKERS = {
     "decision": "decision",
     "risk": "risk",
 }
-_RAW_REFERENCE = re.compile(
-    r"(^|[\s'\"])(/|[A-Za-z]:[\\/]|\\\\|file://|s3://|smb://|nfs://|" r"postgres(?:ql)?://)",
-    re.IGNORECASE,
-)
 
 
 @dataclass(frozen=True)
@@ -106,6 +102,11 @@ def extract_mail_semantics_and_candidates(
     candidate_atoms = [*thread_atoms.values(), *candidate_atoms]
     if not semantic_metadata:
         warnings.append("no_mail_semantic_markers")
+    _assert_bridge_result_public_payload_safe(
+        semantic_metadata=semantic_metadata,
+        candidate_atoms=candidate_atoms,
+        candidate_relations=candidate_relations,
+    )
     return MailCandidateBridgeResult(
         semantic_metadata=semantic_metadata,
         candidate_atoms=candidate_atoms,
@@ -352,10 +353,25 @@ def _validate_id(value: str, field_name: str) -> None:
 
 
 def _validate_public_label(value: str) -> None:
-    if _RAW_REFERENCE.search(value):
-        raise ContractValidationError(
-            "mail candidate labels must not contain raw paths or locators"
-        )
+    assert_public_payload_safe(value, "mail_candidate_label")
+
+
+def _assert_bridge_result_public_payload_safe(
+    *,
+    semantic_metadata: Sequence[SemanticMetadata],
+    candidate_atoms: Sequence[CandidateAtom],
+    candidate_relations: Sequence[CandidateRelation],
+) -> None:
+    # Validate the full public payload before any store write so a rejected
+    # candidate batch leaves semantic, atom, and relation stores untouched.
+    assert_public_payload_safe(
+        {
+            "semantic_metadata": [item.to_dict() for item in semantic_metadata],
+            "candidate_atoms": [item.to_dict() for item in candidate_atoms],
+            "candidate_relations": [item.to_dict() for item in candidate_relations],
+        },
+        "mail_candidate_bridge_result",
+    )
 
 
 __all__ = [

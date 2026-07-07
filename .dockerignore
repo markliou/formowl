@@ -1,5 +1,6 @@
 .git
 .formowl
 .test-tmp
+tests/pst-exm/
 __pycache__
 *.pyc

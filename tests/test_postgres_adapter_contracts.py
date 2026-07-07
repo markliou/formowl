@@ -67,12 +67,13 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         manifest = migration_files()
         index_names = grant_audit_query_indexes()
 
-        migration_replay = len(manifest) == 3 and all(
+        migration_replay = len(manifest) == 4 and all(
             item.statement_count >= 3 for item in manifest
         )
         migration_files_marker = manifest[0].filename == "001_metadata_store.sql"
         vector_migration_marker = manifest[1].filename == "002_vector_index.sql"
         ingestion_migration_marker = manifest[2].filename == "003_ingestion_records.sql"
+        mail_migration_marker = manifest[3].filename == "004_mail_evidence.sql"
         grant_audit_query_indexes_marker = {
             "idx_formowl_graph_records_scope",
             "idx_formowl_ingestion_records_scope",
@@ -85,6 +86,7 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         self.assertTrue(migration_files_marker)
         self.assertTrue(vector_migration_marker)
         self.assertTrue(ingestion_migration_marker)
+        self.assertTrue(mail_migration_marker)
         self.assertTrue(grant_audit_query_indexes_marker)
         self.assertEqual(
             postgre_sql_backed_repository_interfaces(),
@@ -112,6 +114,9 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
             any(
                 "CREATE TABLE IF NOT EXISTS formowl_vector_index" in item.sql for item in statements
             )
+        )
+        self.assertTrue(
+            any("CREATE TABLE IF NOT EXISTS mail_import_session" in item.sql for item in statements)
         )
         self.assertTrue(
             all("postgresql://" not in str(item.to_dict()).lower() for item in statements)

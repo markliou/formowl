@@ -17,7 +17,10 @@ from formowl_ingestion.storage import (
     StorageBackendRegistry,
 )
 from formowl_mail import (
+    MailBodySegment,
+    MailEvidencePack,
     MailEvidencePackStore,
+    MailEvidenceRecord,
     build_case_progress_answer,
     build_mail_evidence_pack,
     build_mail_preflight_readiness_review,
@@ -64,11 +67,14 @@ class MailPhaseWorkflowTests(unittest.TestCase):
             )
         )
 
+        semantic_store = SemanticMetadataStore(temp_dir)
+        atom_store = CandidateAtomStore(temp_dir)
+        relation_store = CandidateRelationStore(temp_dir)
         bridge_result = extract_and_store_mail_candidates(
             observations,
-            semantic_metadata_store=SemanticMetadataStore(temp_dir),
-            candidate_atom_store=CandidateAtomStore(temp_dir),
-            candidate_relation_store=CandidateRelationStore(temp_dir),
+            semantic_metadata_store=semantic_store,
+            candidate_atom_store=atom_store,
+            candidate_relation_store=relation_store,
             extractor_run_id="mail_candidate_run_001",
             created_at="2026-06-30T10:01:00+00:00",
         )
@@ -79,17 +85,31 @@ class MailPhaseWorkflowTests(unittest.TestCase):
         self.assertIn("next_action", atom_types)
         self.assertIn("deadline", atom_types)
         self.assertTrue(bridge_result.candidate_relations)
-        self.assertEqual(
-            len(SemanticMetadataStore(temp_dir).list()),
-            len(bridge_result.semantic_metadata),
-        )
-        self.assertEqual(
-            len(CandidateAtomStore(temp_dir).list()), len(bridge_result.candidate_atoms)
-        )
-        self.assertEqual(
-            len(CandidateRelationStore(temp_dir).list()),
-            len(bridge_result.candidate_relations),
-        )
+        self.assertEqual(len(semantic_store.list()), len(bridge_result.semantic_metadata))
+        self.assertEqual(len(atom_store.list()), len(bridge_result.candidate_atoms))
+        self.assertEqual(len(relation_store.list()), len(bridge_result.candidate_relations))
+        for semantic in bridge_result.semantic_metadata:
+            persisted = semantic_store.get(semantic.semantic_metadata_id)
+            self.assertIsNotNone(persisted)
+            self.assertEqual(persisted.to_dict(), semantic.to_dict())
+            self.assertTrue(persisted.requires_review)
+            self.assertTrue(persisted.source_observation_ids)
+        for atom in bridge_result.candidate_atoms:
+            persisted = atom_store.get(atom.candidate_atom_id)
+            self.assertIsNotNone(persisted)
+            self.assertEqual(persisted.to_dict(), atom.to_dict())
+            self.assertEqual(persisted.status, "pending_review")
+            self.assertTrue(persisted.requires_review)
+            self.assertTrue(persisted.source_observation_ids)
+        for relation in bridge_result.candidate_relations:
+            persisted = relation_store.get(relation.candidate_relation_id)
+            self.assertIsNotNone(persisted)
+            self.assertEqual(persisted.to_dict(), relation.to_dict())
+            self.assertEqual(persisted.status, "pending_review")
+            self.assertTrue(persisted.requires_review)
+            self.assertTrue(persisted.source_observation_ids)
+            self.assertIsNotNone(atom_store.get(persisted.source_candidate_atom_id))
+            self.assertIsNotNone(atom_store.get(persisted.target_candidate_atom_id))
 
         answer = build_case_progress_answer(
             pack,
@@ -109,8 +129,15 @@ class MailPhaseWorkflowTests(unittest.TestCase):
             readiness.status,
             "synthetic_mail_phase_ready_production_parser_deferred",
         )
-        self.assertIn("835", readiness.completed_work_packages)
+        self.assertEqual(
+            readiness.completed_work_packages,
+            ["828", "829", "831", "832", "833", "834", "835"],
+        )
         self.assertTrue(readiness.production_expansion_blockers)
+        with self.assertRaises(ContractValidationError):
+            build_mail_preflight_readiness_review(
+                reviewed_at="object://mail/raw/review",
+            ).to_dict()
 
         graph_entries = {entry.name for entry in (temp_dir / "graph").iterdir()}
         self.assertEqual(
@@ -134,24 +161,189 @@ class MailPhaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("postgres://", serialized)
 
     def test_mail_candidate_bridge_rejects_raw_paths_without_partial_writes(self) -> None:
-        temp_dir = _paths.fresh_test_dir("mail-phase-raw-candidate")
-        archive = _mail_archive()
-        archive["messages"][0]["body"] = "Action Item: review C:\\secret\\mail.pst"
-        stored = _run_mail_fixture(temp_dir, archive)
+        cases = [
+            ("windows-path", "Action Item: review C:\\secret\\mail.pst"),
+            ("object-store", "Action Item: review object://mail/raw/archive"),
+            ("punctuated-object-store", "Action Item: review (object://mail/raw/archive)"),
+            ("sql-text", "Action Item: run SELECT * FROM mailbox_messages"),
+        ]
+        for case_name, unsafe_body in cases:
+            with self.subTest(case_name=case_name):
+                temp_dir = _paths.fresh_test_dir(f"mail-phase-raw-candidate-{case_name}")
+                archive = _mail_archive()
+                archive["messages"][0]["body"] = unsafe_body
+                stored = _run_mail_fixture(temp_dir, archive)
+                semantic_store = SemanticMetadataStore(temp_dir)
+                atom_store = CandidateAtomStore(temp_dir)
+                relation_store = CandidateRelationStore(temp_dir)
+
+                with self.assertRaises(ContractValidationError):
+                    extract_and_store_mail_candidates(
+                        stored.observations,
+                        semantic_metadata_store=semantic_store,
+                        candidate_atom_store=atom_store,
+                        candidate_relation_store=relation_store,
+                        extractor_run_id=f"mail_candidate_run_raw_{case_name}",
+                        created_at="2026-06-30T10:01:00+00:00",
+                    )
+
+                self.assertEqual(semantic_store.list(), [])
+                self.assertEqual(atom_store.list(), [])
+                self.assertEqual(relation_store.list(), [])
+
+    def test_mail_evidence_rejects_backend_locators_and_sql_text(self) -> None:
+        cases = [
+            ("object-store", "Investigate object://mail/raw/archive"),
+            ("punctuated-object-store", "Investigate (object://mail/raw/archive)"),
+            ("sql-text", "SELECT * FROM mailbox_messages"),
+        ]
+        for case_name, unsafe_body in cases:
+            with self.subTest(case_name=case_name):
+                temp_dir = _paths.fresh_test_dir(f"mail-phase-raw-evidence-{case_name}")
+                archive = _mail_archive()
+                archive["messages"][0]["body"] = unsafe_body
+                stored = _run_mail_fixture(temp_dir, archive)
+
+                with self.assertRaises(ContractValidationError):
+                    build_mail_evidence_pack(
+                        stored.observations,
+                        created_at="2026-06-30T10:00:00+00:00",
+                    )
+
+    def test_mail_evidence_pack_store_rejects_unsafe_pack_without_artifacts(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-phase-unsafe-evidence-store")
+        store = MailEvidencePackStore(temp_dir)
+        unsafe_pack = {
+            "mail_evidence_pack_id": "mailpack_unsafe_store",
+            "source_observation_ids": ["obs_mail_unsafe"],
+            "records": [
+                {
+                    "record_key": "mailrecord_unsafe_store",
+                    "observation_ids": ["obs_mail_unsafe"],
+                    "archive_id": "archive_launch",
+                    "mailbox_id": "mailbox_yifan",
+                    "folder_path_hash": "sha256:folder-inbox",
+                    "message_id": "<launch-unsafe@example.test>",
+                    "headers": {"api_key": "not-public"},
+                    "body_segments": [],
+                    "attachments": [],
+                }
+            ],
+            "query_index": {},
+            "created_at": "2026-06-30T10:00:00+00:00",
+        }
 
         with self.assertRaises(ContractValidationError):
-            extract_and_store_mail_candidates(
-                stored.observations,
-                semantic_metadata_store=SemanticMetadataStore(temp_dir),
-                candidate_atom_store=CandidateAtomStore(temp_dir),
-                candidate_relation_store=CandidateRelationStore(temp_dir),
-                extractor_run_id="mail_candidate_run_raw",
-                created_at="2026-06-30T10:01:00+00:00",
+            store.create(unsafe_pack)
+
+        self.assertEqual(store.list(), [])
+        evidence_dir = temp_dir / "mail" / "evidence-packs"
+        self.assertEqual(list(evidence_dir.glob("*.json")), [])
+
+    def test_case_progress_rejects_unsafe_public_payloads(self) -> None:
+        pack = MailEvidencePack(
+            mail_evidence_pack_id="mailpack_unsafe",
+            source_observation_ids=["obs_mail_001"],
+            records=[
+                MailEvidenceRecord(
+                    record_key="mailrecord_unsafe",
+                    observation_ids=["obs_mail_001"],
+                    archive_id="archive_launch",
+                    mailbox_id="mailbox_yifan",
+                    folder_path_hash="sha256:folder-inbox",
+                    message_id="<launch-001@example.test>",
+                    body_segments=[
+                        MailBodySegment(
+                            observation_id="obs_mail_001",
+                            text="Update: see object://mail/raw/archive",
+                        )
+                    ],
+                )
+            ],
+            query_index={},
+            created_at="2026-06-30T10:00:00+00:00",
+        )
+
+        with self.assertRaises(ContractValidationError):
+            build_case_progress_answer(
+                pack,
+                case_id="case_launch",
+                generated_at="2026-06-30T10:02:00+00:00",
             )
 
-        self.assertEqual(SemanticMetadataStore(temp_dir).list(), [])
-        self.assertEqual(CandidateAtomStore(temp_dir).list(), [])
-        self.assertEqual(CandidateRelationStore(temp_dir).list(), [])
+        safe_pack = MailEvidencePack(
+            mail_evidence_pack_id="mailpack_safe",
+            source_observation_ids=[],
+            records=[],
+            query_index={},
+            created_at="2026-06-30T10:00:00+00:00",
+        )
+        with self.assertRaises(ContractValidationError):
+            build_case_progress_answer(
+                safe_pack,
+                case_id="object://mail/raw/archive",
+                generated_at="2026-06-30T10:02:00+00:00",
+            )
+
+        unsafe_key_pack = MailEvidencePack(
+            mail_evidence_pack_id="mailpack_unsafe_key",
+            source_observation_ids=["obs_mail_002"],
+            records=[
+                MailEvidenceRecord(
+                    record_key="mailrecord_unsafe_key",
+                    observation_ids=["obs_mail_002"],
+                    archive_id="archive_launch",
+                    mailbox_id="mailbox_yifan",
+                    folder_path_hash="sha256:folder-inbox",
+                    message_id="<launch-002@example.test>",
+                    headers={"object://mail/raw/archive": "x"},
+                    body_segments=[
+                        MailBodySegment(
+                            observation_id="obs_mail_002",
+                            text="Update: header key should be rejected",
+                        )
+                    ],
+                )
+            ],
+            query_index={},
+            created_at="2026-06-30T10:00:00+00:00",
+        )
+        with self.assertRaises(ContractValidationError):
+            build_case_progress_answer(
+                unsafe_key_pack,
+                case_id="case_launch",
+                generated_at="2026-06-30T10:02:00+00:00",
+            )
+
+        secret_key_pack = MailEvidencePack(
+            mail_evidence_pack_id="mailpack_secret_key",
+            source_observation_ids=["obs_mail_003"],
+            records=[
+                MailEvidenceRecord(
+                    record_key="mailrecord_secret_key",
+                    observation_ids=["obs_mail_003"],
+                    archive_id="archive_launch",
+                    mailbox_id="mailbox_yifan",
+                    folder_path_hash="sha256:folder-inbox",
+                    message_id="<launch-003@example.test>",
+                    headers={"api_key": "not-public"},
+                    body_segments=[
+                        MailBodySegment(
+                            observation_id="obs_mail_003",
+                            text="Update: secret-like header key should be rejected",
+                        )
+                    ],
+                )
+            ],
+            query_index={},
+            created_at="2026-06-30T10:00:00+00:00",
+        )
+        with self.assertRaises(ContractValidationError):
+            build_case_progress_answer(
+                secret_key_pack,
+                case_id="case_launch",
+                generated_at="2026-06-30T10:02:00+00:00",
+            )
 
 
 def _mail_archive() -> dict:

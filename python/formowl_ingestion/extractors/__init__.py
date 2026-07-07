@@ -2,7 +2,7 @@
 
 from .audio import FixtureAudioTranscriptExtractor
 from .document import FixtureDocumentParserExtractor
-from .mail import FixtureMailArchiveExtractor
+from .mail import FixtureMailArchiveExtractor, PstMailArchiveExtractor
 from .metadata import FileTechnicalMetadataExtractor
 from .ocr import FixtureOcrExtractor
 from .text import PlainTextObservationExtractor
@@ -16,4 +16,5 @@ __all__ = [
     "FixtureOcrExtractor",
     "FixtureVideoSceneExtractor",
     "PlainTextObservationExtractor",
+    "PstMailArchiveExtractor",
 ]

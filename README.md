@@ -63,6 +63,163 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   metadata and candidate graph proposals; case-progress answers cite mail
   observations; and a preflight artifact marks synthetic readiness while
   deferring production PST/OST/MSG/EML parser readiness.
+- Current #21 mail milestone direction: Phase 1 requires ordinary users to be
+  able to upload a full PST through a session-bound FormOwl upload surface /
+  iframe, after which server-side workers parse into PostgreSQL normalized mail
+  evidence and raw PST retention is delete-after-success or policy-controlled.
+  Local Companion import is optional / advanced / policy-triggered, and both
+  parser locations must emit the same `MailEvidenceBundle` contract. KG
+  construction from mail evidence is Phase 2.
+- The current #21 internal workflow helper can run a synthetic
+  UploadSession-bound server-side mail import through normal Asset /
+  IngestionJob / FixtureMailArchiveExtractor records, build a
+  `MailEvidenceBundle` with `upload_session_id`, write it through the
+  PostgreSQL mail evidence store contract, and verify a store-backed JSON-RPC
+  `query_mail_evidence` owner path. This is still synthetic/internal evidence:
+  it does not claim real PST parsing, upload UI / iframe readiness, live
+  PostgreSQL readiness, production worker leasing, KG writes, wiki projection,
+  or production readiness.
+- The current #21 ChatGPT-facing upload entrypoint can return a session-bound
+  mail archive upload task card through `open_upload_session`, attach guided
+  PST/OST/MSG/EML/MBOX source-preparation guidance, and create an audited
+  `UploadSession` while rejecting user-supplied storage backends, parser
+  controls, worker queues, raw paths, SQL-like values, and unsupported owner or
+  visibility scopes. This is still only a task-card/session-entrypoint slice:
+  it does not implement the real upload iframe, real mail parser, live
+  PostgreSQL readiness, production worker leasing, or ChatGPT smoke completion.
+- The semantic JSON-RPC runtime entrypoint for that task-card path is
+  `formowl-semantic-mcp-jsonrpc`. It wires `open_upload_session` to the mail
+  upload session handler. The current command preflight launches that console
+  command, performs `initialize`, `tools/list`, and
+  `tools/call open_upload_session`, verifies the persisted session-bound task
+  card, and writes only hash/status/count report data. This still is not an
+  actual ChatGPT connected smoke, and the command still does not transfer
+  files, implement the upload iframe, or parse real mail archives.
+- The current #21 backend upload-intake checkpoint can receive a
+  server-staged PST/OST/MSG/EML/MBOX upload for an existing matching
+  `UploadSession`, register it as a governed `Asset` and ObjectStore payload,
+  bind `UploadSession.asset_id`, write upload-receipt audit, reuse duplicate
+  payload bytes for repeated rolling exports, and return only a
+  hash/status/count public receipt. This is backend file-transfer receipt, not
+  the actual iframe UI, actual ChatGPT connected upload, real mail parser,
+  live PostgreSQL readiness, production worker leasing, KG writes, wiki
+  projection, or production readiness.
+- The current #21 local HTTP upload-surface contract checkpoint provides a
+  stdlib `ThreadingHTTPServer` harness for a session-bound mail upload form.
+  `GET /mail/upload/<upload_session_id>` renders a single-session
+  multipart form, and `POST /mail/upload/<upload_session_id>` accepts one
+  PST/OST/MSG/EML/MBOX `mail_archive` file, stages it temporarily, calls the
+  backend upload-intake helper, cleans up the temporary staged body, and returns
+  a safe JSON receipt. It rejects malformed multipart input, route/form/session
+  mismatches, unsupported file names, oversized requests, wrong actor/status,
+  and user-supplied storage/parser/worker fields before durable side effects.
+  This is a local contract harness only: it does not claim actual ChatGPT
+  connected upload, production iframe readiness, real mail parser readiness,
+  live PostgreSQL readiness, production worker leasing, KG writes, wiki
+  projection, or production readiness.
+- The current #21 MCP-command-to-local-HTTP upload smoke connects the
+  documented `formowl-semantic-mcp-jsonrpc` command path to the local HTTP
+  upload-surface harness. It opens a mail `UploadSession` through JSON-RPC
+  `open_upload_session`, serves the matching local HTTP form, posts synthetic
+  multipart PST bytes to the same session, verifies the resulting
+  `UploadSession.asset_id`, Asset/ObjectStore/audit records, staging cleanup,
+  safe public report contract, and negative probes for wrong route/session,
+  wrong workspace, infrastructure fields, duplicate multipart files, malformed
+  multipart, oversized bodies, and startup/surface errors. This supports only
+  the local command-to-HTTP upload contract; it is still not an actual ChatGPT
+  connected upload, production iframe, real mail parser, live PostgreSQL
+  deployment, production worker leasing, KG write, wiki projection, or
+  production readiness claim.
+- The current #21 local upload-to-import-and-query smoke extends that path
+  with server-side synthetic mail import and store-backed evidence query. It
+  opens a mail `UploadSession` through the configured MCP command, posts a
+  session-bound multipart upload to the local HTTP surface, runs
+  `run_upload_session_mail_import()` against the bound `asset_id`, writes
+  normalized mail evidence through the PostgreSQL adapter contract, verifies
+  owner and denied `query_mail_evidence` JSON-RPC behavior, and probes missing
+  asset, wrong source ref, parser failure, evidence-store failure, and query
+  failure paths. This is still a synthetic local contract smoke only: it does
+  not claim actual ChatGPT connected upload, production iframe readiness, real
+  PST/OST/MSG/EML/MBOX parsing, live PostgreSQL deployment, production worker
+  leasing, KG write, wiki projection, or production readiness.
+- The current #21 ChatGPT connection preflight packages the configured
+  `formowl-semantic-mcp-jsonrpc` command path into a bounded manual ChatGPT
+  MCP attach contract. It reuses the command smoke, validates a hash-only
+  connection package shape, records the required environment-name count,
+  required tool count, expected JSON-RPC sequence, and task-card/session shape
+  hashes, and rejects package probes that include environment values, concrete
+  upload locators, raw command paths, or ChatGPT overclaims. This is only a
+  connection-readiness package for the next manual ChatGPT test; it does not
+  claim actual ChatGPT connected upload, production iframe readiness, real
+  parser readiness, live PostgreSQL deployment, production worker leasing, KG
+  write, wiki projection, or production readiness.
+- The current #21 ChatGPT result intake checkpoint validates a bounded
+  operator-supplied result packet after a manual ChatGPT MCP session calls
+  `open_upload_session`. The packet records only hashes, statuses, counts,
+  expected sequence binding, tool availability, task-card shape, and operator
+  attestation; it rejects environment values, upload locators, mail payload
+  fields, raw command paths, static-contract hash tampering, and upload
+  overclaims. This is result-packet intake only: it does not let Codex directly
+  control ChatGPT, does not claim file transfer, and does not claim production
+  readiness.
+- The scoped #21 local Phase 1 Mail Evidence Reading proof is complete for
+  synthetic evidence and ChatGPT testing readiness. The governed MCP / JSON-RPC
+  surface now supports both `query_mail_evidence` and
+  `answer_mail_case_progress` over normalized `MailEvidenceBundle` data,
+  including owner/denied/forged-grant/trusted-grant and bundle-id probes,
+  citation-preserving case-progress answers, hash-only transcripts, and
+  explicit false claim boundaries. This completion does not claim actual
+  ChatGPT connected upload or file transfer, production iframe readiness, real
+  PST/OST/MSG/EML/MBOX parser readiness, live PostgreSQL deployment readiness,
+  production worker leasing, KG writes, wiki projection, or production
+  readiness.
+- The current #21 mail evidence ChatGPT result-intake checkpoint validates a
+  bounded operator-supplied result packet after a manual ChatGPT MCP session
+  calls fixture-backed `query_mail_evidence` and `answer_mail_case_progress`.
+  The packet records only hashes, statuses, counts, smoke-contract binding,
+  owner/denied result shapes, positive owner citation counts, denied redaction
+  counts, and operator attestation. It rejects raw ChatGPT transcripts, raw
+  tool payloads, mail body/snippet/text fields, concrete mail identifiers,
+  upload locators, environment values, paths, SQL, parser/storage/worker
+  internals, static-contract hash tampering, duplicate response hashes, bool
+  counts, permission-bypass claims, KG/wiki claims, and production overclaims.
+  This is bounded result-packet intake only: it is not direct Codex-controlled
+  ChatGPT verification, not cryptographic proof, not file transfer, not raw
+  mail access, and not production readiness.
+- The current #21 real PST sampled parser checkpoint adds
+  `PstMailArchiveExtractor` under the official mail `ExtractorAdapter`
+  boundary and a `scripts/mail_real_pst_smoke.py` harness for the
+  operator-provided `tests/pst-exm/archive.pst` fixture. The smoke runs the
+  sampled real PST through UploadSession, Asset/ObjectStore, IngestionJob,
+  ExtractorRun, mail observations, `MailEvidenceBundle`,
+  `PostgreSQLMailEvidenceStore`, and JSON-RPC `query_mail_evidence`
+  owner/denied probes. Public output is hash/status/count only, and the
+  fixture directory is ignored so the 3GB PST is never added to Git or Docker
+  build context. The current retention decision is `retained_by_policy` under
+  `retain_7_days`; this checkpoint does not claim the raw PST object has been
+  deleted after extraction. It proves sampled real PST parser integration only,
+  not full PST parser readiness, actual ChatGPT upload/file transfer,
+  production iframe readiness, live PostgreSQL deployment readiness,
+  production worker leasing, raw mail access, KG writes, wiki projection, or
+  production readiness.
+- The current #21 full PST 100-case evaluation checkpoint adds
+  `scripts/mail_full_pst_100_case_eval.py` for the operator-provided full PST
+  fixture. It runs the full parser path with no `max_messages` sampling,
+  builds a normalized `MailEvidenceBundle`, creates 100 deterministic
+  manifest-bound mail evidence retrieval cases, preflights selected cases
+  through the same governed JSON-RPC `query_mail_evidence` path, and validates
+  only hash/status/count public report fields. The latest dev-container run
+  passed 100/100 cases, including five AI/progress-related cases, with no
+  duplicate response hashes and no staging/scratch leftovers. The query gateway
+  now uses a reusable per-bundle inverted snippet index for repeated evidence
+  queries, but the full PST import/parser pipeline remains the dominant runtime
+  bottleneck and needs phase profiling before any native-parser rewrite. This
+  proves only this operator-provided full PST deterministic evidence-reading evaluation;
+  it does not claim general PST/OST/MSG/EML/MBOX parser readiness, actual
+  ChatGPT upload/file transfer, production iframe readiness, live PostgreSQL
+  deployment readiness, production worker leasing, raw mail access,
+  delete-after-success retention, KG writes, wiki projection, or production
+  readiness.
 - Candidate graph contract models for `CandidateAtom`, `CandidateRelation`, and `ExternalGraphImport` proposal records.
 - Canonical graph contract models for `CanonicalAtom`, `CanonicalEntity`,
   `CanonicalRelation`, and `CanonicalGraphRevision`; canonical commit workflow
@@ -318,6 +475,178 @@ Run the closed-beta readiness smoke inside the dev container:
 ```sh
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/closed_beta_smoke.py --output /tmp/formowl-closed-beta-smoke.json"
 ```
+
+Run the issue #21 mail evidence MCP smoke inside the dev container:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_evidence_mcp_smoke.py --output /tmp/formowl-mail-evidence-mcp-smoke.json"
+```
+
+This smoke uses a synthetic mail fixture to exercise the ChatGPT-free local path
+from asset/job/extractor records to governed JSON-RPC `query_mail_evidence` and
+`answer_mail_case_progress` calls. It validates permission filtering,
+citations, hash-only transcripts, and hash/status/count public reporting. It
+does not claim actual ChatGPT connected upload, production iframe readiness,
+real PST/OST/MSG/EML/MBOX parsing, live PostgreSQL deployment readiness,
+production worker leasing, KG writes, wiki projection, or production readiness.
+
+The current configured semantic JSON-RPC command for ChatGPT-facing mail upload
+task-card testing is:
+
+```sh
+FORMOWL_DATA_DIR=.formowl/data formowl-semantic-mcp-jsonrpc
+```
+
+Set `FORMOWL_MCP_SESSION_ID`, `FORMOWL_MCP_ACTOR_USER_ID`, and
+`FORMOWL_MCP_WORKSPACE_ID` to bind the trusted internal session context for a
+local smoke. Unsafe secret-like values are rejected to safe defaults.
+
+Run the #21 mail upload MCP command preflight:
+
+```sh
+python scripts/mail_upload_mcp_command_smoke.py --output /tmp/formowl-mail-upload-mcp-command-smoke.json
+```
+
+This preflight checks the configured command path and upload task-card session
+creation only. It does not claim actual ChatGPT connection, file transfer, real
+upload iframe readiness, real mail parser readiness, live PostgreSQL readiness,
+production worker leasing, KG writes, wiki projection, or production readiness.
+
+Run the #21 mail upload-surface intake focused tests:
+
+```sh
+python -m unittest discover -s tests -p "test_mail_upload_surface.py"
+```
+
+These tests cover backend receipt and rollback for a session-bound upload
+surface. They do not perform an actual iframe or ChatGPT connected upload.
+
+Run the #21 local HTTP upload-surface contract focused tests:
+
+```sh
+python -m unittest discover -s tests -p "test_mail_upload_http_surface.py"
+```
+
+These tests exercise the stdlib local HTTP GET/POST multipart harness and its
+handoff into backend upload intake. They still do not perform an actual ChatGPT
+connected upload or production iframe test.
+
+Run the #21 MCP-command-to-local-HTTP upload smoke:
+
+```sh
+python scripts/mail_upload_mcp_http_smoke.py --output /tmp/formowl-mail-upload-mcp-http-smoke.json
+```
+
+This smoke proves the configured command can open the upload task and that the
+local HTTP surface can receive one synthetic session-bound mail archive upload.
+It still does not perform an actual ChatGPT connected upload, production iframe
+test, real mail parsing, live PostgreSQL deployment, production worker leasing,
+KG writes, wiki projection, or production readiness.
+
+Run the #21 local upload-to-import-and-query smoke:
+
+```sh
+python scripts/mail_upload_mcp_http_import_smoke.py --output /tmp/formowl-mail-upload-mcp-http-import-smoke.json
+```
+
+This smoke extends the local command-to-HTTP path through the synthetic
+server-side import workflow and store-backed `query_mail_evidence` JSON-RPC
+surface. It still does not perform an actual ChatGPT connected upload,
+production iframe test, real PST/OST/MSG/EML/MBOX parsing, live PostgreSQL
+deployment, production worker leasing, KG writes, wiki projection, or
+production readiness.
+
+Run the #21 sampled real PST ingestion smoke inside the dev container after
+placing the operator-provided PST at `tests/pst-exm/archive.pst`:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_real_pst_smoke.py --output .test-tmp/formowl-real-pst-sampled-smoke.json --mode sampled --sample-message-limit 25"
+```
+
+Validate the saved public report:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_real_pst_smoke.py --validate-report .test-tmp/formowl-real-pst-sampled-smoke.json --output .test-tmp/formowl-real-pst-sampled-validation.json"
+```
+
+This smoke requires `readpst` from the dev image's `pst-utils` package. The
+report must remain hash/status/count-only: do not paste PST contents, concrete
+message identifiers, subjects, senders, attachment names, body text, object
+store locators, parser command lines, scratch paths, SQL, or environment values
+into public reports. The sampled smoke may set
+`supports_real_pst_sampled_parser_claim=true` only after the report validator
+passes. It must keep full-parser, production, ChatGPT upload/file-transfer,
+iframe, worker-leasing, raw-mail-access, KG, and wiki claims false.
+
+Run the #21 full PST 100-case mail evidence evaluation inside the dev container
+after placing the operator-provided PST at `tests/pst-exm/archive.pst`:
+
+```sh
+docker run --rm -e FORMOWL_RUN_FULL_PST_100_CASE_EVAL=1 -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_100_case_eval.py --output .test-tmp/formowl-mail-full-pst-100-case-eval.json"
+```
+
+Validate the saved public report:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_100_case_eval.py --validate-report .test-tmp/formowl-mail-full-pst-100-case-eval.json --output .test-tmp/formowl-mail-full-pst-100-case-validation.json"
+```
+
+This evaluation performs a full parse with no message sampling, then scores 100
+manifest-bound governed `query_mail_evidence` cases. The public report must
+remain hash/status/count-only and must not include query text, PST contents,
+concrete message identifiers, subjects, senders, attachment names, body text,
+object-store locators, parser command lines, scratch paths, SQL, or
+environment values. Passing this evaluator supports only the operator-provided
+full PST 100-case evidence-reading evaluation claim; it is not a general mail
+parser, ChatGPT upload, production iframe, live PostgreSQL, worker-leasing,
+raw-mail-access, KG, wiki, or production readiness claim.
+
+Run the #21 ChatGPT MCP connection preflight package:
+
+```sh
+python scripts/mail_upload_chatgpt_connection_preflight.py --output /tmp/formowl-mail-upload-chatgpt-connection-preflight.json
+```
+
+This preflight proves the command path can be packaged for manual ChatGPT MCP
+configuration without exposing environment values, local paths, upload
+locators, parser controls, storage controls, or backend internals in its public
+report. The manual ChatGPT MCP server configuration should use the stdio command
+`formowl-semantic-mcp-jsonrpc` and operator-supplied local values for
+`FORMOWL_DATA_DIR`, `FORMOWL_MCP_SESSION_ID`,
+`FORMOWL_MCP_ACTOR_USER_ID`, `FORMOWL_MCP_WORKSPACE_ID`, and
+`FORMOWL_MAIL_UPLOAD_EXPIRES_AT`. The next live ChatGPT test must still prove
+the actual ChatGPT-connected session separately.
+
+Run the #21 ChatGPT MCP result packet intake after a manual ChatGPT MCP test:
+
+```sh
+python scripts/mail_upload_chatgpt_result_intake.py --input /tmp/formowl-chatgpt-result-packet.json --output /tmp/formowl-mail-upload-chatgpt-result-intake.json
+```
+
+The input packet must be a bounded operator summary of the ChatGPT MCP session:
+hashes, statuses, counts, expected `initialize` / `tools/list` /
+`tools/call open_upload_session` sequence, task-card shape hashes, and explicit
+attestation that raw ChatGPT detail payloads, environment values, upload
+locators, and mail payloads were excluded. Do not paste raw ChatGPT transcripts,
+PST contents, upload session IDs, local paths, or environment values into the
+packet.
+
+Run the #21 mail evidence ChatGPT result packet intake after a manual
+fixture-backed ChatGPT MCP evidence-reading smoke:
+
+```sh
+python scripts/mail_evidence_chatgpt_result_intake.py --input /tmp/formowl-mail-evidence-chatgpt-result-packet.json --output /tmp/formowl-mail-evidence-chatgpt-result-intake.json
+```
+
+The input packet must be a bounded operator summary of the ChatGPT MCP session:
+hashes, statuses, counts, the expected `initialize` / `tools/list` /
+`query_mail_evidence` owner/denied / `answer_mail_case_progress` owner/denied
+sequence, fixture-smoke contract hashes, owner citation counts, denied
+redaction counts, and explicit attestation that raw transcripts, raw tool
+payloads, mail text, concrete mail identifiers, environment values, upload
+locators, paths, SQL, and parser/storage/worker internals were excluded. Do
+not paste raw ChatGPT transcripts, mail body/snippet text, concrete bundle or
+message IDs, local paths, SQL, or environment values into the packet.
 
 ## Repository Skills
 

@@ -112,9 +112,11 @@ from .models import (
     validate_wiki_projection_spec,
     validate_wiki_projection_policy,
 )
+from .public_safety import assert_no_public_raw_references, safe_public_string
 
 __all__ = [
     "AccessRequest",
+    "assert_no_public_raw_references",
     "AuditLog",
     "Asset",
     "AssetMetadata",
@@ -139,6 +141,7 @@ __all__ = [
     "Observation",
     "PermissionScope",
     "RelationResolutionPolicy",
+    "safe_public_string",
     "SemanticMetadata",
     "SessionIdentity",
     "SourceRef",
