@@ -3057,6 +3057,162 @@ These groups can be split across multiple agents after Slice 1 is stable.
       deployment readiness, production worker leasing, raw mail access,
       delete-after-success retention, KG writes, wiki projection, or
       production readiness.
+  - 2026-07-07 checkpoint S domain-hard full PST baseline:
+    - Baseline measurement implemented and canonically run:
+      `scripts/mail_full_pst_domain_hard_case_eval.py` creates 100
+      practitioner-style retrieval cases across ten business-function lenses,
+      using two positive cross-message cases per positive pattern plus one
+      no-match and one permission-denied probe per domain. Public taxonomy is
+      hash-keyed; query text, evidence ids, mail text, concrete mail
+      identifiers, parser/storage paths, SQL, and environment values remain
+      out of the public report. The private manifest and work directory are
+      preserved under `.test-tmp` for follow-up experiments.
+    - Latest dev-container baseline and saved-report validation both exited 0
+      with `blockers=[]`. Safe counts/timings:
+      fixture size `3152323584`, full parse true, sample limit `0`,
+      parser workers `8`, message count `2746`, observation count `28163`,
+      body segment count `4965`, attachment occurrence count `24`,
+      mail evidence row count `13861`, parse warning count `3350`, 100 cases
+      scored, 20 passed, 80 failed, pass rate `2000` basis points, 80 positive
+      cases, 10 no-match cases, 10 permission-denied cases, duplicate response
+      hash count `0`, fixture hash `41688ms`, upload `308409ms`, import
+      `3160357ms`, bundle read `50147ms`, manifest generation `1938ms`,
+      scoring `66156ms`, query runner setup `319ms`, query loop `65824ms`,
+      artifact entries retained `1`, artifact bytes retained `72849`,
+      staging/scratch leftovers `0`, and work dir cleaned false.
+    - Current baseline outcome: all permission-denied probes passed redaction;
+      no-match probes failed as hard near-miss retrieval cases; only 10 of 80
+      positive evidence-retrieval cases passed. This intentionally does not
+      block structural baseline completion, because checkpoint S measures the
+      current method on harder cases rather than claiming 99/100 quality.
+    - Verification after implementation: focused
+      `test_mail_full_pst_domain_hard_case_eval_script.py` ran 11 OK in the
+      dev container; the full hard-domain baseline plus `--validate-report`
+      exited 0; touched-file Ruff check and format-check passed. Full unittest
+      remains a separate follow-up if this baseline slice is promoted to a
+      completed implementation checkpoint.
+    - Claim boundary: checkpoint S proves only this operator-provided full PST
+      hard-domain evidence-retrieval baseline measurement. It does not prove
+      business answer generation, general PST/OST/MSG/EML/MBOX parser
+      readiness, actual ChatGPT upload or file transfer, production iframe
+      readiness, live PostgreSQL readiness, production worker leasing, raw
+      mail access, KG writes, wiki projection, or production readiness.
+  - 2026-07-07 checkpoint T non-BERT candidate-only KG fusion rescore:
+    - Rescore implemented with
+      `scripts/mail_full_pst_domain_hard_kg_fusion_eval.py` and focused tests
+      in `tests/test_mail_full_pst_domain_hard_kg_fusion_eval_script.py`.
+      The script requires explicit opt-in, an explicit baseline report, and an
+      explicit preserved work directory. It reuses the checkpoint S private
+      manifest and full-PST body observations without reparsing the PST, builds
+      candidate-only mail components before reading the private manifest, and
+      validates only public hash/status/count/timing outputs.
+    - Method boundary: this is a deterministic candidate-graph structure
+      ablation over existing mail observations. It links body observations by
+      thread and bounded domain/conflict term overlap. It does not use BERT,
+      SentenceTransformer, torch, transformers, local LLM extraction, formal
+      scoped ontology contracts, the core supertype lattice, type alignment
+      candidates, ontology revision pins, canonical KG writes, user graph
+      assembly, wiki projection, raw mail access, or business answer
+      generation.
+    - Latest preserved-workdir rescore and saved-report validation both exited
+      0 with `blockers=[]`. Safe results: baseline 20/100; KG rescore 30/100;
+      delta `+10`; 13 baseline-failed cases became KG-passed; 3
+      baseline-passed cases became KG-failed; positive cases 20/80; no-match
+      near-miss cases 0/10; permission-denied cases 10/10; duplicate response
+      hash count `0`; candidate graph node count `4965`; candidate relation
+      count `3460`; thread relation count `3111`; term relation count `349`;
+      component count `1505`; largest component size `1193`; largest
+      component share `2402` basis points; oversized component count `0`;
+      searchable term count `103`; observation load `14060ms`; KG build
+      `44ms`; scoring `83ms`; total `14360ms`.
+    - Current outcome: non-BERT candidate graph fusion improves the difficult
+      full-PST score from 20/100 to 30/100, but the result remains poor and
+      should not be treated as a solved evidence-reading path. It mainly proves
+      the preserved intermediate data can be rescored through a candidate KG
+      structure quickly.
+    - Verification so far: focused
+      `test_mail_full_pst_domain_hard_kg_fusion_eval_script.py` ran 9 OK in
+      the dev container; the preserved-workdir rescore plus saved-report
+      validation exited 0 in the dev container with `blockers=[]`; touched-file
+      Ruff check and format-check passed in the dev container. The container
+      bind-mount run preserved the same counts and took `190596ms` total, with
+      observation load `190366ms`, KG build `28ms`, and scoring `60ms`. The
+      full dev-container unittest ran 573 OK in 835.841s, and full Ruff
+      check/format-check passed with 217 files already formatted.
+    - Reviewer gate: passed 6/6 with read-only reviewers `Rawls`, `Galileo`,
+      `Pascal`, `Plato`, `Chandrasekhar`, and `Confucius`; all returned
+      `RELEASE_DECISION: AGREE` with no blocking findings.
+    - Claim boundary: checkpoint T proves only this candidate-only non-BERT KG
+      fusion rescore over the operator-provided full PST hard-domain baseline.
+      It does not prove ontology-aware KG reasoning, business answer
+      generation, general PST/OST/MSG/EML/MBOX parser readiness, actual
+      ChatGPT upload or file transfer, production iframe readiness, live
+      PostgreSQL readiness, production worker leasing, raw mail access,
+      canonical KG writes, wiki projection, or production readiness.
+  - 2026-07-07 checkpoint U ontology-guided non-BERT ablation:
+    - Ablation implemented with
+      `scripts/mail_full_pst_domain_hard_ontology_ablation_eval.py` and
+      focused tests in
+      `tests/test_mail_full_pst_domain_hard_ontology_ablation_eval_script.py`.
+      The script compares the same 100 case hashes across baseline retrieval,
+      non-BERT candidate KG, and ontology-guided non-BERT candidate KG. It
+      requires explicit opt-in, an explicit baseline report, and an explicit
+      preserved work directory; it does not reparse the PST.
+    - Method boundary: the ontology arm uses formal FormOwl `TypeDefinition`
+      and `TypeMapping` contracts, a hash-bound ontology revision, ten
+      business-function lens mappings into the closed core supertype lattice as
+      `Concept`, and type evidence as candidate scoring/gating only. It does
+      not use BERT, SentenceTransformer, torch, transformers, local LLM
+      extraction, canonical KG/type writes, user graph writes, grants, raw
+      access, wiki projection, or business answer generation.
+    - Latest preserved-workdir ablation and saved-report validation both
+      exited 0 with `blockers=[]`. Safe results: baseline 20/100; non-BERT KG
+      30/100; ontology-guided KG 29/100; ontology delta versus baseline `+9`;
+      ontology delta versus non-BERT KG `-1`; baseline-failed KG-passed `13`;
+      baseline-failed ontology-passed `12`; KG-failed ontology-passed `0`;
+      KG-passed ontology-failed `1`; positive cases: KG 20/80, ontology
+      19/80; no-match near-miss cases: KG 0/10, ontology 0/10;
+      permission-denied cases: KG 10/10, ontology 10/10.
+    - Ontology graph/typing safe aggregates: candidate graph node count
+      `4965`; relation count `3460`; thread relation count `3111`; term
+      relation count `349`; component count `1505`; typed candidate node count
+      `784`; typed component count `229`; ontology type definitions `10`;
+      ontology type mappings `10`; mapped lens count `10`; invalid mapping
+      count `0`; type-evidence coverage `1579` basis points;
+      ontology-supported relation count `1571`; incompatible-core pruned
+      relation count `0`; missing type-evidence count `4181`; weak
+      type-evidence count `0`; conflicting type-evidence count `412`; largest
+      component size `1193`; largest component share `2402` basis points;
+      oversized component count `0`; searchable term count `103`.
+    - Host timings before canonical container verification: observation load
+      `10796ms`; KG plus ontology build `88ms`; scoring `169ms`; total
+      `11164ms`. Canonical dev-container bind-mount timings preserved the same
+      counts but were slower: observation load `190371ms`; KG plus ontology
+      build `70ms`; scoring `127ms`; total `190695ms`.
+    - Current outcome: this is a negative ontology ablation. Formal ontology
+      contracts are wired into the candidate-only scoring/gating arm, but the
+      broad business-function lens does not improve hard mail evidence
+      retrieval. Future ontology work needs finer typed candidate
+      atoms/relations and actual incompatible-core false-positive pruning
+      cases, not just domain-lens-to-`Concept` mapping.
+    - Verification so far: focused ontology ablation tests ran 9 OK in the dev
+      container; focused non-BERT KG rescore tests ran 9 OK in the dev
+      container; preserved-workdir ontology ablation plus saved-report
+      validation exited 0 in the dev container with `blockers=[]`; touched-file
+      Ruff check and format-check passed in the dev container. The full
+      dev-container unittest ran 573 OK in 835.841s, and full Ruff
+      check/format-check passed with 217 files already formatted.
+    - Reviewer gate: passed 6/6 with read-only reviewers `Rawls`, `Galileo`,
+      `Pascal`, `Plato`, `Chandrasekhar`, and `Confucius`; all returned
+      `RELEASE_DECISION: AGREE` with no blocking findings.
+    - Claim boundary: checkpoint U proves only this candidate-only non-BERT
+      ontology-guided ablation over the operator-provided full PST hard-domain
+      baseline. It does not prove ontology-aware business reasoning, improved
+      quality over non-BERT KG, general PST/OST/MSG/EML/MBOX parser readiness,
+      actual ChatGPT upload or file transfer, production iframe readiness,
+      live PostgreSQL readiness, production worker leasing, raw mail access,
+      canonical KG/type writes, user graph writes, grants, wiki projection, or
+      production readiness.
 
 ### Infrastructure and Operations
 

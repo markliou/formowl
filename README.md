@@ -220,6 +220,49 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   deployment readiness, production worker leasing, raw mail access,
   delete-after-success retention, KG writes, wiki projection, or production
   readiness.
+- The current #21 domain-hard full PST baseline adds
+  `scripts/mail_full_pst_domain_hard_case_eval.py`. It keeps the same
+  full-PST governed `query_mail_evidence` path but generates 100 harder
+  practitioner-style retrieval cases across ten business-function lenses, with
+  two positive cross-message cases per positive pattern plus no-match and
+  permission-denied probes per domain. The latest dev-container baseline
+  scored 20/100, with all permission-denied probes redacted and all no-match
+  probes currently failing as hard near-miss retrieval cases. The public report
+  is hash/status/count/timing-only, while the private manifest and work
+  directory are preserved under `.test-tmp` for follow-up experiments. This is
+  a baseline measurement only; it does not claim business answer generation,
+  general parser readiness, actual ChatGPT upload/file transfer, production
+  iframe readiness, live PostgreSQL readiness, production worker leasing, raw
+  mail access, KG writes, wiki projection, or production readiness.
+- The current #21 non-BERT KG fusion rescore adds
+  `scripts/mail_full_pst_domain_hard_kg_fusion_eval.py`. It reuses the
+  preserved domain-hard full-PST work directory and private manifest without
+  reparsing the PST, builds deterministic candidate-only mail components from
+  full-PST body observations, and scores the same 100 hard-domain cases. This
+  path uses thread links and domain/conflict term overlap only; it does not yet
+  use the formal scoped ontology contracts, core supertype lattice, type
+  alignment candidates, ontology revision pins, BERT, SentenceTransformer,
+  torch, transformers, canonical KG writes, or wiki projection. The first
+  rescore improved the hard baseline from 20/100 to 30/100, with positives at
+  20/80, no-match probes still 0/10, and permission-denied probes still
+  10/10. This is a candidate-only research baseline, not business answer
+  generation or production readiness.
+- The current #21 ontology-guided ablation adds
+  `scripts/mail_full_pst_domain_hard_ontology_ablation_eval.py`. It compares
+  the same 100 hard-domain case hashes across three arms: baseline retrieval
+  (20/100), non-BERT candidate KG (30/100), and ontology-guided non-BERT
+  candidate KG (29/100). This arm uses FormOwl `TypeDefinition` and
+  `TypeMapping` contracts, a hash-bound ontology revision, and domain-lens to
+  closed-core-supertype mappings as candidate scoring/gating signals only. It
+  still does not write canonical graph/type state, user graphs, grants, raw
+  access, or wiki projections. The result is negative for quality: ontology
+  guidance as currently implemented did not beat the simpler candidate KG arm.
+- The next #21 ontology experiment is pre-registered in
+  `docs/mail-ontology-native-factorial-design.md`. It treats the negative
+  ablation above as KG-first evidence only, then defines an ontology-native
+  324-arm grid plus 8 controls over typed mail frames, relations, query
+  encoding, scoring/gating, and candidate-pool size. This document is a design
+  checkpoint, not an experiment result.
 - Candidate graph contract models for `CandidateAtom`, `CandidateRelation`, and `ExternalGraphImport` proposal records.
 - Canonical graph contract models for `CanonicalAtom`, `CanonicalEntity`,
   `CanonicalRelation`, and `CanonicalGraphRevision`; canonical commit workflow
@@ -600,6 +643,62 @@ environment values. Passing this evaluator supports only the operator-provided
 full PST 100-case evidence-reading evaluation claim; it is not a general mail
 parser, ChatGPT upload, production iframe, live PostgreSQL, worker-leasing,
 raw-mail-access, KG, wiki, or production readiness claim.
+
+Run the #21 domain-hard full PST mail evidence baseline inside the dev
+container:
+
+```sh
+docker run --rm -e FORMOWL_RUN_FULL_PST_DOMAIN_HARD_CASE_EVAL=1 -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_domain_hard_case_eval.py --output .test-tmp/formowl-mail-domain-hard-case-baseline.json --work-dir .test-tmp/formowl-mail-domain-hard-case-baseline-work"
+```
+
+Validate the saved public report:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_domain_hard_case_eval.py --validate-report .test-tmp/formowl-mail-domain-hard-case-baseline.json --output .test-tmp/formowl-mail-domain-hard-case-baseline-validation.json"
+```
+
+This baseline intentionally allows low pass rates so difficult cases can expose
+retrieval and performance gaps. The public report must remain
+hash/status/count/timing-only. Do not paste query text, PST contents, concrete
+message identifiers, subjects, senders, body text, private manifest contents,
+object-store locators, parser command lines, scratch paths, SQL, or environment
+values into public reports.
+
+Run the #21 non-BERT candidate-only KG fusion rescore over a preserved
+domain-hard work directory:
+
+```sh
+docker run --rm -e FORMOWL_RUN_FULL_PST_DOMAIN_HARD_KG_FUSION_EVAL=1 -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_domain_hard_kg_fusion_eval.py --baseline-report .test-tmp/formowl-mail-domain-hard-case-baseline-v4.json --work-dir .test-tmp/formowl-mail-domain-hard-case-baseline-work-v4 --output .test-tmp/formowl-mail-domain-hard-kg-fusion-eval-v1.json"
+```
+
+Validate the saved KG fusion public report:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_domain_hard_kg_fusion_eval.py --validate-report .test-tmp/formowl-mail-domain-hard-kg-fusion-eval-v1.json --output .test-tmp/formowl-mail-domain-hard-kg-fusion-eval-v1-validation.json"
+```
+
+This rescore does not reparse the PST and does not use BERT or any neural
+package. It is a candidate-only graph-structure experiment over existing
+observations; the current implementation has not yet integrated formal ontology
+governance or canonical graph state.
+
+Run the #21 ontology-guided non-BERT ablation over the same preserved
+domain-hard work directory:
+
+```sh
+docker run --rm -e FORMOWL_RUN_FULL_PST_DOMAIN_HARD_ONTOLOGY_ABLATION_EVAL=1 -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_domain_hard_ontology_ablation_eval.py --baseline-report .test-tmp/formowl-mail-domain-hard-case-baseline-v4.json --work-dir .test-tmp/formowl-mail-domain-hard-case-baseline-work-v4 --output .test-tmp/formowl-mail-domain-hard-ontology-ablation-eval-v1.json"
+```
+
+Validate the saved ontology ablation public report:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_domain_hard_ontology_ablation_eval.py --validate-report .test-tmp/formowl-mail-domain-hard-ontology-ablation-eval-v1.json --output .test-tmp/formowl-mail-domain-hard-ontology-ablation-eval-v1-validation.json"
+```
+
+The ontology arm is a candidate-only ablation. It validates formal ontology
+contract usage and a revision hash, but it does not claim completed ontology
+governance, canonical type writes, canonical KG writes, raw access, wiki
+projection, business answer generation, or production readiness.
 
 Run the #21 ChatGPT MCP connection preflight package:
 

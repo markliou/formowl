@@ -1575,3 +1575,47 @@ Reviewer cost-control rules:
   added, tests were strengthened, and docs clarified that `summary` and
   `benchmarks` are the product integration surfaces; research-method reviewer
   `Chandrasekhar` agreed with no blocking findings.
+- 2026-07-07 #21 full-PST mail KG ablation checkpoint:
+  checkpoint S's hard-domain full-PST baseline was rescored without BERT using
+  preserved intermediate data. The non-BERT candidate KG arm links body
+  observations by thread and bounded domain/conflict terms; the ontology-guided
+  arm additionally uses formal FormOwl `TypeDefinition` and `TypeMapping`
+  contracts, a hash-bound ontology revision, and business-function lens to
+  closed-core-supertype mappings as candidate scoring/gating only. Neither arm
+  reparses the PST, uses neural packages, writes canonical graph/type state,
+  grants raw access, writes user graphs, or projects wiki state. Latest
+  preserved-workdir results: baseline retrieval 20/100, non-BERT candidate KG
+  30/100, ontology-guided non-BERT candidate KG 29/100. The ontology arm is a
+  negative ablation result, not a quality win: positive cases fell from 20/80
+  to 19/80 versus pure KG, no-match cases stayed 0/10, and permission-denied
+  cases stayed 10/10. Canonical dev-container verification passed for focused
+  KG tests 9 OK, focused ontology-ablation tests 9 OK, touched-file Ruff
+  check/format-check, and saved-report validation for both container-generated
+  public reports with `blockers=[]`; full unittest ran 573 OK in 835.841s;
+  full Ruff check/format-check passed with 217 files already formatted. The
+  #21 reviewer gate passed 6/6 with read-only reviewers `Rawls`, `Galileo`,
+  `Pascal`, `Plato`, `Chandrasekhar`, and `Confucius`; all returned
+  `RELEASE_DECISION: AGREE` with no blocking findings. This checkpoint does
+  not change the broad real-evidence KG acceptance blockers or support a broad
+  completion claim.
+- 2026-07-07 #21 ontology-native factorial redesign checkpoint:
+  after the user challenged the negative ontology result as unfairly KG-first,
+  the next active mail-evidence research goal is to redesign and rerun the
+  hard-domain comparison with ontology-native encoding. The pre-registration
+  draft is `docs/mail-ontology-native-factorial-design.md`. It records the
+  four math/research subagent design positions (`Jason`, `Maxwell`,
+  `Hypatia`, and `Planck`) and replaces the earlier KG-first 326 ordered
+  operator search with a staged 332-entry design: 324 ontology-native arms
+  across type inventory, corpus encoder, query encoder, scoring/gating mode,
+  and candidate-pool size, plus 8 controls. The intended representation builds
+  typed segment, entity, mail-frame, value, and message-context nodes before
+  graph fusion, and ranks compact typed proof neighborhoods instead of large
+  thread/domain components. This is a design checkpoint only: no ontology-native
+  experiment result is claimed yet. Next action is to pass the design audit,
+  implement the pre-registered harness over the preserved `.test-tmp`
+  full-PST work directory without deleting intermediates, run the 332 entries,
+  validate only hash/status/count/timing public reports, share redacted results
+  back to the four design reviewers, and rerun if they find a stronger fair
+  design. Claim boundaries remain candidate-only with no canonical graph/type
+  writes, no user graph writes, no raw access, no wiki projection, and no broad
+  KG real-evidence completion claim.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 import unittest
 
 import _paths  # noqa: F401
@@ -51,6 +52,7 @@ class MailPhaseWorkflowTests(unittest.TestCase):
             observations,
             created_at="2026-06-30T10:00:00+00:00",
         )
+        self.assertRegex(pack.mail_evidence_pack_id, r"^mailpack_[0-9a-f]{24}$")
         persisted_pack = MailEvidencePackStore(temp_dir).create(pack)
         self.assertEqual(persisted_pack.to_dict(), pack.to_dict())
         self.assertEqual(
@@ -239,6 +241,45 @@ class MailPhaseWorkflowTests(unittest.TestCase):
         self.assertEqual(store.list(), [])
         evidence_dir = temp_dir / "mail" / "evidence-packs"
         self.assertEqual(list(evidence_dir.glob("*.json")), [])
+
+    def test_mail_evidence_pack_id_generation_is_constrained_to_safe_file_name(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-phase-evidence-pack-id-contract")
+        stored = _run_mail_fixture(temp_dir, _mail_archive())
+
+        pack = build_mail_evidence_pack(
+            stored.observations,
+            created_at="2026-06-30T10:00:00+00:00",
+        )
+        self.assertRegex(pack.mail_evidence_pack_id, r"^mailpack_[0-9a-f]{24}$")
+        persisted = MailEvidencePackStore(temp_dir).create(pack)
+
+        evidence_path = temp_dir / "mail" / "evidence-packs" / f"{pack.mail_evidence_pack_id}.json"
+        self.assertTrue(evidence_path.is_file())
+        self.assertEqual(persisted.mail_evidence_pack_id, pack.mail_evidence_pack_id)
+
+    def test_mail_evidence_pack_id_generator_blocks_unsafe_future_stable_ids(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-phase-unsafe-generated-pack-id")
+        stored = _run_mail_fixture(temp_dir, _mail_archive())
+
+        with patch(
+            "formowl_mail.evidence.stable_resource_contract_id",
+            return_value="mailpack:unsafe",
+        ):
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "mail_evidence_pack_id generator produced an unsafe file name",
+            ):
+                build_mail_evidence_pack(
+                    stored.observations,
+                    created_at="2026-06-30T10:00:00+00:00",
+                )
+
+        evidence_dir = temp_dir / "mail" / "evidence-packs"
+        self.assertFalse(evidence_dir.exists())
 
     def test_case_progress_rejects_unsafe_public_payloads(self) -> None:
         pack = MailEvidencePack(

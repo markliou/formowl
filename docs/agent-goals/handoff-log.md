@@ -6,6 +6,83 @@ status in each role's goal file and task completion in
 
 ## 2026-07-07
 
+- #21 ontology-native factorial redesign started after the user challenged the
+  negative ontology ablation as unfairly KG-first. The pre-registration draft
+  is `docs/mail-ontology-native-factorial-design.md`. Four math/research
+  subagents shaped the design: `Jason` and `Maxwell` required a rework toward
+  typed proof graphs and deterministic mail-native frames before graph fusion;
+  `Hypatia` allowed the design only as pre-registered/exploratory unless
+  holdout or correction supports confirmatory claims; and `Planck` proposed a
+  staged 324-arm ontology-native grid plus 8 controls instead of arbitrary
+  ordered permutations. The next implementation must build typed segment,
+  entity, mail-frame, value, and message-context state before opening the
+  private hard-case manifest; compare identical case hashes against KG-only;
+  preserve the `.test-tmp` intermediates; emit only safe public aggregates; and
+  share the redacted result packet back to those four reviewers before any
+  final claim. No ontology-native result is claimed yet.
+
+- #21 checkpoints T/U non-BERT KG and ontology-guided ablation completed as
+  measurements over the preserved domain-hard full-PST work directory.
+  `scripts/mail_full_pst_domain_hard_kg_fusion_eval.py` rescored checkpoint S
+  with deterministic candidate-only mail components built from body
+  observations before reading the private manifest. Latest preserved-workdir
+  run plus saved-report validation exited 0 with `blockers=[]`: baseline
+  20/100, candidate KG 30/100, positive 20/80, no-match 0/10,
+  permission-denied 10/10, candidate nodes `4965`, candidate relations `3460`,
+  components `1505`, largest component `1193`, and total rescore `14360ms`.
+  `scripts/mail_full_pst_domain_hard_ontology_ablation_eval.py` then compared
+  the same 100 case hashes across baseline retrieval, candidate KG, and
+  ontology-guided candidate KG. It uses formal FormOwl `TypeDefinition` and
+  `TypeMapping` contracts, hash-bound ontology revision evidence, and
+  business-function lens mappings into the closed core supertype lattice as
+  candidate scoring/gating only. Latest preserved-workdir ablation plus
+  saved-report validation exited 0 with `blockers=[]`: baseline 20/100,
+  candidate KG 30/100, ontology-guided KG 29/100, positive KG 20/80 versus
+  ontology 19/80, no-match 0/10 for both, permission-denied 10/10 for both,
+  ontology type definitions `10`, type mappings `10`, typed candidate nodes
+  `784`, typed components `229`, type-evidence coverage `1579` basis points,
+  ontology-supported relations `1571`, missing type-evidence nodes `4181`,
+  conflicting type-evidence nodes `412`, and total ablation `11164ms`. This is
+  a negative ontology ablation: the broad business-function ontology lens did
+  not beat the simpler candidate KG. Canonical dev-container verification now
+  passed for focused KG tests 9 OK, focused ontology-ablation tests 9 OK,
+  touched-file Ruff check/format-check, and saved-report validation for both
+  container-generated public reports with `blockers=[]`. The container
+  bind-mount runs preserved the same counts but were slower: KG total
+  `190596ms`, ontology ablation total `190695ms`, both dominated by
+  observation loading. Full dev-container unittest ran 573 OK in 835.841s, and
+  full Ruff check/format-check passed with 217 files already formatted. The
+  #21 reviewer gate passed 6/6 with read-only reviewers `Rawls`, `Galileo`,
+  `Pascal`, `Plato`, `Chandrasekhar`, and `Confucius`; all returned
+  `RELEASE_DECISION: AGREE` with no blocking findings. No intermediate
+  `.test-tmp` data was deleted.
+
+- #21 checkpoint S domain-hard full PST baseline measurement completed.
+  `scripts/mail_full_pst_domain_hard_case_eval.py` now runs the
+  operator-provided full PST through the governed Phase 1 mail evidence path,
+  builds 100 harder retrieval cases across ten business-function lenses, keeps
+  public case taxonomy hash-keyed, and preserves the private manifest/work
+  directory under `.test-tmp` for follow-up experiments. The baseline is
+  intentionally a measurement, not a 99/100 completion gate. Latest
+  dev-container run and saved-report validation both exited 0 with
+  `blockers=[]`. Safe counts/timings: fixture size `3152323584`, full parse
+  true, parser workers `8`, message count `2746`, observation count `28163`,
+  body segment count `4965`, mail evidence row count `13861`, parse warning
+  count `3350`, 100 cases scored, 20 passed, 80 failed, pass rate `2000`
+  basis points, 80 positive cases, 10 no-match cases, 10 permission-denied
+  cases, duplicate response hash count `0`, upload `308409ms`, import
+  `3160357ms`, bundle read `50147ms`, manifest generation `1938ms`, scoring
+  `66156ms`, query runner setup `319ms`, query loop `65824ms`, retained
+  artifact bytes `72849`, staging/scratch leftovers `0`, and work dir cleaned
+  false. All permission-denied probes passed redaction; no-match probes failed
+  as near-miss retrieval cases; only 10 of 80 positive retrieval cases passed.
+  Focused hard-domain tests ran 11 OK in the dev container, and touched-file
+  Ruff check/format-check passed. Claim only this hard-domain
+  evidence-retrieval baseline measurement; do not claim business answer
+  generation, general parser readiness, actual ChatGPT upload/file transfer,
+  production iframe readiness, live PostgreSQL readiness, production worker
+  leasing, raw mail access, KG/wiki writes, or production readiness.
+
 - #21 checkpoint R full PST 100-case evidence-reading evaluation is
   implemented, reviewer-gated, and canonically verified.
   The new `scripts/mail_full_pst_100_case_eval.py` harness runs the
