@@ -65,6 +65,7 @@ class IngestionPackageTests(unittest.TestCase):
                 "FixtureOcrExtractor",
                 "FixtureVideoSceneExtractor",
                 "PlainTextObservationExtractor",
+                "PstMailArchiveExtractor",
             ],
         )
         self.assertEqual(

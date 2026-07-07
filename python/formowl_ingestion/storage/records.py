@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import time
 from typing import Any, Callable, Generic, TypeVar
+import uuid
 
 from formowl_contract import (
     Asset,
@@ -47,6 +49,11 @@ class _JsonRecordStore(Generic[T]):
             return None
         return self.factory(_read_json(path))
 
+    def delete(self, record_id: str) -> None:
+        path = self._record_path(record_id)
+        if path.exists():
+            path.unlink()
+
     def list(self) -> list[T]:
         return [self.factory(_read_json(path)) for path in sorted(self.base_dir.glob("*.json"))]
 
@@ -82,6 +89,9 @@ class AssetStore:
 
     def list(self) -> list[Asset]:
         return self._store.list()
+
+    def delete(self, asset_id: str) -> None:
+        self._store.delete(asset_id)
 
 
 class JobStore:
@@ -173,9 +183,20 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
+    temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     temp_path.write_text(
         json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    temp_path.replace(path)
+    last_error: PermissionError | None = None
+    for attempt in range(5):
+        try:
+            temp_path.replace(path)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            time.sleep(0.05 * (attempt + 1))
+    if temp_path.exists():
+        temp_path.unlink(missing_ok=True)
+    if last_error is not None:
+        raise last_error

@@ -583,23 +583,57 @@ AI-generated image descriptions must be marked as model-generated and reviewable
 
 Mail archives should be ingested through a formal asset pipeline, not by a parser directly watching and mutating folders.
 
+For Phase 1, the primary user path is direct upload through a session-bound
+FormOwl upload surface / iframe. Local Companion import is optional, advanced,
+or policy-triggered; it is not required for ordinary Phase 1 users. The two
+parser locations must share one ingestion contract and emit the same
+`MailEvidenceBundle` shape so downstream stores, retrieval, and MCP tools do
+not fork by parser location.
+
 Recommended flow:
 
 ```text
-user uploads or drops PST, OST, MSG, or EML resource
--> Ingress API or gateway detects a stable file
--> compute sha256 and technical metadata
--> register immutable Asset in PostgreSQL
--> create IngestionJob
--> worker leases job
--> worker copies archive to local scratch SSD
--> parser extracts locally
--> attachments become independent Assets
--> email messages become Observations
--> semantic metadata and candidate graph are generated later
+user creates UploadSession for PST, OST, MSG, EML, or MBOX import
+-> user uploads full archive through the session-bound upload surface / iframe
+-> archive enters ingest staging
+-> compute archive sha256 and technical metadata
+-> register immutable Asset metadata in PostgreSQL
+-> create IngestionJob and mail import session
+-> server-side worker leases job
+-> worker parses incrementally from staging/local scratch
+-> parser emits MailEvidenceBundle
+-> PostgreSQL stores normalized mail evidence
+-> raw archive is deleted or retention-controlled after successful extraction
+-> semantic metadata, candidate graph, and KG projection are generated later
 ```
 
-PST, OST, MSG, and EML inputs are immutable raw assets. The parser must not directly mutate the canonical graph. It emits versioned `ExtractorRun` outputs, observations, and attachment assets.
+PST, OST, MSG, EML, and MBOX inputs are import carriers. For Phase 1, the
+normalized mail evidence rows become the operational evidence layer after
+successful extraction. Raw archives and attachment bytes stay in ObjectStore /
+staging / retention-controlled storage, not PostgreSQL, and the raw archive is
+not permanent default storage unless a legal, audit, or explicit retention
+policy requires it. The parser must not directly mutate the canonical graph.
+It emits a versioned `ExtractorRun`, a mail parse run, warnings/errors, mail
+evidence rows, observations where the current implementation uses
+ObservationStore, and attachment asset or attachment byte references required
+by policy.
+
+Recommended Phase 1 normalized mail evidence tables/contracts:
+
+```text
+mail_import_session
+mail_archive_occurrence
+mail_folder_occurrence
+email_message
+email_message_occurrence
+email_body_segment
+email_attachment
+email_attachment_occurrence
+quoted_message_candidate
+embedded_message_relation
+mail_parse_run
+mail_parse_warning
+```
 
 Attachments should keep occurrence links back to the source message and source archive. Email deduplication must preserve occurrence because the same message or attachment may appear in multiple folders, exports, or user mailboxes.
 
@@ -630,6 +664,30 @@ email_attachment_occurrence
 mail_folder_occurrence
 ```
 
+Logical email message modeling:
+
+```text
+top-level PST mail item -> email_message
+embedded .msg / .eml / message/rfc822 attachment -> embedded email_message
+quoted or forwarded body text -> quoted_message_candidate first
+```
+
+Quoted body content must not automatically become a formal `email_message`
+because it may be partial, edited, reformatted, or duplicated in reply chains.
+It should link to an existing `email_message` only when matching is reliable.
+
+Dedup bypass behavior must preserve lineage:
+
+```text
+known archive hash -> skip exact duplicate carrier processing when policy allows
+known message fingerprint -> skip duplicate body insertion and downstream work,
+  still insert email_message_occurrence
+known attachment sha256 -> skip duplicate byte storage,
+  still insert email_attachment_occurrence
+known embedded message -> skip duplicate message body,
+  still insert embedded_message_relation / occurrence lineage
+```
+
 #### Official FormOwl Mail Evidence Adapter boundary
 
 The FormOwl Mail Evidence Adapter is an `ExtractorAdapter` boundary for
@@ -645,6 +703,11 @@ archives, but it must receive FormOwl identifiers such as `asset_id`,
 `object_uri`, `storage_backend_id`, `permission_scope`, `workspace_id`, and
 `source_ref`. It must not use raw local paths, NAS paths, mailbox account
 credentials, or parser scratch locations as public identity.
+
+Server-side parser adapters and optional Local Companion adapters are both
+inside this boundary. Server-side adapters parse uploaded archives from ingest
+staging; Companion adapters may parse locally or emit manifest/delta output.
+Both must produce the same `MailEvidenceBundle` contract.
 
 Within this boundary a mail adapter may:
 
@@ -684,10 +747,11 @@ state, and tests.
 The current `FixtureMailArchiveExtractor` is the official synthetic conformance
 baseline for this boundary. It proves archive, mailbox, folder, message, body
 segment, attachment occurrence, source provenance, permission scope, stable
-observation IDs, and raw-path non-exposure for JSON-backed mail fixtures. It is
-not a production PST/EML parser, and it does not complete the normalized mail
-schema, retrieval, candidate bridge, case-progress QA, or preflight readiness
-work.
+observation IDs, and raw-path non-exposure for JSON-backed mail fixtures. The
+extractor itself still only parses observations; the synthetic completion
+profile below adds separate evidence/search, candidate bridge, case-progress
+QA, and preflight helpers for JSON fixtures. This is not a production
+PST/OST/MSG/EML parser or real mailbox retrieval/index readiness claim.
 
 #### Synthetic mail phase completion profile
 

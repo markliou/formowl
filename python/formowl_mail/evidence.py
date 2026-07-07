@@ -14,11 +14,9 @@ from formowl_contract import (
     to_plain,
 )
 
+from ._guards import assert_public_payload_safe, safe_public_string
+
 _SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
-_RAW_REFERENCE = re.compile(
-    r"(^|[\s'\"])(/|[A-Za-z]:[\\/]|\\\\|file://|s3://|smb://|nfs://|" r"postgres(?:ql)?://)",
-    re.IGNORECASE,
-)
 
 
 @dataclass(frozen=True)
@@ -51,8 +49,9 @@ class MailEvidenceRecord:
     attachments: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        _assert_no_raw_references(to_plain(self))
-        return to_plain(self)
+        payload = to_plain(self)
+        assert_public_payload_safe(payload, "mail_evidence_record")
+        return payload
 
 
 @dataclass(frozen=True)
@@ -64,8 +63,9 @@ class MailSearchResult:
     observation_ids: list[str]
 
     def to_dict(self) -> dict[str, Any]:
-        _assert_no_raw_references(to_plain(self))
-        return to_plain(self)
+        payload = to_plain(self)
+        assert_public_payload_safe(payload, "mail_search_result")
+        return payload
 
 
 @dataclass(frozen=True)
@@ -78,8 +78,9 @@ class MailEvidencePack:
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        _assert_no_raw_references(to_plain(self))
-        return to_plain(self)
+        payload = to_plain(self)
+        assert_public_payload_safe(payload, "mail_evidence_pack")
+        return payload
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "MailEvidencePack":
@@ -123,7 +124,7 @@ class MailEvidencePack:
             created_at=str(value["created_at"]),
             warnings=list(value.get("warnings", [])),
         )
-        _assert_no_raw_references(pack.to_dict())
+        assert_public_payload_safe(pack.to_dict(), "mail_evidence_pack")
         return pack
 
 
@@ -359,13 +360,7 @@ def _required_location(observation: Observation, field_name: str) -> str:
 
 
 def _safe_string(value: Any, field_name: str) -> str:
-    if value is None:
-        return ""
-    if not isinstance(value, str):
-        raise ContractValidationError(f"{field_name} must be a string")
-    if _RAW_REFERENCE.search(value):
-        raise ContractValidationError(f"{field_name} must not contain raw paths or locators")
-    return value
+    return safe_public_string(value, field_name)
 
 
 def _string_or_none(value: Any) -> str | None:
@@ -392,27 +387,6 @@ def _write_json(path: Path, payload: Any) -> None:
         encoding="utf-8",
     )
     temp_path.replace(path)
-
-
-def _assert_no_raw_references(payload: Any) -> None:
-    violations: list[str] = []
-
-    def walk(value: Any, path: str) -> None:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                walk(item, f"{path}.{key}" if path else str(key))
-        elif isinstance(value, list):
-            for index, item in enumerate(value):
-                walk(item, f"{path}[{index}]")
-        elif isinstance(value, str) and _RAW_REFERENCE.search(value):
-            violations.append(path)
-
-    walk(payload, "")
-    if violations:
-        raise ContractValidationError(
-            "mail evidence public payload contains raw paths or locators: "
-            + ", ".join(sorted(violations))
-        )
 
 
 __all__ = [

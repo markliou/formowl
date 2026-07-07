@@ -6,6 +6,7 @@ from typing import Any, Iterable
 
 from formowl_contract import (
     Observation,
+    assert_no_public_raw_references,
     now_iso,
     sha256_json,
     stable_observation_id,
@@ -18,7 +19,6 @@ from ...extraction import ExtractionInput, ExtractionResult
 _SUPPORTED_MAIL_MIME_TYPES = [
     "application/vnd.formowl.mail-archive+json",
     "application/json",
-    "message/rfc822",
 ]
 
 
@@ -64,6 +64,7 @@ class FixtureMailArchiveExtractor:
             mailbox_id=mailbox_id,
             source_ref=source_ref,
         ):
+            _validate_public_mail_observation(parsed)
             observation_id = stable_observation_id(
                 asset_id=extraction_input.asset.asset_id,
                 extractor_run_id=extraction_input.extractor_run_id,
@@ -149,8 +150,6 @@ def _iter_mail_observations(
         normalized_subject = _normalize_subject(subject)
         thread_id = _thread_id(message, normalized_subject=normalized_subject)
         message_fingerprint = _message_fingerprint(
-            archive_id=archive_id,
-            mailbox_id=mailbox_id,
             message=message,
             normalized_subject=normalized_subject,
             sender=sender,
@@ -172,6 +171,7 @@ def _iter_mail_observations(
             "mailbox_id": mailbox_id,
             "folder_path_hash": folder_path_hash,
             "message_id": message_id,
+            "message_occurrence_id": occurrence_id,
             "thread_id": thread_id,
         }
         yield _MailObservation(
@@ -180,7 +180,6 @@ def _iter_mail_observations(
             location={
                 **base_location,
                 "message_index": message_index,
-                "message_occurrence_id": occurrence_id,
             },
             payload=_with_source(
                 {
@@ -355,15 +354,24 @@ def _headers(message: dict[str, Any]) -> list[dict[str, str]]:
         values = value if isinstance(value, list) else [value]
         if not all(isinstance(item, str) for item in values):
             raise ValueError(f"mail archive fixture header value must be a string: {name}")
+        header_name = _safe_header_name(name)
         header_value = ", ".join(item.strip() for item in values if item.strip())
         if header_value:
             normalized.append(
                 {
-                    "header_name": name.strip().lower(),
+                    "header_name": header_name,
                     "header_value": header_value,
                 }
             )
     return normalized
+
+
+def _safe_header_name(name: str) -> str:
+    header_name = name.strip().lower()
+    # Header names become public evidence dict keys downstream, so validate the
+    # normalized name through the shared dict-key guard before emitting it.
+    assert_no_public_raw_references({header_name: "mail_header"}, "mail fixture header name")
+    return header_name
 
 
 def _thread_id(message: dict[str, Any], *, normalized_subject: str) -> str:
@@ -371,6 +379,7 @@ def _thread_id(message: dict[str, Any], *, normalized_subject: str) -> str:
     if explicit_thread_id not in (None, ""):
         if not isinstance(explicit_thread_id, str):
             raise ValueError("mail archive fixture field must be a string: thread_id")
+        assert_no_public_raw_references(explicit_thread_id, "mail fixture field thread_id")
         return explicit_thread_id
 
     references = message.get("references")
@@ -378,6 +387,7 @@ def _thread_id(message: dict[str, Any], *, normalized_subject: str) -> str:
         if isinstance(references, list):
             if not all(isinstance(item, str) for item in references):
                 raise ValueError("mail archive fixture references must contain only strings")
+            assert_no_public_raw_references(references, "mail fixture field references")
             if references:
                 return stable_resource_contract_id(
                     "mailthread",
@@ -385,6 +395,7 @@ def _thread_id(message: dict[str, Any], *, normalized_subject: str) -> str:
                     {"references": references},
                 )
         elif isinstance(references, str):
+            assert_no_public_raw_references(references, "mail fixture field references")
             return stable_resource_contract_id(
                 "mailthread",
                 "MailThread",
@@ -397,6 +408,7 @@ def _thread_id(message: dict[str, Any], *, normalized_subject: str) -> str:
     if in_reply_to not in (None, ""):
         if not isinstance(in_reply_to, str):
             raise ValueError("mail archive fixture field must be a string: in_reply_to")
+        assert_no_public_raw_references(in_reply_to, "mail fixture field in_reply_to")
         return stable_resource_contract_id(
             "mailthread",
             "MailThread",
@@ -424,8 +436,6 @@ def _normalize_subject(subject: str) -> str:
 
 def _message_fingerprint(
     *,
-    archive_id: str,
-    mailbox_id: str,
     message: dict[str, Any],
     normalized_subject: str,
     sender: str,
@@ -443,8 +453,6 @@ def _message_fingerprint(
             "sent_at": sent_at,
             "body_hash": message.get("body_hash"),
             "attachment_hashes": sorted(attachment_hashes),
-            "archive_id": archive_id,
-            "mailbox_id": mailbox_id,
         }
     )
 
@@ -455,6 +463,7 @@ def _required_str(value: dict[str, Any], field_name: str) -> str:
         raise ValueError(f"mail archive fixture missing required field: {field_name}")
     if not isinstance(item, str):
         raise ValueError(f"mail archive fixture field must be a string: {field_name}")
+    assert_no_public_raw_references(item, f"mail fixture field {field_name}")
     return item
 
 
@@ -462,7 +471,29 @@ def _with_source(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if value is not None}
 
 
+def _validate_public_mail_observation(observation: _MailObservation) -> None:
+    assert_no_public_raw_references(
+        observation.location,
+        f"mail observation location {observation.observation_type}",
+    )
+    assert_no_public_raw_references(
+        observation.payload,
+        f"mail observation payload {observation.observation_type}",
+    )
+    # Body segments carry source mail evidence. Other observation text is
+    # metadata such as subjects, headers, folder names, and attachment names.
+    if observation.observation_type != "email_body_segment" and observation.text:
+        assert_no_public_raw_references(
+            observation.text,
+            f"mail observation text {observation.observation_type}",
+        )
+
+
 def _source_payload(source_ref: Any) -> dict[str, Any] | None:
     if source_ref is None:
         return None
-    return to_plain(source_ref)
+    payload = to_plain(source_ref)
+    # Source refs are copied into public observation payloads, so reject
+    # backend locators before any mail observations are generated.
+    assert_no_public_raw_references(payload, "mail_source_ref")
+    return payload

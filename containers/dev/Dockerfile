@@ -18,7 +18,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list; \
     fi \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git \
+    && apt-get install -y --no-install-recommends ca-certificates curl git pst-utils \
     && case "${TARGETARCH:-amd64}" in \
         amd64) gitleaks_arch="x64" ;; \
         arm64) gitleaks_arch="arm64" ;; \

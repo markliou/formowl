@@ -1102,6 +1102,58 @@ class OpenProjectAdapterTests(unittest.TestCase):
         self.assertIsNone(snapshot_store.get_snapshot(snapshot_id))
         self.assertIsNone(snapshot_store.get_snapshot_payload(snapshot_id))
 
+    def test_evidence_snapshot_rename_permission_fallback_publishes_complete_snapshot(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("openproject-evidence-snapshot-rename-fallback")
+        snapshot_store = FileEvidenceSnapshotStore(temp_dir)
+        snapshot_id = "ev_openproject_rename_fallback"
+        original_rename = Path.rename
+        rename_call_count = 0
+
+        def deny_temporary_directory_rename(self: Path, target: Path) -> Path:
+            nonlocal rename_call_count
+            if self.name.startswith(f"{snapshot_id}.tmp-"):
+                rename_call_count += 1
+                raise PermissionError("bind mount denied directory rename")
+            return original_rename(self, target)
+
+        with patch.object(Path, "rename", deny_temporary_directory_rename):
+            result = snapshot_store.save_snapshot(
+                {
+                    "snapshot": {
+                        "evidence_snapshot_id": snapshot_id,
+                        "captured_at": "2026-06-18T10:00:00+00:00",
+                        "source_refs": [
+                            {
+                                "source_system": "openproject",
+                                "source_type": "work_package",
+                                "source_id": "42",
+                            }
+                        ],
+                    },
+                    "request_payload": {"source_id": "42"},
+                    "response_payload": {"subject": "Rename fallback snapshot"},
+                    "normalized_markdown": "# Rename fallback snapshot\n",
+                }
+            )
+
+        final_directory = (
+            Path(temp_dir) / "raw" / "evidence" / "openproject" / "2026" / "06" / "18" / snapshot_id
+        )
+        self.assertEqual(rename_call_count, 1)
+        self.assertEqual(result["evidence_snapshot_id"], snapshot_id)
+        self.assertTrue(final_directory.is_dir())
+        self.assertEqual(list(final_directory.parent.glob(f"{snapshot_id}.tmp-*")), [])
+        snapshot = snapshot_store.get_snapshot(snapshot_id)
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot["evidence_snapshot_id"], snapshot_id)
+        self.assertEqual(
+            snapshot_store.get_snapshot_payload(snapshot_id),
+            {"subject": "Rename fallback snapshot"},
+        )
+
     def test_evidence_snapshot_ids_reject_globs_paths_and_non_strings(self) -> None:
         temp_dir = _paths.fresh_test_dir("openproject-safe-evidence-snapshot-ids")
         snapshot_store = FileEvidenceSnapshotStore(temp_dir)

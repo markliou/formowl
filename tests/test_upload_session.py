@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from typing import Any
 
 import _paths  # noqa: F401
 from formowl_auth import FileAuditLogStore
@@ -37,6 +38,7 @@ class UploadSessionTests(unittest.TestCase):
 
         self.assertTrue(upload_session.upload_session_id.startswith("upload_"))
         self.assertEqual(upload_session.actor_user_id, "user_yifan")
+        self.assertEqual(upload_session.session_id, "session_001")
         self.assertEqual(
             upload_session.intent, "Upload meeting notes for source-backed extraction."
         )
@@ -79,6 +81,7 @@ class UploadSessionTests(unittest.TestCase):
             status="pending",
             created_at=created_at,
             audit_log_id="audit_001",
+            session_id="session_001",
         ).to_dict()
 
         store = UploadSessionStore(temp_dir)
@@ -140,6 +143,66 @@ class UploadSessionTests(unittest.TestCase):
 
                 self.assertEqual(upload_store.list(), [])
                 self.assertEqual(audit_store.list(), [])
+
+    def test_create_upload_session_audit_failure_leaves_no_session_side_effect(self) -> None:
+        temp_dir = _paths.fresh_test_dir("upload-session-audit-failure")
+        audit_store = _FailingAuditLogStore(temp_dir)
+        upload_store = UploadSessionStore(temp_dir)
+
+        with self.assertRaises(RuntimeError):
+            create_upload_session(
+                upload_session_store=upload_store,
+                audit_store=audit_store,
+                actor_user_id="user_yifan",
+                session_id="session_001",
+                workspace_id="workspace_formowl",
+                owner_scope_type="project",
+                owner_scope_id="project_formowl",
+                intent="Upload meeting notes for source-backed extraction.",
+                intended_asset_type="document",
+                ingestion_profile="plain_text",
+                visibility_scope="workspace",
+                permission_scope=PermissionScope.project("project_formowl"),
+                expires_at="2026-06-18T10:00:00+00:00",
+                created_at="2026-06-17T10:00:00+00:00",
+            )
+
+        self.assertEqual(upload_store.list(), [])
+
+    def test_create_upload_session_store_failure_rolls_back_audit_side_effect(self) -> None:
+        temp_dir = _paths.fresh_test_dir("upload-session-store-failure")
+        audit_store = FileAuditLogStore(temp_dir)
+        upload_store = _FailingUploadSessionStore(temp_dir)
+
+        with self.assertRaises(RuntimeError):
+            create_upload_session(
+                upload_session_store=upload_store,  # type: ignore[arg-type]
+                audit_store=audit_store,
+                actor_user_id="user_yifan",
+                session_id="session_001",
+                workspace_id="workspace_formowl",
+                owner_scope_type="project",
+                owner_scope_id="project_formowl",
+                intent="Upload meeting notes for source-backed extraction.",
+                intended_asset_type="document",
+                ingestion_profile="plain_text",
+                visibility_scope="workspace",
+                permission_scope=PermissionScope.project("project_formowl"),
+                expires_at="2026-06-18T10:00:00+00:00",
+                created_at="2026-06-17T10:00:00+00:00",
+            )
+
+        self.assertEqual(audit_store.list(), [])
+
+
+class _FailingAuditLogStore(FileAuditLogStore):
+    def create(self, audit_log: Any) -> Any:
+        raise RuntimeError("audit write failed")
+
+
+class _FailingUploadSessionStore(UploadSessionStore):
+    def create(self, upload_session: Any) -> Any:
+        raise RuntimeError("upload session write failed")
 
 
 if __name__ == "__main__":

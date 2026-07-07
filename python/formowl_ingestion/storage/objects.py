@@ -108,6 +108,16 @@ class FileObjectStore:
         actual_hash, actual_size = _hash_file(payload_path)
         return actual_hash == expected_hash and actual_size == stored.file_size
 
+    def delete_object(self, object_uri: str) -> None:
+        payload_path = self.resolve_object_path(object_uri)
+        if payload_path is None:
+            return
+        object_dir = payload_path.parent
+        metadata_path = object_dir / "metadata.json"
+        payload_path.unlink(missing_ok=True)
+        metadata_path.unlink(missing_ok=True)
+        _remove_empty_parents(object_dir, stop_at=object_dir.parents[2])
+
     def public_object_dict(self, object_uri: str) -> dict[str, Any] | None:
         stored = self.get_object(object_uri)
         if stored is None:
@@ -233,3 +243,16 @@ def _write_json(path: Path, payload: Any) -> None:
         json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+
+
+def _remove_empty_parents(path: Path, *, stop_at: Path) -> None:
+    current = path
+    stop = stop_at.resolve()
+    while current.exists() and current.resolve().is_relative_to(stop):
+        if current.resolve() == stop:
+            return
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent

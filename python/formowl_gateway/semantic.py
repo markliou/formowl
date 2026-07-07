@@ -4,7 +4,14 @@ from dataclasses import dataclass
 import re
 from typing import Any, Callable, Mapping
 
-from formowl_contract import AuditLog, McpResultEnvelope, now_iso, sha256_json, to_plain
+from formowl_contract import (
+    AuditLog,
+    ContractValidationError,
+    McpResultEnvelope,
+    now_iso,
+    sha256_json,
+    to_plain,
+)
 
 _FORBIDDEN_PUBLIC_KEYS = {
     "absolute_path",
@@ -42,14 +49,26 @@ _FORBIDDEN_PUBLIC_VALUE_PATTERNS = (
     re.compile(r"(^|[\"'\s])/(srv|home|tmp|var|mnt|opt|root)/", re.IGNORECASE),
     re.compile(r"\b[a-z]:\\", re.IGNORECASE),
     re.compile(
-        r"\b(file|smb|nfs|s3|minio|gs|azure|postgres|postgresql|mysql|sqlite)://",
+        r"\b(file|smb|nfs|s3|minio|object|webdav|gs|azure|postgres|postgresql|mysql|sqlite)://",
         re.IGNORECASE,
     ),
     re.compile(
         r"\bhttps?://(localhost|127\.0\.0\.1|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)",
         re.IGNORECASE,
     ),
-    re.compile(r"\b(select|with|copy|insert|update|delete|drop|alter)\b\s+", re.IGNORECASE),
+    re.compile(
+        r"\b("
+        r"select\s+.+\s+from|"
+        r"with\s+.+\s+as\s*\(|"
+        r"copy\s+.+\s+from|"
+        r"insert\s+into|"
+        r"update\s+[A-Za-z_][\w.]*\s+set|"
+        r"delete\s+from|"
+        r"drop\s+table|"
+        r"alter\s+table"
+        r")\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\bTraceback \(most recent call last\):", re.IGNORECASE),
 )
 
@@ -64,9 +83,15 @@ PUBLIC_TOOL_SCHEMAS = [
             "intended_asset_type",
             "permission_scope",
         ],
-        "output_keys": ["upload_session_id", "status", "next_required_action"],
+        "output_keys": [
+            "upload_session_id",
+            "status",
+            "next_required_action",
+            "upload_task_card",
+            "source_preparation_guidance",
+        ],
         "result_type": "upload_session_request",
-        "status_values": ["pending_review", "error"],
+        "status_values": ["pending_review", "ok", "error"],
     },
     {
         "tool_name": "create_ingestion_job",
@@ -106,6 +131,53 @@ PUBLIC_TOOL_SCHEMAS = [
         "status_values": ["pending_review", "ok", "permission_denied", "error"],
     },
     {
+        "tool_name": "query_mail_evidence",
+        "workflow": "mail_evidence",
+        "input_keys": [
+            "workspace_id",
+            "requester_user_id",
+            "query_text",
+            "mail_import_session_id",
+            "mail_evidence_bundle_id",
+        ],
+        "output_keys": [
+            "mail_import_session_id",
+            "evidence_snippets",
+            "citations",
+            "redaction_counts",
+            "warnings",
+        ],
+        "result_type": "mail_evidence_query",
+        "status_values": ["pending_review", "ok", "not_found", "permission_denied", "error"],
+    },
+    {
+        "tool_name": "answer_mail_case_progress",
+        "workflow": "mail_evidence",
+        "input_keys": [
+            "workspace_id",
+            "requester_user_id",
+            "case_id",
+            "mail_import_session_id",
+            "mail_evidence_bundle_id",
+        ],
+        "output_keys": [
+            "mail_import_session_id",
+            "mail_evidence_bundle_id",
+            "case_id",
+            "latest_updates",
+            "blockers",
+            "responsible_parties",
+            "next_actions",
+            "deadlines",
+            "citations",
+            "redaction_counts",
+            "warnings",
+            "claim_boundary",
+        ],
+        "result_type": "mail_case_progress_answer",
+        "status_values": ["pending_review", "ok", "not_found", "permission_denied", "error"],
+    },
+    {
         "tool_name": "request_graph_access",
         "workflow": "access",
         "input_keys": [
@@ -143,6 +215,21 @@ _FORBIDDEN_TOOL_NAMES = {
     "direct_filesystem_read_tool",
     "direct_canonical_mutation_tool",
 }
+_MAIL_CASE_PROGRESS_CLAIM_KEYS = {
+    "supports_mail_case_progress_answer_claim",
+    "supports_actual_chatgpt_connected_upload_claim",
+    "supports_upload_ui_claim",
+    "supports_production_iframe_readiness_claim",
+    "supports_real_pst_parser_claim",
+    "supports_live_postgresql_readiness_claim",
+    "supports_production_worker_leasing_claim",
+    "supports_kg_write_claim",
+    "supports_wiki_projection_claim",
+    "supports_production_ready_claim",
+}
+_MAIL_CASE_PROGRESS_FORBIDDEN_TRUE_CLAIMS = _MAIL_CASE_PROGRESS_CLAIM_KEYS - {
+    "supports_mail_case_progress_answer_claim"
+}
 
 
 @dataclass(frozen=True)
@@ -165,12 +252,18 @@ class SemanticMcpGateway:
     def __init__(
         self,
         *,
+        upload_session_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         preview_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         retrieval_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        mail_evidence_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        mail_case_progress_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         wiki_projection_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
+        self.upload_session_handler = upload_session_handler
         self.preview_handler = preview_handler
         self.retrieval_handler = retrieval_handler
+        self.mail_evidence_handler = mail_evidence_handler
+        self.mail_case_progress_handler = mail_case_progress_handler
         self.wiki_projection_handler = wiki_projection_handler
         self.tool_call_logs: list[ToolCallLog] = []
 
@@ -219,6 +312,10 @@ class SemanticMcpGateway:
             envelope = self._preview_graph_candidates(dict(input_data))
         elif tool_name == "query_effective_graph":
             envelope = self._query_effective_graph(dict(input_data))
+        elif tool_name == "query_mail_evidence":
+            envelope = self._query_mail_evidence(dict(input_data))
+        elif tool_name == "answer_mail_case_progress":
+            envelope = self._answer_mail_case_progress(dict(input_data))
         elif tool_name == "request_graph_access":
             envelope = self._request_graph_access(dict(input_data))
         elif tool_name == "submit_graph_review_decision":
@@ -244,6 +341,12 @@ class SemanticMcpGateway:
         return envelope
 
     def _open_upload_session(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        if self.upload_session_handler is not None:
+            return _safe_handler_envelope(
+                result_type="upload_session_request",
+                handler_payload=self.upload_session_handler(input_data),
+                status_from_payload=True,
+            )
         return _pending_workflow_envelope(
             result_type="upload_session_request",
             data={
@@ -309,6 +412,66 @@ class SemanticMcpGateway:
         return _safe_handler_envelope(
             result_type="effective_graph_query",
             handler_payload=self.retrieval_handler(input_data),
+        )
+
+    def _query_mail_evidence(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        if self.mail_evidence_handler is None:
+            return _envelope(
+                result_type="mail_evidence_query",
+                status="pending_review",
+                data={
+                    "mail_import_session_id": None,
+                    "evidence_snippets": [],
+                    "citations": [],
+                    "redaction_counts": {"hidden_bundles": 0, "hidden_messages": 0},
+                    "warnings": ["mail_evidence_handler_not_configured"],
+                },
+                warnings=["mail_evidence_handler_not_configured"],
+            )
+        return _safe_handler_envelope(
+            result_type="mail_evidence_query",
+            handler_payload=self.mail_evidence_handler(input_data),
+            status_from_payload=True,
+        )
+
+    def _answer_mail_case_progress(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        if self.mail_case_progress_handler is None:
+            return _envelope(
+                result_type="mail_case_progress_answer",
+                status="pending_review",
+                data={
+                    "mail_import_session_id": None,
+                    "mail_evidence_bundle_id": None,
+                    "case_id": None,
+                    "latest_updates": [],
+                    "blockers": [],
+                    "responsible_parties": [],
+                    "next_actions": [],
+                    "deadlines": [],
+                    "citations": [],
+                    "redaction_counts": {"hidden_bundles": 0, "hidden_messages": 0},
+                    "warnings": ["mail_case_progress_handler_not_configured"],
+                    "claim_boundary": {
+                        "supports_mail_case_progress_answer_claim": False,
+                        "supports_actual_chatgpt_connected_upload_claim": False,
+                        "supports_upload_ui_claim": False,
+                        "supports_production_iframe_readiness_claim": False,
+                        "supports_real_pst_parser_claim": False,
+                        "supports_live_postgresql_readiness_claim": False,
+                        "supports_production_worker_leasing_claim": False,
+                        "supports_kg_write_claim": False,
+                        "supports_wiki_projection_claim": False,
+                        "supports_production_ready_claim": False,
+                    },
+                },
+                warnings=["mail_case_progress_handler_not_configured"],
+            )
+        handler_payload = self.mail_case_progress_handler(input_data)
+        _validate_mail_case_progress_handler_payload(handler_payload)
+        return _safe_handler_envelope(
+            result_type="mail_case_progress_answer",
+            handler_payload=handler_payload,
+            status_from_payload=True,
         )
 
     def _request_graph_access(self, input_data: dict[str, Any]) -> dict[str, Any]:
@@ -472,8 +635,35 @@ def direct_canonical_mutation_tool() -> None:
     """Forbidden marker: direct_canonical_mutation_tool."""
 
 
-def _safe_handler_envelope(*, result_type: str, handler_payload: dict[str, Any]) -> dict[str, Any]:
-    envelope = _envelope(result_type=result_type, status="ok", data=handler_payload)
+def _validate_mail_case_progress_handler_payload(payload: dict[str, Any]) -> None:
+    claim_boundary = payload.get("claim_boundary")
+    if not isinstance(claim_boundary, dict):
+        raise ContractValidationError("mail case-progress claim_boundary is required")
+    extra = set(claim_boundary) - _MAIL_CASE_PROGRESS_CLAIM_KEYS
+    missing = _MAIL_CASE_PROGRESS_CLAIM_KEYS - set(claim_boundary)
+    if extra or missing:
+        raise ContractValidationError("mail case-progress claim_boundary keys are invalid")
+    if not isinstance(
+        claim_boundary.get("supports_mail_case_progress_answer_claim"),
+        bool,
+    ):
+        raise ContractValidationError("mail case-progress support claim must be boolean")
+    for claim in _MAIL_CASE_PROGRESS_FORBIDDEN_TRUE_CLAIMS:
+        if claim_boundary.get(claim) is not False:
+            raise ContractValidationError("mail case-progress overclaims unsupported work")
+
+
+def _safe_handler_envelope(
+    *,
+    result_type: str,
+    handler_payload: dict[str, Any],
+    status_from_payload: bool = False,
+) -> dict[str, Any]:
+    status = "ok"
+    if status_from_payload:
+        payload_status = handler_payload.get("status")
+        status = payload_status if isinstance(payload_status, str) else "ok"
+    envelope = _envelope(result_type=result_type, status=status, data=handler_payload)
     validate_public_gateway_payload(envelope)
     return envelope
 

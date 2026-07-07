@@ -1,17 +1,27 @@
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tomllib
+from typing import Any
 import unittest
 
 import _paths  # noqa: F401
 from formowl_gateway import (
+    SemanticMcpGateway,
     SemanticGatewaySession,
     SemanticMcpJsonRpcGateway,
     build_raw_path_raw_sql_worker_internal_leak_transcript,
     containerized_semantic_mcp_gateway_smoke,
+    create_mail_upload_semantic_jsonrpc_gateway,
     end_to_end_raw_path_raw_sql_worker_internal_leak_transcript,
     session_auth_and_audit_store_integration,
     standards_compliant_mcp_gateway_transport,
 )
+from formowl_ingestion.storage import UploadSessionStore
 
 
 class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
@@ -48,6 +58,8 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
                 "list_observations",
                 "preview_graph_candidates",
                 "query_effective_graph",
+                "query_mail_evidence",
+                "answer_mail_case_progress",
                 "request_graph_access",
                 "submit_graph_review_decision",
                 "generate_wiki_draft_from_graph_view",
@@ -89,6 +101,67 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
         )
         self.assertEqual(set(transcript[0]), {"method", "request_hash", "response_hash", "status"})
         self.assertNotIn("delivery risk", str(transcript))
+
+    def test_semantic_jsonrpc_allowlist_rejects_public_control_fields_before_handler_dispatch(
+        self,
+    ) -> None:
+        handler_calls: list[dict[str, Any]] = []
+
+        def recording_handler(input_data: dict[str, Any]) -> dict[str, Any]:
+            handler_calls.append(input_data)
+            return {
+                "answer": "bounded answer",
+                "citations": [],
+                "visible_graph_snippets": [],
+                "redaction_counts": {"hidden_records": 0},
+            }
+
+        gateway = SemanticMcpJsonRpcGateway(
+            semantic_gateway=SemanticMcpGateway(retrieval_handler=recording_handler),
+            session=SemanticGatewaySession(
+                session_id="session_001",
+                actor_user_id="user_yifan",
+                workspace_id="workspace_main",
+            ),
+        )
+        cases = [
+            {"grants": [{"scope": "workspace_formowl", "level": "admin"}]},
+            {"storage": {"profile": "mail_archive_pool"}},
+            {"parser": {"profile": "pst_local"}},
+            {"backend": {"name": "private_backend"}},
+            {"raw": {"include_unprocessed": True}},
+            {"requested_scope": {"grants": [{"scope": "workspace_formowl"}]}},
+        ]
+
+        for index, extra_arguments in enumerate(cases, start=1):
+            with self.subTest(index=index):
+                result = gateway.handle_json_rpc(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": f"control_{index}",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "query_effective_graph",
+                            "arguments": {
+                                "query_text": "delivery risk",
+                                **extra_arguments,
+                            },
+                        },
+                    }
+                )
+
+                tool_result = result["result"]["content"][0]["json"]
+                self.assertTrue(result["result"]["isError"])
+                self.assertEqual(tool_result["status"], "error")
+                self.assertEqual(tool_result["data"]["error_code"], "unsafe_tool_payload")
+                self.assertEqual(handler_calls, [])
+                self.assertEqual(result["result"]["session"]["session_id"], "session_001")
+                rendered = str(result).lower()
+                self.assertNotIn("workspace_formowl", rendered)
+                self.assertNotIn("mail_archive_pool", rendered)
+                self.assertNotIn("pst_local", rendered)
+                self.assertNotIn("private_backend", rendered)
+                self.assertNotIn("include_unprocessed", rendered)
 
     def test_forbidden_tool_calls_return_safe_json_rpc_errors(self) -> None:
         gateway = SemanticMcpJsonRpcGateway()
@@ -143,6 +216,217 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
         self.assertNotIn("/tmp/", rendered)
         self.assertNotIn("select *", rendered)
         self.assertNotIn("worker_scratch", rendered)
+
+    def test_mail_upload_runtime_gateway_configures_open_upload_session_handler(self) -> None:
+        temp_dir = _paths.fresh_test_dir("semantic-mail-upload-runtime")
+        gateway = create_mail_upload_semantic_jsonrpc_gateway(
+            data_dir=temp_dir,
+            expires_at="2026-07-06T00:00:00+00:00",
+            session=SemanticGatewaySession(
+                session_id="session_runtime_001",
+                actor_user_id="user_yifan",
+                workspace_id="workspace_formowl",
+            ),
+        )
+
+        result = gateway.handle_json_rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": "mail_upload_runtime",
+                "method": "tools/call",
+                "params": {
+                    "name": "open_upload_session",
+                    "arguments": {
+                        "intent": "Upload my PST for FormOwl mail evidence reading.",
+                        "intended_asset_type": "pst",
+                        "owner_scope_type": "project",
+                        "owner_scope_id": "project_formowl",
+                        "project_id": "project_formowl",
+                    },
+                },
+            }
+        )
+
+        self.assertFalse(result["result"]["isError"])
+        payload = result["result"]["content"][0]["json"]["data"]
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["validation"]["passed"], True)
+        task_card = payload["upload_task_card"]
+        self.assertEqual(task_card["card_type"], "mail_archive_upload_task")
+        self.assertTrue(
+            task_card["upload_surface_locator"].startswith("formowl_upload_session:upload_")
+        )
+        upload_store = UploadSessionStore(temp_dir)
+        persisted = upload_store.get(payload["upload_session_id"])
+        self.assertIsNotNone(persisted)
+        assert persisted is not None
+        self.assertEqual(persisted.actor_user_id, "user_yifan")
+        self.assertEqual(persisted.session_id, "session_runtime_001")
+        self.assertEqual(persisted.workspace_id, "workspace_formowl")
+        self.assertEqual(persisted.ingestion_profile, "mail_archive_phase1")
+        rendered = str(result).lower()
+        self.assertNotIn("upload_handler_not_configured", rendered)
+        self.assertNotIn("storage_backend_id", rendered)
+        self.assertNotIn("private_backend", rendered)
+        self.assertNotIn("parser_path", rendered)
+        self.assertNotIn("worker_queue", rendered)
+
+    def test_pyproject_exposes_semantic_jsonrpc_console_script(self) -> None:
+        pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            pyproject["project"]["scripts"]["formowl-semantic-mcp-jsonrpc"],
+            "formowl_gateway.cli:main",
+        )
+
+    def test_jsonrpc_module_main_uses_configured_mail_upload_runtime(self) -> None:
+        temp_dir = _paths.fresh_test_dir("semantic-mail-upload-runtime-main")
+        repo_root = Path(__file__).resolve().parents[1]
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(repo_root / "python")
+        env["FORMOWL_DATA_DIR"] = str(temp_dir)
+        env["FORMOWL_MCP_SESSION_ID"] = "session_cli_001"
+        env["FORMOWL_MCP_ACTOR_USER_ID"] = "user_cli"
+        env["FORMOWL_MCP_WORKSPACE_ID"] = "workspace_cli"
+        env["FORMOWL_MAIL_UPLOAD_EXPIRES_AT"] = "2026-07-06T00:00:00+00:00"
+        request = {
+            "jsonrpc": "2.0",
+            "id": "mail_upload_cli",
+            "method": "tools/call",
+            "params": {
+                "name": "open_upload_session",
+                "arguments": {
+                    "intent": "Upload mail archive from ChatGPT MCP runtime.",
+                    "intended_asset_type": "pst",
+                },
+            },
+        }
+
+        completed = subprocess.run(
+            [sys.executable, "-m", "formowl_gateway.cli"],
+            input=json.dumps(request) + "\n",
+            text=True,
+            capture_output=True,
+            cwd=repo_root,
+            env=env,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        response = json.loads(completed.stdout)
+        self.assertFalse(response["result"]["isError"])
+        payload = response["result"]["content"][0]["json"]["data"]
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["validation"]["passed"], True)
+        persisted = UploadSessionStore(temp_dir).get(payload["upload_session_id"])
+        self.assertIsNotNone(persisted)
+        assert persisted is not None
+        self.assertEqual(persisted.actor_user_id, "user_cli")
+        self.assertEqual(persisted.session_id, "session_cli_001")
+        self.assertEqual(persisted.workspace_id, "workspace_cli")
+        rendered = (completed.stdout + completed.stderr).lower()
+        self.assertNotIn("upload_handler_not_configured", rendered)
+        self.assertNotIn("storage_backend_id", rendered)
+        self.assertNotIn("parser_path", rendered)
+        self.assertNotIn("worker_queue", rendered)
+
+    def test_jsonrpc_module_main_rejects_non_object_json_without_traceback(self) -> None:
+        temp_dir = _paths.fresh_test_dir("semantic-mail-upload-runtime-non-object")
+        repo_root = Path(__file__).resolve().parents[1]
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(repo_root / "python")
+        env["FORMOWL_DATA_DIR"] = str(temp_dir)
+
+        completed = subprocess.run(
+            [sys.executable, "-m", "formowl_gateway.cli"],
+            input='[]\n"x"\n',
+            text=True,
+            capture_output=True,
+            cwd=repo_root,
+            env=env,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        responses = [json.loads(line) for line in completed.stdout.splitlines()]
+        self.assertEqual(len(responses), 2)
+        for response in responses:
+            self.assertEqual(response["error"]["code"], -32600)
+            self.assertEqual(response["error"]["message"], "invalid_request")
+        rendered = (completed.stdout + completed.stderr).lower()
+        self.assertNotIn("traceback", rendered)
+        self.assertNotIn(str(repo_root).lower(), rendered)
+
+    def test_jsonrpc_module_main_redacts_secret_like_env_session_values(self) -> None:
+        temp_dir = _paths.fresh_test_dir("semantic-mail-upload-runtime-secret-env")
+        repo_root = Path(__file__).resolve().parents[1]
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(repo_root / "python")
+        env["FORMOWL_DATA_DIR"] = str(temp_dir)
+        env["FORMOWL_MCP_SESSION_ID"] = "token: session-secret"
+        env["FORMOWL_MCP_ACTOR_USER_ID"] = "password: swordfish"
+        env["FORMOWL_MCP_WORKSPACE_ID"] = "workspace_cli"
+
+        completed = subprocess.run(
+            [sys.executable, "-m", "formowl_gateway.cli"],
+            input=json.dumps({"jsonrpc": "2.0", "id": "init", "method": "initialize"}) + "\n",
+            text=True,
+            capture_output=True,
+            cwd=repo_root,
+            env=env,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        response = json.loads(completed.stdout)
+        session = response["result"]["session"]
+        self.assertEqual(session["session_id"], "semantic_gateway_session")
+        self.assertEqual(session["actor_user_id"], "manual_trusted_internal")
+        self.assertEqual(session["workspace_id"], "workspace_cli")
+        rendered = completed.stdout.lower()
+        self.assertNotIn("swordfish", rendered)
+        self.assertNotIn("session-secret", rendered)
+        self.assertNotIn("password:", rendered)
+        self.assertNotIn("token:", rendered)
+
+    def test_jsonrpc_module_main_redacts_gateway_startup_failures(self) -> None:
+        temp_dir = _paths.fresh_test_dir("semantic-mail-upload-runtime-startup-failure")
+        bad_data_dir = temp_dir / "not-a-directory"
+        bad_data_dir.write_text("occupied", encoding="utf-8")
+        repo_root = Path(__file__).resolve().parents[1]
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(repo_root / "python")
+        env["FORMOWL_DATA_DIR"] = str(bad_data_dir)
+        request = {
+            "jsonrpc": "2.0",
+            "id": "startup_failure",
+            "method": "initialize",
+        }
+
+        completed = subprocess.run(
+            [sys.executable, "-m", "formowl_gateway.cli"],
+            input=json.dumps(request) + "\n",
+            text=True,
+            capture_output=True,
+            cwd=repo_root,
+            env=env,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        response = json.loads(completed.stdout)
+        self.assertEqual(response["id"], "startup_failure")
+        self.assertEqual(response["error"]["code"], -32000)
+        self.assertEqual(response["error"]["message"], "internal_error")
+        rendered = (completed.stdout + completed.stderr).lower()
+        self.assertNotIn("traceback", rendered)
+        self.assertNotIn(str(bad_data_dir).lower(), rendered)
+        self.assertNotIn(str(repo_root).lower(), rendered)
 
 
 if __name__ == "__main__":

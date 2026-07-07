@@ -4,6 +4,553 @@ Use this log for short cross-session and cross-machine notes. Keep detailed
 status in each role's goal file and task completion in
 `docs/implementation-task-breakdown.md`.
 
+## 2026-07-07
+
+- #21 checkpoint R full PST 100-case evidence-reading evaluation is
+  implemented, reviewer-gated, and canonically verified.
+  The new `scripts/mail_full_pst_100_case_eval.py` harness runs the
+  operator-provided full PST fixture with no sampling, builds a normalized
+  `MailEvidenceBundle`, generates 100 deterministic manifest-bound retrieval
+  cases, preflights selected cases through the same governed JSON-RPC
+  `query_mail_evidence` path, scores a fresh pass over the final manifest, and
+  publishes only hash/status/count report fields. Hardening includes reusable
+  in-memory mail query indexing, reusable case query runner, top-k-retrievable
+  positive cases, no-match and permission-denied meaning checks, case-bound
+  response hashes, row-derived aggregate/category/hash validation, and a
+  narrower SQL leak guard that no longer rejects ordinary progress-update
+  mail phrases. Maxwell's reviewer blocker added sentinel-guarded work-dir
+  behavior so the harness refuses unmarked non-empty work dirs and refuses
+  recursive cleanup without a valid harness sentinel. Latest dev-container full
+  eval and saved-report validation after that fix both exited 0 with
+  `blockers=[]`. Safe counts/timings:
+  fixture size `3152323584`, full parse true, sample limit `0`,
+  parser workers `8`, message count `2777`, observation count `28477`,
+  body segment count `5041`, mail evidence row count `14050`, parse warning
+  count `3401`, 100 cases scored, 100 passed, 0 failed, 5 no-match, 5
+  permission-denied, 5 AI/progress-related cases all passed, duplicate
+  response hash count `0`, import `160410ms`, manifest preflight `32121ms`,
+  scoring `13712ms`, staging/scratch leftovers `0`, and work dir cleaned.
+  Canonical verification: focused full-PST eval tests 14 OK before reviewer
+  gate and 17 OK after the sentinel cleanup blocker fix, PST extractor tests 7
+  OK, semantic JSON-RPC tests 12 OK, mail evidence gateway tests 18 OK,
+  full-PST eval plus `--validate-report` exited 0, full Ruff
+  check/format-check passed, and full unittest ran 539 OK in 842.996s. Three
+  onboarding test-design subagents (`Gibbs`, `Tesla`, and `Zeno`) shaped the
+  harness. Reviewer gate passed 6/6 with `Euler`, `Mendel`, `Huygens`,
+  `Copernicus`, `Euclid`, and `Maxwell`; `Maxwell` initially blocked cleanup,
+  then agreed after the sentinel fix. Claim only this operator-provided full
+  PST 100-case deterministic evidence-reading evaluation; do not claim general
+  PST/OST/MSG/EML/MBOX readiness, actual ChatGPT upload/file transfer,
+  production iframe readiness, live PostgreSQL readiness, production worker
+  leasing, raw mail access, delete-after-success retention, KG/wiki writes, or
+  production readiness until separate evidence exists.
+
+## 2026-07-06
+
+- #21 checkpoint Q real PST sampled parser proof is implemented, reviewer-gated,
+  and canonically verified. The slice adds `PstMailArchiveExtractor`, dev-container
+  `pst-utils`, and `scripts/mail_real_pst_smoke.py` for the operator-provided
+  `tests/pst-exm/archive.pst` fixture. Latest dev-container sampled smoke with
+  limit 25 exited 0 and validation passed: fixture size `3152323584`,
+  `message_count=25`, `observation_count=234`, `mail_evidence_row_count=132`,
+  owner query `ok` with one citation, denied query `permission_denied` with
+  zero visible results and hidden bundle count one, staging/scratch leftovers
+  zero, and no public-report leak-scan hits for PST path, object-store locator,
+  parser command, scratch path, traceback, or Windows drive path. Reviewer
+  blockers fixed cover retention honesty (`retain_7_days` /
+  `retained_by_policy`, not deleted), full-parser overclaim rejection,
+  bool-as-int count rejection, malformed validate-report bounded failure,
+  `query_mail_evidence` dual-selector AND matching, JSON-RPC pre-dispatch
+  argument allowlisting, recursive control-key rejection before handler
+  dispatch, public `session_id` trusted override behavior, and PST `readpst`
+  argv/timeout/scratch cleanup tests. The issue-specific 6/6 reviewer gate
+  passed with `Hilbert`, `Hubble`, `Hooke`, `Einstein`, `Hypatia`, and
+  `Fermat`. Final canonical verification: focused semantic JSON-RPC tests ran
+  12 OK; mail upload session gateway tests ran 8 OK; mail evidence MCP smoke
+  tests ran 15 OK; `test_mail_*.py` ran 155 OK; sampled real PST smoke plus
+  `--validate-report` exited 0; Ruff check/format check passed; full
+  `python -m unittest discover -s tests` ran 524 OK in 781.345s. Claim only
+  sampled real PST parser integration; do not claim full PST/OST/MSG/EML/MBOX
+  readiness, actual ChatGPT upload/file transfer, production iframe readiness,
+  live PostgreSQL readiness, production worker leasing, raw mail access,
+  delete-after-success retention, KG/wiki writes, or production readiness.
+
+- #21 checkpoint P completes the scoped Phase 1 Mail Evidence Reading via
+  FormOwl MCP proof for fixture-backed ChatGPT testing readiness. Added
+  bounded operator-supplied ChatGPT MCP mail evidence result-packet intake in
+  `scripts/mail_evidence_chatgpt_result_intake.py` with focused tests in
+  `tests/test_mail_evidence_chatgpt_result_intake.py`. The intake validates
+  only hashes, statuses, counts, checkpoint-O smoke binding, owner/denied
+  `query_mail_evidence` and `answer_mail_case_progress` result shapes,
+  request-shape hashes, and operator attestation; it rejects raw transcripts,
+  raw tool payloads, mail text/snippets, concrete mail identifiers, upload
+  locators, environment values, paths, SQL, parser/storage/worker internals,
+  bool counts, duplicate hashes, permission-bypass claims, KG/wiki claims, and
+  production overclaims. Three onboarding subagents (`Ohm`, `Raman`, and
+  `Confucius`) shaped the harness. The issue-specific 6/6 reviewer gate passed
+  with `Hume`, `Carson`, `Nietzsche`, `Mencius`, `Newton`, and `Meitner` after
+  selector-kind and smoke/request/report binding blockers were fixed. Canonical
+  verification after reviewer fixes and formatting passed: focused P tests ran
+  12 OK, direct result-intake CLI and `--validate-report` exited 0, direct
+  checkpoint-O mail evidence MCP smoke exited 0, `test_mail_*.py` ran 144 OK,
+  full Ruff check/format check passed for `python`, `tests`, and `scripts`,
+  and full `python -m unittest discover -s tests` ran 505 OK in 682.461s.
+  This completes the local fixture-backed #21 Phase 1 MCP evidence-reading and
+  result-intake goal, while still not claiming direct Codex-controlled ChatGPT
+  verification, cryptographic ChatGPT proof, actual upload/file transfer,
+  production iframe readiness, real PST/OST/MSG/EML/MBOX parser readiness,
+  live PostgreSQL deployment readiness, production worker leasing, raw mail
+  access, KG/wiki writes, or production readiness.
+
+- #21 checkpoint O completes the scoped local Phase 1 Mail Evidence Reading via
+  FormOwl MCP proof. Added governed `answer_mail_case_progress` behavior over
+  normalized `MailEvidenceBundle` data, exposed it through
+  `SemanticMcpGateway` / JSON-RPC, extended
+  `scripts/mail_evidence_mcp_smoke.py` with owner/denied/forged/trusted and
+  bundle-id case-progress probes, and hardened the smoke report to hashes,
+  statuses, counts, and explicit false claim boundaries only. Three onboarding
+  test-design subagents (`James`, `Arendt`, `Curie`) shaped the final harness.
+  The issue-specific 6/6 reviewer gate passed with `Kuhn`, `Ampere`, `James`,
+  `Arendt`, `Curie`, and `Pascal`; `Curie`'s dual-id lookup blocker and
+  `Arendt`'s claim-boundary enforcement blocker were fixed and re-reviewed.
+  Canonical dev-container verification is no longer blocked after Docker
+  restart: focused case-progress MCP tests ran 16 OK, focused smoke-validator
+  tests ran 15 OK, the direct mail evidence MCP smoke exited 0, touched-file
+  Ruff check/format check passed, `test_mail_*.py` ran 132 OK, and full
+  `python -m unittest discover -s tests` ran 493 OK in 743.175s. This checks
+  off issue #21's scoped local synthetic MCP evidence-reading and
+  case-progress proof for ChatGPT testing readiness; it does not claim actual
+  ChatGPT connected upload or file transfer, production iframe readiness, real
+  PST/OST/MSG/EML/MBOX parser readiness, live PostgreSQL deployment readiness,
+  production worker leasing, KG writes, wiki projection, or production
+  readiness.
+
+## 2026-07-05
+
+- PM decision from GitHub #22 is now the #21 Phase 1 mail standard. Ordinary
+  Phase 1 users must be able to upload a full PST through a session-bound
+  FormOwl upload surface / iframe. The raw PST enters ingest staging; a
+  server-side worker parses incrementally; PostgreSQL normalized mail evidence
+  is the Phase 1 operational evidence layer; and the raw PST is deleted or
+  retained only under configured retention after successful extraction.
+  Local Companion is optional / advanced / policy-triggered for repeated
+  rolling PST, privacy-sensitive imports, bandwidth limits, or
+  manifest-first workspace policy, not the ordinary baseline.
+- #21 must preserve one mail ingestion contract across parser locations:
+  server-side parser and optional Companion parser both emit
+  `MailEvidenceBundle`. Dedup is archive/message/attachment-level while still
+  preserving message, attachment, archive, folder, embedded-message, and
+  quoted-message candidate occurrence lineage. KG construction is explicitly
+  Phase 2 and must not be a Phase 1 parser side effect.
+- User-specific #21 reviewer gate override: every completed implementation or
+  durable handoff slice for #21 requires 6 effective read-only Codex/GPT
+  subagent reviewers with explicit `RELEASE_DECISION: AGREE`. Antigravity/`agy`
+  remains disabled unless explicitly re-enabled after policy/platform/MCP
+  changes, so do not count fake Antigravity reviewers or carry approvals across
+  slices.
+- #21 MailEvidenceBundle contract checkpoint: added the Phase 1
+  `MailEvidenceBundle` contract/builder surface for fixture mail observations,
+  including parser producer type parity, explicit server-side upload-session
+  identity, occurrence-preserving archive/message/folder/attachment lineage,
+  archive-independent logical message fingerprints, duplicate carrier import
+  identity, required lineage-array validation, retention enum validation,
+  raw/backend/SQL/secret public guards, and no tree side effects. Supplemental
+  host checks passed: touched-file `py_compile`, focused mail tests 17 OK,
+  extraction edge tests 13 OK, and `git diff --check`. The #21 slice-specific
+  6-reviewer code/test gate agreed after blocker fixes with `Goodall`,
+  `Curie`, `Mill`, `Hilbert`, `Euclid`, and `Jason`. This does not complete
+  #21: canonical dev-container verification is blocked because Docker Desktop
+  reports `Docker Desktop is unable to start`, and the governed MCP/JSON-RPC
+  evidence-query path remains to be implemented.
+- #21 MCP/JSON-RPC mail evidence query checkpoint B is implemented and passed
+  the issue-specific 6/6 reviewer gate, but it is not a #21 completion claim.
+  The slice adds normalized-bundle mail evidence querying through
+  `query_mail_evidence`, Semantic MCP handler injection, JSON-RPC tool
+  list/call coverage, session identity binding, trusted server-side grants
+  only, permission-denied and not-found envelopes, `mail_import_session_id` and
+  `mail_evidence_bundle_id` lookup, hash-only transcripts, and
+  raw/backend/SQL/secret guards. It does not implement real PST parsing, the
+  upload UI, PostgreSQL mail persistence, case-progress QA, KG writes, or wiki
+  projection. Latest supplemental host checks passed after grant-forgery
+  hardening: mail evidence MCP tests 9 OK, semantic gateway tests 8 OK,
+  semantic JSON-RPC tests 5 OK, `test_mail_*.py` 26 OK, extraction edge tests
+  13 OK, touched-file `py_compile`, long-line scan, and `git diff --check`.
+  Reviewers `Socrates`, `Cicero`, `Euler`, `Ptolemy`, `Hume`, and `Halley`
+  returned `RELEASE_DECISION: AGREE` after blockers were fixed. Canonical
+  dev-container verification remains blocked by Docker Desktop unable to start.
+- #21 checkpoint C is implemented and passed the issue-specific 6/6 reviewer
+  gate: added
+  `scripts/mail_evidence_mcp_smoke.py` and
+  `tests/test_mail_evidence_mcp_smoke_script.py` as a ChatGPT-free local smoke
+  for the normalized mail evidence MCP path. It runs synthetic mail fixture
+  ingestion through Asset/ObjectStore, IngestionJob, FixtureMailArchiveExtractor,
+  persisted observations, MailEvidenceBundle, and JSON-RPC `query_mail_evidence`
+  owner/denied/forged-grant/trusted-grant/bundle-id probes. Public output is
+  hash/status/count only and carries false claims for real PST parser, upload
+  UI, PostgreSQL mail persistence, KG writes, wiki projection, and production
+  readiness. Accepted reviewer blockers fixed CLI coverage, report validation,
+  body-leak checks, work-directory sentinel behavior, deterministic safe
+  outputs, owner-matched trusted grants, exact report contracts, and
+  unknown-key no-echo behavior. Effective reviewers `Poincare`, `Hooke`,
+  `Schrodinger`, `James`, `Gibbs`, and `Pasteur` returned
+  `RELEASE_DECISION: AGREE` before the post-gate host portability fix. A
+  follow-up Windows host portability hardening changed `tests/_paths.py` to
+  avoid `os.getuid()` when unavailable and changed the smoke CLI default work
+  directory from hard-coded `/tmp` to the platform temp directory. A fresh
+  recheck of the latest diff passed 6/6 with `Poincare`, `Hooke`,
+  `Schrodinger`, `James`, `Gibbs`, and `Pasteur`. Supplemental host checks
+  after latest validation hardening and host portability fix: smoke tests 13
+  OK, direct smoke CLI exited 0 with validation passed, mail evidence MCP tests
+  9 OK, semantic gateway tests 8 OK, semantic JSON-RPC tests 5 OK,
+  `test_mail_*.py` 39 OK, extraction edge tests 13 OK, touched-file
+  `py_compile`, long-line scan, and `git diff --check` passed. Canonical
+  dev-container verification remains blocked by Docker Desktop unable to
+  start, so #21 stays open for canonical verification and the
+  upload/parser/PostgreSQL/full path requirements.
+- #21 checkpoint D is implemented and reviewer-gated: added
+  `python/formowl_mail/postgres.py`,
+  `python/formowl_graph/storage/migrations/004_mail_evidence.sql`, package
+  exports, and `tests/test_mail_evidence_postgres.py` for the normalized
+  PostgreSQL mail evidence adapter-contract slice. The slice stores
+  `MailEvidenceBundle` data across all 12 Phase 1 mail evidence tables,
+  rehydrates bundles by import session or bundle id, exposes a store-backed
+  `query_mail_evidence` handler, uses parameterized SQL, adds import-session
+  query indexes, preserves duplicate logical message/attachment rows while
+  retaining occurrence rows, round-trips attachment, quoted candidate,
+  embedded relation, and parse-warning rows, validates unsafe ids and unsafe
+  public query inputs before store side effects, and covers rollback through
+  `PostgreSQLUnitOfWork`. The checkpoint D reviewer gate passed 6/6 after
+  blocker fixes with `Anscombe`, `Erdos`, `Dirac`, `Plato`, `Maxwell`, and
+  `Planck` agreeing.
+  Supplemental host checks passed: focused mail evidence PostgreSQL tests 6
+  OK, PostgreSQL adapter contract tests 11 OK, mail tests 45 OK, PostgreSQL
+  tests 20 OK, focused mail evidence MCP tests 9 OK, touched-file
+  `py_compile`, long-line scan, and `git diff --check`. This remains a
+  mocked-connection adapter-contract slice only and does not implement real PST
+  parsing, upload UI / iframe, live PostgreSQL readiness, production worker
+  leasing, KG writes, wiki projection, or ChatGPT-facing DB controls.
+  Canonical dev-container verification remains blocked because Docker Desktop
+  reports `Docker Desktop is unable to start`, so #21 stays open for canonical
+  verification plus upload/parser/full-path requirements.
+- #21 checkpoint E is implemented and passed the issue-specific 6-reviewer
+  gate: added `python/formowl_mail/import_workflow.py`, package exports, and
+  `tests/test_mail_upload_import_workflow.py` for an UploadSession-bound
+  server-side mail import workflow. The helper requires an existing matching
+  mail `UploadSession` before side effects, registers the staged archive as a
+  normal `Asset`, creates/runs an `IngestionJob` through
+  `FixtureMailArchiveExtractor`, builds a server-side `MailEvidenceBundle`
+  with `upload_session_id`, writes normalized evidence through
+  `PostgreSQLMailEvidenceStore` inside `PostgreSQLUnitOfWork`, verifies the
+  store-backed JSON-RPC `query_mail_evidence` owner path, and updates the
+  UploadSession only after the store-backed query succeeds. Focused tests cover
+  invalid-session no-write behavior, duplicate rolling upload object-payload
+  sharing plus occurrence-preserving logical mail dedup, public-summary
+  leak/overclaim rejection, and evidence-store rollback/session failure
+  handling. Reviewer blockers strengthened the session binding contract so new
+  `UploadSession` records persist `session_id` and the workflow rejects a
+  mismatched session before side effects; focused coverage also proves
+  parser/job failure marks the UploadSession failed without PostgreSQL mail
+  evidence side effects. Reviewer gate passed 6/6 after blocker fixes with
+  `Carson`, `Galileo`, `Einstein`, `Ohm`, `Sartre`, and `Laplace` returning
+  explicit `RELEASE_DECISION: AGREE`; no blocking findings remain.
+  Supplemental host checks passed: upload import
+  workflow tests 7 OK, upload session tests 3 OK, contract tests 8 OK, mail
+  tests 52 OK, PostgreSQL tests 20 OK, semantic MCP tests 13 OK, touched-file
+  `py_compile`, directly touched-file long-line scan, and `git diff --check`.
+  Host `ruff` is unavailable; full host unittest is not clean due unrelated
+  Windows temp-directory permission errors in KG-eval/benchmark tests and one
+  pre-existing local-folder observation ordering difference. Canonical
+  dev-container verification remains blocked because Docker Desktop reports
+  `Docker Desktop is unable to start`. This remains a synthetic/internal
+  workflow slice and does not implement real PST parsing, upload UI / iframe,
+  live PostgreSQL readiness, production worker leasing, KG writes, wiki
+  projection, or production readiness.
+- #21 checkpoint F is implemented and passed the issue-specific 6-reviewer
+  gate: added `python/formowl_mail/upload_session.py`, exported the mail upload
+  session helpers from `formowl_mail`, and wired
+  `SemanticMcpGateway.open_upload_session` so ChatGPT-facing callers can
+  receive a session-bound mail archive upload task card. The task card accepts
+  PST/OST/MSG/EML/MBOX profiles, exposes a
+  `formowl_upload_session:<upload_id>` public locator, attaches source
+  preparation guidance, and creates an audited `UploadSession` without
+  exposing storage backends, parser controls, worker queues, raw paths, SQL, or
+  object-store details. Reviewer blockers fixed exact public input
+  allowlisting, camelCase ignored-key rejection, nested infrastructure-control
+  rejection, restricted matching `permission_scope`, owner/visibility
+  allowlists, embedded validation overclaim checks, audit failure no-write
+  behavior, and audit rollback when session-store creation fails. Reviewer gate
+  passed 6/6 after blocker fixes with `Hegel`, `Pauli`, `Leibniz`, `Kuhn`,
+  `Volta`, and `Avicenna` returning explicit `RELEASE_DECISION: AGREE`;
+  no blocking findings remain. Supplemental host checks passed: mail upload
+  session gateway tests 8 OK, upload session tests 5 OK, semantic MCP tests
+  8 OK, semantic JSON-RPC tests 5 OK, mail upload import workflow tests 7 OK,
+  mail evidence MCP tests 9 OK, ingestion package tests 1 OK, contract glob
+  tests 8 OK, touched-file `py_compile`, touched-file long-line scan, and
+  `git diff --check`. Canonical dev-container verification remains blocked
+  because Docker Desktop reports `Docker Desktop is unable to start`. This is
+  only the upload task-card/session-entrypoint slice; it does not implement the
+  real upload iframe, real PST parser, live PostgreSQL readiness, production
+  worker leasing, KG writes, wiki projection, production readiness, or a
+  completed ChatGPT smoke test.
+- #21 checkpoint G is implemented and passed the issue-specific 6-reviewer
+  gate: added a configured semantic JSON-RPC runtime entrypoint for
+  ChatGPT-facing mail upload session task cards. `python/formowl_gateway/jsonrpc.py`
+  now exposes `create_mail_upload_semantic_jsonrpc_gateway()`,
+  `python/formowl_gateway/cli.py` provides the command wrapper, and
+  `pyproject.toml` registers `formowl-semantic-mcp-jsonrpc`. The runtime wires
+  `open_upload_session` to the mail upload session handler with
+  file-backed `UploadSessionStore` and `FileAuditLogStore`, binds sanitized
+  environment session identity, and accepts stdin/stdout JSON-RPC so a ChatGPT
+  MCP command can reach the configured task-card path instead of the
+  unconfigured `upload_handler_not_configured` stub. Reviewer blockers fixed
+  the direct module `RuntimeWarning`, non-object JSON traceback behavior,
+  secret-like env session value leakage, and bad `FORMOWL_DATA_DIR` startup
+  tracebacks. Reviewer gate passed 6/6 after blocker fixes with
+  `Kierkegaard`, `Helmholtz`, `Beauvoir`, `Carver`, `Hubble`, and
+  `Chandrasekhar` returning explicit `RELEASE_DECISION: AGREE`; no blocking
+  findings remain. Supplemental host checks passed: semantic JSON-RPC gateway
+  tests 11 OK, mail upload session gateway tests 8 OK, semantic MCP gateway
+  tests 8 OK, upload session tests 5 OK, touched-file `py_compile`, and
+  `git diff --check` with CRLF warnings only. Canonical dev-container
+  verification remains blocked because Docker Desktop reports
+  `Docker Desktop is unable to start`. This is only runtime wiring for the
+  task-card/session workflow; it does not implement the real upload iframe,
+  real PST parser, live PostgreSQL readiness, production worker leasing,
+  KG writes, wiki projection, production readiness, or a completed ChatGPT
+  smoke test.
+- #21 checkpoint H is implemented and passed the issue-specific 6-reviewer
+  gate: added `scripts/mail_upload_mcp_command_smoke.py` and
+  `tests/test_mail_upload_mcp_command_smoke_script.py` for a
+  ChatGPT-compatible MCP command preflight. The smoke launches the documented
+  `formowl-semantic-mcp-jsonrpc` console command, sends JSON-RPC
+  `initialize`, `tools/list`, and `tools/call open_upload_session`, verifies
+  `open_upload_session` is listed, returns a valid `status=ok` mail upload
+  task card, and persists an `UploadSession` bound to the configured MCP
+  session identity. It verifies the task-card upload id and
+  `formowl_upload_session:<upload_id>` locator resolve to that persisted
+  record. Reviewer blockers fixed the console-command surface, task-card
+  persisted-session resolution, non-object report validation, exact
+  response/count validation, audit no-side-effect checks, bool count bypasses,
+  duplicate response hashes, stale command docstring, and secret-like report
+  values. Reviewer gate passed 6/6 with `Gauss`, `Singer`, `Aquinas`,
+  `Aristotle`, `Epicurus`, and `Godel` returning explicit
+  `RELEASE_DECISION: AGREE`; no blocking findings remain. Supplemental host
+  checks passed: H smoke tests 10 OK, direct PATH-shim command smoke and
+  `--validate-report` exited 0, semantic JSON-RPC tests 11 OK, mail upload
+  session gateway tests 8 OK, `test_mail_*.py` 70 OK, touched-file
+  `py_compile`, direct line-length scan, and `git diff --check` with CRLF
+  warnings only. Host Ruff remains unavailable. Canonical dev-container
+  verification remains blocked because Docker Desktop reports
+  `Docker Desktop is unable to start`. This is only the subprocess command
+  preflight for the upload task-card runtime; it does not implement the real
+  upload iframe/surface, file transfer, real PST/OST/MSG/EML/MBOX parser,
+  live PostgreSQL deployment readiness, production worker leasing, KG writes,
+  wiki projection, production readiness, or an actual ChatGPT connected smoke
+  test.
+- #21 checkpoint I is implemented and passed the issue-specific 6-reviewer
+  gate: added `python/formowl_mail/upload_surface.py`,
+  `tests/test_mail_upload_surface.py`, file-backed asset/object rollback
+  helpers, `upload_session_file_received` audit logging, public exports from
+  `formowl_mail`, and an import-workflow path that consumes an
+  UploadSession already bound to a registered `asset_id`. The slice lets a
+  trusted server upload surface receive a server-staged PST/OST/MSG/EML/MBOX
+  upload for an existing matching mail `UploadSession`, reject mismatched
+  actor/session/profile/status and user-supplied infrastructure controls
+  before side effects, register the upload as a governed `Asset` and
+  ObjectStore payload, bind `UploadSession.asset_id`, audit the receipt, reuse
+  duplicate object payload bytes, and return only hash/status/count public
+  receipt data. Reviewer blockers fixed during the gate: duplicate-preexistence
+  detection now uses verified object payload state instead of metadata
+  presence; metadata-only or corrupt object records are rolled back as newly
+  written side effects; bound-asset import requires `uploading` /
+  `archive_uploaded` receipt state and an Asset `source_ref` bound to the same
+  UploadSession before job/run/observation/evidence side effects; and the
+  public receipt explicitly denies actual ChatGPT connected upload with
+  `supports_actual_chatgpt_connected_upload_claim=false`. Reviewer gate passed
+  6/6 with `Pascal`, `Bacon`, `Mencius`, `Locke`, `Faraday`, and `Tesla`
+  returning explicit `RELEASE_DECISION: AGREE`; no blocking findings remain.
+  Supplemental host checks after reviewer blocker fixes passed: upload surface
+  tests 8 OK, mail upload import workflow tests 9 OK, `test_mail_*.py` 80 OK,
+  semantic JSON-RPC gateway tests 11 OK, mail upload session gateway tests
+  8 OK, upload session tests 5 OK, ingestion package regression 1 OK, object
+  store tests 7 OK, store edge tests 7 OK, workflow edge tests 8 OK, upload
+  asset reference tests 2 OK, touched-file `py_compile`, touched-file
+  line-length scan, and `git diff --check` with CRLF warnings only. This is
+  backend upload intake / file-transfer receipt only, not the actual iframe UI,
+  actual ChatGPT connected upload, real mail parser, live PostgreSQL
+  deployment, production worker leasing, KG writes, wiki projection,
+  production readiness, or a completed #21 claim. Canonical dev-container
+  verification remains blocked by Docker Desktop unable to start.
+- #21 checkpoint J is implemented and passed the issue-specific 6-reviewer
+  gate: added
+  `python/formowl_mail/upload_http.py` and
+  `tests/test_mail_upload_http_surface.py` for a local stdlib HTTP upload
+  surface contract harness. The handler renders `GET
+  /mail/upload/<upload_session_id>` as a session-bound mail archive form and
+  accepts `POST /mail/upload/<upload_session_id>` multipart uploads with one
+  `mail_archive` file, validates route/form/workspace binding, request size,
+  multipart boundary, duplicate file/field parts, parser defects such as
+  missing close boundary, short HTTP body reads, actor/session/status,
+  supported filename, and user-supplied storage/parser/worker controls before
+  durable side effects, stages bytes only temporarily, calls
+  `receive_mail_archive_upload()`, removes the temporary staged body, and
+  returns a safe JSON receipt. Supplemental host checks before reviewer gate
+  passed: HTTP upload surface tests 11 OK, backend
+  upload surface regression tests 8 OK, mail upload session gateway tests
+  8 OK, mail upload import workflow tests 9 OK, clean-temp-root
+  `test_mail_*.py` 91 OK, touched-file `py_compile` passed, touched-file
+  line-length scan passed, and `git diff --check` passed with CRLF warnings
+  only. Reviewer blockers fixed during the gate: wrong and missing
+  `workspace_id` route/form binding tests, duplicate `mail_archive` file and
+  duplicate hidden-field tests, and truncated multipart / short-read parser
+  hardening with no durable side effects. Reviewer gate passed 6/6 with
+  `Popper`, `Russell`, `Peirce`, `Huygens`, `Turing`, and `Heisenberg`
+  returning explicit `RELEASE_DECISION: AGREE`; no blocking findings remain.
+  This is a local HTTP contract harness for future iframe/portal integration
+  only; it does not claim actual ChatGPT
+  connected upload, production iframe readiness, real PST/OST/MSG/EML/MBOX
+  parser readiness, live PostgreSQL deployment, production worker leasing, KG
+  writes, wiki projection, production readiness, or a completed #21 claim.
+  Canonical dev-container verification remains blocked by Docker Desktop unable
+  to start.
+- #21 checkpoint K is implemented and passed the issue-specific 6-reviewer
+  gate: added
+  `scripts/mail_upload_mcp_http_smoke.py` and
+  `tests/test_mail_upload_mcp_http_smoke_script.py` for a local
+  MCP-command-to-HTTP upload smoke. The smoke launches the configured
+  `formowl-semantic-mcp-jsonrpc` command, sends JSON-RPC `initialize`,
+  `tools/list`, and `tools/call open_upload_session`, resolves the persisted
+  `UploadSession`, starts the local HTTP upload surface with the same data
+  directory and trusted session identity, posts synthetic multipart PST bytes
+  to `/mail/upload/<upload_session_id>`, verifies `UploadSession.asset_id`,
+  Asset/ObjectStore/audit side effects, staging cleanup, and safe
+  hash/status/count report output. Negative probes cover missing route, wrong
+  session route, wrong workspace, user-supplied infrastructure fields,
+  duplicate multipart files, malformed multipart, oversized bodies, and
+  command startup redaction with no durable upload side effects. Supplemental
+  host checks before reviewer gate passed: MCP HTTP smoke tests 7 OK, MCP
+  command preflight regression 10 OK, local HTTP upload surface tests 11 OK,
+  `test_mail_*.py` 98 OK, touched-file `py_compile`, touched-file line-length
+  scan, and `git diff --check` with CRLF warnings only. Reviewer gate passed
+  6/6 with `Descartes`, `Bohr`, `Ampere`, `Hypatia`, `Sagan`, and `Rawls`
+  returning explicit `RELEASE_DECISION: AGREE`; no blocking findings remain.
+  This is a local
+  MCP-command-to-HTTP upload contract smoke only; it does not claim actual
+  ChatGPT connected upload, production iframe readiness, real mail parser,
+  live PostgreSQL deployment, production worker leasing, KG writes, wiki
+  projection, production readiness, or a completed #21 claim. Canonical
+  dev-container verification remains blocked by Docker Desktop unable to
+  start.
+- #21 checkpoint L is implemented and passed the issue-specific 6-reviewer
+  gate: added `scripts/mail_upload_mcp_http_import_smoke.py` and
+  `tests/test_mail_upload_mcp_http_import_smoke_script.py`, updated
+  `README.md` and `docs/workflows.md`, hardened
+  `python/formowl_mail/import_workflow.py` so mail evidence writes and
+  verification query share one transaction, and hardened
+  `python/formowl_ingestion/storage/records.py` against Windows host temp-file
+  replace locks. The smoke extends the local MCP-command-to-HTTP upload path:
+  it opens an `UploadSession` through the configured JSON-RPC command, uploads
+  a synthetic JSON-backed mail fixture through the local HTTP surface, runs the
+  UploadSession-bound server-side import against the bound `asset_id`, writes
+  normalized evidence through the PostgreSQL adapter contract, verifies
+  store-backed owner and denied `query_mail_evidence` JSON-RPC behavior, and
+  reports only hashes/statuses/counts. Negative probes cover missing asset,
+  wrong asset `source_ref`, parser failure, evidence-store failure, and
+  query-verification failure. Reviewer blockers fixed during the gate: query
+  failure now rolls back mail evidence rows instead of leaving committed
+  partial evidence, and denied query validation now proves zero visible results
+  with strict integer checking. Supplemental host checks after blocker fixes
+  passed: L smoke tests 7 OK, upload import workflow tests 9 OK, K smoke tests
+  7 OK, local HTTP upload tests 11 OK, MCP command smoke tests 10 OK,
+  `test_mail_*.py` 105 OK, touched-file `py_compile`, touched-file long-line
+  scan, and `git diff --check` with CRLF warnings only. Reviewer gate passed
+  6/6 with `Kepler`, `Archimedes`, `Kant`, `Dewey`, `Dalton`, and `Confucius`
+  returning explicit `RELEASE_DECISION: AGREE` after blocker fixes. This is a
+  local synthetic contract smoke only; it does not claim actual ChatGPT
+  connected upload, production iframe readiness, real mail parser, live
+  PostgreSQL deployment, production worker leasing, KG writes, wiki projection,
+  production readiness, or #21 completion. Canonical dev-container verification
+  remains blocked by Docker Desktop unable to start.
+- #21 checkpoint M is implemented and passed the issue-specific 6-reviewer
+  gate: added `scripts/mail_upload_chatgpt_connection_preflight.py` and
+  `tests/test_mail_upload_chatgpt_connection_preflight.py`, and updated
+  `README.md` and `docs/workflows.md`. The preflight reuses the configured
+  `formowl-semantic-mcp-jsonrpc` command smoke, validates a bounded manual
+  ChatGPT MCP attach package shape, and emits only hash/status/count report
+  data for the required environment-name count, required tool count, expected
+  JSON-RPC sequence, command-smoke report, upload-session shape, and task-card
+  shape. Negative package probes reject environment values, concrete upload
+  locators, raw command paths, and actual ChatGPT-connected upload overclaims.
+  Reviewer blocker fixed during the gate: static contract hash fields now
+  validate against exact `sha256_json(...)` values for required environment
+  names, required tool names, expected JSON-RPC sequence, and negative package
+  probe names; focused tests cover tampered static hashes, duplicate probe
+  hashes, and embedded validation overclaims. Supplemental host checks after
+  blocker fixes passed: M focused tests 8 OK, M touched-file `py_compile`,
+  MCP command smoke tests 10 OK, K smoke tests 7 OK, L smoke tests 7 OK,
+  `test_mail_*.py` 113 OK, new-file long-line scan, and `git diff --check`
+  with CRLF warnings only. Reviewer gate passed 6/6 with `Bernoulli`,
+  `Boole`, `Copernicus`, `Wegener`, `Nietzsche`, and `Arendt` returning
+  explicit `RELEASE_DECISION: AGREE` after blocker fixes. This is only a local
+  connection-readiness package for the next manual ChatGPT test; it does not
+  claim actual ChatGPT connected upload, production iframe readiness, real
+  parser readiness, live PostgreSQL deployment, production worker leasing, KG
+  writes, wiki projection, production readiness, or #21 completion. Canonical
+  dev-container verification remains blocked by Docker Desktop unable to
+  start.
+- #21 checkpoint N is implemented and passed the issue-specific 6-reviewer
+  gate: added `scripts/mail_upload_chatgpt_result_intake.py` and
+  `tests/test_mail_upload_chatgpt_result_intake.py`, and updated `README.md`
+  and `docs/workflows.md`. After an operator manually connects ChatGPT to the
+  configured `formowl-semantic-mcp-jsonrpc` MCP server and calls
+  `open_upload_session`, the intake validates a bounded hash/status/count
+  result packet for the preflight static contract, expected JSON-RPC sequence,
+  observed required tool, task-card shape, upload-session shape, and operator
+  attestation. It rejects environment values, concrete upload locators or
+  upload session IDs, private mail payload fields, raw command paths,
+  static-contract hash tampering, duplicate response hashes, and actual upload
+  / production overclaims. Supplemental host checks passed: focused
+  result-intake tests 7 OK, `test_mail_*.py` 120 OK, touched-file
+  `py_compile`, new-file long-line scan, and `git diff --check` with CRLF
+  warnings only. Reviewer blocker fixes then made negative packet probes
+  valid-packet-only, malformed nested packets safe, packet-derived safe outputs
+  sanitized, CLI JSON load failures bounded, `--input` and `--validate-report`
+  mutually exclusive, and packet-level duplicate hash / bool count / invalid
+  hash / asset-type / non-object / KG-overclaim coverage explicit.
+  Supplemental host checks after blocker fixes passed: focused result-intake
+  tests 10 OK, `test_mail_*.py` 123 OK, touched-file `py_compile`, new-file
+  long-line scan, and `git diff --check` with CRLF warnings only. Host Ruff is
+  unavailable. Canonical dev-container
+  verification remains blocked: unprivileged Docker access returned npipe
+  permission denied, and the escalated canonical focused command reached
+  Docker but returned `Docker Desktop is unable to start`. Reviewer gate
+  passed 6/6 with `Linnaeus`, `Raman`, `Herschel`, `Fermat`, `Harvey`, and
+  `Mendel` returning explicit `RELEASE_DECISION: AGREE` after blocker fixes.
+  This is result-packet intake only; it does not let Codex directly control
+  ChatGPT, prove actual file transfer, prove production iframe readiness,
+  implement real mail parsing, prove live PostgreSQL deployment readiness,
+  implement production worker leasing, write KG/wiki state, claim production
+  readiness, or complete #21.
+
+## 2026-07-04
+
+- Mail priority reset after PM review: the user explicitly made GitHub issue
+  #21, `Mail Evidence Reading via FormOwl MCP`, the main mail target. Do not
+  continue issue #5 as the active product direction. Treat #5's synthetic mail
+  phase only as reusable foundation: normalized JSON fixture observations,
+  local mail evidence packs/search, candidate-only bridge helpers,
+  case-progress QA helpers, and synthetic preflight artifact. Issue #21 remains
+  open until the governed FormOwl MCP / JSON-RPC evidence-query path is proven
+  with fixture-backed mail evidence, permission-filtered allowed/denied cases,
+  citations, audit/logging behavior, raw/internal leak guards, and a
+  ChatGPT-free local harness. Do not use live mailbox access, parser-side QA,
+  parser-side candidate writes, canonical graph writes, or direct wiki
+  projection to satisfy #21.
+- GitHub issue #5 was merged into #21 and closed as a duplicate on
+  2026-07-04. The merged #21 body now carries #5's OpenProject #827 /
+  #828-#835 mapping, reusable #828/#830 foundation, remaining mail contract /
+  retrieval / QA / candidate / preflight requirements, and sequencing guidance.
+
 ## 2026-06-30
 
 - #13 code-review follow-up on branch `complete-remaining-backbone-slices`:
@@ -1442,8 +1989,9 @@ status in each role's goal file and task completion in
   scope/contract alignment: mail parsing starts from governed `Asset` /
   `IngestionJob` records and ends at versioned `ExtractorRun`, mail
   `Observation`, and attachment asset outputs. It does not start or complete
-  the production PST/EML parser, normalized mail schema, retrieval/index flow,
-  candidate bridge, case-progress QA, or preflight readiness work.
+  the production PST/OST/MSG/EML parser, normalized mail schema,
+  retrieval/index flow, candidate bridge, case-progress QA, or preflight
+  readiness work.
 - 2026-06-30 Issue #5 synthetic mail phase completion: by explicit user
   assignment, the remaining formowl-mail checklist items were completed for
   synthetic JSON-backed fixtures. `FixtureMailArchiveExtractor` now emits
@@ -1454,9 +2002,31 @@ status in each role's goal file and task completion in
   candidate-only semantic/candidate proposal bridging, case-progress QA with
   observation citations, and a preflight readiness artifact. Docs now include
   the synthetic completion profile and `docs/mail-preflight-readiness.md`.
-  Verification passed in the canonical dev container: focused mail tests ran
-  15 OK, Ruff check/format-check passed, and full
-  `python -m unittest discover -s tests` ran 355 OK. Claim boundary: this
+  Verification passed in the canonical dev container after reviewer hardening:
+  focused mail tests ran 20 OK, Ruff check/format-check passed, and full
+  `python -m unittest discover -s tests` ran 360 OK. Claim boundary: this
   closes issue #5 child items `829`, `831`, `832`, `833`, `834`, and `835` for
   synthetic fixtures only; real PST/OST/MSG/EML parser readiness and real
-  mailbox support remain deferred.
+  mailbox support remain deferred. Reviewer gate passed fresh user-requested
+  6/6 after every earlier blocker was fixed and the count reset: code
+  reviewers `Godel`, `Franklin`, and `Bacon` agreed; hardness board test
+  reviewers `Hooke`, `Arendt`, and `Euclid` agreed. Earlier blocking reviewers
+  `Sagan`, `Dalton`, `Laplace`, `Einstein`, `Aristotle`, `Kierkegaard`, and
+  `Bohr` were re-reviewed after their blockers were fixed and are not counted
+  in the final fresh 6/6.
+- 2026-07-07 Issue #21 checkpoint R performance follow-up: after the user
+  flagged full-PST evaluation runtime, `MailEvidenceQueryGateway` now builds a
+  reusable per-bundle inverted snippet index so repeated governed
+  `query_mail_evidence` calls score only token-candidate snippets instead of
+  scanning every snippet. Focused tests now prove non-matching snippets are not
+  scanned/materialized and that the index is built once per bundle across
+  repeated owner, no-match, and denied queries. Latest dev-container full-PST
+  100-case eval plus saved-report validation exited 0 with `blockers=[]` and
+  100/100 cases; safe timings were import `161583ms`, manifest `31320ms`, and
+  scoring `11091ms`, with cleanup counts zero. Full dev-container unittest ran
+  544 OK in 711.056s, and full Ruff check/format-check passed. The performance
+  follow-up passed a fresh 6/6 read-only reviewer gate with `Euler`, `Mendel`,
+  `Euclid`, `Copernicus`, `Huygens`, and `Maxwell`. This is only a Python
+  query-index optimization; the main runtime bottleneck remains the full PST
+  import/parser pipeline, so the next speed slice should add safe phase
+  profiling before considering a native parser or systems-language module.

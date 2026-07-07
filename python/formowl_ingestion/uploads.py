@@ -91,10 +91,14 @@ def create_upload_session(
         status=status,  # type: ignore[arg-type]
         created_at=timestamp,
         audit_log_id=audit_log_id,
+        session_id=session_id,
         project_id=project_id,
         customer_id=customer_id,
     )
-    created_upload_session = upload_session_store.create(upload_session)
+    # Validate before any durable write, then write audit before the session.
+    # This keeps invalid requests and audit-store failures from leaving a
+    # partially tracked UploadSession.
+    upload_session = UploadSession.from_dict(upload_session.to_dict())
     record_upload_session_creation(
         audit_store,
         actor_user_id=actor_user_id,
@@ -104,7 +108,11 @@ def create_upload_session(
         timestamp=timestamp,
         audit_log_id=audit_log_id,
     )
-    return created_upload_session
+    try:
+        return upload_session_store.create(upload_session)
+    except Exception:
+        audit_store.delete(audit_log_id)
+        raise
 
 
 def upload_asset_reference(

@@ -9,6 +9,7 @@ from .audit import (
     record_evidence_fetch,
     record_ingestion_job_creation,
     record_permission_denied,
+    record_upload_session_file_received,
     record_upload_session_creation,
     write_audit_log,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "record_evidence_fetch",
     "record_ingestion_job_creation",
     "record_permission_denied",
+    "record_upload_session_file_received",
     "record_upload_session_creation",
     "write_audit_log",
 ]

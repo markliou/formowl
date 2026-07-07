@@ -4,7 +4,7 @@ import json
 import unittest
 
 import _paths  # noqa: F401
-from formowl_contract import PermissionScope, SourceRef
+from formowl_contract import ContractValidationError, PermissionScope, SourceRef
 from formowl_ingestion.assets import register_asset_from_local_file
 from formowl_ingestion.extraction import run_extractor
 from formowl_ingestion.extractors import FixtureMailArchiveExtractor
@@ -134,6 +134,87 @@ class MailExtractionTests(unittest.TestCase):
 
         persisted = ObservationStore(temp_dir).get(attachment.observation_id)
         self.assertEqual(persisted.to_dict(), attachment.to_dict())
+
+    def test_mail_archive_fixture_rejects_raw_source_ref_without_observations(
+        self,
+    ) -> None:
+        cases = [
+            ("object-locator", "object://mail/raw/archive"),
+            ("url-userinfo", "https://user:pass@example.test/mail"),
+            ("username-only-url-userinfo", "https://user@example.test/mail"),
+            ("mongodb-srv-locator", "mongodb+srv://cluster.example.test/mail"),
+            ("rediss-locator", "rediss://cache.example.test/0"),
+            ("imap-locator", "imap://mail.example.test/inbox"),
+            ("imaps-locator", "imaps://mail.example.test/inbox"),
+            ("smtp-locator", "smtp://mail.example.test/outbox"),
+            ("pop3-locator", "pop3://mail.example.test/inbox"),
+            ("mapi-locator", "mapi://mailbox/archive"),
+            ("ews-locator", "ews://exchange.example.test/mail"),
+        ]
+        for case_name, source_url in cases:
+            with self.subTest(case_name=case_name):
+                temp_dir = _paths.fresh_test_dir(f"mail-extraction-raw-source-ref-{case_name}")
+                source_path = temp_dir / "incoming" / "mail-archive.json"
+                source_path.parent.mkdir(parents=True)
+                source_path.write_text(
+                    json.dumps(
+                        {
+                            "archive_id": "archive_001",
+                            "mailbox_id": "mailbox_yifan",
+                            "messages": [
+                                {
+                                    "message_id": "<msg-001@example.test>",
+                                    "folder_path_hash": "sha256:folder-inbox",
+                                    "body": "Update: source ref must stay safe",
+                                }
+                            ],
+                        },
+                        sort_keys=True,
+                    ),
+                    encoding="utf-8",
+                )
+                registry = StorageBackendRegistry(temp_dir)
+                backend = registry.register_local_backend(
+                    temp_dir / "object-root",
+                    workspace_scope="workspace_formowl",
+                )
+                object_store = FileObjectStore(registry)
+                asset = register_asset_from_local_file(
+                    source_path,
+                    object_store=object_store,
+                    asset_store=AssetStore(temp_dir),
+                    storage_backend_id=backend.storage_backend_id,
+                    workspace_id="workspace_formowl",
+                    owner_user_id="user_yifan",
+                    permission_scope=PermissionScope.project("project_formowl"),
+                    source_ref=SourceRef(
+                        source_system="local",
+                        source_type="mail_archive",
+                        source_id="mail-archive.json",
+                        source_url=source_url,
+                    ),
+                    mime_type="application/vnd.formowl.mail-archive+json",
+                    created_at="2026-06-17T10:00:00+00:00",
+                    registered_at="2026-06-17T10:00:00+00:00",
+                )
+                run_store = ExtractorRunStore(temp_dir)
+                observation_store = ObservationStore(temp_dir)
+
+                with self.assertRaises(ContractValidationError):
+                    run_extractor(
+                        asset=asset,
+                        object_store=object_store,
+                        extractor_run_store=run_store,
+                        observation_store=observation_store,
+                        adapter=FixtureMailArchiveExtractor(),
+                        started_at="2026-06-17T10:01:00+00:00",
+                        completed_at="2026-06-17T10:01:00+00:00",
+                    )
+
+                failed_runs = run_store.list()
+                self.assertEqual(len(failed_runs), 1)
+                self.assertEqual(failed_runs[0].status, "failed")
+                self.assertEqual(observation_store.list(), [])
 
 
 def _observations_by_type(observations):

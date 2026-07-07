@@ -27,6 +27,8 @@ class SemanticMcpGatewayTests(unittest.TestCase):
                 "list_observations",
                 "preview_graph_candidates",
                 "query_effective_graph",
+                "query_mail_evidence",
+                "answer_mail_case_progress",
                 "request_graph_access",
                 "submit_graph_review_decision",
                 "generate_wiki_draft_from_graph_view",
@@ -122,6 +124,24 @@ class SemanticMcpGatewayTests(unittest.TestCase):
                 "query_text": "delivery risk",
             },
         )
+        mail_query = gateway.dispatch_tool(
+            "query_mail_evidence",
+            {
+                "workspace_id": "workspace_main",
+                "requester_user_id": "user_yifan",
+                "query_text": "mail evidence",
+                "mail_import_session_id": "mailimport_001",
+            },
+        )
+        case_progress = gateway.dispatch_tool(
+            "answer_mail_case_progress",
+            {
+                "workspace_id": "workspace_main",
+                "requester_user_id": "user_yifan",
+                "case_id": "case_launch",
+                "mail_import_session_id": "mailimport_001",
+            },
+        )
         review = gateway.dispatch_tool(
             "submit_graph_review_decision",
             {
@@ -151,18 +171,48 @@ class SemanticMcpGatewayTests(unittest.TestCase):
         self.assertEqual(observations["status"], "pending_review")
         self.assertEqual(preview["status"], "pending_review")
         self.assertEqual(query["status"], "pending_review")
+        self.assertEqual(mail_query["status"], "pending_review")
+        self.assertEqual(case_progress["status"], "pending_review")
+        self.assertEqual(case_progress["data"]["blockers"], [])
+        self.assertEqual(case_progress["data"]["citations"], [])
         self.assertEqual(review["status"], "pending_review")
         self.assertEqual(access["status"], "pending_review")
         self.assertEqual(draft["status"], "pending_review")
         self.assertNotIn(
             "canonical_commit",
-            str([upload, ingestion, observations, preview, query, review, access, draft]),
+            str(
+                [
+                    upload,
+                    ingestion,
+                    observations,
+                    preview,
+                    query,
+                    mail_query,
+                    case_progress,
+                    review,
+                    access,
+                    draft,
+                ]
+            ),
         )
         self.assertNotIn(
             "raw_path",
-            str([upload, ingestion, observations, preview, query, review, access, draft]),
+            str(
+                [
+                    upload,
+                    ingestion,
+                    observations,
+                    preview,
+                    query,
+                    mail_query,
+                    case_progress,
+                    review,
+                    access,
+                    draft,
+                ]
+            ),
         )
-        self.assertEqual(len(gateway.tool_call_logs), 8)
+        self.assertEqual(len(gateway.tool_call_logs), 10)
 
     def test_gateway_rejects_handler_payloads_with_raw_values(self) -> None:
         gateway = SemanticMcpGateway(
@@ -192,13 +242,14 @@ class SemanticGatewayStaticContractTests(unittest.TestCase):
         no_worker_internal_output = True
         safe_error_envelope = True
 
-        self.assertEqual(len(PUBLIC_TOOL_SCHEMAS), 8)
+        self.assertEqual(len(PUBLIC_TOOL_SCHEMAS), 10)
         self.assertEqual(
             {schema["workflow"] for schema in PUBLIC_TOOL_SCHEMAS},
             {
                 "upload",
                 "ingestion",
                 "observation",
+                "mail_evidence",
                 "candidate_graph",
                 "access",
                 "wiki_projection",
@@ -222,6 +273,7 @@ class SemanticGatewayStaticContractTests(unittest.TestCase):
             "ingestion",
             "observation",
             "candidate_graph",
+            "mail_evidence",
             "access",
             "wiki_projection",
         }:

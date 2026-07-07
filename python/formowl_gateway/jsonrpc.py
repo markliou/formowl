@@ -1,15 +1,53 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+import json
+import os
+from pathlib import Path
+import sys
 from typing import Any, Mapping
 
-from formowl_contract import ContractValidationError, sha256_json, to_plain
+from formowl_contract import ContractValidationError, safe_public_string, sha256_json, to_plain
 
 from .semantic import (
     PUBLIC_TOOL_SCHEMAS,
     SemanticMcpGateway,
     validate_public_gateway_payload,
 )
+
+_SEMANTIC_TOOL_INPUT_KEYS = {
+    schema["tool_name"]: set(schema["input_keys"]) for schema in PUBLIC_TOOL_SCHEMAS
+}
+_SEMANTIC_TOOL_EXTRA_ARGUMENT_KEYS = {
+    "open_upload_session": {
+        "owner_scope_type",
+        "owner_scope_id",
+        "project_id",
+        "customer_id",
+        "visibility_scope",
+        "ingestion_profile",
+    },
+    "query_mail_evidence": {"limit"},
+}
+_SEMANTIC_TOOL_SESSION_OVERRIDE_KEYS = {"session_id"}
+_SEMANTIC_TOOL_FORBIDDEN_ARGUMENT_KEYS = {
+    "backend",
+    "backend_id",
+    "backend_name",
+    "grants",
+    "parser",
+    "parser_id",
+    "parser_name",
+    "raw",
+    "storage",
+    "storage_backend",
+    "storage_backend_id",
+    "storage_backend_name",
+    "worker",
+    "worker_name",
+    "worker_queue",
+}
 
 
 @dataclass(frozen=True)
@@ -215,10 +253,26 @@ class SemanticMcpJsonRpcGateway:
             arguments = params.get("arguments", {})
             if not isinstance(tool_name, str) or not isinstance(arguments, Mapping):
                 return _json_rpc_error(request_id, -32602, "invalid_params")
+            try:
+                _validate_semantic_tool_arguments(tool_name, arguments)
+            except ContractValidationError:
+                tool_result = self.semantic_gateway.safe_error_envelope(
+                    tool_name=tool_name,
+                    error_code="unsafe_tool_payload",
+                )
+                return _json_rpc_result(
+                    request_id,
+                    {
+                        "content": [{"type": "json", "json": tool_result}],
+                        "isError": True,
+                        "session": self.session.to_dict(),
+                    },
+                )
             merged_arguments = {
+                **dict(arguments),
+                "session_id": self.session.session_id,
                 "workspace_id": self.session.workspace_id,
                 "requester_user_id": self.session.actor_user_id,
-                **dict(arguments),
             }
             try:
                 tool_result = self.semantic_gateway.dispatch_tool(tool_name, merged_arguments)
@@ -226,6 +280,11 @@ class SemanticMcpJsonRpcGateway:
                 tool_result = self.semantic_gateway.safe_error_envelope(
                     tool_name=tool_name,
                     error_code="unsafe_tool_payload",
+                )
+            except Exception:
+                tool_result = self.semantic_gateway.safe_error_envelope(
+                    tool_name=tool_name,
+                    error_code="tool_execution_failed",
                 )
             validate_public_gateway_payload(tool_result)
             return _json_rpc_result(
@@ -367,6 +426,37 @@ def end_to_end_raw_path_raw_sql_worker_internal_leak_transcript() -> dict[str, A
     return build_raw_path_raw_sql_worker_internal_leak_transcript()
 
 
+def create_mail_upload_semantic_jsonrpc_gateway(
+    *,
+    data_dir: str | Path | None = None,
+    expires_at: str | None = None,
+    session: SemanticGatewaySession | None = None,
+) -> SemanticMcpJsonRpcGateway:
+    """Build the Phase 1 semantic gateway runtime with mail upload sessions enabled."""
+
+    # Local imports avoid a module cycle: formowl_mail.upload_session imports the
+    # public payload validator from formowl_gateway.
+    from formowl_auth import FileAuditLogStore
+    from formowl_ingestion.storage import UploadSessionStore
+    from formowl_mail import build_mail_upload_session_handler
+
+    root = Path(data_dir or os.environ.get("FORMOWL_DATA_DIR", ".formowl/data"))
+    resolved_session = session or _session_from_env()
+    resolved_expires_at = (
+        expires_at
+        or os.environ.get("FORMOWL_MAIL_UPLOAD_EXPIRES_AT")
+        or _default_mail_upload_expires_at()
+    )
+    gateway = SemanticMcpGateway(
+        upload_session_handler=build_mail_upload_session_handler(
+            upload_session_store=UploadSessionStore(root),
+            audit_store=FileAuditLogStore(root),
+            expires_at=resolved_expires_at,
+        )
+    )
+    return SemanticMcpJsonRpcGateway(semantic_gateway=gateway, session=resolved_session)
+
+
 def _tool_to_json_rpc_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": schema["tool_name"],
@@ -395,6 +485,48 @@ def _mcp_server_tool_to_json_rpc_schema(tool: dict[str, Any]) -> dict[str, Any]:
             "additionalProperties": True,
         },
     }
+
+
+def _validate_semantic_tool_arguments(tool_name: str, arguments: Mapping[str, Any]) -> None:
+    validate_public_gateway_payload({"tool_name": tool_name, "arguments": dict(arguments)})
+    _reject_semantic_control_argument_keys(arguments)
+    allowed_keys = _SEMANTIC_TOOL_INPUT_KEYS.get(tool_name)
+    if allowed_keys is None:
+        return
+    allowed = (
+        allowed_keys
+        | _SEMANTIC_TOOL_EXTRA_ARGUMENT_KEYS.get(tool_name, set())
+        | _SEMANTIC_TOOL_SESSION_OVERRIDE_KEYS
+    )
+    extra = sorted(set(arguments) - allowed)
+    if extra:
+        raise ContractValidationError(
+            "semantic JSON-RPC arguments contain unsupported keys: " + sha256_json(extra)
+        )
+
+
+def _reject_semantic_control_argument_keys(value: Any) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = _normalized_semantic_argument_key(str(key))
+            if normalized in _SEMANTIC_TOOL_FORBIDDEN_ARGUMENT_KEYS:
+                raise ContractValidationError(
+                    "semantic JSON-RPC arguments contain unsupported control key: "
+                    + sha256_json(normalized)
+                )
+            _reject_semantic_control_argument_keys(item)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_semantic_control_argument_keys(item)
+
+
+def _normalized_semantic_argument_key(value: str) -> str:
+    normalized = []
+    for index, char in enumerate(value):
+        if char.isupper() and index > 0:
+            normalized.append("_")
+        normalized.append(char.lower() if char.isalnum() else "_")
+    return "_".join(part for part in "".join(normalized).split("_") if part)
 
 
 def _safe_mcp_tool_error_envelope(
@@ -440,3 +572,74 @@ def _safe_method_name(value: str) -> str:
     except ContractValidationError:
         return "unsafe_input_redacted"
     return value if value else "unknown"
+
+
+def _session_from_env() -> SemanticGatewaySession:
+    return SemanticGatewaySession(
+        session_id=_public_env_value("FORMOWL_MCP_SESSION_ID", "semantic_gateway_session"),
+        actor_user_id=_public_env_value(
+            "FORMOWL_MCP_ACTOR_USER_ID",
+            "manual_trusted_internal",
+        ),
+        workspace_id=_public_env_value("FORMOWL_MCP_WORKSPACE_ID", "workspace_main"),
+    )
+
+
+def _public_env_value(name: str, fallback: str) -> str:
+    value = os.environ.get(name) or fallback
+    try:
+        safe_public_string(value, name)
+        validate_public_gateway_payload(value)
+    except ContractValidationError:
+        return fallback
+    return value
+
+
+def _default_mail_upload_expires_at() -> str:
+    return (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+
+
+def main() -> None:
+    gateway: SemanticMcpJsonRpcGateway | None = None
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError:
+            response = _safe_json_rpc_error(None, -32700, "parse_error")
+        else:
+            if not isinstance(request, Mapping):
+                response = _safe_json_rpc_error(None, -32600, "invalid_request")
+            else:
+                if gateway is None:
+                    try:
+                        gateway = create_mail_upload_semantic_jsonrpc_gateway()
+                    except Exception:
+                        response = _safe_json_rpc_error(
+                            request.get("id"),
+                            -32000,
+                            "internal_error",
+                        )
+                        print(json.dumps(response, ensure_ascii=False), flush=True)
+                        continue
+                try:
+                    response = gateway.handle_json_rpc(request)
+                except Exception:
+                    response = _safe_json_rpc_error(
+                        request.get("id"),
+                        -32000,
+                        "internal_error",
+                    )
+        print(json.dumps(response, ensure_ascii=False), flush=True)
+
+
+def _safe_json_rpc_error(request_id: Any, code: int, message: str) -> dict[str, Any]:
+    try:
+        return _json_rpc_error(request_id, code, message)
+    except ContractValidationError:
+        return _json_rpc_error(None, code, message)
+
+
+if __name__ == "__main__":
+    main()
