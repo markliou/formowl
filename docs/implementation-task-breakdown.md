@@ -304,25 +304,39 @@ These groups can be split across multiple agents after Slice 1 is stable.
     this slice; domain-specific specializations are validated in
     `DomainPackDefinition` until a later explicit domain-pack binding field
     exists.
-  - Canonical verification: focused issue #28 dev-container tests ran 8 OK;
-    experiment CLI plus saved-report validation exited 0; full
-    `python -m unittest discover -s tests` ran 589 OK in 835.252s; full Ruff
+  - Canonical verification: initial focused issue #28 dev-container tests ran
+    8 OK; initial experiment CLI plus saved-report validation exited 0; the
+    follow-up robustness patch focused tests ran 12 OK; follow-up experiment
+    CLI plus current-fixture saved-report validation exited 0; full
+    `python -m unittest discover -s tests` ran 593 OK in 829.203s; full Ruff
     check passed; full Ruff format-check passed with 222 files already
     formatted.
   - Reviewer gate status: passed default 3 effective read-only Codex/GPT
-    reviewers.
-  - Effective reviewer count: 3/3.
-  - Reviewer agreement count: 3/3 (`Herschel`, `Bohr`, `Mencius`).
+    reviewers for the initial slice and the follow-up robustness patch.
+  - Effective reviewer count: initial 3/3; follow-up 3/3.
+  - Reviewer agreement count: initial 3/3 (`Herschel`, `Bohr`, `Mencius`);
+    follow-up 3/3 (`Ramanujan`, `Aristotle`, `Sagan`).
   - Reviewers with blocking findings: `Herschel` initially blocked permissive
     flat business-label frame types; fixed by requiring core coordination
     frame types for candidate/canonical frame instances and adding `Invoice`
-    rejection coverage. `Herschel` re-reviewed and agreed.
+    rejection coverage. `Herschel` re-reviewed and agreed. `Aristotle`
+    blocked aggregate-only mention-only validation; fixed by requiring each
+    case row to include mention-only coverage. `Ramanujan` blocked stale saved
+    reports that were not bound to the current fixture; fixed by validating
+    `fixture_hash` and `case_row_hash` against the requested fixture and by
+    covering custom-fixture CLI validation. `Aristotle` and `Ramanujan`
+    re-reviewed and agreed.
   - Non-counted agents: none.
   - Active reviewers: none.
+  - Follow-up robustness patch: added mention-only/no-obligation coverage for
+    every scenario, added an explicit `OpenQuestion` fixture frame, and raised
+    report validation to require per-scenario mention-only coverage, current
+    fixture-bound report hashes, and at least six coordination frame types.
   - Non-blocking next-iteration notes: add explicit domain-pack binding for
     specialized frame instances, use the actual current extraction path instead
-    of a flat-path answerability proxy, add mention-only/no-obligation negative
-    examples, and add an explicit `OpenQuestion` fixture frame.
+    of a flat-path answerability proxy, add old atom/relation migration notes,
+    and evaluate projection/view behavior without mutating wiki or user graph
+    state.
 
 ### Test Hardening Board for Completed Slices
 

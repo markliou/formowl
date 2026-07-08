@@ -32,12 +32,12 @@ core experiment. The first checkpoint is documented in
 candidate-only `CandidateMention`, `CandidateBusinessObject`, `CandidateFrame`,
 `CanonicalFrame`, and `DomainPackDefinition` contracts, then compares a
 current flat semantic path with a v2 coordination-frame path on four
-synthetic cross-domain email scenarios. The result is 16/40 answerable
-competency question-case pairs for the flat path versus 40/40 for the v2 frame
-path. This supports only fixture answerability and contract-shape claims; it
-does not complete issue #28 or claim canonical graph/type writes, user graph
-writes, wiki projection, raw access, real parser readiness, or production
-readiness.
+synthetic cross-domain email scenarios, including mention-only negatives and
+an explicit `OpenQuestion` frame. The result is 16/40 answerable competency
+question-case pairs for the flat path versus 40/40 for the v2 frame path. This
+supports only fixture answerability and contract-shape claims; it does not
+complete issue #28 or claim canonical graph/type writes, user graph writes,
+wiki projection, raw access, real parser readiness, or production readiness.
 
 The current code-level method is:
 

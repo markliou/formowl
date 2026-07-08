@@ -50,10 +50,14 @@ four email-first cross-domain scenarios:
 4. Management + Project launch dependency and open coordination.
 
 Each scenario contains structured lines for `Request`, `Blocker`,
-`Commitment`, `Decision`, and `StatusUpdate`. The script converts those lines
-into candidate-only frame records with ontology revision pins, evidence spans,
-domain hints, candidate mention links, candidate business object links,
-extractor run provenance, and pending-review state.
+`Commitment`, `Decision`, and `StatusUpdate`. The management/project scenario
+also contains an explicit `OpenQuestion` frame. Every scenario includes one
+`Mention` line with `obligation=mention_only`; those lines create candidate
+mentions but no `CandidateFrame`, so the fixture tests whether the v2 path can
+distinguish background mentions from coordination obligations. The script
+converts frame lines into candidate-only frame records with ontology revision
+pins, evidence spans, domain hints, candidate mention links, candidate
+business object links, extractor run provenance, and pending-review state.
 
 Domain packs are loaded for sales, R&D, warehouse, production, finance,
 management, and project. Each pack defines domain business object types and
@@ -74,7 +78,8 @@ The current fixture run reports:
 | Domain packs | 7 |
 | Competency questions | 10 |
 | Question-case pairs | 40 |
-| Candidate frames | 20 |
+| Candidate frames | 21 |
+| Mention-only lines | 4 |
 | Current flat path answerable | 16/40 |
 | Ontology v2 frame path answerable | 40/40 |
 | Delta | +24 |
@@ -94,6 +99,11 @@ python scripts/ontology_v2_coordination_frame_experiment.py \
 
 Canonical completion evidence must come from the dev container, together with
 the repository test and formatting commands.
+
+Saved-report validation is current-fixture-bound. The validator recomputes the
+fixture hash and case-row hash from the requested `--fixture`, rejects stale
+`fixture_hash` / `case_row_hash` values, and requires every case row to include
+mention-only coverage.
 
 ## Claim Boundary
 
@@ -123,6 +133,6 @@ This slice does not claim:
 
 The next issue #28 work should move from structured fixture lines to an
 extractor-like candidate generation path over ordinary observations. It should
-also add old atom/relation migration notes, test more negative/no-obligation
-mentions, and evaluate the projection/view layer without mutating wiki or user
-graph state.
+also add old atom/relation migration notes, broaden no-obligation mention
+variety, add explicit domain-pack binding for specialized frame instances, and
+evaluate the projection/view layer without mutating wiki or user graph state.

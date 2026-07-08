@@ -12,9 +12,10 @@ status in each role's goal file and task completion in
   definitions, four synthetic cross-domain email cases, and
   `scripts/ontology_v2_coordination_frame_experiment.py`. The current public
   aggregate compares `current_flat_atom_path` with
-  `ontology_v2_coordination_frame_path`: 4 scenarios, 7 domain packs, 20
-  candidate frames, 10 competency questions, 16/40 flat-path answerability,
-  40/40 v2 frame-path answerability, delta +24. This is only a candidate-only
+  `ontology_v2_coordination_frame_path`: 4 scenarios, 7 domain packs, 21
+  candidate frames, 4 mention-only lines, 10 competency questions, 16/40
+  flat-path answerability, 40/40 v2 frame-path answerability, delta +24. This
+  is only a candidate-only
   fixture answerability checkpoint for GitHub issue #28; it does not complete
   the issue and does not claim real parser readiness, canonical type/KG writes,
   user graph writes, wiki projection, raw access, or production readiness.
@@ -22,12 +23,19 @@ status in each role's goal file and task completion in
   coordination core frame types in this slice; domain-specific specializations
   remain validated in `DomainPackDefinition` until an explicit domain-pack
   binding field is added. Canonical verification passed: focused issue #28
-  dev-container tests ran 8 OK; experiment CLI plus saved-report validation
-  exited 0; full unittest ran 589 OK in 835.252s; full Ruff check and
-  format-check passed. Reviewer gate passed 3/3 with `Herschel`, `Bohr`, and
-  `Mencius`. Next issue #28 iteration should add actual current-path rerun,
-  explicit domain-pack specialization binding, mention-only/no-obligation
-  negatives, and an `OpenQuestion` fixture frame.
+  dev-container tests initially ran 8 OK; experiment CLI plus saved-report
+  validation exited 0; the follow-up robustness patch focused tests ran 12 OK;
+  follow-up experiment CLI plus current-fixture saved-report validation exited
+  0; full unittest ran 593 OK in 829.203s; full Ruff check and format-check
+  passed with 222 files already formatted. Reviewer gate passed 3/3 for the
+  initial slice with `Herschel`, `Bohr`, and `Mencius`; the follow-up
+  robustness patch passed a fresh 3/3 with `Ramanujan`, `Aristotle`, and
+  `Sagan`. The follow-up patch added mention-only/no-obligation coverage for
+  every scenario, an explicit `OpenQuestion` fixture frame, per-scenario
+  mention-only report validation, and current-fixture `fixture_hash` /
+  `case_row_hash` validation for saved reports. Next issue #28 iteration
+  should add actual current-path rerun and explicit domain-pack specialization
+  binding.
 
 ## 2026-07-07
 

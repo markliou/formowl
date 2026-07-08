@@ -270,7 +270,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   candidate-only `CandidateMention`, `CandidateBusinessObject`,
   `CandidateFrame`, `CanonicalFrame`, and `DomainPackDefinition` contracts,
   then compares the current flat semantic path with a coordination-frame path
-  on four synthetic cross-domain email scenarios. The fixture result improves
+  on four synthetic cross-domain email scenarios with mention-only negatives
+  and an explicit `OpenQuestion` frame. The fixture result improves
   competency-question answerability from 16/40 to 40/40. This is a fixture
   experiment only; it does not claim issue #28 completion, real parser
   readiness, canonical type/KG writes, user graph writes, wiki projection,

@@ -1630,17 +1630,28 @@ Reviewer cost-control rules:
   `current_flat_atom_path` against `ontology_v2_coordination_frame_path` on
   four synthetic cross-domain email scenarios and reports 16/40 answerable
   competency question-case pairs for the flat path versus 40/40 for the v2
-  frame path. `CandidateFrame` and `CanonicalFrame` instances are restricted
-  to coordination core frame types in this slice; domain-specific
-  specializations are validated in `DomainPackDefinition` until a later
-  explicit domain-pack binding field exists. Canonical verification passed:
+  frame path, with 21 candidate frames, 4 mention-only lines, and an explicit
+  `OpenQuestion` fixture frame. `CandidateFrame` and `CanonicalFrame`
+  instances are restricted to coordination core frame types in this slice;
+  domain-specific specializations are validated in `DomainPackDefinition`
+  until a later explicit domain-pack binding field exists. The follow-up
+  robustness patch hardens saved-report validation so every scenario must have
+  mention-only coverage, and saved `fixture_hash` / `case_row_hash` values must
+  match the requested current fixture. Canonical verification passed: initial
   focused issue #28 dev-container tests ran 8 OK; experiment CLI plus
-  saved-report validation exited 0; full unittest ran 589 OK in 835.252s;
-  full Ruff check and format-check passed. Reviewer gate passed 3/3 with
-  `Herschel`, `Bohr`, and `Mencius`; `Herschel`'s flat business-label frame
-  type blocker was fixed and re-reviewed. Claim boundary: this proves only
-  fixture-based coordination-frame answerability and contract shape. It does
-  not complete issue #28, does not parse real mail, does not generate business
-  answers, and does not write canonical type/KG state, user graph state, wiki
-  projection, raw access grants, or production readiness. Next action is
-  commit, push, and a draft PR to `main`.
+  saved-report validation exited 0; follow-up focused tests ran 12 OK;
+  follow-up experiment CLI plus current-fixture saved-report validation exited
+  0; full unittest ran 593 OK in 829.203s; full Ruff check and format-check
+  passed with 222 files already formatted. Reviewer gate passed 3/3 for the
+  initial slice with `Herschel`, `Bohr`, and `Mencius`; `Herschel`'s flat
+  business-label frame type blocker was fixed and re-reviewed. The follow-up
+  robustness patch passed a fresh 3/3 with `Ramanujan`, `Aristotle`, and
+  `Sagan`; `Aristotle`'s aggregate-only mention-only validation blocker and
+  `Ramanujan`'s stale-report binding blockers were fixed and re-reviewed.
+  Claim boundary: this proves only fixture-based coordination-frame
+  answerability and contract shape. It does not complete issue #28, does not
+  parse real mail, does not generate business answers, and does not write
+  canonical type/KG state, user graph state, wiki projection, raw access
+  grants, or production readiness. Delivery target is draft PR #30 to `main`;
+  the next research iteration should add actual current-path rerun and
+  explicit domain-pack specialization binding.

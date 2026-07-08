@@ -141,6 +141,7 @@ class ExtractedCase:
     mentions: tuple[CandidateMention, ...]
     business_objects: tuple[CandidateBusinessObject, ...]
     frames: tuple[CandidateFrame, ...]
+    mention_only_count: int
 
 
 def run_experiment(fixture_path: Path = DEFAULT_FIXTURE_PATH) -> dict[str, Any]:
@@ -169,11 +170,14 @@ def run_experiment(fixture_path: Path = DEFAULT_FIXTURE_PATH) -> dict[str, Any]:
         "claim_boundary": _claim_boundary(),
     }
     report["metrics"]["raw_leak_guard_passed"] = _raw_leak_guard_passes(report)
-    report["validation"] = validate_report(report)
+    report["validation"] = validate_report(report, fixture_path)
     return report
 
 
-def validate_report(report: Mapping[str, Any]) -> dict[str, Any]:
+def validate_report(
+    report: Mapping[str, Any],
+    fixture_path: Path = DEFAULT_FIXTURE_PATH,
+) -> dict[str, Any]:
     blockers: list[str] = []
     if not isinstance(report, Mapping):
         return {"passed": False, "blockers": ["report must be an object"]}
@@ -186,8 +190,10 @@ def validate_report(report: Mapping[str, Any]) -> dict[str, Any]:
     safe = _mapping_or_empty(report.get("safe_outputs"), "safe_outputs", blockers)
     claim_boundary = _mapping_or_empty(report.get("claim_boundary"), "claim_boundary", blockers)
     _validate_claim_boundary(claim_boundary, blockers)
+    expected_safe = _expected_safe_outputs_for_fixture(fixture_path, blockers)
     expected_questions = len(COMPETENCY_QUESTION_IDS)
     scenario_count = _integer_value(safe, "scenario_count", blockers)
+    mention_only_count = _integer_value(safe, "mention_only_count", blockers)
     v1_total = _integer_value(safe, "v1_answerable_count", blockers)
     v2_total = _integer_value(safe, "v2_answerable_count", blockers)
     delta = _integer_value(safe, "v2_delta_answerable_count", blockers)
@@ -201,6 +207,18 @@ def validate_report(report: Mapping[str, Any]) -> dict[str, Any]:
         blockers.append("safe_outputs.v2_delta_answerable_count mismatch")
     if None not in (v1_total, v2_total) and v2_total <= v1_total:
         blockers.append("v2 must improve answerability over the flat baseline")
+    if None not in (scenario_count, mention_only_count) and mention_only_count < scenario_count:
+        blockers.append("safe_outputs.mention_only_count must cover every scenario")
+    case_rows = safe.get("case_rows")
+    if isinstance(case_rows, list):
+        if scenario_count is not None and len(case_rows) != scenario_count:
+            blockers.append("safe_outputs.case_rows length must match scenario_count")
+        if any(_case_row_mention_only_count(row) < 1 for row in case_rows):
+            blockers.append(
+                "safe_outputs.case_rows must include mention-only coverage for every scenario"
+            )
+    else:
+        blockers.append("safe_outputs.case_rows must be a list")
     if metrics.get("candidate_only_boundary_respected") is not True:
         blockers.append("candidate_only_boundary_respected must be true")
     if metrics.get("canonical_side_effects_absent") is not True:
@@ -209,13 +227,49 @@ def validate_report(report: Mapping[str, Any]) -> dict[str, Any]:
         blockers.append("raw_leak_guard_passed must be true")
     if safe.get("domain_pack_count", 0) < 5:
         blockers.append("safe_outputs.domain_pack_count must cover at least five domains")
-    if safe.get("candidate_frame_type_count", 0) < 5:
+    if safe.get("candidate_frame_type_count", 0) < 6:
         blockers.append("safe_outputs.candidate_frame_type_count must cover coordination frames")
+    if expected_safe:
+        _validate_fixture_bound_hashes(safe, expected_safe, blockers)
     try:
         assert_no_public_raw_references(report, "ontology_v2_coordination_report")
     except ContractValidationError as exc:
         blockers.append(str(exc))
     return {"passed": not blockers, "blockers": blockers}
+
+
+def _expected_safe_outputs_for_fixture(
+    fixture_path: Path,
+    blockers: list[str],
+) -> Mapping[str, Any]:
+    try:
+        fixture = _load_fixture(fixture_path)
+        domain_packs = _build_domain_packs(fixture)
+        cases = tuple(_extract_case(case) for case in fixture["cases"])
+        case_rows = [_score_case(case) for case in cases]
+        return _safe_outputs(fixture, domain_packs, cases, case_rows)
+    except (ContractValidationError, OSError, json.JSONDecodeError) as exc:
+        blockers.append(f"current fixture could not be validated: {exc}")
+        return {}
+
+
+def _validate_fixture_bound_hashes(
+    safe: Mapping[str, Any],
+    expected_safe: Mapping[str, Any],
+    blockers: list[str],
+) -> None:
+    for field_name in ("fixture_hash", "case_row_hash"):
+        if safe.get(field_name) != expected_safe.get(field_name):
+            blockers.append(f"safe_outputs.{field_name} must match current fixture")
+
+
+def _case_row_mention_only_count(row: Any) -> int:
+    if not isinstance(row, Mapping):
+        return 0
+    value = row.get("mention_only_count")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value
 
 
 def _load_fixture(path: Path) -> dict[str, Any]:
@@ -265,6 +319,7 @@ def _extract_case(case: Mapping[str, Any]) -> ExtractedCase:
     mentions: list[CandidateMention] = []
     business_objects: list[CandidateBusinessObject] = []
     frames: list[CandidateFrame] = []
+    mention_only_count = 0
     for line_number, line in enumerate(body_lines, start=1):
         frame_type, slots = _parse_frame_line(line)
         evidence_span = {
@@ -274,6 +329,9 @@ def _extract_case(case: Mapping[str, Any]) -> ExtractedCase:
         }
         line_mentions = _mentions_for_slots(observation, frame_type, slots, evidence_span)
         mentions.extend(line_mentions)
+        if frame_type == "Mention":
+            mention_only_count += 1
+            continue
         line_business_objects = _business_objects_for_slots(observation, slots, line_mentions)
         business_objects.extend(line_business_objects)
         frames.append(
@@ -293,6 +351,7 @@ def _extract_case(case: Mapping[str, Any]) -> ExtractedCase:
         mentions=tuple(mentions),
         business_objects=tuple(business_objects),
         frames=tuple(frames),
+        mention_only_count=mention_only_count,
     )
 
 
@@ -497,6 +556,7 @@ def _score_case(case: ExtractedCase) -> dict[str, Any]:
         "scenario_id": case.scenario_id,
         "domain_count": len(set(case.domains)),
         "frame_count": len(case.frames),
+        "mention_only_count": case.mention_only_count,
         "v1_answered_question_ids": sorted(v1_answered),
         "v2_answered_question_ids": sorted(v2_answered),
         "v1_answerable_count": len(v1_answered),
@@ -541,7 +601,10 @@ def _v2_answered_questions(case: ExtractedCase) -> set[str]:
         answered.add("what_evidence_supports_frame")
     if any(frame.domain_hints for frame in frames):
         answered.add("which_domain_belongs")
-    if any(frame.slots.get("obligation") == "coordination_obligation" for frame in frames):
+    if (
+        any(frame.slots.get("obligation") == "coordination_obligation" for frame in frames)
+        and case.mention_only_count > 0
+    ):
         answered.add("mention_or_coordination_obligation")
     if any(
         frame.slots.get("follow_up_owner")
@@ -596,6 +659,7 @@ def _safe_outputs(
         "candidate_mention_count": sum(len(case.mentions) for case in cases),
         "candidate_business_object_count": sum(len(case.business_objects) for case in cases),
         "candidate_frame_count": sum(len(case.frames) for case in cases),
+        "mention_only_count": sum(case.mention_only_count for case in cases),
         "candidate_frame_type_count": len(frame_types),
         "candidate_frame_type_hash": sha256_json(frame_types),
         "domain_hash": sha256_json(domains),
@@ -664,7 +728,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.validate_report is not None:
         report = json.loads(args.validate_report.read_text(encoding="utf-8"))
-        validation = validate_report(report)
+        validation = validate_report(report, args.fixture)
         payload = validation
         exit_code = 0 if validation["passed"] else 1
     else:
