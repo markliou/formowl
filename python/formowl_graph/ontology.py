@@ -34,6 +34,32 @@ class TypeCompatibilityDecision:
         }
 
 
+@dataclass(frozen=True)
+class SoftTypeCompatibilityDecision:
+    left_core_supertype_id: str
+    right_core_supertype_id: str
+    compatible: bool
+    hard_reject: bool
+    score_multiplier: float
+    reason: str
+    left_type_confidence: float
+    right_type_confidence: float
+    high_confidence_threshold: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "left_core_supertype_id": self.left_core_supertype_id,
+            "right_core_supertype_id": self.right_core_supertype_id,
+            "compatible": self.compatible,
+            "hard_reject": self.hard_reject,
+            "score_multiplier": self.score_multiplier,
+            "reason": self.reason,
+            "left_type_confidence": self.left_type_confidence,
+            "right_type_confidence": self.right_type_confidence,
+            "high_confidence_threshold": self.high_confidence_threshold,
+        }
+
+
 def core_supertypes_compatible(
     left_core_supertype_id: str,
     right_core_supertype_id: str,
@@ -62,6 +88,68 @@ def core_supertypes_compatible(
         right_core_supertype_id=right_core_supertype_id,
         compatible=False,
         reason="core_supertype_incompatible",
+    )
+
+
+def soft_core_supertypes_compatible(
+    left_core_supertype_id: str,
+    right_core_supertype_id: str,
+    *,
+    left_type_confidence: float,
+    right_type_confidence: float,
+    high_confidence_threshold: float = 0.9,
+    mismatch_score_multiplier: float = 0.65,
+) -> SoftTypeCompatibilityDecision:
+    """Soft type prior for noisy candidate generation experiments.
+
+    This deliberately does not replace the hard governance gate used by
+    ``propose_type_alignment_candidate``. It gives experiments a way to model
+    predicted type noise without silently dropping plausible candidates.
+    """
+
+    _validate_confidence(left_type_confidence, "left_type_confidence")
+    _validate_confidence(right_type_confidence, "right_type_confidence")
+    _validate_confidence(high_confidence_threshold, "high_confidence_threshold")
+    _validate_confidence(mismatch_score_multiplier, "mismatch_score_multiplier")
+    hard = core_supertypes_compatible(left_core_supertype_id, right_core_supertype_id)
+    if hard.compatible:
+        return SoftTypeCompatibilityDecision(
+            left_core_supertype_id=left_core_supertype_id,
+            right_core_supertype_id=right_core_supertype_id,
+            compatible=True,
+            hard_reject=False,
+            score_multiplier=1.0,
+            reason=hard.reason,
+            left_type_confidence=float(left_type_confidence),
+            right_type_confidence=float(right_type_confidence),
+            high_confidence_threshold=float(high_confidence_threshold),
+        )
+    high_confidence_mismatch = (
+        left_type_confidence >= high_confidence_threshold
+        and right_type_confidence >= high_confidence_threshold
+    )
+    if high_confidence_mismatch:
+        return SoftTypeCompatibilityDecision(
+            left_core_supertype_id=left_core_supertype_id,
+            right_core_supertype_id=right_core_supertype_id,
+            compatible=False,
+            hard_reject=True,
+            score_multiplier=0.0,
+            reason="high_confidence_core_supertype_mismatch",
+            left_type_confidence=float(left_type_confidence),
+            right_type_confidence=float(right_type_confidence),
+            high_confidence_threshold=float(high_confidence_threshold),
+        )
+    return SoftTypeCompatibilityDecision(
+        left_core_supertype_id=left_core_supertype_id,
+        right_core_supertype_id=right_core_supertype_id,
+        compatible=True,
+        hard_reject=False,
+        score_multiplier=float(mismatch_score_multiplier),
+        reason="low_confidence_core_supertype_mismatch_soft_prior",
+        left_type_confidence=float(left_type_confidence),
+        right_type_confidence=float(right_type_confidence),
+        high_confidence_threshold=float(high_confidence_threshold),
     )
 
 
@@ -140,6 +228,13 @@ def _validate_core_supertype(value: str, field_name: str) -> None:
         raise ContractValidationError(f"{field_name} must be a closed core supertype")
 
 
+def _validate_confidence(value: float, field_name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ContractValidationError(f"{field_name} must be numeric")
+    if not 0 <= float(value) <= 1:
+        raise ContractValidationError(f"{field_name} must be between 0 and 1")
+
+
 def _is_core_ancestor(possible_ancestor: str, child: str) -> bool:
     current = child
     while current in _CORE_SUPERTYPE_PARENTS:
@@ -165,7 +260,9 @@ def _score_from_breakdown(score_breakdown: Mapping[str, float]) -> float:
 
 
 __all__ = [
+    "SoftTypeCompatibilityDecision",
     "TypeCompatibilityDecision",
     "core_supertypes_compatible",
     "propose_type_alignment_candidate",
+    "soft_core_supertypes_compatible",
 ]

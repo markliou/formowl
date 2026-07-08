@@ -2107,3 +2107,23 @@ status in each role's goal file and task completion in
   query-index optimization; the main runtime bottleneck remains the full PST
   import/parser pipeline, so the next speed slice should add safe phase
   profiling before considering a native parser or systems-language module.
+- 2026-07-08 issue #28 10,000-case redacted stress expansion:
+  added runner-generated `redacted_stress_benchmark_10000` from the fixed
+  100-case redacted hard-challenge templates instead of committing a giant
+  fixture. The generated benchmark has 10,000 cases, split 1,000 dev / 9,000
+  holdout, with bucket counts scaled by 100 from the 100-case design. Current
+  10,000-case result: KG without ontology exact `0.46`, KG + hard ontology
+  `0.22`, KG + soft gate `0.74`, v2 frame `0.82`, hybrid soft gate + v2
+  `0.90`. Absolute counts expose 3,000 hard false rejects for hard ontology,
+  1,100 false positives for KG without ontology, and 100 false positives plus
+  900 partial answers for hybrid. This is deterministic redacted stress
+  evidence from repeated template families, not independent PST/parser holdout
+  evidence or production parser proof. Canonical verification passed: focused
+  coordination-frame tests 27 OK, runner passed, full unittest 374 OK, Ruff
+  check/format-check passed, default KG acceptance
+  `passed_with_explicit_limits`, and `git diff --check` passed. Issue #28
+  follow-up comment: `4913032708`. Reviewer gate passed 3/3: `Anscombe`
+  engineering correctness, `Pauli` governance/safety, and `Russell` research
+  method. Anscombe's optional seed-shape validation note and Russell's optional
+  explicit claim-boundary assertion note were implemented before final
+  verification.

@@ -41,6 +41,7 @@
 .venv/
 .test-tmp/
 tests/pst-exm/
+tests/*-exm/
 dist/
 *.egg-info/
 __pycache__/

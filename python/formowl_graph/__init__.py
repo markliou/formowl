@@ -10,6 +10,13 @@ from .canonical import (
     CanonicalCommitResult,
     commit_reviewed_candidates_to_canonical_graph,
 )
+from .coordination_frames import (
+    CoordinationFrameExtractionResult,
+    DeterministicCoordinationFrameExtractor,
+    DomainPackDefinition,
+    evaluate_coordination_answerability,
+    extract_and_store_coordination_frames,
+)
 from .capabilities import (
     CandidateGenerationProfile,
     build_candidate_generation_capability_summary,
@@ -25,9 +32,11 @@ from .lifecycle import (
     resolve_canonical_lifecycle_id,
 )
 from .ontology import (
+    SoftTypeCompatibilityDecision,
     TypeCompatibilityDecision,
     core_supertypes_compatible,
     propose_type_alignment_candidate,
+    soft_core_supertypes_compatible,
 )
 from .preview import CandidatePreviewItem, CandidatePreviewResult, preview_candidates
 from .research_acceptance import (
@@ -88,6 +97,9 @@ __all__ = [
     "CanonicalLifecycleResolution",
     "CanonicalLifecycleStore",
     "ClericalReviewItem",
+    "CoordinationFrameExtractionResult",
+    "DeterministicCoordinationFrameExtractor",
+    "DomainPackDefinition",
     "DeterministicTextCandidateExtractor",
     "EffectiveGraphView",
     "EvidenceLink",
@@ -101,6 +113,7 @@ __all__ = [
     "ResolutionPolicy",
     "ResolutionRecord",
     "SplinkPackageCandidateGenerator",
+    "SoftTypeCompatibilityDecision",
     "StructuredLinkageCandidateGenerator",
     "TypeCompatibilityDecision",
     "assemble_effective_graph_view",
@@ -109,7 +122,9 @@ __all__ = [
     "canonical_merge",
     "commit_reviewed_candidates_to_canonical_graph",
     "core_supertypes_compatible",
+    "evaluate_coordination_answerability",
     "extract_and_store_candidates",
+    "extract_and_store_coordination_frames",
     "generate_lexical_fusion_candidates",
     "generate_structured_linkage_candidates",
     "get_candidate_generation_profile",
@@ -134,4 +149,5 @@ __all__ = [
     "run_kg_research_acceptance_suite",
     "select_candidate_generation_profile",
     "splink_model_config_manifest_bound_to_main_repo",
+    "soft_core_supertypes_compatible",
 ]

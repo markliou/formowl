@@ -1,0 +1,287 @@
+{
+  "dataset_id": "fixed_redacted_email_regression_replay_v1",
+  "source_kind": "pst_redacted_replay_fixture",
+  "created_at": "2026-07-08T10:30:00+00:00",
+  "claim_boundary": {
+    "raw_pst_content_used": false,
+    "raw_message_bodies_committed": false,
+    "production_parser_claim": false,
+    "fixed_redacted_replay_claim": true
+  },
+  "cases": [
+    {
+      "case_id": "redacted_quote_revision_gate_false_reject",
+      "failure_bucket": "gate_false_reject",
+      "should_answer": true,
+      "source_observation_ids": ["obs_redacted_quote_revision"],
+      "required_slots": ["owner", "work_object", "deadline", "blocker"],
+      "gold_answer": {
+        "owner": "ROLE_SALES_OPS",
+        "work_object": "QUOTE_REVISION_A",
+        "deadline": "DATE_1",
+        "blocker": "FIRMWARE_CONFIRMATION"
+      },
+      "evidence_spans": [
+        {
+          "span_id": "span_redacted_quote_revision_1",
+          "source_observation_id": "obs_redacted_quote_revision",
+          "locator": {"redacted_message_index": 1, "line": 4},
+          "text_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "right_core_supertype_id": "Event",
+        "left_type_confidence": 0.62,
+        "right_type_confidence": 0.58
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_SALES_OPS",
+          "work_object": "QUOTE_REVISION_A",
+          "deadline": "DATE_1",
+          "blocker": "FIRMWARE_CONFIRMATION"
+        }
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "owner": "ROLE_SALES_OPS",
+          "work_object": "QUOTE_REVISION_A",
+          "deadline": "DATE_1",
+          "blocker": "FIRMWARE_CONFIRMATION"
+        }
+      }
+    },
+    {
+      "case_id": "redacted_customer_commitment_gate_false_reject",
+      "failure_bucket": "gate_false_reject",
+      "should_answer": true,
+      "source_observation_ids": ["obs_redacted_customer_commitment"],
+      "required_slots": ["actor", "customer", "commitment"],
+      "gold_answer": {
+        "actor": "ROLE_ACCOUNT_OWNER",
+        "customer": "CUSTOMER_A",
+        "commitment": "PAYMENT_UPDATE"
+      },
+      "evidence_spans": [
+        {
+          "span_id": "span_redacted_customer_commitment_1",
+          "source_observation_id": "obs_redacted_customer_commitment",
+          "locator": {"redacted_message_index": 2, "line": 7},
+          "text_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ],
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "right_core_supertype_id": "Organization",
+        "left_type_confidence": 0.57,
+        "right_type_confidence": 0.72
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACCOUNT_OWNER",
+          "customer": "CUSTOMER_A",
+          "commitment": "PAYMENT_UPDATE"
+        }
+      },
+      "v2_frame_answer": {
+        "frame_type": "Commitment",
+        "slots": {
+          "actor": "ROLE_ACCOUNT_OWNER",
+          "customer": "CUSTOMER_A",
+          "commitment": "PAYMENT_UPDATE"
+        }
+      }
+    },
+    {
+      "case_id": "redacted_cross_scope_alignment_suppressed",
+      "failure_bucket": "alignment_suppressed",
+      "should_answer": true,
+      "source_observation_ids": ["obs_redacted_cross_scope_payment"],
+      "required_slots": ["actor", "work_object", "next_step"],
+      "gold_answer": {
+        "actor": "ROLE_FINANCE_CONTROLLER",
+        "work_object": "INVOICE_A",
+        "next_step": "APPROVE_REVISED_TERM"
+      },
+      "evidence_spans": [
+        {
+          "span_id": "span_redacted_cross_scope_payment_1",
+          "source_observation_id": "obs_redacted_cross_scope_payment",
+          "locator": {"redacted_message_index": 3, "line": 3},
+          "text_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        }
+      ],
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "right_core_supertype_id": "Artifact",
+        "left_type_confidence": 0.81,
+        "right_type_confidence": 0.86
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_FINANCE_CONTROLLER",
+          "work_object": "INVOICE_A",
+          "next_step": "APPROVE_REVISED_TERM"
+        }
+      },
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_FINANCE_CONTROLLER",
+          "work_object": "INVOICE_A",
+          "next_step": "APPROVE_REVISED_TERM"
+        }
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_FINANCE_CONTROLLER",
+          "work_object": "INVOICE_A",
+          "next_step": "APPROVE_REVISED_TERM"
+        }
+      }
+    },
+    {
+      "case_id": "redacted_invoice_structure_misleads",
+      "failure_bucket": "structure_misleads",
+      "should_answer": true,
+      "source_observation_ids": ["obs_redacted_invoice_thread"],
+      "required_slots": ["owner", "work_object", "deadline"],
+      "gold_answer": {
+        "owner": "ROLE_FINANCE_CONTROLLER",
+        "work_object": "INVOICE_A",
+        "deadline": "DATE_2"
+      },
+      "evidence_spans": [
+        {
+          "span_id": "span_redacted_invoice_thread_1",
+          "source_observation_id": "obs_redacted_invoice_thread",
+          "locator": {"redacted_message_index": 4, "line": 6},
+          "text_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      ],
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "right_core_supertype_id": "Artifact",
+        "left_type_confidence": 0.92,
+        "right_type_confidence": 0.93
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_FINANCE_CONTROLLER",
+          "work_object": "INVOICE_A",
+          "deadline": "DATE_2"
+        }
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_ACCOUNT_OWNER",
+          "work_object": "RENEWAL_A",
+          "deadline": "DATE_3"
+        }
+      },
+      "soft_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_ACCOUNT_OWNER",
+          "work_object": "RENEWAL_A",
+          "deadline": "DATE_3"
+        }
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "owner": "ROLE_FINANCE_CONTROLLER",
+          "work_object": "INVOICE_A",
+          "deadline": "DATE_2"
+        }
+      }
+    },
+    {
+      "case_id": "redacted_followup_frame_missing",
+      "failure_bucket": "other",
+      "should_answer": true,
+      "source_observation_ids": ["obs_redacted_followup_dependency"],
+      "required_slots": ["owner", "work_object", "deadline", "fallback"],
+      "gold_answer": {
+        "owner": "ROLE_PMO",
+        "work_object": "ROLLOUT_A",
+        "deadline": "DATE_4",
+        "fallback": "PHASED_RELEASE"
+      },
+      "evidence_spans": [
+        {
+          "span_id": "span_redacted_followup_dependency_1",
+          "source_observation_id": "obs_redacted_followup_dependency",
+          "locator": {"redacted_message_index": 5, "line": 8},
+          "text_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        }
+      ],
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "right_core_supertype_id": "Project",
+        "left_type_confidence": 0.9,
+        "right_type_confidence": 0.9
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_PMO",
+          "work_object": "ROLLOUT_A",
+          "deadline": "DATE_4"
+        }
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_PMO",
+          "work_object": "ROLLOUT_A",
+          "deadline": "DATE_4"
+        }
+      },
+      "soft_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_PMO",
+          "work_object": "ROLLOUT_A",
+          "deadline": "DATE_4"
+        }
+      },
+      "v2_frame_answer": {
+        "frame_type": "Assignment",
+        "slots": {
+          "owner": "ROLE_PMO",
+          "work_object": "ROLLOUT_A",
+          "deadline": "DATE_4",
+          "fallback": "PHASED_RELEASE"
+        }
+      }
+    },
+    {
+      "case_id": "redacted_high_confidence_negative",
+      "failure_bucket": "false_positive_guard",
+      "should_answer": false,
+      "source_observation_ids": ["obs_redacted_negative"],
+      "required_slots": [],
+      "gold_answer": {},
+      "evidence_spans": [
+        {
+          "span_id": "span_redacted_negative_1",
+          "source_observation_id": "obs_redacted_negative",
+          "locator": {"redacted_message_index": 6, "line": 2},
+          "text_hash": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+        }
+      ],
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "right_core_supertype_id": "Project",
+        "left_type_confidence": 0.96,
+        "right_type_confidence": 0.95
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_PERSON_A",
+          "work_object": "PROJECT_B"
+        }
+      }
+    }
+  ]
+}

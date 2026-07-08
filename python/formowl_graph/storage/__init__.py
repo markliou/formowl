@@ -2,6 +2,9 @@
 
 from .records import (
     CandidateAtomStore,
+    CandidateBusinessObjectStore,
+    CandidateFrameStore,
+    CandidateMentionStore,
     CandidateRelationStore,
     CanonicalGraphStore,
     SemanticMetadataStore,
@@ -26,6 +29,9 @@ from .postgres import (
 
 __all__ = [
     "CandidateAtomStore",
+    "CandidateBusinessObjectStore",
+    "CandidateFrameStore",
+    "CandidateMentionStore",
     "CandidateRelationStore",
     "CanonicalGraphStore",
     "CanonicalCommitProposal",

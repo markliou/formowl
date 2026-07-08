@@ -13,6 +13,9 @@ ExtractorRun
 Observation
 SemanticMetadata
 CandidateAtom
+CandidateMention
+CandidateFrame
+CandidateBusinessObject
 ExtractionWarning
 ExtractionError
 ```
@@ -33,6 +36,9 @@ ObjectStore
 ObservationStore
 SemanticMetadataStore
 CandidateAtomStore
+CandidateMentionStore
+CandidateFrameStore
+CandidateBusinessObjectStore
 ExternalGraphImportStore
 ExtractorRunStore
 JobStore
@@ -814,6 +820,8 @@ dependencies
 open questions
 candidate atoms
 candidate graph edges
+coordination frames
+business object candidates
 ```
 
 Possible tools:
@@ -834,6 +842,9 @@ These tools may write only to:
 ```text
 SemanticMetadataStore
 CandidateAtomStore
+CandidateMentionStore
+CandidateFrameStore
+CandidateBusinessObjectStore
 ExternalGraphImportStore
 ```
 
@@ -1049,6 +1060,9 @@ ObjectStore
 ObservationStore
 SemanticMetadataStore
 CandidateAtomStore
+CandidateMentionStore
+CandidateFrameStore
+CandidateBusinessObjectStore
 ExternalGraphImportStore
 ExtractorRunStore
 JobStore
@@ -1067,7 +1081,7 @@ Downstream conversion should follow this path:
 ```text
 Observation
 -> SemanticMetadata
--> CandidateAtom / CandidateGraph
+-> CandidateMention / CandidateFrame / CandidateBusinessObject / CandidateAtom / CandidateGraph
 -> GranularityPolicyEngine
 -> EntityResolver
 -> RelationResolver
@@ -1139,6 +1153,9 @@ Storage:
   - ObservationStore
   - SemanticMetadataStore
   - CandidateAtomStore
+  - CandidateMentionStore
+  - CandidateFrameStore
+  - CandidateBusinessObjectStore
   - ExtractorRunStore
   - JobStore
 ```

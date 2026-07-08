@@ -316,9 +316,13 @@ Observation
 SemanticMetadata
 CandidateAtom
 CandidateRelation
+CandidateMention
+CandidateFrame
+CandidateBusinessObject
 FusionCandidate
 EntityResolutionProposal
 EvidenceLink
+CanonicalFrame
 CanonicalAtom
 CanonicalEntity
 CanonicalRelation
@@ -1435,10 +1439,21 @@ Candidate graph objects should include:
 CandidateAtom
 CandidateRelation
 CandidateEntityMention
+CandidateMention
+CandidateFrame
+CandidateBusinessObject
 ExternalGraphImport
 ```
 
 Candidate atoms and relations represent possible knowledge units and links. They must record source observations, extractor metadata, confidence, proposed atom type, proposed granularity, and review state.
+
+Coordination-frame candidates represent enterprise coordination obligations
+such as requests, commitments, decisions, blockers, deadlines, dependencies,
+status changes, and open questions. A `CandidateFrame` should carry a stable
+frame type, named slots, evidence spans, domain hints, access boundary,
+granularity level, ontology revision id, source mention ids, linked candidate
+business object ids, confidence, and review state. It is still a candidate
+proposal and must not bypass canonical graph governance.
 
 Candidate graph state may be previewed, rejected, split, merged, revised, or committed. It must not be silently promoted to canonical graph state.
 
@@ -1847,6 +1862,81 @@ alt_labels provide an alias and normalization dataset.
 TypeAlignmentCandidate decisions provide a record-linkage training signal.
 Outputs of trained type classifiers remain candidates and never mutate canonical type state directly.
 ```
+
+## 9.5.2 Coordination-Frame Ontology
+
+The scoped type ontology is not enough by itself for enterprise coordination.
+FormOwl also needs a stable coordination-frame core that can represent what
+people request, commit, decide, block, depend on, escalate, and follow up
+across email, meetings, documents, project issues, wiki pages, and chat
+transcripts.
+
+Ontology v2 is layered:
+
+```text
+Evidence/source ontology
++ stable coordination-frame core
++ scoped domain object packs
++ projection/view ontology
+```
+
+The coordination core should remain small and stable. Initial frame types are:
+
+```text
+Request
+Commitment
+Decision
+Assignment
+StatusUpdate
+StatusChange
+Blocker
+Risk
+Issue
+OpenQuestion
+Deadline
+Dependency
+Escalation
+Change
+Exception
+Constraint
+```
+
+Domain packs may add business objects and domain process frames, but they must
+extend the core rather than bypass it:
+
+```text
+CustomerRequest -> Request
+InventoryShortage -> Blocker
+InvoiceApproval -> Decision
+FirmwareCapabilityQuestion -> OpenQuestion
+ShipmentDelay -> Issue or Blocker
+CustomerCommitment -> Commitment
+```
+
+The required candidate path is:
+
+```text
+Observation
+  -> CandidateMention
+  -> CandidateFrame
+  -> CandidateBusinessObject
+  -> CandidateRelation
+  -> reviewed CanonicalFrame / CanonicalObject / CanonicalRelation
+  -> UserKnowledgeGraphRevision
+  -> WikiProjection
+```
+
+`CandidateFrame` is the central abstraction. It is where evidence spans,
+permission scope, domain hints, obligation granularity, and named coordination
+slots meet. Email must not become a special ontology; it is only one source
+substrate that can emit the same coordination frames as meetings, documents,
+project issues, and chat transcripts.
+
+The current repository includes a deterministic issue #28 experiment under
+`experiments/kg_ontology_v2_coordination/`. It is a synthetic candidate-layer
+ablation and does not claim production email parsing, raw PST extraction,
+canonical frame commits, canonical type writes, user graph mutation, or wiki
+revision mutation.
 
 ## 9.6 User Knowledge Graphs
 

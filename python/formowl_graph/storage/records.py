@@ -7,6 +7,9 @@ from typing import Any, Callable, Generic, TypeVar
 
 from formowl_contract import (
     CandidateAtom,
+    CandidateBusinessObject,
+    CandidateFrame,
+    CandidateMention,
     CandidateRelation,
     CanonicalAtom,
     CanonicalEntity,
@@ -140,6 +143,78 @@ class CandidateRelationStore:
 
     def validate_candidate_relation_id(self, candidate_relation_id: str) -> None:
         self._store.validate_record_id(candidate_relation_id)
+
+
+class CandidateMentionStore:
+    def __init__(self, base_dir: str | Path) -> None:
+        self._store = _JsonGraphRecordStore[CandidateMention](
+            base_dir,
+            collection="candidate-mentions",
+            id_field="candidate_mention_id",
+            factory=CandidateMention.from_dict,
+            serializer=lambda value: value.to_dict(),
+        )
+
+    def create(self, candidate_mention: CandidateMention | dict[str, Any]) -> CandidateMention:
+        return self._store.create(candidate_mention)
+
+    def get(self, candidate_mention_id: str) -> CandidateMention | None:
+        return self._store.get(candidate_mention_id)
+
+    def list(self) -> list[CandidateMention]:
+        return self._store.list()
+
+    def validate_candidate_mention_id(self, candidate_mention_id: str) -> None:
+        self._store.validate_record_id(candidate_mention_id)
+
+
+class CandidateBusinessObjectStore:
+    def __init__(self, base_dir: str | Path) -> None:
+        self._store = _JsonGraphRecordStore[CandidateBusinessObject](
+            base_dir,
+            collection="candidate-business-objects",
+            id_field="candidate_business_object_id",
+            factory=CandidateBusinessObject.from_dict,
+            serializer=lambda value: value.to_dict(),
+        )
+
+    def create(
+        self,
+        candidate_business_object: CandidateBusinessObject | dict[str, Any],
+    ) -> CandidateBusinessObject:
+        return self._store.create(candidate_business_object)
+
+    def get(self, candidate_business_object_id: str) -> CandidateBusinessObject | None:
+        return self._store.get(candidate_business_object_id)
+
+    def list(self) -> list[CandidateBusinessObject]:
+        return self._store.list()
+
+    def validate_candidate_business_object_id(self, candidate_business_object_id: str) -> None:
+        self._store.validate_record_id(candidate_business_object_id)
+
+
+class CandidateFrameStore:
+    def __init__(self, base_dir: str | Path) -> None:
+        self._store = _JsonGraphRecordStore[CandidateFrame](
+            base_dir,
+            collection="candidate-frames",
+            id_field="candidate_frame_id",
+            factory=CandidateFrame.from_dict,
+            serializer=lambda value: value.to_dict(),
+        )
+
+    def create(self, candidate_frame: CandidateFrame | dict[str, Any]) -> CandidateFrame:
+        return self._store.create(candidate_frame)
+
+    def get(self, candidate_frame_id: str) -> CandidateFrame | None:
+        return self._store.get(candidate_frame_id)
+
+    def list(self) -> list[CandidateFrame]:
+        return self._store.list()
+
+    def validate_candidate_frame_id(self, candidate_frame_id: str) -> None:
+        self._store.validate_record_id(candidate_frame_id)
 
 
 class CanonicalGraphStore:

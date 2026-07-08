@@ -1,0 +1,5913 @@
+{
+  "cases": [
+    {
+      "case_id": "challenge_001_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 1,
+            "redacted_turn": 1
+          },
+          "source_observation_id": "obs_challenge_001",
+          "span_id": "span_challenge_001_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000001"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_001",
+        "deadline": "DATE_001",
+        "owner": "ROLE_OWNER_001",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_001"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_001",
+          "deadline": "DATE_001",
+          "owner": "ROLE_OWNER_001",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_001"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_001",
+          "deadline": "DATE_001",
+          "owner": "ROLE_OWNER_001",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_001"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_001"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_001",
+          "deadline": "DATE_001",
+          "owner": "ROLE_OWNER_001",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_001"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_002_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 2,
+            "redacted_turn": 2
+          },
+          "source_observation_id": "obs_challenge_002",
+          "span_id": "span_challenge_002_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000002"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_002",
+        "deadline": "DATE_002",
+        "owner": "ROLE_OWNER_002",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_002"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_002",
+          "deadline": "DATE_002",
+          "owner": "ROLE_OWNER_002",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_002"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_002",
+          "deadline": "DATE_002",
+          "owner": "ROLE_OWNER_002",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_002"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_002"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_002",
+          "deadline": "DATE_002",
+          "owner": "ROLE_OWNER_002",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_002"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_003_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 3,
+            "redacted_turn": 3
+          },
+          "source_observation_id": "obs_challenge_003",
+          "span_id": "span_challenge_003_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000003"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_003",
+        "deadline": "DATE_003",
+        "owner": "ROLE_OWNER_003",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_003"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_003",
+          "deadline": "DATE_003",
+          "owner": "ROLE_OWNER_003",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_003"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_003",
+          "deadline": "DATE_003",
+          "owner": "ROLE_OWNER_003",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_003"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_003"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_003",
+          "deadline": "DATE_003",
+          "owner": "ROLE_OWNER_003",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_003"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_004_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 4,
+            "redacted_turn": 4
+          },
+          "source_observation_id": "obs_challenge_004",
+          "span_id": "span_challenge_004_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000004"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_004",
+        "deadline": "DATE_004",
+        "owner": "ROLE_OWNER_004",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_004"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_004",
+          "deadline": "DATE_004",
+          "owner": "ROLE_OWNER_004",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_004"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_004",
+          "deadline": "DATE_004",
+          "owner": "ROLE_OWNER_004",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_004"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_004"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_004",
+          "deadline": "DATE_004",
+          "owner": "ROLE_OWNER_004",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_004"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_005_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 5,
+            "redacted_turn": 5
+          },
+          "source_observation_id": "obs_challenge_005",
+          "span_id": "span_challenge_005_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000005"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_005",
+        "deadline": "DATE_005",
+        "owner": "ROLE_OWNER_005",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_005"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_005",
+          "deadline": "DATE_005",
+          "owner": "ROLE_OWNER_005",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_005"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_005",
+          "deadline": "DATE_005",
+          "owner": "ROLE_OWNER_005",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_005"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_005"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_005",
+          "deadline": "DATE_005",
+          "owner": "ROLE_OWNER_005",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_005"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_006_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 6,
+            "redacted_turn": 6
+          },
+          "source_observation_id": "obs_challenge_006",
+          "span_id": "span_challenge_006_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000006"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_006",
+        "deadline": "DATE_006",
+        "owner": "ROLE_OWNER_006",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_006"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_006",
+          "deadline": "DATE_006",
+          "owner": "ROLE_OWNER_006",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_006"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_006",
+          "deadline": "DATE_006",
+          "owner": "ROLE_OWNER_006",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_006"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_006"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_006",
+          "deadline": "DATE_006",
+          "owner": "ROLE_OWNER_006",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_006"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_007_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 7,
+            "redacted_turn": 7
+          },
+          "source_observation_id": "obs_challenge_007",
+          "span_id": "span_challenge_007_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000007"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_007",
+        "deadline": "DATE_007",
+        "owner": "ROLE_OWNER_007",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_007"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_007",
+          "deadline": "DATE_007",
+          "owner": "ROLE_OWNER_007",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_007"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_007",
+          "deadline": "DATE_007",
+          "owner": "ROLE_OWNER_007",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_007"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_007"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_007",
+          "deadline": "DATE_007",
+          "owner": "ROLE_OWNER_007",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_007"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_008_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 8,
+            "redacted_turn": 8
+          },
+          "source_observation_id": "obs_challenge_008",
+          "span_id": "span_challenge_008_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000008"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_008",
+        "deadline": "DATE_008",
+        "owner": "ROLE_OWNER_008",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_008"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_008",
+          "deadline": "DATE_008",
+          "owner": "ROLE_OWNER_008",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_008"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_008",
+          "deadline": "DATE_008",
+          "owner": "ROLE_OWNER_008",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_008"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_008"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_008",
+          "deadline": "DATE_008",
+          "owner": "ROLE_OWNER_008",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_008"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_009_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 9,
+            "redacted_turn": 9
+          },
+          "source_observation_id": "obs_challenge_009",
+          "span_id": "span_challenge_009_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000009"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_009",
+        "deadline": "DATE_009",
+        "owner": "ROLE_OWNER_009",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_009"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_009",
+          "deadline": "DATE_009",
+          "owner": "ROLE_OWNER_009",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_009"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_009",
+          "deadline": "DATE_009",
+          "owner": "ROLE_OWNER_009",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_009"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_009"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_009",
+          "deadline": "DATE_009",
+          "owner": "ROLE_OWNER_009",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_009"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_010_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 10,
+            "redacted_turn": 10
+          },
+          "source_observation_id": "obs_challenge_010",
+          "span_id": "span_challenge_010_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000000a"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_010",
+        "deadline": "DATE_010",
+        "owner": "ROLE_OWNER_010",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_010"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_010",
+          "deadline": "DATE_010",
+          "owner": "ROLE_OWNER_010",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_010"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_010",
+          "owner": "ROLE_OWNER_010",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_010"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_010"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_010",
+          "deadline": "DATE_010",
+          "owner": "ROLE_OWNER_010",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_010"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_011_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 11,
+            "redacted_turn": 11
+          },
+          "source_observation_id": "obs_challenge_011",
+          "span_id": "span_challenge_011_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000000b"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_011",
+        "deadline": "DATE_011",
+        "owner": "ROLE_OWNER_011",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_011"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_011",
+          "deadline": "DATE_011",
+          "owner": "ROLE_OWNER_011",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_011"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_011",
+          "deadline": "DATE_011",
+          "owner": "ROLE_OWNER_011",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_011"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_011"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_011",
+          "deadline": "DATE_011",
+          "owner": "ROLE_OWNER_011",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_011"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_012_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 12,
+            "redacted_turn": 12
+          },
+          "source_observation_id": "obs_challenge_012",
+          "span_id": "span_challenge_012_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000000c"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_012",
+        "deadline": "DATE_012",
+        "owner": "ROLE_OWNER_012",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_012"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_012",
+          "deadline": "DATE_012",
+          "owner": "ROLE_OWNER_012",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_012"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_012",
+          "deadline": "DATE_012",
+          "owner": "ROLE_OWNER_012",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_012"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_012"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_012",
+          "deadline": "DATE_012",
+          "owner": "ROLE_OWNER_012",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_012"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_013_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 13,
+            "redacted_turn": 13
+          },
+          "source_observation_id": "obs_challenge_013",
+          "span_id": "span_challenge_013_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000000d"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_013",
+        "deadline": "DATE_013",
+        "owner": "ROLE_OWNER_013",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_013"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_013",
+          "deadline": "DATE_013",
+          "owner": "ROLE_OWNER_013",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_013"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_013",
+          "deadline": "DATE_013",
+          "owner": "ROLE_OWNER_013",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_013"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_013"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_013",
+          "deadline": "DATE_013",
+          "owner": "ROLE_OWNER_013",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_013"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_014_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 14,
+            "redacted_turn": 14
+          },
+          "source_observation_id": "obs_challenge_014",
+          "span_id": "span_challenge_014_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000000e"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_014",
+        "deadline": "DATE_014",
+        "owner": "ROLE_OWNER_014",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_014"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_014",
+          "deadline": "DATE_014",
+          "owner": "ROLE_OWNER_014",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_014"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_014",
+          "deadline": "DATE_014",
+          "owner": "ROLE_OWNER_014",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_014"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_014"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_014",
+          "deadline": "DATE_014",
+          "owner": "ROLE_OWNER_014",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_014"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_015_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 15,
+            "redacted_turn": 15
+          },
+          "source_observation_id": "obs_challenge_015",
+          "span_id": "span_challenge_015_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000000f"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_015",
+        "deadline": "DATE_015",
+        "owner": "ROLE_OWNER_015",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_015"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_015",
+          "deadline": "DATE_015",
+          "owner": "ROLE_OWNER_015",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_015"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_015",
+          "deadline": "DATE_015",
+          "owner": "ROLE_OWNER_015",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_015"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_015"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_015",
+          "deadline": "DATE_015",
+          "owner": "ROLE_OWNER_015",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_015"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_016_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 16,
+            "redacted_turn": 16
+          },
+          "source_observation_id": "obs_challenge_016",
+          "span_id": "span_challenge_016_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000010"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_016",
+        "deadline": "DATE_016",
+        "owner": "ROLE_OWNER_016",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_016"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_016",
+          "deadline": "DATE_016",
+          "owner": "ROLE_OWNER_016",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_016"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_016",
+          "deadline": "DATE_016",
+          "owner": "ROLE_OWNER_016",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_016"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_016"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_016",
+          "deadline": "DATE_016",
+          "owner": "ROLE_OWNER_016",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_016"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_017_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 17,
+            "redacted_turn": 17
+          },
+          "source_observation_id": "obs_challenge_017",
+          "span_id": "span_challenge_017_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000011"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_017",
+        "deadline": "DATE_017",
+        "owner": "ROLE_OWNER_017",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_017"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_017",
+          "deadline": "DATE_017",
+          "owner": "ROLE_OWNER_017",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_017"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_017",
+          "deadline": "DATE_017",
+          "owner": "ROLE_OWNER_017",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_017"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_017"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_017",
+          "deadline": "DATE_017",
+          "owner": "ROLE_OWNER_017",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_017"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_018_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 18,
+            "redacted_turn": 18
+          },
+          "source_observation_id": "obs_challenge_018",
+          "span_id": "span_challenge_018_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000012"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_018",
+        "deadline": "DATE_018",
+        "owner": "ROLE_OWNER_018",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_018"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_018",
+          "deadline": "DATE_018",
+          "owner": "ROLE_OWNER_018",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_018"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_018",
+          "deadline": "DATE_018",
+          "owner": "ROLE_OWNER_018",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_018"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_018"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_018",
+          "deadline": "DATE_018",
+          "owner": "ROLE_OWNER_018",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_018"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_019_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 19,
+            "redacted_turn": 19
+          },
+          "source_observation_id": "obs_challenge_019",
+          "span_id": "span_challenge_019_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000013"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_019",
+        "deadline": "DATE_019",
+        "owner": "ROLE_OWNER_019",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_019"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_019",
+          "deadline": "DATE_019",
+          "owner": "ROLE_OWNER_019",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_019"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_019",
+          "deadline": "DATE_019",
+          "owner": "ROLE_OWNER_019",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_019"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_019"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_019",
+          "deadline": "DATE_019",
+          "owner": "ROLE_OWNER_019",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_019"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_020_gate_false_reject",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 20,
+            "redacted_turn": 20
+          },
+          "source_observation_id": "obs_challenge_020",
+          "span_id": "span_challenge_020_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000014"
+        }
+      ],
+      "failure_bucket": "gate_false_reject",
+      "gold_answer": {
+        "blocker": "GATE_FALSE_REJECT_BLOCKER_020",
+        "deadline": "DATE_020",
+        "owner": "ROLE_OWNER_020",
+        "work_object": "GATE_FALSE_REJECT_OBJECT_020"
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_020",
+          "deadline": "DATE_020",
+          "owner": "ROLE_OWNER_020",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_020"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "blocker"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_020",
+          "owner": "ROLE_OWNER_020",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_020"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_020"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.61,
+        "right_core_supertype_id": "Event",
+        "right_type_confidence": 0.59
+      },
+      "v2_frame_answer": {
+        "frame_type": "Request",
+        "slots": {
+          "blocker": "GATE_FALSE_REJECT_BLOCKER_020",
+          "deadline": "DATE_020",
+          "owner": "ROLE_OWNER_020",
+          "work_object": "GATE_FALSE_REJECT_OBJECT_020"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_021_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 21,
+            "redacted_turn": 1
+          },
+          "source_observation_id": "obs_challenge_021",
+          "span_id": "span_challenge_021_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000015"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_021",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_021",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_021"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_021",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_021",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_021"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_021",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_021",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_021"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_021"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_021",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_021",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_021"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_022_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 22,
+            "redacted_turn": 2
+          },
+          "source_observation_id": "obs_challenge_022",
+          "span_id": "span_challenge_022_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000016"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_022",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_022",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_022"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_022",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_022",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_022"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_022",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_022",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_022"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_022"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_022",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_022",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_022"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_023_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 23,
+            "redacted_turn": 3
+          },
+          "source_observation_id": "obs_challenge_023",
+          "span_id": "span_challenge_023_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000017"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_023",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_023",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_023"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_023",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_023",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_023"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_023",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_023",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_023"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_023"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_023",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_023",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_023"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_024_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 24,
+            "redacted_turn": 4
+          },
+          "source_observation_id": "obs_challenge_024",
+          "span_id": "span_challenge_024_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000018"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_024",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_024",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_024"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_024",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_024",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_024"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_024",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_024",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_024"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_024"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_024",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_024",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_024"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_025_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 25,
+            "redacted_turn": 5
+          },
+          "source_observation_id": "obs_challenge_025",
+          "span_id": "span_challenge_025_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000019"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_025",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_025",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_025"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_025",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_025",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_025"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_025",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_025",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_025"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_025"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_025",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_025",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_025"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_026_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 26,
+            "redacted_turn": 6
+          },
+          "source_observation_id": "obs_challenge_026",
+          "span_id": "span_challenge_026_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000001a"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_026",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_026",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_026"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_026",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_026",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_026"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_026",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_026",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_026"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_026"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_026",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_026",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_026"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_027_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 27,
+            "redacted_turn": 7
+          },
+          "source_observation_id": "obs_challenge_027",
+          "span_id": "span_challenge_027_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000001b"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_027",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_027",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_027"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_027",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_027",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_027"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_027",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_027",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_027"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_027"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_027",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_027",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_027"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_028_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 28,
+            "redacted_turn": 8
+          },
+          "source_observation_id": "obs_challenge_028",
+          "span_id": "span_challenge_028_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000001c"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_028",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_028",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_028"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_028",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_028",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_028"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_028",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_028",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_028"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_028"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_028",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_028",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_028"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_029_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 29,
+            "redacted_turn": 9
+          },
+          "source_observation_id": "obs_challenge_029",
+          "span_id": "span_challenge_029_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000001d"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_029",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_029",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_029"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_029",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_029",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_029"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_029",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_029",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_029"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_029"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_029",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_029",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_029"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_030_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 30,
+            "redacted_turn": 10
+          },
+          "source_observation_id": "obs_challenge_030",
+          "span_id": "span_challenge_030_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000001e"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_030",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_030",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_030"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_030",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_030",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_030"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_030",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_030",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_030"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_030"
+      ],
+      "split": "dev",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_030",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_030",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_030"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_031_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 31,
+            "redacted_turn": 11
+          },
+          "source_observation_id": "obs_challenge_031",
+          "span_id": "span_challenge_031_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000001f"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_031",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_031",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_031"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_031",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_031",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_031"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_031",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_031",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_031"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_031"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_031",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_031",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_031"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_032_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 32,
+            "redacted_turn": 12
+          },
+          "source_observation_id": "obs_challenge_032",
+          "span_id": "span_challenge_032_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000020"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_032",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_032",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_032"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_032",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_032",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_032"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_032",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_032",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_032"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_032"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_032",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_032",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_032"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_033_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 33,
+            "redacted_turn": 13
+          },
+          "source_observation_id": "obs_challenge_033",
+          "span_id": "span_challenge_033_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000021"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_033",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_033",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_033"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_033",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_033"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_033",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_033"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_033"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_033",
+          "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_033",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_033"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_034_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 34,
+            "redacted_turn": 14
+          },
+          "source_observation_id": "obs_challenge_034",
+          "span_id": "span_challenge_034_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000022"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_034",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_034",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_034"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_034",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_034"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_034",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_034"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_034"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_034",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_034"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_035_alignment_suppressed",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 35,
+            "redacted_turn": 15
+          },
+          "source_observation_id": "obs_challenge_035",
+          "span_id": "span_challenge_035_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000023"
+        }
+      ],
+      "failure_bucket": "alignment_suppressed",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_035",
+        "next_step": "ALIGNMENT_SUPPRESSED_NEXT_STEP_035",
+        "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_035"
+      },
+      "hard_alignment_suppressed": true,
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_035",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_035"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "next_step"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_035",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_035"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_035"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.83,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.87
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "actor": "ROLE_ACTOR_035",
+          "work_object": "ALIGNMENT_SUPPRESSED_OBJECT_035"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_036_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 36,
+            "redacted_turn": 1
+          },
+          "source_observation_id": "obs_challenge_036",
+          "span_id": "span_challenge_036_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000024"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_036",
+        "owner": "ROLE_OWNER_036",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_036"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_036",
+          "owner": "ROLE_OWNER_036",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_036"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_036",
+          "owner": "ROLE_OWNER_036",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_036"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_036",
+          "owner": "ROLE_OWNER_036",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_036"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_036"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_036",
+          "owner": "ROLE_OWNER_036",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_036"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_037_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 37,
+            "redacted_turn": 2
+          },
+          "source_observation_id": "obs_challenge_037",
+          "span_id": "span_challenge_037_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000025"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_037",
+        "owner": "ROLE_OWNER_037",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_037"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_037",
+          "owner": "ROLE_OWNER_037",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_037"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_037",
+          "owner": "ROLE_OWNER_037",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_037"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_037",
+          "owner": "ROLE_OWNER_037",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_037"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_037"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_037",
+          "owner": "ROLE_OWNER_037",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_037"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_038_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 38,
+            "redacted_turn": 3
+          },
+          "source_observation_id": "obs_challenge_038",
+          "span_id": "span_challenge_038_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000026"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_038",
+        "owner": "ROLE_OWNER_038",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_038"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_038",
+          "owner": "ROLE_OWNER_038",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_038"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_038",
+          "owner": "ROLE_OWNER_038",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_038"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_038",
+          "owner": "ROLE_OWNER_038",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_038"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_038"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_038",
+          "owner": "ROLE_OWNER_038",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_038"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_039_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 39,
+            "redacted_turn": 4
+          },
+          "source_observation_id": "obs_challenge_039",
+          "span_id": "span_challenge_039_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000027"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_039",
+        "owner": "ROLE_OWNER_039",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_039"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_039",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_039"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_039",
+          "owner": "ROLE_OWNER_039",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_039"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_039",
+          "owner": "ROLE_OWNER_039",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_039"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_039"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_039",
+          "owner": "ROLE_OWNER_039",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_039"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_040_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 40,
+            "redacted_turn": 5
+          },
+          "source_observation_id": "obs_challenge_040",
+          "span_id": "span_challenge_040_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000028"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_040",
+        "owner": "ROLE_OWNER_040",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_040"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_040",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_040"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_040",
+          "owner": "ROLE_OWNER_040",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_040"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_040",
+          "owner": "ROLE_OWNER_040",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_040"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_040"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_040",
+          "owner": "ROLE_OWNER_040",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_040"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_041_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 41,
+            "redacted_turn": 6
+          },
+          "source_observation_id": "obs_challenge_041",
+          "span_id": "span_challenge_041_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000029"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_041",
+        "owner": "ROLE_OWNER_041",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_041"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_041",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_041"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_041",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_041"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_041",
+          "owner": "ROLE_OWNER_041",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_041"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_041"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_041",
+          "owner": "ROLE_OWNER_041",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_041"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_042_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 42,
+            "redacted_turn": 7
+          },
+          "source_observation_id": "obs_challenge_042",
+          "span_id": "span_challenge_042_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000002a"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_042",
+        "owner": "ROLE_OWNER_042",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_042"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_042",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_042"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_042",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_042"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_042",
+          "owner": "ROLE_OWNER_042",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_042"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_042"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_042",
+          "owner": "ROLE_OWNER_042",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_042"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_043_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 43,
+            "redacted_turn": 8
+          },
+          "source_observation_id": "obs_challenge_043",
+          "span_id": "span_challenge_043_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000002b"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_043",
+        "owner": "ROLE_OWNER_043",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_043"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_043",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_043"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_043",
+          "owner": "ROLE_OWNER_043",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_043"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_043"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_043",
+          "owner": "ROLE_OWNER_043",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_043"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_044_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 44,
+            "redacted_turn": 9
+          },
+          "source_observation_id": "obs_challenge_044",
+          "span_id": "span_challenge_044_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000002c"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_044",
+        "owner": "ROLE_OWNER_044",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_044"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_044",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_044"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_044",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_044"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_044"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_044",
+          "owner": "ROLE_OWNER_044",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_044"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_045_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 45,
+            "redacted_turn": 10
+          },
+          "source_observation_id": "obs_challenge_045",
+          "span_id": "span_challenge_045_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000002d"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_045",
+        "owner": "ROLE_OWNER_045",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_045"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_045",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_045"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_045",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_045"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_045"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_045",
+          "owner": "ROLE_OWNER_045",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_045"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_046_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 46,
+            "redacted_turn": 11
+          },
+          "source_observation_id": "obs_challenge_046",
+          "span_id": "span_challenge_046_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000002e"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_046",
+        "owner": "ROLE_OWNER_046",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_046"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_046",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_046"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_046"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_046",
+          "owner": "ROLE_OWNER_046",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_046"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_047_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 47,
+            "redacted_turn": 12
+          },
+          "source_observation_id": "obs_challenge_047",
+          "span_id": "span_challenge_047_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000002f"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_047",
+        "owner": "ROLE_OWNER_047",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_047"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "owner": "ROLE_OWNER_047",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_047"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_047"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      },
+      "v2_frame_answer": {
+        "frame_type": "Decision",
+        "slots": {
+          "deadline": "DATE_047",
+          "owner": "ROLE_OWNER_047",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_047"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_048_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 48,
+            "redacted_turn": 13
+          },
+          "source_observation_id": "obs_challenge_048",
+          "span_id": "span_challenge_048_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000030"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_048",
+        "owner": "ROLE_OWNER_048",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_048"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_048",
+          "owner": "ROLE_OWNER_048",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_048"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_048"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      }
+    },
+    {
+      "case_id": "challenge_049_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 49,
+            "redacted_turn": 14
+          },
+          "source_observation_id": "obs_challenge_049",
+          "span_id": "span_challenge_049_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000031"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_049",
+        "owner": "ROLE_OWNER_049",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_049"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_049",
+          "owner": "ROLE_OWNER_049",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_049"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_049"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      }
+    },
+    {
+      "case_id": "challenge_050_structure_misleads",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 50,
+            "redacted_turn": 15
+          },
+          "source_observation_id": "obs_challenge_050",
+          "span_id": "span_challenge_050_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000032"
+        }
+      ],
+      "failure_bucket": "structure_misleads",
+      "gold_answer": {
+        "deadline": "DATE_050",
+        "owner": "ROLE_OWNER_050",
+        "work_object": "STRUCTURE_MISLEADS_OBJECT_050"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "WRONG_DEADLINE",
+          "owner": "WRONG_OWNER",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_050",
+          "owner": "ROLE_OWNER_050",
+          "work_object": "STRUCTURE_MISLEADS_OBJECT_050"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_050"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Document",
+        "left_type_confidence": 0.92,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.91
+      }
+    },
+    {
+      "case_id": "challenge_051_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 51,
+            "redacted_turn": 1
+          },
+          "source_observation_id": "obs_challenge_051",
+          "span_id": "span_challenge_051_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000033"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_051",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_051",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_051"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_051",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_051",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_051"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_051",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_051",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_051"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_051",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_051",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_051"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_051"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_051",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_051",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_051"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_052_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 52,
+            "redacted_turn": 2
+          },
+          "source_observation_id": "obs_challenge_052",
+          "span_id": "span_challenge_052_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000034"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_052",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_052",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_052"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_052",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_052",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_052"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_052",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_052",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_052"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_052",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_052",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_052"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_052"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_052",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_052",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_052"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_053_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 53,
+            "redacted_turn": 3
+          },
+          "source_observation_id": "obs_challenge_053",
+          "span_id": "span_challenge_053_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000035"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_053",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_053",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_053"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_053",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_053",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_053"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_053",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_053",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_053"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_053",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_053",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_053"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_053"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_053",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_053",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_053"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_054_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 54,
+            "redacted_turn": 4
+          },
+          "source_observation_id": "obs_challenge_054",
+          "span_id": "span_challenge_054_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000036"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_054",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_054",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_054"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_054",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_054",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_054"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_054",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_054",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_054"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_054",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_054",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_054"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_054"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_054",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_054",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_054"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_055_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 55,
+            "redacted_turn": 5
+          },
+          "source_observation_id": "obs_challenge_055",
+          "span_id": "span_challenge_055_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000037"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_055",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_055",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_055"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_055",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_055"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_055",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_055",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_055"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_055",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_055",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_055"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_055"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_055",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_055",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_055"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_056_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 56,
+            "redacted_turn": 6
+          },
+          "source_observation_id": "obs_challenge_056",
+          "span_id": "span_challenge_056_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000038"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_056",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_056",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_056"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_056",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_056"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_056",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_056"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_056",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_056",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_056"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_056"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_056",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_056",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_056"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_057_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 57,
+            "redacted_turn": 7
+          },
+          "source_observation_id": "obs_challenge_057",
+          "span_id": "span_challenge_057_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000039"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_057",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_057",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_057"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_057",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_057"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_057",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_057"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_057",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_057"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_057"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_057",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_057",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_057"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_058_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 58,
+            "redacted_turn": 8
+          },
+          "source_observation_id": "obs_challenge_058",
+          "span_id": "span_challenge_058_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000003a"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_058",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_058",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_058"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_058",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_058"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_058",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_058"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_058",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_058"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_058"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_058",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_058",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_058"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_059_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 59,
+            "redacted_turn": 9
+          },
+          "source_observation_id": "obs_challenge_059",
+          "span_id": "span_challenge_059_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000003b"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_059",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_059",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_059"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_059",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_059"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_059",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_059"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_059"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_059",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_059"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_060_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 60,
+            "redacted_turn": 10
+          },
+          "source_observation_id": "obs_challenge_060",
+          "span_id": "span_challenge_060_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000003c"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_060",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_060",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_060"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_060",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_060"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_060",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_060"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_060"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_060",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_060"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_061_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 61,
+            "redacted_turn": 11
+          },
+          "source_observation_id": "obs_challenge_061",
+          "span_id": "span_challenge_061_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000003d"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_061",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_061",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_061"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_061",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_061"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_061"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_061",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_061"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_062_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 62,
+            "redacted_turn": 12
+          },
+          "source_observation_id": "obs_challenge_062",
+          "span_id": "span_challenge_062_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000003e"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_062",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_062",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_062"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_062"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_062",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_062"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_063_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 63,
+            "redacted_turn": 13
+          },
+          "source_observation_id": "obs_challenge_063",
+          "span_id": "span_challenge_063_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000003f"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_063",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_063",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_063"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_063"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      },
+      "v2_frame_answer": {
+        "frame_type": "OpenQuestion",
+        "slots": {
+          "actor": "ROLE_ACTOR_063",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_063"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_064_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 64,
+            "redacted_turn": 14
+          },
+          "source_observation_id": "obs_challenge_064",
+          "span_id": "span_challenge_064_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000040"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_064",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_064",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_064"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_064",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_064",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_064"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_064"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      }
+    },
+    {
+      "case_id": "challenge_065_frame_type_confusion",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 65,
+            "redacted_turn": 15
+          },
+          "source_observation_id": "obs_challenge_065",
+          "span_id": "span_challenge_065_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000041"
+        }
+      ],
+      "failure_bucket": "frame_type_confusion",
+      "gold_answer": {
+        "actor": "ROLE_ACTOR_065",
+        "intent": "FRAME_TYPE_CONFUSION_INTENT_065",
+        "work_object": "FRAME_TYPE_CONFUSION_OBJECT_065"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "WRONG_ACTOR",
+          "intent": "WRONG_INTENT",
+          "work_object": "WRONG_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object",
+        "intent"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "actor": "ROLE_ACTOR_065",
+          "intent": "FRAME_TYPE_CONFUSION_INTENT_065",
+          "work_object": "FRAME_TYPE_CONFUSION_OBJECT_065"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_065"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Concept",
+        "left_type_confidence": 0.79,
+        "right_core_supertype_id": "Concept",
+        "right_type_confidence": 0.78
+      }
+    },
+    {
+      "case_id": "challenge_066_cross_thread_dependency",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 66,
+            "redacted_turn": 1
+          },
+          "source_observation_id": "obs_challenge_066",
+          "span_id": "span_challenge_066_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000042"
+        }
+      ],
+      "failure_bucket": "cross_thread_dependency",
+      "gold_answer": {
+        "deadline": "DATE_066",
+        "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_066",
+        "owner": "ROLE_OWNER_066",
+        "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_066"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_066",
+          "owner": "ROLE_OWNER_066",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_066"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_066",
+          "owner": "ROLE_OWNER_066",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_066"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "dependency",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_066",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_066",
+          "owner": "ROLE_OWNER_066",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_066"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_066"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.88,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.89
+      },
+      "v2_frame_answer": {
+        "frame_type": "Dependency",
+        "slots": {
+          "deadline": "DATE_066",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_066",
+          "owner": "ROLE_OWNER_066",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_066"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_067_cross_thread_dependency",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 67,
+            "redacted_turn": 2
+          },
+          "source_observation_id": "obs_challenge_067",
+          "span_id": "span_challenge_067_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000043"
+        }
+      ],
+      "failure_bucket": "cross_thread_dependency",
+      "gold_answer": {
+        "deadline": "DATE_067",
+        "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_067",
+        "owner": "ROLE_OWNER_067",
+        "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_067"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_067",
+          "owner": "ROLE_OWNER_067",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_067"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_067",
+          "owner": "ROLE_OWNER_067",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_067"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "dependency",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_067",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_067",
+          "owner": "ROLE_OWNER_067",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_067"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_067"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.88,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.89
+      },
+      "v2_frame_answer": {
+        "frame_type": "Dependency",
+        "slots": {
+          "deadline": "DATE_067",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_067",
+          "owner": "ROLE_OWNER_067",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_067"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_068_cross_thread_dependency",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 68,
+            "redacted_turn": 3
+          },
+          "source_observation_id": "obs_challenge_068",
+          "span_id": "span_challenge_068_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000044"
+        }
+      ],
+      "failure_bucket": "cross_thread_dependency",
+      "gold_answer": {
+        "deadline": "DATE_068",
+        "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_068",
+        "owner": "ROLE_OWNER_068",
+        "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_068"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_068",
+          "owner": "ROLE_OWNER_068",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_068"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_068",
+          "owner": "ROLE_OWNER_068",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_068"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "dependency",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_068",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_068",
+          "owner": "ROLE_OWNER_068",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_068"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_068"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.88,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.89
+      },
+      "v2_frame_answer": {
+        "frame_type": "Dependency",
+        "slots": {
+          "deadline": "DATE_068",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_068",
+          "owner": "ROLE_OWNER_068",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_068"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_069_cross_thread_dependency",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 69,
+            "redacted_turn": 4
+          },
+          "source_observation_id": "obs_challenge_069",
+          "span_id": "span_challenge_069_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000045"
+        }
+      ],
+      "failure_bucket": "cross_thread_dependency",
+      "gold_answer": {
+        "deadline": "DATE_069",
+        "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_069",
+        "owner": "ROLE_OWNER_069",
+        "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_069"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_069",
+          "owner": "ROLE_OWNER_069",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_069"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_069",
+          "owner": "ROLE_OWNER_069",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_069"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "dependency",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_069",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_069",
+          "owner": "ROLE_OWNER_069",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_069"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_069"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.88,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.89
+      },
+      "v2_frame_answer": {
+        "frame_type": "Dependency",
+        "slots": {
+          "deadline": "DATE_069",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_069",
+          "owner": "ROLE_OWNER_069",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_069"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_070_cross_thread_dependency",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 70,
+            "redacted_turn": 5
+          },
+          "source_observation_id": "obs_challenge_070",
+          "span_id": "span_challenge_070_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000046"
+        }
+      ],
+      "failure_bucket": "cross_thread_dependency",
+      "gold_answer": {
+        "deadline": "DATE_070",
+        "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_070",
+        "owner": "ROLE_OWNER_070",
+        "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_070"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_070",
+          "owner": "ROLE_OWNER_070",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_070"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_070",
+          "owner": "ROLE_OWNER_070",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_070"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "dependency",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_070",
+          "owner": "ROLE_OWNER_070",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_070"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_070"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.88,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.89
+      },
+      "v2_frame_answer": {
+        "frame_type": "Dependency",
+        "slots": {
+          "deadline": "DATE_070",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_070",
+          "owner": "ROLE_OWNER_070",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_070"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_071_cross_thread_dependency",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 71,
+            "redacted_turn": 6
+          },
+          "source_observation_id": "obs_challenge_071",
+          "span_id": "span_challenge_071_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000047"
+        }
+      ],
+      "failure_bucket": "cross_thread_dependency",
+      "gold_answer": {
+        "deadline": "DATE_071",
+        "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_071",
+        "owner": "ROLE_OWNER_071",
+        "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_071"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_071",
+          "owner": "ROLE_OWNER_071",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_071"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_071",
+          "owner": "ROLE_OWNER_071",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_071"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "dependency",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_071",
+          "owner": "ROLE_OWNER_071",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_071"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_071"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.88,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.89
+      },
+      "v2_frame_answer": {
+        "frame_type": "Dependency",
+        "slots": {
+          "deadline": "DATE_071",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_071",
+          "owner": "ROLE_OWNER_071",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_071"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_072_cross_thread_dependency",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 72,
+            "redacted_turn": 7
+          },
+          "source_observation_id": "obs_challenge_072",
+          "span_id": "span_challenge_072_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000048"
+        }
+      ],
+      "failure_bucket": "cross_thread_dependency",
+      "gold_answer": {
+        "deadline": "DATE_072",
+        "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_072",
+        "owner": "ROLE_OWNER_072",
+        "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_072"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_072",
+          "owner": "ROLE_OWNER_072",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_072"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_072",
+          "owner": "ROLE_OWNER_072",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_072"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "dependency",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_072",
+          "owner": "ROLE_OWNER_072",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_072"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_072"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.88,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.89
+      },
+      "v2_frame_answer": {
+        "frame_type": "Dependency",
+        "slots": {
+          "deadline": "DATE_072",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_072",
+          "owner": "ROLE_OWNER_072",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_072"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_073_cross_thread_dependency",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 73,
+            "redacted_turn": 8
+          },
+          "source_observation_id": "obs_challenge_073",
+          "span_id": "span_challenge_073_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000049"
+        }
+      ],
+      "failure_bucket": "cross_thread_dependency",
+      "gold_answer": {
+        "deadline": "DATE_073",
+        "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_073",
+        "owner": "ROLE_OWNER_073",
+        "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_073"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_073",
+          "owner": "ROLE_OWNER_073",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_073"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_073",
+          "owner": "ROLE_OWNER_073",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_073"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "dependency",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_073",
+          "owner": "ROLE_OWNER_073",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_073"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_073"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.88,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.89
+      }
+    },
+    {
+      "case_id": "challenge_074_cross_thread_dependency",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 74,
+            "redacted_turn": 9
+          },
+          "source_observation_id": "obs_challenge_074",
+          "span_id": "span_challenge_074_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000004a"
+        }
+      ],
+      "failure_bucket": "cross_thread_dependency",
+      "gold_answer": {
+        "deadline": "DATE_074",
+        "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_074",
+        "owner": "ROLE_OWNER_074",
+        "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_074"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_074",
+          "owner": "ROLE_OWNER_074",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_074"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_074",
+          "owner": "ROLE_OWNER_074",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_074"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "dependency",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_074",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_074",
+          "owner": "ROLE_OWNER_074",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_074"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_074"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.88,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.89
+      }
+    },
+    {
+      "case_id": "challenge_075_cross_thread_dependency",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 75,
+            "redacted_turn": 10
+          },
+          "source_observation_id": "obs_challenge_075",
+          "span_id": "span_challenge_075_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000004b"
+        }
+      ],
+      "failure_bucket": "cross_thread_dependency",
+      "gold_answer": {
+        "deadline": "DATE_075",
+        "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_075",
+        "owner": "ROLE_OWNER_075",
+        "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_075"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_075",
+          "owner": "ROLE_OWNER_075",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_075"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_075",
+          "owner": "ROLE_OWNER_075",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_075"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "dependency",
+        "deadline"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_075",
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_075",
+          "owner": "ROLE_OWNER_075",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_075"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_075"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.88,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.89
+      },
+      "v2_frame_answer": {
+        "frame_type": "Dependency",
+        "slots": {
+          "dependency": "CROSS_THREAD_DEPENDENCY_DEPENDENCY_075",
+          "owner": "ROLE_OWNER_075",
+          "work_object": "CROSS_THREAD_DEPENDENCY_OBJECT_075"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_076_followup_or_fallback_missing",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 76,
+            "redacted_turn": 1
+          },
+          "source_observation_id": "obs_challenge_076",
+          "span_id": "span_challenge_076_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000004c"
+        }
+      ],
+      "failure_bucket": "followup_or_fallback_missing",
+      "gold_answer": {
+        "deadline": "DATE_076",
+        "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_076",
+        "owner": "ROLE_OWNER_076",
+        "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_076"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_076",
+          "owner": "ROLE_OWNER_076",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_076"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_076",
+          "owner": "ROLE_OWNER_076",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_076"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "fallback"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_076",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_076",
+          "owner": "ROLE_OWNER_076",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_076"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_076"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.86,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.84
+      },
+      "v2_frame_answer": {
+        "frame_type": "Assignment",
+        "slots": {
+          "deadline": "DATE_076",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_076",
+          "owner": "ROLE_OWNER_076",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_076"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_077_followup_or_fallback_missing",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 77,
+            "redacted_turn": 2
+          },
+          "source_observation_id": "obs_challenge_077",
+          "span_id": "span_challenge_077_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000004d"
+        }
+      ],
+      "failure_bucket": "followup_or_fallback_missing",
+      "gold_answer": {
+        "deadline": "DATE_077",
+        "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_077",
+        "owner": "ROLE_OWNER_077",
+        "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_077"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_077",
+          "owner": "ROLE_OWNER_077",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_077"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_077",
+          "owner": "ROLE_OWNER_077",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_077"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "fallback"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_077",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_077",
+          "owner": "ROLE_OWNER_077",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_077"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_077"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.86,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.84
+      },
+      "v2_frame_answer": {
+        "frame_type": "Assignment",
+        "slots": {
+          "deadline": "DATE_077",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_077",
+          "owner": "ROLE_OWNER_077",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_077"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_078_followup_or_fallback_missing",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 78,
+            "redacted_turn": 3
+          },
+          "source_observation_id": "obs_challenge_078",
+          "span_id": "span_challenge_078_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000004e"
+        }
+      ],
+      "failure_bucket": "followup_or_fallback_missing",
+      "gold_answer": {
+        "deadline": "DATE_078",
+        "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_078",
+        "owner": "ROLE_OWNER_078",
+        "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_078"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_078",
+          "owner": "ROLE_OWNER_078",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_078"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_078",
+          "owner": "ROLE_OWNER_078",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_078"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "fallback"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_078",
+          "owner": "ROLE_OWNER_078",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_078"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_078"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.86,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.84
+      },
+      "v2_frame_answer": {
+        "frame_type": "Assignment",
+        "slots": {
+          "deadline": "DATE_078",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_078",
+          "owner": "ROLE_OWNER_078",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_078"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_079_followup_or_fallback_missing",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 79,
+            "redacted_turn": 4
+          },
+          "source_observation_id": "obs_challenge_079",
+          "span_id": "span_challenge_079_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000004f"
+        }
+      ],
+      "failure_bucket": "followup_or_fallback_missing",
+      "gold_answer": {
+        "deadline": "DATE_079",
+        "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_079",
+        "owner": "ROLE_OWNER_079",
+        "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_079"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_079",
+          "owner": "ROLE_OWNER_079",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_079"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_079",
+          "owner": "ROLE_OWNER_079",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_079"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "fallback"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_079",
+          "owner": "ROLE_OWNER_079",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_079"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_079"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.86,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.84
+      },
+      "v2_frame_answer": {
+        "frame_type": "Assignment",
+        "slots": {
+          "deadline": "DATE_079",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_079",
+          "owner": "ROLE_OWNER_079",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_079"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_080_followup_or_fallback_missing",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 80,
+            "redacted_turn": 5
+          },
+          "source_observation_id": "obs_challenge_080",
+          "span_id": "span_challenge_080_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000050"
+        }
+      ],
+      "failure_bucket": "followup_or_fallback_missing",
+      "gold_answer": {
+        "deadline": "DATE_080",
+        "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_080",
+        "owner": "ROLE_OWNER_080",
+        "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_080"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_080",
+          "owner": "ROLE_OWNER_080",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_080"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_080",
+          "owner": "ROLE_OWNER_080",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_080"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "fallback"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_080",
+          "owner": "ROLE_OWNER_080",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_080"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_080"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.86,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.84
+      },
+      "v2_frame_answer": {
+        "frame_type": "Assignment",
+        "slots": {
+          "deadline": "DATE_080",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_080",
+          "owner": "ROLE_OWNER_080",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_080"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_081_followup_or_fallback_missing",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 81,
+            "redacted_turn": 6
+          },
+          "source_observation_id": "obs_challenge_081",
+          "span_id": "span_challenge_081_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000051"
+        }
+      ],
+      "failure_bucket": "followup_or_fallback_missing",
+      "gold_answer": {
+        "deadline": "DATE_081",
+        "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_081",
+        "owner": "ROLE_OWNER_081",
+        "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_081"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_081",
+          "owner": "ROLE_OWNER_081",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_081"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_081",
+          "owner": "ROLE_OWNER_081",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_081"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "fallback"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_081",
+          "owner": "ROLE_OWNER_081",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_081"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_081"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.86,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.84
+      },
+      "v2_frame_answer": {
+        "frame_type": "Assignment",
+        "slots": {
+          "deadline": "DATE_081",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_081",
+          "owner": "ROLE_OWNER_081",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_081"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_082_followup_or_fallback_missing",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 82,
+            "redacted_turn": 7
+          },
+          "source_observation_id": "obs_challenge_082",
+          "span_id": "span_challenge_082_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000052"
+        }
+      ],
+      "failure_bucket": "followup_or_fallback_missing",
+      "gold_answer": {
+        "deadline": "DATE_082",
+        "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_082",
+        "owner": "ROLE_OWNER_082",
+        "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_082"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_082",
+          "owner": "ROLE_OWNER_082",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_082"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_082",
+          "owner": "ROLE_OWNER_082",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_082"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "fallback"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_082",
+          "owner": "ROLE_OWNER_082",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_082"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_082"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.86,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.84
+      },
+      "v2_frame_answer": {
+        "frame_type": "Assignment",
+        "slots": {
+          "deadline": "DATE_082",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_082",
+          "owner": "ROLE_OWNER_082",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_082"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_083_followup_or_fallback_missing",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 83,
+            "redacted_turn": 8
+          },
+          "source_observation_id": "obs_challenge_083",
+          "span_id": "span_challenge_083_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000053"
+        }
+      ],
+      "failure_bucket": "followup_or_fallback_missing",
+      "gold_answer": {
+        "deadline": "DATE_083",
+        "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_083",
+        "owner": "ROLE_OWNER_083",
+        "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_083"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_083",
+          "owner": "ROLE_OWNER_083",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_083"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_083",
+          "owner": "ROLE_OWNER_083",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_083"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "fallback"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_083",
+          "owner": "ROLE_OWNER_083",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_083"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_083"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.86,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.84
+      },
+      "v2_frame_answer": {
+        "frame_type": "Assignment",
+        "slots": {
+          "deadline": "DATE_083",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_083",
+          "owner": "ROLE_OWNER_083",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_083"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_084_followup_or_fallback_missing",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 84,
+            "redacted_turn": 9
+          },
+          "source_observation_id": "obs_challenge_084",
+          "span_id": "span_challenge_084_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000054"
+        }
+      ],
+      "failure_bucket": "followup_or_fallback_missing",
+      "gold_answer": {
+        "deadline": "DATE_084",
+        "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_084",
+        "owner": "ROLE_OWNER_084",
+        "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_084"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_084",
+          "owner": "ROLE_OWNER_084",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_084"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_084",
+          "owner": "ROLE_OWNER_084",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_084"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "fallback"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_084",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_084",
+          "owner": "ROLE_OWNER_084",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_084"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_084"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.86,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.84
+      }
+    },
+    {
+      "case_id": "challenge_085_followup_or_fallback_missing",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 85,
+            "redacted_turn": 10
+          },
+          "source_observation_id": "obs_challenge_085",
+          "span_id": "span_challenge_085_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000055"
+        }
+      ],
+      "failure_bucket": "followup_or_fallback_missing",
+      "gold_answer": {
+        "deadline": "DATE_085",
+        "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_085",
+        "owner": "ROLE_OWNER_085",
+        "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_085"
+      },
+      "hard_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_085",
+          "owner": "ROLE_OWNER_085",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_085"
+        }
+      },
+      "kg_without_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_085",
+          "owner": "ROLE_OWNER_085",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_085"
+        }
+      },
+      "required_slots": [
+        "owner",
+        "work_object",
+        "deadline",
+        "fallback"
+      ],
+      "should_answer": true,
+      "soft_ontology_answer": {
+        "slots": {
+          "deadline": "DATE_085",
+          "fallback": "FOLLOWUP_OR_FALLBACK_MISSING_FALLBACK_085",
+          "owner": "ROLE_OWNER_085",
+          "work_object": "FOLLOWUP_OR_FALLBACK_MISSING_OBJECT_085"
+        }
+      },
+      "source_observation_ids": [
+        "obs_challenge_085"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Project",
+        "left_type_confidence": 0.86,
+        "right_core_supertype_id": "Artifact",
+        "right_type_confidence": 0.84
+      }
+    },
+    {
+      "case_id": "challenge_086_false_positive_guard",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 86,
+            "redacted_turn": 1
+          },
+          "source_observation_id": "obs_challenge_086",
+          "span_id": "span_challenge_086_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000056"
+        }
+      ],
+      "failure_bucket": "false_positive_guard",
+      "gold_answer": {},
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_086"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "left_type_confidence": 0.97,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.96
+      }
+    },
+    {
+      "case_id": "challenge_087_false_positive_guard",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 87,
+            "redacted_turn": 2
+          },
+          "source_observation_id": "obs_challenge_087",
+          "span_id": "span_challenge_087_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000057"
+        }
+      ],
+      "failure_bucket": "false_positive_guard",
+      "gold_answer": {},
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_087"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "left_type_confidence": 0.97,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.96
+      }
+    },
+    {
+      "case_id": "challenge_088_false_positive_guard",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 88,
+            "redacted_turn": 3
+          },
+          "source_observation_id": "obs_challenge_088",
+          "span_id": "span_challenge_088_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000058"
+        }
+      ],
+      "failure_bucket": "false_positive_guard",
+      "gold_answer": {},
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_088"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "left_type_confidence": 0.97,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.96
+      }
+    },
+    {
+      "case_id": "challenge_089_false_positive_guard",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 89,
+            "redacted_turn": 4
+          },
+          "source_observation_id": "obs_challenge_089",
+          "span_id": "span_challenge_089_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000059"
+        }
+      ],
+      "failure_bucket": "false_positive_guard",
+      "gold_answer": {},
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_089"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "left_type_confidence": 0.97,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.96
+      }
+    },
+    {
+      "case_id": "challenge_090_false_positive_guard",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 90,
+            "redacted_turn": 5
+          },
+          "source_observation_id": "obs_challenge_090",
+          "span_id": "span_challenge_090_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000005a"
+        }
+      ],
+      "failure_bucket": "false_positive_guard",
+      "gold_answer": {},
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_090"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "left_type_confidence": 0.97,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.96
+      }
+    },
+    {
+      "case_id": "challenge_091_false_positive_guard",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 91,
+            "redacted_turn": 6
+          },
+          "source_observation_id": "obs_challenge_091",
+          "span_id": "span_challenge_091_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000005b"
+        }
+      ],
+      "failure_bucket": "false_positive_guard",
+      "gold_answer": {},
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_091"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "left_type_confidence": 0.97,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.96
+      }
+    },
+    {
+      "case_id": "challenge_092_false_positive_guard",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 92,
+            "redacted_turn": 7
+          },
+          "source_observation_id": "obs_challenge_092",
+          "span_id": "span_challenge_092_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000005c"
+        }
+      ],
+      "failure_bucket": "false_positive_guard",
+      "gold_answer": {},
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_092"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "left_type_confidence": 0.97,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.96
+      }
+    },
+    {
+      "case_id": "challenge_093_false_positive_guard",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 93,
+            "redacted_turn": 8
+          },
+          "source_observation_id": "obs_challenge_093",
+          "span_id": "span_challenge_093_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000005d"
+        }
+      ],
+      "failure_bucket": "false_positive_guard",
+      "gold_answer": {},
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_093"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "left_type_confidence": 0.97,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.96
+      }
+    },
+    {
+      "case_id": "challenge_094_false_positive_guard",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 94,
+            "redacted_turn": 9
+          },
+          "source_observation_id": "obs_challenge_094",
+          "span_id": "span_challenge_094_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000005e"
+        }
+      ],
+      "failure_bucket": "false_positive_guard",
+      "gold_answer": {},
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_094"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "left_type_confidence": 0.97,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.96
+      }
+    },
+    {
+      "case_id": "challenge_095_false_positive_guard",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 95,
+            "redacted_turn": 10
+          },
+          "source_observation_id": "obs_challenge_095",
+          "span_id": "span_challenge_095_1",
+          "text_hash": "sha256:000000000000000000000000000000000000000000000000000000000000005f"
+        }
+      ],
+      "failure_bucket": "false_positive_guard",
+      "gold_answer": {},
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_095"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Person",
+        "left_type_confidence": 0.97,
+        "right_core_supertype_id": "Project",
+        "right_type_confidence": 0.96
+      },
+      "v2_frame_answer": {
+        "frame_type": "Issue",
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      }
+    },
+    {
+      "case_id": "challenge_096_access_or_redaction_boundary",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 96,
+            "redacted_turn": 1
+          },
+          "source_observation_id": "obs_challenge_096",
+          "span_id": "span_challenge_096_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000060"
+        }
+      ],
+      "failure_bucket": "access_or_redaction_boundary",
+      "gold_answer": {},
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_096"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Location",
+        "left_type_confidence": 0.95,
+        "right_core_supertype_id": "Document",
+        "right_type_confidence": 0.94
+      }
+    },
+    {
+      "case_id": "challenge_097_access_or_redaction_boundary",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 97,
+            "redacted_turn": 2
+          },
+          "source_observation_id": "obs_challenge_097",
+          "span_id": "span_challenge_097_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000061"
+        }
+      ],
+      "failure_bucket": "access_or_redaction_boundary",
+      "gold_answer": {},
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_097"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Location",
+        "left_type_confidence": 0.95,
+        "right_core_supertype_id": "Document",
+        "right_type_confidence": 0.94
+      }
+    },
+    {
+      "case_id": "challenge_098_access_or_redaction_boundary",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 98,
+            "redacted_turn": 3
+          },
+          "source_observation_id": "obs_challenge_098",
+          "span_id": "span_challenge_098_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000062"
+        }
+      ],
+      "failure_bucket": "access_or_redaction_boundary",
+      "gold_answer": {},
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_098"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Location",
+        "left_type_confidence": 0.95,
+        "right_core_supertype_id": "Document",
+        "right_type_confidence": 0.94
+      }
+    },
+    {
+      "case_id": "challenge_099_access_or_redaction_boundary",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 99,
+            "redacted_turn": 4
+          },
+          "source_observation_id": "obs_challenge_099",
+          "span_id": "span_challenge_099_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000063"
+        }
+      ],
+      "failure_bucket": "access_or_redaction_boundary",
+      "gold_answer": {},
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_099"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Location",
+        "left_type_confidence": 0.95,
+        "right_core_supertype_id": "Document",
+        "right_type_confidence": 0.94
+      }
+    },
+    {
+      "case_id": "challenge_100_access_or_redaction_boundary",
+      "evidence_spans": [
+        {
+          "locator": {
+            "redacted_thread_index": 100,
+            "redacted_turn": 5
+          },
+          "source_observation_id": "obs_challenge_100",
+          "span_id": "span_challenge_100_1",
+          "text_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000064"
+        }
+      ],
+      "failure_bucket": "access_or_redaction_boundary",
+      "gold_answer": {},
+      "kg_without_ontology_answer": {
+        "slots": {
+          "actor": "UNSUPPORTED_ACTOR",
+          "work_object": "UNSUPPORTED_WORK_OBJECT"
+        }
+      },
+      "required_slots": [
+        "actor",
+        "work_object"
+      ],
+      "should_answer": false,
+      "source_observation_ids": [
+        "obs_challenge_100"
+      ],
+      "split": "holdout",
+      "type_pair": {
+        "left_core_supertype_id": "Location",
+        "left_type_confidence": 0.95,
+        "right_core_supertype_id": "Document",
+        "right_type_confidence": 0.94
+      }
+    }
+  ],
+  "claim_boundary": {
+    "fixed_redacted_replay_claim": true,
+    "held_out_parser_output_claim": false,
+    "production_parser_claim": false,
+    "raw_message_bodies_committed": false,
+    "raw_pst_content_used": false
+  },
+  "created_at": "2026-07-08T12:00:00+00:00",
+  "dataset_id": "redacted_hard_challenge_100_v1",
+  "design_note": "Fixed redacted 100-case hard challenge for ontology v2 ablation. This is designed from failure modes, not raw PST parser output.",
+  "failure_bucket_counts": {
+    "access_or_redaction_boundary": 5,
+    "alignment_suppressed": 15,
+    "cross_thread_dependency": 10,
+    "false_positive_guard": 10,
+    "followup_or_fallback_missing": 10,
+    "frame_type_confusion": 15,
+    "gate_false_reject": 20,
+    "structure_misleads": 15
+  },
+  "source_kind": "designed_redacted_hard_challenge_fixture",
+  "splits": {
+    "dev": 30,
+    "holdout": 70
+  }
+}

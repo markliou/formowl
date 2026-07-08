@@ -32,6 +32,343 @@ current authority state. The stricter current state is blocked, and no broad
 completion claim is supported until the four remaining gates have accepted
 canonical packets and all authority reports are synchronized and passing.
 
+## Latest Completed Slice
+
+2026-07-08: issue #28 Ontology v2 coordination-frame experiment is complete
+for the scoped candidate-layer slice.
+This is a new additive candidate-layer slice, not a reopening of the broad
+KG real-evidence objective and not a canonical ontology/type mutation claim.
+
+Current slice status:
+
+- `CandidateMention`, `CandidateFrame`, `CandidateBusinessObject`, and
+  `CanonicalFrame` target contracts have been added to the contract layer.
+- Candidate mention, business-object, and frame file-backed stores have been
+  added; no generic canonical frame store has been introduced.
+- `python/formowl_graph/coordination_frames.py` contains a deterministic
+  fixture extractor, domain-pack validation, candidate-store persistence, and
+  competency-question answerability evaluation.
+- `experiments/kg_ontology_v2_coordination/` contains synthetic email-first
+  cross-domain fixtures, gold competency questions, and a four-arm experiment
+  runner.
+- `docs/ontology-v2-coordination-plan.md` is the detailed review packet for
+  Claude or another reviewer, and
+  `docs/ontology-v2-coordination-frames.md` is the method/result note.
+- Current synthetic result: v2 and hybrid arms score slot recall `1.0`,
+  slot-value recall `1.0`, and competency answerability `1.0`; current atom
+  path scores slot recall `0.0`, slot-value recall `0.0`, and answerability
+  `0.09375`; no-ontology metadata-only scores slot recall `0.0`,
+  slot-value recall `0.0`, and answerability `0.4375`.
+- Initial reviewer blockers for global-by-type evaluator scoring and
+  evidence-required CQ answerability have been patched. The evaluator now
+  scores frames against each case's `observation_ids`, the evidence CQ requires
+  case-local locator/text-hash evidence, and raw-reference rejection covers
+  UNC, double-slash NAS, generic POSIX absolute paths, and common relative
+  raw/private/scratch prefixes.
+- Claude's review materially changed the slice: CQ answerability is now
+  treated as schema-level round-trip evidence, slot-value recall was added, the
+  real email regression is explicitly marked unreproduced, and the next method
+  step is fixed real/PST-redacted regression reproduction plus hard-vs-soft
+  type-gate ablation under predicted/noisy types.
+- The current `formowl_graph.ontology` hard gate remains unchanged for
+  production behavior. A separate `soft_core_supertypes_compatible()` scaffold
+  exists for future ablation: low-confidence core mismatch becomes a soft
+  penalty, while high-confidence mismatch can still reject.
+- Judgment was posted to GitHub issue #28 as comment `4911893040`; final
+  scoped-slice checkpoint was posted as comment `4912075952`.
+- Huygens found a final engineering blocker: dot-relative and home-relative
+  raw references were still accepted in public candidate fields. The blocker
+  was fixed by extending raw-reference guards and regression tests for
+  `../private/archive.pst`, `./scratch/tmp/archive.pst`,
+  `~/private/archive.pst`, and backslash variants.
+- Volta's non-blocking research-method note led to neutral runner acceptance
+  key names: round-trip deltas now say `v2_roundtrip_*`, not
+  performance-style "beats current" wording.
+- `.gitignore` now ignores private raw test-data directories so private raw PST
+  files remain untracked.
+
+Final verification:
+
+```text
+Dev container focused test:
+  python -m unittest discover -s tests -p 'test_coordination_frame*.py'
+  -> 19 tests OK
+
+Dev container focused ontology contract test:
+  python -m unittest discover -s tests -p 'test_ontology_contract.py'
+  -> 5 tests OK
+
+Experiment runner:
+  python experiments/kg_ontology_v2_coordination/run_coordination_frame_experiment.py
+  -> passed
+
+Dev container full test:
+  python -m unittest discover -s tests
+  -> 366 tests OK
+
+Dev container lint/format:
+  ruff check python tests scripts experiments/kg_ontology_v2_coordination
+  -> passed
+  ruff format --check python tests scripts experiments/kg_ontology_v2_coordination
+  -> 168 files already formatted
+
+KG acceptance:
+  python scripts/kg_research_acceptance_suite.py
+  -> passed_with_explicit_limits, only expected limits
+```
+
+Remaining work for this slice:
+
+- None for the scoped issue #28 candidate-layer experiment. The work-board
+  item is checked complete.
+- Reviewer gate passed 3/3: `Huygens` agreed on engineering correctness after
+  the raw-reference blocker was fixed, `Archimedes` agreed on
+  governance/safety, and `Volta` agreed on research method after the acceptance
+  key names were neutralized.
+- Remaining product/research work is outside this completed slice: reproduce
+  the real email `KG alone > KG + current ontology` regression on fixed
+  real/PST-redacted cases, decompose failure buckets, and compare hard vs soft
+  type gates under predicted/noisy types before claiming v2 solves production
+  email behavior.
+
+## Latest Completed Evaluation Goal
+
+2026-07-08: issue #28 redacted effectiveness evaluation is complete. The user
+asked to finish the actual effectiveness comparison, not only the candidate
+contract slice.
+
+Current evaluation state:
+
+- Added fixed redacted replay fixture:
+  `experiments/kg_ontology_v2_coordination/fixtures/regression_redacted_cases.json`.
+- The fixture contains redacted answer slots, evidence span hashes/locators,
+  predicted core supertypes, and confidence values. It does not include raw PST
+  content, raw message bodies, subjects, mailbox ids, sender/recipient
+  addresses, attachment names, or filesystem paths.
+- The runner now emits `effectiveness_regression` with five arms:
+  `kg_without_ontology`, `kg_hard_ontology`, `kg_soft_ontology_gate`,
+  `coordination_frame_v2_redacted`, and `hybrid_soft_gate_v2_frame`.
+- Current canonical dev-container result: KG without ontology exact match
+  `0.666667`, KG + hard ontology `0.166667`, KG + soft ontology gate
+  `0.666667`, coordination frame v2 `1.0`, and hybrid soft gate + v2 frame
+  `1.0`.
+- The hard ontology regression is reproduced on this fixed redacted replay:
+  hard ontology is `-0.5` exact-match points versus KG without ontology.
+- Soft gate removes two hard false rejects and recovers to the KG-without-
+  ontology exact-match level while preserving the high-confidence negative
+  guard.
+- v2 and hybrid both reach `1.0` exact match and zero false positives on this
+  replay pack.
+
+Current claim boundary:
+
+- This is positive effectiveness evidence for a fixed redacted replay pack.
+- It is not raw PST extraction, not a production parser-quality claim, and not
+  proof that the deployed email pipeline is fixed.
+- The remaining production-quality step is to run this same answer rubric and
+  five-arm comparison on private real/PST-redacted parser output.
+
+Completion state:
+
+- The work-board item is checked complete.
+- Final issue #28 update was posted as comment `4912426980`.
+- No remaining work is required for this fixed redacted replay evaluation
+  slice.
+
+Verification after redacted effectiveness additions:
+
+```text
+Dev container focused coordination-frame tests:
+  python -m unittest discover -s tests -p 'test_coordination_frame*.py'
+  -> 23 tests OK
+
+Dev container ontology contract tests:
+  python -m unittest discover -s tests -p 'test_ontology_contract.py'
+  -> 5 tests OK
+
+Dev container experiment runner:
+  python experiments/kg_ontology_v2_coordination/run_coordination_frame_experiment.py --output /tmp/formowl_coordination_effectiveness.json
+  -> passed
+
+Dev container full unittest:
+  python -m unittest discover -s tests
+  -> 370 tests OK
+
+Dev container lint/format:
+  ruff check python tests scripts experiments/kg_ontology_v2_coordination
+  -> passed
+  ruff format --check python tests scripts experiments/kg_ontology_v2_coordination
+  -> 168 files already formatted
+
+KG acceptance:
+  python scripts/kg_research_acceptance_suite.py
+  -> passed_with_explicit_limits, only expected limits
+
+Patch whitespace:
+  git diff --check
+  -> passed
+```
+
+Reviewer-gate note:
+
+- Engineering reviewer `Hume` agreed and suggested optional hardening to assert
+  the exact five-arm key set. That test was added.
+- Governance/safety reviewer `Avicenna` blocked on external `--regression`
+  input paths being echoed in public reports and explicit private PST corpus
+  paths in docs. The runner now redacts repo-external input paths as
+  `external_input_redacted`, a focused test covers this, and the docs no longer
+  name the private PST path. Avicenna re-reviewed and agreed.
+- Research-method reviewer `Carver` agreed with no blockers, keeping the claim
+  bounded to replay evidence rather than parser or held-out production proof.
+
+Reviewer gate passed 3/3 for the redacted effectiveness slice.
+
+## Latest Completed 100-Question Challenge Follow-Up
+
+2026-07-08: the original first-version synthetic marker fixture remains in
+place, and a redesigned 100-case redacted hard challenge was added without
+overwriting it.
+
+Current state:
+
+- Original first-version fixture:
+  `experiments/kg_ontology_v2_coordination/fixtures/email_cross_domain_cases.json`
+  plus `gold_competency_answers.json`; still treated as round-trip contract
+  evidence.
+- Redesigned hard challenge:
+  `experiments/kg_ontology_v2_coordination/fixtures/challenge_redacted_100_cases.json`.
+- The runner now reports both versions under `ablation_versions`:
+  `original_synthetic_marker_fixture` and `redacted_hard_challenge_100`.
+- The 100-case challenge has 30 dev cases, 70 holdout cases, and covers
+  `gate_false_reject`, `alignment_suppressed`, `structure_misleads`,
+  `frame_type_confusion`, `cross_thread_dependency`,
+  `followup_or_fallback_missing`, `false_positive_guard`, and
+  `access_or_redaction_boundary`.
+
+100-case result:
+
+| Arm | Exact match | Slot-value F1 | False positives | Hard false rejects |
+| --- | ---: | ---: | ---: | ---: |
+| KG without ontology | 0.46 | 0.801382 | 11 | 0 |
+| KG + current hard ontology | 0.22 | 0.329239 | 0 | 30 |
+| KG + soft ontology gate | 0.74 | 0.936396 | 0 | 0 |
+| Coordination frame v2 | 0.82 | 0.925859 | 1 | 0 |
+| Hybrid soft gate + v2 frame | 0.90 | 0.981133 | 1 | 0 |
+
+Interpretation: the 100-case challenge shows a strong effect but not full
+coverage. Hybrid is best, hard ontology still regresses by `-0.24` exact-match
+points versus KG without ontology, and the best arm still misses 10 cases. This
+remains designed redacted challenge evidence, not private PST parser output.
+
+Verification:
+
+```text
+Dev container focused coordination-frame tests:
+  python -m unittest discover -s tests -p 'test_coordination_frame*.py'
+  -> 25 tests OK
+
+Dev container runner:
+  python experiments/kg_ontology_v2_coordination/run_coordination_frame_experiment.py --output /tmp/formowl_ontology_v2_100.json
+  -> passed
+
+Dev container full unittest:
+  python -m unittest discover -s tests
+  -> 372 tests OK
+
+Dev container lint/format:
+  ruff check python tests scripts experiments/kg_ontology_v2_coordination
+  -> passed
+  ruff format --check python tests scripts experiments/kg_ontology_v2_coordination
+  -> 168 files already formatted
+
+KG acceptance:
+  python scripts/kg_research_acceptance_suite.py
+  -> passed_with_explicit_limits, only expected limits
+
+Patch whitespace:
+  git diff --check
+  -> passed
+```
+
+## Latest Completed 10,000-Case Stress Expansion
+
+2026-07-08: the 100-case hard challenge was expanded inside the runner into a
+deterministic 10,000-case redacted stress benchmark using the same failure
+bucket proportions and a 10/90 dev/holdout split.
+
+Current state:
+
+- The runner emits `redacted_stress_benchmark_10000`.
+- No 10,000-case JSON fixture is committed. The benchmark is generated from
+  the fixed 100-case redacted hard-challenge templates.
+- Split counts: 1,000 dev cases and 9,000 holdout cases.
+- Bucket counts: 2,000 gate false rejects, 1,500 alignment-suppressed cases,
+  1,500 structure-misleads cases, 1,500 frame-type-confusion cases, 1,000
+  cross-thread dependency cases, 1,000 follow-up/fallback cases, 1,000
+  false-positive guards, and 500 access/redaction-boundary cases.
+- Per-case results are omitted from the 10,000-case public report to keep the
+  runner output compact; split, bucket, arm, status, and summary metrics remain
+  present and tested.
+
+10,000-case generated stress result:
+
+| Arm | Exact match | Slot-value F1 | False positives | Hard false rejects |
+| --- | ---: | ---: | ---: | ---: |
+| KG without ontology | 0.46 | 0.801382 | 1,100 | 0 |
+| KG + current hard ontology | 0.22 | 0.329239 | 0 | 3,000 |
+| KG + soft ontology gate | 0.74 | 0.936396 | 0 | 0 |
+| Coordination frame v2 | 0.82 | 0.925859 | 100 | 0 |
+| Hybrid soft gate + v2 frame | 0.90 | 0.981133 | 100 | 0 |
+
+Interpretation: the rate-level ordering matches the 100-case design because
+the benchmark intentionally scales redacted template families. Its added value
+is count-level stress evidence: hard ontology still regresses by `-0.24`
+exact-match points versus KG without ontology and creates 3,000 hard false
+rejects, while the best hybrid arm still leaves 100 false positives and 900
+partial answers. This is not independent PST/parser holdout evidence and not a
+production parser claim.
+
+Verification:
+
+```text
+Dev container focused coordination-frame tests:
+  python -m unittest discover -s tests -p 'test_coordination_frame*.py'
+  -> 27 tests OK
+
+Dev container runner:
+  python experiments/kg_ontology_v2_coordination/run_coordination_frame_experiment.py --output /tmp/formowl_ontology_v2_10000.json
+  -> passed
+
+Dev container full unittest:
+  python -m unittest discover -s tests
+  -> 374 tests OK
+
+Dev container lint/format:
+  ruff check python tests scripts experiments/kg_ontology_v2_coordination
+  -> passed
+  ruff format --check python tests scripts experiments/kg_ontology_v2_coordination
+  -> 168 files already formatted
+
+KG acceptance:
+  python scripts/kg_research_acceptance_suite.py
+  -> passed_with_explicit_limits, only expected limits
+
+Patch whitespace:
+  git diff --check
+  -> passed
+```
+
+Issue #28 follow-up comment: `4913032708`.
+
+Reviewer gate passed 3/3:
+
+- `Anscombe` agreed on engineering correctness.
+- `Pauli` agreed on governance/safety.
+- `Russell` agreed on research method.
+
+Anscombe's optional seed-shape validation note and Russell's optional explicit
+claim-boundary assertion note were implemented before final verification.
+
 Two different acceptance layers currently exist:
 
 - Main-repo KG research acceptance slice:
