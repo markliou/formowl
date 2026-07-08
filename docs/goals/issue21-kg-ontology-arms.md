@@ -12,6 +12,12 @@ ontology as a late KG-first reranker. It must encode typed mail frames,
 entities, slots, values, and relations before graph fusion, then evaluate the
 pre-registered ontology-native arms against the same hard-domain case hashes.
 
+This goal must not run or report the 324 plus 8 experiment family until the
+corrected ontology principle is written into durable specs and handoff docs.
+The corrected principle is that ontology is a fixed corpus-governed TBox
+revision, while email-derived frames, entities, values, and relations are ABox
+candidate instances with observation provenance.
+
 ## Current Evidence
 
 - The operator-provided full-PST hard-domain baseline and preserved work
@@ -19,7 +25,8 @@ pre-registered ontology-native arms against the same hard-domain case hashes.
 - Current measured results before this redesign:
   - baseline retrieval: 20/100
   - non-BERT candidate KG: 30/100
-  - broad ontology-guided KG: 29/100
+  - broad ontology-guided KG: 29/100, now classified as a taxonomy-like
+    KG-first proxy baseline rather than ontology-native evidence
   - KG-first ordered ontology-operator factorial best arm: 30/100
 - These results are valid as KG-first evidence only. They do not prove that
   ontology cannot help when it is encoded before graph fusion.
@@ -62,6 +69,23 @@ Total report entries: 332.
 
 ## Non-Negotiable Constraints
 
+- Ontology means the governed, versioned type system and relation/frame
+  vocabulary used to interpret evidence-derived candidate nodes, frames, slots,
+  values, and relations. Per-email labels, mailbox folders,
+  business-function lenses, domain tags, pattern labels, and experiment/result
+  labels are metadata or evaluation partitions, not ontology.
+- A label or tag may influence retrieval only as an explicitly declared
+  candidate feature or diagnostic control. It must not by itself create a
+  `TypeDefinition`, `TypeMapping`, `ontology_revision_id`, hard compatibility
+  gate, canonical type write, canonical KG write, user graph write, grant, or
+  wiki projection.
+- Use one fixed corpus-governed ontology revision for the experiment. Do not
+  create one ontology per email, thread, case, or query.
+- Keep TBox and ABox separate. TBox state contains classes, frame/relation
+  vocabulary, properties, hierarchy, aliases, mappings, constraints,
+  competency questions, provenance, and revision metadata. ABox state contains
+  observation-grounded candidate frames, entities, values, relations, atoms,
+  and selected proof neighborhoods.
 - Build corpus typed state before opening the private hard-case manifest.
 - Retrieval and scoring may see only query text, requester/workspace/permission
   context, fixed arm configuration, and fixed evidence budget.

@@ -1732,6 +1732,38 @@ Deterministic and statistical tools generate type candidates; an LLM only adjudi
 Nothing an LLM produces is committed automatically; it enters the candidate type store.
 ```
 
+Ontology revisions are corpus-governed TBox state. A FormOwl ontology is not
+created separately for each document, email, row, transcript segment, or user
+question. Individual resources, observations, semantic frames, candidate atoms,
+entities, values, and relations are ABox evidence instances that point back to
+assets, observations, extractor runs, permissions, and provenance. They may
+reference a pinned `ontology_revision_id`, but they must not mutate the TBox.
+
+Do not confuse ontology with a taxonomy, keyword list, folder list, domain tag
+set, or controlled vocabulary. Those can be useful candidate features, aliases,
+or evaluation labels, but they are not sufficient ontology evidence unless they
+are promoted through the governed type lifecycle and connected to classes,
+properties, domain/range rules, hierarchy, mappings, provenance, and a versioned
+revision.
+
+The ontology lifecycle is:
+
+```text
+representative corpus and competency questions
+-> candidate type/frame/property/relation proposals
+-> review against evidence, scope, permission, and regression expectations
+-> versioned ontology revision
+-> candidate extraction and graph/retrieval experiments pinned to that revision
+-> drift monitoring and periodic or event-triggered candidate updates
+```
+
+Extractor adapters, LLMs, and research harnesses may propose extension types,
+aliases, frame classes, relation/property candidates, mappings, and ontology
+revision candidates. They must not directly change canonical type state or
+silently invent a new ontology per resource. Any ontology update requires a new
+revision, review record, provenance, and regression against existing
+competency questions and graph/retrieval behavior.
+
 The type model has three tiers:
 
 ```text

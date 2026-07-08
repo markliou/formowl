@@ -1619,3 +1619,18 @@ Reviewer cost-control rules:
   design. Claim boundaries remain candidate-only with no canonical graph/type
   writes, no user graph writes, no raw access, no wiki projection, and no broad
   KG real-evidence completion claim.
+- 2026-07-08 #21 ontology lifecycle correction:
+  before rerunning the 324 plus 8 ontology-native experiment, durable specs
+  must treat ontology as one fixed corpus-governed TBox revision and mail
+  evidence as ABox candidate instances. Per-email labels, mailbox folders,
+  business-function lenses, domain tags, pattern labels, and experiment result
+  labels are metadata, candidate features, or evaluation partitions, not
+  ontology. A label/tag must not by itself create a `TypeDefinition`,
+  `TypeMapping`, `ontology_revision_id`, hard compatibility gate, canonical
+  type write, canonical KG write, user graph write, grant, or wiki projection.
+  The rerun must build label-blind corpus state from allowed observations
+  before opening the private hard-case manifest, pin the ontology revision in
+  outputs, keep TBox and ABox separate, and use competency/regression thinking
+  for future ontology lifecycle updates. The prior 10-domain ontology-guided
+  result is now classified as a taxonomy-like KG-first negative baseline, not
+  the corrected ontology-native method.

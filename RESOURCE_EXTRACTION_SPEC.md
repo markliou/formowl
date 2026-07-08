@@ -744,6 +744,21 @@ indexes, and wiki projection are downstream consumers of mail observations.
 They must remain separate workflows with their own permission checks, review
 state, and tests.
 
+Mail semantic extraction may create ABox candidates such as typed mail frames,
+entities, values, roles, and relations. Examples include `Request`, `Approval`,
+`Blocker`, `Commitment`, `PaymentEvent`, `ShipmentEvent`, `EngineeringChange`,
+actors, artifacts, dates, amounts, quantities, statuses, and provenance-backed
+relations between them. These are candidate instances derived from mail
+observations; they are not new per-email ontologies.
+
+Mail ontology use must reference a fixed, versioned ontology revision for the
+corpus or experiment. A parser, retrieval harness, or LLM adapter must not
+create a separate ontology for each email, thread, case, or query. Domain tags,
+keyword lenses, folders, and business-function labels may be candidate features
+or evaluation labels only. They become ontology state only through the governed
+type lifecycle described in `SPEC.md`: representative corpus and competency
+questions, candidate changes, review, versioned revision, and regression.
+
 The current `FixtureMailArchiveExtractor` is the official synthetic conformance
 baseline for this boundary. It proves archive, mailbox, folder, message, body
 segment, attachment occurrence, source provenance, permission scope, stable
@@ -844,6 +859,20 @@ CanonicalGraphStore
 UserKnowledgeGraph
 WikiRevision
 ```
+
+For ontology-aware semantic extraction, keep the TBox and ABox separate:
+
+```text
+TBox -> versioned ontology revision with classes, properties, hierarchy,
+        aliases, mappings, domain/range and cardinality constraints.
+ABox -> observation-grounded candidate frame/entity/value/relation instances
+        that cite assets, observations, extractor runs, and permission scope.
+```
+
+Semantic extractors may propose ontology changes when drift is detected, but
+those proposals are reviewable candidate type/frame/property changes. They do
+not change the fixed ontology revision used by an extraction run or evaluation
+after scoring has started.
 
 ---
 

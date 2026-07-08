@@ -254,15 +254,21 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   candidate KG (29/100). This arm uses FormOwl `TypeDefinition` and
   `TypeMapping` contracts, a hash-bound ontology revision, and domain-lens to
   closed-core-supertype mappings as candidate scoring/gating signals only. It
-  still does not write canonical graph/type state, user graphs, grants, raw
-  access, or wiki projections. The result is negative for quality: ontology
-  guidance as currently implemented did not beat the simpler candidate KG arm.
+  is now classified as a taxonomy-like KG-first negative baseline: ten
+  business-function lenses and keyword/domain tags are not enough to represent
+  a real ontology-native mail state. It still does not write canonical
+  graph/type state, user graphs, grants, raw access, or wiki projections. The
+  result is negative for quality only for that shallow representation.
 - The next #21 ontology experiment is pre-registered in
   `docs/mail-ontology-native-factorial-design.md`. It treats the negative
   ablation above as KG-first evidence only, then defines an ontology-native
-  324-arm grid plus 8 controls over typed mail frames, relations, query
-  encoding, scoring/gating, and candidate-pool size. This document is a design
-  checkpoint, not an experiment result.
+  324-arm grid plus 8 controls over a fixed corpus-governed ontology revision,
+  typed mail frames, relations, query encoding, scoring/gating, and
+  candidate-pool size. The experiment must keep TBox ontology state separate
+  from ABox email/frame/relation instances, and it must not create one ontology
+  per email or query. The ontology-native rerun must not treat per-email
+  labels, domain tags, or business-function lenses as ontology. This document
+  is a design checkpoint, not an experiment result.
 - Candidate graph contract models for `CandidateAtom`, `CandidateRelation`, and `ExternalGraphImport` proposal records.
 - Canonical graph contract models for `CanonicalAtom`, `CanonicalEntity`,
   `CanonicalRelation`, and `CanonicalGraphRevision`; canonical commit workflow

@@ -36,6 +36,39 @@ Four read-only math/research subagents reviewed the design:
 
 ## Ontology-Native Representation
 
+### Corrected Ontology Principle
+
+Ontology means the governed, versioned type system and relation/frame
+vocabulary used to interpret evidence-derived candidate nodes, frames, slots,
+values, and relations. Per-email labels, mailbox folders, business-function
+lenses, domain tags, pattern labels, and experiment/result labels are metadata
+or evaluation partitions, not ontology.
+
+A label or tag may influence retrieval only as an explicitly declared
+candidate feature or diagnostic control. It must not by itself create a
+`TypeDefinition`, `TypeMapping`, `ontology_revision_id`, hard compatibility
+gate, canonical type write, canonical KG write, user graph write, grant, or
+wiki projection.
+
+Ontology-native corpus state must be built label-blind from allowed mail
+evidence before the private hard-case manifest is opened. Retrieval/scoring may
+use query text, permission context, fixed arm configuration, public evidence
+budget, and precomputed candidate ontology state; domain/pattern/result labels
+and required evidence ids are evaluation-only and may be used only after
+evidence selection.
+
+Message, thread, folder, occurrence, and concrete business identifiers are
+provenance/context or artifact/entity candidates. They are not ontology type
+names.
+
+This experiment uses one fixed corpus-governed ontology revision. It does not
+create one ontology per email, thread, case, or query. The revision contains
+the TBox: classes, frame/relation/property vocabulary, hierarchy, aliases,
+mappings, domain/range and cardinality constraints, competency questions,
+provenance, and regression expectations. Email-derived typed frames, entities,
+values, relations, and selected proof neighborhoods are ABox candidate
+instances anchored to observations.
+
 Build the corpus state before opening the private hard-case manifest.
 
 ### Nodes
@@ -233,6 +266,13 @@ Controls:
 8. Frequency-matched random type labels.
 
 Total report entries: 332.
+
+The `broad domain` type-inventory level means evidence-derived coarse
+frame/type grouping from the allowed corpus state. It must not reuse private
+manifest domain labels, pattern labels, result labels, or per-email tags as
+ontology classes. The shuffled-label and random-label controls are diagnostic
+controls only; they must not become ontology revisions or type governance
+evidence.
 
 ## Aliasing And Dominance
 

@@ -26,6 +26,28 @@ Current comparison date: 2026-06-27.
 
 FormOwl uses a scoped emergent ontology, not a global top-down ontology.
 
+Corrected #21 ontology principle: ontology means the governed, versioned type
+system plus relation and frame vocabulary used to interpret evidence-derived
+candidate nodes, frames, slots, values, and relations. Per-email labels,
+mailbox folders, business-function lenses, domain tags, pattern labels, and
+experiment result labels are metadata or evaluation partitions, not ontology.
+
+FormOwl keeps ontology TBox state separate from ABox evidence instances:
+
+- TBox: versioned classes, frame/relation/property vocabulary, hierarchy,
+  aliases, mappings, domain/range and cardinality constraints, competency
+  questions, revision provenance, and regression expectations.
+- ABox: observation-grounded candidate entities, values, mail frames,
+  relations, candidate atoms, and selected evidence neighborhoods that cite
+  assets, observations, extractor runs, permission scope, and the pinned
+  ontology revision.
+
+A label or tag may influence retrieval only as an explicitly declared
+candidate feature or diagnostic control. It must not by itself create a
+`TypeDefinition`, `TypeMapping`, `ontology_revision_id`, hard compatibility
+gate, canonical type write, canonical KG write, user graph write, grant, or
+wiki projection.
+
 The current code-level method is:
 
 - `CORE_SUPERTYPE_IDS` is closed and small: `Person`, `Organization`,
@@ -374,8 +396,9 @@ Current ablations:
   remains far below the user's earlier 99/100 target.
 - In the same #21 comparison, ontology-guided non-BERT candidate scoring with
   formal `TypeDefinition`/`TypeMapping` contracts scored 29/100. This is a
-  negative ablation result: the current broad business-function ontology lens
-  did not beat the simpler candidate KG structure.
+  negative proxy ablation result: the current broad business-function
+  taxonomy-like lens did not beat the simpler candidate KG structure and is
+  not the corrected ontology-native principle.
 - That negative #21 ontology result is now treated as KG-first evidence only.
   The next registered method is `docs/mail-ontology-native-factorial-design.md`:
   it builds typed mail frames, slots, values, and relations before graph fusion
@@ -386,6 +409,9 @@ Current ablations:
   candidates.
 - Without provenance requirements, type and graph revisions cannot be
   reproduced or audited.
+- Without TBox/ABox separation, a corpus-specific label, folder, or evaluation
+  domain can be mistaken for ontology state and make KG+ontology experiments
+  falsely negative or falsely positive.
 
 Current error analysis cases:
 
@@ -396,7 +422,7 @@ Current error analysis cases:
 | package_output_treated_as_truth | RapidFuzz, Splink, or an LLM output is treated as canonical state. | Adapter manifests and claim boundaries keep output in candidate or review packet stores. |
 | alignment_without_provenance | A type decision cannot be traced to observations or candidate records. | Extension and promoted type validators require source provenance before acceptance. |
 | full_pst_mail_component_overreach | Deterministic thread/domain-term components retrieve related but insufficient evidence for hard business questions. | Public row-derived metrics show the 30/100 baseline, no-match failures, component size, and no canonical KG/write claim; next ablation must add ontology pins and stricter candidate typing. |
-| full_pst_mail_broad_ontology_lens | A broad business-function lens maps many mail observations to `Concept` but does not distinguish the evidence relation needed by hard questions. | The ontology-guided ablation scores 29/100 versus 30/100 for pure candidate KG; future work needs finer typed atoms/relations and real false-positive pruning evidence. |
+| full_pst_mail_broad_ontology_lens | A broad business-function lens maps many mail observations to `Concept` but does not distinguish the evidence relation needed by hard questions. | The ontology-guided ablation scores 29/100 versus 30/100 for pure candidate KG and is now classified as a taxonomy-like proxy baseline; future work needs a pinned ontology revision, TBox/ABox separation, finer typed frames/relations, and real false-positive pruning evidence. |
 
 Known limitations:
 
@@ -448,6 +474,8 @@ Current expected status:
 - Multi-modal KG survey: https://arxiv.org/abs/2202.05786
 - MR-MKG multimodal reasoning paper: https://arxiv.org/abs/2406.02030
 - OAEI 2024 results: https://oaei.ontologymatching.org/2024/results/
+- W3C OWL Web Ontology Language Guide: https://www.w3.org/TR/owl-guide/
+- Ontology Development 101: https://protege.stanford.edu/publications/ontology_development/ontology101.pdf
 - RapidFuzz documentation: https://rapidfuzz.github.io/RapidFuzz/
 - Splink documentation: https://moj-analytical-services.github.io/splink/
 - RAGAS: https://arxiv.org/abs/2309.15217

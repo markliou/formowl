@@ -4,6 +4,21 @@ Use this log for short cross-session and cross-machine notes. Keep detailed
 status in each role's goal file and task completion in
 `docs/implementation-task-breakdown.md`.
 
+## 2026-07-08
+
+- #21 ontology lifecycle correction before rerun: the user accepted the
+  principle that ontology must not be treated as per-email labels or a fixed
+  set of business-function tags. Future #21 ontology-native work must use one
+  fixed corpus-governed TBox revision with classes, frame/relation/property
+  vocabulary, hierarchy, aliases, mappings, constraints, competency questions,
+  provenance, and regression expectations. Email-derived typed frames,
+  entities, values, relations, candidate atoms, and selected proof
+  neighborhoods are ABox candidate instances anchored to observations. The
+  private hard-case manifest may be opened only after label-blind corpus state
+  exists. The prior 10-domain ontology-guided run remains a taxonomy-like
+  KG-first negative baseline, not a completed ontology-native result. Preserve
+  `.test-tmp` work dirs for follow-up experiments.
+
 ## 2026-07-07
 
 - #21 ontology-native factorial redesign started after the user challenged the
