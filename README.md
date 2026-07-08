@@ -263,6 +263,18 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   324-arm grid plus 8 controls over typed mail frames, relations, query
   encoding, scoring/gating, and candidate-pool size. This document is a design
   checkpoint, not an experiment result.
+- The current issue #28 Ontology v2 checkpoint adds
+  `docs/ontology-v2-coordination-frame-experiment.md`,
+  `scripts/ontology_v2_coordination_frame_experiment.py`, and
+  `examples/ontology-v2-cross-domain-email-cases.json`. It introduces
+  candidate-only `CandidateMention`, `CandidateBusinessObject`,
+  `CandidateFrame`, `CanonicalFrame`, and `DomainPackDefinition` contracts,
+  then compares the current flat semantic path with a coordination-frame path
+  on four synthetic cross-domain email scenarios. The fixture result improves
+  competency-question answerability from 16/40 to 40/40. This is a fixture
+  experiment only; it does not claim issue #28 completion, real parser
+  readiness, canonical type/KG writes, user graph writes, wiki projection,
+  raw access, or production readiness.
 - Candidate graph contract models for `CandidateAtom`, `CandidateRelation`, and `ExternalGraphImport` proposal records.
 - Canonical graph contract models for `CanonicalAtom`, `CanonicalEntity`,
   `CanonicalRelation`, and `CanonicalGraphRevision`; canonical commit workflow
@@ -423,6 +435,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - `docs/wiki-draft-schema.md` - wiki draft and frontmatter schema.
 - `docs/kg-research-method.md` - KG research method, literature comparison,
   acceptance evidence, and known limits.
+- `docs/ontology-v2-coordination-frame-experiment.md` - issue #28
+  coordination-frame fixture experiment design, results, and claim boundary.
 - `docs/kg-eval-package.md` - packaged KG evaluation facade and integration
   contract for the System Backbone Agent.
 - `docs/kg-bert-runtime.md` - optional BERT/SentenceTransformer KG

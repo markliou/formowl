@@ -1619,3 +1619,28 @@ Reviewer cost-control rules:
   design. Claim boundaries remain candidate-only with no canonical graph/type
   writes, no user graph writes, no raw access, no wiki projection, and no broad
   KG real-evidence completion claim.
+- 2026-07-08 issue #28 Ontology v2 coordination-frame experiment checkpoint:
+  the first fixture-only issue #28 slice is implemented and reviewer-gated on
+  branch `codex/issue-28-ontology-v2-experiment`. It adds candidate-only
+  `CandidateMention`, `CandidateBusinessObject`, `CandidateFrame`,
+  `CanonicalFrame`, and `DomainPackDefinition` contracts plus
+  `examples/ontology-v2-cross-domain-email-cases.json`,
+  `scripts/ontology_v2_coordination_frame_experiment.py`, focused tests, and
+  `docs/ontology-v2-coordination-frame-experiment.md`. The fixture compares
+  `current_flat_atom_path` against `ontology_v2_coordination_frame_path` on
+  four synthetic cross-domain email scenarios and reports 16/40 answerable
+  competency question-case pairs for the flat path versus 40/40 for the v2
+  frame path. `CandidateFrame` and `CanonicalFrame` instances are restricted
+  to coordination core frame types in this slice; domain-specific
+  specializations are validated in `DomainPackDefinition` until a later
+  explicit domain-pack binding field exists. Canonical verification passed:
+  focused issue #28 dev-container tests ran 8 OK; experiment CLI plus
+  saved-report validation exited 0; full unittest ran 589 OK in 835.252s;
+  full Ruff check and format-check passed. Reviewer gate passed 3/3 with
+  `Herschel`, `Bohr`, and `Mencius`; `Herschel`'s flat business-label frame
+  type blocker was fixed and re-reviewed. Claim boundary: this proves only
+  fixture-based coordination-frame answerability and contract shape. It does
+  not complete issue #28, does not parse real mail, does not generate business
+  answers, and does not write canonical type/KG state, user graph state, wiki
+  projection, raw access grants, or production readiness. Next action is
+  commit, push, and a draft PR to `main`.

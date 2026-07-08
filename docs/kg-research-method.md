@@ -26,6 +26,19 @@ Current comparison date: 2026-06-27.
 
 FormOwl uses a scoped emergent ontology, not a global top-down ontology.
 
+Issue #28 begins the Ontology v2 correction by adding a coordination-frame
+core experiment. The first checkpoint is documented in
+`docs/ontology-v2-coordination-frame-experiment.md`. It introduces
+candidate-only `CandidateMention`, `CandidateBusinessObject`, `CandidateFrame`,
+`CanonicalFrame`, and `DomainPackDefinition` contracts, then compares a
+current flat semantic path with a v2 coordination-frame path on four
+synthetic cross-domain email scenarios. The result is 16/40 answerable
+competency question-case pairs for the flat path versus 40/40 for the v2 frame
+path. This supports only fixture answerability and contract-shape claims; it
+does not complete issue #28 or claim canonical graph/type writes, user graph
+writes, wiki projection, raw access, real parser readiness, or production
+readiness.
+
 The current code-level method is:
 
 - `CORE_SUPERTYPE_IDS` is closed and small: `Person`, `Organization`,

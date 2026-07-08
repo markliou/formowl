@@ -287,6 +287,42 @@ These groups can be split across multiple agents after Slice 1 is stable.
   - Owner paths: `python/formowl_contract/`, tests
   - Proof: candidate records preserve source observation ids and extractor run
     provenance.
+- [x] Add issue #28 Ontology v2 fixture coordination-frame experiment slice.
+  - Owner paths: `python/formowl_contract/`, `scripts/`, `examples/`,
+    `tests/`, `docs/`, `README.md`
+  - Proof: `CandidateMention`, `CandidateBusinessObject`, `CandidateFrame`,
+    `CanonicalFrame`, and `DomainPackDefinition` contracts exist; domain pack
+    frame specializations extend coordination core frames; the fixture
+    experiment compares `current_flat_atom_path` with
+    `ontology_v2_coordination_frame_path`; public output is hash/status/count
+    only; canonical dev-container unittest and Ruff checks pass.
+  - Note: completed as a candidate-only fixture experiment checkpoint for
+    GitHub issue #28, not issue completion and not a production ontology,
+    parser, canonical KG/type, user graph, wiki, raw access, or
+    production-readiness claim. `CandidateFrame` and `CanonicalFrame`
+    instances are intentionally restricted to coordination core frame types in
+    this slice; domain-specific specializations are validated in
+    `DomainPackDefinition` until a later explicit domain-pack binding field
+    exists.
+  - Canonical verification: focused issue #28 dev-container tests ran 8 OK;
+    experiment CLI plus saved-report validation exited 0; full
+    `python -m unittest discover -s tests` ran 589 OK in 835.252s; full Ruff
+    check passed; full Ruff format-check passed with 222 files already
+    formatted.
+  - Reviewer gate status: passed default 3 effective read-only Codex/GPT
+    reviewers.
+  - Effective reviewer count: 3/3.
+  - Reviewer agreement count: 3/3 (`Herschel`, `Bohr`, `Mencius`).
+  - Reviewers with blocking findings: `Herschel` initially blocked permissive
+    flat business-label frame types; fixed by requiring core coordination
+    frame types for candidate/canonical frame instances and adding `Invoice`
+    rejection coverage. `Herschel` re-reviewed and agreed.
+  - Non-counted agents: none.
+  - Active reviewers: none.
+  - Non-blocking next-iteration notes: add explicit domain-pack binding for
+    specialized frame instances, use the actual current extraction path instead
+    of a flat-path answerability proxy, add mention-only/no-obligation negative
+    examples, and add an explicit `OpenQuestion` fixture frame.
 
 ### Test Hardening Board for Completed Slices
 

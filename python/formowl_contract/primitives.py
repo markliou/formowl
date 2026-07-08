@@ -265,6 +265,71 @@ def stable_candidate_relation_id(
     )
 
 
+def stable_candidate_mention_id(
+    *,
+    source_observation_ids: list[str] | tuple[str, ...],
+    mention_type: str,
+    label: str,
+    evidence_span: dict[str, JsonValue],
+    extractor_run_id: str,
+    ontology_revision_id: str,
+) -> str:
+    return stable_resource_contract_id(
+        "cmention",
+        "CandidateMention",
+        {
+            "source_observation_ids": list(source_observation_ids),
+            "mention_type": mention_type,
+            "label": label,
+            "evidence_span": evidence_span,
+            "extractor_run_id": extractor_run_id,
+            "ontology_revision_id": ontology_revision_id,
+        },
+    )
+
+
+def stable_candidate_business_object_id(
+    *,
+    object_type: str,
+    label: str,
+    source_mention_ids: list[str] | tuple[str, ...],
+    ontology_revision_id: str,
+    extractor_run_id: str,
+) -> str:
+    return stable_resource_contract_id(
+        "cbobj",
+        "CandidateBusinessObject",
+        {
+            "object_type": object_type,
+            "label": label,
+            "source_mention_ids": list(source_mention_ids),
+            "ontology_revision_id": ontology_revision_id,
+            "extractor_run_id": extractor_run_id,
+        },
+    )
+
+
+def stable_candidate_frame_id(
+    *,
+    frame_type: str,
+    slots: dict[str, JsonValue],
+    source_observation_ids: list[str] | tuple[str, ...],
+    ontology_revision_id: str,
+    extractor_run_id: str,
+) -> str:
+    return stable_resource_contract_id(
+        "cframe",
+        "CandidateFrame",
+        {
+            "frame_type": frame_type,
+            "slots": slots,
+            "source_observation_ids": list(source_observation_ids),
+            "ontology_revision_id": ontology_revision_id,
+            "extractor_run_id": extractor_run_id,
+        },
+    )
+
+
 def stable_external_graph_import_id(
     *,
     source_system: str,
@@ -280,6 +345,29 @@ def stable_external_graph_import_id(
             "source_ref": source_ref,
             "extractor_run_id": extractor_run_id,
             "imported_at": imported_at,
+        },
+    )
+
+
+def stable_canonical_frame_id(
+    *,
+    scope_type: str,
+    scope_id: str,
+    frame_type: str,
+    canonical_summary: str,
+    source_candidate_frame_ids: list[str] | tuple[str, ...],
+    ontology_revision_id: str,
+) -> str:
+    return stable_resource_contract_id(
+        "frame",
+        "CanonicalFrame",
+        {
+            "scope_type": scope_type,
+            "scope_id": scope_id,
+            "frame_type": frame_type,
+            "canonical_summary": canonical_summary,
+            "source_candidate_frame_ids": list(source_candidate_frame_ids),
+            "ontology_revision_id": ontology_revision_id,
         },
     )
 
@@ -370,6 +458,25 @@ def stable_canonical_graph_revision_id(
             "canonical_relation_ids": list(canonical_relation_ids),
             "created_at": created_at,
             "parent_revision_id": parent_revision_id,
+        },
+    )
+
+
+def stable_domain_pack_id(
+    *,
+    domain_name: str,
+    scope_type: str,
+    scope_id: str,
+    ontology_revision_id: str,
+) -> str:
+    return stable_resource_contract_id(
+        "domainpack",
+        "DomainPackDefinition",
+        {
+            "domain_name": domain_name,
+            "scope_type": scope_type,
+            "scope_id": scope_id,
+            "ontology_revision_id": ontology_revision_id,
         },
     )
 

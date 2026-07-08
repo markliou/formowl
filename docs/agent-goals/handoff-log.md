@@ -4,6 +4,31 @@ Use this log for short cross-session and cross-machine notes. Keep detailed
 status in each role's goal file and task completion in
 `docs/implementation-task-breakdown.md`.
 
+## 2026-07-08
+
+- Issue #28 Ontology v2 coordination-frame experiment checkpoint completed on
+  `codex/issue-28-ontology-v2-experiment`: first fixture-only slice adds
+  candidate-only mention/business-object/frame contracts, domain pack
+  definitions, four synthetic cross-domain email cases, and
+  `scripts/ontology_v2_coordination_frame_experiment.py`. The current public
+  aggregate compares `current_flat_atom_path` with
+  `ontology_v2_coordination_frame_path`: 4 scenarios, 7 domain packs, 20
+  candidate frames, 10 competency questions, 16/40 flat-path answerability,
+  40/40 v2 frame-path answerability, delta +24. This is only a candidate-only
+  fixture answerability checkpoint for GitHub issue #28; it does not complete
+  the issue and does not claim real parser readiness, canonical type/KG writes,
+  user graph writes, wiki projection, raw access, or production readiness.
+  `CandidateFrame` and `CanonicalFrame` instances are restricted to
+  coordination core frame types in this slice; domain-specific specializations
+  remain validated in `DomainPackDefinition` until an explicit domain-pack
+  binding field is added. Canonical verification passed: focused issue #28
+  dev-container tests ran 8 OK; experiment CLI plus saved-report validation
+  exited 0; full unittest ran 589 OK in 835.252s; full Ruff check and
+  format-check passed. Reviewer gate passed 3/3 with `Herschel`, `Bohr`, and
+  `Mencius`. Next issue #28 iteration should add actual current-path rerun,
+  explicit domain-pack specialization binding, mention-only/no-obligation
+  negatives, and an `OpenQuestion` fixture frame.
+
 ## 2026-07-07
 
 - #21 ontology-native factorial redesign started after the user challenged the

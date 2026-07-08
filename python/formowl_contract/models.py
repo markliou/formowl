@@ -15,11 +15,16 @@ from .primitives import (
     stable_asset_id as stable_asset_id,
     stable_asset_metadata_hash as stable_asset_metadata_hash,
     stable_candidate_atom_id as stable_candidate_atom_id,
+    stable_candidate_business_object_id as stable_candidate_business_object_id,
+    stable_candidate_frame_id as stable_candidate_frame_id,
+    stable_candidate_mention_id as stable_candidate_mention_id,
     stable_candidate_relation_id as stable_candidate_relation_id,
     stable_canonical_atom_id as stable_canonical_atom_id,
     stable_canonical_entity_id as stable_canonical_entity_id,
+    stable_canonical_frame_id as stable_canonical_frame_id,
     stable_canonical_graph_revision_id as stable_canonical_graph_revision_id,
     stable_canonical_relation_id as stable_canonical_relation_id,
+    stable_domain_pack_id as stable_domain_pack_id,
     stable_external_graph_import_id as stable_external_graph_import_id,
     stable_extractor_run_id as stable_extractor_run_id,
     stable_ingestion_job_id as stable_ingestion_job_id,
@@ -72,6 +77,25 @@ USER_GRAPH_PROFILE_STATUS_VALUES = ("active", "archived")
 USER_GRAPH_REVISION_STATUS_VALUES = ("draft", "reviewed", "published", "archived")
 TYPE_TIER_VALUES = ("core", "extension", "promoted")
 TYPE_STATUS_VALUES = ("candidate", "active", "deprecated", "archived")
+COORDINATION_FRAME_TYPE_VALUES = (
+    "Request",
+    "Commitment",
+    "Decision",
+    "Assignment",
+    "StatusUpdate",
+    "StatusChange",
+    "Blocker",
+    "Risk",
+    "Issue",
+    "OpenQuestion",
+    "Deadline",
+    "Dependency",
+    "Escalation",
+    "Change",
+    "Exception",
+    "Constraint",
+)
+MENTION_TYPE_VALUES = ("Actor", "WorkObject", "Value", "EvidenceSpan", "DomainHint")
 CORE_SUPERTYPE_IDS = (
     "Person",
     "Organization",
@@ -97,6 +121,8 @@ UserGraphProfileStatus = Literal[*USER_GRAPH_PROFILE_STATUS_VALUES]
 UserGraphRevisionStatus = Literal[*USER_GRAPH_REVISION_STATUS_VALUES]
 TypeTier = Literal[*TYPE_TIER_VALUES]
 TypeStatus = Literal[*TYPE_STATUS_VALUES]
+CoordinationFrameType = Literal[*COORDINATION_FRAME_TYPE_VALUES]
+MentionType = Literal[*MENTION_TYPE_VALUES]
 _GRAPH_REFERENCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _RAW_PUBLIC_REFERENCE_PATTERNS = (
     re.compile(r"[A-Za-z]:[\\/]"),
@@ -221,6 +247,14 @@ def _validate_string_list(
 
 def _validate_non_empty_unique_string_list(value: Any, field_name: str) -> None:
     _validate_string_list(value, field_name, allow_empty=False)
+    if any(not item for item in value):
+        raise ContractValidationError(f"{field_name} entries must be non-empty strings")
+    if len(set(value)) != len(value):
+        raise ContractValidationError(f"{field_name} entries must be unique")
+
+
+def _validate_unique_string_list(value: Any, field_name: str) -> None:
+    _validate_string_list(value, field_name)
     if any(not item for item in value):
         raise ContractValidationError(f"{field_name} entries must be non-empty strings")
     if len(set(value)) != len(value):
@@ -661,6 +695,43 @@ class TypeAlignmentCandidate:
 
 
 @dataclass(frozen=True)
+class DomainPackDefinition:
+    domain_pack_id: str
+    domain_name: str
+    scope_type: str
+    scope_id: str
+    ontology_revision_id: str
+    business_object_types: list[str]
+    frame_specializations: dict[str, str]
+    created_at: str
+    created_by: str
+    aliases: dict[str, list[str]] = field(default_factory=dict)
+    metadata: dict[str, JsonValue] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "DomainPackDefinition":
+        domain_pack = validate_domain_pack_definition(value)
+        return cls(
+            domain_pack_id=str(domain_pack["domain_pack_id"]),
+            domain_name=str(domain_pack["domain_name"]),
+            scope_type=str(domain_pack["scope_type"]),
+            scope_id=str(domain_pack["scope_id"]),
+            ontology_revision_id=str(domain_pack["ontology_revision_id"]),
+            business_object_types=list(domain_pack["business_object_types"]),
+            frame_specializations=dict(domain_pack["frame_specializations"]),
+            created_at=str(domain_pack["created_at"]),
+            created_by=str(domain_pack["created_by"]),
+            aliases={key: list(value) for key, value in domain_pack.get("aliases", {}).items()},
+            metadata=dict(domain_pack.get("metadata", {})),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data = to_plain(self)
+        validate_domain_pack_definition(data)
+        return data
+
+
+@dataclass(frozen=True)
 class McpResultEnvelope:
     result_type: str
     status: McpResultStatus
@@ -1022,6 +1093,133 @@ class CandidateRelation:
 
 
 @dataclass(frozen=True)
+class CandidateMention:
+    candidate_mention_id: str
+    source_observation_ids: list[str]
+    mention_type: MentionType
+    label: str
+    evidence_span: dict[str, JsonValue]
+    confidence: float
+    extractor_run_id: str
+    ontology_revision_id: str
+    status: CandidateStatus
+    requires_review: bool = True
+    normalized_value: str | None = None
+    created_at: str | None = None
+    properties: dict[str, JsonValue] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "CandidateMention":
+        mention = validate_candidate_mention(value)
+        return cls(
+            candidate_mention_id=str(mention["candidate_mention_id"]),
+            source_observation_ids=list(mention["source_observation_ids"]),
+            mention_type=mention["mention_type"],
+            label=str(mention["label"]),
+            evidence_span=dict(mention["evidence_span"]),
+            confidence=float(mention["confidence"]),
+            extractor_run_id=str(mention["extractor_run_id"]),
+            ontology_revision_id=str(mention["ontology_revision_id"]),
+            status=mention["status"],
+            requires_review=bool(mention.get("requires_review", True)),
+            normalized_value=mention.get("normalized_value"),
+            created_at=mention.get("created_at"),
+            properties=dict(mention.get("properties", {})),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data = to_plain(self)
+        validate_candidate_mention(data)
+        return data
+
+
+@dataclass(frozen=True)
+class CandidateBusinessObject:
+    candidate_business_object_id: str
+    object_type: str
+    label: str
+    source_mention_ids: list[str]
+    source_observation_ids: list[str]
+    ontology_revision_id: str
+    confidence: float
+    extractor_run_id: str
+    status: CandidateStatus
+    requires_review: bool = True
+    domain_hints: list[str] = field(default_factory=list)
+    created_at: str | None = None
+    properties: dict[str, JsonValue] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "CandidateBusinessObject":
+        business_object = validate_candidate_business_object(value)
+        return cls(
+            candidate_business_object_id=str(business_object["candidate_business_object_id"]),
+            object_type=str(business_object["object_type"]),
+            label=str(business_object["label"]),
+            source_mention_ids=list(business_object["source_mention_ids"]),
+            source_observation_ids=list(business_object["source_observation_ids"]),
+            ontology_revision_id=str(business_object["ontology_revision_id"]),
+            confidence=float(business_object["confidence"]),
+            extractor_run_id=str(business_object["extractor_run_id"]),
+            status=business_object["status"],
+            requires_review=bool(business_object.get("requires_review", True)),
+            domain_hints=list(business_object.get("domain_hints", [])),
+            created_at=business_object.get("created_at"),
+            properties=dict(business_object.get("properties", {})),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data = to_plain(self)
+        validate_candidate_business_object(data)
+        return data
+
+
+@dataclass(frozen=True)
+class CandidateFrame:
+    candidate_frame_id: str
+    frame_type: str
+    source_observation_ids: list[str]
+    ontology_revision_id: str
+    slots: dict[str, JsonValue]
+    evidence_span: dict[str, JsonValue]
+    confidence: float
+    extractor_run_id: str
+    status: CandidateStatus
+    requires_review: bool = True
+    source_mention_ids: list[str] = field(default_factory=list)
+    source_business_object_ids: list[str] = field(default_factory=list)
+    domain_hints: list[str] = field(default_factory=list)
+    created_at: str | None = None
+    properties: dict[str, JsonValue] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "CandidateFrame":
+        frame = validate_candidate_frame(value)
+        return cls(
+            candidate_frame_id=str(frame["candidate_frame_id"]),
+            frame_type=str(frame["frame_type"]),
+            source_observation_ids=list(frame["source_observation_ids"]),
+            ontology_revision_id=str(frame["ontology_revision_id"]),
+            slots=dict(frame["slots"]),
+            evidence_span=dict(frame["evidence_span"]),
+            confidence=float(frame["confidence"]),
+            extractor_run_id=str(frame["extractor_run_id"]),
+            status=frame["status"],
+            requires_review=bool(frame.get("requires_review", True)),
+            source_mention_ids=list(frame.get("source_mention_ids", [])),
+            source_business_object_ids=list(frame.get("source_business_object_ids", [])),
+            domain_hints=list(frame.get("domain_hints", [])),
+            created_at=frame.get("created_at"),
+            properties=dict(frame.get("properties", {})),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data = to_plain(self)
+        validate_candidate_frame(data)
+        return data
+
+
+@dataclass(frozen=True)
 class ExternalGraphImport:
     external_graph_import_id: str
     source_system: str
@@ -1210,6 +1408,53 @@ class CanonicalRelation:
     def to_dict(self) -> dict[str, Any]:
         data = to_plain(self)
         validate_canonical_relation(data)
+        return data
+
+
+@dataclass(frozen=True)
+class CanonicalFrame:
+    canonical_frame_id: str
+    scope_type: str
+    scope_id: str
+    frame_type: str
+    canonical_summary: str
+    ontology_revision_id: str
+    status: CanonicalRecordStatus
+    source_candidate_frame_ids: list[str]
+    source_observation_ids: list[str]
+    source_refs: list[SourceRef | dict[str, Any]]
+    evidence_snapshot_ids: list[str]
+    citations: list[Citation | dict[str, Any]]
+    slots: dict[str, JsonValue]
+    confidence: float
+    created_at: str
+    metadata: dict[str, JsonValue] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "CanonicalFrame":
+        frame = validate_canonical_frame(value)
+        return cls(
+            canonical_frame_id=str(frame["canonical_frame_id"]),
+            scope_type=str(frame["scope_type"]),
+            scope_id=str(frame["scope_id"]),
+            frame_type=str(frame["frame_type"]),
+            canonical_summary=str(frame["canonical_summary"]),
+            ontology_revision_id=str(frame["ontology_revision_id"]),
+            status=frame["status"],
+            source_candidate_frame_ids=list(frame["source_candidate_frame_ids"]),
+            source_observation_ids=list(frame["source_observation_ids"]),
+            source_refs=list(frame["source_refs"]),
+            evidence_snapshot_ids=list(frame["evidence_snapshot_ids"]),
+            citations=list(frame["citations"]),
+            slots=dict(frame["slots"]),
+            confidence=float(frame["confidence"]),
+            created_at=str(frame["created_at"]),
+            metadata=dict(frame.get("metadata", {})),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data = to_plain(self)
+        validate_canonical_frame(data)
         return data
 
 
@@ -2325,6 +2570,85 @@ def validate_type_alignment_candidate(value: Any) -> dict[str, Any]:
     return candidate
 
 
+def validate_domain_pack_definition(value: Any) -> dict[str, Any]:
+    domain_pack = _require_mapping(value, "DomainPackDefinition")
+    _require_fields(
+        domain_pack,
+        (
+            "domain_pack_id",
+            "domain_name",
+            "scope_type",
+            "scope_id",
+            "ontology_revision_id",
+            "business_object_types",
+            "frame_specializations",
+            "created_at",
+            "created_by",
+        ),
+        "DomainPackDefinition",
+    )
+    _validate_string_fields(
+        domain_pack,
+        (
+            "domain_pack_id",
+            "domain_name",
+            "scope_type",
+            "scope_id",
+            "ontology_revision_id",
+            "created_at",
+            "created_by",
+        ),
+        "DomainPackDefinition",
+    )
+    for field_name in (
+        "domain_pack_id",
+        "scope_type",
+        "scope_id",
+        "ontology_revision_id",
+        "created_by",
+    ):
+        _validate_graph_reference_id(domain_pack[field_name], f"DomainPackDefinition.{field_name}")
+    _validate_iso_timestamp(domain_pack["created_at"], "DomainPackDefinition.created_at")
+    _validate_unique_string_list(
+        domain_pack["business_object_types"],
+        "DomainPackDefinition.business_object_types",
+    )
+    frame_specializations = domain_pack["frame_specializations"]
+    if not isinstance(frame_specializations, dict) or not frame_specializations:
+        raise ContractValidationError(
+            "DomainPackDefinition.frame_specializations must be a non-empty object"
+        )
+    for frame_type, parent_frame_type in frame_specializations.items():
+        if not isinstance(frame_type, str) or not frame_type:
+            raise ContractValidationError(
+                "DomainPackDefinition.frame_specializations keys must be strings"
+            )
+        _validate_coordination_frame_type(
+            parent_frame_type,
+            f"DomainPackDefinition.frame_specializations.{frame_type}",
+        )
+    aliases = domain_pack.get("aliases", {})
+    if not isinstance(aliases, dict):
+        raise ContractValidationError("DomainPackDefinition.aliases must be an object")
+    for key, values in aliases.items():
+        if not isinstance(key, str) or not key:
+            raise ContractValidationError("DomainPackDefinition.aliases keys must be strings")
+        _validate_unique_string_list(values, f"DomainPackDefinition.aliases.{key}")
+    if not isinstance(domain_pack.get("metadata", {}), dict):
+        raise ContractValidationError("DomainPackDefinition.metadata must be an object")
+    _validate_no_raw_public_reference(
+        {
+            "domain_name": domain_pack["domain_name"],
+            "business_object_types": domain_pack["business_object_types"],
+            "frame_specializations": frame_specializations,
+            "aliases": aliases,
+            "metadata": domain_pack.get("metadata", {}),
+        },
+        "DomainPackDefinition",
+    )
+    return domain_pack
+
+
 def validate_permission_scope(value: Any) -> dict[str, Any]:
     permission_scope = _require_mapping(value, "PermissionScope")
     _require_fields(permission_scope, ("scope_type", "visibility"), "PermissionScope")
@@ -2698,6 +3022,234 @@ def validate_candidate_relation(value: Any) -> dict[str, Any]:
     return relation
 
 
+def validate_candidate_mention(value: Any) -> dict[str, Any]:
+    mention = _require_mapping(value, "CandidateMention")
+    _require_fields(
+        mention,
+        (
+            "candidate_mention_id",
+            "source_observation_ids",
+            "mention_type",
+            "label",
+            "evidence_span",
+            "confidence",
+            "extractor_run_id",
+            "ontology_revision_id",
+            "status",
+            "requires_review",
+        ),
+        "CandidateMention",
+    )
+    _validate_string_fields(
+        mention,
+        (
+            "candidate_mention_id",
+            "mention_type",
+            "label",
+            "extractor_run_id",
+            "ontology_revision_id",
+            "status",
+        ),
+        "CandidateMention",
+    )
+    _validate_optional_string_fields(
+        mention,
+        ("normalized_value", "created_at"),
+        "CandidateMention",
+    )
+    _validate_optional_iso_timestamp_fields(mention, ("created_at",), "CandidateMention")
+    _validate_graph_reference_id(
+        mention["candidate_mention_id"],
+        "CandidateMention.candidate_mention_id",
+    )
+    _validate_graph_reference_id(
+        mention["extractor_run_id"],
+        "CandidateMention.extractor_run_id",
+    )
+    _validate_graph_reference_id(
+        mention["ontology_revision_id"],
+        "CandidateMention.ontology_revision_id",
+    )
+    _validate_provenance_id_list(
+        mention["source_observation_ids"],
+        "CandidateMention.source_observation_ids",
+        allow_empty=False,
+    )
+    if mention["mention_type"] not in MENTION_TYPE_VALUES:
+        raise ContractValidationError("CandidateMention.mention_type is not supported")
+    if not mention["label"]:
+        raise ContractValidationError("CandidateMention.label cannot be empty")
+    if not isinstance(mention["evidence_span"], dict) or not mention["evidence_span"]:
+        raise ContractValidationError("CandidateMention.evidence_span must be a non-empty object")
+    _validate_confidence(mention["confidence"], "CandidateMention.confidence")
+    _validate_candidate_status_fields(mention, "CandidateMention")
+    if not isinstance(mention.get("properties", {}), dict):
+        raise ContractValidationError("CandidateMention.properties must be an object")
+    _validate_no_raw_public_reference(
+        {
+            "label": mention["label"],
+            "normalized_value": mention.get("normalized_value"),
+            "evidence_span": mention["evidence_span"],
+            "properties": mention.get("properties", {}),
+        },
+        "CandidateMention",
+    )
+    return mention
+
+
+def validate_candidate_business_object(value: Any) -> dict[str, Any]:
+    business_object = _require_mapping(value, "CandidateBusinessObject")
+    _require_fields(
+        business_object,
+        (
+            "candidate_business_object_id",
+            "object_type",
+            "label",
+            "source_mention_ids",
+            "source_observation_ids",
+            "ontology_revision_id",
+            "confidence",
+            "extractor_run_id",
+            "status",
+            "requires_review",
+        ),
+        "CandidateBusinessObject",
+    )
+    _validate_string_fields(
+        business_object,
+        (
+            "candidate_business_object_id",
+            "object_type",
+            "label",
+            "ontology_revision_id",
+            "extractor_run_id",
+            "status",
+        ),
+        "CandidateBusinessObject",
+    )
+    _validate_optional_string_fields(business_object, ("created_at",), "CandidateBusinessObject")
+    _validate_optional_iso_timestamp_fields(
+        business_object,
+        ("created_at",),
+        "CandidateBusinessObject",
+    )
+    _validate_graph_reference_id(
+        business_object["candidate_business_object_id"],
+        "CandidateBusinessObject.candidate_business_object_id",
+    )
+    _validate_graph_reference_id(
+        business_object["ontology_revision_id"],
+        "CandidateBusinessObject.ontology_revision_id",
+    )
+    _validate_graph_reference_id(
+        business_object["extractor_run_id"],
+        "CandidateBusinessObject.extractor_run_id",
+    )
+    _validate_unique_provenance_id_list(
+        business_object["source_mention_ids"],
+        "CandidateBusinessObject.source_mention_ids",
+        allow_empty=False,
+    )
+    _validate_unique_provenance_id_list(
+        business_object["source_observation_ids"],
+        "CandidateBusinessObject.source_observation_ids",
+        allow_empty=False,
+    )
+    _validate_unique_string_list(
+        business_object.get("domain_hints", []),
+        "CandidateBusinessObject.domain_hints",
+    )
+    _validate_confidence(
+        business_object["confidence"],
+        "CandidateBusinessObject.confidence",
+    )
+    _validate_candidate_status_fields(business_object, "CandidateBusinessObject")
+    if not isinstance(business_object.get("properties", {}), dict):
+        raise ContractValidationError("CandidateBusinessObject.properties must be an object")
+    _validate_no_raw_public_reference(
+        {
+            "object_type": business_object["object_type"],
+            "label": business_object["label"],
+            "domain_hints": business_object.get("domain_hints", []),
+            "properties": business_object.get("properties", {}),
+        },
+        "CandidateBusinessObject",
+    )
+    return business_object
+
+
+def validate_candidate_frame(value: Any) -> dict[str, Any]:
+    frame = _require_mapping(value, "CandidateFrame")
+    _require_fields(
+        frame,
+        (
+            "candidate_frame_id",
+            "frame_type",
+            "source_observation_ids",
+            "ontology_revision_id",
+            "slots",
+            "evidence_span",
+            "confidence",
+            "extractor_run_id",
+            "status",
+            "requires_review",
+        ),
+        "CandidateFrame",
+    )
+    _validate_string_fields(
+        frame,
+        (
+            "candidate_frame_id",
+            "frame_type",
+            "ontology_revision_id",
+            "extractor_run_id",
+            "status",
+        ),
+        "CandidateFrame",
+    )
+    _validate_optional_string_fields(frame, ("created_at",), "CandidateFrame")
+    _validate_optional_iso_timestamp_fields(frame, ("created_at",), "CandidateFrame")
+    _validate_graph_reference_id(frame["candidate_frame_id"], "CandidateFrame.candidate_frame_id")
+    _validate_graph_reference_id(
+        frame["ontology_revision_id"], "CandidateFrame.ontology_revision_id"
+    )
+    _validate_graph_reference_id(frame["extractor_run_id"], "CandidateFrame.extractor_run_id")
+    _validate_provenance_id_list(
+        frame["source_observation_ids"],
+        "CandidateFrame.source_observation_ids",
+        allow_empty=False,
+    )
+    _validate_unique_provenance_id_list(
+        frame.get("source_mention_ids", []),
+        "CandidateFrame.source_mention_ids",
+    )
+    _validate_unique_provenance_id_list(
+        frame.get("source_business_object_ids", []),
+        "CandidateFrame.source_business_object_ids",
+    )
+    _validate_unique_string_list(frame.get("domain_hints", []), "CandidateFrame.domain_hints")
+    _validate_coordination_frame_type(frame["frame_type"], "CandidateFrame.frame_type")
+    if not isinstance(frame["slots"], dict) or not frame["slots"]:
+        raise ContractValidationError("CandidateFrame.slots must be a non-empty object")
+    if not isinstance(frame["evidence_span"], dict) or not frame["evidence_span"]:
+        raise ContractValidationError("CandidateFrame.evidence_span must be a non-empty object")
+    _validate_confidence(frame["confidence"], "CandidateFrame.confidence")
+    _validate_candidate_status_fields(frame, "CandidateFrame")
+    if not isinstance(frame.get("properties", {}), dict):
+        raise ContractValidationError("CandidateFrame.properties must be an object")
+    _validate_no_raw_public_reference(
+        {
+            "frame_type": frame["frame_type"],
+            "slots": frame["slots"],
+            "evidence_span": frame["evidence_span"],
+            "domain_hints": frame.get("domain_hints", []),
+            "properties": frame.get("properties", {}),
+        },
+        "CandidateFrame",
+    )
+    return frame
+
+
 def validate_external_graph_import(value: Any) -> dict[str, Any]:
     graph_import = _require_mapping(value, "ExternalGraphImport")
     _require_fields(
@@ -2926,6 +3478,74 @@ def validate_canonical_relation(value: Any) -> dict[str, Any]:
     if not isinstance(relation.get("properties", {}), dict):
         raise ContractValidationError("CanonicalRelation.properties must be an object")
     return relation
+
+
+def validate_canonical_frame(value: Any) -> dict[str, Any]:
+    frame = _require_mapping(value, "CanonicalFrame")
+    _require_fields(
+        frame,
+        (
+            "canonical_frame_id",
+            "scope_type",
+            "scope_id",
+            "frame_type",
+            "canonical_summary",
+            "ontology_revision_id",
+            "status",
+            "source_candidate_frame_ids",
+            "source_observation_ids",
+            "source_refs",
+            "evidence_snapshot_ids",
+            "citations",
+            "slots",
+            "confidence",
+            "created_at",
+        ),
+        "CanonicalFrame",
+    )
+    _validate_string_fields(
+        frame,
+        (
+            "canonical_frame_id",
+            "scope_type",
+            "scope_id",
+            "frame_type",
+            "canonical_summary",
+            "ontology_revision_id",
+            "status",
+            "created_at",
+        ),
+        "CanonicalFrame",
+    )
+    _validate_canonical_scope(frame, "CanonicalFrame")
+    _validate_graph_reference_id(frame["canonical_frame_id"], "CanonicalFrame.canonical_frame_id")
+    _validate_graph_reference_id(
+        frame["ontology_revision_id"], "CanonicalFrame.ontology_revision_id"
+    )
+    _validate_coordination_frame_type(frame["frame_type"], "CanonicalFrame.frame_type")
+    _validate_provenance_id_list(
+        frame["source_candidate_frame_ids"],
+        "CanonicalFrame.source_candidate_frame_ids",
+        allow_empty=False,
+    )
+    _validate_canonical_source_fields(frame, "CanonicalFrame")
+    if not isinstance(frame["slots"], dict) or not frame["slots"]:
+        raise ContractValidationError("CanonicalFrame.slots must be a non-empty object")
+    _validate_canonical_record_status(frame["status"], "CanonicalFrame.status")
+    _validate_confidence(frame["confidence"], "CanonicalFrame.confidence")
+    _validate_iso_timestamp(frame["created_at"], "CanonicalFrame.created_at")
+    if not isinstance(frame.get("metadata", {}), dict):
+        raise ContractValidationError("CanonicalFrame.metadata must be an object")
+    _validate_no_raw_public_reference(
+        {
+            "frame_type": frame["frame_type"],
+            "canonical_summary": frame["canonical_summary"],
+            "slots": frame["slots"],
+            "metadata": frame.get("metadata", {}),
+        },
+        "CanonicalFrame",
+    )
+    return frame
 
 
 def validate_canonical_graph_revision(value: Any) -> dict[str, Any]:
@@ -3307,6 +3927,18 @@ def _validate_candidate_common(candidate: dict[str, Any], name: str) -> None:
         raise ContractValidationError(f"{name}.status is not supported")
     if not isinstance(candidate["requires_review"], bool):
         raise ContractValidationError(f"{name}.requires_review must be boolean")
+
+
+def _validate_candidate_status_fields(candidate: dict[str, Any], name: str) -> None:
+    if candidate["status"] not in CANDIDATE_STATUS_VALUES:
+        raise ContractValidationError(f"{name}.status is not supported")
+    if not isinstance(candidate["requires_review"], bool):
+        raise ContractValidationError(f"{name}.requires_review must be boolean")
+
+
+def _validate_coordination_frame_type(value: Any, field_name: str) -> None:
+    if value not in COORDINATION_FRAME_TYPE_VALUES:
+        raise ContractValidationError(f"{field_name} must extend a coordination core frame")
 
 
 def _validate_core_supertype_id(value: Any, field_name: str) -> None:

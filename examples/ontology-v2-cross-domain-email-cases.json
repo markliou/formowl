@@ -1,0 +1,62 @@
+{
+  "fixture_id": "ontology_v2_cross_domain_email_cases_v1",
+  "created_at": "2026-07-08T00:00:00+00:00",
+  "cases": [
+    {
+      "scenario_id": "sales_rd_quote_firmware",
+      "domains": ["sales", "rd"],
+      "from": "sales_manager",
+      "sent_at": "2026-07-08T09:00:00+00:00",
+      "subject": "Quote v2 firmware capability",
+      "body_lines": [
+        "Request | actor=sales_manager | target=quote_v2 | target_type=Quote | requested_action=deliver revised quotation | deadline=2026-07-20 | follow_up_owner=rd_owner | obligation=coordination_obligation | domain_hints=sales,rd",
+        "Blocker | actor=rd_owner | target=firmware_capability | target_type=FirmwareSpec | blocker=capability unconfirmed | deadline=2026-07-12 | follow_up_owner=rd_owner | obligation=coordination_obligation | domain_hints=rd,sales",
+        "Commitment | actor=rd_owner | target=firmware_capability | target_type=FirmwareSpec | committed_action=confirm capability | deadline=2026-07-12 | fallback=use old specification if no conclusion by 2026-07-12 | follow_up_owner=rd_owner | obligation=coordination_obligation | domain_hints=rd,sales",
+        "Decision | actor=sales_director | target=quote_v2 | target_type=Quote | decision=send quote only after firmware confirmation | deadline=2026-07-20 | follow_up_owner=sales_manager | obligation=coordination_obligation | domain_hints=sales,rd",
+        "StatusUpdate | actor=sales_manager | target=quote_v2 | target_type=Quote | status=waiting for firmware confirmation | changed_status=quote blocked by technical confirmation | deadline=2026-07-12 | follow_up_owner=sales_manager | obligation=coordination_obligation | domain_hints=sales,rd"
+      ]
+    },
+    {
+      "scenario_id": "warehouse_production_material_shortage",
+      "domains": ["warehouse", "production"],
+      "from": "warehouse_lead",
+      "sent_at": "2026-07-08T10:00:00+00:00",
+      "subject": "Material shortage affects WO-774",
+      "body_lines": [
+        "Request | actor=production_planner | target=material_allocation | target_type=InventoryItem | requested_action=reserve substitute material for WO-774 | deadline=2026-07-10 | follow_up_owner=warehouse_lead | obligation=coordination_obligation | domain_hints=warehouse,production",
+        "Blocker | actor=warehouse_lead | target=WO-774 | target_type=WorkOrder | blocker=main material is short | dependency=substitute material approval | deadline=2026-07-10 | follow_up_owner=warehouse_lead | obligation=coordination_obligation | domain_hints=warehouse,production",
+        "Commitment | actor=warehouse_lead | target=material_allocation | target_type=InventoryItem | committed_action=confirm substitute stock count | deadline=2026-07-09 | follow_up_owner=warehouse_lead | obligation=coordination_obligation | domain_hints=warehouse,production",
+        "Decision | actor=production_manager | target=WO-774 | target_type=WorkOrder | decision=delay line start until substitute material is confirmed | deadline=2026-07-10 | follow_up_owner=production_planner | obligation=coordination_obligation | domain_hints=production,warehouse",
+        "StatusUpdate | actor=production_planner | target=WO-774 | target_type=WorkOrder | status=line start delayed | changed_status=production delayed by material shortage | deadline=2026-07-10 | follow_up_owner=production_planner | obligation=coordination_obligation | domain_hints=production,warehouse"
+      ]
+    },
+    {
+      "scenario_id": "finance_sales_invoice_payment",
+      "domains": ["finance", "sales"],
+      "from": "finance_controller",
+      "sent_at": "2026-07-08T11:00:00+00:00",
+      "subject": "Invoice payment approval and customer commitment",
+      "body_lines": [
+        "Request | actor=account_manager | target=invoice_INV-2044 | target_type=Invoice | requested_action=confirm payment approval before customer renewal call | deadline=2026-07-15 | follow_up_owner=finance_controller | obligation=coordination_obligation | domain_hints=finance,sales",
+        "Blocker | actor=finance_controller | target=invoice_INV-2044 | target_type=Invoice | blocker=payment term mismatch requires approval | dependency=approval from finance director | deadline=2026-07-14 | follow_up_owner=finance_controller | obligation=coordination_obligation | domain_hints=finance,sales",
+        "Commitment | actor=account_manager | target=customer_renewal | target_type=Opportunity | committed_action=tell customer final payment status after finance approval | deadline=2026-07-15 | follow_up_owner=account_manager | obligation=coordination_obligation | domain_hints=sales,finance",
+        "Decision | actor=finance_director | target=invoice_INV-2044 | target_type=Invoice | decision=approve payment after corrected term note is attached | deadline=2026-07-14 | follow_up_owner=finance_controller | obligation=coordination_obligation | domain_hints=finance,sales",
+        "StatusUpdate | actor=finance_controller | target=invoice_INV-2044 | target_type=Invoice | status=pending corrected term note | changed_status=payment approval waiting on documentation | deadline=2026-07-14 | follow_up_owner=finance_controller | obligation=coordination_obligation | domain_hints=finance,sales"
+      ]
+    },
+    {
+      "scenario_id": "management_project_dependency_open_question",
+      "domains": ["management", "project"],
+      "from": "program_manager",
+      "sent_at": "2026-07-08T12:00:00+00:00",
+      "subject": "Launch decision and unresolved dependency",
+      "body_lines": [
+        "Request | actor=program_manager | target=launch_readiness | target_type=Project | requested_action=prepare launch readiness update | deadline=2026-07-18 | follow_up_owner=project_owner | obligation=coordination_obligation | domain_hints=management,project",
+        "Blocker | actor=project_owner | target=audit_dependency | target_type=Task | blocker=security audit slot not confirmed | dependency=security audit schedule | deadline=2026-07-16 | follow_up_owner=security_owner | obligation=coordination_obligation | domain_hints=project,management",
+        "Commitment | actor=security_owner | target=audit_dependency | target_type=Task | committed_action=send audit slot options | deadline=2026-07-16 | follow_up_owner=security_owner | obligation=coordination_obligation | domain_hints=project,management",
+        "Decision | actor=steering_committee | target=launch_readiness | target_type=Project | decision=keep launch date tentative until audit slot is confirmed | deadline=2026-07-18 | follow_up_owner=program_manager | obligation=coordination_obligation | domain_hints=management,project",
+        "StatusUpdate | actor=program_manager | target=launch_readiness | target_type=Project | status=tentative launch pending audit | changed_status=launch readiness blocked by audit dependency | deadline=2026-07-18 | follow_up_owner=program_manager | obligation=coordination_obligation | domain_hints=management,project"
+      ]
+    }
+  ]
+}
