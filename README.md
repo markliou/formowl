@@ -444,6 +444,9 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - `docs/ontology-v2-coordination-frames.md` - issue #28 coordination-frame
   ontology method, synthetic email-first experiment, fixed redacted replay
   effectiveness result, ablation results, and PST safety boundary.
+- `docs/multimodal-ontology-term-extraction-decision.md` - data-driven
+  multimodal term, mention, tokenizer, and ontology-selection decision for
+  future PDF, PowerPoint, audio, OCR, mail, and mixed Chinese/English inputs.
 - `docs/kg-eval-package.md` - packaged KG evaluation facade and integration
   contract for the System Backbone Agent.
 - `docs/kg-bert-runtime.md` - optional BERT/SentenceTransformer KG

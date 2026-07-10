@@ -46,6 +46,28 @@ This keeps "Customer" in one workspace and "Client" in another workspace as a
 reviewable alignment candidate. It does not grant either owner access to the
 other scope's evidence and does not merge the type state.
 
+### Data-Driven Term And Mention Extraction
+
+The next ontology method decision is recorded in
+`docs/multimodal-ontology-term-extraction-decision.md`. FormOwl should add a
+data-driven term and mention extraction layer before ontology selection,
+coordination frames, entity resolution, and KG fusion. This layer is broader
+than a tokenizer: it uses corpus phrase mining, CJK span generation, layout and
+role context, gazetteers, weak labels, and ablations to produce scored
+candidate mentions and typed mention candidates.
+
+This decision is motivated by the current regex tokenizer limit and the
+operator-provided procurement PST result: KG structure helped, but the current
+ontology operators did not beat KG-only. A stable ontology therefore needs
+better upstream term/mention evidence before it can safely promote data-driven
+types or domain packs.
+
+Large raw corpora are enough for vocabulary adaptation, phrase mining, weak
+labels, and gazetteer induction. They are not, by themselves, a reliable source
+of supervised typed labels. Trained models may be added later, but their output
+remains candidate-only and must record model version, training manifest hash,
+policy id, confidence, and source evidence.
+
 ## Ontology v2 Coordination-Frame Experiment
 
 Issue #28 adds an ontology-method experiment because the scoped type ontology
@@ -133,6 +155,61 @@ The value of the 10,000-case run is count-level stress evidence: hard ontology
 now produces 3,000 hard false rejects, KG without ontology produces 1,100
 false positives, and the hybrid still has 100 false positives plus 900 partial
 answers. It is not an independent held-out production claim.
+
+The EXM lexical ontology follow-up then tested all currently available EXM PST
+parsed corpora with the user's requested `jieba + SentencePiece` tokenizer
+plan across 50,000 generated cases. The aggregate result is tracked at
+`experiments/kg_ontology_v2_coordination/results/exm_lexical_ontology_50000_summary_2026-07-09.json`.
+Regex current KG and regex current ontology each scored 10,000/50,000, with
+0/40,000 positive cases solved but all no-match and permission-denied guards
+passing. The `jieba + SentencePiece` KG and ontology arms each scored
+16,811/50,000, solving 11,811/40,000 positive cases while failing all 5,000
+no-match guards. This is a real positive-retrieval effect, but not a stable
+retrieval or ontology method yet. The ontology-scored lexical arm tied the
+lexical KG arm exactly, so the run shows tokenizer/lexical graph lift rather
+than incremental ontology lift. The largest lexical component covered nearly
+the full corpus, which confirms that tokenizer output must pass term-quality,
+IDF/document-spread, component-splitting, and no-match calibration before any
+ontology promotion or production retrieval claim.
+
+The next EXM follow-up implemented that correction as a graph-neural
+programmatic ontology policy. The safe aggregate result is tracked at
+`experiments/kg_ontology_v2_coordination/results/exm_programmatic_ontology_50000_summary_2026-07-09.json`.
+This arm compiles ontology behavior before KG edge construction: document-
+frequency gates, protected mention typing, deterministic weak-label MLP
+candidate scoring, and exact-candidate-only ontology retrieval. On the same
+50,000 generated
+cases, graph-neural programmatic ontology scores 43,369/50,000 overall,
+33,369/40,000 positive cases, 5,000/5,000 no-match guards, and 5,000/5,000
+permission-denied guards. By contrast, the raw `jieba + SentencePiece`
+ontology arm scores 18,176/50,000, solves 13,176/40,000 positive cases, and
+still fails every no-match guard. This is the first EXM evidence that ontology
+helps when it is compiled into executable graph policy rather than applied as
+post-hoc labels. The measured lift is for the bundled executable policy, not a
+claim that any single subcomponent explains the full delta. The neural scorer
+is a deterministic CPU-bounded weak-label MLP
+`formowl_exm_weak_label_cjk_mlp_v1`, with model hash and weak-label training
+counts recorded in the tracked summary. It remains candidate-layer evidence,
+not canonical ontology promotion or production retrieval readiness.
+
+The no-training follow-up then compared that weak-label MLP against two
+controls on the same EXM/PST generated benchmark shape. The safe aggregate
+result is tracked at
+`experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json`.
+The `graph_data_driven_programmatic_ontology` arm uses no neural scorer and
+scores 33,277/50,000 overall, with 23,277/40,000 positive cases and all
+no-match and permission-denied guards passing. The
+`graph_frozen_profile_programmatic_ontology` arm uses a hashable fixed CJK
+scoring profile with zero training examples and zero training epochs. It scores
+43,976/50,000 overall, with 33,976/40,000 positive cases and all guards
+passing. The weak-label MLP arm scores 43,369/50,000 in the same run, so the
+frozen profile is ahead by 607 passed cases. Current method judgment: the
+executable programmatic ontology layer is effective, but the self-trained
+weak-label MLP is not justified as the default candidate scorer. Use the
+frozen-profile programmatic policy as the stable candidate-layer default, and
+treat BGE-M3 through FlagEmbedding as a future optional true frozen neural
+adapter that must run in a separate neural experiment/runtime image rather
+than the default dev container.
 
 ## Multi-User KG And Fusion Experiments
 

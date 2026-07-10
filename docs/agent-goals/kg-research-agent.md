@@ -369,6 +369,122 @@ Reviewer gate passed 3/3:
 Anscombe's optional seed-shape validation note and Russell's optional explicit
 claim-boundary assertion note were implemented before final verification.
 
+## Procurement Full-PST Real-Case Follow-Up
+
+2026-07-09: the user supplied a larger operator-provided procurement PST
+fixture and asked to test it using the same preserved-workdir full-PST
+domain-hard evaluation pattern. The fixture was kept in ignored private test
+data and the public reports contain only safe hash/count/status/timing output.
+No raw message content, subject, sender, recipient, attachment name, concrete
+message id, query text, parser command, object locator, or private path is
+included in tracked docs.
+
+Safe input counts:
+
+- PST size: `21150409728` bytes.
+- Messages: `27912`.
+- Body segments: `60923`.
+- Observations: `306741`.
+- Mail evidence rows: `163764`.
+- Parser warnings: `46562`.
+
+Validated results:
+
+| Arm | Passed | Pass rate | Positive passed | No-match passed | Permission-denied passed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Baseline retrieval | 11/100 | 1100 bp | 1/80 | 0/10 | 10/10 |
+| Candidate KG fusion | 19/100 | 1900 bp | 9/80 | 0/10 | 10/10 |
+| Ontology-guided KG | 19/100 | 1900 bp | 9/80 | 0/10 | 10/10 |
+| Best ordered ontology factorial arm | 19/100 | 1900 bp | 9/80 | 0/10 | 10/10 |
+
+Interpretation:
+
+- The real procurement PST is materially harder than the prior 3GB
+  operator-provided full-PST fixture in the domain-hard harness: baseline
+  retrieval fell from 20/100 to 11/100.
+- Candidate KG structure still helps, improving from 11/100 to 19/100.
+- The current ontology-guided arm adds no benefit over non-BERT candidate KG on
+  this data. It also does not regress the aggregate score.
+- The ordered factorial search evaluated 326 arms; 0 beat KG-only, 2 tied
+  KG-only, and 324 were worse. The best arm had zero ontology operators, which
+  means KG-only remained the best observed configuration under this harness.
+- Type-evidence coverage is weak for this corpus: 6083 typed candidate nodes,
+  3448 typed components, 7564 ontology-supported relations, 998 basis points
+  type-evidence coverage, 54840 missing-type-evidence nodes, and 3833
+  conflicting-type-evidence nodes.
+
+Verification:
+
+```text
+Dev-container baseline run:
+  mail_full_pst_domain_hard_case_eval.py with the procurement PST fixture
+  -> completed; validation blockers=[]
+
+Dev-container KG fusion:
+  mail_full_pst_domain_hard_kg_fusion_eval.py
+  -> completed; validation blockers=[]
+
+Dev-container ontology ablation:
+  mail_full_pst_domain_hard_ontology_ablation_eval.py
+  -> completed; validation blockers=[]
+
+Dev-container ontology factorial:
+  mail_full_pst_domain_hard_ontology_factorial_eval.py
+  -> completed; validation blockers=[]
+```
+
+Timing notes:
+
+- Baseline import: `1929481ms`.
+- Baseline scoring: `583823ms`.
+- KG fusion total: `18034ms`.
+- Ontology ablation total: `18684ms`.
+- Ontology factorial total: `190861ms`.
+
+Claim boundary:
+
+- This is an operator-provided real-PST domain-hard retrieval and
+  candidate-only KG/ontology ablation measurement.
+- It is not business answer generation, not a general PST parser readiness
+  claim, not actual ChatGPT upload/file-transfer evidence, not production
+  iframe readiness, not live PostgreSQL readiness, not production worker
+  leasing, not raw-mail-access evidence, not a KG/wiki write claim, and not
+  production readiness.
+- It does not change the broad KG real-evidence acceptance blockers and does
+  not support a broad completion claim.
+
+## Multimodal Term Extraction And Ontology Selection Decision
+
+2026-07-09: after the procurement PST result and the user's concern about
+future audio, PDF, PowerPoint, OCR, and other multimodal data, the ontology
+direction was fixed in
+`docs/multimodal-ontology-term-extraction-decision.md`.
+
+Decision summary:
+
+- Add a data-driven term and mention extraction layer before ontology selection,
+  coordination-frame extraction, entity resolution, and KG fusion.
+- Treat tokenization as a replaceable adapter inside a broader mention/term
+  extraction layer, not as the ontology itself.
+- Keep regex tokenization for ASCII identifiers, email addresses, domains, and
+  part-number-like strings, but add CJK span generation and corpus-adapted term
+  mining for Chinese and mixed-language enterprise text.
+- Use large raw corpora for vocabulary adaptation, phrase mining, gazetteer
+  induction, weak labels, alias discovery, and hard-case selection.
+- Do not claim reliable supervised mention/type classification from raw data
+  alone; typed training requires governed weak labels, review outcomes, active
+  learning, or held-out annotations.
+- Model or LLM outputs remain candidate-only and cannot directly mutate
+  canonical ontology/type/graph/user-graph/wiki state.
+- Ontology promotion must be decided by policy and measured data: coverage,
+  stability, KG/QA lift, ablation contribution, conflict rate,
+  permission-boundary risk, and mapping to closed core or scoped promoted
+  types.
+
+Implementation status: design decision only. No production Chinese tokenizer,
+typed mention classifier, ontology auto-promotion, or multimodal production
+quality claim is made.
+
 Two different acceptance layers currently exist:
 
 - Main-repo KG research acceptance slice:
@@ -438,6 +554,371 @@ adjudication and must not be represented as completed human adjudication.
 product-level limit boundary. It records that production adapter readiness and
 enterprise latency/scalability are not claimed by this broad KG real-evidence
 completion.
+
+## Latest Completed EXM 50,000-Case Lexical Ontology Evaluation
+
+2026-07-09: the user requested all EXM PST corpora be evaluated with the
+planned `jieba + SentencePiece` tokenizer stack plus the current KG/ontology
+ablation method at 50,000 generated cases. This active evaluation slice is now
+complete and tracked as an aggregate-only public summary:
+
+```text
+experiments/kg_ontology_v2_coordination/results/exm_lexical_ontology_50000_summary_2026-07-09.json
+```
+
+Input and case shape:
+
+- Parsed EXM corpus count: 2.
+- Body segments: 65,736.
+- Message keys: 30,013.
+- Thread keys: 23,511.
+- Cases: 50,000 total, with 40,000 positive cross-message cases, 5,000
+  no-match guards, and 5,000 permission-denied guards.
+- Split: 5,000 dev and 45,000 holdout.
+
+Aggregate result:
+
+| Arm | Passed | Positive passed | No-match passed | Permission-denied passed |
+| --- | ---: | ---: | ---: | ---: |
+| Regex current KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Regex current ontology | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece KG | 16,811/50,000 | 11,811/40,000 | 0/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece ontology | 16,811/50,000 | 11,811/40,000 | 0/5,000 | 5,000/5,000 |
+
+Interpretation:
+
+- The tokenizer stack has a real positive-retrieval effect over regex-only
+  matching: 11,811 positive cases passed where regex passed none.
+- The tokenizer stack is not stable enough as a retrieval method: it failed all
+  no-match guards and produced a largest lexical component covering nearly the
+  full corpus.
+- The ontology-scored lexical arm tied the lexical KG arm exactly, so this run
+  shows lexical/KG lift, not incremental ontology lift.
+- The next method step is term-quality scoring, IDF/document-spread caps,
+  component splitting/community detection, alias/entity checks, and no-match
+  calibration before any ontology promotion or production retrieval claim.
+
+Verification:
+
+```text
+Dev container focused lexical ontology tests:
+  python -m unittest discover -s tests -p 'test_mail_full_pst_exm_lexical_ontology_eval_script.py'
+  -> 6 tests OK
+
+Dev container full unittest:
+  python -m unittest discover -s tests
+  -> 615 tests OK
+
+Dev container lint/format:
+  ruff check python tests scripts experiments/kg_ontology_v2_coordination
+  -> passed
+  ruff format --check python tests scripts experiments/kg_ontology_v2_coordination
+  -> 226 files already formatted
+
+Saved public report validator:
+  mail_full_pst_exm_lexical_ontology_eval.py --validate-report
+  -> passed
+
+Summary JSON parse:
+  python3 -m json.tool on the tracked summary
+  -> passed
+
+Patch whitespace:
+  git diff --check
+  -> passed
+```
+
+Reviewer gate:
+
+- Engineering reviewer `Ptolemy` initially blocked because saved-report
+  validation trusted the stored completion metric instead of recomputing the
+  50,000-case completion predicate. The validator now recomputes completion
+  and rejects stale completion/claim values; a focused tamper regression test
+  covers this. Ptolemy re-reviewed and agreed.
+- Governance/safety reviewer `Dalton` agreed with no blockers.
+- Research-method reviewer `Lagrange` agreed with no blockers and noted that
+  the generated holdout cases should not be represented as independent
+  annotated holdout evidence. The current claim boundary already treats the
+  run as generated candidate-layer evidence.
+- Reviewer gate passed 3/3.
+
+Claim boundary:
+
+- This is an operator-provided private EXM full-PST parsed-corpus,
+  candidate-only KG/ontology/tokenizer measurement.
+- The tracked summary and docs do not include raw mail content, query text,
+  subjects, senders, message ids, observation ids, attachment names, private
+  manifest rows, parser commands, or private paths.
+- This is not business answer generation, not a general PST parser-readiness
+  claim, not formal ontology governance completion, not raw-mail access, not
+  canonical graph/type/user-graph/wiki mutation, and not production readiness.
+
+## Latest Completed Programmatic Ontology Redesign Slice
+
+2026-07-09: after the user rejected the prior ontology method as ineffective,
+the EXM 50,000-case evaluator was extended with a graph-neural programmatic
+ontology arm. This implements ontology as executable policy before KG edge
+construction, not as post-hoc type labels.
+
+Current method:
+
+- Keep `jieba + SentencePiece` as an upstream term/mention candidate generator.
+- Compile a candidate ontology policy from graph statistics and weak-label
+  neural scoring before building KG edges.
+- Use document-frequency gates to reject over-broad or low-value terms.
+- Keep protected mention candidates for explicit organization, contact, and
+  business identifier patterns.
+- Use a CPU-bounded deterministic weak-label MLP scorer for CJK term
+  candidates. The safe report records
+  `formowl_exm_weak_label_cjk_mlp_v1`, the neural model hash, weak-label
+  training counts, epoch count, and feature count.
+- Require an exact compiled term candidate for ontology-guided retrieval;
+  category-only fallback is disabled for this policy.
+- Keep all output candidate-only, with no canonical graph/type/user-graph/wiki
+  mutation.
+
+Tracked aggregate summary:
+
+```text
+experiments/kg_ontology_v2_coordination/results/exm_programmatic_ontology_50000_summary_2026-07-09.json
+```
+
+Aggregate result:
+
+| Arm | Passed | Positive passed | No-match passed | Permission-denied passed |
+| --- | ---: | ---: | ---: | ---: |
+| Regex current KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Regex current ontology | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece KG | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece ontology | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Graph-neural programmatic ontology | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
+
+Interpretation:
+
+- The revised ontology method has real measured effect on this generated EXM
+  benchmark: `+25,193` passed cases versus raw `jieba + SentencePiece`
+  ontology and `+33,369` passed cases versus regex current ontology.
+- The measured lift is for the bundled executable policy. It should not be
+  attributed to document-frequency gates, protected terms, neural scoring, or
+  exact-candidate-only retrieval in isolation without a separate subcomponent
+  ablation.
+- It fixes the previous false-positive failure mode: raw lexical ontology
+  still fails all no-match guards, while the programmatic ontology arm passes
+  all no-match guards.
+- It preserves the permission-denied guard in this evaluator.
+- The largest programmatic component is still large, so community detection or
+  stricter component splitting remains a next optimization before production
+  retrieval claims.
+
+Verification:
+
+```text
+Dev container focused lexical ontology tests:
+  python -m unittest discover -s tests -p 'test_mail_full_pst_exm_lexical_ontology_eval_script.py'
+  -> 17 tests OK
+
+Dev container full EXM programmatic evaluation:
+  mail_full_pst_exm_lexical_ontology_eval.py with both parsed EXM workdirs
+  -> completed; validation blockers=[]
+
+Dev container saved public report validator:
+  mail_full_pst_exm_lexical_ontology_eval.py --validate-report
+  -> passed, blockers=[]
+
+Dev container full unittest:
+  python -m unittest discover -s tests
+  -> 626 tests OK
+
+Dev container lint/format:
+  ruff check python tests scripts experiments/kg_ontology_v2_coordination
+  -> passed
+  ruff format --check python tests scripts experiments/kg_ontology_v2_coordination
+  -> 226 files already formatted
+
+Tracked summary JSON parse:
+  python3 -m json.tool on the tracked summary
+  -> passed
+
+Patch whitespace:
+  git diff --check
+  -> passed
+```
+
+Reviewer-gate status:
+
+- Engineering reviewer `Maxwell` initially blocked because the public report
+  validator accepted tampered arm summaries. The validator now recomputes
+  summary hashes, pass-rate math, bucket totals, best-arm selection, and
+  aggregate deltas. Follow-up engineering reviewer `Darwin` then found that
+  result-kind summary counts could still be tampered. The validator now
+  requires positive/no-match/permission-denied passed counts to sum to the
+  passed count, stay within corresponding case-kind totals, and match the
+  bucket passed counts; focused tamper and swapped-count regression tests cover
+  this. Follow-up engineering reviewer `Arendt` then found negative result-kind
+  and bucket passed counts could cancel out in those sums. The validator now
+  rejects negative or bool public counts, and a focused negative-count
+  regression test covers this. Follow-up engineering reviewer `Euclid` then
+  found bucket passed counts could be moved to a nonexistent bucket while
+  preserving sums and recomputing the summary hash. The validator now requires
+  bucket passed keys to be a subset of bucket count keys and rejects any
+  bucket passed count above its bucket total; focused fake-bucket and
+  bucket-overflow regression tests cover this. Follow-up engineering reviewer
+  `Galileo` then found bucket totals themselves could be moved into a fake
+  bucket. The validator now requires every arm's bucket totals to match the
+  report-level `case_bucket_counts`. Follow-up engineering reviewer
+  `Confucius` then found report-level bucket totals themselves could be moved
+  into a fake bucket. The validator now restricts report-level case buckets to
+  the case generator's allowed bucket set and checks access/no-match/positive
+  bucket totals against the corresponding case-kind counts; a focused
+  report-level fake-bucket regression test covers this.
+- Reviewer gate passed 3/3 after fixes: engineering reviewer `Halley`
+  returned `AGREE` after the validator hardening, governance/safety reviewer
+  `Socrates` returned `AGREE`, and research-method reviewer `Bohr` returned
+  `AGREE` after the weak-label MLP/model-evidence and bundled-policy claim
+  fixes.
+- Governance/safety reviewer `Socrates` agreed with no blockers.
+- Research-method reviewer `Descartes` initially blocked because the old
+  "neural" scorer was a hand-weighted sigmoid heuristic. The scorer is now a
+  deterministic weak-label MLP with model hash and training-count evidence,
+  and the docs now treat the result as a bundled-policy effect rather than a
+  single-component causal claim.
+- The dev container image was rebuilt from `containers/dev/Dockerfile` after
+  adding the experiment tokenizer dependencies (`jieba` and `sentencepiece`) to
+  the dev/experiment dependency set, so the 50,000-case evaluation is
+  canonically rerunnable in `formowl-dev:local`.
+
+Claim boundary:
+
+- This is a private EXM parsed-corpus generated-case KG/ontology measurement.
+- The tracked public summary is aggregate/hash/count/status only and excludes
+  raw mail content, query payloads, subjects, senders, message ids,
+  observation ids, attachment names, private rows, private paths, parser
+  commands, SQL, and backend internals.
+- This is not business answer generation, not general PST parser readiness, not
+  formal ontology governance completion, not raw-mail access, not canonical
+  graph/type/user-graph/wiki mutation, and not production readiness.
+
+## Latest Completed No-Training Programmatic Ontology Follow-Up
+
+2026-07-10: the accepted ablation goal is complete. The EXM/PST 50,000-case
+evaluator now compares the weak-label MLP programmatic ontology arm against
+two no-training controls in the same run: a pure data-driven programmatic arm
+and a hashable frozen-profile programmatic arm. This is an additive
+candidate-layer evaluation slice, not a canonical ontology/type mutation and
+not a broad KG real-evidence completion claim.
+
+Tracked aggregate summary:
+
+```text
+experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json
+```
+
+Input and case shape:
+
+- Parsed EXM/PST corpus count: 2.
+- Body segments: 65,736.
+- Message keys: 30,013.
+- Thread keys: 23,511.
+- Cases: 50,000 total, with 40,000 positive cross-message cases, 5,000
+  no-match guards, and 5,000 permission-denied guards.
+- Public report hash after the frozen-profile hash-binding fix:
+  `sha256:51ebc7826f79e11f31bcb4b9801b8ec47cbf0f19ea3db31dac5fe23c92d96401`.
+
+Aggregate result:
+
+| Arm | Passed | Positive passed | No-match passed | Permission-denied passed |
+| --- | ---: | ---: | ---: | ---: |
+| Regex current KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Regex current ontology | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece KG | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece ontology | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Data-driven programmatic ontology | 33,277/50,000 | 23,277/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Frozen-profile programmatic ontology | 43,976/50,000 | 33,976/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Weak-label MLP programmatic ontology | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
+
+Current method judgment:
+
+- The executable programmatic ontology layer is effective in this generated
+  EXM benchmark.
+- The self-trained weak-label MLP is not justified as the stable default
+  candidate scorer: the zero-training frozen profile scored 607 more passed
+  cases than the MLP while preserving all no-match and permission-denied
+  guards.
+- The frozen profile's actual scoring coefficients are now data-bound in
+  `_FROZEN_PROFILE_SCORE_RULES` and included in the frozen model hash
+  `sha256:c01706e9fda8f9dd1f8565fbf29e871b80471fa55eae4ddefd006ea1bf63a623`;
+  a focused regression test verifies this hash binding.
+- BGE-M3 through FlagEmbedding remains the preferred future optional true
+  frozen neural adapter, but it was not executed in this default-dev-container
+  slice. The default container intentionally has `jieba` and `sentencepiece`,
+  not torch, transformers, FlagEmbedding, GLiNER, HanLP, or CKIP.
+
+Verification:
+
+```text
+Dev container focused lexical ontology tests:
+  python -m unittest discover -s tests -p 'test_mail_full_pst_exm_lexical_ontology_eval_script.py'
+  -> 21 tests OK
+
+Dev container full EXM no-training programmatic evaluation:
+  mail_full_pst_exm_lexical_ontology_eval.py with both parsed EXM/PST workdirs
+  -> completed; validation blockers=[]
+
+Dev container saved public report validator:
+  mail_full_pst_exm_lexical_ontology_eval.py --validate-report
+  -> passed, blockers=[]
+
+Dev container full unittest:
+  python -m unittest discover -s tests
+  -> 630 tests OK
+
+Dev container lint/format:
+  ruff check python tests scripts experiments/kg_ontology_v2_coordination
+  -> passed
+  ruff format --check python tests scripts experiments/kg_ontology_v2_coordination
+  -> 226 files already formatted
+
+KG acceptance:
+  python scripts/kg_research_acceptance_suite.py
+  -> passed_with_explicit_limits, only expected limits
+
+Tracked summary JSON parse:
+  python3 -m json.tool on the tracked summary
+  -> passed
+
+Patch whitespace:
+  git diff --check
+  -> passed
+```
+
+Reviewer-gate status:
+
+- Research-method reviewer `Gibbs` agreed that the same-run ablation supports
+  the no-training conclusion and that BGE-M3 is only framed as a future
+  optional adapter.
+- Governance/safety reviewer `Singer` agreed that the slice is aggregate-only,
+  candidate-layer only, and has no canonical graph/type/user-graph/wiki
+  mutation or raw-mail-access claim.
+- Engineering reviewer `Meitner` initially blocked because the frozen-profile
+  model hash did not include the actual scoring coefficients. The blocker was
+  fixed by data-binding scoring rules and adding
+  `test_frozen_profile_model_hash_binds_scoring_rules`; the 50,000-case run,
+  validator, focused tests, full tests, lint, and summary parse were rerun
+  after the fix. Meitner re-reviewed and agreed.
+- Reviewer gate passed 3/3.
+
+Claim boundary:
+
+- This is a private EXM/PST parsed-corpus generated-case KG/ontology
+  measurement.
+- The tracked public summary is aggregate/hash/count/status only and excludes
+  raw mail content, query payloads, subjects, senders, message ids,
+  observation ids, attachment names, private rows, private paths, parser
+  commands, SQL, and backend internals.
+- This is not business answer generation, not general PST parser readiness, not
+  formal ontology governance completion, not raw-mail access, not canonical
+  graph/type/user-graph/wiki mutation, not BGE-M3 execution evidence, and not
+  production readiness.
 
 ## Returned For Rework
 

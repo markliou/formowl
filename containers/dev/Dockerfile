@@ -31,7 +31,9 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
 
 RUN python -m pip install --no-cache-dir \
     "coverage[toml]>=7.6" \
+    "jieba>=0.42.1,<0.43" \
     "pre-commit>=4.0" \
-    "ruff==0.8.6"
+    "ruff==0.8.6" \
+    "sentencepiece>=0.2,<0.3"
 
 CMD ["bash"]

@@ -4,6 +4,114 @@ Use this log for short cross-session and cross-machine notes. Keep detailed
 status in each role's goal file and task completion in
 `docs/implementation-task-breakdown.md`.
 
+## 2026-07-10
+
+- No-training programmatic ontology ablation completed for the accepted active
+  goal. The EXM/PST 50,000-case evaluator now compares regex, raw
+  `jieba + SentencePiece`, data-driven programmatic ontology, frozen-profile
+  programmatic ontology, and the prior weak-label MLP programmatic ontology in
+  one run over the same generated benchmark shape. Safe tracked aggregate:
+  `experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json`.
+  Result: regex current ontology 10,000/50,000; raw `jieba + SentencePiece`
+  ontology 18,176/50,000 with 0/5,000 no-match guards; data-driven
+  programmatic ontology 33,277/50,000 with all guards passing; frozen-profile
+  programmatic ontology 43,976/50,000 with 33,976/40,000 positive cases,
+  5,000/5,000 no-match guards, and 5,000/5,000 denied guards; weak-label MLP
+  programmatic ontology 43,369/50,000 with 33,369/40,000 positives and all
+  guards passing. Current method judgment: the executable programmatic
+  ontology layer is effective, but the self-trained weak-label MLP is not
+  justified as the stable default because the zero-training frozen profile is
+  +607 passed cases better in this run. Engineering reviewer `Meitner` blocked
+  once because the frozen profile model hash did not include the actual
+  scoring coefficients; the blocker was fixed by data-binding
+  `_FROZEN_PROFILE_SCORE_RULES` into both scoring and `model_hash`, then
+  rerunning the 50,000-case evaluation. Verification after the fix:
+  dev-container focused lexical ontology tests 21 OK, full 50,000-case
+  evaluation completed, saved public report validation blockers=[], full
+  unittest 630 OK, Ruff check/format-check passed, KG acceptance
+  `passed_with_explicit_limits`, tracked summary JSON parse passed, and
+  `git diff --check` passed. Reviewer gate passed 3/3: `Meitner`
+  engineering agreed after the hash-binding fix, `Singer` governance/safety
+  agreed, and `Gibbs` research method agreed. BGE-M3 through FlagEmbedding is
+  documented as the preferred future optional true frozen neural adapter, but
+  it was not executed in this default-dev-container slice. Claim remains
+  candidate-only and excludes raw mail content, query payloads, private rows or
+  paths, canonical graph/type/user-graph/wiki mutation, BGE execution evidence,
+  parser readiness, business answer generation, and production readiness.
+
+## 2026-07-09
+
+- Programmatic ontology redesign slice completed after the user rejected the
+  prior ontology as ineffective. The EXM 50,000-case evaluator now includes
+  `graph_neural_programmatic_ontology`, which compiles ontology behavior before
+  KG edge construction using document-frequency graph gates, protected mention
+  typing, deterministic weak-label MLP CJK candidate scoring, and
+  exact-candidate-only ontology retrieval. Safe tracked aggregate:
+  `experiments/kg_ontology_v2_coordination/results/exm_programmatic_ontology_50000_summary_2026-07-09.json`.
+  Result: regex current ontology 10,000/50,000, raw `jieba + SentencePiece`
+  ontology 18,176/50,000 with 0/5,000 no-match guards, and graph-neural
+  programmatic ontology 43,369/50,000 with 33,369/40,000 positive cases,
+  5,000/5,000 no-match guards, and 5,000/5,000 denied guards. The slice also
+  fixed an identifier-regex bug where plain lowercase words were being
+  promoted into `id:*` candidates. Maxwell's reviewer blocker on tampered arm
+  summaries led to validator recomputation of summary hashes, pass-rate math,
+  bucket totals, best-arm selection, and aggregate deltas. Descartes's
+  reviewer blocker on unsupported "neural" wording led to replacing the
+  hand-weighted sigmoid heuristic with deterministic weak-label MLP scorer
+  `formowl_exm_weak_label_cjk_mlp_v1` and model-hash/training-count evidence.
+  Darwin's follow-up blocker on result-kind summary counts led to validator
+  checks that positive/no-match/permission-denied passed counts sum correctly,
+  stay within case-kind totals, and match bucket passed counts.
+  Canonical verification passed for the rebuilt dev-container focused lexical
+  ontology tests 12 OK, full 50,000-case evaluation, saved public report
+  validation blockers=[], and full unittest 621 OK; full verification is
+  recorded in the KG goal file.
+  Claim remains candidate-only and excludes raw
+  mail content, query payloads, private rows/paths, canonical graph/type/user-
+  graph/wiki mutation, parser readiness, and production readiness.
+  Arendt's follow-up blocker on negative public counts was fixed by rejecting
+  negative or bool arm summary and bucket counts before validating derived
+  sums. Euclid's follow-up blocker on fake bucket passed keys was fixed by
+  requiring bucket passed keys to be bucket-count subsets and requiring each
+  bucket passed count to stay within its bucket total. Galileo's follow-up
+  blocker on fake bucket totals was fixed by requiring each arm's bucket totals
+  to match the report-level `case_bucket_counts`. Latest canonical
+  verification: focused lexical ontology tests 16 OK, full unittest 625 OK,
+  full 50,000-case evaluation completed, saved public report validation
+  blockers=[], Ruff check/format-check passed, tracked summary JSON parse
+  passed, and `git diff --check` passed.
+  Confucius's follow-up blocker on report-level fake buckets was fixed by
+  restricting report-level case buckets to the case generator's allowed bucket
+  set and checking access/no-match/positive bucket totals against case-kind
+  counts. Latest canonical verification after that fix: focused lexical
+  ontology tests 17 OK, full unittest 626 OK, saved public report validation
+  blockers=[], Ruff check/format-check passed, and `git diff --check` passed.
+  Reviewer gate passed 3/3 after fixes: `Halley` engineering agreed,
+  `Socrates` governance/safety agreed, and `Bohr` research method agreed.
+
+- EXM 50,000-case lexical ontology evaluation completed for the user's
+  `jieba + SentencePiece` tokenizer plan over all currently available EXM PST
+  parsed corpora. The safe tracked aggregate is
+  `experiments/kg_ontology_v2_coordination/results/exm_lexical_ontology_50000_summary_2026-07-09.json`.
+  Result: regex KG and regex ontology each passed 10,000/50,000, with 0/40,000
+  positive cases and all no-match/denied guards passing; the jieba plus
+  SentencePiece KG and ontology arms each passed 16,811/50,000, with
+  11,811/40,000 positive cases, 0/5,000 no-match guards, and all denied guards
+  passing. This
+  proves a positive lexical retrieval effect but also a severe false-positive
+  risk; ontology added no incremental lift over lexical KG in this run. The
+  experiment script now uses indexed component evidence and bounded fallback
+  scans so 50,000-case scoring completes, and SentencePiece trainer output is
+  redirected to private logs. Ptolemy's reviewer blocker on saved-report
+  validation was fixed by recomputing completion during validation and adding
+  a tamper regression test. Reviewer gate passed 3/3 with `Ptolemy`, `Dalton`,
+  and `Lagrange`. Canonical verification passed: focused lexical ontology
+  tests 6 OK, full unittest 615 OK, full Ruff check/format-check, saved public
+  report validation, tracked summary JSON parse, and `git diff --check`.
+  Claim remains candidate-only: no raw mail content, query text, private rows,
+  private paths, canonical graph/type/user-graph/wiki mutation, or production
+  readiness is claimed.
+
 ## 2026-07-07
 
 - #21 ontology-native factorial redesign started after the user challenged the
@@ -2127,3 +2235,28 @@ status in each role's goal file and task completion in
   method. Anscombe's optional seed-shape validation note and Russell's optional
   explicit claim-boundary assertion note were implemented before final
   verification.
+- 2026-07-09 procurement full-PST real-case follow-up: the user supplied a
+  larger operator-provided procurement PST fixture in ignored private test
+  data. The same preserved-workdir full-PST domain-hard pattern was run without
+  exposing raw mail content or private paths in public reports. Safe counts:
+  21,150,409,728 bytes, 27,912 messages, 60,923 body segments, 306,741
+  observations, 163,764 mail evidence rows, and 46,562 parser warnings.
+  Validated public reports all had `blockers=[]`. Baseline retrieval scored
+  11/100, candidate KG fusion scored 19/100, ontology-guided KG scored 19/100,
+  and the 326-arm ordered ontology factorial search also topped out at 19/100.
+  No factorial arm beat KG-only, 2 tied it, and 324 were worse; the best arm
+  used zero ontology operators. The current ontology layer therefore does not
+  improve this real procurement corpus, though KG structure still adds 8
+  passed cases over baseline. Claim boundary remains candidate-only
+  retrieval/KG/ontology measurement: no business answer generation, no general
+  parser readiness, no raw-mail access, no canonical graph/type/user-graph/wiki
+  writes, no production readiness, and no broad KG completion claim.
+- 2026-07-09 multimodal ontology upstream decision: added
+  `docs/multimodal-ontology-term-extraction-decision.md` to fix the next method
+  boundary before future audio, PDF, PowerPoint, OCR, and mixed-language inputs.
+  The decision is data-driven first: add a shared term/mention extraction layer
+  before ontology selection, keep tokenizer adapters replaceable, use raw
+  corpora for phrase mining and weak labels, require governed labels before
+  supervised typed classification claims, and keep LLM/model outputs
+  candidate-only. This is a design decision only, not a production tokenizer or
+  multimodal extraction claim.

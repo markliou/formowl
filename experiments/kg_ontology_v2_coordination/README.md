@@ -111,3 +111,148 @@ Current 10,000-case generated stress result:
 | KG + soft ontology gate | 0.74 | 0.936396 | 0 | 0 |
 | Coordination frame v2 | 0.82 | 0.925859 | 100 | 0 |
 | Hybrid soft gate + v2 frame | 0.90 | 0.981133 | 100 | 0 |
+
+## Operator-Provided Procurement PST Follow-Up
+
+The procurement real-case follow-up summary is tracked at:
+
+```text
+results/procurement_full_pst_domain_hard_summary_2026-07-09.json
+```
+
+This artifact is a redacted aggregate summary only. It does not include raw
+mail content, query text, message identifiers, subjects, senders, attachment
+names, private manifest rows, PST hashes, or private paths.
+
+Result summary:
+
+| Arm | Passed | Positive passed | No-match passed | Permission-denied passed |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline retrieval | 11/100 | 1/80 | 0/10 | 10/10 |
+| Candidate KG fusion | 19/100 | 9/80 | 0/10 | 10/10 |
+| Ontology-guided KG | 19/100 | 9/80 | 0/10 | 10/10 |
+| Best ordered ontology factorial arm | 19/100 | 9/80 | 0/10 | 10/10 |
+
+Interpretation: candidate KG structure helped on the procurement corpus, but
+the current ontology-guided arm did not improve beyond KG-only. The 326-arm
+ordered ontology factorial search found 0 arms better than KG-only, 2 tied
+KG-only, and 324 worse; the best arm used zero ontology operators.
+
+This is an operator-provided full-PST domain-hard retrieval and candidate-only
+KG/ontology measurement. It is not business answer generation, not a general
+PST parser-readiness claim, not raw-mail access, not canonical graph/type/user
+graph/wiki mutation, and not production readiness.
+
+## EXM Lexical Ontology 50,000-Case Follow-Up
+
+The EXM lexical ontology follow-up summary is tracked at:
+
+```text
+results/exm_lexical_ontology_50000_summary_2026-07-09.json
+```
+
+This run uses all currently available EXM PST parsed corpora as private input
+and compares the existing regex policy against the user's requested
+`jieba + SentencePiece` lexical policy across 50,000 generated cases. The
+public artifact is aggregate-only: it excludes raw mail text, query text,
+subjects, senders, message ids, observation ids, attachment names, private
+paths, parser commands, and private manifest rows.
+
+Result summary:
+
+| Arm | Passed | Positive passed | No-match passed | Permission-denied passed |
+| --- | ---: | ---: | ---: | ---: |
+| Regex current KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Regex current ontology | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece KG | 16,811/50,000 | 11,811/40,000 | 0/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece ontology | 16,811/50,000 | 11,811/40,000 | 0/5,000 | 5,000/5,000 |
+
+Interpretation: the lexical tokenizer plan has a real positive-retrieval
+effect versus regex-only matching, but it is not yet stable enough. It created
+very large lexical components and failed every no-match guard case. The
+ontology-scored arm tied the lexical KG arm exactly, so this run does not show
+incremental ontology lift beyond the lexical KG. The next method step is not
+to promote this tokenizer output directly; it is to add data-driven term
+quality scoring, IDF or document-spread caps, component splitting/community
+detection, and no-match calibration before ontology promotion or any
+production retrieval claim.
+
+## EXM Programmatic Ontology 50,000-Case Follow-Up
+
+The graph-neural programmatic ontology follow-up summary is tracked at:
+
+```text
+results/exm_programmatic_ontology_50000_summary_2026-07-09.json
+```
+
+This is the first executable-policy version of the user's revised ontology
+direction. It keeps `jieba + SentencePiece` as an upstream candidate generator,
+then compiles an ontology policy before KG edge construction:
+
+- document-frequency gates reject low-value or over-broad terms;
+- protected mention typing keeps explicit organization, contact, and business
+  identifier candidates;
+- a CPU-bounded deterministic weak-label MLP assigns candidate scores to CJK
+  term mentions, with model hash and weak-label training counts in the safe
+  summary;
+- ontology retrieval requires an exact compiled term candidate and cannot use
+  category-only fallback.
+
+Result summary:
+
+| Arm | Passed | Positive passed | No-match passed | Permission-denied passed |
+| --- | ---: | ---: | ---: | ---: |
+| Regex current KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Regex current ontology | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece KG | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece ontology | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Graph-neural programmatic ontology | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
+
+Interpretation: the revised ontology method now has measured effect. The
+improvement is measured for the bundled executable graph policy before edge
+construction, not for any single subcomponent in isolation and not from adding
+more post-hoc type labels. The raw lexical arms still fail every no-match
+guard; the programmatic policy keeps all no-match and permission-denied guards
+while recovering most positive cases. The largest programmatic component
+remains large, so community detection or stricter component splitting is still
+needed before production retrieval claims.
+
+## EXM No-Training Programmatic Ontology 50,000-Case Follow-Up
+
+The no-training programmatic ontology control summary is tracked at:
+
+```text
+results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json
+```
+
+This run keeps the same parsed corpus hash, 50,000-case manifest shape,
+`jieba + SentencePiece` candidate generator, document-frequency gates,
+protected mention handling, and exact-candidate-only ontology retrieval. It
+adds two training-free controls:
+
+- `graph_data_driven_programmatic_ontology`: data-driven CJK term admission
+  with no neural scoring and zero training examples;
+- `graph_frozen_profile_programmatic_ontology`: a hashable fixed CJK scoring
+  profile with zero training examples and zero training epochs.
+
+Result summary:
+
+| Arm | Passed | Positive passed | No-match passed | Permission-denied passed |
+| --- | ---: | ---: | ---: | ---: |
+| Regex current KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Regex current ontology | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece KG | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece ontology | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Data-driven programmatic ontology | 33,277/50,000 | 23,277/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Frozen-profile programmatic ontology | 43,976/50,000 | 33,976/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Weak-label MLP programmatic ontology | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
+
+Interpretation: both no-training programmatic controls beat raw lexical
+ontology while preserving no-match and permission-denied guards. The
+zero-training frozen profile scored `607` more passed cases than the weak-label
+MLP on the same generated EXM benchmark. The current default recommendation is
+therefore the hashable frozen-profile programmatic policy, not a self-trained
+weak-label MLP. BGE-M3 through FlagEmbedding remains the preferred future
+optional true frozen neural adapter, but it was not executed in the default dev
+container because that container intentionally does not include torch,
+transformers, FlagEmbedding, GLiNER, HanLP, or CKIP.
