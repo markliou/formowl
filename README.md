@@ -330,6 +330,14 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   request modes. Raw-asset mode requires an explicit grant and returns only
   governed `formowl://asset/...` locators through an injectable resolver path;
   it does not read raw content or expose filesystem/object-store locations.
+- KG-first cross-resource retrieval over a query-scored `EffectiveGraphView`.
+  Graph hits resolve permission-visible mail, slide, document, or project
+  observations through governed `formowl://observation/...` locators. Vector
+  retrieval runs only for graph miss, low confidence, or incomplete evidence,
+  and fallback evidence produces review-required Candidate KG proposal seeds
+  without candidate-store or canonical-graph writes. Run the deterministic
+  mail + slide + project proof with
+  `python scripts/kg_first_cross_resource_smoke.py` inside the dev container.
 - Storage backend registry configuration helpers for local-first deployments
   and metadata-only MinIO/S3-compatible descriptors. Public backend records use
   stable FormOwl storage locators while local roots, internal endpoints, and

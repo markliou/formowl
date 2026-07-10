@@ -37,6 +37,37 @@ canonical packets and all authority reports are synchronized and passing.
 No KG research slice is currently active. The broad objective remains blocked
 by the real-evidence gates described above.
 
+## Completed Issue #16 Slice
+
+2026-07-10: GitHub issue #16 is complete for the scoped implementation goal and
+was merged through PR #34 at commit `434a009`.
+
+The slice implements KG-first, evidence-backed, retrieval-fallback
+cross-resource fusion without reopening or redefining the blocked broad
+real-evidence objective. Required deliverables are query-scored
+`EffectiveGraphView` matching, permission-checked Observation resolution,
+explicit fallback reasons, review-required Candidate KG proposal seeds,
+Semantic MCP/JSON-RPC exposure, a deterministic mail + slide + project proof,
+raw/internal leak protection, canonical dev-container verification, and the
+3-reviewer engineering/governance/research-method gate.
+
+Claim boundaries remain strict: fallback seeds are not persisted candidate
+records, no canonical graph write is authorized, synthetic fixtures are not
+real enterprise-data evidence, and this slice does not implement issue #19's
+general MCP adapter certification or staged-write matrix.
+
+Final evidence:
+
+- Canonical dev-container full unittest: `652 tests OK`.
+- Full Ruff check/format check: passed; `307 files already formatted`.
+- Deterministic smoke build and saved-report validation: both `status: ok`.
+- Reviewer gate: 3/3 effective read-only agreements from `Galileo`, `Hilbert`,
+  and `Euler`; all prior blockers were remediated one at a time and each final
+  response was `RELEASE_DECISION: AGREE`.
+- No Candidate KG store or canonical graph mutation occurs. Fallback seeds
+  remain review-required DTOs, synthetic-only evidence, and outside issue #19's
+  adapter-certification/staged-write scope.
+
 ## Latest Completed Slice
 
 2026-07-10: issue #33 Work Package A is complete on branch

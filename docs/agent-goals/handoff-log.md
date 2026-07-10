@@ -2276,3 +2276,28 @@ status in each role's goal file and task completion in
   supervised typed classification claims, and keep LLM/model outputs
   candidate-only. This is a design decision only, not a production tokenizer or
   multimodal extraction claim.
+- 2026-07-10 issue #16 KG-first cross-resource fusion started on
+  `issue-16-kg-first-fusion` from `origin/main` `832bea2`. The KG Research Agent
+  owns the graph-hit, evidence-lineage, fallback, candidate-seed, fixture, and
+  acceptance behavior. The slice also adds the narrow Semantic MCP tool
+  `query_effective_graph_view` because the user explicitly assigned the
+  cross-role issue; it does not absorb issue #19's general adapter
+  certification/staged-write scope. Current focused retrieval, Semantic
+  MCP/JSON-RPC, and deterministic mail + slide + project smoke checks pass;
+  full dev-container verification and the 3-reviewer gate remain pending.
+- 2026-07-10 issue #16 KG-first cross-resource fusion completed on
+  `issue-16-kg-first-fusion`. The final slice performs query-scored KG lookup
+  before vector fallback, resolves permission-visible and asset-lineage-verified
+  Observations, filters caller-supplied graph objects again at retrieval time,
+  requires audited target-scoped raw-asset grants, derives Candidate KG proposal
+  seeds only from permission-resolved fallback Observations, rejects embedded
+  relative/internal slash and backslash paths, and exposes a strict
+  `query_effective_graph_view` MCP/JSON-RPC contract. The deterministic mail +
+  slide + project smoke uses same-query complete/incomplete scenarios, a visible
+  distractor, an irrelevant-query control, explicit vector-search counts, and
+  verified fixture/semantic hashes. Final canonical evidence: full unittest
+  `652 tests OK`; full Ruff passed with `307 files already formatted`; smoke
+  build and saved-report validation both `status: ok`; `git diff --check`
+  passed. Reviewer gate passed 3/3 with final `RELEASE_DECISION: AGREE` from
+  `Galileo`, `Hilbert`, and `Euler`. No candidate-store or canonical-graph write
+  is performed, and issue #19 certification/staged-write scope remains excluded.

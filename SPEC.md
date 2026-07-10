@@ -2086,6 +2086,39 @@ NetworkX is not the production graph database. PyKEEN, OpenEA, and RDFLib are de
 
 Algorithmic packages may generate `FusionCandidate`, `EntityResolutionProposal`, `TypeAlignmentCandidate`, and `EvidenceLink` records, but they must never mutate the canonical graph or canonical type state directly.
 
+## 9.7.2 KG-First Evidence-Backed Cross-Resource Retrieval
+
+ChatGPT-facing cross-resource retrieval must query a permission-filtered
+`EffectiveGraphView` before using metadata, full-text, vector, or
+observation-level fallback retrieval. Graph matching must be query-scored; the
+gateway must not present every permission-visible graph node as though it
+matched the question.
+
+The governed query sequence is:
+
+```text
+query text
+-> query-scored EffectiveGraphView hits
+-> source_observation_ids
+-> permission-checked Observation resolution
+-> evidence coverage decision
+-> fallback retrieval only for graph miss, low confidence, or incomplete evidence
+-> reviewable Candidate KG proposal seeds from fallback evidence
+```
+
+Each public graph hit must identify the graph object, object type, review state,
+confidence, permission scope, source observation ids, source asset ids, and
+resolved `formowl://observation/{observation_id}` evidence locators. Answering
+from a graph label alone is not sufficient for the normal high-trust path; the
+supporting observations must resolve before the gateway treats the graph path
+as complete.
+
+Fallback proposal seeds are candidate-layer handoffs only. They must require
+review, must not create `CandidateAtom` or `CandidateRelation` records as a
+hidden side effect, and must never write canonical graph state. Raw asset mode
+continues to require an explicit grant and may expose only governed
+`formowl://asset/{asset_id}` references with no raw content.
+
 ## 9.8 Storage and Tool Boundaries
 
 The system should maintain separate stores for separate responsibilities:
@@ -2205,6 +2238,7 @@ propose_type_alignment
 get_entity
 search_graph
 query_effective_graph
+query_effective_graph_view
 search_assets
 search_mail
 fetch_email_thread

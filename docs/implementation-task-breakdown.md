@@ -2258,6 +2258,36 @@ These groups can be split across multiple agents after Slice 1 is stable.
     Dev-container verification passed: `test_retrieval_gateway.py` ran
     8 tests OK, retrieval Ruff check/format check passed, and the full
     `python -m unittest discover -s tests` suite ran 286 tests OK.
+- [x] Complete issue #16 KG-first evidence-backed cross-resource retrieval.
+  - Owner paths: `python/formowl_retrieval/`, `python/formowl_gateway/`,
+    `tests/`, `scripts/kg_first_cross_resource_smoke.py`, graph/retrieval docs.
+  - Proof: a query-scored `EffectiveGraphView` hit resolves governed mail,
+    slide, and project observations before answering; incomplete or
+    low-confidence graph evidence triggers vector fallback; fallback evidence
+    emits review-required Candidate KG proposal seeds; no candidate store or
+    canonical graph write occurs; MCP/JSON-RPC exposes
+    `query_effective_graph_view`; public outputs contain only governed FormOwl
+    locators and permission-visible evidence.
+  - Completion note: implemented on branch `issue-16-kg-first-fusion` from
+    `origin/main` `832bea2`. The retrieval boundary revalidates caller-supplied
+    graph permissions, resolves and verifies Observation-to-asset lineage,
+    requires audited target-scoped raw-asset grants, derives fallback proposal
+    seeds only from permission-resolved Observations, rejects relative/internal
+    slash and backslash paths, and exposes a strict
+    `query_effective_graph_view` JSON-RPC contract. The deterministic smoke uses
+    the same query for complete and incomplete graph scenarios, includes a
+    visible distractor and irrelevant-query control, instruments vector-search
+    ordering, and verifies complete fixture and semantic hashes. Final canonical
+    dev-container verification passed: full unittest `652 tests OK`; full Ruff
+    check passed with `307 files already formatted`; smoke build and saved-report
+    validation both returned `status: ok`; `git diff --check` passed.
+  - Reviewer gate target: 3 effective read-only reviewers.
+  - Effective reviewer count: 3/3.
+  - Reviewer agreement count: 3/3.
+  - Reviewers with blocking findings: none after sequential remediation.
+  - Final agreements: `Galileo` (engineering), `Hilbert` (governance/safety),
+    `Euler` (research method/acceptance), each with
+    `RELEASE_DECISION: AGREE`.
 
 ### MCP Transport and Gateway
 
