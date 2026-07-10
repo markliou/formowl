@@ -1,0 +1,221 @@
+[
+  {
+    "case_id": "sales_rd_quote_firmware",
+    "observation_ids": ["obs_sales_rd_email"],
+    "required_frame_types": ["Request", "Blocker", "Deadline"],
+    "required_slots": {
+      "Request": ["actor", "target", "action", "deadline", "condition", "fallback", "owner", "domains"],
+      "Blocker": ["actor", "target", "blocker", "owner", "deadline", "domains"],
+      "Deadline": ["actor", "target", "deadline", "domains"]
+    },
+    "expected_slot_values": {
+      "Request": {
+        "actor": "Sales Manager",
+        "target": "Quote v2",
+        "action": "deliver revised quotation",
+        "deadline": "2026-07-20",
+        "fallback": "use old specification if no conclusion"
+      },
+      "Blocker": {
+        "target": "Firmware capability",
+        "blocker": "confirmation pending",
+        "owner": "Firmware Team"
+      },
+      "Deadline": {
+        "target": "Quote v2",
+        "deadline": "2026-07-20"
+      }
+    },
+    "competency_questions": [
+      {
+        "question_id": "cq1_who_requested_what",
+        "frame_type": "Request",
+        "required_slots": ["actor", "target", "action"],
+        "v1_partial_credit": false
+      },
+      {
+        "question_id": "cq4_what_is_blocked",
+        "frame_type": "Blocker",
+        "required_slots": ["target", "blocker", "owner"],
+        "v1_partial_credit": false
+      },
+      {
+        "question_id": "cq5_deadline",
+        "frame_type": "Deadline",
+        "required_slots": ["target", "deadline"],
+        "v1_partial_credit": false
+      },
+      {
+        "question_id": "cq10_follow_up",
+        "frame_type": "Request",
+        "required_slots": ["owner", "deadline", "fallback"],
+        "v1_partial_credit": false
+      }
+    ]
+  },
+  {
+    "case_id": "warehouse_production_shortage",
+    "observation_ids": ["obs_warehouse_production_email"],
+    "required_frame_types": ["Blocker", "StatusChange", "Assignment"],
+    "required_slots": {
+      "Blocker": ["actor", "target", "blocker", "owner", "deadline", "domains"],
+      "StatusChange": ["actor", "target", "status", "reason", "owner", "domains"],
+      "Assignment": ["actor", "target", "assigned_to", "action", "deadline", "domains"]
+    },
+    "expected_slot_values": {
+      "Blocker": {
+        "target": "Part X",
+        "blocker": "material shortage",
+        "owner": "Warehouse Team"
+      },
+      "StatusChange": {
+        "target": "WorkOrder WO-77",
+        "status": "delayed",
+        "reason": "Part X shortage"
+      },
+      "Assignment": {
+        "assigned_to": "Warehouse Team",
+        "action": "confirm substitute material",
+        "deadline": "2026-07-09"
+      }
+    },
+    "competency_questions": [
+      {
+        "question_id": "cq4_what_is_blocked",
+        "frame_type": "Blocker",
+        "required_slots": ["target", "blocker"],
+        "v1_partial_credit": false
+      },
+      {
+        "question_id": "cq6_status_change",
+        "frame_type": "StatusChange",
+        "required_slots": ["target", "status", "reason"],
+        "v1_partial_credit": false
+      },
+      {
+        "question_id": "cq10_follow_up",
+        "frame_type": "Assignment",
+        "required_slots": ["assigned_to", "action", "deadline"],
+        "v1_partial_credit": false
+      }
+    ]
+  },
+  {
+    "case_id": "finance_sales_payment",
+    "observation_ids": ["obs_finance_sales_email"],
+    "required_frame_types": ["Commitment", "Decision", "Risk"],
+    "required_slots": {
+      "Commitment": ["actor", "target", "commitment", "deadline", "owner", "domains"],
+      "Decision": ["actor", "target", "decision", "condition", "owner", "domains"],
+      "Risk": ["actor", "target", "risk", "escalation", "owner", "domains"]
+    },
+    "expected_slot_values": {
+      "Commitment": {
+        "actor": "Sales Director",
+        "target": "Customer A",
+        "commitment": "send payment update today",
+        "deadline": "2026-07-08"
+      },
+      "Decision": {
+        "actor": "Finance Controller",
+        "target": "Invoice INV-22",
+        "decision": "approve revised payment term"
+      },
+      "Risk": {
+        "target": "Customer renewal",
+        "risk": "payment delay may block renewal",
+        "escalation": "VP Sales"
+      }
+    },
+    "competency_questions": [
+      {
+        "question_id": "cq2_who_committed",
+        "frame_type": "Commitment",
+        "required_slots": ["actor", "target", "commitment"],
+        "v1_partial_credit": false
+      },
+      {
+        "question_id": "cq3_what_was_decided",
+        "frame_type": "Decision",
+        "required_slots": ["actor", "target", "decision"],
+        "v1_partial_credit": true
+      },
+      {
+        "question_id": "cq8_domain",
+        "frame_type": "Risk",
+        "required_slots": ["domains"],
+        "v1_partial_credit": true
+      },
+      {
+        "question_id": "cq9_obligation_or_mention",
+        "frame_type": "Commitment",
+        "required_slots": ["commitment"],
+        "v1_partial_credit": false
+      }
+    ]
+  },
+  {
+    "case_id": "management_project_coordination",
+    "observation_ids": ["obs_management_project_email"],
+    "required_frame_types": ["Decision", "Dependency", "OpenQuestion", "Assignment"],
+    "required_slots": {
+      "Decision": ["actor", "target", "decision", "owner", "domains"],
+      "Dependency": ["actor", "target", "depends_on", "owner", "domains"],
+      "OpenQuestion": ["actor", "target", "question", "owner", "domains"],
+      "Assignment": ["actor", "target", "assigned_to", "action", "deadline", "domains"]
+    },
+    "expected_slot_values": {
+      "Decision": {
+        "actor": "Steering Committee",
+        "target": "Project Alpha rollout",
+        "decision": "ship in two phases"
+      },
+      "Dependency": {
+        "target": "Project Alpha rollout",
+        "depends_on": "QA acceptance checklist"
+      },
+      "OpenQuestion": {
+        "target": "QA acceptance checklist",
+        "question": "which checklist version applies"
+      },
+      "Assignment": {
+        "assigned_to": "QA Lead",
+        "action": "confirm checklist version",
+        "deadline": "2026-07-11"
+      }
+    },
+    "competency_questions": [
+      {
+        "question_id": "cq3_what_was_decided",
+        "frame_type": "Decision",
+        "required_slots": ["actor", "target", "decision"],
+        "v1_partial_credit": true
+      },
+      {
+        "question_id": "cq7_evidence",
+        "frame_type": "Decision",
+        "required_slots": [],
+        "required_evidence": true,
+        "v1_partial_credit": true
+      },
+      {
+        "question_id": "cq4_dependency",
+        "frame_type": "Dependency",
+        "required_slots": ["target", "depends_on"],
+        "v1_partial_credit": false
+      },
+      {
+        "question_id": "cq9_obligation_or_mention",
+        "frame_type": "Assignment",
+        "required_slots": ["assigned_to", "action"],
+        "v1_partial_credit": false
+      },
+      {
+        "question_id": "cq10_follow_up",
+        "frame_type": "Assignment",
+        "required_slots": ["assigned_to", "action", "deadline"],
+        "v1_partial_credit": false
+      }
+    ]
+  }
+]

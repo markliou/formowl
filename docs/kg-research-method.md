@@ -46,6 +46,171 @@ This keeps "Customer" in one workspace and "Client" in another workspace as a
 reviewable alignment candidate. It does not grant either owner access to the
 other scope's evidence and does not merge the type state.
 
+### Data-Driven Term And Mention Extraction
+
+The next ontology method decision is recorded in
+`docs/multimodal-ontology-term-extraction-decision.md`. FormOwl should add a
+data-driven term and mention extraction layer before ontology selection,
+coordination frames, entity resolution, and KG fusion. This layer is broader
+than a tokenizer: it uses corpus phrase mining, CJK span generation, layout and
+role context, gazetteers, weak labels, and ablations to produce scored
+candidate mentions and typed mention candidates.
+
+This decision is motivated by the current regex tokenizer limit and the
+operator-provided procurement PST result: KG structure helped, but the current
+ontology operators did not beat KG-only. A stable ontology therefore needs
+better upstream term/mention evidence before it can safely promote data-driven
+types or domain packs.
+
+Large raw corpora are enough for vocabulary adaptation, phrase mining, weak
+labels, and gazetteer induction. They are not, by themselves, a reliable source
+of supervised typed labels. Trained models may be added later, but their output
+remains candidate-only and must record model version, training manifest hash,
+policy id, confidence, and source evidence.
+
+## Ontology v2 Coordination-Frame Experiment
+
+Issue #28 adds an ontology-method experiment because the scoped type ontology
+is still too entity-centric for enterprise coordination. The v1 type system
+remains useful as a baseline and compatibility gate, but it does not by itself
+represent requests, commitments, decisions, blockers, deadlines, status
+changes, dependencies, evidence spans, or follow-up obligations.
+
+The additive v2 path is:
+
+```text
+Observation
+  -> CandidateMention
+  -> CandidateFrame
+  -> CandidateBusinessObject
+  -> CandidateRelation
+  -> reviewed CanonicalFrame / CanonicalObject / CanonicalRelation
+```
+
+Current implementation files:
+
+- `python/formowl_contract/models.py` defines `CandidateMention`,
+  `CandidateFrame`, `CandidateBusinessObject`, and `CanonicalFrame`.
+- `python/formowl_graph/coordination_frames.py` defines deterministic fixture
+  extraction, domain-pack validation, candidate-store persistence, and
+  competency-question answerability evaluation.
+- `experiments/kg_ontology_v2_coordination/` contains the synthetic
+  email-first cross-domain fixture, gold competency questions, and runner.
+- `docs/ontology-v2-coordination-frames.md` records the method, results,
+  limits, and PST boundary.
+
+Current experiment result on the checked synthetic marker fixture:
+
+| Arm | Candidate frames | Candidate atoms | Slot recall | Slot value recall | CQ answerability |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| no ontology metadata only | 13 surrogate frames | 0 | 0.0 | 0.0 | 0.4375 |
+| current atom path | 0 | 2 | 0.0 | 0.0 | 0.09375 |
+| coordination frame v2 | 13 | 0 | 1.0 | 1.0 | 1.0 |
+| hybrid v1 gate + v2 projection | 13 | 2 | 1.0 | 1.0 | 1.0 |
+
+This is not a production parser result. It is a contract and methodology
+experiment showing that the frame representation can carry the issue #28
+competency-question structure under deterministic fixtures. It does not prove
+production extraction quality, does not prove v2 fixes the observed email
+regression, does not use raw PST content, does not commit canonical graph or
+type records, does not mutate user graphs, and does not produce wiki revisions.
+
+The current evaluator is scoped per gold case and requires complete
+case-local evidence for the evidence-support competency question. Missing
+locator/text-hash evidence or evidence from another case no longer counts as
+answered.
+The runner now reports slot-value recall, a synthetic hard-gate vs soft-gate
+noise ablation, and a fixed redacted email replay effectiveness report. On the
+redacted replay, KG without ontology scores exact match `0.666667`, KG plus
+the current hard ontology gate scores `0.166667`, KG plus the soft ontology
+gate scores `0.666667`, and both coordination-frame v2 and hybrid soft gate +
+v2 score `1.0`. This reproduces the hard ontology regression on a fixed
+redacted replay and gives a positive v2 effectiveness signal. It is still not
+a production parser result or raw PST extraction claim; the production-quality
+follow-up is to run the same five-arm rubric on private real/PST-redacted
+parser output.
+
+The first synthetic marker fixture remains available as first-version
+round-trip evidence. A redesigned 100-case redacted hard challenge now adds a
+larger ablation surface with 30 dev cases and 70 holdout cases. On that
+challenge, KG without ontology scores exact match `0.46`, KG plus current hard
+ontology scores `0.22`, KG plus soft ontology gate scores `0.74`,
+coordination-frame v2 scores `0.82`, and hybrid soft gate + v2 scores `0.90`.
+The 100-case result shows a real effect but not full coverage: hybrid is best,
+hard ontology still regresses by `-0.24`, and 10 cases remain unsolved by the
+best arm. This is still a designed redacted fixture, not private PST parser
+output.
+
+The same 100-case design is now scaled inside the runner to a deterministic
+10,000-case redacted stress benchmark with 1,000 dev cases and 9,000 holdout
+cases. The bucket mix is the same as the 100-case fixture, scaled by 100:
+2,000 gate false rejects, 1,500 alignment-suppressed cases, 1,500 misleading
+structure cases, 1,500 frame-confusion cases, 1,000 cross-thread dependency
+cases, 1,000 follow-up/fallback cases, 1,000 false-positive guards, and 500
+access/redaction-boundary cases. Because this benchmark repeats redacted
+template families rather than using independent PST/parser output, the rates
+match the 100-case stress design: KG without ontology `0.46`, hard ontology
+`0.22`, soft gate `0.74`, v2 frame `0.82`, and hybrid `0.90` exact match.
+The value of the 10,000-case run is count-level stress evidence: hard ontology
+now produces 3,000 hard false rejects, KG without ontology produces 1,100
+false positives, and the hybrid still has 100 false positives plus 900 partial
+answers. It is not an independent held-out production claim.
+
+The EXM lexical ontology follow-up then tested all currently available EXM PST
+parsed corpora with the user's requested `jieba + SentencePiece` tokenizer
+plan across 50,000 generated cases. The aggregate result is tracked at
+`experiments/kg_ontology_v2_coordination/results/exm_lexical_ontology_50000_summary_2026-07-09.json`.
+Regex current KG and regex current ontology each scored 10,000/50,000, with
+0/40,000 positive cases solved but all no-match and permission-denied guards
+passing. The `jieba + SentencePiece` KG and ontology arms each scored
+16,811/50,000, solving 11,811/40,000 positive cases while failing all 5,000
+no-match guards. This is a real positive-retrieval effect, but not a stable
+retrieval or ontology method yet. The ontology-scored lexical arm tied the
+lexical KG arm exactly, so the run shows tokenizer/lexical graph lift rather
+than incremental ontology lift. The largest lexical component covered nearly
+the full corpus, which confirms that tokenizer output must pass term-quality,
+IDF/document-spread, component-splitting, and no-match calibration before any
+ontology promotion or production retrieval claim.
+
+The next EXM follow-up implemented that correction as a graph-neural
+programmatic ontology policy. The safe aggregate result is tracked at
+`experiments/kg_ontology_v2_coordination/results/exm_programmatic_ontology_50000_summary_2026-07-09.json`.
+This arm compiles ontology behavior before KG edge construction: document-
+frequency gates, protected mention typing, deterministic weak-label MLP
+candidate scoring, and exact-candidate-only ontology retrieval. On the same
+50,000 generated
+cases, graph-neural programmatic ontology scores 43,369/50,000 overall,
+33,369/40,000 positive cases, 5,000/5,000 no-match guards, and 5,000/5,000
+permission-denied guards. By contrast, the raw `jieba + SentencePiece`
+ontology arm scores 18,176/50,000, solves 13,176/40,000 positive cases, and
+still fails every no-match guard. This is the first EXM evidence that ontology
+helps when it is compiled into executable graph policy rather than applied as
+post-hoc labels. The measured lift is for the bundled executable policy, not a
+claim that any single subcomponent explains the full delta. The neural scorer
+is a deterministic CPU-bounded weak-label MLP
+`formowl_exm_weak_label_cjk_mlp_v1`, with model hash and weak-label training
+counts recorded in the tracked summary. It remains candidate-layer evidence,
+not canonical ontology promotion or production retrieval readiness.
+
+The no-training follow-up then compared that weak-label MLP against two
+controls on the same EXM/PST generated benchmark shape. The safe aggregate
+result is tracked at
+`experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json`.
+The `graph_data_driven_programmatic_ontology` arm uses no neural scorer and
+scores 33,277/50,000 overall, with 23,277/40,000 positive cases and all
+no-match and permission-denied guards passing. The
+`graph_frozen_profile_programmatic_ontology` arm uses a hashable fixed CJK
+scoring profile with zero training examples and zero training epochs. It scores
+43,976/50,000 overall, with 33,976/40,000 positive cases and all guards
+passing. The weak-label MLP arm scores 43,369/50,000 in the same run, so the
+frozen profile is ahead by 607 passed cases. Current method judgment: the
+executable programmatic ontology layer is effective, but the self-trained
+weak-label MLP is not justified as the default candidate scorer. Use the
+frozen-profile programmatic policy as the stable candidate-layer default, and
+treat BGE-M3 through FlagEmbedding as a future optional true frozen neural
+adapter that must run in a separate neural experiment/runtime image rather
+than the default dev container.
+
 ## Multi-User KG And Fusion Experiments
 
 The deterministic experiment in `python/formowl_graph/research_acceptance.py`

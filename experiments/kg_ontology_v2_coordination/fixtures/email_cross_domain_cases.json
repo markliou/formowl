@@ -1,0 +1,159 @@
+{
+  "ontology_revision_id": "ontology_rev_coordination_v2_001",
+  "created_at": "2026-07-08T09:00:00+00:00",
+  "permission_scope": {
+    "scope_type": "workspace",
+    "scope_id": "formowl",
+    "visibility": "restricted"
+  },
+  "domain_packs": [
+    {
+      "pack_id": "coord_pack_sales_v2",
+      "domain": "sales",
+      "ontology_revision_id": "ontology_rev_coordination_v2_001",
+      "source_observation_ids": ["obs_domain_pack_sales"],
+      "frame_extensions": {
+        "CustomerRequest": "Request",
+        "CustomerCommitment": "Commitment",
+        "QuoteApproval": "Decision"
+      },
+      "object_types": {
+        "Quote": "WorkObject",
+        "Opportunity": "WorkObject",
+        "CustomerRequest": "WorkObject",
+        "CustomerCommitment": "WorkObject"
+      },
+      "aliases": {
+        "complaint": ["customer issue", "customer escalation"]
+      }
+    },
+    {
+      "pack_id": "coord_pack_rd_v2",
+      "domain": "rd",
+      "ontology_revision_id": "ontology_rev_coordination_v2_001",
+      "source_observation_ids": ["obs_domain_pack_rd"],
+      "frame_extensions": {
+        "FirmwareCapabilityQuestion": "OpenQuestion",
+        "FirmwareReleaseDecision": "Decision"
+      },
+      "object_types": {
+        "FirmwareSpec": "WorkObject",
+        "Requirement": "WorkObject",
+        "Release": "WorkObject",
+        "Bug": "WorkObject"
+      },
+      "aliases": {
+        "spec": ["specification", "firmware specification"]
+      }
+    },
+    {
+      "pack_id": "coord_pack_warehouse_v2",
+      "domain": "warehouse",
+      "ontology_revision_id": "ontology_rev_coordination_v2_001",
+      "source_observation_ids": ["obs_domain_pack_warehouse"],
+      "frame_extensions": {
+        "InventoryShortage": "Blocker",
+        "ShipmentDelay": "Issue"
+      },
+      "object_types": {
+        "InventoryItem": "WorkObject",
+        "Shipment": "WorkObject",
+        "Stockout": "WorkObject",
+        "Transfer": "WorkObject"
+      },
+      "aliases": {}
+    },
+    {
+      "pack_id": "coord_pack_production_v2",
+      "domain": "production",
+      "ontology_revision_id": "ontology_rev_coordination_v2_001",
+      "source_observation_ids": ["obs_domain_pack_production"],
+      "frame_extensions": {
+        "LineStopIncident": "Issue",
+        "ProductionDelay": "StatusChange"
+      },
+      "object_types": {
+        "WorkOrder": "WorkObject",
+        "Batch": "WorkObject",
+        "YieldIssue": "WorkObject",
+        "LineStop": "WorkObject"
+      },
+      "aliases": {}
+    },
+    {
+      "pack_id": "coord_pack_finance_v2",
+      "domain": "finance",
+      "ontology_revision_id": "ontology_rev_coordination_v2_001",
+      "source_observation_ids": ["obs_domain_pack_finance"],
+      "frame_extensions": {
+        "InvoiceApproval": "Decision",
+        "PaymentDelay": "Risk"
+      },
+      "object_types": {
+        "Invoice": "WorkObject",
+        "PaymentTerm": "WorkObject",
+        "Budget": "WorkObject",
+        "CostCenter": "WorkObject"
+      },
+      "aliases": {}
+    }
+  ],
+  "observations": [
+    {
+      "observation_id": "obs_sales_rd_email",
+      "asset_id": "asset_synthetic_email_sales_rd",
+      "extractor_run_id": "run_synthetic_mail_fixture",
+      "observation_type": "email_body_segment",
+      "modality": "text",
+      "location": {
+        "message_id": "msg_sales_rd_001",
+        "thread_key_hash": "thread_sales_rd_hash",
+        "section": "body"
+      },
+      "confidence": 0.95,
+      "text": "Request: actor=Sales Manager; target=Quote v2; action=deliver revised quotation; deadline=2026-07-20; condition=firmware capability confirmed; fallback=use old specification if no conclusion; domains=sales,rd; owner=Sales Ops; object_type=Quote\nBlocker: actor=Firmware Lead; target=Firmware capability; blocker=confirmation pending; owner=Firmware Team; deadline=2026-07-12; domains=rd,sales; object_type=FirmwareSpec\nDeadline: actor=Customer; target=Quote v2; deadline=2026-07-20; domains=sales; owner=Sales Ops; object_type=Quote"
+    },
+    {
+      "observation_id": "obs_warehouse_production_email",
+      "asset_id": "asset_synthetic_email_wh_prod",
+      "extractor_run_id": "run_synthetic_mail_fixture",
+      "observation_type": "email_body_segment",
+      "modality": "text",
+      "location": {
+        "message_id": "msg_wh_prod_001",
+        "thread_key_hash": "thread_wh_prod_hash",
+        "section": "body"
+      },
+      "confidence": 0.95,
+      "text": "InventoryShortage: actor=Warehouse Planner; target=Part X; blocker=material shortage; owner=Warehouse Team; deadline=2026-07-10; domains=warehouse,production; object_type=InventoryItem\nStatusChange: actor=Production Supervisor; target=WorkOrder WO-77; status=delayed; reason=Part X shortage; owner=Production Team; domains=production,warehouse; object_type=WorkOrder\nAssignment: actor=Ops Manager; target=Part X replenishment; assigned_to=Warehouse Team; action=confirm substitute material; deadline=2026-07-09; domains=warehouse,production; object_type=Transfer"
+    },
+    {
+      "observation_id": "obs_finance_sales_email",
+      "asset_id": "asset_synthetic_email_fin_sales",
+      "extractor_run_id": "run_synthetic_mail_fixture",
+      "observation_type": "email_body_segment",
+      "modality": "text",
+      "location": {
+        "message_id": "msg_fin_sales_001",
+        "thread_key_hash": "thread_fin_sales_hash",
+        "section": "body"
+      },
+      "confidence": 0.95,
+      "text": "Commitment: actor=Sales Director; target=Customer A; commitment=send payment update today; deadline=2026-07-08; domains=sales,finance; owner=Sales Director; object_type=CustomerCommitment\nInvoiceApproval: actor=Finance Controller; target=Invoice INV-22; decision=approve revised payment term; condition=customer confirms remittance date; domains=finance,sales; owner=Finance Controller; object_type=Invoice\nRisk: actor=Sales Director; target=Customer renewal; risk=payment delay may block renewal; escalation=VP Sales; domains=sales,finance; owner=Sales Director; object_type=Opportunity"
+    },
+    {
+      "observation_id": "obs_management_project_email",
+      "asset_id": "asset_synthetic_email_mgmt_project",
+      "extractor_run_id": "run_synthetic_mail_fixture",
+      "observation_type": "email_body_segment",
+      "modality": "text",
+      "location": {
+        "message_id": "msg_mgmt_project_001",
+        "thread_key_hash": "thread_mgmt_project_hash",
+        "section": "body"
+      },
+      "confidence": 0.95,
+      "text": "Decision: actor=Steering Committee; target=Project Alpha rollout; decision=ship in two phases; domains=management,project; owner=PMO; object_type=ProjectPlan\nDependency: actor=PMO; target=Project Alpha rollout; depends_on=QA acceptance checklist; domains=project,production; owner=QA Lead; object_type=ProjectPlan\nOpenQuestion: actor=QA Lead; target=QA acceptance checklist; question=which checklist version applies; domains=project,production; owner=QA Lead; object_type=ProjectPlan\nAssignment: actor=Program Manager; target=QA acceptance checklist; assigned_to=QA Lead; action=confirm checklist version; deadline=2026-07-11; domains=project,production; object_type=ProjectPlan"
+    }
+  ]
+}

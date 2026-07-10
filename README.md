@@ -264,6 +264,22 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   encoding, scoring/gating, and candidate-pool size. This document is a design
   checkpoint, not an experiment result.
 - Candidate graph contract models for `CandidateAtom`, `CandidateRelation`, and `ExternalGraphImport` proposal records.
+- Ontology v2 coordination-frame candidate contracts for `CandidateMention`,
+  `CandidateFrame`, `CandidateBusinessObject`, and `CanonicalFrame` target
+  shape. The current implementation includes deterministic fixture extraction,
+  scoped domain-pack validation, an email-first cross-domain experiment, a
+  fixed redacted replay effectiveness report, and a redesigned 100-case
+  redacted hard challenge plus a generated 10,000-case redacted stress
+  benchmark. On the 6-case replay, KG + current hard ontology reproduces the
+  regression against KG without ontology (`0.166667` vs `0.666667` exact
+  match), while coordination-frame v2 and the hybrid soft-gate + v2 path score
+  `1.0`. On both the 100-case hard challenge and the 10,000-case generated
+  stress benchmark, hybrid is best at `0.90` exact match, v2 scores `0.82`,
+  soft gate scores `0.74`, KG without ontology scores `0.46`, and hard
+  ontology scores `0.22`; the 10,000-case run scales the absolute error counts
+  to 3,000 hard false rejects for hard ontology and 1,100 false positives for
+  KG without ontology. This remains candidate-only with no canonical frame
+  store, no raw PST content, and no production parser claim in default tests.
 - Canonical graph contract models for `CanonicalAtom`, `CanonicalEntity`,
   `CanonicalRelation`, and `CanonicalGraphRevision`; canonical commit workflow
   remains a separate governed implementation slice.
@@ -423,6 +439,14 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - `docs/wiki-draft-schema.md` - wiki draft and frontmatter schema.
 - `docs/kg-research-method.md` - KG research method, literature comparison,
   acceptance evidence, and known limits.
+- `docs/ontology-v2-coordination-plan.md` - issue #28 detailed work plan and
+  review packet for the coordination-frame ontology slice.
+- `docs/ontology-v2-coordination-frames.md` - issue #28 coordination-frame
+  ontology method, synthetic email-first experiment, fixed redacted replay
+  effectiveness result, ablation results, and PST safety boundary.
+- `docs/multimodal-ontology-term-extraction-decision.md` - data-driven
+  multimodal term, mention, tokenizer, and ontology-selection decision for
+  future PDF, PowerPoint, audio, OCR, mail, and mixed Chinese/English inputs.
 - `docs/kg-eval-package.md` - packaged KG evaluation facade and integration
   contract for the System Backbone Agent.
 - `docs/kg-bert-runtime.md` - optional BERT/SentenceTransformer KG

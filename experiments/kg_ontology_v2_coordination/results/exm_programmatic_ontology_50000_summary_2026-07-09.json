@@ -1,0 +1,140 @@
+{
+  "artifact_type": "formowl_exm_programmatic_ontology_50000_safe_summary",
+  "generated_at": "2026-07-09T23:35:00+08:00",
+  "claim_boundary": {
+    "supports_exm_50000_programmatic_ontology_eval_claim": true,
+    "supports_business_answer_generation_claim": false,
+    "supports_canonical_kg_write_claim": false,
+    "supports_canonical_type_write_claim": false,
+    "supports_formal_ontology_governance_completion_claim": false,
+    "supports_general_full_pst_parser_readiness_claim": false,
+    "supports_production_ready_claim": false,
+    "supports_raw_mail_access_claim": false,
+    "supports_user_graph_write_claim": false,
+    "supports_wiki_projection_claim": false
+  },
+  "safety_boundary": {
+    "contains_raw_mail_content": false,
+    "contains_raw_question_payload": false,
+    "contains_subjects_or_senders": false,
+    "contains_message_or_observation_ids": false,
+    "contains_attachment_names": false,
+    "contains_private_paths": false,
+    "contains_parser_commands": false,
+    "public_report_validation_passed": true,
+    "public_report_sha256": "sha256:ca7e6aee305b82d19952cbebccc6d8e2dc3978c4a0805e7ab9b912850ca9513c",
+    "public_validation_sha256": "sha256:39aa1fdab2eb12ab27d0fefed2a3054acc3ba18a372c3c70315b1f6cd82b4d44"
+  },
+  "input_summary": {
+    "pst_corpus_count": 2,
+    "parsed_corpus_count": 2,
+    "body_segment_count": 65736,
+    "message_key_count": 30013,
+    "thread_key_count": 23511,
+    "parsed_corpus_hash": "sha256:e8aacc4751caf7a98bef653df46913822832223a79e5b5654cae2a2e8abf2c87"
+  },
+  "method_summary": {
+    "segmentation_policy_hash": "sha256:131deeb87ab16f5fe598b69c37be33fd1c185af8f59cbf56b3b39347ff1d7f3c",
+    "ontology_policy_hash": "sha256:d384858acf14f75ab94f6d615432798050bca8a91da5b9ad3b360d86fa04344b",
+    "programmatic_policy_hash": "sha256:0258f0f51b68b0195d1d9a9fc82c1297612d51121438650a9f23c01c5d8bba75",
+    "programmatic_neural_model_version": "formowl_exm_weak_label_cjk_mlp_v1",
+    "programmatic_neural_model_hash": "sha256:eae0ce776073a111c438b060216815e599efba5d4b7c9143311f3f6dc291f9b3",
+    "programmatic_neural_training_example_count": 58641,
+    "programmatic_neural_training_positive_count": 58139,
+    "programmatic_neural_training_negative_count": 502,
+    "programmatic_neural_training_epoch_count": 8,
+    "programmatic_neural_feature_count": 12,
+    "sentencepiece_model_hash": "sha256:99012feb0d9975fe6236188656d50a2324078dda79f3a210b556167cf2e02959",
+    "training_corpus_hash": "sha256:3cf040c817dcd550bc2eca939eec0fb5974f9c79fb9cfe4702cf6d1d8d275415",
+    "sentencepiece_vocab_size": 12000,
+    "sentencepiece_user_symbol_count": 2000,
+    "candidate_lexeme_count": 224718,
+    "accepted_lexeme_count": 64505,
+    "rejected_lexeme_count": 160213,
+    "protected_accepted_lexeme_count": 6022,
+    "cjk_accepted_lexeme_count": 58483,
+    "ascii_piece_rejected_count": 3464,
+    "frequency_rejected_lexeme_count": 156597,
+    "neural_scored_lexeme_count": 58635,
+    "neural_accepted_lexeme_count": 58483
+  },
+  "case_summary": {
+    "case_count": 50000,
+    "dev_case_count": 5000,
+    "holdout_case_count": 45000,
+    "positive_case_count": 40000,
+    "no_match_case_count": 5000,
+    "permission_denied_case_count": 5000,
+    "bucket_counts": {
+      "access_boundary": 5000,
+      "cjk_organization": 614,
+      "cjk_phrase": 39386,
+      "false_positive_guard": 5000
+    }
+  },
+  "arm_results": {
+    "graph_neural_programmatic_ontology": {
+      "passed_case_count": 43369,
+      "pass_rate_basis_points": 8673,
+      "positive_passed_count": 33369,
+      "no_match_passed_count": 5000,
+      "permission_denied_passed_count": 5000
+    },
+    "jieba_sentencepiece_kg": {
+      "passed_case_count": 18176,
+      "pass_rate_basis_points": 3635,
+      "positive_passed_count": 13176,
+      "no_match_passed_count": 0,
+      "permission_denied_passed_count": 5000
+    },
+    "jieba_sentencepiece_ontology": {
+      "passed_case_count": 18176,
+      "pass_rate_basis_points": 3635,
+      "positive_passed_count": 13176,
+      "no_match_passed_count": 0,
+      "permission_denied_passed_count": 5000
+    },
+    "regex_current_kg": {
+      "passed_case_count": 10000,
+      "pass_rate_basis_points": 2000,
+      "positive_passed_count": 0,
+      "no_match_passed_count": 5000,
+      "permission_denied_passed_count": 5000
+    },
+    "regex_current_ontology": {
+      "passed_case_count": 10000,
+      "pass_rate_basis_points": 2000,
+      "positive_passed_count": 0,
+      "no_match_passed_count": 5000,
+      "permission_denied_passed_count": 5000
+    }
+  },
+  "graph_summary": {
+    "regex_component_count": 19761,
+    "regex_largest_component_size": 16101,
+    "lexical_component_count": 26,
+    "lexical_largest_component_size": 65709,
+    "programmatic_component_count": 13451,
+    "programmatic_largest_component_size": 34806
+  },
+  "deltas": {
+    "programmatic_ontology_vs_jieba_sentencepiece_ontology_passed_case_count": 25193,
+    "programmatic_ontology_vs_regex_current_passed_case_count": 33369,
+    "programmatic_positive_delta_vs_jieba_sentencepiece_ontology": 20193,
+    "programmatic_no_match_delta_vs_jieba_sentencepiece_ontology": 5000,
+    "best_arm_name": "graph_neural_programmatic_ontology",
+    "best_passed_case_count": 43369,
+    "best_pass_rate_basis_points": 8673
+  },
+  "timing_ms": {
+    "kg_build_elapsed_ms": 28069,
+    "scoring_elapsed_ms": 358202,
+    "total_elapsed_ms": 723037
+  },
+  "interpretation": {
+    "effect": "The compiled graph-neural programmatic ontology policy improved both positive retrieval and false-positive guards over the raw jieba plus SentencePiece lexical KG.",
+    "ontology_effect": "The measured effect is for the bundled executable policy: document-frequency gates, protected mention typing, weak-label neural candidate scoring, and exact-candidate-only ontology retrieval before graph construction.",
+    "risk": "The largest component is still large, so community detection or stricter component splitting remains a next optimization before production retrieval claims.",
+    "claim_boundary": "This remains candidate-layer evaluation over private parsed corpora. It is not canonical ontology promotion, canonical KG mutation, raw-mail access, business answer generation, general parser readiness, or production readiness."
+  }
+}

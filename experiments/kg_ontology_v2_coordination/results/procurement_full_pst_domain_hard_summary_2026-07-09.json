@@ -1,0 +1,128 @@
+{
+  "artifact_id": "procurement_full_pst_domain_hard_summary_2026_07_09",
+  "artifact_type": "redacted_operator_provided_full_pst_domain_hard_summary",
+  "generated_at": "2026-07-09",
+  "source_fixture": {
+    "description": "operator-provided procurement full-PST real-case fixture",
+    "raw_content_included": false,
+    "private_path_included": false,
+    "fixture_sha256_included": false,
+    "message_identifiers_included": false,
+    "query_text_included": false
+  },
+  "safe_input_counts": {
+    "fixture_size_bytes": 21150409728,
+    "message_count": 27912,
+    "body_segment_count": 60923,
+    "observation_count": 306741,
+    "mail_evidence_row_count": 163764,
+    "parse_warning_count": 46562
+  },
+  "case_set": {
+    "case_count": 100,
+    "positive_case_count": 80,
+    "no_match_case_count": 10,
+    "permission_denied_case_count": 10,
+    "private_manifest_included": false
+  },
+  "arms": [
+    {
+      "arm_id": "baseline_retrieval",
+      "passed_case_count": 11,
+      "failed_case_count": 89,
+      "pass_rate_basis_points": 1100,
+      "positive_passed_case_count": 1,
+      "no_match_passed_case_count": 0,
+      "permission_denied_passed_case_count": 10
+    },
+    {
+      "arm_id": "candidate_kg_fusion",
+      "passed_case_count": 19,
+      "failed_case_count": 81,
+      "pass_rate_basis_points": 1900,
+      "delta_vs_baseline_passed_case_count": 8,
+      "positive_passed_case_count": 9,
+      "no_match_passed_case_count": 0,
+      "permission_denied_passed_case_count": 10,
+      "candidate_graph_node_count": 60923,
+      "candidate_graph_relation_count": 39938,
+      "component_count": 20985,
+      "largest_component_size": 2632
+    },
+    {
+      "arm_id": "ontology_guided_kg",
+      "passed_case_count": 19,
+      "failed_case_count": 81,
+      "pass_rate_basis_points": 1900,
+      "delta_vs_baseline_passed_case_count": 8,
+      "delta_vs_candidate_kg_passed_case_count": 0,
+      "positive_passed_case_count": 9,
+      "no_match_passed_case_count": 0,
+      "permission_denied_passed_case_count": 10,
+      "ontology_type_definition_count": 10,
+      "ontology_type_mapping_count": 10,
+      "typed_candidate_node_count": 6083,
+      "typed_component_count": 3448,
+      "type_evidence_coverage_basis_points": 998,
+      "ontology_supported_relation_count": 7564,
+      "missing_type_evidence_node_count": 54840,
+      "conflicting_type_evidence_node_count": 3833
+    },
+    {
+      "arm_id": "best_ordered_ontology_factorial",
+      "passed_case_count": 19,
+      "pass_rate_basis_points": 1900,
+      "delta_vs_baseline_passed_case_count": 8,
+      "delta_vs_candidate_kg_passed_case_count": 0,
+      "positive_passed_case_count": 9,
+      "no_match_passed_case_count": 0,
+      "permission_denied_passed_case_count": 10,
+      "best_operator_count": 0,
+      "best_operator_order": []
+    }
+  ],
+  "factorial_summary": {
+    "ordered_arm_count": 326,
+    "arms_better_than_candidate_kg_count": 0,
+    "arms_equal_to_candidate_kg_count": 2,
+    "arms_worse_than_candidate_kg_count": 324
+  },
+  "timing_ms": {
+    "baseline_import_elapsed_ms": 1929481,
+    "baseline_scoring_elapsed_ms": 583823,
+    "candidate_kg_total_elapsed_ms": 18034,
+    "ontology_ablation_total_elapsed_ms": 18684,
+    "ontology_factorial_total_elapsed_ms": 190861
+  },
+  "validated_reports": {
+    "baseline_retrieval_blockers": [],
+    "candidate_kg_fusion_blockers": [],
+    "ontology_guided_kg_blockers": [],
+    "ontology_factorial_blockers": []
+  },
+  "interpretation": {
+    "baseline_retrieval_passed_case_count": 11,
+    "candidate_kg_helped": true,
+    "candidate_kg_delta_vs_baseline_passed_case_count": 8,
+    "current_ontology_helped_beyond_candidate_kg": false,
+    "current_ontology_regressed_below_candidate_kg": false,
+    "best_factorial_arm_used_zero_ontology_operators": true,
+    "summary": "Candidate KG structure improved the procurement real-case score from 11/100 to 19/100, but the current ontology-guided and ordered factorial arms did not improve beyond KG-only."
+  },
+  "claim_boundary": {
+    "supports_operator_provided_full_pst_domain_hard_measurement": true,
+    "supports_business_answer_generation_claim": false,
+    "supports_general_full_pst_parser_readiness_claim": false,
+    "supports_actual_chatgpt_connected_upload_claim": false,
+    "supports_real_upload_iframe_claim": false,
+    "supports_live_postgresql_readiness_claim": false,
+    "supports_production_worker_leasing_claim": false,
+    "supports_raw_mail_access_claim": false,
+    "supports_canonical_graph_write_claim": false,
+    "supports_canonical_type_write_claim": false,
+    "supports_user_graph_write_claim": false,
+    "supports_wiki_projection_claim": false,
+    "supports_production_ready_claim": false,
+    "supports_broad_kg_completion_claim": false
+  }
+}

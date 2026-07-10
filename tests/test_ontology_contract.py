@@ -15,6 +15,7 @@ from formowl_contract import (
     stable_type_mapping_id,
 )
 from formowl_graph import core_supertypes_compatible, propose_type_alignment_candidate
+from formowl_graph import soft_core_supertypes_compatible
 
 
 class OntologyContractTests(unittest.TestCase):
@@ -216,6 +217,52 @@ class OntologyContractTests(unittest.TestCase):
                 created_by="user_reviewer",
                 created_at="2026-06-27T00:00:00+00:00",
             )
+
+    def test_soft_core_supertype_gate_models_noisy_predicted_types_without_mutating_hard_gate(
+        self,
+    ) -> None:
+        hard = core_supertypes_compatible("Person", "Document")
+        low_confidence = soft_core_supertypes_compatible(
+            "Person",
+            "Document",
+            left_type_confidence=0.62,
+            right_type_confidence=0.58,
+        )
+        high_confidence = soft_core_supertypes_compatible(
+            "Person",
+            "Document",
+            left_type_confidence=0.96,
+            right_type_confidence=0.95,
+        )
+        compatible = soft_core_supertypes_compatible(
+            "Artifact",
+            "Document",
+            left_type_confidence=0.52,
+            right_type_confidence=0.51,
+        )
+
+        self.assertFalse(hard.compatible)
+        self.assertTrue(low_confidence.compatible)
+        self.assertFalse(low_confidence.hard_reject)
+        self.assertEqual(
+            low_confidence.reason,
+            "low_confidence_core_supertype_mismatch_soft_prior",
+        )
+        self.assertEqual(low_confidence.score_multiplier, 0.65)
+        self.assertFalse(high_confidence.compatible)
+        self.assertTrue(high_confidence.hard_reject)
+        self.assertEqual(high_confidence.score_multiplier, 0.0)
+        self.assertTrue(compatible.compatible)
+        self.assertEqual(compatible.score_multiplier, 1.0)
+
+        for kwargs in (
+            {"left_type_confidence": True, "right_type_confidence": 0.8},
+            {"left_type_confidence": 1.1, "right_type_confidence": 0.8},
+            {"left_type_confidence": 0.8, "right_type_confidence": -0.1},
+        ):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(ContractValidationError):
+                    soft_core_supertypes_compatible("Person", "Document", **kwargs)
 
 
 def _core_type(core_supertype_id: str) -> TypeDefinition:
