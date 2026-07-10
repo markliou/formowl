@@ -31,6 +31,12 @@ _SEMANTIC_TOOL_EXTRA_ARGUMENT_KEYS = {
     "query_mail_evidence": {"limit"},
 }
 _SEMANTIC_TOOL_SESSION_OVERRIDE_KEYS = {"session_id"}
+_SEMANTIC_TOOL_STRICT_CALLER_INPUTS = {
+    "query_effective_graph_view": {"query_text"},
+}
+_SEMANTIC_TOOL_REQUIRED_ARGUMENT_KEYS = {
+    "query_effective_graph_view": {"query_text"},
+}
 _SEMANTIC_TOOL_FORBIDDEN_ARGUMENT_KEYS = {
     "backend",
     "backend_id",
@@ -458,13 +464,17 @@ def create_mail_upload_semantic_jsonrpc_gateway(
 
 
 def _tool_to_json_rpc_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    tool_name = str(schema["tool_name"])
+    strict_inputs = _SEMANTIC_TOOL_STRICT_CALLER_INPUTS.get(tool_name)
+    input_keys = sorted(strict_inputs or set(schema["input_keys"]))
     return {
-        "name": schema["tool_name"],
-        "description": f"FormOwl semantic gateway tool: {schema['tool_name']}",
+        "name": tool_name,
+        "description": f"FormOwl semantic gateway tool: {tool_name}",
         "inputSchema": {
             "type": "object",
-            "properties": {key: {"type": "string"} for key in schema["input_keys"]},
-            "additionalProperties": True,
+            "properties": {key: {"type": "string"} for key in input_keys},
+            "required": sorted(_SEMANTIC_TOOL_REQUIRED_ARGUMENT_KEYS.get(tool_name, set())),
+            "additionalProperties": strict_inputs is None,
         },
     }
 
@@ -493,7 +503,8 @@ def _validate_semantic_tool_arguments(tool_name: str, arguments: Mapping[str, An
     allowed_keys = _SEMANTIC_TOOL_INPUT_KEYS.get(tool_name)
     if allowed_keys is None:
         return
-    allowed = (
+    strict_inputs = _SEMANTIC_TOOL_STRICT_CALLER_INPUTS.get(tool_name)
+    allowed = strict_inputs or (
         allowed_keys
         | _SEMANTIC_TOOL_EXTRA_ARGUMENT_KEYS.get(tool_name, set())
         | _SEMANTIC_TOOL_SESSION_OVERRIDE_KEYS
@@ -503,6 +514,19 @@ def _validate_semantic_tool_arguments(tool_name: str, arguments: Mapping[str, An
         raise ContractValidationError(
             "semantic JSON-RPC arguments contain unsupported keys: " + sha256_json(extra)
         )
+    missing = sorted(_SEMANTIC_TOOL_REQUIRED_ARGUMENT_KEYS.get(tool_name, set()) - set(arguments))
+    if missing:
+        raise ContractValidationError(
+            "semantic JSON-RPC arguments are missing required keys: " + sha256_json(missing)
+        )
+    for key in sorted(strict_inputs or set()):
+        if key not in arguments:
+            continue
+        value = arguments[key]
+        if not isinstance(value, str) or not value.strip():
+            raise ContractValidationError(
+                "semantic JSON-RPC argument must be a non-empty string: " + sha256_json(key)
+            )
 
 
 def _reject_semantic_control_argument_keys(value: Any) -> None:

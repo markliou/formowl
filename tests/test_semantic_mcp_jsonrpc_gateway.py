@@ -25,6 +25,126 @@ from formowl_ingestion.storage import UploadSessionStore
 
 
 class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
+    def test_query_effective_graph_view_is_discoverable_and_dispatches_kg_first_payload(
+        self,
+    ) -> None:
+        handler_calls: list[dict[str, Any]] = []
+
+        def retrieval_handler(input_data: dict[str, Any]) -> dict[str, Any]:
+            handler_calls.append(input_data)
+            return {
+                "answer": "KG-first answer",
+                "graph_hits": [
+                    {
+                        "graph_object_id": "node_optoma_decision",
+                        "object_type": "candidate_decision_frame",
+                        "source_observation_ids": ["obs_optoma_mail"],
+                        "evidence_locators": ["formowl://observation/obs_optoma_mail"],
+                    }
+                ],
+                "evidence": [
+                    {
+                        "observation_id": "obs_optoma_mail",
+                        "evidence_locator": "formowl://observation/obs_optoma_mail",
+                    }
+                ],
+                "fallback_used": False,
+                "fallback_reason": None,
+                "evidence_coverage": 1.0,
+                "candidate_graph_proposal_seeds": [],
+                "citations": [],
+                "visible_graph_snippets": [],
+                "redaction_counts": {"hidden_records": 0},
+                "warnings": [],
+            }
+
+        gateway = SemanticMcpJsonRpcGateway(
+            semantic_gateway=SemanticMcpGateway(retrieval_handler=retrieval_handler),
+            session=SemanticGatewaySession(
+                session_id="session_kg_first",
+                actor_user_id="user_pm",
+                workspace_id="workspace_main",
+            ),
+        )
+
+        listed = gateway.handle_json_rpc({"jsonrpc": "2.0", "id": "list", "method": "tools/list"})
+        tool_names = {tool["name"] for tool in listed["result"]["tools"]}
+        self.assertIn("query_effective_graph_view", tool_names)
+
+        called = gateway.handle_json_rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": "call",
+                "method": "tools/call",
+                "params": {
+                    "name": "query_effective_graph_view",
+                    "arguments": {"query_text": "Optoma quotation decision"},
+                },
+            }
+        )
+
+        self.assertFalse(called["result"]["isError"])
+        payload = called["result"]["content"][0]["json"]["data"]
+        self.assertFalse(payload["fallback_used"])
+        self.assertEqual(payload["evidence_coverage"], 1.0)
+        self.assertEqual(payload["graph_hits"][0]["graph_object_id"], "node_optoma_decision")
+        self.assertEqual(handler_calls[0]["requester_user_id"], "user_pm")
+        self.assertEqual(handler_calls[0]["workspace_id"], "workspace_main")
+        self.assertEqual(handler_calls[0]["session_id"], "session_kg_first")
+
+    def test_query_effective_graph_view_rejects_malformed_arguments_before_dispatch(
+        self,
+    ) -> None:
+        handler_calls: list[dict[str, Any]] = []
+
+        def retrieval_handler(input_data: dict[str, Any]) -> dict[str, Any]:
+            handler_calls.append(input_data)
+            return {"answer": "unexpected"}
+
+        gateway = SemanticMcpJsonRpcGateway(
+            semantic_gateway=SemanticMcpGateway(retrieval_handler=retrieval_handler),
+            session=SemanticGatewaySession(
+                session_id="session_kg_first_validation",
+                actor_user_id="user_pm",
+                workspace_id="workspace_main",
+            ),
+        )
+        tools = gateway.handle_json_rpc({"jsonrpc": "2.0", "id": "list", "method": "tools/list"})
+        tool_schema = next(
+            tool
+            for tool in tools["result"]["tools"]
+            if tool["name"] == "query_effective_graph_view"
+        )["inputSchema"]
+
+        self.assertEqual(tool_schema["required"], ["query_text"])
+        self.assertEqual(tool_schema["properties"], {"query_text": {"type": "string"}})
+        self.assertFalse(tool_schema["additionalProperties"])
+
+        malformed_arguments = (
+            {},
+            {"query_text": ""},
+            {"query_text": 42},
+            {"query_text": "Optoma", "workspace_id": "workspace_other"},
+        )
+        for index, arguments in enumerate(malformed_arguments):
+            response = gateway.handle_json_rpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": f"invalid_{index}",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "query_effective_graph_view",
+                        "arguments": arguments,
+                    },
+                }
+            )
+            self.assertTrue(response["result"]["isError"])
+            self.assertEqual(
+                response["result"]["content"][0]["json"]["data"]["error_code"],
+                "unsafe_tool_payload",
+            )
+        self.assertEqual(handler_calls, [])
+
     def test_standards_compliant_mcp_gateway_transport_initialize_and_tool_list(
         self,
     ) -> None:
@@ -58,6 +178,7 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
                 "list_observations",
                 "preview_graph_candidates",
                 "query_effective_graph",
+                "query_effective_graph_view",
                 "query_mail_evidence",
                 "answer_mail_case_progress",
                 "request_graph_access",

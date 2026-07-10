@@ -1106,7 +1106,13 @@ user_id
 grant_id
 ```
 
-Allowed retrieval locators are FormOwl-controlled identifiers such as `formowl://asset/{asset_id}` or `formowl://evidence/{evidence_id}`. Disallowed locators include NAS, SMB, NFS, WebDAV, local scratch, and raw object-store paths exposed through MCP.
+Allowed retrieval locators are FormOwl-controlled identifiers such as
+`formowl://asset/{asset_id}`, `formowl://observation/{observation_id}`, or
+`formowl://evidence/{evidence_id}`. A KG-first query may use graph evidence
+links to resolve observations, but the resolver must apply the observation's
+permission scope before returning text, captions, modality-specific location
+fields, or asset references. Disallowed locators include NAS, SMB, NFS,
+WebDAV, local scratch, and raw object-store paths exposed through MCP.
 
 ---
 
