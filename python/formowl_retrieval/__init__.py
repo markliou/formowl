@@ -8,6 +8,13 @@ from .gateway import (
     RetrievalMode,
     RetrievalTrace,
 )
+from .kg_first import (
+    CandidateGraphProposalSeed,
+    EvidenceContext,
+    EvidenceResolver,
+    GraphHit,
+    ObservationStoreEvidenceResolver,
+)
 
 __all__ = [
     "RetrievalGateway",
@@ -16,4 +23,9 @@ __all__ = [
     "RetrievalTrace",
     "MetadataRawAssetLocatorResolver",
     "RawAssetLocatorResolver",
+    "CandidateGraphProposalSeed",
+    "EvidenceContext",
+    "EvidenceResolver",
+    "GraphHit",
+    "ObservationStoreEvidenceResolver",
 ]

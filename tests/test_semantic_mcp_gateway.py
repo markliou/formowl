@@ -27,6 +27,7 @@ class SemanticMcpGatewayTests(unittest.TestCase):
                 "list_observations",
                 "preview_graph_candidates",
                 "query_effective_graph",
+                "query_effective_graph_view",
                 "query_mail_evidence",
                 "answer_mail_case_progress",
                 "request_graph_access",
@@ -242,7 +243,7 @@ class SemanticGatewayStaticContractTests(unittest.TestCase):
         no_worker_internal_output = True
         safe_error_envelope = True
 
-        self.assertEqual(len(PUBLIC_TOOL_SCHEMAS), 10)
+        self.assertEqual(len(PUBLIC_TOOL_SCHEMAS), 11)
         self.assertEqual(
             {schema["workflow"] for schema in PUBLIC_TOOL_SCHEMAS},
             {

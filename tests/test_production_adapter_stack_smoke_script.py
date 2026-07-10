@@ -162,6 +162,7 @@ def _valid_report() -> dict:
                 "tool_names": [
                     "preview_graph_candidates",
                     "query_effective_graph",
+                    "query_effective_graph_view",
                     "submit_graph_review_decision",
                     "generate_wiki_draft_from_graph_view",
                 ],

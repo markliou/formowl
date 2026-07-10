@@ -592,3 +592,33 @@ candidate matching proposes same-as or related-to candidates
 ```
 
 Matching does not grant access. Access does not merge graph state. Canonical merge does not grant raw asset access.
+
+## KG-First Cross-Resource Retrieval
+
+The ChatGPT-facing retrieval path uses the effective graph as the primary
+cross-resource integration layer while preserving observations and raw assets
+as evidence and source of truth:
+
+```text
+query_effective_graph_view
+  -> query-score permission-visible graph nodes and edges
+  -> resolve graph-hit source_observation_ids
+  -> return governed observation snippets and modality locators
+  -> evaluate graph confidence and evidence coverage
+  -> use vector/metadata fallback only when the graph path is insufficient
+  -> emit review-required Candidate KG proposal seeds from fallback evidence
+```
+
+The evidence resolver exposes only allowlisted modality location fields and
+`formowl://observation/{observation_id}` references. Raw asset references remain
+separate and require an explicit asset-scoped grant. Fallback seeds are DTOs for
+later candidate extraction/review; the query performs no candidate-store or
+canonical-graph write.
+
+The deterministic synthetic conformance fixture is
+`scripts/kg_first_cross_resource_smoke.py`. It proves one Optoma quotation
+decision can be matched through a candidate graph object and resolved to mail,
+slide, and project observations. A second query proves incomplete graph
+evidence triggers fallback and produces a review-required seed without a
+canonical artifact. This fixture is not real enterprise-data or production
+readiness evidence.

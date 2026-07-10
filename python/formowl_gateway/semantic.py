@@ -131,6 +131,26 @@ PUBLIC_TOOL_SCHEMAS = [
         "status_values": ["pending_review", "ok", "permission_denied", "error"],
     },
     {
+        "tool_name": "query_effective_graph_view",
+        "workflow": "access",
+        "input_keys": ["workspace_id", "query_text", "requester_user_id"],
+        "output_keys": [
+            "answer",
+            "graph_hits",
+            "evidence",
+            "fallback_used",
+            "fallback_reason",
+            "evidence_coverage",
+            "candidate_graph_proposal_seeds",
+            "citations",
+            "visible_graph_snippets",
+            "redaction_counts",
+            "warnings",
+        ],
+        "result_type": "effective_graph_query",
+        "status_values": ["pending_review", "ok", "permission_denied", "error"],
+    },
+    {
         "tool_name": "query_mail_evidence",
         "workflow": "mail_evidence",
         "input_keys": [
@@ -310,7 +330,7 @@ class SemanticMcpGateway:
             envelope = self._list_observations(dict(input_data))
         elif tool_name == "preview_graph_candidates":
             envelope = self._preview_graph_candidates(dict(input_data))
-        elif tool_name == "query_effective_graph":
+        elif tool_name in {"query_effective_graph", "query_effective_graph_view"}:
             envelope = self._query_effective_graph(dict(input_data))
         elif tool_name == "query_mail_evidence":
             envelope = self._query_mail_evidence(dict(input_data))
@@ -403,9 +423,16 @@ class SemanticMcpGateway:
                 status="pending_review",
                 data={
                     "answer": None,
+                    "graph_hits": [],
+                    "evidence": [],
+                    "fallback_used": False,
+                    "fallback_reason": None,
+                    "evidence_coverage": 0.0,
+                    "candidate_graph_proposal_seeds": [],
                     "citations": [],
                     "visible_graph_snippets": [],
                     "redaction_counts": {"hidden_records": 0},
+                    "warnings": ["retrieval_handler_not_configured"],
                 },
                 warnings=["retrieval_handler_not_configured"],
             )
