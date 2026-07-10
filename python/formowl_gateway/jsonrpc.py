@@ -30,12 +30,41 @@ _SEMANTIC_TOOL_EXTRA_ARGUMENT_KEYS = {
     },
     "query_mail_evidence": {"limit"},
 }
-_SEMANTIC_TOOL_SESSION_OVERRIDE_KEYS = {"session_id"}
-_SEMANTIC_TOOL_STRICT_CALLER_INPUTS = {
-    "query_effective_graph_view": {"query_text"},
+_SEMANTIC_TOOL_CALLER_IDENTITY_KEYS = {
+    "actor_user_id",
+    "requester_user_id",
+    "reviewer_user_id",
+    "session_id",
+    "workspace_id",
 }
+_SEMANTIC_TOOL_OBJECT_ARGUMENT_KEYS = {
+    "candidate_filter",
+    "observation_filter",
+    "permission_scope",
+    "requested_scope",
+}
+_SEMANTIC_TOOL_INTEGER_ARGUMENT_KEYS = {"limit"}
 _SEMANTIC_TOOL_REQUIRED_ARGUMENT_KEYS = {
+    "open_upload_session": {"intent", "intended_asset_type"},
+    "create_ingestion_job": {"asset_locator", "extractor_profile"},
+    "list_observations": {"asset_locator"},
+    "preview_graph_candidates": {"candidate_filter"},
+    "query_effective_graph": {"query_text"},
     "query_effective_graph_view": {"query_text"},
+    "query_mail_evidence": {"query_text"},
+    "answer_mail_case_progress": {"case_id"},
+    "request_graph_access": {
+        "owner_user_id",
+        "requested_scope",
+        "requested_access_level",
+        "reason",
+    },
+    "submit_graph_review_decision": {"proposal_id", "decision"},
+    "generate_wiki_draft_from_graph_view": {"projection_spec_id"},
+}
+_SEMANTIC_TOOL_SELECTOR_ARGUMENT_KEYS = {
+    "query_mail_evidence": ("mail_import_session_id", "mail_evidence_bundle_id"),
+    "answer_mail_case_progress": ("mail_import_session_id", "mail_evidence_bundle_id"),
 }
 _SEMANTIC_TOOL_FORBIDDEN_ARGUMENT_KEYS = {
     "backend",
@@ -280,6 +309,8 @@ class SemanticMcpJsonRpcGateway:
                 "workspace_id": self.session.workspace_id,
                 "requester_user_id": self.session.actor_user_id,
             }
+            if tool_name == "submit_graph_review_decision":
+                merged_arguments["reviewer_user_id"] = self.session.actor_user_id
             try:
                 tool_result = self.semantic_gateway.dispatch_tool(tool_name, merged_arguments)
             except ContractValidationError:
@@ -464,19 +495,34 @@ def create_mail_upload_semantic_jsonrpc_gateway(
 
 
 def _tool_to_json_rpc_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    tool_name = str(schema["tool_name"])
-    strict_inputs = _SEMANTIC_TOOL_STRICT_CALLER_INPUTS.get(tool_name)
-    input_keys = sorted(strict_inputs or set(schema["input_keys"]))
+    tool_name = schema["tool_name"]
+    exposed_keys = (
+        set(schema["input_keys"]) | _SEMANTIC_TOOL_EXTRA_ARGUMENT_KEYS.get(tool_name, set())
+    ) - _SEMANTIC_TOOL_CALLER_IDENTITY_KEYS
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {key: _semantic_argument_json_schema(key) for key in sorted(exposed_keys)},
+        "required": sorted(
+            _SEMANTIC_TOOL_REQUIRED_ARGUMENT_KEYS.get(tool_name, set()) & exposed_keys
+        ),
+        "additionalProperties": False,
+    }
+    selector_keys = _SEMANTIC_TOOL_SELECTOR_ARGUMENT_KEYS.get(tool_name)
+    if selector_keys is not None:
+        input_schema["anyOf"] = [{"required": [key]} for key in selector_keys]
     return {
         "name": tool_name,
         "description": f"FormOwl semantic gateway tool: {tool_name}",
-        "inputSchema": {
-            "type": "object",
-            "properties": {key: {"type": "string"} for key in input_keys},
-            "required": sorted(_SEMANTIC_TOOL_REQUIRED_ARGUMENT_KEYS.get(tool_name, set())),
-            "additionalProperties": strict_inputs is None,
-        },
+        "inputSchema": input_schema,
     }
+
+
+def _semantic_argument_json_schema(key: str) -> dict[str, Any]:
+    if key in _SEMANTIC_TOOL_OBJECT_ARGUMENT_KEYS:
+        return {"type": "object"}
+    if key in _SEMANTIC_TOOL_INTEGER_ARGUMENT_KEYS:
+        return {"type": "integer", "minimum": 1, "maximum": 100}
+    return {"type": "string"}
 
 
 def _mcp_server_tool_to_json_rpc_schema(tool: dict[str, Any]) -> dict[str, Any]:
@@ -498,35 +544,50 @@ def _mcp_server_tool_to_json_rpc_schema(tool: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_semantic_tool_arguments(tool_name: str, arguments: Mapping[str, Any]) -> None:
-    validate_public_gateway_payload({"tool_name": tool_name, "arguments": dict(arguments)})
+    _reject_semantic_caller_identity_keys(arguments)
     _reject_semantic_control_argument_keys(arguments)
     allowed_keys = _SEMANTIC_TOOL_INPUT_KEYS.get(tool_name)
     if allowed_keys is None:
         return
-    strict_inputs = _SEMANTIC_TOOL_STRICT_CALLER_INPUTS.get(tool_name)
-    allowed = strict_inputs or (
-        allowed_keys
-        | _SEMANTIC_TOOL_EXTRA_ARGUMENT_KEYS.get(tool_name, set())
-        | _SEMANTIC_TOOL_SESSION_OVERRIDE_KEYS
-    )
+    allowed = allowed_keys | _SEMANTIC_TOOL_EXTRA_ARGUMENT_KEYS.get(tool_name, set())
     extra = sorted(set(arguments) - allowed)
     if extra:
         raise ContractValidationError(
             "semantic JSON-RPC arguments contain unsupported keys: " + sha256_json(extra)
         )
-    missing = sorted(_SEMANTIC_TOOL_REQUIRED_ARGUMENT_KEYS.get(tool_name, set()) - set(arguments))
+    required = _SEMANTIC_TOOL_REQUIRED_ARGUMENT_KEYS.get(tool_name, set())
+    missing = sorted(key for key in required if key not in arguments)
     if missing:
         raise ContractValidationError(
-            "semantic JSON-RPC arguments are missing required keys: " + sha256_json(missing)
+            "semantic JSON-RPC arguments omit required keys: " + sha256_json(missing)
         )
-    for key in sorted(strict_inputs or set()):
-        if key not in arguments:
-            continue
-        value = arguments[key]
-        if not isinstance(value, str) or not value.strip():
-            raise ContractValidationError(
-                "semantic JSON-RPC argument must be a non-empty string: " + sha256_json(key)
-            )
+    selector_keys = _SEMANTIC_TOOL_SELECTOR_ARGUMENT_KEYS.get(tool_name)
+    if selector_keys is not None and not any(arguments.get(key) for key in selector_keys):
+        raise ContractValidationError("semantic JSON-RPC arguments omit a required selector")
+    for key, value in arguments.items():
+        if key in _SEMANTIC_TOOL_OBJECT_ARGUMENT_KEYS:
+            if not isinstance(value, Mapping):
+                raise ContractValidationError("semantic JSON-RPC object argument is invalid")
+        elif key in _SEMANTIC_TOOL_INTEGER_ARGUMENT_KEYS:
+            if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 100:
+                raise ContractValidationError("semantic JSON-RPC integer argument is invalid")
+        elif not isinstance(value, str) or not value.strip():
+            raise ContractValidationError("semantic JSON-RPC string argument is invalid")
+
+
+def _reject_semantic_caller_identity_keys(value: Any) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = _normalized_semantic_argument_key(str(key))
+            if normalized in _SEMANTIC_TOOL_CALLER_IDENTITY_KEYS:
+                raise ContractValidationError(
+                    "semantic JSON-RPC arguments contain caller-controlled identity key: "
+                    + sha256_json(normalized)
+                )
+            _reject_semantic_caller_identity_keys(item)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_semantic_caller_identity_keys(item)
 
 
 def _reject_semantic_control_argument_keys(value: Any) -> None:

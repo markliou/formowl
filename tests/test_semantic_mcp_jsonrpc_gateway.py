@@ -186,6 +186,47 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
                 "generate_wiki_draft_from_graph_view",
             },
         )
+        tools_by_name = {tool["name"]: tool for tool in tools["result"]["tools"]}
+        upload_schema = tools_by_name["open_upload_session"]["inputSchema"]
+        mail_schema = tools_by_name["query_mail_evidence"]["inputSchema"]
+        access_schema = tools_by_name["request_graph_access"]["inputSchema"]
+        review_schema = tools_by_name["submit_graph_review_decision"]["inputSchema"]
+        self.assertFalse(upload_schema["additionalProperties"])
+        self.assertFalse(mail_schema["additionalProperties"])
+        self.assertEqual(upload_schema["properties"]["permission_scope"], {"type": "object"})
+        self.assertEqual(
+            mail_schema["properties"]["limit"],
+            {"type": "integer", "minimum": 1, "maximum": 100},
+        )
+        self.assertEqual(access_schema["properties"]["requested_scope"], {"type": "object"})
+        self.assertEqual(upload_schema["required"], ["intended_asset_type", "intent"])
+        self.assertEqual(mail_schema["required"], ["query_text"])
+        self.assertEqual(
+            mail_schema["anyOf"],
+            [
+                {"required": ["mail_import_session_id"]},
+                {"required": ["mail_evidence_bundle_id"]},
+            ],
+        )
+        self.assertEqual(
+            access_schema["required"],
+            ["owner_user_id", "reason", "requested_access_level", "requested_scope"],
+        )
+        self.assertEqual(review_schema["required"], ["decision", "proposal_id"])
+        for tool in tools_by_name.values():
+            input_schema = tool["inputSchema"]
+            self.assertFalse(input_schema["additionalProperties"])
+            self.assertIn("required", input_schema)
+        for identity_key in (
+            "actor_user_id",
+            "requester_user_id",
+            "reviewer_user_id",
+            "session_id",
+            "workspace_id",
+        ):
+            self.assertNotIn(identity_key, upload_schema["properties"])
+            self.assertNotIn(identity_key, mail_schema["properties"])
+            self.assertNotIn(identity_key, review_schema["properties"])
         self.assertEqual(len(gateway.leak_transcript()), 2)
 
     def test_tools_call_binds_session_and_records_hash_only_transcript(self) -> None:
@@ -283,6 +324,129 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
                 self.assertNotIn("pst_local", rendered)
                 self.assertNotIn("private_backend", rendered)
                 self.assertNotIn("include_unprocessed", rendered)
+
+    def test_semantic_jsonrpc_rejects_caller_identity_before_handler_dispatch(self) -> None:
+        handler_calls: list[dict[str, Any]] = []
+
+        def recording_handler(input_data: dict[str, Any]) -> dict[str, Any]:
+            handler_calls.append(input_data)
+            return {
+                "answer": "bounded answer",
+                "citations": [],
+                "visible_graph_snippets": [],
+                "redaction_counts": {"hidden_records": 0},
+            }
+
+        gateway = SemanticMcpJsonRpcGateway(
+            semantic_gateway=SemanticMcpGateway(retrieval_handler=recording_handler),
+            session=SemanticGatewaySession(
+                session_id="session_001",
+                actor_user_id="user_yifan",
+                workspace_id="workspace_main",
+            ),
+        )
+        cases = [
+            {"session_id": "session_forged"},
+            {"workspace_id": "workspace_forged"},
+            {"requester_user_id": "user_forged"},
+            {"actorUserId": "user_forged"},
+            {"candidate_filter": {"reviewer_user_id": "user_forged"}},
+        ]
+
+        for index, identity_arguments in enumerate(cases, start=1):
+            with self.subTest(index=index):
+                result = gateway.handle_json_rpc(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": f"identity_{index}",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "query_effective_graph",
+                            "arguments": {
+                                "query_text": "delivery risk",
+                                **identity_arguments,
+                            },
+                        },
+                    }
+                )
+
+                tool_result = result["result"]["content"][0]["json"]
+                self.assertTrue(result["result"]["isError"])
+                self.assertEqual(tool_result["status"], "error")
+                self.assertEqual(tool_result["data"]["error_code"], "unsafe_tool_payload")
+                self.assertEqual(handler_calls, [])
+                rendered = str(result)
+                self.assertNotIn("forged", rendered)
+
+    def test_review_decision_binds_reviewer_identity_from_session(self) -> None:
+        gateway = SemanticMcpJsonRpcGateway(
+            session=SemanticGatewaySession(
+                session_id="session_001",
+                actor_user_id="user_reviewer",
+                workspace_id="workspace_main",
+            )
+        )
+
+        result = gateway.handle_json_rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": "review_001",
+                "method": "tools/call",
+                "params": {
+                    "name": "submit_graph_review_decision",
+                    "arguments": {"proposal_id": "fusion_001", "decision": "defer"},
+                },
+            }
+        )
+
+        self.assertFalse(result["result"]["isError"])
+        tool_result = result["result"]["content"][0]["json"]
+        self.assertEqual(tool_result["status"], "pending_review")
+
+    def test_private_query_content_is_dispatched_without_output_leak_scanning_or_echo(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        def recording_handler(input_data: dict[str, Any]) -> dict[str, Any]:
+            calls.append(input_data)
+            return {
+                "status": "ok",
+                "mail_import_session_id": "mailimport_001",
+                "query_hash": "sha256:" + "1" * 64,
+                "evidence_snippets": [],
+                "citations": [],
+                "redaction_counts": {"hidden_bundles": 0, "hidden_messages": 0},
+                "warnings": ["no_visible_mail_evidence_matched"],
+            }
+
+        gateway = SemanticMcpJsonRpcGateway(
+            semantic_gateway=SemanticMcpGateway(mail_evidence_handler=recording_handler),
+            session=SemanticGatewaySession(
+                session_id="session_private_query",
+                actor_user_id="user_yifan",
+                workspace_id="workspace_main",
+            ),
+        )
+        private_query = "Review /srv/private/a.csv and select * from supplier_private"
+
+        result = gateway.handle_json_rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": "private_query",
+                "method": "tools/call",
+                "params": {
+                    "name": "query_mail_evidence",
+                    "arguments": {
+                        "query_text": private_query,
+                        "mail_import_session_id": "mailimport_001",
+                    },
+                },
+            }
+        )
+
+        self.assertFalse(result["result"]["isError"])
+        self.assertEqual(calls[0]["query_text"], private_query)
+        self.assertNotIn(private_query, str(result))
+        self.assertNotIn(private_query, str(gateway.leak_transcript()))
 
     def test_forbidden_tool_calls_return_safe_json_rpc_errors(self) -> None:
         gateway = SemanticMcpJsonRpcGateway()

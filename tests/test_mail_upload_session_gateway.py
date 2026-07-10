@@ -80,7 +80,7 @@ class MailUploadSessionGatewayTests(unittest.TestCase):
         self.assertNotIn("bucket_name", rendered)
         self.assertNotIn("select *", rendered)
 
-    def test_jsonrpc_session_context_overrides_forged_public_identity(self) -> None:
+    def test_jsonrpc_rejects_forged_public_identity_before_side_effects(self) -> None:
         temp_dir = _paths.fresh_test_dir("mail-upload-session-forged-identity")
         upload_store = UploadSessionStore(temp_dir)
         audit_store = FileAuditLogStore(temp_dir)
@@ -104,25 +104,17 @@ class MailUploadSessionGatewayTests(unittest.TestCase):
             }
         )
 
-        self.assertFalse(result["result"]["isError"])
+        self.assertTrue(result["result"]["isError"])
         self.assertEqual(result["result"]["session"]["session_id"], "session_001")
         self.assertEqual(result["result"]["session"]["actor_user_id"], "user_yifan")
         self.assertEqual(result["result"]["session"]["workspace_id"], "workspace_formowl")
-        payload = result["result"]["content"][0]["json"]["data"]
-        task_card = payload["upload_task_card"]
-        self.assertEqual(task_card["current_user_id"], "user_yifan")
-        self.assertEqual(task_card["workspace_id"], "workspace_formowl")
-        persisted = upload_store.get(payload["upload_session_id"])
-        self.assertIsNotNone(persisted)
-        assert persisted is not None
-        self.assertEqual(persisted.actor_user_id, "user_yifan")
-        self.assertEqual(persisted.session_id, "session_001")
-        self.assertEqual(persisted.workspace_id, "workspace_formowl")
-        audit_logs = audit_store.list()
-        self.assertEqual(len(audit_logs), 1)
-        self.assertEqual(audit_logs[0].actor_user_id, "user_yifan")
-        self.assertEqual(audit_logs[0].session_id, "session_001")
-        self.assertNotIn("attacker", str(result))
+        payload = result["result"]["content"][0]["json"]
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["data"]["error_code"], "unsafe_tool_payload")
+        self.assertEqual(upload_store.list(), [])
+        self.assertEqual(audit_store.list(), [])
+        rendered = str(result)
+        self.assertNotIn("attacker", rendered)
 
     def test_user_infrastructure_controls_fail_before_session_or_audit_side_effects(self) -> None:
         cases = [
