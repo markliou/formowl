@@ -2089,6 +2089,39 @@ These groups can be split across multiple agents after Slice 1 is stable.
     optional explicit claim-boundary assertion note were implemented before
     final verification.
 
+- [x] Complete issue #33 Work Package A experiment naming and reporting
+  boundary.
+  - Owner paths: `scripts/mail_full_pst_exm_lexical_ontology_eval.py`,
+    `tests/test_mail_full_pst_exm_lexical_ontology_eval_script.py`,
+    `experiments/kg_ontology_v2_coordination/`, `docs/`
+  - Proof: generated arms separately identify candidate admission, candidate
+    KG construction, type compatibility, and frame semantics; generated
+    same-corpus cases use development/evaluation rather than holdout labels;
+    positive retrieval, no-answer/no-match behavior, and permission safety are
+    separate validated report sections; permission-denied auto-passes do not
+    enter primary retrieval accuracy; all eight required report sections are
+    present; canonical dev-container tests and Ruff pass; and the 3-reviewer
+    gate agrees.
+  - 2026-07-10 completion: report-schema implementation, regression tests, and
+    documentation are complete on `issue-33-work-package-a`. The validator
+    removes the unsupported private-row recomputation claim, enforces closed
+    schemas and derived-value checks for all eight report sections, and rejects
+    coherent public-summary reclassification that changes the configured
+    positive/no-match/permission evaluation mix. Canonical dev-container
+    verification passes: focused lexical candidate-admission evaluator suite 29
+    tests OK; full unittest 638 tests OK; full Ruff check passed; 303 files pass
+    format-check; and `git diff --check` passes.
+  - Effective reviewer count: 3/3.
+  - Reviewer agreement count: 3/3 (`Dalton`, `Kepler`, `Faraday`).
+  - Reviewers with blocking findings: none. Dalton's engineering blockers on
+    unsupported recomputation claims, open nested report schemas, missing
+    derived topology/frame/evidence validation, and coherent permission-case
+    reclassification were fixed one at a time and re-reviewed. Kepler's
+    governance naming blocker and Faraday's research-claim naming blocker were
+    also fixed and re-reviewed.
+  - Non-counted agents: none.
+  - Active reviewers: none.
+
 - [x] Add KG candidate-generation capability profiles for heterogeneous remote
   workers.
   - Owner paths: `python/formowl_graph/`, `python/formowl_kg_eval/`, `docs/`,
