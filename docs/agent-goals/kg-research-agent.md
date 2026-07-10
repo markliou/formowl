@@ -25,6 +25,73 @@ raw access, canonical graph writes, autonomous business judgment, and
 enterprise-scale latency/scalability remain outside any future completion
 claim.
 
+## Completed 2026-07-10 Issue #36 Slice
+
+Status: `complete`.
+
+GitHub tracking issue: `#36`.
+
+Current execution goal:
+
+1. Complete the evidence-grounded 100-unique-case / 50,000-rendered-scenario
+   ChatGPT × FormOwl MCP evaluation on the MAY procurement corpus.
+2. Fix every replay, evidence-normalization, and structured-answer contract
+   blocker exposed by the complete corpus without weakening safety validation.
+3. Preserve expected case outcomes separately from actual MCP semantic outcomes
+   and score retrieval false positives/false negatives as evaluation results.
+4. Verify permission denial, stateful response-derived follow-ups, complete
+   tools/list binding, replay roots, and the external trust anchor.
+5. Revalidate the candidate-KG, ontology ablation, and 326-arm factorial source
+   reports and bind them into the final safe report.
+6. Pass focused tests, the canonical dev-container full suite, Ruff, and three
+   independent reviewer gates covering product usefulness, evidence/citation
+   correctness, and engineering/governance.
+7. Update the issue and durable handoff records, commit and push the complete
+   slice, and close `#36` only after every acceptance blocker passes.
+
+Evaluate whether ChatGPT can answer operator supply-chain questions better when
+FormOwl is available as a governed read-only MCP tool over the operator-provided
+MAY procurement PST corpus. Build a deterministic, model-free 50,000-case
+ChatGPT tool-use simulation from the existing 100 reviewer-grounded private
+domain-hard cases, with 500 persona, urgency, answer-format, and conversation
+variants per evidence case. Compare no-FormOwl, governed mail evidence,
+candidate-KG, and ontology-guided-KG arms on tool trajectory, argument shape,
+evidence retrieval, citations, actionable-answer support, no-match behavior,
+permission safety, and latency. Re-run the existing candidate-KG, ontology
+ablation, and complete 326 ordered-arm ontology factorial experiments on the
+same preserved MAY work directory, then bind their safe aggregate results into
+the 50,000-case report.
+
+This slice supports only an offline recorded/simulated ChatGPT-to-MCP tool-use
+evaluation claim. It does not support a live ChatGPT connection, production
+readiness, autonomous business judgment, raw-mail access, database deployment,
+canonical KG/type/user-graph/wiki mutation, or a claim that generated prompt
+variants provide 50,000 independent evidence situations. Private prompts,
+queries, tool arguments, evidence identifiers, and scoring rows must stay in
+operator-controlled ignored artifacts; public output is hash/count/status/
+timing-only.
+
+Completion evidence:
+
+- Production v4 completed 100 unique evidence cases and 50,000 rendered
+  scenarios with internal validation `blockers=[]`.
+- Standalone validation rebuilt grounded answer rows from the private source
+  manifest, trusted replay artifact, and evidence bundle, then passed with
+  `blockers=[]`.
+- The replay preserved 10 expected no-match false positives as measured
+  failures and enforced all 10 expected permission denials.
+- Each FormOwl arm recorded 60,000 tool calls derived from realized
+  response-conditional trajectories; non-triggered conditions did not add a
+  second call or its simulated cost.
+- Candidate KG and ontology-guided KG both passed 19/100 retrieval cases;
+  governed mail passed 11/100. Across 326 ordered factorial retrieval arms,
+  zero beat KG-only, two tied, and 324 were worse.
+- Canonical verification passed 713 dev-container tests, full Ruff check,
+  316-file format check, and `git diff --check`.
+- The three read-only release gates returned `RELEASE_DECISION: AGREE` for
+  product usefulness, evidence/citation correctness, and
+  engineering/governance.
+
 ## Current Acceptance State
 
 Do not treat the broad KG real-evidence acceptance objective as complete in the

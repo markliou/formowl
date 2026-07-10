@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from unittest.mock import patch
 import unittest
@@ -361,6 +362,54 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
             audit_snippet.payload["source_observation_id"],
         )
         self.assertEqual(missed, [])
+
+    def test_mail_evidence_query_redacts_unsafe_spans_without_failing_whole_query(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-query-content-redaction")
+        bundle = _mail_bundle(temp_dir)
+        unsafe_segment = replace(
+            bundle.body_segments[0],
+            text=(
+                "Audit approval is delayed. Debug export was /srv/formowl/private/a.csv "
+                "and the note included select * from supplier_private. "
+                "A copied note said copy supplier_private from /tmp/private.csv."
+            ),
+        )
+        unsafe_message = replace(
+            bundle.messages[0],
+            subject="Audit follow-up with supplier_private as (select * from private_table)",
+        )
+        bundle = replace(
+            bundle,
+            messages=[unsafe_message],
+            body_segments=[unsafe_segment],
+        )
+
+        result = (
+            MailEvidenceQueryGateway([bundle])
+            .query_mail_evidence(
+                query_text="audit approval delayed",
+                requester_user_id="user_yifan",
+                workspace_id="workspace_formowl",
+                session_id="session_owner",
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+                now=NOW,
+            )
+            .to_dict()
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["evidence_snippets"])
+        self.assertTrue(result["evidence_snippets"][0]["content_redacted"])
+        self.assertGreater(result["redaction_counts"]["unsafe_snippets"], 0)
+        self.assertIn("unsafe_mail_evidence_content_redacted", result["warnings"])
+        rendered = str(result).lower()
+        self.assertNotIn("/srv/formowl", rendered)
+        self.assertNotIn("/tmp/private.csv", rendered)
+        self.assertNotIn("select * from", rendered)
+        self.assertNotIn("copy supplier_private from", rendered)
+        self.assertNotIn("with supplier_private as", rendered)
 
     def test_mail_evidence_query_gateway_builds_index_once_per_bundle(self) -> None:
         temp_dir = _paths.fresh_test_dir("mail-evidence-query-index-cache")
@@ -897,9 +946,9 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
         )
 
         content = result["result"]["content"][0]["json"]
-        self.assertFalse(result["result"]["isError"])
-        self.assertEqual(content["status"], "permission_denied")
-        self.assertEqual(content["data"]["evidence_snippets"], [])
+        self.assertTrue(result["result"]["isError"])
+        self.assertEqual(content["status"], "error")
+        self.assertEqual(content["data"]["error_code"], "unsafe_tool_payload")
         self.assertEqual(result["result"]["session"]["actor_user_id"], "user_other")
         self.assertNotIn("Waiting on audit approval", str(content))
 

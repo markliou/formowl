@@ -70,6 +70,12 @@ _SECRET_FIELD_NAMES = {
     "token",
 }
 _SECRET_COMPACT_FIELD_NAMES = {name.replace("_", "") for name in _SECRET_FIELD_NAMES}
+_RAW_PATH_TOKEN = re.compile(
+    r"(?:(?<=^)|(?<=[\s'\"([{=,:;]))(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+|"
+    r"[A-Za-z]:[\\/][^\s'\"<>]+|\\\\[^\s'\"<>]+)",
+    re.IGNORECASE,
+)
+_LOCATOR_TOKEN = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>]+", re.IGNORECASE)
 
 
 def safe_public_string(value: Any, field_name: str) -> str:
@@ -105,6 +111,30 @@ def assert_no_public_raw_references(payload: Any, context: str = "payload") -> N
             "public payload contains raw, backend, credential, secret, or SQL references: "
             + ", ".join(sorted(violations))
         )
+
+
+def redact_public_raw_references(value: str) -> tuple[str, int]:
+    """Redact unsafe locator, credential, and SQL spans from user evidence text."""
+
+    if not isinstance(value, str):
+        raise ContractValidationError("redacted public value must be a string")
+    redacted = value
+    replacements = 0
+    for pattern, replacement in (
+        (_SECRET_ASSIGNMENT_TEXT, "[redacted_credential]"),
+        (_BEARER_CREDENTIAL_TEXT, "[redacted_credential]"),
+        (_SQL_TEXT, "[redacted_sql]"),
+        (_INTERNAL_FORMOWL_LOCATOR, "[redacted_internal_locator]"),
+        (_BACKEND_LOCATOR, "[redacted_internal_locator]"),
+        (_URL_USERINFO, "[redacted_url_credentials]"),
+        (_LOCATOR_TOKEN, "[redacted_locator]"),
+        (_RAW_PATH_TOKEN, "[redacted_path]"),
+    ):
+        redacted, count = pattern.subn(replacement, redacted)
+        replacements += count
+    if _unsafe_public_string(redacted):
+        return "[redacted_mail_evidence]", max(1, replacements)
+    return redacted, replacements
 
 
 def _unsafe_public_string(value: str) -> bool:

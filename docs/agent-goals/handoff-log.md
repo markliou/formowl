@@ -2301,3 +2301,33 @@ status in each role's goal file and task completion in
   passed. Reviewer gate passed 3/3 with final `RELEASE_DECISION: AGREE` from
   `Galileo`, `Hilbert`, and `Euler`. No candidate-store or canonical-graph write
   is performed, and issue #19 certification/staged-write scope remains excluded.
+
+# 2026-07-10 — KG Research Agent — issue #36 release gate passed
+
+- Completed the evidence-grounded MAY ChatGPT × FormOwl MCP evaluation with
+  100 unique reviewer-grounded evidence cases and 50,000 rendered interaction
+  variants. Production v4 and the standalone source-rebuild validator both
+  passed with `blockers=[]`.
+- The evaluator now binds closed `tools/list` schemas, recursively rejects
+  caller-controlled identity/session/grant keys, separates expected outcomes
+  from actual MCP semantics, executes same-session response-derived follow-ups,
+  and validates private replay roots against an external trust anchor.
+- Structured-answer gold and prediction use methodologically independent
+  lifecycle/action/deadline/dependency extraction. Answerable false negatives
+  score case/thread scope as an applicable zero, and standalone validation
+  rebuilds grounded rows from the private manifest, trusted replay, and evidence
+  bundle so coherent rehashing cannot pass.
+- Safe results: governed mail retrieval 11/100, candidate KG 19/100, ontology
+  KG 19/100; 326 retrieval-only factorial arms produced zero better than
+  KG-only, two equal, and 324 worse. The replay exposed 10 expected no-match
+  false positives while enforcing all 10 expected permission denials.
+- Response-conditioned trajectory accounting records 60,000 tool calls per
+  FormOwl arm. Non-triggered correction/refinement/permission conditions do not
+  add a second call, turn, or simulated cost.
+- Canonical final verification passed 713 dev-container tests, full Ruff check,
+  316-file format check, and `git diff --check`. Reviewer gate passed 3/3 with
+  explicit `RELEASE_DECISION: AGREE` from the product-usefulness,
+  evidence/citation, and engineering/governance reviewers.
+- Claim boundary remains deterministic offline replay/usefulness evaluation:
+  no live ChatGPT execution, production-readiness claim, autonomous business
+  judgment, raw-mail MCP access, or canonical KG/type/user-graph/wiki writes.

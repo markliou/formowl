@@ -5,12 +5,23 @@ from datetime import datetime
 import re
 from typing import Any, Mapping, Sequence
 
-from formowl_contract import ContractValidationError, Grant, sha256_json, to_plain
+from formowl_contract import (
+    ContractValidationError,
+    Grant,
+    redact_public_raw_references,
+    sha256_json,
+    to_plain,
+)
 
 from ._guards import assert_public_payload_safe, safe_public_string
 from .bundle import MailEvidenceBundle
 
 _MAIL_EVIDENCE_PERMISSIONS = {"read", "evidence_snippet", "mail_evidence_read"}
+_SEMANTIC_GATEWAY_TEXT_REDACTIONS = (
+    re.compile(r"\bwith\s+.+\s+as\s*\(", re.IGNORECASE),
+    re.compile(r"\bcopy\s+.+\s+from\b", re.IGNORECASE),
+    re.compile(r"\bTraceback \(most recent call last\):", re.IGNORECASE),
+)
 
 
 @dataclass(frozen=True)
@@ -129,13 +140,19 @@ class MailEvidenceQueryGateway:
                 warnings=["no_visible_mail_evidence_matched"],
             )
         citations = [_citation_for_snippet(snippet) for snippet in snippets]
+        unsafe_snippet_count = sum(bool(snippet.get("content_redacted")) for snippet in snippets)
         return MailEvidenceQueryResult(
             status="ok",
             mail_import_session_id=visible_bundles[0].mail_import_session.mail_import_session_id,
             query_hash=query_hash,
             evidence_snippets=snippets,
             citations=citations,
-            redaction_counts={"hidden_bundles": 0, "hidden_messages": 0},
+            redaction_counts={
+                "hidden_bundles": 0,
+                "hidden_messages": 0,
+                "unsafe_snippets": unsafe_snippet_count,
+            },
+            warnings=(["unsafe_mail_evidence_content_redacted"] if unsafe_snippet_count else []),
         )
 
     def _matching_bundles(
@@ -279,8 +296,26 @@ def _build_snippet_index(bundle: MailEvidenceBundle) -> _MailSnippetIndex:
 
 def _safe_snippet(payload: dict[str, Any]) -> dict[str, Any]:
     cleaned = {key: value for key, value in payload.items() if value is not None}
+    redaction_count = 0
+    for field_name in ("subject", "snippet"):
+        value = cleaned.get(field_name)
+        if not isinstance(value, str):
+            continue
+        redacted, field_redaction_count = _redact_mail_public_text(value)
+        cleaned[field_name] = redacted
+        redaction_count += field_redaction_count
+    if redaction_count:
+        cleaned["content_redacted"] = True
     assert_public_payload_safe(cleaned, "mail_evidence_snippet")
     return cleaned
+
+
+def _redact_mail_public_text(value: str) -> tuple[str, int]:
+    redacted, count = redact_public_raw_references(value)
+    for pattern in _SEMANTIC_GATEWAY_TEXT_REDACTIONS:
+        redacted, replacement_count = pattern.subn("[redacted_mail_evidence]", redacted)
+        count += replacement_count
+    return redacted, count
 
 
 def _citation_for_snippet(snippet: dict[str, Any]) -> dict[str, Any]:
