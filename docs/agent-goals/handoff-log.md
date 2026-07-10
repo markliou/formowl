@@ -6,20 +6,36 @@ status in each role's goal file and task completion in
 
 ## 2026-07-10
 
-- No-training programmatic ontology ablation completed for the accepted active
-  goal. The EXM/PST 50,000-case evaluator now compares regex, raw
-  `jieba + SentencePiece`, data-driven programmatic ontology, frozen-profile
-  programmatic ontology, and the prior weak-label MLP programmatic ontology in
+- Issue #33 Work Package A completed on `issue-33-work-package-a` from merged
+  Ontology v2 PR #31. The EXM evaluator now uses candidate-admission arm names,
+  declares KG/type/frame stage boundaries, uses development/evaluation labels
+  instead of same-corpus holdout language, excludes permission-denied
+  auto-passes from primary retrieval accuracy, and emits eight closed-schema
+  report sections. Reviewer fixes removed unsupported private-row recomputation
+  and ontology/frame-semantic claims, bound frame/type/evidence/topology fields
+  to exact derived values, and reject coherent permission-case reclassification
+  that changes the configured evaluation mix. Canonical dev-container
+  verification passes: focused evaluator tests 29 OK, full unittest 638 OK,
+  full Ruff check passed, 303 files pass format-check, and `git diff --check`
+  passed. The 3/3 read-only gate passed with explicit `RELEASE_DECISION: AGREE`
+  from `Dalton` (engineering), `Kepler` (governance/safety), and `Faraday`
+  (research method); no blocking findings remain.
+
+- No-training candidate-admission ablation completed for the accepted active
+  goal. The EXM/PST 50,000-case evaluator compared regex, raw
+  `jieba + SentencePiece`, frequency-rule admission, frozen-profile admission,
+  and the prior weak-label MLP admission policy in
   one run over the same generated benchmark shape. Safe tracked aggregate:
   `experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json`.
-  Result: regex current ontology 10,000/50,000; raw `jieba + SentencePiece`
-  ontology 18,176/50,000 with 0/5,000 no-match guards; data-driven
-  programmatic ontology 33,277/50,000 with all guards passing; frozen-profile
-  programmatic ontology 43,976/50,000 with 33,976/40,000 positive cases,
+  Result: regex admission 10,000/50,000; raw `jieba + SentencePiece`
+  admission 18,176/50,000 with 0/5,000 no-match guards; frequency-rule
+  admission 33,277/50,000 with all guards passing; frozen-profile admission
+  43,976/50,000 with 33,976/40,000 positive cases,
   5,000/5,000 no-match guards, and 5,000/5,000 denied guards; weak-label MLP
-  programmatic ontology 43,369/50,000 with 33,369/40,000 positives and all
-  guards passing. Current method judgment: the executable programmatic
-  ontology layer is effective, but the self-trained weak-label MLP is not
+  weak-label MLP admission 43,369/50,000 with 33,369/40,000 positives and all
+  guards passing. Current method judgment: the bundled candidate-admission and
+  graph-construction policy is effective on this generated benchmark, but this
+  does not establish a type-compatibility or frame-semantic effect. The self-trained MLP is not
   justified as the stable default because the zero-training frozen profile is
   +607 passed cases better in this run. Engineering reviewer `Meitner` blocked
   once because the frozen profile model hash did not include the actual
@@ -41,16 +57,16 @@ status in each role's goal file and task completion in
 
 ## 2026-07-09
 
-- Programmatic ontology redesign slice completed after the user rejected the
-  prior ontology as ineffective. The EXM 50,000-case evaluator now includes
-  `graph_neural_programmatic_ontology`, which compiles ontology behavior before
-  KG edge construction using document-frequency graph gates, protected mention
+- Candidate-admission redesign slice completed after the user rejected the
+  prior method as ineffective. The historical report arm was named
+  `graph_neural_programmatic_ontology`; issue #33 reclassifies it as candidate
+  admission before KG edge construction using document-frequency graph gates, protected mention
   typing, deterministic weak-label MLP CJK candidate scoring, and
   exact-candidate-only ontology retrieval. Safe tracked aggregate:
   `experiments/kg_ontology_v2_coordination/results/exm_programmatic_ontology_50000_summary_2026-07-09.json`.
-  Result: regex current ontology 10,000/50,000, raw `jieba + SentencePiece`
-  ontology 18,176/50,000 with 0/5,000 no-match guards, and graph-neural
-  programmatic ontology 43,369/50,000 with 33,369/40,000 positive cases,
+  Result: regex admission 10,000/50,000, raw `jieba + SentencePiece`
+  admission 18,176/50,000 with 0/5,000 no-match guards, and weak-label MLP
+  admission 43,369/50,000 with 33,369/40,000 positive cases,
   5,000/5,000 no-match guards, and 5,000/5,000 denied guards. The slice also
   fixed an identifier-regex bug where plain lowercase words were being
   promoted into `id:*` candidates. Maxwell's reviewer blocker on tampered arm

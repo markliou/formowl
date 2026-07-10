@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate EXM PST KG/ontology behavior with jieba + SentencePiece segmentation.
+"""Evaluate EXM PST candidate admission and graph scoring behavior.
 
 This experiment consumes preserved full-PST parsed work directories rather than
 re-parsing archives inside the KG scorer. Public output is hash/count/status
@@ -35,7 +35,7 @@ from formowl_gateway import validate_public_gateway_payload  # noqa: E402
 
 DEFAULT_OUTPUT = ROOT / ".test-tmp" / "formowl-mail-exm-lexical-ontology-50000.json"
 DEFAULT_PRIVATE_DIR = ROOT / ".test-tmp" / "formowl-mail-exm-lexical-ontology-private"
-REPORT_TYPE = "mail_full_pst_exm_lexical_ontology_eval"
+REPORT_TYPE = "mail_full_pst_exm_candidate_admission_eval"
 RUN_OPT_IN_ENV = "FORMOWL_RUN_FULL_PST_EXM_LEXICAL_ONTOLOGY_EVAL"
 NOW = "2026-07-09T16:00:00+08:00"
 CASE_COUNT = 50000
@@ -59,20 +59,20 @@ PROGRAMMATIC_SCORER_WEAK_LABEL_MLP = "weak_label_mlp"
 PROGRAMMATIC_SCORER_DATA_DRIVEN = "data_driven_no_neural"
 PROGRAMMATIC_SCORER_FROZEN_PROFILE = "frozen_profile_no_training"
 SEGMENTATION_POLICY_VERSION = "jieba_sentencepiece_protected_spans_v1"
-ONTOLOGY_POLICY_VERSION = "formowl_exm_graph_neural_programmatic_ontology_policy_v1"
+TYPE_COMPATIBILITY_PROXY_POLICY_VERSION = "formowl_exm_category_soft_scoring_proxy_v1"
 PRIVATE_MANIFEST_NAME = "exm_lexical_ontology_50000.private.json"
 PRIVATE_ROWS_NAME = "exm_lexical_ontology_50000_rows.private.json"
 PRIVATE_CORPUS_NAME = "sentencepiece_training_corpus.private.txt"
 PRIVATE_SENTENCEPIECE_LOG_NAME = "sentencepiece_training.private.log"
 PRIVATE_SENTENCEPIECE_PREFIX = "sentencepiece_exm_private"
 
-ARM_REGEX_KG = "regex_current_kg"
-ARM_REGEX_ONTOLOGY = "regex_current_ontology"
-ARM_LEXICAL_KG = "jieba_sentencepiece_kg"
-ARM_LEXICAL_ONTOLOGY = "jieba_sentencepiece_ontology"
-ARM_DATA_DRIVEN_ONTOLOGY = "graph_data_driven_programmatic_ontology"
-ARM_FROZEN_ONTOLOGY = "graph_frozen_profile_programmatic_ontology"
-ARM_PROGRAMMATIC_ONTOLOGY = "graph_neural_programmatic_ontology"
+ARM_REGEX_KG = "regex_candidate_admission__candidate_kg"
+ARM_REGEX_ONTOLOGY = "regex_candidate_admission__type_compatibility_proxy"
+ARM_LEXICAL_KG = "jieba_sentencepiece_candidate_admission__candidate_kg"
+ARM_LEXICAL_ONTOLOGY = "jieba_sentencepiece_candidate_admission__type_compatibility_proxy"
+ARM_DATA_DRIVEN_ONTOLOGY = "frequency_rule_candidate_admission__type_compatibility_proxy"
+ARM_FROZEN_ONTOLOGY = "frozen_profile_candidate_admission__type_compatibility_proxy"
+ARM_PROGRAMMATIC_ONTOLOGY = "weak_label_mlp_candidate_admission__type_compatibility_proxy"
 ARMS = (
     ARM_REGEX_KG,
     ARM_REGEX_ONTOLOGY,
@@ -83,11 +83,56 @@ ARMS = (
     ARM_PROGRAMMATIC_ONTOLOGY,
 )
 
-POLICY_REGEX = "regex_current"
-POLICY_LEXICAL = "jieba_sentencepiece"
-POLICY_DATA_DRIVEN_PROGRAMMATIC = "graph_data_driven_programmatic"
-POLICY_FROZEN_PROGRAMMATIC = "graph_frozen_profile_programmatic"
-POLICY_PROGRAMMATIC = "graph_neural_programmatic"
+ARM_STAGE_DEFINITIONS = {
+    ARM_REGEX_KG: {
+        "candidate_admission_policy": "regex_candidate_admission",
+        "kg_construction_mode": "lexeme_component_graph_v1",
+        "type_compatibility_mode": "not_applied",
+        "frame_semantics_mode": "not_evaluated",
+    },
+    ARM_REGEX_ONTOLOGY: {
+        "candidate_admission_policy": "regex_candidate_admission",
+        "kg_construction_mode": "lexeme_component_graph_v1",
+        "type_compatibility_mode": "category_soft_scoring_proxy_v1",
+        "frame_semantics_mode": "not_evaluated",
+    },
+    ARM_LEXICAL_KG: {
+        "candidate_admission_policy": "jieba_sentencepiece_candidate_admission",
+        "kg_construction_mode": "lexeme_component_graph_v1",
+        "type_compatibility_mode": "not_applied",
+        "frame_semantics_mode": "not_evaluated",
+    },
+    ARM_LEXICAL_ONTOLOGY: {
+        "candidate_admission_policy": "jieba_sentencepiece_candidate_admission",
+        "kg_construction_mode": "lexeme_component_graph_v1",
+        "type_compatibility_mode": "category_soft_scoring_proxy_v1",
+        "frame_semantics_mode": "not_evaluated",
+    },
+    ARM_DATA_DRIVEN_ONTOLOGY: {
+        "candidate_admission_policy": "frequency_rule_candidate_admission",
+        "kg_construction_mode": "lexeme_component_graph_v1",
+        "type_compatibility_mode": "category_soft_scoring_proxy_v1",
+        "frame_semantics_mode": "not_evaluated",
+    },
+    ARM_FROZEN_ONTOLOGY: {
+        "candidate_admission_policy": "frozen_profile_candidate_admission",
+        "kg_construction_mode": "lexeme_component_graph_v1",
+        "type_compatibility_mode": "category_soft_scoring_proxy_v1",
+        "frame_semantics_mode": "not_evaluated",
+    },
+    ARM_PROGRAMMATIC_ONTOLOGY: {
+        "candidate_admission_policy": "weak_label_mlp_candidate_admission",
+        "kg_construction_mode": "lexeme_component_graph_v1",
+        "type_compatibility_mode": "category_soft_scoring_proxy_v1",
+        "frame_semantics_mode": "not_evaluated",
+    },
+}
+
+POLICY_REGEX = "regex_candidate_admission"
+POLICY_LEXICAL = "jieba_sentencepiece_candidate_admission"
+POLICY_DATA_DRIVEN_PROGRAMMATIC = "frequency_rule_candidate_admission"
+POLICY_FROZEN_PROGRAMMATIC = "frozen_profile_candidate_admission"
+POLICY_PROGRAMMATIC = "weak_label_mlp_candidate_admission"
 PROGRAMMATIC_POLICIES = frozenset(
     {
         POLICY_DATA_DRIVEN_PROGRAMMATIC,
@@ -157,7 +202,7 @@ _OWNER_MATCH_BUCKETS = frozenset(
     }
 )
 _CASE_BUCKETS = _OWNER_MATCH_BUCKETS | {"access_boundary", "false_positive_guard"}
-_CASE_SPLITS = frozenset({"dev", "holdout"})
+_CASE_SPLITS = frozenset({"development", "evaluation"})
 _PROGRAMMATIC_NEURAL_FEATURE_NAMES = (
     "has_cjk",
     "length_norm",
@@ -705,7 +750,7 @@ def _run_exm_lexical_ontology_eval_inner(
         "candidate_kg_scored": all(
             safe_outputs["arm_summaries"][arm]["case_count"] == case_count for arm in ARMS
         ),
-        "ontology_ablation_scored": (
+        "type_compatibility_proxy_scored": (
             safe_outputs["arm_summaries"][ARM_REGEX_ONTOLOGY]["case_count"] == case_count
             and safe_outputs["arm_summaries"][ARM_LEXICAL_ONTOLOGY]["case_count"] == case_count
             and safe_outputs["arm_summaries"][ARM_DATA_DRIVEN_ONTOLOGY]["case_count"] == case_count
@@ -714,9 +759,8 @@ def _run_exm_lexical_ontology_eval_inner(
         ),
         "candidate_only_boundary_respected": True,
         "canonical_kg_wiki_side_effects_absent": _no_graph_or_wiki_side_effects(parsed_corpus_dirs),
-        "row_derived_validation_recomputed": True,
         "raw_leak_guard_passed": False,
-        "exm_lexical_ontology_eval_completed": False,
+        "exm_candidate_admission_eval_completed": False,
     }
     report = {
         "report_type": REPORT_TYPE,
@@ -726,10 +770,10 @@ def _run_exm_lexical_ontology_eval_inner(
         "claim_boundary": _claim_boundary(False),
     }
     report["metrics"]["raw_leak_guard_passed"] = _public_outputs_are_safe(report)
-    report["metrics"]["exm_lexical_ontology_eval_completed"] = _eval_completed(report)
-    report["claim_boundary"]["supports_exm_50000_lexical_ontology_eval_claim"] = report["metrics"][
-        "exm_lexical_ontology_eval_completed"
-    ]
+    report["metrics"]["exm_candidate_admission_eval_completed"] = _eval_completed(report)
+    report["claim_boundary"]["supports_exm_50000_candidate_admission_eval_claim"] = report[
+        "metrics"
+    ]["exm_candidate_admission_eval_completed"]
     report["validation"] = validate_report(report)
     return report
 
@@ -898,7 +942,7 @@ def _generate_cases(segments: Sequence[_Segment], *, case_count: int) -> list[_C
         del lexeme
         member_pair = _distinct_pair_for_variant(members, index)
         display = members[0][1]
-        split = "dev" if len(positives) < max(1, positive_target // 10) else "holdout"
+        split = "development" if len(positives) < max(1, positive_target // 10) else "evaluation"
         positives.append(
             _Case(
                 case_id="exmlexcase_"
@@ -926,7 +970,7 @@ def _generate_cases(segments: Sequence[_Segment], *, case_count: int) -> list[_C
             case_id="exmlexcase_" + sha256_json({"kind": "no_match", "index": index})[-28:],
             result_kind="no_match",
             bucket="false_positive_guard",
-            split="dev" if index < max(1, no_match_target // 10) else "holdout",
+            split=("development" if index < max(1, no_match_target // 10) else "evaluation"),
             query_text=f"Find separate evidence about absentlexicalcase{index:05d}.",
             required_segment_ids=(),
             required_match_count=0,
@@ -945,7 +989,7 @@ def _generate_cases(segments: Sequence[_Segment], *, case_count: int) -> list[_C
                 )[-28:],
                 result_kind="permission_denied",
                 bucket="access_boundary",
-                split="dev" if index < max(1, permission_target // 10) else "holdout",
+                split=("development" if index < max(1, permission_target // 10) else "evaluation"),
                 query_text=source.query_text,
                 required_segment_ids=(),
                 required_match_count=0,
@@ -1224,7 +1268,7 @@ def _compile_programmatic_ontology_policy(
         counters["frequency_rejected"] += 1
 
     payload = {
-        "policy_version": ONTOLOGY_POLICY_VERSION,
+        "policy_version": TYPE_COMPATIBILITY_PROXY_POLICY_VERSION,
         "min_document_frequency": PROGRAMMATIC_MIN_DOCUMENT_FREQUENCY,
         "max_document_frequency": PROGRAMMATIC_MAX_DOCUMENT_FREQUENCY,
         "neural_score_threshold_basis_points": PROGRAMMATIC_NEURAL_SCORE_THRESHOLD_BP,
@@ -1783,8 +1827,8 @@ def _safe_outputs(
     best_arm = max(
         ARMS,
         key=lambda arm: (
-            arm_summaries[arm]["passed_case_count"],
-            arm_summaries[arm]["positive_passed_count"],
+            arm_summaries[arm]["primary_retrieval_passed_count"],
+            arm_summaries[arm]["no_answer_passed_count"],
             arm,
         ),
     )
@@ -1794,13 +1838,15 @@ def _safe_outputs(
     frozen_ontology_summary = arm_summaries[ARM_FROZEN_ONTOLOGY]
     programmatic_ontology_summary = arm_summaries[ARM_PROGRAMMATIC_ONTOLOGY]
     programmatic_policy_summaries = {
-        PROGRAMMATIC_SCORER_DATA_DRIVEN: _policy_public_summary(data_driven_policy),
-        PROGRAMMATIC_SCORER_FROZEN_PROFILE: _policy_public_summary(frozen_policy),
-        PROGRAMMATIC_SCORER_WEAK_LABEL_MLP: _policy_public_summary(programmatic_policy),
+        POLICY_DATA_DRIVEN_PROGRAMMATIC: _policy_public_summary(data_driven_policy),
+        POLICY_FROZEN_PROGRAMMATIC: _policy_public_summary(frozen_policy),
+        POLICY_PROGRAMMATIC: _policy_public_summary(programmatic_policy),
     }
     return {
         "segmentation_policy_hash": sha256_json(SEGMENTATION_POLICY_VERSION),
-        "ontology_policy_hash": sha256_json(ONTOLOGY_POLICY_VERSION),
+        "type_compatibility_proxy_policy_hash": sha256_json(
+            TYPE_COMPATIBILITY_PROXY_POLICY_VERSION
+        ),
         "parsed_corpus_count": prepared.parsed_corpus_count,
         "expected_parsed_corpus_count": expected_parsed_corpus_count,
         "parsed_corpus_hash": prepared.parsed_corpus_hash,
@@ -1813,7 +1859,7 @@ def _safe_outputs(
         "sentencepiece_model_hash": prepared.segmenters.sentencepiece_model_hash,
         "sentencepiece_vocab_size": prepared.segmenters.sentencepiece_vocab_size,
         "sentencepiece_user_symbol_count": prepared.segmenters.user_symbol_count,
-        "programmatic_policy_summaries": programmatic_policy_summaries,
+        "candidate_admission_policy_summaries": programmatic_policy_summaries,
         "programmatic_policy_hash": programmatic_policy.policy_hash,
         "programmatic_candidate_lexeme_count": programmatic_policy.candidate_lexeme_count,
         "programmatic_accepted_lexeme_count": programmatic_policy.accepted_lexeme_count,
@@ -1856,8 +1902,8 @@ def _safe_outputs(
         "permission_denied_case_count": sum(
             1 for case in cases if case.result_kind == "permission_denied"
         ),
-        "dev_case_count": sum(1 for case in cases if case.split == "dev"),
-        "holdout_case_count": sum(1 for case in cases if case.split == "holdout"),
+        "development_case_count": sum(1 for case in cases if case.split == "development"),
+        "evaluation_case_count": sum(1 for case in cases if case.split == "evaluation"),
         "protected_span_case_count": sum(
             1 for case in cases if case.bucket in {"cjk_organization", "business_identifier"}
         ),
@@ -1866,42 +1912,66 @@ def _safe_outputs(
         "private_manifest_hash": private_manifest_hash,
         "private_score_rows_hash": private_rows_hash,
         "arm_names": list(ARMS),
+        "arm_stage_definitions": {
+            arm: dict(definition) for arm, definition in ARM_STAGE_DEFINITIONS.items()
+        },
         "arm_summaries": arm_summaries,
+        **_report_sections(
+            arm_summaries=arm_summaries,
+            protected_span_case_count=sum(
+                1 for case in cases if case.bucket in {"cjk_organization", "business_identifier"}
+            ),
+            regex_kg=regex_kg,
+            lexical_kg=lexical_kg,
+            data_driven_kg=data_driven_kg,
+            frozen_kg=frozen_kg,
+            programmatic_kg=programmatic_kg,
+            case_elapsed_ms=case_elapsed_ms,
+            segmenter_elapsed_ms=segmenter_elapsed_ms,
+            corpus_elapsed_ms=corpus_elapsed_ms,
+            kg_elapsed_ms=kg_elapsed_ms,
+            scoring_elapsed_ms=scoring_elapsed_ms,
+            total_elapsed_ms=total_elapsed_ms,
+        ),
         "best_arm_name": best_arm,
-        "best_passed_case_count": int(arm_summaries[best_arm]["passed_case_count"]),
-        "best_pass_rate_basis_points": int(arm_summaries[best_arm]["pass_rate_basis_points"]),
-        "lexical_ontology_delta_vs_regex_current_passed_case_count": int(
-            lexical_ontology_summary["passed_case_count"]
+        "best_primary_retrieval_passed_count": int(
+            arm_summaries[best_arm]["primary_retrieval_passed_count"]
+        ),
+        "best_primary_retrieval_accuracy_basis_points": int(
+            arm_summaries[best_arm]["primary_retrieval_accuracy_basis_points"]
+        ),
+        "jieba_sentencepiece_type_compatibility_proxy_delta_vs_regex_type_compatibility_proxy_primary_retrieval_passed_count": int(
+            lexical_ontology_summary["primary_retrieval_passed_count"]
         )
-        - int(regex_current_summary["passed_case_count"]),
-        "lexical_ontology_delta_vs_lexical_kg_passed_case_count": int(
-            arm_summaries[ARM_LEXICAL_ONTOLOGY]["passed_case_count"]
+        - int(regex_current_summary["primary_retrieval_passed_count"]),
+        "type_compatibility_proxy_delta_vs_jieba_sentencepiece_candidate_kg_primary_retrieval_passed_count": int(
+            arm_summaries[ARM_LEXICAL_ONTOLOGY]["primary_retrieval_passed_count"]
         )
-        - int(arm_summaries[ARM_LEXICAL_KG]["passed_case_count"]),
-        "programmatic_ontology_delta_vs_lexical_ontology_passed_case_count": int(
-            programmatic_ontology_summary["passed_case_count"]
+        - int(arm_summaries[ARM_LEXICAL_KG]["primary_retrieval_passed_count"]),
+        "weak_label_mlp_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count": int(
+            programmatic_ontology_summary["primary_retrieval_passed_count"]
         )
-        - int(lexical_ontology_summary["passed_case_count"]),
-        "data_driven_ontology_delta_vs_lexical_ontology_passed_case_count": int(
-            data_driven_ontology_summary["passed_case_count"]
+        - int(lexical_ontology_summary["primary_retrieval_passed_count"]),
+        "frequency_rule_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count": int(
+            data_driven_ontology_summary["primary_retrieval_passed_count"]
         )
-        - int(lexical_ontology_summary["passed_case_count"]),
-        "frozen_ontology_delta_vs_lexical_ontology_passed_case_count": int(
-            frozen_ontology_summary["passed_case_count"]
+        - int(lexical_ontology_summary["primary_retrieval_passed_count"]),
+        "frozen_profile_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count": int(
+            frozen_ontology_summary["primary_retrieval_passed_count"]
         )
-        - int(lexical_ontology_summary["passed_case_count"]),
-        "programmatic_ontology_delta_vs_data_driven_passed_case_count": int(
-            programmatic_ontology_summary["passed_case_count"]
+        - int(lexical_ontology_summary["primary_retrieval_passed_count"]),
+        "weak_label_mlp_delta_vs_frequency_rule_primary_retrieval_passed_count": int(
+            programmatic_ontology_summary["primary_retrieval_passed_count"]
         )
-        - int(data_driven_ontology_summary["passed_case_count"]),
-        "programmatic_ontology_delta_vs_frozen_profile_passed_case_count": int(
-            programmatic_ontology_summary["passed_case_count"]
+        - int(data_driven_ontology_summary["primary_retrieval_passed_count"]),
+        "weak_label_mlp_delta_vs_frozen_profile_primary_retrieval_passed_count": int(
+            programmatic_ontology_summary["primary_retrieval_passed_count"]
         )
-        - int(frozen_ontology_summary["passed_case_count"]),
-        "programmatic_ontology_delta_vs_regex_current_passed_case_count": int(
-            programmatic_ontology_summary["passed_case_count"]
+        - int(frozen_ontology_summary["primary_retrieval_passed_count"]),
+        "weak_label_mlp_delta_vs_regex_primary_retrieval_passed_count": int(
+            programmatic_ontology_summary["primary_retrieval_passed_count"]
         )
-        - int(regex_current_summary["passed_case_count"]),
+        - int(regex_current_summary["primary_retrieval_passed_count"]),
         "regex_candidate_graph_node_count": regex_kg.node_count,
         "regex_candidate_graph_relation_count": regex_kg.relation_count,
         "regex_lexical_relation_count": regex_kg.lexical_relation_count,
@@ -1967,6 +2037,9 @@ def _arm_summary(
         for row in rows
         if row.get("result_kind") == "permission_denied" and row.get("status") == "passed"
     )
+    positive_case_count = sum(1 for row in rows if row.get("result_kind") == "owner_match")
+    no_match_case_count = sum(1 for row in rows if row.get("result_kind") == "no_match")
+    permission_case_count = sum(1 for row in rows if row.get("result_kind") == "permission_denied")
     bucket_passed: Counter[str] = Counter()
     bucket_total: Counter[str] = Counter()
     for row in rows:
@@ -1977,10 +2050,24 @@ def _arm_summary(
             bucket_passed[bucket] += 1
     summary = {
         "arm_hash": sha256_json(arm),
+        **ARM_STAGE_DEFINITIONS[arm],
         "case_count": len(rows),
         "passed_case_count": passed,
         "failed_case_count": len(rows) - passed,
-        "pass_rate_basis_points": _basis_points(passed, len(rows)),
+        "all_case_pass_rate_basis_points": _basis_points(passed, len(rows)),
+        "primary_retrieval_case_count": positive_case_count,
+        "primary_retrieval_passed_count": positive_passed,
+        "primary_retrieval_accuracy_basis_points": _basis_points(
+            positive_passed, positive_case_count
+        ),
+        "no_answer_case_count": no_match_case_count,
+        "no_answer_passed_count": no_match_passed,
+        "no_answer_accuracy_basis_points": _basis_points(no_match_passed, no_match_case_count),
+        "permission_safety_case_count": permission_case_count,
+        "permission_safety_passed_count": denied_passed,
+        "permission_safety_accuracy_basis_points": _basis_points(
+            denied_passed, permission_case_count
+        ),
         "positive_passed_count": positive_passed,
         "no_match_passed_count": no_match_passed,
         "permission_denied_passed_count": denied_passed,
@@ -1991,6 +2078,116 @@ def _arm_summary(
     }
     summary["summary_hash"] = sha256_json(summary)
     return summary
+
+
+def _report_sections(
+    *,
+    arm_summaries: Mapping[str, Mapping[str, Any]],
+    protected_span_case_count: int,
+    regex_kg: _KgIndex,
+    lexical_kg: _KgIndex,
+    data_driven_kg: _KgIndex,
+    frozen_kg: _KgIndex,
+    programmatic_kg: _KgIndex,
+    case_elapsed_ms: int,
+    segmenter_elapsed_ms: int,
+    corpus_elapsed_ms: int,
+    kg_elapsed_ms: int,
+    scoring_elapsed_ms: int,
+    total_elapsed_ms: int,
+) -> dict[str, Any]:
+    positive_retrieval = {
+        "primary_metric": "primary_retrieval_accuracy_basis_points",
+        "permission_denied_cases_excluded": True,
+        "arms": {
+            arm: {
+                "case_count": summary["primary_retrieval_case_count"],
+                "passed_count": summary["primary_retrieval_passed_count"],
+                "accuracy_basis_points": summary["primary_retrieval_accuracy_basis_points"],
+            }
+            for arm, summary in arm_summaries.items()
+        },
+    }
+    no_answer = {
+        "primary_metric": "no_answer_accuracy_basis_points",
+        "arms": {
+            arm: {
+                "case_count": summary["no_answer_case_count"],
+                "passed_count": summary["no_answer_passed_count"],
+                "accuracy_basis_points": summary["no_answer_accuracy_basis_points"],
+            }
+            for arm, summary in arm_summaries.items()
+        },
+    }
+    permission_safety = {
+        "primary_metric": "permission_safety_accuracy_basis_points",
+        "automatically_blocked_cases_are_not_retrieval_successes": True,
+        "arms": {
+            arm: {
+                "case_count": summary["permission_safety_case_count"],
+                "passed_count": summary["permission_safety_passed_count"],
+                "accuracy_basis_points": summary["permission_safety_accuracy_basis_points"],
+            }
+            for arm, summary in arm_summaries.items()
+        },
+    }
+    kg_indexes = {
+        ARM_REGEX_KG: regex_kg,
+        ARM_REGEX_ONTOLOGY: regex_kg,
+        ARM_LEXICAL_KG: lexical_kg,
+        ARM_LEXICAL_ONTOLOGY: lexical_kg,
+        ARM_DATA_DRIVEN_ONTOLOGY: data_driven_kg,
+        ARM_FROZEN_ONTOLOGY: frozen_kg,
+        ARM_PROGRAMMATIC_ONTOLOGY: programmatic_kg,
+    }
+    graph_topology = {
+        "measurement_status": "candidate_graph_diagnostics",
+        "arms": {
+            arm: {
+                "candidate_graph_node_count": index.node_count,
+                "candidate_graph_relation_count": index.relation_count,
+                "lexical_relation_count": index.lexical_relation_count,
+                "component_count": index.component_count,
+                "largest_component_size": index.largest_component_size,
+            }
+            for arm, index in kg_indexes.items()
+        },
+    }
+    return {
+        "positive_retrieval": positive_retrieval,
+        "no_answer_or_no_match": no_answer,
+        "permission_safety": permission_safety,
+        "frame_type_quality": {
+            "measurement_status": "not_measured_by_candidate_admission_harness",
+            "quality_claim_supported": False,
+            "type_compatibility_modes": {
+                arm: definition["type_compatibility_mode"]
+                for arm, definition in ARM_STAGE_DEFINITIONS.items()
+            },
+            "frame_semantics_modes": {
+                arm: definition["frame_semantics_mode"]
+                for arm, definition in ARM_STAGE_DEFINITIONS.items()
+            },
+        },
+        "slot_value_quality": {
+            "measurement_status": "not_measured_by_candidate_admission_harness",
+            "quality_claim_supported": False,
+        },
+        "evidence_span_quality": {
+            "measurement_status": "coverage_proxy_only",
+            "quality_claim_supported": False,
+            "protected_span_case_count": protected_span_case_count,
+        },
+        "latency_and_resource_use": {
+            "case_generation_elapsed_ms": case_elapsed_ms,
+            "segmentation_elapsed_ms": segmenter_elapsed_ms,
+            "corpus_preparation_elapsed_ms": corpus_elapsed_ms,
+            "kg_build_elapsed_ms": kg_elapsed_ms,
+            "scoring_elapsed_ms": scoring_elapsed_ms,
+            "total_elapsed_ms": total_elapsed_ms,
+        },
+        "graph_topology_diagnostics": graph_topology,
+    }
 
 
 def validate_report(report: Mapping[str, Any]) -> dict[str, Any]:
@@ -2014,9 +2211,9 @@ def validate_report(report: Mapping[str, Any]) -> dict[str, Any]:
     else:
         _validate_success_report(metrics, safe_outputs, claim_boundary, blockers)
         recomputed_complete = _eval_completed(report)
-        if metrics.get("exm_lexical_ontology_eval_completed") is not recomputed_complete:
+        if metrics.get("exm_candidate_admission_eval_completed") is not recomputed_complete:
             blockers.append("completion metric does not match recomputed completion predicate")
-        if claim_boundary.get("supports_exm_50000_lexical_ontology_eval_claim") is not (
+        if claim_boundary.get("supports_exm_50000_candidate_admission_eval_claim") is not (
             recomputed_complete
         ):
             blockers.append("claim boundary does not match recomputed completion predicate")
@@ -2043,20 +2240,19 @@ def _validate_success_report(
         "case_manifest_generated",
         "case_count_target_met",
         "candidate_kg_scored",
-        "ontology_ablation_scored",
+        "type_compatibility_proxy_scored",
         "candidate_only_boundary_respected",
         "canonical_kg_wiki_side_effects_absent",
-        "row_derived_validation_recomputed",
         "raw_leak_guard_passed",
-        "exm_lexical_ontology_eval_completed",
+        "exm_candidate_admission_eval_completed",
     }
     _validate_exact_keys(metrics, expected_metrics, "metrics", blockers)
-    for key in expected_metrics - {"exm_lexical_ontology_eval_completed"}:
+    for key in expected_metrics - {"exm_candidate_admission_eval_completed"}:
         if metrics.get(key) is not True:
             blockers.append("required metric is not true: " + key)
     expected_safe_keys = {
         "segmentation_policy_hash",
-        "ontology_policy_hash",
+        "type_compatibility_proxy_policy_hash",
         "parsed_corpus_count",
         "expected_parsed_corpus_count",
         "parsed_corpus_hash",
@@ -2067,7 +2263,7 @@ def _validate_success_report(
         "sentencepiece_model_hash",
         "sentencepiece_vocab_size",
         "sentencepiece_user_symbol_count",
-        "programmatic_policy_summaries",
+        "candidate_admission_policy_summaries",
         "programmatic_policy_hash",
         "programmatic_candidate_lexeme_count",
         "programmatic_accepted_lexeme_count",
@@ -2092,26 +2288,35 @@ def _validate_success_report(
         "positive_case_count",
         "no_match_case_count",
         "permission_denied_case_count",
-        "dev_case_count",
-        "holdout_case_count",
+        "development_case_count",
+        "evaluation_case_count",
         "protected_span_case_count",
         "case_bucket_counts",
         "case_split_counts",
         "private_manifest_hash",
         "private_score_rows_hash",
         "arm_names",
+        "arm_stage_definitions",
         "arm_summaries",
+        "positive_retrieval",
+        "no_answer_or_no_match",
+        "permission_safety",
+        "frame_type_quality",
+        "slot_value_quality",
+        "evidence_span_quality",
+        "latency_and_resource_use",
+        "graph_topology_diagnostics",
         "best_arm_name",
-        "best_passed_case_count",
-        "best_pass_rate_basis_points",
-        "lexical_ontology_delta_vs_regex_current_passed_case_count",
-        "lexical_ontology_delta_vs_lexical_kg_passed_case_count",
-        "programmatic_ontology_delta_vs_lexical_ontology_passed_case_count",
-        "data_driven_ontology_delta_vs_lexical_ontology_passed_case_count",
-        "frozen_ontology_delta_vs_lexical_ontology_passed_case_count",
-        "programmatic_ontology_delta_vs_data_driven_passed_case_count",
-        "programmatic_ontology_delta_vs_frozen_profile_passed_case_count",
-        "programmatic_ontology_delta_vs_regex_current_passed_case_count",
+        "best_primary_retrieval_passed_count",
+        "best_primary_retrieval_accuracy_basis_points",
+        "jieba_sentencepiece_type_compatibility_proxy_delta_vs_regex_type_compatibility_proxy_primary_retrieval_passed_count",
+        "type_compatibility_proxy_delta_vs_jieba_sentencepiece_candidate_kg_primary_retrieval_passed_count",
+        "weak_label_mlp_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count",
+        "frequency_rule_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count",
+        "frozen_profile_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count",
+        "weak_label_mlp_delta_vs_frequency_rule_primary_retrieval_passed_count",
+        "weak_label_mlp_delta_vs_frozen_profile_primary_retrieval_passed_count",
+        "weak_label_mlp_delta_vs_regex_primary_retrieval_passed_count",
         "regex_candidate_graph_node_count",
         "regex_candidate_graph_relation_count",
         "regex_lexical_relation_count",
@@ -2157,7 +2362,7 @@ def _validate_success_report(
     _validate_exact_keys(safe_outputs, expected_safe_keys, "safe_outputs", blockers)
     for key in (
         "segmentation_policy_hash",
-        "ontology_policy_hash",
+        "type_compatibility_proxy_policy_hash",
         "parsed_corpus_hash",
         "training_corpus_hash",
         "sentencepiece_model_hash",
@@ -2186,13 +2391,14 @@ def _validate_success_report(
         blockers.append("safe_outputs.arm_names mismatch")
     _validate_report_level_case_counts(safe_outputs, blockers)
     _validate_arm_summaries(safe_outputs, blockers)
+    _validate_report_sections(safe_outputs, blockers)
     _validate_safe_output_derived_values(safe_outputs, blockers)
     if safe_outputs.get("positive_case_count", 0) + safe_outputs.get(
         "no_match_case_count", 0
     ) + safe_outputs.get("permission_denied_case_count", 0) != safe_outputs.get("case_count"):
         blockers.append("case-kind counts do not sum to case_count")
-    if safe_outputs.get("dev_case_count", 0) + safe_outputs.get(
-        "holdout_case_count", 0
+    if safe_outputs.get("development_case_count", 0) + safe_outputs.get(
+        "evaluation_case_count", 0
     ) != safe_outputs.get("case_count"):
         blockers.append("split counts do not sum to case_count")
     _validate_success_claim_boundary(claim_boundary, metrics, blockers)
@@ -2210,11 +2416,24 @@ def _validate_report_level_case_counts(
         "positive_case_count",
         "no_match_case_count",
         "permission_denied_case_count",
-        "dev_case_count",
-        "holdout_case_count",
+        "development_case_count",
+        "evaluation_case_count",
     ):
         if not _is_non_negative_int(safe_outputs.get(key)):
             blockers.append("safe_outputs count must be a non-negative integer: " + key)
+    expected_positive_count = int(case_count * POSITIVE_CASE_RATIO_BP / 10000)
+    expected_no_match_count = int(case_count * NO_MATCH_CASE_RATIO_BP / 10000)
+    expected_denied_count = case_count - expected_positive_count - expected_no_match_count
+    if (
+        positive_case_count,
+        no_match_case_count,
+        denied_case_count,
+    ) != (
+        expected_positive_count,
+        expected_no_match_count,
+        expected_denied_count,
+    ):
+        blockers.append("case-kind counts must match configured evaluation mix")
     case_bucket_counts = safe_outputs.get("case_bucket_counts")
     if not isinstance(case_bucket_counts, Mapping):
         blockers.append("safe_outputs.case_bucket_counts must be an object")
@@ -2251,17 +2470,17 @@ def _validate_report_level_case_counts(
 def _validate_programmatic_policy_summaries(
     safe_outputs: Mapping[str, Any], blockers: list[str]
 ) -> None:
-    summaries = safe_outputs.get("programmatic_policy_summaries")
+    summaries = safe_outputs.get("candidate_admission_policy_summaries")
     if not isinstance(summaries, Mapping):
-        blockers.append("safe_outputs.programmatic_policy_summaries must be an object")
+        blockers.append("safe_outputs.candidate_admission_policy_summaries must be an object")
         return
-    expected_scorers = {
-        PROGRAMMATIC_SCORER_DATA_DRIVEN,
-        PROGRAMMATIC_SCORER_FROZEN_PROFILE,
-        PROGRAMMATIC_SCORER_WEAK_LABEL_MLP,
+    expected_policies = {
+        POLICY_DATA_DRIVEN_PROGRAMMATIC,
+        POLICY_FROZEN_PROGRAMMATIC,
+        POLICY_PROGRAMMATIC,
     }
-    if set(summaries) != expected_scorers:
-        blockers.append("programmatic policy summary scorer set mismatch")
+    if set(summaries) != expected_policies:
+        blockers.append("candidate admission policy summary set mismatch")
         return
     expected_keys = {
         "policy_hash",
@@ -2284,19 +2503,25 @@ def _validate_programmatic_policy_summaries(
         "training_epoch_count",
         "feature_count",
     }
-    expected_versions = {
-        PROGRAMMATIC_SCORER_DATA_DRIVEN: PROGRAMMATIC_DATA_DRIVEN_MODEL_VERSION,
-        PROGRAMMATIC_SCORER_FROZEN_PROFILE: PROGRAMMATIC_FROZEN_MODEL_VERSION,
-        PROGRAMMATIC_SCORER_WEAK_LABEL_MLP: PROGRAMMATIC_NEURAL_MODEL_VERSION,
+    expected_scorers = {
+        POLICY_DATA_DRIVEN_PROGRAMMATIC: PROGRAMMATIC_SCORER_DATA_DRIVEN,
+        POLICY_FROZEN_PROGRAMMATIC: PROGRAMMATIC_SCORER_FROZEN_PROFILE,
+        POLICY_PROGRAMMATIC: PROGRAMMATIC_SCORER_WEAK_LABEL_MLP,
     }
-    for scorer_kind, summary in summaries.items():
+    expected_versions = {
+        POLICY_DATA_DRIVEN_PROGRAMMATIC: PROGRAMMATIC_DATA_DRIVEN_MODEL_VERSION,
+        POLICY_FROZEN_PROGRAMMATIC: PROGRAMMATIC_FROZEN_MODEL_VERSION,
+        POLICY_PROGRAMMATIC: PROGRAMMATIC_NEURAL_MODEL_VERSION,
+    }
+    for policy_name, summary in summaries.items():
         if not isinstance(summary, Mapping):
             blockers.append("programmatic policy summary must be an object")
             continue
         _validate_exact_keys(summary, expected_keys, "programmatic_policy_summary", blockers)
+        scorer_kind = expected_scorers[policy_name]
         if summary.get("scorer_kind") != scorer_kind:
             blockers.append("programmatic policy summary scorer kind mismatch")
-        if summary.get("model_version") != expected_versions.get(str(scorer_kind)):
+        if summary.get("model_version") != expected_versions[policy_name]:
             blockers.append("programmatic policy summary model version mismatch")
         for key in ("policy_hash", "model_hash"):
             _require_sha256(summary.get(key), "programmatic_policy_summary." + key, blockers)
@@ -2359,10 +2584,23 @@ def _validate_arm_summaries(safe_outputs: Mapping[str, Any], blockers: list[str]
             continue
         expected = {
             "arm_hash",
+            "candidate_admission_policy",
+            "kg_construction_mode",
+            "type_compatibility_mode",
+            "frame_semantics_mode",
             "case_count",
             "passed_case_count",
             "failed_case_count",
-            "pass_rate_basis_points",
+            "all_case_pass_rate_basis_points",
+            "primary_retrieval_case_count",
+            "primary_retrieval_passed_count",
+            "primary_retrieval_accuracy_basis_points",
+            "no_answer_case_count",
+            "no_answer_passed_count",
+            "no_answer_accuracy_basis_points",
+            "permission_safety_case_count",
+            "permission_safety_passed_count",
+            "permission_safety_accuracy_basis_points",
             "positive_passed_count",
             "no_match_passed_count",
             "permission_denied_passed_count",
@@ -2377,6 +2615,16 @@ def _validate_arm_summaries(safe_outputs: Mapping[str, Any], blockers: list[str]
             _require_sha256(summary.get(key), "arm_summary." + key, blockers)
         if summary.get("case_count") != case_count:
             blockers.append("arm_summary.case_count mismatch")
+        if {
+            key: summary.get(key)
+            for key in (
+                "candidate_admission_policy",
+                "kg_construction_mode",
+                "type_compatibility_mode",
+                "frame_semantics_mode",
+            )
+        } != ARM_STAGE_DEFINITIONS[arm]:
+            blockers.append("arm summary stage definition mismatch")
         passed_count = _int_value(summary.get("passed_case_count"))
         failed_count = _int_value(summary.get("failed_case_count"))
         positive_passed = _int_value(summary.get("positive_passed_count"))
@@ -2386,7 +2634,16 @@ def _validate_arm_summaries(safe_outputs: Mapping[str, Any], blockers: list[str]
             "case_count",
             "passed_case_count",
             "failed_case_count",
-            "pass_rate_basis_points",
+            "all_case_pass_rate_basis_points",
+            "primary_retrieval_case_count",
+            "primary_retrieval_passed_count",
+            "primary_retrieval_accuracy_basis_points",
+            "no_answer_case_count",
+            "no_answer_passed_count",
+            "no_answer_accuracy_basis_points",
+            "permission_safety_case_count",
+            "permission_safety_passed_count",
+            "permission_safety_accuracy_basis_points",
             "positive_passed_count",
             "no_match_passed_count",
             "permission_denied_passed_count",
@@ -2404,8 +2661,31 @@ def _validate_arm_summaries(safe_outputs: Mapping[str, Any], blockers: list[str]
             blockers.append("arm summary no-match passed count exceeds total")
         if denied_passed > denied_case_count:
             blockers.append("arm summary permission-denied passed count exceeds total")
-        if summary.get("pass_rate_basis_points") != _basis_points(passed_count, case_count):
-            blockers.append("arm summary pass rate mismatch")
+        if summary.get("all_case_pass_rate_basis_points") != _basis_points(
+            passed_count, case_count
+        ):
+            blockers.append("arm summary all-case pass rate mismatch")
+        expected_separate_metrics = (
+            (
+                "primary_retrieval",
+                positive_case_count,
+                positive_passed,
+            ),
+            ("no_answer", no_match_case_count, no_match_passed),
+            ("permission_safety", denied_case_count, denied_passed),
+        )
+        for prefix, expected_count, expected_passed in expected_separate_metrics:
+            if summary.get(prefix + "_case_count") != expected_count:
+                blockers.append("arm summary " + prefix + " case count mismatch")
+            if summary.get(prefix + "_passed_count") != expected_passed:
+                blockers.append("arm summary " + prefix + " passed count mismatch")
+            accuracy_key = (
+                "primary_retrieval_accuracy_basis_points"
+                if prefix == "primary_retrieval"
+                else prefix + "_accuracy_basis_points"
+            )
+            if summary.get(accuracy_key) != _basis_points(expected_passed, expected_count):
+                blockers.append("arm summary " + prefix + " accuracy mismatch")
         if summary.get("unique_response_hash_count") != case_count:
             blockers.append("arm summary response hashes must be unique")
         if summary.get("arm_hash") != sha256_json(str(arm)):
@@ -2454,6 +2734,216 @@ def _validate_arm_summaries(safe_outputs: Mapping[str, Any], blockers: list[str]
             blockers.append("arm summary hash mismatch")
 
 
+def _validate_report_sections(safe_outputs: Mapping[str, Any], blockers: list[str]) -> None:
+    if safe_outputs.get("arm_stage_definitions") != ARM_STAGE_DEFINITIONS:
+        blockers.append("arm stage definitions mismatch")
+    arm_summaries = safe_outputs.get("arm_summaries")
+    if not isinstance(arm_summaries, Mapping) or set(arm_summaries) != set(ARMS):
+        return
+    section_specs = {
+        "positive_retrieval": (
+            "primary_retrieval",
+            "primary_retrieval_accuracy_basis_points",
+        ),
+        "no_answer_or_no_match": ("no_answer", "no_answer_accuracy_basis_points"),
+        "permission_safety": (
+            "permission_safety",
+            "permission_safety_accuracy_basis_points",
+        ),
+    }
+    for section_name, (prefix, metric_name) in section_specs.items():
+        section = safe_outputs.get(section_name)
+        if not isinstance(section, Mapping):
+            blockers.append(section_name + " section must be an object")
+            continue
+        expected_section_keys = {"primary_metric", "arms"}
+        if section_name == "positive_retrieval":
+            expected_section_keys.add("permission_denied_cases_excluded")
+        elif section_name == "permission_safety":
+            expected_section_keys.add("automatically_blocked_cases_are_not_retrieval_successes")
+        _validate_exact_keys(section, expected_section_keys, section_name, blockers)
+        if section.get("primary_metric") != metric_name:
+            blockers.append(section_name + " primary metric mismatch")
+        arms = section.get("arms")
+        if not isinstance(arms, Mapping) or set(arms) != set(ARMS):
+            blockers.append(section_name + " arm set mismatch")
+            continue
+        for arm, values in arms.items():
+            expected = {
+                "case_count": arm_summaries[arm][prefix + "_case_count"],
+                "passed_count": arm_summaries[arm][prefix + "_passed_count"],
+                "accuracy_basis_points": arm_summaries[arm][metric_name],
+            }
+            if not isinstance(values, Mapping):
+                blockers.append(section_name + " arm values mismatch")
+                break
+            _validate_exact_keys(
+                values,
+                set(expected),
+                section_name + ".arms." + str(arm),
+                blockers,
+            )
+            if dict(values) != expected:
+                blockers.append(section_name + " arm values mismatch")
+                break
+    positive = safe_outputs.get("positive_retrieval")
+    if (
+        not isinstance(positive, Mapping)
+        or positive.get("permission_denied_cases_excluded") is not True
+    ):
+        blockers.append("positive retrieval must exclude permission-denied cases")
+    permission = safe_outputs.get("permission_safety")
+    if (
+        not isinstance(permission, Mapping)
+        or permission.get("automatically_blocked_cases_are_not_retrieval_successes") is not True
+    ):
+        blockers.append("permission safety must not count blocked cases as retrieval successes")
+    frame_type = safe_outputs.get("frame_type_quality")
+    if not isinstance(frame_type, Mapping):
+        blockers.append("frame_type_quality section must be an object")
+    else:
+        _validate_exact_keys(
+            frame_type,
+            {
+                "measurement_status",
+                "quality_claim_supported",
+                "type_compatibility_modes",
+                "frame_semantics_modes",
+            },
+            "frame_type_quality",
+            blockers,
+        )
+        if frame_type.get("measurement_status") != ("not_measured_by_candidate_admission_harness"):
+            blockers.append("frame_type_quality measurement status mismatch")
+        if frame_type.get("quality_claim_supported") is not False:
+            blockers.append("frame_type_quality must not support a quality claim")
+        expected_type_modes = {
+            arm: definition["type_compatibility_mode"]
+            for arm, definition in ARM_STAGE_DEFINITIONS.items()
+        }
+        type_modes = frame_type.get("type_compatibility_modes")
+        if not isinstance(type_modes, Mapping) or dict(type_modes) != expected_type_modes:
+            blockers.append("frame type compatibility modes mismatch")
+        expected_frame_modes = {
+            arm: definition["frame_semantics_mode"]
+            for arm, definition in ARM_STAGE_DEFINITIONS.items()
+        }
+        frame_modes = frame_type.get("frame_semantics_modes")
+        if not isinstance(frame_modes, Mapping) or dict(frame_modes) != expected_frame_modes:
+            blockers.append("frame semantics modes mismatch")
+    slot_value = safe_outputs.get("slot_value_quality")
+    if not isinstance(slot_value, Mapping):
+        blockers.append("slot_value_quality section must be an object")
+    else:
+        _validate_exact_keys(
+            slot_value,
+            {"measurement_status", "quality_claim_supported"},
+            "slot_value_quality",
+            blockers,
+        )
+        if slot_value.get("measurement_status") != ("not_measured_by_candidate_admission_harness"):
+            blockers.append("slot_value_quality measurement status mismatch")
+        if slot_value.get("quality_claim_supported") is not False:
+            blockers.append("slot_value_quality must not support a quality claim")
+    evidence = safe_outputs.get("evidence_span_quality")
+    if not isinstance(evidence, Mapping):
+        blockers.append("evidence_span_quality section must be an object")
+    else:
+        _validate_exact_keys(
+            evidence,
+            {
+                "measurement_status",
+                "quality_claim_supported",
+                "protected_span_case_count",
+            },
+            "evidence_span_quality",
+            blockers,
+        )
+        if evidence.get("measurement_status") != "coverage_proxy_only":
+            blockers.append("evidence span measurement status mismatch")
+        if evidence.get("quality_claim_supported") is not False:
+            blockers.append("evidence span must not support a quality claim")
+        if evidence.get("protected_span_case_count") != safe_outputs.get(
+            "protected_span_case_count"
+        ):
+            blockers.append("evidence span protected case count mismatch")
+    latency = safe_outputs.get("latency_and_resource_use")
+    latency_keys = (
+        "case_generation_elapsed_ms",
+        "segmentation_elapsed_ms",
+        "corpus_preparation_elapsed_ms",
+        "kg_build_elapsed_ms",
+        "scoring_elapsed_ms",
+        "total_elapsed_ms",
+    )
+    if not isinstance(latency, Mapping):
+        blockers.append("latency_and_resource_use section must be an object")
+    else:
+        _validate_exact_keys(
+            latency,
+            set(latency_keys),
+            "latency_and_resource_use",
+            blockers,
+        )
+        if dict(latency) != {key: safe_outputs.get(key) for key in latency_keys}:
+            blockers.append("latency and resource use values mismatch")
+    topology = safe_outputs.get("graph_topology_diagnostics")
+    if not isinstance(topology, Mapping) or not isinstance(topology.get("arms"), Mapping):
+        blockers.append("graph_topology_diagnostics section must contain arms")
+    else:
+        _validate_exact_keys(
+            topology,
+            {"measurement_status", "arms"},
+            "graph_topology_diagnostics",
+            blockers,
+        )
+        if topology.get("measurement_status") != "candidate_graph_diagnostics":
+            blockers.append("graph topology diagnostics measurement status mismatch")
+        topology_arms = topology["arms"]
+        if set(topology_arms) != set(ARMS):
+            blockers.append("graph topology diagnostics arm set mismatch")
+        else:
+            topology_prefixes = {
+                ARM_REGEX_KG: "regex",
+                ARM_REGEX_ONTOLOGY: "regex",
+                ARM_LEXICAL_KG: "lexical",
+                ARM_LEXICAL_ONTOLOGY: "lexical",
+                ARM_DATA_DRIVEN_ONTOLOGY: "data_driven",
+                ARM_FROZEN_ONTOLOGY: "frozen",
+                ARM_PROGRAMMATIC_ONTOLOGY: "programmatic",
+            }
+            for arm, prefix in topology_prefixes.items():
+                lexical_key = (
+                    "lexical_relation_count"
+                    if prefix == "lexical"
+                    else prefix + "_lexical_relation_count"
+                )
+                expected = {
+                    "candidate_graph_node_count": safe_outputs.get(
+                        prefix + "_candidate_graph_node_count"
+                    ),
+                    "candidate_graph_relation_count": safe_outputs.get(
+                        prefix + "_candidate_graph_relation_count"
+                    ),
+                    "lexical_relation_count": safe_outputs.get(lexical_key),
+                    "component_count": safe_outputs.get(prefix + "_component_count"),
+                    "largest_component_size": safe_outputs.get(prefix + "_largest_component_size"),
+                }
+                values = topology_arms.get(arm)
+                if not isinstance(values, Mapping):
+                    blockers.append("graph topology diagnostics arm values mismatch")
+                    break
+                _validate_exact_keys(
+                    values,
+                    set(expected),
+                    "graph_topology_diagnostics.arms." + arm,
+                    blockers,
+                )
+                if dict(values) != expected:
+                    blockers.append("graph topology diagnostics arm values mismatch")
+                    break
+
+
 def _validate_safe_output_derived_values(
     safe_outputs: Mapping[str, Any], blockers: list[str]
 ) -> None:
@@ -2463,44 +2953,58 @@ def _validate_safe_output_derived_values(
     best_arm = max(
         ARMS,
         key=lambda arm: (
-            _int_value(arm_summaries[arm].get("passed_case_count")),
-            _int_value(arm_summaries[arm].get("positive_passed_count")),
+            _int_value(arm_summaries[arm].get("primary_retrieval_passed_count")),
+            _int_value(arm_summaries[arm].get("no_answer_passed_count")),
             arm,
         ),
     )
     if safe_outputs.get("best_arm_name") != best_arm:
         blockers.append("best arm name mismatch")
-    if safe_outputs.get("best_passed_case_count") != arm_summaries[best_arm].get(
-        "passed_case_count"
+    if safe_outputs.get("best_primary_retrieval_passed_count") != arm_summaries[best_arm].get(
+        "primary_retrieval_passed_count"
     ):
-        blockers.append("best passed case count mismatch")
-    if safe_outputs.get("best_pass_rate_basis_points") != arm_summaries[best_arm].get(
-        "pass_rate_basis_points"
-    ):
-        blockers.append("best pass rate mismatch")
-    regex_current = _int_value(arm_summaries[ARM_REGEX_ONTOLOGY].get("passed_case_count"))
-    lexical_kg = _int_value(arm_summaries[ARM_LEXICAL_KG].get("passed_case_count"))
-    lexical_ontology = _int_value(arm_summaries[ARM_LEXICAL_ONTOLOGY].get("passed_case_count"))
-    data_driven = _int_value(arm_summaries[ARM_DATA_DRIVEN_ONTOLOGY].get("passed_case_count"))
-    frozen = _int_value(arm_summaries[ARM_FROZEN_ONTOLOGY].get("passed_case_count"))
-    programmatic = _int_value(arm_summaries[ARM_PROGRAMMATIC_ONTOLOGY].get("passed_case_count"))
+        blockers.append("best primary retrieval passed count mismatch")
+    if safe_outputs.get("best_primary_retrieval_accuracy_basis_points") != arm_summaries[
+        best_arm
+    ].get("primary_retrieval_accuracy_basis_points"):
+        blockers.append("best primary retrieval accuracy mismatch")
+    regex_current = _int_value(
+        arm_summaries[ARM_REGEX_ONTOLOGY].get("primary_retrieval_passed_count")
+    )
+    lexical_kg = _int_value(arm_summaries[ARM_LEXICAL_KG].get("primary_retrieval_passed_count"))
+    lexical_ontology = _int_value(
+        arm_summaries[ARM_LEXICAL_ONTOLOGY].get("primary_retrieval_passed_count")
+    )
+    data_driven = _int_value(
+        arm_summaries[ARM_DATA_DRIVEN_ONTOLOGY].get("primary_retrieval_passed_count")
+    )
+    frozen = _int_value(arm_summaries[ARM_FROZEN_ONTOLOGY].get("primary_retrieval_passed_count"))
+    programmatic = _int_value(
+        arm_summaries[ARM_PROGRAMMATIC_ONTOLOGY].get("primary_retrieval_passed_count")
+    )
     expected_deltas = {
-        "lexical_ontology_delta_vs_regex_current_passed_case_count": (
+        "jieba_sentencepiece_type_compatibility_proxy_delta_vs_regex_type_compatibility_proxy_primary_retrieval_passed_count": (
             lexical_ontology - regex_current
         ),
-        "lexical_ontology_delta_vs_lexical_kg_passed_case_count": (lexical_ontology - lexical_kg),
-        "data_driven_ontology_delta_vs_lexical_ontology_passed_case_count": (
+        "type_compatibility_proxy_delta_vs_jieba_sentencepiece_candidate_kg_primary_retrieval_passed_count": (
+            lexical_ontology - lexical_kg
+        ),
+        "frequency_rule_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count": (
             data_driven - lexical_ontology
         ),
-        "frozen_ontology_delta_vs_lexical_ontology_passed_case_count": (frozen - lexical_ontology),
-        "programmatic_ontology_delta_vs_lexical_ontology_passed_case_count": (
+        "frozen_profile_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count": (
+            frozen - lexical_ontology
+        ),
+        "weak_label_mlp_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count": (
             programmatic - lexical_ontology
         ),
-        "programmatic_ontology_delta_vs_data_driven_passed_case_count": (
+        "weak_label_mlp_delta_vs_frequency_rule_primary_retrieval_passed_count": (
             programmatic - data_driven
         ),
-        "programmatic_ontology_delta_vs_frozen_profile_passed_case_count": (programmatic - frozen),
-        "programmatic_ontology_delta_vs_regex_current_passed_case_count": (
+        "weak_label_mlp_delta_vs_frozen_profile_primary_retrieval_passed_count": (
+            programmatic - frozen
+        ),
+        "weak_label_mlp_delta_vs_regex_primary_retrieval_passed_count": (
             programmatic - regex_current
         ),
     }
@@ -2528,7 +3032,7 @@ def _blocked_report(reason: str) -> dict[str, Any]:
         "metrics": {
             "blocked_reason": reason,
             "raw_leak_guard_passed": True,
-            "exm_lexical_ontology_eval_completed": False,
+            "exm_candidate_admission_eval_completed": False,
         },
         "safe_outputs": {
             "blocker_hash": sha256_json(reason),
@@ -2548,7 +3052,7 @@ def _validate_blocked_report(
 ) -> None:
     _validate_exact_keys(
         metrics,
-        {"blocked_reason", "raw_leak_guard_passed", "exm_lexical_ontology_eval_completed"},
+        {"blocked_reason", "raw_leak_guard_passed", "exm_candidate_admission_eval_completed"},
         "metrics",
         blockers,
     )
@@ -2556,7 +3060,7 @@ def _validate_blocked_report(
         blockers.append("blocked_reason must be a configured enum")
     if metrics.get("raw_leak_guard_passed") is not True:
         blockers.append("blocked report raw leak guard must be true")
-    if metrics.get("exm_lexical_ontology_eval_completed") is not False:
+    if metrics.get("exm_candidate_admission_eval_completed") is not False:
         blockers.append("blocked report must not be complete")
     _validate_exact_keys(safe_outputs, {"blocker_hash", "case_count"}, "safe_outputs", blockers)
     _require_sha256(safe_outputs.get("blocker_hash"), "safe_outputs.blocker_hash", blockers)
@@ -2571,12 +3075,12 @@ def _validate_success_claim_boundary(
     blockers: list[str],
 ) -> None:
     expected = _FORBIDDEN_TRUE_CLAIMS | {
-        "supports_exm_50000_lexical_ontology_eval_claim",
+        "supports_exm_50000_candidate_admission_eval_claim",
         "container_verification_required",
     }
     _validate_exact_keys(claim_boundary, expected, "claim_boundary", blockers)
-    expected_support = metrics.get("exm_lexical_ontology_eval_completed") is True
-    if claim_boundary.get("supports_exm_50000_lexical_ontology_eval_claim") is not (
+    expected_support = metrics.get("exm_candidate_admission_eval_completed") is True
+    if claim_boundary.get("supports_exm_50000_candidate_admission_eval_claim") is not (
         expected_support
     ):
         blockers.append("lexical ontology eval claim boundary mismatch")
@@ -2592,7 +3096,7 @@ def _eval_completed(report: Mapping[str, Any]) -> bool:
     safe_outputs = report.get("safe_outputs")
     if not isinstance(metrics, Mapping) or not isinstance(safe_outputs, Mapping):
         return False
-    required = set(metrics) - {"exm_lexical_ontology_eval_completed"}
+    required = set(metrics) - {"exm_candidate_admission_eval_completed"}
     return (
         all(metrics.get(key) is True for key in required)
         and safe_outputs.get("case_count") == CASE_COUNT
@@ -2602,7 +3106,7 @@ def _eval_completed(report: Mapping[str, Any]) -> bool:
 
 def _claim_boundary(supports_eval: bool) -> dict[str, bool]:
     return {
-        "supports_exm_50000_lexical_ontology_eval_claim": supports_eval,
+        "supports_exm_50000_candidate_admission_eval_claim": supports_eval,
         "supports_actual_chatgpt_connected_upload_claim": False,
         "supports_real_upload_iframe_claim": False,
         "supports_general_full_pst_parser_readiness_claim": False,
@@ -2965,10 +3469,10 @@ def _write_private_manifest(
     expected_parsed_corpus_count: int,
 ) -> str:
     payload = {
-        "manifest_type": "exm_lexical_ontology_private_case_manifest",
+        "manifest_type": "exm_candidate_admission_private_case_manifest",
         "generated_at": NOW,
         "segmentation_policy_version": SEGMENTATION_POLICY_VERSION,
-        "ontology_policy_version": ONTOLOGY_POLICY_VERSION,
+        "type_compatibility_proxy_policy_version": TYPE_COMPATIBILITY_PROXY_POLICY_VERSION,
         "expected_parsed_corpus_count": expected_parsed_corpus_count,
         "parsed_corpus_count": prepared.parsed_corpus_count,
         "parsed_corpus_hash": prepared.parsed_corpus_hash,
@@ -2982,7 +3486,7 @@ def _write_private_manifest(
 
 def _write_private_rows(path: Path, arm_rows: Mapping[str, Sequence[Mapping[str, Any]]]) -> str:
     payload = {
-        "manifest_type": "exm_lexical_ontology_private_score_rows",
+        "manifest_type": "exm_candidate_admission_private_score_rows",
         "generated_at": NOW,
         "arm_names": list(ARMS),
         "rows_by_arm": {arm: list(rows) for arm, rows in arm_rows.items()},
@@ -3073,7 +3577,7 @@ def _validate_embedded_validation(
     _validate_exact_keys(
         claim_boundary,
         {
-            "supports_exm_50000_lexical_ontology_eval_claim",
+            "supports_exm_50000_candidate_admission_eval_claim",
             "supports_production_ready_claim",
         },
         "validation.claim_boundary",
@@ -3081,9 +3585,10 @@ def _validate_embedded_validation(
     )
     metrics = report.get("metrics") if isinstance(report, Mapping) else {}
     expected = (
-        isinstance(metrics, Mapping) and metrics.get("exm_lexical_ontology_eval_completed") is True
+        isinstance(metrics, Mapping)
+        and metrics.get("exm_candidate_admission_eval_completed") is True
     )
-    if claim_boundary.get("supports_exm_50000_lexical_ontology_eval_claim") is not expected:
+    if claim_boundary.get("supports_exm_50000_candidate_admission_eval_claim") is not expected:
         blockers.append("validation lexical eval claim mismatch")
     if claim_boundary.get("supports_production_ready_claim") is not False:
         blockers.append("validation production claim must be false")
@@ -3099,13 +3604,13 @@ def _validation(
         passed
         and isinstance(report, Mapping)
         and isinstance(report.get("metrics"), Mapping)
-        and report["metrics"].get("exm_lexical_ontology_eval_completed") is True
+        and report["metrics"].get("exm_candidate_admission_eval_completed") is True
     )
     return {
         "passed": passed,
         "blockers": blockers,
         "claim_boundary": {
-            "supports_exm_50000_lexical_ontology_eval_claim": supported,
+            "supports_exm_50000_candidate_admission_eval_claim": supported,
             "supports_production_ready_claim": False,
         },
     }
@@ -3142,7 +3647,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    return 0 if report.get("metrics", {}).get("exm_lexical_ontology_eval_completed") is True else 1
+    return (
+        0 if report.get("metrics", {}).get("exm_candidate_admission_eval_completed") is True else 1
+    )
 
 
 if __name__ == "__main__":

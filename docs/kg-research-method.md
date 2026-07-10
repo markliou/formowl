@@ -156,60 +156,47 @@ now produces 3,000 hard false rejects, KG without ontology produces 1,100
 false positives, and the hybrid still has 100 false positives plus 900 partial
 answers. It is not an independent held-out production claim.
 
-The EXM lexical ontology follow-up then tested all currently available EXM PST
-parsed corpora with the user's requested `jieba + SentencePiece` tokenizer
-plan across 50,000 generated cases. The aggregate result is tracked at
+The EXM lexical candidate-admission follow-up tested all currently available
+EXM PST parsed corpora with the requested `jieba + SentencePiece` tokenizer
+plan across 50,000 generated same-corpus cases. The historical aggregate
+artifact remains at
 `experiments/kg_ontology_v2_coordination/results/exm_lexical_ontology_50000_summary_2026-07-09.json`.
-Regex current KG and regex current ontology each scored 10,000/50,000, with
-0/40,000 positive cases solved but all no-match and permission-denied guards
-passing. The `jieba + SentencePiece` KG and ontology arms each scored
-16,811/50,000, solving 11,811/40,000 positive cases while failing all 5,000
-no-match guards. This is a real positive-retrieval effect, but not a stable
-retrieval or ontology method yet. The ontology-scored lexical arm tied the
-lexical KG arm exactly, so the run shows tokenizer/lexical graph lift rather
-than incremental ontology lift. The largest lexical component covered nearly
-the full corpus, which confirms that tokenizer output must pass term-quality,
-IDF/document-spread, component-splitting, and no-match calibration before any
-ontology promotion or production retrieval claim.
+Regex candidate admission solved 0/40,000 positive cases. Jieba + SentencePiece
+candidate admission solved 11,811/40,000 positive cases but failed all 5,000
+no-match cases. Adding the category/type scoring proxy did not change either
+arm. The result therefore shows candidate-admission and lexical-graph lift, not
+incremental ontology or coordination-frame lift.
 
-The next EXM follow-up implemented that correction as a graph-neural
-programmatic ontology policy. The safe aggregate result is tracked at
+The next EXM follow-up applied a weak-label MLP candidate-admission policy
+before KG construction. Its historical artifact remains at
 `experiments/kg_ontology_v2_coordination/results/exm_programmatic_ontology_50000_summary_2026-07-09.json`.
-This arm compiles ontology behavior before KG edge construction: document-
-frequency gates, protected mention typing, deterministic weak-label MLP
-candidate scoring, and exact-candidate-only ontology retrieval. On the same
-50,000 generated
-cases, graph-neural programmatic ontology scores 43,369/50,000 overall,
-33,369/40,000 positive cases, 5,000/5,000 no-match guards, and 5,000/5,000
-permission-denied guards. By contrast, the raw `jieba + SentencePiece`
-ontology arm scores 18,176/50,000, solves 13,176/40,000 positive cases, and
-still fails every no-match guard. This is the first EXM evidence that ontology
-helps when it is compiled into executable graph policy rather than applied as
-post-hoc labels. The measured lift is for the bundled executable policy, not a
-claim that any single subcomponent explains the full delta. The neural scorer
-is a deterministic CPU-bounded weak-label MLP
-`formowl_exm_weak_label_cjk_mlp_v1`, with model hash and weak-label training
-counts recorded in the tracked summary. It remains candidate-layer evidence,
-not canonical ontology promotion or production retrieval readiness.
+The policy combines document-frequency gates, protected mention handling,
+deterministic weak-label candidate scoring, and exact-candidate-only retrieval.
+It solves 33,369/40,000 positive cases while preserving all no-match and
+permission-safety cases. This is evidence for the bundled candidate-admission
+and graph-construction policy. It does not isolate type compatibility, frame
+semantics, slot-value quality, or evidence-span quality.
 
-The no-training follow-up then compared that weak-label MLP against two
-controls on the same EXM/PST generated benchmark shape. The safe aggregate
-result is tracked at
+The no-training follow-up compared the weak-label MLP against frequency-rule
+and frozen-profile candidate-admission controls. Its historical artifact
+remains at
 `experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json`.
-The `graph_data_driven_programmatic_ontology` arm uses no neural scorer and
-scores 33,277/50,000 overall, with 23,277/40,000 positive cases and all
-no-match and permission-denied guards passing. The
-`graph_frozen_profile_programmatic_ontology` arm uses a hashable fixed CJK
-scoring profile with zero training examples and zero training epochs. It scores
-43,976/50,000 overall, with 33,976/40,000 positive cases and all guards
-passing. The weak-label MLP arm scores 43,369/50,000 in the same run, so the
-frozen profile is ahead by 607 passed cases. Current method judgment: the
-executable programmatic ontology layer is effective, but the self-trained
-weak-label MLP is not justified as the default candidate scorer. Use the
-frozen-profile programmatic policy as the stable candidate-layer default, and
-treat BGE-M3 through FlagEmbedding as a future optional true frozen neural
-adapter that must run in a separate neural experiment/runtime image rather
-than the default dev container.
+The frequency-rule arm solves 23,277/40,000 positive cases. The frozen-profile
+arm solves 33,976/40,000, 607 more than the weak-label MLP, while all three
+preserve the no-match and permission-safety cases. The frozen profile remains
+the stable candidate-admission default; this is an engineering default, not a
+production or semantic-quality claim.
+
+Issue #33 Work Package A corrects the generated report boundary. New reports
+use `development_case_count` and `evaluation_case_count`, never a holdout label
+for cases generated from a corpus and vocabulary already seen by the policy.
+Arm metadata separately declares candidate admission, KG construction, type
+compatibility, and frame semantics. Primary retrieval accuracy excludes
+permission-denied cases; no-answer behavior and permission safety are reported
+separately. The report also carries explicit `frame_type_quality`,
+`slot_value_quality`, `evidence_span_quality`, `latency_and_resource_use`, and
+`graph_topology_diagnostics` sections. Unmeasured semantic quality sections are
+marked not measured instead of inheriting candidate-admission gains.
 
 ## Multi-User KG And Fusion Experiments
 

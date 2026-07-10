@@ -32,7 +32,41 @@ current authority state. The stricter current state is blocked, and no broad
 completion claim is supported until the four remaining gates have accepted
 canonical packets and all authority reports are synchronized and passing.
 
+## Active Slice
+
+No KG research slice is currently active. The broad objective remains blocked
+by the real-evidence gates described above.
+
 ## Latest Completed Slice
+
+2026-07-10: issue #33 Work Package A is complete on branch
+`issue-33-work-package-a`.
+
+Scope:
+
+- Reclassify EXM generated benchmark arms as candidate-admission, candidate-KG,
+  type-compatibility proxy, and frame-semantics stages.
+- Replace generated same-corpus holdout language with development/evaluation
+  terminology.
+- Separate positive retrieval, no-answer/no-match behavior, and permission
+  safety, with permission-denied auto-passes excluded from primary retrieval
+  accuracy.
+- Emit and validate all eight issue-required report sections.
+- Preserve historical aggregate artifacts as historical evidence while
+  correcting current method claims and generated report schema.
+
+Completion evidence: focused canonical dev-container evaluator tests run 29 OK;
+full unittest runs 638 OK; full Ruff check passes; all 303 files pass
+format-check; and `git diff --check` passes. The 3/3 read-only reviewer gate
+passed with explicit agreements from `Dalton` (engineering), `Kepler`
+(governance/safety), and `Faraday` (research method). Reviewer-driven fixes
+removed an unsupported private-row recomputation claim, closed all nested report
+schemas, bound frame/type/evidence/topology fields to recomputed values, enforced
+the configured evaluation-case mix against coherent permission-case
+reclassification, and replaced remaining ontology/frame-semantic overclaims
+with candidate-admission and type-compatibility-proxy terminology.
+
+## Previous Completed Slice
 
 2026-07-08: issue #28 Ontology v2 coordination-frame experiment is complete
 for the scoped candidate-layer slice.
@@ -592,8 +626,8 @@ Interpretation:
 - The tokenizer stack is not stable enough as a retrieval method: it failed all
   no-match guards and produced a largest lexical component covering nearly the
   full corpus.
-- The ontology-scored lexical arm tied the lexical KG arm exactly, so this run
-  shows lexical/KG lift, not incremental ontology lift.
+- The type-compatibility proxy arm tied the lexical KG arm exactly, so this run
+  shows lexical/KG lift, not a type-compatibility or frame-semantic effect.
 - The next method step is term-quality scoring, IDF/document-spread caps,
   component splitting/community detection, alias/entity checks, and no-match
   calibration before any ontology promotion or production retrieval claim.
@@ -653,17 +687,17 @@ Claim boundary:
   claim, not formal ontology governance completion, not raw-mail access, not
   canonical graph/type/user-graph/wiki mutation, and not production readiness.
 
-## Latest Completed Programmatic Ontology Redesign Slice
+## Latest Completed Candidate-Admission Redesign Slice
 
 2026-07-09: after the user rejected the prior ontology method as ineffective,
-the EXM 50,000-case evaluator was extended with a graph-neural programmatic
-ontology arm. This implements ontology as executable policy before KG edge
-construction, not as post-hoc type labels.
+the EXM 50,000-case evaluator was extended with a weak-label MLP
+candidate-admission arm before KG edge construction. Issue #33 later clarified
+that this is not an ontology-semantic or coordination-frame arm.
 
 Current method:
 
 - Keep `jieba + SentencePiece` as an upstream term/mention candidate generator.
-- Compile a candidate ontology policy from graph statistics and weak-label
+- Compile a candidate-admission policy from graph statistics and weak-label
   neural scoring before building KG edges.
 - Use document-frequency gates to reject over-broad or low-value terms.
 - Keep protected mention candidates for explicit organization, contact, and
@@ -672,7 +706,7 @@ Current method:
   candidates. The safe report records
   `formowl_exm_weak_label_cjk_mlp_v1`, the neural model hash, weak-label
   training counts, epoch count, and feature count.
-- Require an exact compiled term candidate for ontology-guided retrieval;
+- Require an exact compiled term candidate for the category/type scoring proxy;
   category-only fallback is disabled for this policy.
 - Keep all output candidate-only, with no canonical graph/type/user-graph/wiki
   mutation.
@@ -687,23 +721,23 @@ Aggregate result:
 
 | Arm | Passed | Positive passed | No-match passed | Permission-denied passed |
 | --- | ---: | ---: | ---: | ---: |
-| Regex current KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
-| Regex current ontology | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
-| Jieba + SentencePiece KG | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
-| Jieba + SentencePiece ontology | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
-| Graph-neural programmatic ontology | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Regex admission + candidate KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Regex admission + type-compatibility proxy | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece admission + candidate KG | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece admission + type-compatibility proxy | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Weak-label MLP candidate admission + type-compatibility proxy | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
 
 Interpretation:
 
-- The revised ontology method has real measured effect on this generated EXM
-  benchmark: `+25,193` passed cases versus raw `jieba + SentencePiece`
-  ontology and `+33,369` passed cases versus regex current ontology.
+- The candidate-admission and graph-construction bundle has measured effect on
+  this generated EXM benchmark. It does not isolate type compatibility or
+  frame semantics.
 - The measured lift is for the bundled executable policy. It should not be
   attributed to document-frequency gates, protected terms, neural scoring, or
   exact-candidate-only retrieval in isolation without a separate subcomponent
   ablation.
-- It fixes the previous false-positive failure mode: raw lexical ontology
-  still fails all no-match guards, while the programmatic ontology arm passes
+- It fixes the previous false-positive failure mode: raw lexical admission
+  still fails all no-match guards, while the weak-label admission arm passes
   all no-match guards.
 - It preserves the permission-denied guard in this evaluator.
 - The largest programmatic component is still large, so community detection or
@@ -798,12 +832,12 @@ Claim boundary:
   formal ontology governance completion, not raw-mail access, not canonical
   graph/type/user-graph/wiki mutation, and not production readiness.
 
-## Latest Completed No-Training Programmatic Ontology Follow-Up
+## Latest Completed No-Training Candidate-Admission Follow-Up
 
 2026-07-10: the accepted ablation goal is complete. The EXM/PST 50,000-case
-evaluator now compares the weak-label MLP programmatic ontology arm against
-two no-training controls in the same run: a pure data-driven programmatic arm
-and a hashable frozen-profile programmatic arm. This is an additive
+evaluator now compares the weak-label MLP candidate-admission arm against two
+no-training controls in the same run: a frequency-rule arm and a hashable
+frozen-profile arm. This is an additive
 candidate-layer evaluation slice, not a canonical ontology/type mutation and
 not a broad KG real-evidence completion claim.
 
@@ -832,14 +866,14 @@ Aggregate result:
 | Regex current ontology | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
 | Jieba + SentencePiece KG | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
 | Jieba + SentencePiece ontology | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
-| Data-driven programmatic ontology | 33,277/50,000 | 23,277/40,000 | 5,000/5,000 | 5,000/5,000 |
-| Frozen-profile programmatic ontology | 43,976/50,000 | 33,976/40,000 | 5,000/5,000 | 5,000/5,000 |
-| Weak-label MLP programmatic ontology | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Frequency-rule candidate admission | 33,277/50,000 | 23,277/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Frozen-profile candidate admission | 43,976/50,000 | 33,976/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Weak-label MLP candidate admission | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
 
 Current method judgment:
 
-- The executable programmatic ontology layer is effective in this generated
-  EXM benchmark.
+- The bundled candidate-admission and graph-construction policy is effective
+  in this generated EXM benchmark; semantic quality remains unmeasured.
 - The self-trained weak-label MLP is not justified as the stable default
   candidate scorer: the zero-training frozen profile scored 607 more passed
   cases than the MLP while preserving all no-match and permission-denied

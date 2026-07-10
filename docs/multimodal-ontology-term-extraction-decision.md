@@ -204,11 +204,11 @@ multimodal-ready before any broader ontology claim".
 
 ## Current EXM Lexical Evaluation
 
-The 2026-07-09 EXM 50,000-case lexical ontology run supports this decision.
+The 2026-07-09 EXM 50,000-case lexical candidate-admission run supports this decision.
 The `jieba + SentencePiece` lexical policy improved positive cross-message
 retrieval versus regex-only matching, but it also failed every no-match guard
 case because the lexical graph collapsed into very large components. The
-ontology-scored lexical arm tied the lexical KG arm, so the measured lift came
+type-compatibility proxy arm tied the lexical KG arm, so the measured lift came
 from broader lexical matching, not from ontology selection.
 
 This result means the tokenizer stack should remain an upstream candidate
@@ -218,21 +218,21 @@ method needs term-quality scores, document-spread or IDF caps, component
 splitting, alias/entity clustering checks, and no-match calibration before
 ontology promotion decisions use those terms.
 
-The graph-neural programmatic ontology follow-up implements that principle as
+The weak-label MLP candidate-admission follow-up implements that principle as
 an executable policy. The policy accepts or rejects candidate terms before KG
 edge construction using document-frequency gates, protected mention typing, a
 deterministic CPU-bounded weak-label MLP scorer, and exact-candidate-only
-ontology retrieval. On the 50,000-case EXM evaluation, this bundled policy
+category/type-proxy retrieval. On the 50,000-case EXM evaluation, this bundled policy
 keeps all no-match and permission-denied guards while improving positive
 retrieval over raw `jieba + SentencePiece`. This supports the design rule that
-ontology should be compiled into tested graph behavior before it can influence
-retrieval or promotion decisions.
+candidate admission must be tested before graph construction. It does not
+establish a coordination-frame or ontology-semantic effect.
 
 The 2026-07-10 no-training control run further narrows the default method. A
 hashable fixed CJK scoring profile with zero training examples and zero
 training epochs scored 43,976/50,000 on the same generated EXM benchmark,
 while the weak-label MLP scored 43,369/50,000. The stable default should
-therefore be data-driven-first programmatic ontology with a frozen scoring
+therefore be data-driven-first candidate admission with a frozen scoring
 profile, not a self-trained MLP. BGE-M3 through FlagEmbedding remains the best
 next optional true frozen neural adapter candidate, but it should run in a
 separate neural experiment/runtime image because the default dev container

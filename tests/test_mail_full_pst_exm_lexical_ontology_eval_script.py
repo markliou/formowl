@@ -52,7 +52,7 @@ class MailFullPstExmLexicalOntologyEvalScriptTests(unittest.TestCase):
         for report in (missing_opt_in, missing_input):
             self.assertTrue(report["validation"]["passed"], report["validation"]["blockers"])
             self.assertFalse(
-                report["claim_boundary"]["supports_exm_50000_lexical_ontology_eval_claim"]
+                report["claim_boundary"]["supports_exm_50000_candidate_admission_eval_claim"]
             )
 
     def test_requires_external_segmenters_by_default(self) -> None:
@@ -108,19 +108,36 @@ class MailFullPstExmLexicalOntologyEvalScriptTests(unittest.TestCase):
         self.assertEqual(report["safe_outputs"]["positive_case_count"], 40)
         self.assertEqual(report["safe_outputs"]["no_match_case_count"], 5)
         self.assertEqual(report["safe_outputs"]["permission_denied_case_count"], 5)
+        self.assertGreater(report["safe_outputs"]["development_case_count"], 0)
+        self.assertEqual(
+            report["safe_outputs"]["development_case_count"]
+            + report["safe_outputs"]["evaluation_case_count"],
+            50,
+        )
+        self.assertEqual(
+            set(report["safe_outputs"]["case_split_counts"]),
+            {"development", "evaluation"},
+        )
+        self.assertNotIn("holdout_case_count", report["safe_outputs"])
         self.assertGreater(report["safe_outputs"]["protected_span_case_count"], 0)
         summaries = report["safe_outputs"]["arm_summaries"]
         self.assertEqual(tuple(report["safe_outputs"]["arm_names"]), module.ARMS)
+        self.assertEqual(
+            report["safe_outputs"]["arm_stage_definitions"],
+            module.ARM_STAGE_DEFINITIONS,
+        )
         self.assertIn(module.ARM_DATA_DRIVEN_ONTOLOGY, summaries)
         self.assertIn(module.ARM_FROZEN_ONTOLOGY, summaries)
         self.assertEqual(summaries[module.ARM_DATA_DRIVEN_ONTOLOGY]["case_count"], 50)
         self.assertEqual(summaries[module.ARM_FROZEN_ONTOLOGY]["case_count"], 50)
         self.assertGreater(
-            summaries[module.ARM_LEXICAL_KG]["passed_case_count"],
-            summaries[module.ARM_REGEX_KG]["passed_case_count"],
+            summaries[module.ARM_LEXICAL_KG]["primary_retrieval_passed_count"],
+            summaries[module.ARM_REGEX_KG]["primary_retrieval_passed_count"],
         )
         self.assertGreater(
-            report["safe_outputs"]["lexical_ontology_delta_vs_regex_current_passed_case_count"],
+            report["safe_outputs"][
+                "jieba_sentencepiece_type_compatibility_proxy_delta_vs_regex_type_compatibility_proxy_primary_retrieval_passed_count"
+            ],
             0,
         )
         self.assertEqual(
@@ -131,21 +148,61 @@ class MailFullPstExmLexicalOntologyEvalScriptTests(unittest.TestCase):
             report["safe_outputs"]["programmatic_neural_model_hash"], r"^sha256:[0-9a-f]{64}$"
         )
         self.assertGreater(report["safe_outputs"]["programmatic_neural_training_example_count"], 0)
-        policy_summaries = report["safe_outputs"]["programmatic_policy_summaries"]
+        policy_summaries = report["safe_outputs"]["candidate_admission_policy_summaries"]
         self.assertEqual(
-            policy_summaries[module.PROGRAMMATIC_SCORER_DATA_DRIVEN]["training_example_count"],
+            policy_summaries[module.POLICY_DATA_DRIVEN_PROGRAMMATIC]["training_example_count"],
             0,
         )
         self.assertEqual(
-            policy_summaries[module.PROGRAMMATIC_SCORER_FROZEN_PROFILE]["training_epoch_count"],
+            policy_summaries[module.POLICY_FROZEN_PROGRAMMATIC]["training_epoch_count"],
             0,
         )
         self.assertGreater(
-            policy_summaries[module.PROGRAMMATIC_SCORER_WEAK_LABEL_MLP]["training_example_count"],
+            policy_summaries[module.POLICY_PROGRAMMATIC]["training_example_count"],
             0,
         )
+        required_sections = {
+            "positive_retrieval",
+            "no_answer_or_no_match",
+            "permission_safety",
+            "frame_type_quality",
+            "slot_value_quality",
+            "evidence_span_quality",
+            "latency_and_resource_use",
+            "graph_topology_diagnostics",
+        }
+        self.assertTrue(required_sections <= set(report["safe_outputs"]))
+        self.assertTrue(
+            report["safe_outputs"]["positive_retrieval"]["permission_denied_cases_excluded"]
+        )
+        self.assertTrue(
+            report["safe_outputs"]["permission_safety"][
+                "automatically_blocked_cases_are_not_retrieval_successes"
+            ]
+        )
+        for arm in module.ARMS:
+            primary = report["safe_outputs"]["positive_retrieval"]["arms"][arm]
+            self.assertEqual(primary["case_count"], 40)
+            self.assertEqual(
+                primary["accuracy_basis_points"],
+                summaries[arm]["primary_retrieval_accuracy_basis_points"],
+            )
         self.assertTrue((temp_dir / "private" / module.PRIVATE_MANIFEST_NAME).is_file())
         rendered = json.dumps(report, ensure_ascii=False, sort_keys=True).lower()
+        for legacy_label in (
+            "holdout_case_count",
+            "graph_data_driven_programmatic_ontology",
+            "graph_frozen_profile_programmatic_ontology",
+            "graph_neural_programmatic_ontology",
+            "regex_current_ontology",
+            "jieba_sentencepiece_ontology",
+            "frame_type_scoring",
+            "ontology_ablation_scored",
+            "exm_lexical_ontology_eval_completed",
+            "supports_exm_50000_lexical_ontology_eval_claim",
+            "row_derived_validation_recomputed",
+        ):
+            self.assertNotIn(legacy_label, rendered)
         self.assertNotIn("query_text", rendered)
         self.assertNotIn("source_observation_id", rendered)
         self.assertNotIn("email_message_id", rendered)
@@ -487,8 +544,8 @@ class MailFullPstExmLexicalOntologyEvalScriptTests(unittest.TestCase):
         module = _load_eval_module()
         report = _valid_synthetic_report(module)
         report["safe_outputs"]["case_count"] = module.CASE_COUNT - 1
-        report["metrics"]["exm_lexical_ontology_eval_completed"] = True
-        report["claim_boundary"]["supports_exm_50000_lexical_ontology_eval_claim"] = True
+        report["metrics"]["exm_candidate_admission_eval_completed"] = True
+        report["claim_boundary"]["supports_exm_50000_candidate_admission_eval_claim"] = True
         report.pop("validation", None)
 
         validation = module.validate_report(report)
@@ -509,15 +566,14 @@ class MailFullPstExmLexicalOntologyEvalScriptTests(unittest.TestCase):
         summary = report["safe_outputs"]["arm_summaries"][module.ARM_PROGRAMMATIC_ONTOLOGY]
         summary["passed_case_count"] += 1
         summary["failed_case_count"] -= 1
-        summary["pass_rate_basis_points"] += 1
+        summary["all_case_pass_rate_basis_points"] += 1
         report.pop("validation", None)
 
         validation = module.validate_report(report)
 
         self.assertFalse(validation["passed"])
         self.assertIn("arm summary hash mismatch", validation["blockers"])
-        self.assertIn("arm summary pass rate mismatch", validation["blockers"])
-        self.assertIn("best passed case count mismatch", validation["blockers"])
+        self.assertIn("arm summary all-case pass rate mismatch", validation["blockers"])
 
     def test_validate_report_rejects_tampered_result_kind_counts(self) -> None:
         module = _load_eval_module()
@@ -536,11 +592,244 @@ class MailFullPstExmLexicalOntologyEvalScriptTests(unittest.TestCase):
             validation["blockers"],
         )
 
+    def test_validate_report_rejects_permission_cases_in_primary_retrieval(self) -> None:
+        module = _load_eval_module()
+        report = _valid_synthetic_report(module)
+        report["safe_outputs"]["positive_retrieval"]["permission_denied_cases_excluded"] = False
+        report.pop("validation", None)
+
+        validation = module.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn(
+            "positive retrieval must exclude permission-denied cases",
+            validation["blockers"],
+        )
+
+    def test_validate_report_rejects_coherent_permission_case_reclassification(self) -> None:
+        module = _load_eval_module()
+        report = _valid_synthetic_report(module)
+        safe_outputs = report["safe_outputs"]
+        summaries = safe_outputs["arm_summaries"]
+        owner_bucket = next(
+            bucket
+            for bucket in module._OWNER_MATCH_BUCKETS
+            if safe_outputs["case_bucket_counts"].get(bucket, 0) > 0
+        )
+        safe_outputs["positive_case_count"] -= 1
+        safe_outputs["permission_denied_case_count"] += 1
+        safe_outputs["case_bucket_counts"][owner_bucket] -= 1
+        safe_outputs["case_bucket_counts"]["access_boundary"] += 1
+        for arm, summary in summaries.items():
+            was_passed = summary["bucket_passed_counts"].get(owner_bucket, 0) > 0
+            summary["primary_retrieval_case_count"] -= 1
+            if was_passed:
+                summary["primary_retrieval_passed_count"] -= 1
+                summary["positive_passed_count"] -= 1
+                summary["bucket_passed_counts"][owner_bucket] -= 1
+            else:
+                summary["passed_case_count"] += 1
+                summary["failed_case_count"] -= 1
+                summary["all_case_pass_rate_basis_points"] = module._basis_points(
+                    summary["passed_case_count"], summary["case_count"]
+                )
+            summary["primary_retrieval_accuracy_basis_points"] = module._basis_points(
+                summary["primary_retrieval_passed_count"],
+                summary["primary_retrieval_case_count"],
+            )
+            summary["permission_safety_case_count"] += 1
+            summary["permission_safety_passed_count"] += 1
+            summary["permission_safety_accuracy_basis_points"] = module._basis_points(
+                summary["permission_safety_passed_count"],
+                summary["permission_safety_case_count"],
+            )
+            summary["permission_denied_passed_count"] += 1
+            summary["bucket_counts"][owner_bucket] -= 1
+            summary["bucket_counts"]["access_boundary"] += 1
+            summary["bucket_passed_counts"]["access_boundary"] += 1
+            summary["summary_hash"] = module.sha256_json(
+                {key: value for key, value in summary.items() if key != "summary_hash"}
+            )
+            positive_arm = safe_outputs["positive_retrieval"]["arms"][arm]
+            positive_arm["case_count"] = summary["primary_retrieval_case_count"]
+            positive_arm["passed_count"] = summary["primary_retrieval_passed_count"]
+            positive_arm["accuracy_basis_points"] = summary[
+                "primary_retrieval_accuracy_basis_points"
+            ]
+            permission_arm = safe_outputs["permission_safety"]["arms"][arm]
+            permission_arm["case_count"] = summary["permission_safety_case_count"]
+            permission_arm["passed_count"] = summary["permission_safety_passed_count"]
+            permission_arm["accuracy_basis_points"] = summary[
+                "permission_safety_accuracy_basis_points"
+            ]
+        best_arm = max(
+            module.ARMS,
+            key=lambda arm: (
+                summaries[arm]["primary_retrieval_passed_count"],
+                summaries[arm]["no_answer_passed_count"],
+                arm,
+            ),
+        )
+        safe_outputs["best_arm_name"] = best_arm
+        safe_outputs["best_primary_retrieval_passed_count"] = summaries[best_arm][
+            "primary_retrieval_passed_count"
+        ]
+        safe_outputs["best_primary_retrieval_accuracy_basis_points"] = summaries[best_arm][
+            "primary_retrieval_accuracy_basis_points"
+        ]
+        regex_current = summaries[module.ARM_REGEX_ONTOLOGY]["primary_retrieval_passed_count"]
+        lexical_kg = summaries[module.ARM_LEXICAL_KG]["primary_retrieval_passed_count"]
+        lexical_current = summaries[module.ARM_LEXICAL_ONTOLOGY]["primary_retrieval_passed_count"]
+        data_driven = summaries[module.ARM_DATA_DRIVEN_ONTOLOGY]["primary_retrieval_passed_count"]
+        frozen = summaries[module.ARM_FROZEN_ONTOLOGY]["primary_retrieval_passed_count"]
+        programmatic = summaries[module.ARM_PROGRAMMATIC_ONTOLOGY]["primary_retrieval_passed_count"]
+        safe_outputs[
+            "jieba_sentencepiece_type_compatibility_proxy_delta_vs_regex_type_compatibility_proxy_primary_retrieval_passed_count"
+        ] = lexical_current - regex_current
+        safe_outputs[
+            "type_compatibility_proxy_delta_vs_jieba_sentencepiece_candidate_kg_primary_retrieval_passed_count"
+        ] = lexical_current - lexical_kg
+        safe_outputs[
+            "frequency_rule_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count"
+        ] = data_driven - lexical_current
+        safe_outputs[
+            "frozen_profile_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count"
+        ] = frozen - lexical_current
+        safe_outputs[
+            "weak_label_mlp_delta_vs_jieba_sentencepiece_primary_retrieval_passed_count"
+        ] = programmatic - lexical_current
+        safe_outputs["weak_label_mlp_delta_vs_frequency_rule_primary_retrieval_passed_count"] = (
+            programmatic - data_driven
+        )
+        safe_outputs["weak_label_mlp_delta_vs_frozen_profile_primary_retrieval_passed_count"] = (
+            programmatic - frozen
+        )
+        safe_outputs["weak_label_mlp_delta_vs_regex_primary_retrieval_passed_count"] = (
+            programmatic - regex_current
+        )
+        report.pop("validation", None)
+
+        validation = module.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn(
+            "case-kind counts must match configured evaluation mix",
+            validation["blockers"],
+        )
+        self.assertNotIn(
+            "arm summary primary_retrieval case count mismatch", validation["blockers"]
+        )
+        self.assertNotIn("permission_safety arm values mismatch", validation["blockers"])
+
+    def test_validate_report_rejects_tampered_separate_report_section(self) -> None:
+        module = _load_eval_module()
+        report = _valid_synthetic_report(module)
+        report["safe_outputs"]["no_answer_or_no_match"]["arms"][module.ARM_PROGRAMMATIC_ONTOLOGY][
+            "passed_count"
+        ] -= 1
+        report.pop("validation", None)
+
+        validation = module.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn("no_answer_or_no_match arm values mismatch", validation["blockers"])
+
+    def test_validate_report_rejects_tampered_frame_type_modes(self) -> None:
+        module = _load_eval_module()
+        report = _valid_synthetic_report(module)
+        frame_type = report["safe_outputs"]["frame_type_quality"]
+        frame_type["type_compatibility_modes"][module.ARM_PROGRAMMATIC_ONTOLOGY] = (
+            "full_ontology_reasoning"
+        )
+        frame_type["frame_semantics_modes"][module.ARM_PROGRAMMATIC_ONTOLOGY] = (
+            "coordination_frame_v2"
+        )
+        report.pop("validation", None)
+
+        validation = module.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn("frame type compatibility modes mismatch", validation["blockers"])
+        self.assertIn("frame semantics modes mismatch", validation["blockers"])
+
+    def test_validate_report_rejects_tampered_evidence_span_status(self) -> None:
+        module = _load_eval_module()
+        report = _valid_synthetic_report(module)
+        evidence = report["safe_outputs"]["evidence_span_quality"]
+        evidence["measurement_status"] = "measured"
+        evidence["quality_claim_supported"] = True
+        report.pop("validation", None)
+
+        validation = module.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn("evidence span measurement status mismatch", validation["blockers"])
+        self.assertIn("evidence span must not support a quality claim", validation["blockers"])
+
+    def test_validate_report_rejects_tampered_graph_topology_values(self) -> None:
+        module = _load_eval_module()
+        report = _valid_synthetic_report(module)
+        topology = report["safe_outputs"]["graph_topology_diagnostics"]
+        topology["measurement_status"] = "canonical_graph_quality"
+        topology["arms"][module.ARM_PROGRAMMATIC_ONTOLOGY]["candidate_graph_node_count"] += 1
+        report.pop("validation", None)
+
+        validation = module.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn(
+            "graph topology diagnostics measurement status mismatch",
+            validation["blockers"],
+        )
+        self.assertIn(
+            "graph topology diagnostics arm values mismatch",
+            validation["blockers"],
+        )
+
+    def test_validate_report_rejects_unknown_and_missing_nested_section_keys(self) -> None:
+        module = _load_eval_module()
+        report = _valid_synthetic_report(module)
+        arm_values = report["safe_outputs"]["positive_retrieval"]["arms"][
+            module.ARM_PROGRAMMATIC_ONTOLOGY
+        ]
+        arm_values["unexpected_accuracy"] = 10000
+        arm_values.pop("case_count")
+        report.pop("validation", None)
+
+        validation = module.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertTrue(
+            any(
+                "positive_retrieval.arms." in blocker and "missing keys" in blocker
+                for blocker in validation["blockers"]
+            )
+        )
+        self.assertTrue(
+            any(
+                "positive_retrieval.arms." in blocker and "unknown keys" in blocker
+                for blocker in validation["blockers"]
+            )
+        )
+
+    def test_validate_report_rejects_tampered_stage_definition(self) -> None:
+        module = _load_eval_module()
+        report = _valid_synthetic_report(module)
+        report["safe_outputs"]["arm_stage_definitions"][module.ARM_PROGRAMMATIC_ONTOLOGY][
+            "frame_semantics_mode"
+        ] = "coordination_frame_v2"
+        report.pop("validation", None)
+
+        validation = module.validate_report(report)
+
+        self.assertFalse(validation["passed"])
+        self.assertIn("arm stage definitions mismatch", validation["blockers"])
+
     def test_validate_report_rejects_tampered_no_training_policy_summary(self) -> None:
         module = _load_eval_module()
         report = _valid_synthetic_report(module)
-        summary = report["safe_outputs"]["programmatic_policy_summaries"][
-            module.PROGRAMMATIC_SCORER_FROZEN_PROFILE
+        summary = report["safe_outputs"]["candidate_admission_policy_summaries"][
+            module.POLICY_FROZEN_PROGRAMMATIC
         ]
         summary["training_example_count"] = 1
         summary["training_positive_count"] = 1
@@ -555,7 +844,7 @@ class MailFullPstExmLexicalOntologyEvalScriptTests(unittest.TestCase):
         module = _load_eval_module()
         report = _valid_synthetic_report(module)
         report["safe_outputs"][
-            "programmatic_ontology_delta_vs_frozen_profile_passed_case_count"
+            "weak_label_mlp_delta_vs_frozen_profile_primary_retrieval_passed_count"
         ] += 1
         report.pop("validation", None)
 
@@ -563,7 +852,7 @@ class MailFullPstExmLexicalOntologyEvalScriptTests(unittest.TestCase):
 
         self.assertFalse(validation["passed"])
         self.assertIn(
-            "programmatic_ontology_delta_vs_frozen_profile_passed_case_count mismatch",
+            "weak_label_mlp_delta_vs_frozen_profile_primary_retrieval_passed_count mismatch",
             validation["blockers"],
         )
 

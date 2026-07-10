@@ -143,7 +143,7 @@ KG/ontology measurement. It is not business answer generation, not a general
 PST parser-readiness claim, not raw-mail access, not canonical graph/type/user
 graph/wiki mutation, and not production readiness.
 
-## EXM Lexical Ontology 50,000-Case Follow-Up
+## EXM Lexical Candidate-Admission 50,000-Case Follow-Up
 
 The EXM lexical ontology follow-up summary is tracked at:
 
@@ -162,32 +162,32 @@ Result summary:
 
 | Arm | Passed | Positive passed | No-match passed | Permission-denied passed |
 | --- | ---: | ---: | ---: | ---: |
-| Regex current KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
-| Regex current ontology | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
-| Jieba + SentencePiece KG | 16,811/50,000 | 11,811/40,000 | 0/5,000 | 5,000/5,000 |
-| Jieba + SentencePiece ontology | 16,811/50,000 | 11,811/40,000 | 0/5,000 | 5,000/5,000 |
+| Regex admission + candidate KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Regex admission + type-compatibility proxy | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece admission + candidate KG | 16,811/50,000 | 11,811/40,000 | 0/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece admission + type-compatibility proxy | 16,811/50,000 | 11,811/40,000 | 0/5,000 | 5,000/5,000 |
 
 Interpretation: the lexical tokenizer plan has a real positive-retrieval
 effect versus regex-only matching, but it is not yet stable enough. It created
 very large lexical components and failed every no-match guard case. The
-ontology-scored arm tied the lexical KG arm exactly, so this run does not show
-incremental ontology lift beyond the lexical KG. The next method step is not
+type-compatibility proxy arm tied the lexical KG arm exactly, so this run does
+not show an incremental type-compatibility or frame-semantic effect. The next method step is not
 to promote this tokenizer output directly; it is to add data-driven term
 quality scoring, IDF or document-spread caps, component splitting/community
 detection, and no-match calibration before ontology promotion or any
 production retrieval claim.
 
-## EXM Programmatic Ontology 50,000-Case Follow-Up
+## EXM Weak-Label Candidate-Admission 50,000-Case Follow-Up
 
-The graph-neural programmatic ontology follow-up summary is tracked at:
+The historically named programmatic-ontology artifact is tracked at:
 
 ```text
 results/exm_programmatic_ontology_50000_summary_2026-07-09.json
 ```
 
-This is the first executable-policy version of the user's revised ontology
-direction. It keeps `jieba + SentencePiece` as an upstream candidate generator,
-then compiles an ontology policy before KG edge construction:
+This historical artifact predates the issue #33 report-schema correction. It
+keeps `jieba + SentencePiece` as an upstream candidate generator, then compiles
+a candidate-admission policy before KG edge construction:
 
 - document-frequency gates reject low-value or over-broad terms;
 - protected mention typing keeps explicit organization, contact, and business
@@ -195,31 +195,30 @@ then compiles an ontology policy before KG edge construction:
 - a CPU-bounded deterministic weak-label MLP assigns candidate scores to CJK
   term mentions, with model hash and weak-label training counts in the safe
   summary;
-- ontology retrieval requires an exact compiled term candidate and cannot use
+- the category/type scoring proxy requires an exact compiled term candidate and cannot use
   category-only fallback.
 
 Result summary:
 
 | Arm | Passed | Positive passed | No-match passed | Permission-denied passed |
 | --- | ---: | ---: | ---: | ---: |
-| Regex current KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
-| Regex current ontology | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
-| Jieba + SentencePiece KG | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
-| Jieba + SentencePiece ontology | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
-| Graph-neural programmatic ontology | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Regex admission + candidate KG | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Regex admission + type-compatibility proxy | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece admission + candidate KG | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Jieba + SentencePiece admission + type-compatibility proxy | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
+| Weak-label MLP candidate admission + type-compatibility proxy | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
 
-Interpretation: the revised ontology method now has measured effect. The
-improvement is measured for the bundled executable graph policy before edge
-construction, not for any single subcomponent in isolation and not from adding
-more post-hoc type labels. The raw lexical arms still fail every no-match
+Interpretation: the revised candidate-admission and graph-construction bundle
+has measured effect. This does not isolate type compatibility or coordination-
+frame semantics. The raw lexical arms still fail every no-match
 guard; the programmatic policy keeps all no-match and permission-denied guards
 while recovering most positive cases. The largest programmatic component
 remains large, so community detection or stricter component splitting is still
 needed before production retrieval claims.
 
-## EXM No-Training Programmatic Ontology 50,000-Case Follow-Up
+## EXM No-Training Candidate-Admission 50,000-Case Follow-Up
 
-The no-training programmatic ontology control summary is tracked at:
+The historically named no-training programmatic-ontology artifact is tracked at:
 
 ```text
 results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json
@@ -227,13 +226,13 @@ results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json
 
 This run keeps the same parsed corpus hash, 50,000-case manifest shape,
 `jieba + SentencePiece` candidate generator, document-frequency gates,
-protected mention handling, and exact-candidate-only ontology retrieval. It
+protected mention handling, and exact-candidate-only category/type-proxy retrieval. It
 adds two training-free controls:
 
-- `graph_data_driven_programmatic_ontology`: data-driven CJK term admission
-  with no neural scoring and zero training examples;
-- `graph_frozen_profile_programmatic_ontology`: a hashable fixed CJK scoring
-  profile with zero training examples and zero training epochs.
+- `frequency_rule_candidate_admission`: data-driven CJK term admission with no
+  neural scoring and zero training examples;
+- `frozen_profile_candidate_admission`: a hashable fixed CJK scoring profile
+  with zero training examples and zero training epochs.
 
 Result summary:
 
@@ -243,9 +242,9 @@ Result summary:
 | Regex current ontology | 10,000/50,000 | 0/40,000 | 5,000/5,000 | 5,000/5,000 |
 | Jieba + SentencePiece KG | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
 | Jieba + SentencePiece ontology | 18,176/50,000 | 13,176/40,000 | 0/5,000 | 5,000/5,000 |
-| Data-driven programmatic ontology | 33,277/50,000 | 23,277/40,000 | 5,000/5,000 | 5,000/5,000 |
-| Frozen-profile programmatic ontology | 43,976/50,000 | 33,976/40,000 | 5,000/5,000 | 5,000/5,000 |
-| Weak-label MLP programmatic ontology | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Frequency-rule candidate admission | 33,277/50,000 | 23,277/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Frozen-profile candidate admission | 43,976/50,000 | 33,976/40,000 | 5,000/5,000 | 5,000/5,000 |
+| Weak-label MLP candidate admission | 43,369/50,000 | 33,369/40,000 | 5,000/5,000 | 5,000/5,000 |
 
 Interpretation: both no-training programmatic controls beat raw lexical
 ontology while preserving no-match and permission-denied guards. The
@@ -256,3 +255,21 @@ weak-label MLP. BGE-M3 through FlagEmbedding remains the preferred future
 optional true frozen neural adapter, but it was not executed in the default dev
 container because that container intentionally does not include torch,
 transformers, FlagEmbedding, GLiNER, HanLP, or CKIP.
+
+## Issue #33 Work Package A Report Boundary
+
+Newly generated reports use `development` and `evaluation` case labels. They do
+not call generated same-corpus cases a holdout. Arm identifiers separately name
+the candidate-admission policy and whether the run stops at candidate-KG
+ranking or adds the category/type scoring proxy. Every arm also declares its KG
+construction, type-compatibility, and frame-semantics modes.
+
+The primary retrieval accuracy contains only positive retrieval cases.
+No-answer/no-match behavior and permission safety are separate sections, so an
+automatically blocked permission-denied case cannot inflate retrieval accuracy.
+The report has explicit sections for `positive_retrieval`,
+`no_answer_or_no_match`, `permission_safety`, `frame_type_quality`,
+`slot_value_quality`, `evidence_span_quality`, `latency_and_resource_use`, and
+`graph_topology_diagnostics`. This harness marks `frame_type_quality` and slot
+value quality as not measured rather than treating candidate-admission lift as
+semantic evidence.
