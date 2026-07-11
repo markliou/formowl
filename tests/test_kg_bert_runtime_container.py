@@ -6,10 +6,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "containers" / "kg-bert-cpu" / "Dockerfile"
-REQUIREMENTS = ROOT / "containers" / "kg-bert-cpu" / "requirements.txt"
+REQUIREMENTS = ROOT / "containers" / "kg-bert-requirements.txt"
 CONTAINER_README = ROOT / "containers" / "kg-bert-cpu" / "README.md"
 GPU_DOCKERFILE = ROOT / "containers" / "kg-bert-gpu" / "Dockerfile"
-GPU_REQUIREMENTS = ROOT / "containers" / "kg-bert-gpu" / "requirements.txt"
 GPU_CONTAINER_README = ROOT / "containers" / "kg-bert-gpu" / "README.md"
 RUNTIME_DOC = ROOT / "docs" / "kg-bert-runtime.md"
 
@@ -31,7 +30,6 @@ class KGBertRuntimeContainerTests(unittest.TestCase):
 
     def test_neural_runtime_requirements_are_pinned(self) -> None:
         requirements = REQUIREMENTS.read_text(encoding="utf-8").splitlines()
-        gpu_requirements = GPU_REQUIREMENTS.read_text(encoding="utf-8").splitlines()
 
         self.assertIn("sentence-transformers==3.3.1", requirements)
         self.assertIn("transformers==4.46.3", requirements)
@@ -39,7 +37,8 @@ class KGBertRuntimeContainerTests(unittest.TestCase):
         for line in requirements:
             if line and not line.startswith("#"):
                 self.assertIn("==", line)
-        self.assertEqual(requirements, gpu_requirements)
+        self.assertIn("containers/kg-bert-requirements.txt", DOCKERFILE.read_text())
+        self.assertIn("containers/kg-bert-requirements.txt", GPU_DOCKERFILE.read_text())
 
     def test_gpu_dockerfile_preserves_cuda_runtime_boundary(self) -> None:
         dockerfile = GPU_DOCKERFILE.read_text(encoding="utf-8")

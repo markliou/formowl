@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import patch
+import json
 
 import kg_objective_completion_audit as audit
 import kg_total_acceptance_suite as suite
@@ -13,6 +14,9 @@ import fair_external_baseline_run_validator as fair_run
 import enterprise_multimodal_validation_validator as enterprise_multimodal
 import production_adapter_path_validator as production_path
 import multimodal_enterprise_recovery as multimodal
+import real_evidence_collection_work_orders as work_orders
+import real_evidence_preflight as preflight
+from authority_test_fixtures import AuthorityWorkspace
 
 
 CURRENT_FAILED_GATE_IDS = [
@@ -25,7 +29,8 @@ CURRENT_FAILED_GATE_IDS = [
 
 class RecoveredTotalAcceptanceTest(unittest.TestCase):
     def test_recovered_total_suite_reports_current_blocked_broad_gates(self) -> None:
-        report = suite.build_report()
+        with AuthorityWorkspace("blocked"):
+            report = suite.build_report()
         gates = {gate["gate_id"]: gate for gate in report["gates"]}
 
         self.assertFalse(report["summary"]["overall_passed"])
@@ -45,7 +50,8 @@ class RecoveredTotalAcceptanceTest(unittest.TestCase):
         self.assertTrue(gates["overclaim_guard"]["passed"])
 
     def test_recovered_objective_audit_reports_current_blocked_requirements(self) -> None:
-        report = audit.build_report()
+        with AuthorityWorkspace("blocked"):
+            report = audit.build_report()
 
         self.assertFalse(report["objective_complete"])
         self.assertEqual(report["proved_requirement_count"], 5)
@@ -63,6 +69,56 @@ class RecoveredTotalAcceptanceTest(unittest.TestCase):
         self.assertEqual(rows["human_annotation_adjudication_protocol"]["status"], "incomplete")
         self.assertEqual(rows["multimodal_enterprise_validation"]["status"], "incomplete")
         self.assertEqual(rows["production_adapter_gate"]["status"], "incomplete")
+
+    def test_blocked_and_completed_authority_fixtures_are_separate(self) -> None:
+        with AuthorityWorkspace("blocked"):
+            blocked = audit.build_report()
+        with AuthorityWorkspace("completed"):
+            completed_total = suite.build_report()
+            completed = audit.build_report()
+            completed_preflight = preflight.build_report()
+            completed_checklist = json.loads(preflight.CHECKLIST_PATH.read_text(encoding="utf-8"))
+            completed_work_orders = work_orders.build_report()
+
+        self.assertFalse(blocked["objective_complete"])
+        self.assertEqual(blocked["failed_gate_ids"], CURRENT_FAILED_GATE_IDS)
+        self.assertTrue(completed["objective_complete"])
+        self.assertEqual(completed["failed_gate_ids"], [])
+        self.assertEqual(completed["proved_requirement_count"], completed["requirement_count"])
+        self.assertTrue(completed_total["summary"]["overall_passed"])
+        self.assertEqual(completed_total["summary"]["passed_gate_count"], 12)
+        self.assertEqual(completed_total["summary"]["failed_gate_count"], 0)
+        self.assertEqual(completed_checklist["remaining_gates"], [])
+        self.assertEqual(completed_checklist["passed_gate_count"], 12)
+        self.assertEqual(completed_checklist["failed_gate_count"], 0)
+        self.assertEqual(completed_preflight["summary"]["blocked_gate_count"], 0)
+        self.assertEqual(completed_preflight["checklist_sync"]["diagnostics"], [])
+        self.assertEqual(completed_work_orders["summary"]["work_order_count"], 0)
+        self.assertEqual(
+            completed_work_orders["work_order_state"],
+            "no_remaining_work_orders_all_broad_gates_clear",
+        )
+
+    def test_authority_fixture_setup_failure_restores_globals_and_removes_temp_root(self) -> None:
+        original_results = suite.RESULTS
+        workspace = AuthorityWorkspace("completed")
+        temporary_root = workspace.root
+
+        with patch.object(
+            workspace,
+            "_install_completed_reports",
+            side_effect=RuntimeError("fixture setup failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "fixture setup failed"):
+                workspace.__enter__()
+
+        self.assertEqual(suite.RESULTS, original_results)
+        self.assertFalse(temporary_root.exists())
+
+        with AuthorityWorkspace("blocked"):
+            blocked = suite.build_report()
+        self.assertEqual(blocked["summary"]["passed_gate_count"], 8)
+        self.assertEqual(blocked["summary"]["failed_gate_count"], 4)
 
     def test_external_literature_gate_rejects_real_run_overclaim(self) -> None:
         report = literature.build_report()

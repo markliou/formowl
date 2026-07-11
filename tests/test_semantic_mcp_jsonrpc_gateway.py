@@ -25,6 +25,78 @@ from formowl_ingestion.storage import UploadSessionStore
 
 
 class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
+    def test_tools_list_exposes_canonical_and_deprecated_alias_policy(self) -> None:
+        gateway = SemanticMcpJsonRpcGateway(
+            session=SemanticGatewaySession(
+                session_id="session_alias_discovery",
+                actor_user_id="user_alias_discovery",
+                workspace_id="workspace_main",
+            )
+        )
+
+        listed = gateway.handle_json_rpc({"jsonrpc": "2.0", "id": "list", "method": "tools/list"})
+        tools = {tool["name"]: tool for tool in listed["result"]["tools"]}
+
+        self.assertIn("canonical API", tools["query_effective_graph_view"]["description"])
+        self.assertIn(
+            "deprecated compatibility alias", tools["query_effective_graph"]["description"]
+        )
+        self.assertIn("query_effective_graph_view", tools["query_effective_graph"]["description"])
+
+    def test_transcript_records_tool_errors_and_permission_denials(self) -> None:
+        gateway = SemanticMcpJsonRpcGateway(
+            semantic_gateway=SemanticMcpGateway(
+                mail_evidence_handler=lambda _input_data: {
+                    "status": "permission_denied",
+                    "evidence_snippets": [],
+                    "citations": [],
+                    "redaction_counts": {"hidden_records": 1},
+                    "warnings": [],
+                }
+            ),
+            session=SemanticGatewaySession(
+                session_id="session_transcript_status",
+                actor_user_id="user_transcript_status",
+                workspace_id="workspace_main",
+            ),
+        )
+
+        missing_handler = gateway.handle_json_rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": "missing",
+                "method": "tools/call",
+                "params": {
+                    "name": "create_ingestion_job",
+                    "arguments": {
+                        "asset_locator": "formowl://asset/asset_001",
+                        "extractor_profile": "mail_archive_phase1",
+                    },
+                },
+            }
+        )
+        denied = gateway.handle_json_rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": "denied",
+                "method": "tools/call",
+                "params": {
+                    "name": "query_mail_evidence",
+                    "arguments": {
+                        "query_text": "restricted evidence",
+                        "mail_import_session_id": "mailimport_001",
+                    },
+                },
+            }
+        )
+
+        self.assertTrue(missing_handler["result"]["isError"])
+        self.assertFalse(denied["result"]["isError"])
+        self.assertEqual(
+            [entry["status"] for entry in gateway.leak_transcript()],
+            ["error", "permission_denied"],
+        )
+
     def test_query_effective_graph_view_is_discoverable_and_dispatches_kg_first_payload(
         self,
     ) -> None:
@@ -231,11 +303,19 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
 
     def test_tools_call_binds_session_and_records_hash_only_transcript(self) -> None:
         gateway = SemanticMcpJsonRpcGateway(
+            semantic_gateway=SemanticMcpGateway(
+                retrieval_handler=lambda input_data: {
+                    "answer": "bounded answer",
+                    "citations": [],
+                    "visible_graph_snippets": [],
+                    "redaction_counts": {"hidden_records": 0},
+                }
+            ),
             session=SemanticGatewaySession(
                 session_id="session_001",
                 actor_user_id="user_yifan",
                 workspace_id="workspace_main",
-            )
+            ),
         )
 
         result = gateway.handle_json_rpc(
@@ -379,12 +459,19 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
                 self.assertNotIn("forged", rendered)
 
     def test_review_decision_binds_reviewer_identity_from_session(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        def review_handler(input_data: dict[str, Any]) -> dict[str, Any]:
+            calls.append(input_data)
+            return {"status": "pending_review", "decision": input_data["decision"]}
+
         gateway = SemanticMcpJsonRpcGateway(
+            semantic_gateway=SemanticMcpGateway(review_decision_handler=review_handler),
             session=SemanticGatewaySession(
                 session_id="session_001",
                 actor_user_id="user_reviewer",
                 workspace_id="workspace_main",
-            )
+            ),
         )
 
         result = gateway.handle_json_rpc(
@@ -402,6 +489,7 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
         self.assertFalse(result["result"]["isError"])
         tool_result = result["result"]["content"][0]["json"]
         self.assertEqual(tool_result["status"], "pending_review")
+        self.assertEqual(calls[0]["reviewer_user_id"], "user_reviewer")
 
     def test_private_query_content_is_dispatched_without_output_leak_scanning_or_echo(self) -> None:
         calls: list[dict[str, Any]] = []
@@ -449,7 +537,13 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
         self.assertNotIn(private_query, str(gateway.leak_transcript()))
 
     def test_forbidden_tool_calls_return_safe_json_rpc_errors(self) -> None:
-        gateway = SemanticMcpJsonRpcGateway()
+        gateway = SemanticMcpJsonRpcGateway(
+            session=SemanticGatewaySession(
+                session_id="session_forbidden_tool",
+                actor_user_id="user_forbidden_tool",
+                workspace_id="workspace_main",
+            )
+        )
 
         result = gateway.handle_json_rpc(
             {
@@ -668,10 +762,8 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(completed.stderr, "")
         response = json.loads(completed.stdout)
-        session = response["result"]["session"]
-        self.assertEqual(session["session_id"], "semantic_gateway_session")
-        self.assertEqual(session["actor_user_id"], "manual_trusted_internal")
-        self.assertEqual(session["workspace_id"], "workspace_cli")
+        self.assertEqual(response["error"]["code"], -32001)
+        self.assertEqual(response["error"]["message"], "session_not_authenticated")
         rendered = completed.stdout.lower()
         self.assertNotIn("swordfish", rendered)
         self.assertNotIn("session-secret", rendered)

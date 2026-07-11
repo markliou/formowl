@@ -59,7 +59,7 @@ def valid_response_packet() -> dict:
 class EnterpriseMultimodalResponseIntakeTest(unittest.TestCase):
     def setUp(self) -> None:
         shutil.rmtree(TEST_PARENT, ignore_errors=True)
-        shutil.rmtree(validator_fixtures.BASE, ignore_errors=True)
+        shutil.rmtree(validator_fixtures.fixture_base(), ignore_errors=True)
         BROKEN_SYMLINK_TARGET.unlink(missing_ok=True)
         ASSEMBLY_MANIFEST_PARENT_FILE.unlink(missing_ok=True)
         for path in (ASSEMBLY_MANIFEST, WORK_PACKET_PATH, RESPONSE_PACKET_PATH):
@@ -72,7 +72,7 @@ class EnterpriseMultimodalResponseIntakeTest(unittest.TestCase):
 
     def tearDown(self) -> None:
         shutil.rmtree(TEST_PARENT, ignore_errors=True)
-        shutil.rmtree(validator_fixtures.BASE, ignore_errors=True)
+        shutil.rmtree(validator_fixtures.fixture_base(), ignore_errors=True)
         BROKEN_SYMLINK_TARGET.unlink(missing_ok=True)
         ASSEMBLY_MANIFEST_PARENT_FILE.unlink(missing_ok=True)
         for path in (ASSEMBLY_MANIFEST, WORK_PACKET_PATH, RESPONSE_PACKET_PATH):

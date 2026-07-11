@@ -443,15 +443,16 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - `docs/provenance.md` - provenance and source-traceability model.
 - `docs/workflows.md` - end-to-end workflow examples.
 - `docs/mcp-boundaries.md` - what MCP tools may and may not do.
-- `docs/mcp-server-abstract.md` - abstract responsibilities of the Project and Wiki MCP servers.
 - `docs/wiki-draft-schema.md` - wiki draft and frontmatter schema.
 - `docs/kg-research-method.md` - KG research method, literature comparison,
   acceptance evidence, and known limits.
-- `docs/ontology-v2-coordination-plan.md` - issue #28 detailed work plan and
+- `docs/ontology-v2-coordination-plan.md` - historical issue #28 work plan and
   review packet for the coordination-frame ontology slice.
-- `docs/ontology-v2-coordination-frames.md` - issue #28 coordination-frame
+- `docs/ontology-v2-coordination-frames.md` - canonical issue #28 coordination-frame
   ontology method, synthetic email-first experiment, fixed redacted replay
   effectiveness result, ablation results, and PST safety boundary.
+- `docs/ontology-v2-review-comments.md` - historical methodology critique and
+  remaining limitations behind the ontology v2 experiment changes.
 - `docs/multimodal-ontology-term-extraction-decision.md` - data-driven
   multimodal term, mention, tokenizer, and ontology-selection decision for
   future PDF, PowerPoint, audio, OCR, mail, and mixed Chinese/English inputs.
@@ -804,10 +805,18 @@ long-running objectives portable across sessions and machines:
 - `docs/agent-goals/system-backbone-agent.md`
 - `docs/agent-goals/handoff-log.md`
 - `docs/agent-goals/reviewer-gate.md`
+- `docs/archive/README.md` - `immutable-history` index for lossless dated
+  snapshots of completed board, goal, and handoff detail. It is consulted on
+  demand and is not part of the default agent startup sequence.
 
 Use `docs/implementation-task-breakdown.md` for checkbox task completion and
 `docs/agent-goals/` for current objective, scope, blockers, status, and handoff
-state.
+state. Active files are bounded: the board retains every unchecked item,
+current phase summaries, and up to five recent completion summaries; role goals
+retain role/objective/status/blockers/next action; handoffs retain 14 days and
+at most 300 lines. The lifecycle labels are `active`, `active-blocked`,
+`complete`, and `immutable-history`; detailed rules live in
+`docs/agent-goals/README.md`.
 
 Install and run pre-commit checks from inside the dev container:
 

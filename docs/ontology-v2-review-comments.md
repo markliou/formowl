@@ -1,5 +1,9 @@
 # Ontology Methodology Review: Why KG + Ontology Underperforms KG Alone
 
+Status: historical methodology critique retained to explain the experiment
+changes and remaining limitations. Current implementation and results live in
+`docs/ontology-v2-coordination-frames.md`.
+
 Review date: 2026-07-08.
 Reviewed artifacts: `docs/ontology-v2-coordination-frames.md`,
 `docs/ontology-v2-coordination-plan.md`,

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import real_evidence_collection_work_orders as work_orders
 import real_evidence_preflight as preflight
+from authority_test_fixtures import AuthorityWorkspace
 
 
 def nested_keys(payload: object) -> set[str]:
@@ -227,6 +228,14 @@ def blocked_preflight(gate_ids: list[str] | None = None) -> dict:
 
 class RealEvidenceCollectionWorkOrdersTest(unittest.TestCase):
     def setUp(self) -> None:
+        self._authority_workspace = AuthorityWorkspace("blocked")
+        self._authority_workspace.__enter__()
+        self.addCleanup(
+            self._authority_workspace.__exit__,
+            None,
+            None,
+            None,
+        )
         self.snapshot_bytes = (
             work_orders.RESULTS / "kg_total_acceptance_snapshot.json"
         ).read_bytes()

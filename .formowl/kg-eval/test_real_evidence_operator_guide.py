@@ -11,6 +11,7 @@ from io import StringIO
 
 import real_evidence_collection_work_orders as work_orders
 import real_evidence_operator_guide as guide
+from authority_test_fixtures import AuthorityWorkspace
 
 
 def nested_strings(payload: object) -> list[str]:
@@ -30,6 +31,14 @@ def nested_strings(payload: object) -> list[str]:
 
 class RealEvidenceOperatorGuideTest(unittest.TestCase):
     def setUp(self) -> None:
+        self._authority_workspace = AuthorityWorkspace("blocked")
+        self._authority_workspace.__enter__()
+        self.addCleanup(
+            self._authority_workspace.__exit__,
+            None,
+            None,
+            None,
+        )
         self.output = guide.WORK_PACKETS / "test_remaining_real_evidence_operator_guide.md"
         self.nested_output = (
             guide.WORK_PACKETS / "test_remaining_real_evidence_operator_guide_parent" / "guide.md"

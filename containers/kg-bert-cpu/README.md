@@ -29,7 +29,8 @@ docker build \
 ```
 
 The Dockerfile installs CPU-only PyTorch from the official PyTorch CPU wheel
-index, then installs the pinned packages in `requirements.txt`.
+index, then installs the shared pinned packages in
+`containers/kg-bert-requirements.txt`.
 
 ## Run The Ablation
 

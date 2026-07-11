@@ -84,7 +84,7 @@ class SemanticMcpGatewayTests(unittest.TestCase):
             self.assertNotIn("canonical_graph_revision_id", str(result))
         self.assertEqual(len(gateway.tool_call_logs), 3)
 
-    def test_semantic_tools_are_proposal_or_gateway_bound_not_canonical_mutations(
+    def test_missing_semantic_handlers_fail_without_synthesizing_domain_results(
         self,
     ) -> None:
         gateway = SemanticMcpGateway()
@@ -167,18 +167,25 @@ class SemanticMcpGatewayTests(unittest.TestCase):
             {"projection_spec_id": "projection_001", "requester_user_id": "user_yifan"},
         )
 
-        self.assertEqual(upload["status"], "pending_review")
-        self.assertEqual(ingestion["status"], "pending_review")
-        self.assertEqual(observations["status"], "pending_review")
-        self.assertEqual(preview["status"], "pending_review")
-        self.assertEqual(query["status"], "pending_review")
-        self.assertEqual(mail_query["status"], "pending_review")
-        self.assertEqual(case_progress["status"], "pending_review")
-        self.assertEqual(case_progress["data"]["blockers"], [])
-        self.assertEqual(case_progress["data"]["citations"], [])
-        self.assertEqual(review["status"], "pending_review")
-        self.assertEqual(access["status"], "pending_review")
-        self.assertEqual(draft["status"], "pending_review")
+        results = [
+            upload,
+            ingestion,
+            observations,
+            preview,
+            query,
+            mail_query,
+            case_progress,
+            review,
+            access,
+            draft,
+        ]
+        for result in results:
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["data"]["error_code"], "handler_not_configured")
+        self.assertNotIn("candidate_summaries", preview["data"])
+        self.assertNotIn("access_request_id", access["data"])
+        self.assertNotIn("audit_ref", review["data"])
+        self.assertIn("deprecated_alias_use_query_effective_graph_view", query["warnings"])
         self.assertNotIn(
             "canonical_commit",
             str(
@@ -196,24 +203,44 @@ class SemanticMcpGatewayTests(unittest.TestCase):
                 ]
             ),
         )
-        self.assertNotIn(
-            "raw_path",
-            str(
-                [
-                    upload,
-                    ingestion,
-                    observations,
-                    preview,
-                    query,
-                    mail_query,
-                    case_progress,
-                    review,
-                    access,
-                    draft,
-                ]
-            ),
-        )
+        self.assertNotIn("raw_path", str(results))
         self.assertEqual(len(gateway.tool_call_logs), 10)
+
+    def test_effective_graph_view_is_canonical_and_old_name_is_deprecated_alias(self) -> None:
+        schemas = {schema["tool_name"]: schema for schema in PUBLIC_TOOL_SCHEMAS}
+
+        self.assertEqual(
+            schemas["query_effective_graph_view"]["compatibility"],
+            {"status": "canonical"},
+        )
+        self.assertEqual(
+            schemas["query_effective_graph"]["compatibility"],
+            {
+                "status": "deprecated_alias",
+                "canonical_tool_name": "query_effective_graph_view",
+            },
+        )
+
+        gateway = SemanticMcpGateway(
+            retrieval_handler=lambda _payload: {
+                "answer": "same governed answer",
+                "citations": [],
+                "visible_graph_snippets": [],
+                "redaction_counts": {"hidden_records": 0},
+            }
+        )
+        arguments = {
+            "query_text": "delivery risk",
+            "session_id": "session_alias",
+            "workspace_id": "workspace_main",
+            "requester_user_id": "user_alias",
+        }
+        canonical = gateway.dispatch_tool("query_effective_graph_view", arguments)
+        alias = gateway.dispatch_tool("query_effective_graph", arguments)
+
+        self.assertEqual(alias["data"], canonical["data"])
+        self.assertNotIn("deprecated_alias_use_query_effective_graph_view", canonical["warnings"])
+        self.assertIn("deprecated_alias_use_query_effective_graph_view", alias["warnings"])
 
     def test_gateway_rejects_handler_payloads_with_raw_values(self) -> None:
         gateway = SemanticMcpGateway(

@@ -14,6 +14,9 @@ Every agent should read these files after `AGENTS.md`, the work board, and
 3. `docs/agent-goals/handoff-log.md` for recent cross-agent notes.
 4. `docs/agent-goals/reviewer-gate.md` before marking reviewed work complete.
 
+Do not add `docs/archive/` to the normal startup sequence. Open the archive only
+when older proof or handoff history is required.
+
 The goal file records the durable objective. The work board records task
 completion. Git records the mergeable engineering state.
 
@@ -28,6 +31,28 @@ completion. Git records the mergeable engineering state.
 - `reviewer-gate.md` - default 3-reviewer gate with Codex/GPT reviewers.
   Antigravity/Gemini through `agy` is disabled by default unless the user
   explicitly re-enables it after the local policy or platform state changes.
+
+## Lifecycle Labels
+
+- `active` - current operational objective can proceed.
+- `active-blocked` - current operational objective exists but cannot proceed or
+  cannot be claimed complete until listed blockers clear.
+- `complete` - objective is achieved and verified; move detailed history to a
+  dated archive during the next archival cycle.
+- `immutable-history` - archived evidence only; never treat it as current
+  instructions or edit it in place.
+
+## Size And Retention Policy
+
+- Each role goal file contains only role, current objective, status, blockers,
+  and next action. Target 180 lines; archive before 250 lines.
+- `handoff-log.md` keeps the latest 14 calendar days and at most 300 lines.
+  Archive the oldest complete dated entries before either limit is exceeded.
+- The active work board keeps all unchecked work, current phase summaries, and
+  at most five concise recent-completion summaries. Target 400 lines; archive
+  before 500 lines.
+- Every archival cycle creates a new dated snapshot plus hashes under
+  `docs/archive/`. Existing dated snapshots are immutable.
 
 ## Update Protocol
 
@@ -50,6 +75,10 @@ Use these statuses consistently:
 - `waiting-for-owner` - the owning agent or user must fill in missing details.
 - `blocked` - progress requires external input, access, tooling, or a merge.
 - `complete` - objective is achieved and verified.
+
+Lifecycle labels describe document use; status values describe objective state.
+For example, a blocked current objective uses lifecycle `active-blocked` and
+status `blocked`.
 
 Do not mark a goal `complete` unless code, tests, relevant docs, work-board
 state, and canonical dev-container verification are aligned.

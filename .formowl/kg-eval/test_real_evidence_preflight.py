@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import unittest
@@ -15,15 +16,33 @@ from unittest import mock
 
 import real_evidence_preflight as preflight
 import test_enterprise_multimodal_validation_validator as enterprise_fixtures
+from authority_test_fixtures import AuthorityWorkspace
 
 
-CANONICAL_PACKETS = [gate["input_packet"] for gate in preflight.EXPECTED_GATES.values()]
 CURRENT_BLOCKED_GATE_IDS = [
     "fair_external_baseline_comparison",
     "annotation_adjudication_protocol",
     "multimodal_semantic_validation",
     "production_adapter_paths",
 ]
+SOURCE_OPERATOR_FIXTURE_ROOT = (
+    Path(__file__).resolve().parent / "inputs" / "enterprise_multimodal_real" / "validator_fixture"
+)
+
+
+def tree_fingerprint(root: Path) -> list[tuple[str, str, str]]:
+    if not root.exists() and not root.is_symlink():
+        return []
+    rows: list[tuple[str, str, str]] = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            rows.append((relative, "symlink", str(path.readlink())))
+        elif path.is_file():
+            rows.append((relative, "file", hashlib.sha256(path.read_bytes()).hexdigest()))
+        elif path.is_dir():
+            rows.append((relative, "dir", ""))
+    return rows
 
 
 def remove_packet_path(path: Path) -> None:
@@ -74,7 +93,16 @@ def nested_keys(payload: object) -> set[str]:
 
 class RealEvidencePreflightTest(unittest.TestCase):
     def setUp(self) -> None:
-        self._saved_packets = [PacketPathState(path) for path in CANONICAL_PACKETS]
+        self._authority_workspace = AuthorityWorkspace("blocked")
+        self._authority_workspace.__enter__()
+        self.addCleanup(
+            self._authority_workspace.__exit__,
+            None,
+            None,
+            None,
+        )
+        self.canonical_packets = self._authority_workspace.canonical_packets
+        self._saved_packets = [PacketPathState(path) for path in self.canonical_packets]
         self._saved_checklist = preflight.CHECKLIST_PATH.read_bytes()
         for gate in preflight.EXPECTED_GATES.values():
             shutil.rmtree(gate["real_root"] / "preflight_test", ignore_errors=True)
@@ -95,10 +123,21 @@ class RealEvidencePreflightTest(unittest.TestCase):
         shutil.rmtree(preflight.INPUTS / "test_preflight_fixture_inputs", ignore_errors=True)
 
     def _write_json(self, path: Path, payload: object) -> None:
-        if path in CANONICAL_PACKETS:
+        if path in self.canonical_packets:
             self._saved_packet_state(path).clear_for_test()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def test_enterprise_fixture_generation_does_not_touch_operator_state(self) -> None:
+        before = tree_fingerprint(SOURCE_OPERATOR_FIXTURE_ROOT)
+
+        packet = enterprise_fixtures.valid_packet()
+
+        self.assertEqual(tree_fingerprint(SOURCE_OPERATOR_FIXTURE_ROOT), before)
+        self.assertTrue(
+            packet["pilot_manifest_artifact"].startswith("inputs/enterprise_multimodal_real/")
+        )
+        self.assertTrue(enterprise_fixtures.fixture_base().is_relative_to(preflight.ROOT))
 
     def _gate(self, report: dict, gate_id: str) -> dict:
         return {row["gate_id"]: row for row in report["gates"]}[gate_id]
@@ -662,6 +701,17 @@ class RealEvidencePreflightTest(unittest.TestCase):
             report["checklist_sync"]["checklist_objective_audit_sha256_matches_current"]
         )
         self.assertFalse(report["checklist_sync"]["checklist_source_snapshot_path_matches"])
+        self.assertEqual(len(report["checklist_sync"]["diagnostics"]), 1)
+        diagnostic = report["checklist_sync"]["diagnostics"][0]
+        self.assertEqual(diagnostic["code"], "kg_evaluation_authority_drift")
+        self.assertEqual(
+            diagnostic["failed_checks"],
+            [
+                "checklist_objective_audit_sha256_matches_current",
+                "checklist_source_snapshot_path_matches",
+            ],
+        )
+        self.assertIn("regenerate the total acceptance snapshot", diagnostic["action"])
         self.assertEqual(report["summary"]["blocked_gate_ids"], CURRENT_BLOCKED_GATE_IDS)
 
     def test_main_writes_preflight_result_without_mutating_acceptance_snapshot(self) -> None:

@@ -10,14 +10,18 @@ import unittest
 import enterprise_multimodal_validation_validator as validator
 import llm_subagent_adjudication as llm_panel
 import public_reproducible_evidence as public_evidence
+from authority_test_fixtures import AuthorityWorkspace
 
 
-BASE = validator.REAL_ARTIFACT_ROOT_PATH / "validator_fixture"
 LLM_PANEL_RUBRIC_SHA256 = "a1234567890bcdef" * 4
 
 
+def fixture_base():
+    return validator.REAL_ARTIFACT_ROOT_PATH / "validator_fixture"
+
+
 def write_artifact(relative_name: str, payload: object) -> tuple[str, str]:
-    path = BASE / relative_name
+    path = fixture_base() / relative_name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return (
@@ -360,14 +364,22 @@ def convert_to_llm_subagent_route(packet: dict) -> dict:
 
 class EnterpriseMultimodalValidationValidatorTest(unittest.TestCase):
     def setUp(self) -> None:
-        shutil.rmtree(BASE, ignore_errors=True)
+        self._authority_workspace = AuthorityWorkspace("blocked")
+        self._authority_workspace.__enter__()
+        self.addCleanup(
+            self._authority_workspace.__exit__,
+            None,
+            None,
+            None,
+        )
+        shutil.rmtree(fixture_base(), ignore_errors=True)
         shutil.rmtree(validator.INPUTS / "test_enterprise_multimodal_rejected", ignore_errors=True)
         remove_path(validator.REAL_ARTIFACT_ROOT_PATH / "templates")
         remove_path(validator.REAL_ARTIFACT_ROOT_PATH / "release_alias")
         remove_path(validator.REAL_ARTIFACT_ROOT_PATH / "release.template.json")
 
     def tearDown(self) -> None:
-        shutil.rmtree(BASE, ignore_errors=True)
+        shutil.rmtree(fixture_base(), ignore_errors=True)
         shutil.rmtree(validator.INPUTS / "test_enterprise_multimodal_rejected", ignore_errors=True)
         remove_path(validator.REAL_ARTIFACT_ROOT_PATH / "templates")
         remove_path(validator.REAL_ARTIFACT_ROOT_PATH / "release_alias")
@@ -414,7 +426,7 @@ class EnterpriseMultimodalValidationValidatorTest(unittest.TestCase):
     def test_default_validator_rejects_symlink_alias_to_sandbox_artifacts(self) -> None:
         packet = valid_packet()
         alias = validator.REAL_ARTIFACT_ROOT_PATH / "release_alias"
-        alias.symlink_to(BASE, target_is_directory=True)
+        alias.symlink_to(fixture_base(), target_is_directory=True)
         original_prefix = f"{validator.REAL_ARTIFACT_ROOT}/validator_fixture/"
         alias_prefix = f"{validator.REAL_ARTIFACT_ROOT}/release_alias/"
         for field in (

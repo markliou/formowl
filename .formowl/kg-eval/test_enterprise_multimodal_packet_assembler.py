@@ -120,11 +120,11 @@ def valid_assembly_manifest() -> dict[str, object]:
 class EnterpriseMultimodalPacketAssemblerTest(unittest.TestCase):
     def setUp(self) -> None:
         shutil.rmtree(BASE, ignore_errors=True)
-        shutil.rmtree(validator_fixtures.BASE, ignore_errors=True)
+        shutil.rmtree(validator_fixtures.fixture_base(), ignore_errors=True)
 
     def tearDown(self) -> None:
         shutil.rmtree(BASE, ignore_errors=True)
-        shutil.rmtree(validator_fixtures.BASE, ignore_errors=True)
+        shutil.rmtree(validator_fixtures.fixture_base(), ignore_errors=True)
 
     def test_assemble_candidate_computes_hashes_without_modifying_artifacts(self) -> None:
         manifest = valid_assembly_manifest()

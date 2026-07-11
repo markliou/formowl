@@ -4,7 +4,10 @@
 
 MCP is an orchestration boundary, not the core data processing engine.
 
-Project MCP and Wiki MCP are current MCP services. Future ingestion and graph services may expose MCP tools too, but heavy extraction, graph resolution, indexing, and storage work should run in FormOwl backend services.
+The Semantic MCP Gateway is the current ChatGPT-facing service. Project MCP
+and Wiki MCP remain compatibility services for their bounded project-context
+and wiki-draft workflows. Heavy extraction, graph resolution, indexing, and
+storage work runs in FormOwl backend services.
 
 For ChatGPT-facing deployments, MCP should expose semantic and governed operations, not infrastructure. The public or tunnel-exposed service is a FormOwl MCP Gateway. Synology NAS, PostgreSQL, MinIO or other object storage, worker services, raw file paths, and scratch directories remain internal-only.
 
@@ -16,63 +19,74 @@ MCP tools should hide backend operation choices from normal users. They should n
 
 This boundary improves security and stability by reducing unvalidated inputs, accidental data exposure, path confusion, parser mismatch, and unaudited local files.
 
-## Current Boundaries
+## Current Services
 
 ```text
 LLM host
-  -> Project MCP for project execution context
-  -> Wiki MCP for wiki draft, revision, snapshot, and publish proposal workflows
+  -> Semantic MCP Gateway for governed upload, evidence, graph, access, and projection workflows
+  -> Project MCP compatibility service for project execution context
+  -> Wiki MCP compatibility service for wiki draft, revision, snapshot, and publish proposals
   -> formowl-contract for portable exchange objects
 ```
 
 Project MCP must not generate wiki pages. Wiki MCP must not depend on project-system internals.
 
-## Future Pipeline Tools
+## Current Public Semantic Tools
 
-Recommended future MCP tools:
+`python/formowl_gateway/semantic.py` is the source of truth for the public tool
+schema. The current tools are:
+
+```text
+open_upload_session
+create_ingestion_job
+list_observations
+preview_graph_candidates
+query_effective_graph
+query_effective_graph_view
+query_mail_evidence
+answer_mail_case_progress
+request_graph_access
+submit_graph_review_decision
+generate_wiki_draft_from_graph_view
+```
+
+These tools should expose reviewable operations. They should not let a client or external extractor directly mutate canonical graph state.
+
+There is currently no public raw attachment reader, raw filesystem reader,
+raw database query tool, or direct canonical mutation tool. Attachments must be
+registered and extracted into governed observations or mail evidence before
+they can support an answer.
+
+## Planned Tools
+
+The following capabilities remain planned and must not be described as current:
 
 ```text
 select_actor
 whoami
 capture_current_chatgpt_session
-create_upload_session
 get_upload_session
-prepare_upload_source
-get_upload_task_card
 complete_upload_session
-upload_asset_reference
-create_ingestion_job
 get_ingestion_job
-list_observations
-extract_graph_candidates
-preview_graph_candidates
 resolve_entity_candidate
 commit_candidates_to_graph
 list_types
 get_type
 propose_type
-propose_type_alias
 resolve_type_candidate
 commit_types
-propose_type_alignment
-get_entity
-search_graph
-query_effective_graph
 search_assets
-search_mail
 fetch_email_thread
 fetch_evidence_snippet
-create_access_request
-list_pending_access_requests
 approve_access_request
 deny_access_request
 revoke_grant
-generate_wiki_page
 ```
 
-These tools should expose reviewable operations. They should not let a client or external extractor directly mutate canonical graph state.
-
-`upload_asset_reference` must not bypass `UploadSession` intent capture for normal user uploads. It is reserved for controlled imports, migration adapters, or trusted backend references that still create asset, permission, and audit records.
+Internal `upload_asset_reference` flows must not bypass `UploadSession` intent
+capture for normal user uploads. They are reserved for controlled imports,
+migration adapters, or trusted backend references that still create asset,
+permission, and audit records.
 
 `capture_current_chatgpt_session` is a convenience shortcut for the current ChatGPT conversation. It may skip the visible upload surface, but it must not skip identity, permission scope, source account metadata, asset registration, ingestion job creation, or audit.
 

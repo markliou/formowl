@@ -20,7 +20,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /workspace
 
-COPY containers/kg-bert-gpu/requirements.txt /tmp/formowl-kg-bert-gpu-requirements.txt
+COPY containers/kg-bert-requirements.txt /tmp/formowl-kg-bert-gpu-requirements.txt
 
 RUN python -m pip install --break-system-packages --no-cache-dir --upgrade "pip<26" \
     && python -m pip install --break-system-packages --no-cache-dir \

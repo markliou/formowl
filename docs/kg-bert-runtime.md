@@ -31,7 +31,7 @@ It lives at:
 
 ```text
 containers/kg-bert-cpu/Dockerfile
-containers/kg-bert-cpu/requirements.txt
+containers/kg-bert-requirements.txt
 ```
 
 The CPU container intentionally preserves the previous neural fallback model:
@@ -73,7 +73,7 @@ The GPU neural runtime lives at:
 
 ```text
 containers/kg-bert-gpu/Dockerfile
-containers/kg-bert-gpu/requirements.txt
+containers/kg-bert-requirements.txt
 ```
 
 It uses the official PyTorch CUDA image:

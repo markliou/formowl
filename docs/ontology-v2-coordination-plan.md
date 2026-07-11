@@ -1,8 +1,12 @@
 # Ontology v2 Coordination Plan
 
-This is the current working plan for issue #28. It is written as a review
-packet for another model or reviewer. It describes what I am implementing now,
-what evidence the current slice can support, and what must remain future work.
+Status: historical issue #28 implementation and review plan. The canonical
+method and result document is `docs/ontology-v2-coordination-frames.md`; the
+methodology critique is `docs/ontology-v2-review-comments.md`.
+
+This was the working plan for issue #28 and is retained as its historical
+review packet. It describes what the slice implemented, what evidence it was
+intended to support, and what remained future work at that time.
 
 ## Objective
 

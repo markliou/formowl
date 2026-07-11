@@ -24,10 +24,13 @@ from .jsonrpc import (
     session_auth_and_audit_store_integration,
     standards_compliant_mcp_gateway_transport,
 )
+from .jsonline import run_jsonline_compat
+from .protocol import McpJsonRpcEngine
 
 __all__ = [
     "JsonRpcTranscriptEntry",
     "McpServerJsonRpcGateway",
+    "McpJsonRpcEngine",
     "PUBLIC_TOOL_SCHEMAS",
     "SemanticGatewaySession",
     "SemanticMcpGateway",
@@ -41,6 +44,7 @@ __all__ = [
     "direct_filesystem_read_tool",
     "end_to_end_raw_path_raw_sql_worker_internal_leak_transcript",
     "public_tool_schema",
+    "run_jsonline_compat",
     "safe_error_envelope",
     "safe_workflow_error_envelope",
     "session_auth_and_audit_store_integration",

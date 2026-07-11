@@ -752,6 +752,25 @@ def build_report() -> dict[str, Any]:
     checklist_sync["status"] = "synchronized" if all(checklist_sync.values()) else "drifted"
     checklist_sync["historical_monitored_gate_ids"] = expected_gate_ids
     checklist_sync["current_expected_gate_ids"] = failed_gate_ids
+    failed_sync_checks = [
+        name
+        for name, passed in checklist_sync.items()
+        if name.startswith("checklist_") and passed is False
+    ]
+    checklist_sync["diagnostics"] = (
+        []
+        if not failed_sync_checks
+        else [
+            {
+                "code": "kg_evaluation_authority_drift",
+                "failed_checks": failed_sync_checks,
+                "action": (
+                    "regenerate the total acceptance snapshot, objective audit, and remaining "
+                    "evidence checklist from the same explicit authority fixture or operator state"
+                ),
+            }
+        ]
+    )
 
     gate_reports = [
         gate_preflight_report(

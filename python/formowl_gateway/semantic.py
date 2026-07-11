@@ -5,7 +5,6 @@ import re
 from typing import Any, Callable, Mapping
 
 from formowl_contract import (
-    AuditLog,
     ContractValidationError,
     McpResultEnvelope,
     now_iso,
@@ -125,6 +124,10 @@ PUBLIC_TOOL_SCHEMAS = [
     {
         "tool_name": "query_effective_graph",
         "workflow": "access",
+        "compatibility": {
+            "status": "deprecated_alias",
+            "canonical_tool_name": "query_effective_graph_view",
+        },
         "input_keys": ["workspace_id", "query_text", "requester_user_id"],
         "output_keys": ["answer", "citations", "visible_graph_snippets", "redaction_counts"],
         "result_type": "effective_graph_query",
@@ -133,6 +136,7 @@ PUBLIC_TOOL_SCHEMAS = [
     {
         "tool_name": "query_effective_graph_view",
         "workflow": "access",
+        "compatibility": {"status": "canonical"},
         "input_keys": ["workspace_id", "query_text", "requester_user_id"],
         "output_keys": [
             "answer",
@@ -273,17 +277,25 @@ class SemanticMcpGateway:
         self,
         *,
         upload_session_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        ingestion_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        observation_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         preview_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         retrieval_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         mail_evidence_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         mail_case_progress_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        access_request_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        review_decision_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         wiki_projection_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         self.upload_session_handler = upload_session_handler
+        self.ingestion_handler = ingestion_handler
+        self.observation_handler = observation_handler
         self.preview_handler = preview_handler
         self.retrieval_handler = retrieval_handler
         self.mail_evidence_handler = mail_evidence_handler
         self.mail_case_progress_handler = mail_case_progress_handler
+        self.access_request_handler = access_request_handler
+        self.review_decision_handler = review_decision_handler
         self.wiki_projection_handler = wiki_projection_handler
         self.tool_call_logs: list[ToolCallLog] = []
 
@@ -332,6 +344,12 @@ class SemanticMcpGateway:
             envelope = self._preview_graph_candidates(dict(input_data))
         elif tool_name in {"query_effective_graph", "query_effective_graph_view"}:
             envelope = self._query_effective_graph(dict(input_data))
+            if tool_name == "query_effective_graph":
+                envelope = dict(envelope)
+                envelope["warnings"] = [
+                    *envelope.get("warnings", []),
+                    "deprecated_alias_use_query_effective_graph_view",
+                ]
         elif tool_name == "query_mail_evidence":
             envelope = self._query_mail_evidence(dict(input_data))
         elif tool_name == "answer_mail_case_progress":
@@ -361,56 +379,35 @@ class SemanticMcpGateway:
         return envelope
 
     def _open_upload_session(self, input_data: dict[str, Any]) -> dict[str, Any]:
-        if self.upload_session_handler is not None:
-            return _safe_handler_envelope(
-                result_type="upload_session_request",
-                handler_payload=self.upload_session_handler(input_data),
-                status_from_payload=True,
-            )
-        return _pending_workflow_envelope(
+        if self.upload_session_handler is None:
+            return _handler_not_configured("open_upload_session")
+        return _safe_handler_envelope(
             result_type="upload_session_request",
-            data={
-                "upload_session_id": None,
-                "status": "pending_review",
-                "next_required_action": "upload_handler_not_configured",
-            },
-            warning="upload_handler_not_configured",
+            handler_payload=self.upload_session_handler(input_data),
+            status_from_payload=True,
         )
 
     def _create_ingestion_job(self, input_data: dict[str, Any]) -> dict[str, Any]:
-        return _pending_workflow_envelope(
+        if self.ingestion_handler is None:
+            return _handler_not_configured("create_ingestion_job")
+        return _safe_handler_envelope(
             result_type="ingestion_job_request",
-            data={
-                "ingestion_job_id": None,
-                "status": "pending_review",
-                "next_required_action": "ingestion_handler_not_configured",
-            },
-            warning="ingestion_handler_not_configured",
+            handler_payload=self.ingestion_handler(input_data),
+            status_from_payload=True,
         )
 
     def _list_observations(self, input_data: dict[str, Any]) -> dict[str, Any]:
-        return _pending_workflow_envelope(
+        if self.observation_handler is None:
+            return _handler_not_configured("list_observations")
+        return _safe_handler_envelope(
             result_type="observation_listing",
-            data={
-                "observations": [],
-                "redaction_counts": {"hidden_observations": 0},
-                "warnings": ["observation_handler_not_configured"],
-            },
-            warning="observation_handler_not_configured",
+            handler_payload=self.observation_handler(input_data),
+            status_from_payload=True,
         )
 
     def _preview_graph_candidates(self, input_data: dict[str, Any]) -> dict[str, Any]:
         if self.preview_handler is None:
-            return _envelope(
-                result_type="candidate_preview",
-                status="pending_review",
-                data={
-                    "candidate_summaries": [],
-                    "redaction_counts": {"hidden_candidates": 0},
-                    "warnings": ["preview_handler_not_configured"],
-                },
-                warnings=["preview_handler_not_configured"],
-            )
+            return _handler_not_configured("preview_graph_candidates")
         return _safe_handler_envelope(
             result_type="candidate_preview",
             handler_payload=self.preview_handler(input_data),
@@ -418,24 +415,7 @@ class SemanticMcpGateway:
 
     def _query_effective_graph(self, input_data: dict[str, Any]) -> dict[str, Any]:
         if self.retrieval_handler is None:
-            return _envelope(
-                result_type="effective_graph_query",
-                status="pending_review",
-                data={
-                    "answer": None,
-                    "graph_hits": [],
-                    "evidence": [],
-                    "fallback_used": False,
-                    "fallback_reason": None,
-                    "evidence_coverage": 0.0,
-                    "candidate_graph_proposal_seeds": [],
-                    "citations": [],
-                    "visible_graph_snippets": [],
-                    "redaction_counts": {"hidden_records": 0},
-                    "warnings": ["retrieval_handler_not_configured"],
-                },
-                warnings=["retrieval_handler_not_configured"],
-            )
+            return _handler_not_configured("query_effective_graph_view")
         return _safe_handler_envelope(
             result_type="effective_graph_query",
             handler_payload=self.retrieval_handler(input_data),
@@ -443,18 +423,7 @@ class SemanticMcpGateway:
 
     def _query_mail_evidence(self, input_data: dict[str, Any]) -> dict[str, Any]:
         if self.mail_evidence_handler is None:
-            return _envelope(
-                result_type="mail_evidence_query",
-                status="pending_review",
-                data={
-                    "mail_import_session_id": None,
-                    "evidence_snippets": [],
-                    "citations": [],
-                    "redaction_counts": {"hidden_bundles": 0, "hidden_messages": 0},
-                    "warnings": ["mail_evidence_handler_not_configured"],
-                },
-                warnings=["mail_evidence_handler_not_configured"],
-            )
+            return _handler_not_configured("query_mail_evidence")
         return _safe_handler_envelope(
             result_type="mail_evidence_query",
             handler_payload=self.mail_evidence_handler(input_data),
@@ -463,36 +432,7 @@ class SemanticMcpGateway:
 
     def _answer_mail_case_progress(self, input_data: dict[str, Any]) -> dict[str, Any]:
         if self.mail_case_progress_handler is None:
-            return _envelope(
-                result_type="mail_case_progress_answer",
-                status="pending_review",
-                data={
-                    "mail_import_session_id": None,
-                    "mail_evidence_bundle_id": None,
-                    "case_id": None,
-                    "latest_updates": [],
-                    "blockers": [],
-                    "responsible_parties": [],
-                    "next_actions": [],
-                    "deadlines": [],
-                    "citations": [],
-                    "redaction_counts": {"hidden_bundles": 0, "hidden_messages": 0},
-                    "warnings": ["mail_case_progress_handler_not_configured"],
-                    "claim_boundary": {
-                        "supports_mail_case_progress_answer_claim": False,
-                        "supports_actual_chatgpt_connected_upload_claim": False,
-                        "supports_upload_ui_claim": False,
-                        "supports_production_iframe_readiness_claim": False,
-                        "supports_real_pst_parser_claim": False,
-                        "supports_live_postgresql_readiness_claim": False,
-                        "supports_production_worker_leasing_claim": False,
-                        "supports_kg_write_claim": False,
-                        "supports_wiki_projection_claim": False,
-                        "supports_production_ready_claim": False,
-                    },
-                },
-                warnings=["mail_case_progress_handler_not_configured"],
-            )
+            return _handler_not_configured("answer_mail_case_progress")
         handler_payload = self.mail_case_progress_handler(input_data)
         _validate_mail_case_progress_handler_payload(handler_payload)
         return _safe_handler_envelope(
@@ -502,63 +442,26 @@ class SemanticMcpGateway:
         )
 
     def _request_graph_access(self, input_data: dict[str, Any]) -> dict[str, Any]:
-        requester_user_id = _safe_public_string(input_data.get("requester_user_id"), "requester")
-        owner_user_id = _safe_public_string(input_data.get("owner_user_id"), "owner")
-        scope = input_data.get("requested_scope")
-        scope_hash = sha256_json(scope if isinstance(scope, Mapping) else {})
-        request_payload = {
-            "requester_user_id": requester_user_id,
-            "owner_user_id": owner_user_id,
-            "scope_hash": scope_hash,
-            "requested_access_level": _safe_public_string(
-                input_data.get("requested_access_level"), "answer_only"
-            ),
-        }
-        access_request_id = f"access_request_{sha256_json(request_payload)[-24:]}"
-        return _pending_workflow_envelope(
+        if self.access_request_handler is None:
+            return _handler_not_configured("request_graph_access")
+        return _safe_handler_envelope(
             result_type="access_request",
-            data={
-                "access_request_id": access_request_id,
-                "status": "pending_review",
-                "next_required_action": "owner_review_required",
-            },
-            warning="access_request_requires_review",
+            handler_payload=self.access_request_handler(input_data),
+            status_from_payload=True,
         )
 
     def _submit_graph_review_decision(self, input_data: dict[str, Any]) -> dict[str, Any]:
-        proposal_id = _safe_public_string(input_data.get("proposal_id"), "proposal_unknown")
-        decision = _safe_public_string(input_data.get("decision"), "defer")
-        reviewer_user_id = _safe_public_string(input_data.get("reviewer_user_id"), "reviewer")
-        audit_log = _audit_log(
-            actor_user_id=reviewer_user_id,
-            action="submit_graph_review_decision",
-            target_id=proposal_id,
-            status="pending_review",
-        )
-        return _envelope(
+        if self.review_decision_handler is None:
+            return _handler_not_configured("submit_graph_review_decision")
+        return _safe_handler_envelope(
             result_type="graph_review_decision",
-            status="pending_review",
-            data={
-                "status": "pending_review",
-                "decision": decision,
-                "audit_ref": audit_log.audit_log_id,
-                "next_required_action": "governed_backend_review_required",
-            },
+            handler_payload=self.review_decision_handler(input_data),
+            status_from_payload=True,
         )
 
     def _generate_wiki_draft_from_graph_view(self, input_data: dict[str, Any]) -> dict[str, Any]:
         if self.wiki_projection_handler is None:
-            return _envelope(
-                result_type="wiki_projection_request",
-                status="pending_review",
-                data={
-                    "draft_id": None,
-                    "revision_status": "pending_projection",
-                    "citations": [],
-                    "redaction_counts": {"hidden_evidence": 0},
-                },
-                warnings=["wiki_projection_handler_not_configured"],
-            )
+            return _handler_not_configured("generate_wiki_draft_from_graph_view")
         return _safe_handler_envelope(
             result_type="wiki_projection_request",
             handler_payload=self.wiki_projection_handler(input_data),
@@ -618,6 +521,14 @@ def safe_workflow_error_envelope(
             "message": "The FormOwl gateway rejected this request.",
         },
         warnings=["safe_error_envelope"],
+    )
+
+
+def _handler_not_configured(tool_name: str) -> dict[str, Any]:
+    return safe_workflow_error_envelope(
+        workflow="semantic_gateway",
+        tool_name=tool_name,
+        error_code="handler_not_configured",
     )
 
 
@@ -695,20 +606,6 @@ def _safe_handler_envelope(
     return envelope
 
 
-def _pending_workflow_envelope(
-    *,
-    result_type: str,
-    data: dict[str, Any],
-    warning: str,
-) -> dict[str, Any]:
-    return _envelope(
-        result_type=result_type,
-        status="pending_review",
-        data=data,
-        warnings=[warning],
-    )
-
-
 def _envelope(
     *,
     result_type: str,
@@ -734,29 +631,3 @@ def _safe_public_string(value: Any, fallback: str) -> str:
     except Exception:
         return fallback
     return value
-
-
-def _audit_log(
-    *,
-    actor_user_id: str,
-    action: str,
-    target_id: str,
-    status: str,
-) -> AuditLog:
-    payload = {
-        "actor_user_id": actor_user_id,
-        "action": action,
-        "target_id": target_id,
-        "status": status,
-        "timestamp": now_iso(),
-    }
-    return AuditLog(
-        audit_log_id=f"audit_{sha256_json(payload)[-24:]}",
-        actor_user_id=actor_user_id,
-        action=action,
-        target_type="semantic_gateway",
-        target_id=target_id,
-        session_id="semantic_gateway_session",
-        timestamp=payload["timestamp"],
-        status=status,
-    )

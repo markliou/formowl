@@ -17,7 +17,9 @@ order:
 
 Use `docs/implementation-task-breakdown.md` as the shared work board. Use
 `docs/agent-goals/` as the durable cross-session and cross-machine goal
-registry.
+registry. These startup files are intentionally bounded active views. Read
+`docs/archive/README.md` only when historical completion detail or older
+handoffs are needed; archived files are not additional startup instructions.
 
 ## Active Agent Role
 
@@ -57,6 +59,9 @@ unless the user explicitly assigns it here.
   goal, update the relevant `docs/agent-goals/*.md` file and append a concise
   note to `docs/agent-goals/handoff-log.md` when the change affects another
   agent or future session.
+- Enforce the retention limits documented in the active board and goal
+  registry. Archive complete dated history losslessly before an active file
+  exceeds its limit; never edit an immutable dated archive in place.
 - Use the dev container as the canonical development and verification
   environment. Host commands may be used only for quick inspection or as clearly
   labeled supplemental checks; do not report host-only results as completion

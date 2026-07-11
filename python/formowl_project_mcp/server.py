@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
-import sys
 from typing import Any
+
+from formowl_gateway.jsonline import run_jsonline_compat
 
 from .adapters.openproject import MockOpenProjectAdapter
 from .observability import JsonlToolCallLogger
@@ -59,16 +59,7 @@ def create_default_server(data_dir: str | Path | None = None) -> ProjectMcpServe
 
 
 def main() -> None:
-    server = create_default_server()
-    for line in sys.stdin:
-        if not line.strip():
-            continue
-        request = json.loads(line)
-        if request.get("method") == "list_tools":
-            response = {"tools": server.list_tools()}
-        else:
-            response = server.call_tool(str(request.get("tool")), request.get("arguments") or {})
-        print(json.dumps(response, ensure_ascii=False), flush=True)
+    run_jsonline_compat(create_default_server)
 
 
 if __name__ == "__main__":

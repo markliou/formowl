@@ -1,0 +1,33 @@
+{
+  "archive_date": "2026-07-11",
+  "files": [
+    {
+      "source": "docs/implementation-task-breakdown.md",
+      "archive": "docs/archive/2026-07-11/implementation-task-breakdown.md",
+      "bytes": 231857,
+      "lines": 3579,
+      "sha256": "337c3d0c723cf506816636c615f66637df4c6bb2c5edb2f4f046c01ef58789b5"
+    },
+    {
+      "source": "docs/agent-goals/kg-research-agent.md",
+      "archive": "docs/archive/2026-07-11/kg-research-agent.md",
+      "bytes": 150516,
+      "lines": 2571,
+      "sha256": "6a34fbef5fe74449a2feaf5c6c9ee60c410e32f5f320887b44782f6c5acf74ee"
+    },
+    {
+      "source": "docs/agent-goals/system-backbone-agent.md",
+      "archive": "docs/archive/2026-07-11/system-backbone-agent.md",
+      "bytes": 61782,
+      "lines": 1006,
+      "sha256": "5db64a1889ad41702ea02780bd1d98b070ebd5d9b8dd722dd3b93d8785c46de2"
+    },
+    {
+      "source": "docs/agent-goals/handoff-log.md",
+      "archive": "docs/archive/2026-07-11/handoff-log.md",
+      "bytes": 165671,
+      "lines": 2364,
+      "sha256": "4fcafc2598af8d464c8cb443892c7a6ae767594533c5ea5dfd279baad682842e"
+    }
+  ]
+}

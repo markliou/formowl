@@ -101,22 +101,6 @@ def visible_evidence_only(graph_view: dict[str, Any]) -> bool:
     return True
 
 
-def ontology_revision_pin(projection_spec: WikiProjectionSpec) -> str:
-    return projection_spec.ontology_revision_id
-
-
-def source_lineage_preserved(draft: dict[str, Any]) -> bool:
-    return bool(draft.get("source_refs")) and bool(draft.get("evidence_snapshot_ids"))
-
-
-def draft_not_publish(draft: dict[str, Any]) -> bool:
-    return draft.get("status") == "draft" and draft.get("published_at") is None
-
-
-def diff_created_on_refresh(draft: dict[str, Any]) -> bool:
-    return bool(draft.get("diff_markdown"))
-
-
 def evidence_snapshot_ref(evidence_snapshot_id: str) -> dict[str, str]:
     if not isinstance(evidence_snapshot_id, str) or not evidence_snapshot_id:
         raise ContractValidationError("evidence_snapshot_ref requires an evidence snapshot id")

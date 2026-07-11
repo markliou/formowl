@@ -3,15 +3,19 @@
 This document is the readiness artifact for the synthetic `formowl-mail` phase
 tracked by issue #5 and OpenProject work package `827`.
 
+Status: historical synthetic-fixture conformance profile. It does not describe
+the repository's current PST capability; current mail ingestion and evidence
+boundaries are documented in `README.md` and `docs/workflows.md`.
+
 ## Status
 
 ```text
 synthetic_mail_phase_ready_production_parser_deferred
 ```
 
-The repository is ready for the synthetic JSON fixture mail workflow. It is not
-claiming production PST, OST, MSG, EML, MBOX, online mailbox, or real archive
-parser readiness.
+This profile is ready for the synthetic JSON fixture mail workflow. Its status
+string intentionally does not claim PST, OST, MSG, EML, MBOX, online mailbox,
+or real archive parser readiness for that historical phase.
 
 ## Completed Scope
 
@@ -58,7 +62,9 @@ parser readiness.
 
 ## Schedule Assumptions
 
-The synthetic phase can be closed in project tracking after tests pass and the
-repository change is merged. Real archive support requires a separate scheduled
-assignment that chooses a parser, sandbox boundary, non-synthetic fixtures or
+At the time of issue #5, the synthetic phase could close after its tests passed
+and the repository change merged. Real archive support then required a separate
+assignment to choose a parser, sandbox boundary, non-synthetic fixtures or
 operator-approved replay packets, and privacy/scale/malformed-archive tests.
+That historical requirement was later addressed by the repository's PST path;
+it is not a statement of the current capability boundary.

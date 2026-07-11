@@ -13,6 +13,7 @@ from io import StringIO
 from pathlib import Path
 
 import real_evidence_gate_progress as progress
+from authority_test_fixtures import AuthorityWorkspace
 
 
 ROOT = Path(__file__).resolve().parent
@@ -101,26 +102,40 @@ def nested_strings(payload: object) -> list[str]:
 
 class RealEvidenceGateProgressTest(unittest.TestCase):
     def setUp(self) -> None:
+        self._authority_workspace = AuthorityWorkspace("blocked")
+        self._authority_workspace.__enter__()
+        self.addCleanup(
+            self._authority_workspace.__exit__,
+            None,
+            None,
+            None,
+        )
         self.output = progress.OUTPUT_PATH
         self.gate_id = "multimodal_semantic_validation"
         self.candidate_manifest = (
             "work_packets/multimodal_semantic_validation_candidate_manifest.json"
         )
         self.manifest = (
-            ROOT / "work_packets" / "multimodal_semantic_validation_candidate_manifest.json"
+            progress.ROOT
+            / "work_packets"
+            / "multimodal_semantic_validation_candidate_manifest.json"
         )
         self.validation_report = (
-            ROOT / "work_packets" / "progress_unitcase_candidate_validation_report.json"
+            progress.ROOT / "work_packets" / "progress_unitcase_candidate_validation_report.json"
         )
-        self.hazard_source = ROOT / "work_packets" / "progress_unitcase_manifest_source.json"
-        self.approval_manifest = ROOT / "work_packets" / "progress_unitcase_approval_manifest.json"
+        self.hazard_source = (
+            progress.ROOT / "work_packets" / "progress_unitcase_manifest_source.json"
+        )
+        self.approval_manifest = (
+            progress.ROOT / "work_packets" / "progress_unitcase_approval_manifest.json"
+        )
         self.actual_validation_report = (
-            ROOT
+            progress.ROOT
             / "work_packets"
             / "multimodal_semantic_validation_candidate_validation_report.json"
         )
         self.actual_approval_manifest = (
-            ROOT / "work_packets" / "multimodal_semantic_validation_approval_manifest.json"
+            progress.ROOT / "work_packets" / "multimodal_semantic_validation_approval_manifest.json"
         )
         self._managed_paths = list(
             dict.fromkeys(
@@ -132,8 +147,10 @@ class RealEvidenceGateProgressTest(unittest.TestCase):
                     self.validation_report,
                     self.hazard_source,
                     self.approval_manifest,
-                    *sorted((ROOT / "work_packets").glob("*_candidate_validation_report.json")),
-                    *sorted((ROOT / "work_packets").glob("*_approval_manifest.json")),
+                    *sorted(
+                        (progress.ROOT / "work_packets").glob("*_candidate_validation_report.json")
+                    ),
+                    *sorted((progress.ROOT / "work_packets").glob("*_approval_manifest.json")),
                 ]
             )
         )

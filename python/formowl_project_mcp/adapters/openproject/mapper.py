@@ -317,10 +317,6 @@ class OpenProjectMapper:
         return None
 
 
-def collection_elements(collection: dict[str, Any]) -> list[dict[str, Any]]:
-    return _collection_elements(collection)
-
-
 def link_href(payload: dict[str, Any], name: str) -> str | None:
     return _link_href(payload, name)
 

@@ -5,8 +5,10 @@ existing scoped type ontology outright. It adds a reversible candidate-layer
 coordination-frame path so the current type gate can remain a baseline and a
 hybrid guard.
 
-For the detailed work plan and review packet, see
-`docs/ontology-v2-coordination-plan.md`.
+For historical implementation context, see
+`docs/ontology-v2-coordination-plan.md`. For the methodology critique that
+motivated the soft-gate and evaluation changes, see
+`docs/ontology-v2-review-comments.md`.
 
 ## Diagnosis
 

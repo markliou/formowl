@@ -22,7 +22,7 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     && apt-get install -y --no-install-recommends ca-certificates git curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY containers/kg-bert-cpu/requirements.txt /tmp/formowl-kg-bert-requirements.txt
+COPY containers/kg-bert-requirements.txt /tmp/formowl-kg-bert-requirements.txt
 
 RUN python -m pip install --no-cache-dir --upgrade "pip<26" \
     && python -m pip install --no-cache-dir \

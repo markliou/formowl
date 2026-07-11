@@ -607,7 +607,7 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertIn("Waiting on audit approval", str(result["data"]["evidence_snippets"]))
 
-        pending = SemanticMcpGateway().dispatch_tool(
+        missing_handler = SemanticMcpGateway().dispatch_tool(
             "query_mail_evidence",
             {
                 "workspace_id": "workspace_formowl",
@@ -616,8 +616,9 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
                 "mail_import_session_id": bundle.mail_import_session.mail_import_session_id,
             },
         )
-        self.assertEqual(pending["status"], "pending_review")
-        self.assertEqual(pending["data"]["evidence_snippets"], [])
+        self.assertEqual(missing_handler["status"], "error")
+        self.assertEqual(missing_handler["data"]["error_code"], "handler_not_configured")
+        self.assertNotIn("evidence_snippets", missing_handler["data"])
 
         unsafe_gateway = SemanticMcpGateway(
             mail_evidence_handler=lambda _payload: {
@@ -675,7 +676,7 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
         self.assertIn("Waiting on audit approval", str(result["data"]["blockers"]))
         self.assertTrue(result["data"]["citations"])
 
-        pending = SemanticMcpGateway().dispatch_tool(
+        missing_handler = SemanticMcpGateway().dispatch_tool(
             "answer_mail_case_progress",
             {
                 "workspace_id": "workspace_formowl",
@@ -684,8 +685,9 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
                 "mail_import_session_id": bundle.mail_import_session.mail_import_session_id,
             },
         )
-        self.assertEqual(pending["status"], "pending_review")
-        self.assertEqual(pending["data"]["blockers"], [])
+        self.assertEqual(missing_handler["status"], "error")
+        self.assertEqual(missing_handler["data"]["error_code"], "handler_not_configured")
+        self.assertNotIn("blockers", missing_handler["data"])
 
         unsafe_gateway = SemanticMcpGateway(
             mail_case_progress_handler=lambda _payload: {

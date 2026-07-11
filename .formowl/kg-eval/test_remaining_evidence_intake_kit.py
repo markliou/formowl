@@ -13,6 +13,7 @@ import fair_external_baseline_run_validator as fair_baseline
 import human_annotation_adjudication_validator as human_annotation
 import kg_total_acceptance_suite as total_suite
 import production_adapter_path_validator as production_adapter
+from authority_test_fixtures import AuthorityWorkspace
 
 
 ROOT = Path(__file__).resolve().parent
@@ -56,12 +57,6 @@ HISTORICAL_GATES = {
         "template": "production_adapter_evidence_packet.template.json",
     },
 }
-CURRENT_REMAINING_GATE_IDS = set(total_suite.build_report()["summary"]["failed_gate_ids"])
-CURRENT_REMAINING_GATES = {
-    gate_id: expected
-    for gate_id, expected in HISTORICAL_GATES.items()
-    if gate_id in CURRENT_REMAINING_GATE_IDS
-}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -81,12 +76,31 @@ def exact_artifact_fields(values: list[object]) -> list[str]:
 
 
 class RemainingEvidenceIntakeKitTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._authority_workspace = AuthorityWorkspace("blocked")
+        workspace = self._authority_workspace.__enter__()
+        self.addCleanup(
+            self._authority_workspace.__exit__,
+            None,
+            None,
+            None,
+        )
+        self.root = workspace.root
+        self.checklist = workspace.checklist
+        self.templates = workspace.templates
+        remaining_gate_ids = set(total_suite.build_report()["summary"]["failed_gate_ids"])
+        self.current_remaining_gates = {
+            gate_id: expected
+            for gate_id, expected in HISTORICAL_GATES.items()
+            if gate_id in remaining_gate_ids
+        }
+
     def test_checklist_stays_synchronized_with_validator_packet_contracts(self) -> None:
-        checklist = load_json(CHECKLIST)
+        checklist = load_json(self.checklist)
         rows = {row["gate_id"]: row for row in checklist["remaining_gates"]}
 
-        self.assertEqual(set(rows), set(CURRENT_REMAINING_GATES))
-        for gate_id, expected in CURRENT_REMAINING_GATES.items():
+        self.assertEqual(set(rows), set(self.current_remaining_gates))
+        for gate_id, expected in self.current_remaining_gates.items():
             row = rows[gate_id]
             validator = expected["validator"]
             report = validator.build_report({})
@@ -100,7 +114,7 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
             self.assertEqual(row["current_blockers"], report["blockers"])
             self.assertFalse(report["passed"])
 
-            template = load_json(TEMPLATES / expected["template"])
+            template = load_json(self.templates / expected["template"])
             packet_allowed_fields = getattr(validator, "PACKET_ALLOWED_FIELDS", set())
             for field in exact_artifact_fields(row.get("required_artifacts", [])):
                 self.assertIn(field, packet_allowed_fields)
@@ -116,7 +130,7 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
                 )
 
     def test_checklist_status_matches_total_acceptance_snapshot(self) -> None:
-        checklist = load_json(CHECKLIST)
+        checklist = load_json(self.checklist)
         total = total_suite.build_report()
         summary = total["summary"]
         failed_gate_ids = [row["gate_id"] for row in checklist["remaining_gates"]]
@@ -130,7 +144,7 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
     def test_templates_are_outside_real_input_paths_and_cannot_pass_validators(self) -> None:
         for gate_id, expected in HISTORICAL_GATES.items():
             with self.subTest(gate_id=gate_id):
-                template_path = TEMPLATES / expected["template"]
+                template_path = self.templates / expected["template"]
                 template = load_json(template_path)
                 validator = expected["validator"]
                 report = validator.build_report(template)
@@ -147,7 +161,9 @@ class RemainingEvidenceIntakeKitTest(unittest.TestCase):
                     template["evidence_kind"],
                     expected.get("template_evidence_kind", expected["required_evidence_kind"]),
                 )
-                self.assertNotEqual(str(template_path.relative_to(ROOT)), expected["input_packet"])
+                self.assertNotEqual(
+                    str(template_path.relative_to(self.root)), expected["input_packet"]
+                )
                 self.assertFalse(report["passed"])
                 self.assertTrue(report["blockers"])
                 self.assertTrue(

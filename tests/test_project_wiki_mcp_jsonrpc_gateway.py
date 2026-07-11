@@ -19,6 +19,13 @@ WORK_ITEM_REF = {
 
 
 class ProjectWikiMcpJsonRpcGatewayTests(unittest.TestCase):
+    def _session(self) -> SemanticGatewaySession:
+        return SemanticGatewaySession(
+            session_id="project_wiki_jsonrpc_session",
+            actor_user_id="project_wiki_actor",
+            workspace_id="workspace_formowl",
+        )
+
     def test_project_mcp_json_rpc_preserves_context_snapshot_behavior(self) -> None:
         temp_dir = _paths.fresh_test_dir("project-jsonrpc-context")
         gateway = McpServerJsonRpcGateway(
@@ -84,7 +91,7 @@ class ProjectWikiMcpJsonRpcGatewayTests(unittest.TestCase):
 
     def test_wiki_mcp_json_rpc_preserves_draft_and_proposal_only_publish(self) -> None:
         temp_dir = _paths.fresh_test_dir("wiki-jsonrpc-draft")
-        gateway = McpServerJsonRpcGateway(create_wiki_server(temp_dir))
+        gateway = McpServerJsonRpcGateway(create_wiki_server(temp_dir), session=self._session())
 
         draft_response = gateway.handle_json_rpc(
             {
@@ -134,7 +141,7 @@ class ProjectWikiMcpJsonRpcGatewayTests(unittest.TestCase):
 
     def test_json_rpc_gateway_rejects_unsafe_payload_before_tool_side_effects(self) -> None:
         temp_dir = _paths.fresh_test_dir("wiki-jsonrpc-unsafe-payload")
-        gateway = McpServerJsonRpcGateway(create_wiki_server(temp_dir))
+        gateway = McpServerJsonRpcGateway(create_wiki_server(temp_dir), session=self._session())
 
         result = gateway.handle_json_rpc(
             {
@@ -166,7 +173,8 @@ class ProjectWikiMcpJsonRpcGatewayTests(unittest.TestCase):
 
     def test_json_rpc_gateway_returns_protocol_errors_without_raw_request_leak(self) -> None:
         gateway = McpServerJsonRpcGateway(
-            create_project_server(_paths.fresh_test_dir("bad-jsonrpc"))
+            create_project_server(_paths.fresh_test_dir("bad-jsonrpc")),
+            session=self._session(),
         )
 
         invalid = gateway.handle_json_rpc(
