@@ -166,3 +166,22 @@ Lifecycle label: `active`.
   325-file format check. Engineering, governance/safety, and maintainability
   reviewers returned 3/3 `RELEASE_DECISION: AGREE` after signature and
   specification compatibility blockers were fixed.
+
+## 2026-07-11 — Pre-feature structural cleanup
+
+- Consolidated duplicated evaluator validation, ChatGPT intake validation,
+  HTTP smoke orchestration, PostgreSQL container lifecycle, mail payload
+  validation, and atomic JSON persistence. Eleven evaluation/smoke entrypoints
+  are thinner while retaining their CLI, report schema, error, privacy, and
+  claim-boundary contracts.
+- Tests now validate real adapters, interfaces, and migration content as the
+  primary surfaces. Previously exported name-list helpers remain thin
+  compatibility wrappers to avoid an unannounced API break. A private
+  graph-storage write seam remains as an alias to the shared atomic writer so
+  rollback failure injection stays testable without restoring duplicate
+  persistence code.
+- The second cleanup phase changes 1,334 lines added and 1,514 deleted, net
+  `-180`; scripts and experiment entrypoints are net `-893`. Canonical
+  dev-container verification passed 730 tests, full Ruff check, 331-file format
+  check, and `git diff --check`. Production/API, evaluator/privacy, and
+  shell/safety reviewers returned 3/3 `RELEASE_DECISION: AGREE`.

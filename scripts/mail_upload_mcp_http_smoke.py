@@ -17,16 +17,12 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-import http.client
 import json
-import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 from typing import Any, Sequence
 import uuid
 
@@ -37,6 +33,25 @@ if str(PYTHON_ROOT) not in sys.path:
 
 from formowl_auth import FileAuditLogStore  # noqa: E402
 from formowl_contract import assert_no_public_raw_references, sha256_json  # noqa: E402
+from formowl_evaluator.http_smoke import (  # noqa: E402
+    RunningMailUploadHttpSurface as _RunningHttpSurface,
+    asset_shape_hash as _asset_shape_hash,
+    build_mail_upload_http_config,
+    build_multipart_mail_archive,
+    decode_json_lines as _decode_json_lines,
+    decode_json_object as _decode_json_object,
+    dict_or_empty as _dict_or_empty,
+    jsonrpc_response_hash as _jsonrpc_response_hash,
+    open_upload_session_via_command,
+    response_by_id as _response_by_id,
+    run_gateway_command,
+    tool_payload as _tool_payload,
+    upload_session_shape_hash,
+    validate_claim_boundary as validate_common_claim_boundary,
+    validate_embedded_validation as validate_common_embedded_validation,
+    validate_exact_keys as _validate_exact_keys,
+    validate_hash_list as _validate_hash_list,
+)
 from formowl_gateway import validate_public_gateway_payload  # noqa: E402
 from formowl_ingestion.storage import (  # noqa: E402
     AssetStore,
@@ -45,8 +60,6 @@ from formowl_ingestion.storage import (  # noqa: E402
     UploadSessionStore,
 )
 from formowl_mail import (  # noqa: E402
-    MailUploadHttpSurfaceConfig,
-    create_mail_upload_http_surface_server,
     validate_mail_upload_http_post_result,
 )
 
@@ -100,16 +113,6 @@ FORBIDDEN_TRUE_CLAIMS = [
 ]
 
 EXPECTED_NEGATIVE_STATUS_CODES = [404, 400, 400, 400, 400, 400, 413]
-
-
-@dataclass(frozen=True)
-class _OpenedUploadSession:
-    upload_session_id: str | None
-    responses: list[dict[str, Any]]
-    tool_names: set[str]
-    persisted_count: int
-    persisted_session: Any
-    run: subprocess.CompletedProcess[str]
 
 
 @dataclass(frozen=True)
@@ -340,53 +343,19 @@ def _open_upload_session_via_command(
     data_dir: Path,
     *,
     command: Sequence[str] | None,
-) -> _OpenedUploadSession:
-    requests = [
-        {"jsonrpc": "2.0", "id": "initialize", "method": "initialize"},
-        {"jsonrpc": "2.0", "id": "tools", "method": "tools/list"},
-        {
-            "jsonrpc": "2.0",
-            "id": "open_upload_session",
-            "method": "tools/call",
-            "params": {
-                "name": "open_upload_session",
-                "arguments": {
-                    "intent": "Upload PST for FormOwl mail evidence reading.",
-                    "intended_asset_type": "pst",
-                    "owner_scope_type": "project",
-                    "owner_scope_id": PROJECT_ID,
-                    "project_id": PROJECT_ID,
-                },
-            },
-        },
-    ]
-    run = _run_gateway_command(
-        requests,
+) -> Any:
+    return open_upload_session_via_command(
+        data_dir,
         command=command,
-        data_dir=data_dir,
+        default_command=DEFAULT_COMMAND,
+        root=ROOT,
+        python_root=PYTHON_ROOT,
         session_id=SESSION_ID,
         actor_user_id=ACTOR_USER_ID,
         workspace_id=WORKSPACE_ID,
-    )
-    responses = _decode_json_lines(run.stdout)
-    tools_response = _response_by_id(responses, "tools")
-    tool_names = {
-        tool["name"]
-        for tool in tools_response.get("result", {}).get("tools", [])
-        if isinstance(tool, dict)
-    }
-    upload_payload = _tool_payload(_response_by_id(responses, "open_upload_session"))
-    upload_data = _dict_or_empty(upload_payload.get("data"))
-    upload_session_id = upload_data.get("upload_session_id")
-    sessions = UploadSessionStore(data_dir).list()
-    persisted = sessions[0] if len(sessions) == 1 else None
-    return _OpenedUploadSession(
-        upload_session_id=upload_session_id if isinstance(upload_session_id, str) else None,
-        responses=responses,
-        tool_names=tool_names,
-        persisted_count=len(sessions),
-        persisted_session=persisted,
-        run=run,
+        project_id=PROJECT_ID,
+        expires_at=EXPIRES_AT,
+        upload_session_store_factory=UploadSessionStore,
     )
 
 
@@ -539,27 +508,18 @@ def _run_gateway_command(
     actor_user_id: str,
     workspace_id: str,
 ) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(PYTHON_ROOT)
-    env["FORMOWL_DATA_DIR"] = str(data_dir)
-    env["FORMOWL_MCP_SESSION_ID"] = session_id
-    env["FORMOWL_MCP_ACTOR_USER_ID"] = actor_user_id
-    env["FORMOWL_MCP_WORKSPACE_ID"] = workspace_id
-    env["FORMOWL_MAIL_UPLOAD_EXPIRES_AT"] = EXPIRES_AT
-    input_text = "".join(json.dumps(request, sort_keys=True) + "\n" for request in requests)
-    argv = _resolve_command_argv(command or DEFAULT_COMMAND)
-    try:
-        return subprocess.run(
-            argv,
-            input=input_text,
-            text=True,
-            capture_output=True,
-            cwd=ROOT,
-            env=env,
-            check=False,
-        )
-    except OSError:
-        return subprocess.CompletedProcess(argv, 127, "", "command_start_failed")
+    return run_gateway_command(
+        requests,
+        command=command,
+        default_command=DEFAULT_COMMAND,
+        root=ROOT,
+        python_root=PYTHON_ROOT,
+        data_dir=data_dir,
+        session_id=session_id,
+        actor_user_id=actor_user_id,
+        workspace_id=workspace_id,
+        expires_at=EXPIRES_AT,
+    )
 
 
 def _upload_surface_stores(data_dir: Path, object_root: Path) -> dict[str, Any]:
@@ -582,56 +542,17 @@ def _http_config(
     stores: dict[str, Any],
     *,
     max_request_bytes: int = 1024 * 1024,
-) -> MailUploadHttpSurfaceConfig:
-    return MailUploadHttpSurfaceConfig(
-        upload_session_store=stores["upload_session_store"],
-        object_store=stores["object_store"],
-        asset_store=stores["asset_store"],
-        audit_store=stores["audit_store"],
+) -> Any:
+    return build_mail_upload_http_config(
+        work_dir,
+        stores,
         storage_backend_id=STORAGE_BACKEND_ID,
         actor_user_id=ACTOR_USER_ID,
         session_id=SESSION_ID,
         workspace_id=WORKSPACE_ID,
-        staging_dir=work_dir / "staging",
         received_at=NOW,
         max_request_bytes=max_request_bytes,
     )
-
-
-class _RunningHttpSurface:
-    def __init__(self, config: MailUploadHttpSurfaceConfig) -> None:
-        self.server = create_mail_upload_http_surface_server("127.0.0.1", 0, config)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-
-    def __enter__(self) -> "_RunningHttpSurface":
-        self.thread.start()
-        return self
-
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=5)
-
-    def request(
-        self,
-        method: str,
-        path: str,
-        *,
-        body: bytes | None = None,
-        headers: dict[str, str] | None = None,
-    ) -> tuple[Any, bytes]:
-        connection = http.client.HTTPConnection(
-            self.server.server_address[0],
-            self.server.server_address[1],
-            timeout=5,
-        )
-        try:
-            connection.request(method, path, body=body, headers=headers or {})
-            response = connection.getresponse()
-            response_body = response.read()
-            return response, response_body
-        finally:
-            connection.close()
 
 
 def _multipart_body(
@@ -641,8 +562,8 @@ def _multipart_body(
     content: bytes,
     file_content_type: str = UPLOAD_CONTENT_TYPE,
 ) -> tuple[bytes, str]:
-    return _multipart_body_parts(
-        list(fields.items()),
+    return build_multipart_mail_archive(
+        fields,
         files=[] if filename is None else [(filename, content)],
         file_content_type=file_content_type,
     )
@@ -654,82 +575,11 @@ def _multipart_body_parts(
     files: list[tuple[str, bytes]],
     file_content_type: str = UPLOAD_CONTENT_TYPE,
 ) -> tuple[bytes, str]:
-    boundary = "----FormOwlMailUploadHttpBoundary"
-    parts: list[bytes] = []
-    for key, value in field_pairs:
-        parts.extend(
-            [
-                f"--{boundary}\r\n".encode("ascii"),
-                f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("ascii"),
-                value.encode("utf-8"),
-                b"\r\n",
-            ]
-        )
-    for filename, content in files:
-        parts.extend(
-            [
-                f"--{boundary}\r\n".encode("ascii"),
-                (
-                    f'Content-Disposition: form-data; name="mail_archive"; '
-                    f'filename="{filename}"\r\n'
-                ).encode("ascii"),
-                f"Content-Type: {file_content_type}\r\n\r\n".encode("ascii"),
-                content,
-                b"\r\n",
-            ]
-        )
-    parts.append(f"--{boundary}--\r\n".encode("ascii"))
-    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
-
-
-def _resolve_command_argv(command: Sequence[str]) -> list[str]:
-    argv = list(command)
-    if not argv:
-        return list(DEFAULT_COMMAND)
-    executable = argv[0]
-    if Path(executable).name != executable:
-        return argv
-    resolved = shutil.which(executable)
-    if resolved is not None:
-        argv[0] = resolved
-    return argv
-
-
-def _decode_json_lines(value: str) -> list[dict[str, Any]]:
-    responses: list[dict[str, Any]] = []
-    for line in value.splitlines():
-        if not line.strip():
-            continue
-        decoded = json.loads(line)
-        if not isinstance(decoded, dict):
-            raise ValueError("gateway response line must be a JSON object")
-        responses.append(decoded)
-    return responses
-
-
-def _decode_json_object(value: bytes) -> dict[str, Any]:
-    decoded = json.loads(value.decode("utf-8"))
-    if not isinstance(decoded, dict):
-        raise ValueError("HTTP response body must be a JSON object")
-    return decoded
-
-
-def _response_by_id(responses: list[dict[str, Any]], request_id: str) -> dict[str, Any]:
-    for response in responses:
-        if response.get("id") == request_id:
-            return response
-    return {}
-
-
-def _tool_payload(response: dict[str, Any]) -> dict[str, Any]:
-    content = response.get("result", {}).get("content")
-    if not isinstance(content, list) or not content:
-        return {}
-    first = content[0]
-    if not isinstance(first, dict):
-        return {}
-    payload = first.get("json")
-    return payload if isinstance(payload, dict) else {}
+    return build_multipart_mail_archive(
+        field_pairs,
+        files=files,
+        file_content_type=file_content_type,
+    )
 
 
 def _task_card_resolves_to_persisted_session(payload: dict[str, Any], persisted: Any) -> bool:
@@ -742,42 +592,6 @@ def _task_card_resolves_to_persisted_session(payload: dict[str, Any], persisted:
         and task_card.get("upload_surface_locator")
         == f"formowl_upload_session:{persisted.upload_session_id}"
     )
-
-
-def _jsonrpc_response_hash(response: dict[str, Any]) -> str:
-    normalized: dict[str, Any] = {
-        "jsonrpc": response.get("jsonrpc"),
-        "id": response.get("id"),
-    }
-    if "error" in response:
-        error = _dict_or_empty(response.get("error"))
-        normalized["error"] = {
-            "code": error.get("code"),
-            "message": error.get("message"),
-        }
-    result = _dict_or_empty(response.get("result"))
-    if result:
-        normalized["result"] = {
-            "protocolVersion": result.get("protocolVersion"),
-            "isError": result.get("isError"),
-        }
-        tools = result.get("tools")
-        if isinstance(tools, list):
-            normalized["result"]["tool_names"] = sorted(
-                tool.get("name") for tool in tools if isinstance(tool, dict)
-            )
-        payload = _tool_payload(response)
-        if payload:
-            data = _dict_or_empty(payload.get("data"))
-            task_card = _dict_or_empty(data.get("upload_task_card"))
-            normalized["result"]["tool_payload"] = {
-                "result_type": payload.get("result_type"),
-                "status": payload.get("status"),
-                "data_status": data.get("status"),
-                "task_card_type": task_card.get("card_type"),
-                "validation_passed": _dict_or_empty(data.get("validation")).get("passed"),
-            }
-    return sha256_json(normalized)
 
 
 def _http_payload_hash(name: str, payload: dict[str, Any]) -> str:
@@ -794,42 +608,11 @@ def _http_payload_hash(name: str, payload: dict[str, Any]) -> str:
 
 
 def _upload_session_shape_hash(value: Any) -> str:
-    if value is None:
-        return sha256_json("")
-    return sha256_json(
-        {
-            "actor_user_id": value.actor_user_id,
-            "workspace_id": value.workspace_id,
-            "owner_scope_type": value.owner_scope_type,
-            "owner_scope_id": value.owner_scope_id,
-            "intended_asset_type": value.intended_asset_type,
-            "ingestion_profile": value.ingestion_profile,
-            "visibility_scope": value.visibility_scope,
-            "source_preparation_state": value.source_preparation_state,
-            "processing_status": value.processing_status,
-            "status": value.status,
-            "session_bound": value.session_id == SESSION_ID,
-            "asset_bound": isinstance(value.asset_id, str),
-            "project_bound": value.project_id == PROJECT_ID,
-        }
-    )
-
-
-def _asset_shape_hash(asset: Any, upload_session: Any) -> str:
-    if asset is None or upload_session is None:
-        return sha256_json("")
-    source_ref = _dict_or_empty(asset.source_ref)
-    return sha256_json(
-        {
-            "workspace_id": asset.workspace_id,
-            "owner_user_id": asset.owner_user_id,
-            "mime_type": asset.mime_type,
-            "content_hash": asset.content_hash,
-            "file_size": asset.file_size,
-            "project_id": asset.project_id,
-            "source_ref_bound_to_upload_session": source_ref.get("source_id")
-            == upload_session.upload_session_id,
-        }
+    return upload_session_shape_hash(
+        value,
+        session_id=SESSION_ID,
+        project_id=PROJECT_ID,
+        include_job_binding=False,
     )
 
 
@@ -867,10 +650,6 @@ def _leftover_entry_count(root: Path) -> int:
     return len(list(root.rglob("*")))
 
 
-def _dict_or_empty(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
 def _validate_claim_boundary(
     claim_boundary: dict[str, Any],
     blockers: list[str],
@@ -888,18 +667,12 @@ def _validate_claim_boundary(
         "supports_production_ready_claim": False,
         "container_verification_required": True,
     }
-    _validate_exact_keys(
+    validate_common_claim_boundary(
         claim_boundary,
-        set(expected_claims),
-        "claim_boundary",
-        blockers,
+        expected_claims=expected_claims,
+        forbidden_true_claims=FORBIDDEN_TRUE_CLAIMS,
+        blockers=blockers,
     )
-    for key, expected in expected_claims.items():
-        if claim_boundary.get(key) is not expected:
-            blockers.append(f"claim boundary mismatch: {key}")
-    for claim in FORBIDDEN_TRUE_CLAIMS:
-        if claim_boundary.get(claim) is not False:
-            blockers.append(f"forbidden claim is not explicitly false: {claim}")
 
 
 def _validate_safe_outputs(safe_outputs: dict[str, Any], blockers: list[str]) -> None:
@@ -972,73 +745,25 @@ def _validate_safe_outputs(safe_outputs: dict[str, Any], blockers: list[str]) ->
     )
 
 
-def _validate_hash_list(
-    value: Any,
-    *,
-    expected_count: int,
-    context: str,
-    blockers: list[str],
-) -> None:
-    if not isinstance(value, list) or len(value) != expected_count:
-        blockers.append(f"{context} must contain {expected_count} hashes")
-        return
-    if not all(isinstance(item, str) and _SHA256_RE.fullmatch(item) for item in value):
-        blockers.append(f"{context} must contain sha256 hashes")
-    if len(set(value)) != len(value):
-        blockers.append(f"{context} must contain distinct hashes")
-
-
 def _validate_embedded_validation(value: Any, blockers: list[str]) -> None:
-    if not isinstance(value, dict):
-        blockers.append("validation must be an object")
-        return
-    _validate_exact_keys(
+    validate_common_embedded_validation(
         value,
-        {"passed", "blockers", "claim_boundary"},
-        "validation",
-        blockers,
-    )
-    if value.get("passed") is not True:
-        blockers.append("validation.passed must be true")
-    if value.get("blockers") != []:
-        blockers.append("validation.blockers must be empty")
-    claim_boundary = _dict_or_empty(value.get("claim_boundary"))
-    _validate_exact_keys(
-        claim_boundary,
-        {
-            "supports_mcp_command_to_local_http_upload_surface_claim",
-            "supports_actual_chatgpt_connected_upload_claim",
-            "supports_production_ready_claim",
+        expected_claims={
+            "supports_mcp_command_to_local_http_upload_surface_claim": True,
+            "supports_actual_chatgpt_connected_upload_claim": False,
+            "supports_production_ready_claim": False,
         },
-        "validation.claim_boundary",
-        blockers,
+        claim_error_messages={
+            "supports_mcp_command_to_local_http_upload_surface_claim": (
+                "validation MCP-to-HTTP upload claim must be true"
+            ),
+            "supports_actual_chatgpt_connected_upload_claim": (
+                "validation actual ChatGPT claim must be false"
+            ),
+            "supports_production_ready_claim": "validation production claim must be false",
+        },
+        blockers=blockers,
     )
-    if claim_boundary.get("supports_mcp_command_to_local_http_upload_surface_claim") is not True:
-        blockers.append("validation MCP-to-HTTP upload claim must be true")
-    if claim_boundary.get("supports_actual_chatgpt_connected_upload_claim") is not False:
-        blockers.append("validation actual ChatGPT claim must be false")
-    if claim_boundary.get("supports_production_ready_claim") is not False:
-        blockers.append("validation production claim must be false")
-
-
-def _validate_exact_keys(
-    value: dict[str, Any],
-    expected_keys: set[str],
-    context: str,
-    blockers: list[str],
-    *,
-    allowed_extra: set[str] | None = None,
-) -> None:
-    extra = sorted(set(value) - expected_keys - (allowed_extra or set()))
-    missing = sorted(expected_keys - set(value))
-    if extra:
-        blockers.append(_unknown_keys_message(context, extra))
-    if missing:
-        blockers.append(f"{context} missing keys: " + sha256_json(missing))
-
-
-def _unknown_keys_message(context: str, keys: list[str]) -> str:
-    return f"{context} contains unknown keys: " f"count={len(keys)} hash={sha256_json(keys)}"
 
 
 def _public_outputs_are_safe(

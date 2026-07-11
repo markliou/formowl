@@ -19,6 +19,7 @@ from formowl_gateway import validate_public_gateway_payload
 from formowl_ingestion.storage import AssetStore, FileObjectStore, UploadSessionRecordStore
 
 from ._guards import assert_public_payload_safe
+from ._validation import dict_or_empty, expect_exact_keys
 from .upload_surface import (
     receive_mail_archive_upload,
     validate_mail_upload_surface_receipt,
@@ -326,7 +327,7 @@ def validate_mail_upload_http_post_result(payload: Mapping[str, Any]) -> dict[st
     }
     if "validation" in value:
         expected.add("validation")
-    _expect_exact_keys(value, expected, "mail_upload_http_surface_post", blockers)
+    expect_exact_keys(value, expected, "mail_upload_http_surface_post", blockers)
     if value.get("report_type") != "mail_upload_http_surface_post":
         blockers.append("report_type must be mail_upload_http_surface_post")
     if value.get("status") != "uploaded":
@@ -336,14 +337,14 @@ def validate_mail_upload_http_post_result(payload: Mapping[str, Any]) -> dict[st
     upload_session_id = value.get("upload_session_id")
     if not isinstance(upload_session_id, str) or not upload_session_id:
         blockers.append("upload_session_id must be a non-empty string")
-    receipt = _dict_or_empty(value.get("receipt"), "receipt", blockers)
+    receipt = dict_or_empty(value.get("receipt"), "receipt", blockers)
     receipt_validation = validate_mail_upload_surface_receipt(receipt)
     if not receipt_validation["passed"]:
         blockers.append("embedded upload receipt must validate")
     if receipt.get("upload_session_id") != upload_session_id:
         blockers.append("embedded receipt must use the route upload session")
-    public_checks = _dict_or_empty(value.get("public_checks"), "public_checks", blockers)
-    _expect_exact_keys(
+    public_checks = dict_or_empty(value.get("public_checks"), "public_checks", blockers)
+    expect_exact_keys(
         public_checks,
         {
             "http_upload_surface_received_multipart",
@@ -358,8 +359,8 @@ def validate_mail_upload_http_post_result(payload: Mapping[str, Any]) -> dict[st
     for key, item in public_checks.items():
         if item is not True:
             blockers.append(f"public check is not true: {key}")
-    safe_outputs = _dict_or_empty(value.get("safe_outputs"), "safe_outputs", blockers)
-    _expect_exact_keys(
+    safe_outputs = dict_or_empty(value.get("safe_outputs"), "safe_outputs", blockers)
+    expect_exact_keys(
         safe_outputs,
         {"upload_session_id_hash", "receipt_hash", "http_status_code"},
         "safe_outputs",
@@ -371,7 +372,7 @@ def validate_mail_upload_http_post_result(payload: Mapping[str, Any]) -> dict[st
             blockers.append(f"safe_outputs.{key} must be a sha256 hash")
     if safe_outputs.get("http_status_code") != int(HTTPStatus.CREATED):
         blockers.append("safe_outputs.http_status_code must be 201")
-    claim_boundary = _dict_or_empty(value.get("claim_boundary"), "claim_boundary", blockers)
+    claim_boundary = dict_or_empty(value.get("claim_boundary"), "claim_boundary", blockers)
     expected_claims = {
         "supports_local_http_upload_surface_contract_claim": True,
         "supports_actual_chatgpt_connected_upload_claim": False,
@@ -384,13 +385,13 @@ def validate_mail_upload_http_post_result(payload: Mapping[str, Any]) -> dict[st
         "supports_production_ready_claim": False,
         "container_verification_required": True,
     }
-    _expect_exact_keys(claim_boundary, set(expected_claims), "claim_boundary", blockers)
+    expect_exact_keys(claim_boundary, set(expected_claims), "claim_boundary", blockers)
     for key, expected_value in expected_claims.items():
         if claim_boundary.get(key) is not expected_value:
             blockers.append(f"claim boundary mismatch: {key}")
     if "validation" in value:
-        validation = _dict_or_empty(value["validation"], "validation", blockers)
-        _expect_exact_keys(
+        validation = dict_or_empty(value["validation"], "validation", blockers)
+        expect_exact_keys(
             validation,
             {"passed", "blockers", "claim_boundary"},
             "validation",
@@ -400,12 +401,12 @@ def validate_mail_upload_http_post_result(payload: Mapping[str, Any]) -> dict[st
             blockers.append("validation.passed must be true")
         if validation.get("blockers") != []:
             blockers.append("validation.blockers must be empty")
-        validation_claim_boundary = _dict_or_empty(
+        validation_claim_boundary = dict_or_empty(
             validation.get("claim_boundary"),
             "validation.claim_boundary",
             blockers,
         )
-        _expect_exact_keys(
+        expect_exact_keys(
             validation_claim_boundary,
             {
                 "supports_local_http_upload_surface_contract_claim",
@@ -678,27 +679,6 @@ def _safe_error_code(value: str) -> str:
     if not normalized:
         return "upload_request_rejected"
     return normalized[:80]
-
-
-def _dict_or_empty(value: Any, context: str, blockers: list[str]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        blockers.append(f"{context} must be an object")
-        return {}
-    return value
-
-
-def _expect_exact_keys(
-    value: Mapping[str, Any],
-    expected: set[str],
-    context: str,
-    blockers: list[str],
-) -> None:
-    extra = sorted(set(value) - expected)
-    missing = sorted(expected - set(value))
-    if extra:
-        blockers.append(f"{context} contains unknown keys: {sha256_json(extra)}")
-    if missing:
-        blockers.append(f"{context} missing keys: {sha256_json(missing)}")
 
 
 __all__ = [

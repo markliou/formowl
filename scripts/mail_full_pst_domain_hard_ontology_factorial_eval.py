@@ -19,7 +19,6 @@ from itertools import permutations
 import json
 import os
 from pathlib import Path
-import re
 import sys
 import time
 from typing import Any, Mapping, Sequence
@@ -34,8 +33,14 @@ for import_path in (PYTHON_ROOT, SCRIPT_ROOT):
 import mail_full_pst_domain_hard_case_eval as hard_eval  # noqa: E402
 import mail_full_pst_domain_hard_kg_fusion_eval as kg_eval  # noqa: E402
 import mail_full_pst_domain_hard_ontology_ablation_eval as ontology_eval  # noqa: E402
-from formowl_contract import assert_no_public_raw_references, sha256_json  # noqa: E402
-from formowl_gateway import validate_public_gateway_payload  # noqa: E402
+from formowl_contract import sha256_json  # noqa: E402
+from formowl_evaluator.report_validation import (  # noqa: E402
+    basis_points_via_positive_ratio as _basis_points,
+    mapping_dict_or_empty as _dict_or_empty,
+    public_outputs_are_safe,
+    require_sha256 as _require_sha256,
+    validate_exact_keys_missing_first as _validate_exact_keys,
+)
 
 DEFAULT_BASELINE_REPORT = ROOT / ".test-tmp" / "formowl-mail-domain-hard-case-baseline-v4.json"
 DEFAULT_WORK_DIR = ROOT / ".test-tmp" / "formowl-mail-domain-hard-case-baseline-work-v4"
@@ -46,7 +51,6 @@ RUN_OPT_IN_ENV = "FORMOWL_RUN_FULL_PST_DOMAIN_HARD_ONTOLOGY_FACTORIAL_EVAL"
 FACTORIAL_POLICY_VERSION = "formowl_domain_hard_ontology_operator_factorial_v1"
 CASE_COUNT = 100
 MAX_COMPONENT_EVIDENCE_PER_CASE = 10
-_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 BROAD_DOMAIN = "broad_domain"
 SKOS_EXPANSION = "skos_expansion"
@@ -1041,12 +1045,6 @@ def _arm_id_hash(arm: Sequence[str]) -> str:
     return sha256_json({"operators": list(arm), "policy": FACTORIAL_POLICY_VERSION})
 
 
-def _basis_points(numerator: int, denominator: int) -> int:
-    if denominator <= 0:
-        return 0
-    return int((numerator / denominator) * 10000)
-
-
 def _int_or_zero(value: Any) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
@@ -1062,38 +1060,6 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8"
     )
-
-
-def _dict_or_empty(value: Any, context: str, blockers: list[str]) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
-        blockers.append(f"{context} must be an object")
-        return {}
-    return dict(value)
-
-
-def _validate_exact_keys(
-    value: Mapping[str, Any],
-    expected: set[str],
-    context: str,
-    blockers: list[str],
-    *,
-    allowed_extra: set[str] | None = None,
-) -> None:
-    allowed = expected | (allowed_extra or set())
-    actual = set(value.keys())
-    missing = sorted(expected - actual)
-    extra = sorted(actual - allowed)
-    if missing:
-        blockers.append(f"{context} missing keys: count={len(missing)} hash={sha256_json(missing)}")
-    if extra:
-        blockers.append(
-            f"{context} contains unknown keys: count={len(extra)} hash={sha256_json(extra)}"
-        )
-
-
-def _require_sha256(value: Any, context: str, blockers: list[str]) -> None:
-    if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
-        blockers.append(f"{context} must be a sha256 hash")
 
 
 def _reject_private_text_or_evidence_fields(
@@ -1126,12 +1092,10 @@ def _reject_private_text_or_evidence_fields(
 
 
 def _public_outputs_are_safe(report: Mapping[str, Any]) -> bool:
-    try:
-        assert_no_public_raw_references(report, "mail_domain_hard_ontology_factorial_report")
-        validate_public_gateway_payload(report)
-    except Exception:
-        return False
-    return True
+    return public_outputs_are_safe(
+        report,
+        raw_reference_context="mail_domain_hard_ontology_factorial_report",
+    )
 
 
 def _validation(

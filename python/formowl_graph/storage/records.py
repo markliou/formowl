@@ -19,9 +19,11 @@ from formowl_contract import (
     SemanticMetadata,
     to_plain,
 )
+from formowl_core import read_json_object, write_json_atomic
 
 _SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 T = TypeVar("T")
+_write_json = write_json_atomic
 
 
 class _JsonGraphRecordStore(Generic[T]):
@@ -54,10 +56,12 @@ class _JsonGraphRecordStore(Generic[T]):
         path = self._record_path(record_id)
         if not path.exists():
             return None
-        return self.factory(_read_json(path))
+        return self.factory(read_json_object(path))
 
     def list(self) -> list[T]:
-        return [self.factory(_read_json(path)) for path in sorted(self.base_dir.glob("*.json"))]
+        return [
+            self.factory(read_json_object(path)) for path in sorted(self.base_dir.glob("*.json"))
+        ]
 
     def validate_record_id(self, record_id: str) -> None:
         self._record_path(record_id)
@@ -321,17 +325,3 @@ class CanonicalGraphStore:
                 else:
                     path.write_bytes(original)
             raise
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(
-        json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    temp_path.replace(path)

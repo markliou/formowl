@@ -24,6 +24,7 @@ from formowl_ingestion.assets import register_asset_from_local_file
 from formowl_ingestion.storage import AssetStore, FileObjectStore, UploadSessionRecordStore
 
 from ._guards import assert_public_payload_safe, safe_public_string
+from ._validation import dict_or_empty, expect_exact_keys
 from .upload_session import _upload_surface_locator
 
 _MAIL_UPLOAD_INTENDED_ASSET_TYPES = {"mail_archive", "pst", "ost", "msg", "eml", "mbox"}
@@ -297,7 +298,7 @@ def receive_mail_archive_upload(
 def validate_mail_upload_surface_receipt(payload: Mapping[str, Any]) -> dict[str, Any]:
     blockers: list[str] = []
     value = dict(payload)
-    _expect_exact_keys(
+    expect_exact_keys(
         value,
         {
             "report_type",
@@ -340,21 +341,21 @@ def validate_mail_upload_surface_receipt(payload: Mapping[str, Any]) -> dict[str
     ) != _upload_surface_locator(upload_session_id):
         blockers.append("upload_surface_locator must be bound to the upload session")
 
-    public_checks = _dict_or_empty(value.get("public_checks"), "public_checks", blockers)
-    _expect_exact_keys(public_checks, _REQUIRED_TRUE_CHECKS, "public_checks", blockers)
+    public_checks = dict_or_empty(value.get("public_checks"), "public_checks", blockers)
+    expect_exact_keys(public_checks, _REQUIRED_TRUE_CHECKS, "public_checks", blockers)
     for check in _REQUIRED_TRUE_CHECKS:
         if public_checks.get(check) is not True:
             blockers.append(f"public check is not true: {check}")
 
-    safe_outputs = _dict_or_empty(value.get("safe_outputs"), "safe_outputs", blockers)
+    safe_outputs = dict_or_empty(value.get("safe_outputs"), "safe_outputs", blockers)
     _validate_safe_outputs(safe_outputs, blockers)
 
-    claim_boundary = _dict_or_empty(value.get("claim_boundary"), "claim_boundary", blockers)
+    claim_boundary = dict_or_empty(value.get("claim_boundary"), "claim_boundary", blockers)
     expected_claim_keys = _FORBIDDEN_TRUE_CLAIMS | {
         "supports_upload_session_bound_file_transfer_claim",
         "container_verification_required",
     }
-    _expect_exact_keys(claim_boundary, expected_claim_keys, "claim_boundary", blockers)
+    expect_exact_keys(claim_boundary, expected_claim_keys, "claim_boundary", blockers)
     if claim_boundary.get("supports_upload_session_bound_file_transfer_claim") is not True:
         blockers.append("upload-session-bound file transfer claim is not supported")
     if claim_boundary.get("container_verification_required") is not True:
@@ -542,27 +543,6 @@ def _require_public_string(value: Any, field_name: str) -> str:
     return text
 
 
-def _dict_or_empty(value: Any, context: str, blockers: list[str]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        blockers.append(f"{context} must be an object")
-        return {}
-    return value
-
-
-def _expect_exact_keys(
-    value: Mapping[str, Any],
-    expected: set[str],
-    context: str,
-    blockers: list[str],
-) -> None:
-    extra = sorted(set(value) - expected)
-    missing = sorted(expected - set(value))
-    if extra:
-        blockers.append(f"{context} contains unknown keys: {sha256_json(extra)}")
-    if missing:
-        blockers.append(f"{context} missing keys: {sha256_json(missing)}")
-
-
 def _validate_safe_outputs(value: Mapping[str, Any], blockers: list[str]) -> None:
     expected = {
         "upload_session_id_hash",
@@ -574,7 +554,7 @@ def _validate_safe_outputs(value: Mapping[str, Any], blockers: list[str]) -> Non
         "duplicate_object_payload_reused",
         "audit_event_count",
     }
-    _expect_exact_keys(value, expected, "safe_outputs", blockers)
+    expect_exact_keys(value, expected, "safe_outputs", blockers)
     for key in (
         "upload_session_id_hash",
         "asset_id_hash",
@@ -595,8 +575,8 @@ def _validate_safe_outputs(value: Mapping[str, Any], blockers: list[str]) -> Non
 
 
 def _validate_embedded_validation(value: Any, blockers: list[str]) -> None:
-    validation = _dict_or_empty(value, "validation", blockers)
-    _expect_exact_keys(
+    validation = dict_or_empty(value, "validation", blockers)
+    expect_exact_keys(
         validation,
         {"passed", "blockers", "claim_boundary"},
         "validation",
@@ -606,12 +586,12 @@ def _validate_embedded_validation(value: Any, blockers: list[str]) -> None:
         blockers.append("validation.passed must be true")
     if validation.get("blockers") != []:
         blockers.append("validation.blockers must be empty")
-    claim_boundary = _dict_or_empty(
+    claim_boundary = dict_or_empty(
         validation.get("claim_boundary"),
         "validation.claim_boundary",
         blockers,
     )
-    _expect_exact_keys(
+    expect_exact_keys(
         claim_boundary,
         {
             "supports_upload_session_bound_file_transfer_claim",

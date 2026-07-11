@@ -39,6 +39,9 @@ archival is preserved at
   longer ship as public production APIs, mail evidence permission helpers are
   shared, and deprecated Python import/query surfaces retain explicit
   compatibility boundaries.
+- Pre-feature structural cleanup is complete: repeated evaluator validation,
+  HTTP smoke orchestration, PostgreSQL smoke lifecycle, mail payload
+  validation, and atomic JSON persistence now use shared implementations.
 
 ## Current Unchecked Work
 
@@ -94,6 +97,25 @@ archival is preserved at
     paths remain as documented deprecated re-exports.
   - Proof: canonical dev-container suite 726 tests OK, full Ruff check passed,
     325 files passed format check, and the 3/3 reviewer gate agreed.
+
+## Pre-Feature Structural Cleanup
+
+- [x] Consolidate high-cost duplicated validation and smoke harness behavior
+  before the next feature slice.
+  - Eleven evaluator and smoke entrypoints now delegate common exact-key,
+    SHA-256, privacy, HTTP, multipart, gateway-command, and report validation to
+    shared evaluator modules while preserving their CLI and output contracts.
+  - PostgreSQL live-smoke entrypoints share one startup, readiness, migration,
+    and cleanup harness. Mail workflow payload checks and atomic JSON file
+    persistence also have one implementation per architectural layer.
+  - Real adapters, interfaces, and migrations are the primary tested surfaces.
+    Previously exported name-list helpers remain thin compatibility wrappers so
+    this maintenance pass does not introduce an unannounced package API break.
+  - Total change: 1,334 additions and 1,514 deletions, net `-180` lines. Script
+    and experiment entrypoints are net `-893` lines; the added production code
+    is shared infrastructure replacing those repeated implementations.
+  - Proof: canonical dev-container suite 730 tests OK, full Ruff check passed,
+    331 files passed format check, `git diff --check`, and 3/3 reviewer gate passed.
 
 ## Agent Dispatch Notes
 

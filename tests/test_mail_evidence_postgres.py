@@ -58,6 +58,7 @@ class PostgreSQLMailEvidenceStoreTests(unittest.TestCase):
                 "build_postgre_sql_mail_evidence_query_handler",
             ),
         )
+
         self.assertEqual(touched_tables, set(mail_evidence_postgre_sql_tables()))
         self.assertIn("004_mail_evidence.sql", [item.filename for item in migration_files()])
         self.assertIn(

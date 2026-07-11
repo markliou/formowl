@@ -12,6 +12,7 @@ from formowl_contract import (
     stable_resource_contract_id,
     to_plain,
 )
+from formowl_core import read_json_object, write_json_atomic
 
 _SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _RAW_REFERENCE_BOUNDARY = r"(^|[\s'\"(\[{=:,])"
@@ -160,11 +161,11 @@ class CanonicalLifecycleStore:
         path = self._record_path(lifecycle_event_id)
         if not path.exists():
             return None
-        return CanonicalLifecycleEvent.from_dict(_read_json(path))
+        return CanonicalLifecycleEvent.from_dict(read_json_object(path))
 
     def list_events(self) -> list[CanonicalLifecycleEvent]:
         return [
-            CanonicalLifecycleEvent.from_dict(_read_json(path))
+            CanonicalLifecycleEvent.from_dict(read_json_object(path))
             for path in sorted(self.base_dir.glob("*.json"))
         ]
 
@@ -178,7 +179,7 @@ class CanonicalLifecycleStore:
                 return validated
             raise ContractValidationError("lifecycle event id already exists")
         _reject_conflicting_previous_ids(validated, self.list_events())
-        _write_json(path, payload)
+        write_json_atomic(path, payload)
         return validated
 
     def _record_path(self, lifecycle_event_id: str) -> Path:
@@ -513,20 +514,6 @@ def _validate_no_raw_public_reference(value: Any, field_name: str) -> None:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         for item in value:
             _validate_no_raw_public_reference(item, field_name)
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(
-        json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    temp_path.replace(path)
 
 
 __all__ = [

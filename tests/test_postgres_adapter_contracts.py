@@ -12,6 +12,7 @@ from formowl_graph.index import (
     PgVectorSearchTrace,
     VectorIndexRow,
     main_repo_pgvector_adapter,
+    pgvector_sql_adapter_contract,
 )
 from formowl_graph.storage import (
     CanonicalCommitProposal,
@@ -361,12 +362,14 @@ class PgVectorAdapterContractTests(unittest.TestCase):
             retrieval_trace_id="retrieval_trace_pgvector_001",
         )
 
-        main_repo_pgvector_adapter_marker = "PgVectorRepository" in main_repo_pgvector_adapter()
+        adapter_contract = pgvector_sql_adapter_contract()
+        compatibility_adapter_contract = main_repo_pgvector_adapter()
         permission_filtered_query = "formowl_grants" in connection.statements[-1].sql
         ready_vector_only = "v.index_state = 'ready'" in connection.statements[-1].sql
         search_public = execution.to_public_dict()
 
-        self.assertTrue(main_repo_pgvector_adapter_marker)
+        self.assertIn("PgVectorRepository", adapter_contract)
+        self.assertEqual(compatibility_adapter_contract, adapter_contract)
         self.assertTrue(permission_filtered_query)
         self.assertTrue(ready_vector_only)
         self.assertIsInstance(execution, PgVectorSearchExecution)

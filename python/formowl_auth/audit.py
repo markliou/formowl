@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import re
 from typing import Any
 
-from formowl_contract import AuditLog, now_iso, stable_resource_contract_id, to_plain
+from formowl_contract import AuditLog, now_iso, stable_resource_contract_id
+from formowl_core import read_json_object, write_json_atomic
 
 _SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -20,14 +20,14 @@ class FileAuditLogStore:
     def create(self, audit_log: AuditLog | dict[str, Any]) -> AuditLog:
         validated = _validate_audit_log(audit_log)
         payload = validated.to_dict()
-        _write_json(self._record_path(validated.audit_log_id), payload)
+        write_json_atomic(self._record_path(validated.audit_log_id), payload)
         return validated
 
     def get(self, audit_log_id: str) -> AuditLog | None:
         path = self._record_path(audit_log_id)
         if not path.exists():
             return None
-        return AuditLog.from_dict(_read_json(path))
+        return AuditLog.from_dict(read_json_object(path))
 
     def delete(self, audit_log_id: str) -> None:
         path = self._record_path(audit_log_id)
@@ -36,7 +36,8 @@ class FileAuditLogStore:
 
     def list(self) -> list[AuditLog]:
         return [
-            AuditLog.from_dict(_read_json(path)) for path in sorted(self.base_dir.glob("*.json"))
+            AuditLog.from_dict(read_json_object(path))
+            for path in sorted(self.base_dir.glob("*.json"))
         ]
 
     def _record_path(self, audit_log_id: str) -> Path:
@@ -321,17 +322,3 @@ def _validate_audit_log(audit_log: AuditLog | dict[str, Any]) -> AuditLog:
     if isinstance(audit_log, dict):
         return AuditLog.from_dict(audit_log)
     return AuditLog.from_dict(audit_log.to_dict())
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(
-        json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    temp_path.replace(path)

@@ -49,6 +49,12 @@ from formowl_gateway import (  # noqa: E402
     SemanticMcpJsonRpcGateway,
     validate_public_gateway_payload,
 )
+from formowl_evaluator.report_validation import (  # noqa: E402
+    dict_or_empty as _dict_or_empty,
+    public_outputs_are_safe,
+    require_sha256 as _require_sha256,
+    validate_exact_keys as _validate_exact_keys,
+)
 from formowl_ingestion.extractors import PstMailArchiveExtractor  # noqa: E402
 from formowl_ingestion.storage import (  # noqa: E402
     AssetStore,
@@ -86,7 +92,6 @@ WORK_DIR_SENTINEL_NAME = ".formowl-mail-full-pst-100-case-workdir"
 WORK_DIR_SENTINEL_VALUE = "formowl-mail-full-pst-100-case-eval-v1"
 CASE_COUNT = 100
 PASS_THRESHOLD = 99
-_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 _FORBIDDEN_TRUE_CLAIMS = {
     "supports_actual_chatgpt_connected_upload_claim",
@@ -1610,37 +1615,6 @@ def _validation(
     }
 
 
-def _dict_or_empty(value: Any, context: str, blockers: list[str]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        blockers.append(f"{context} must be an object")
-        return {}
-    return value
-
-
-def _validate_exact_keys(
-    value: Mapping[str, Any],
-    expected_keys: set[str],
-    context: str,
-    blockers: list[str],
-    *,
-    allowed_extra: set[str] | None = None,
-) -> None:
-    actual_keys = set(value)
-    extra = sorted(actual_keys - expected_keys - (allowed_extra or set()))
-    missing = sorted(expected_keys - actual_keys)
-    if extra:
-        blockers.append(
-            f"{context} contains unknown keys: count={len(extra)} hash={sha256_json(extra)}"
-        )
-    if missing:
-        blockers.append(f"{context} missing keys: count={len(missing)} hash={sha256_json(missing)}")
-
-
-def _require_sha256(value: Any, context: str, blockers: list[str]) -> None:
-    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
-        blockers.append(f"{context} must be a sha256 hash")
-
-
 def _reject_body_or_evidence_text_fields(
     value: Any,
     blockers: list[str],
@@ -1693,34 +1667,29 @@ def _is_safe_metadata_key(normalized_key: str) -> bool:
 
 
 def _public_outputs_are_safe(report: Mapping[str, Any]) -> bool:
-    rendered = json.dumps(report, sort_keys=True).lower()
-    forbidden_fragments = (
-        "archive.pst",
-        "tests/pst-exm",
-        "pst-exm",
-        str(ROOT).lower(),
-        "formowl://object",
-        "payload.bin",
-        "storage_backend_id",
-        "traceback",
-        "readpst",
-        "pffexport",
-        "pst-scratch",
-        "formowl-pst-export",
-        "query_text",
-        "evidence_snippets",
-        "source_observation_id",
-        "email_message_id",
-        "message_occurrence_id",
+    return public_outputs_are_safe(
+        report,
+        forbidden_fragments=(
+            "archive.pst",
+            "tests/pst-exm",
+            "pst-exm",
+            str(ROOT).lower(),
+            "formowl://object",
+            "payload.bin",
+            "storage_backend_id",
+            "traceback",
+            "readpst",
+            "pffexport",
+            "pst-scratch",
+            "formowl-pst-export",
+            "query_text",
+            "evidence_snippets",
+            "source_observation_id",
+            "email_message_id",
+            "message_occurrence_id",
+        ),
+        raw_reference_context="mail_full_pst_100_case_eval_report",
     )
-    if any(fragment in rendered for fragment in forbidden_fragments):
-        return False
-    try:
-        validate_public_gateway_payload(report)
-        assert_no_public_raw_references(report, "mail_full_pst_100_case_eval_report")
-    except Exception:
-        return False
-    return True
 
 
 def _cleanup(path: Path) -> bool:

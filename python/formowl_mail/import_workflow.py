@@ -33,6 +33,7 @@ from formowl_ingestion.storage import (
 )
 
 from ._guards import assert_public_payload_safe, safe_public_string
+from ._validation import dict_or_empty
 from .bundle import MailEvidenceBundle, build_mail_evidence_bundle
 from .postgres import (
     PostgreSQLMailEvidenceStore,
@@ -352,9 +353,9 @@ def validate_mail_upload_import_summary(summary: Mapping[str, Any]) -> dict[str,
         blockers.append("report_type must be mail_upload_import_workflow")
     if payload.get("status") != "succeeded":
         blockers.append("status must be succeeded")
-    metrics = _dict_or_empty(payload.get("metrics"), "metrics", blockers)
-    safe_outputs = _dict_or_empty(payload.get("safe_outputs"), "safe_outputs", blockers)
-    claim_boundary = _dict_or_empty(
+    metrics = dict_or_empty(payload.get("metrics"), "metrics", blockers)
+    safe_outputs = dict_or_empty(payload.get("safe_outputs"), "safe_outputs", blockers)
+    claim_boundary = dict_or_empty(
         payload.get("claim_boundary"),
         "claim_boundary",
         blockers,
@@ -615,22 +616,15 @@ def _query_store_backed_jsonrpc(
     return {"response": response, "transcript": gateway.leak_transcript()}
 
 
-def _dict_or_empty(value: Any, context: str, blockers: list[str]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        blockers.append(f"{context} must be an object")
-        return {}
-    return value
-
-
 def _validate_embedded_validation(value: Any, blockers: list[str]) -> None:
-    validation = _dict_or_empty(value, "validation", blockers)
+    validation = dict_or_empty(value, "validation", blockers)
     expected_keys = {"passed", "blockers", "claim_boundary"}
     _validate_exact_keys(validation, expected_keys, "validation", blockers)
     if validation.get("passed") is not True:
         blockers.append("validation.passed must be true")
     if validation.get("blockers") != []:
         blockers.append("validation.blockers must be empty")
-    claim_boundary = _dict_or_empty(
+    claim_boundary = dict_or_empty(
         validation.get("claim_boundary"),
         "validation.claim_boundary",
         blockers,

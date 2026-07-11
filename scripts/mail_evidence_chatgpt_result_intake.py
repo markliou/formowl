@@ -33,6 +33,12 @@ for import_root in (PYTHON_ROOT, SCRIPTS_ROOT):
         sys.path.insert(0, str(import_root))
 
 from formowl_contract import assert_no_public_raw_references, sha256_json  # noqa: E402
+from formowl_evaluator.intake import (  # noqa: E402
+    is_sha256 as _is_sha256,
+    public_payload_is_safe,
+    validate_exact_keys as _validate_exact_keys,
+    validate_hash_list as _validate_hash_list,
+)
 from formowl_gateway import validate_public_gateway_payload  # noqa: E402
 
 
@@ -93,8 +99,6 @@ NEGATIVE_PACKET_PROBE_NAMES = [
     "wrong_tool_sequence",
     "missing_case_progress_result",
 ]
-_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-
 REQUIRED_TRUE_METRICS = [
     "result_packet_loaded",
     "smoke_contract_bound",
@@ -1497,8 +1501,6 @@ def _result_block_safe_shape(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_outputs_are_safe(report: dict[str, Any]) -> bool:
-    rendered = json.dumps(report, sort_keys=True)
-    lowered = rendered.lower()
     forbidden = (
         str(ROOT).lower(),
         "formowl_data_dir",
@@ -1528,33 +1530,11 @@ def _public_outputs_are_safe(report: dict[str, Any]) -> bool:
         "c:\\private",
         "/workspace",
     )
-    if any(item in lowered for item in forbidden):
-        return False
-    try:
-        validate_public_gateway_payload(report)
-        assert_no_public_raw_references(
-            report,
-            "mail_evidence_chatgpt_result_intake_report",
-        )
-    except Exception:
-        return False
-    return True
-
-
-def _validate_hash_list(
-    value: Any,
-    *,
-    expected_count: int,
-    context: str,
-    blockers: list[str],
-) -> None:
-    if not isinstance(value, list) or len(value) != expected_count:
-        blockers.append(f"{context} must contain {expected_count} hashes")
-        return
-    if not all(_is_sha256(item) for item in value):
-        blockers.append(f"{context} must contain sha256 hashes")
-    if len(set(value)) != len(value):
-        blockers.append(f"{context} must contain distinct hashes")
+    return public_payload_is_safe(
+        report,
+        forbidden_fragments=forbidden,
+        raw_reference_context="mail_evidence_chatgpt_result_intake_report",
+    )
 
 
 def _validate_distinct_hashes(
@@ -1565,26 +1545,6 @@ def _validate_distinct_hashes(
     hashes = [value for value in values if _is_sha256(value)]
     if len(hashes) == len(values) and len(set(hashes)) != len(hashes):
         blockers.append(f"{context} must be distinct")
-
-
-def _validate_exact_keys(
-    value: dict[str, Any],
-    expected_keys: set[str],
-    context: str,
-    blockers: list[str],
-    *,
-    allowed_extra: set[str] | None = None,
-) -> None:
-    extra = sorted(set(value) - expected_keys - (allowed_extra or set()))
-    missing = sorted(expected_keys - set(value))
-    if extra:
-        blockers.append(_unknown_keys_message(context, extra))
-    if missing:
-        blockers.append(f"{context} missing keys: " + sha256_json(missing))
-
-
-def _unknown_keys_message(context: str, keys: Sequence[str]) -> str:
-    return f"{context} contains unknown keys: " f"count={len(keys)} hash={sha256_json(list(keys))}"
 
 
 def _reject_private_payload_fields(
@@ -1660,10 +1620,6 @@ def _reject_concrete_identifier_fields(
     elif isinstance(value, list):
         for index, item in enumerate(value):
             _reject_concrete_identifier_fields(item, blockers, f"{path}[{index}]")
-
-
-def _is_sha256(value: Any) -> bool:
-    return isinstance(value, str) and _SHA256_RE.fullmatch(value) is not None
 
 
 def _is_positive_int(value: Any) -> bool:

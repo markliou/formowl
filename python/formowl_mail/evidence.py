@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import json
 from pathlib import Path
 import re
 from typing import Any, Sequence
@@ -13,6 +12,7 @@ from formowl_contract import (
     stable_resource_contract_id,
     to_plain,
 )
+from formowl_core import read_json_object, write_json_atomic
 
 from ._guards import assert_public_payload_safe, safe_public_string
 
@@ -136,7 +136,7 @@ class MailEvidencePackStore:
     def create(self, pack: MailEvidencePack | dict[str, Any]) -> MailEvidencePack:
         validated = pack if isinstance(pack, MailEvidencePack) else MailEvidencePack.from_dict(pack)
         _record_path(self.base_dir, validated.mail_evidence_pack_id)
-        _write_json(
+        write_json_atomic(
             _record_path(self.base_dir, validated.mail_evidence_pack_id), validated.to_dict()
         )
         return validated
@@ -145,11 +145,11 @@ class MailEvidencePackStore:
         path = _record_path(self.base_dir, mail_evidence_pack_id)
         if not path.exists():
             return None
-        return MailEvidencePack.from_dict(_read_json(path))
+        return MailEvidencePack.from_dict(read_json_object(path))
 
     def list(self) -> list[MailEvidencePack]:
         return [
-            MailEvidencePack.from_dict(_read_json(path))
+            MailEvidencePack.from_dict(read_json_object(path))
             for path in sorted(self.base_dir.glob("*.json"))
         ]
 
@@ -381,20 +381,6 @@ def _stable_mail_evidence_pack_id(contract_name: str, payload: Any) -> str:
             "mail_evidence_pack_id generator produced an unsafe file name"
         )
     return pack_id
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(
-        json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    temp_path.replace(path)
 
 
 __all__ = [

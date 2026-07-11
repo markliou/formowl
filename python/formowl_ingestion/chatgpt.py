@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-import json
 from pathlib import Path
 import re
 from typing import Any
@@ -24,6 +23,7 @@ from formowl_contract import (
     to_plain,
     validate_permission_scope,
 )
+from formowl_core import read_json_object, write_json_atomic
 
 from .assets import register_asset_from_local_file
 from .jobs import create_ingestion_job
@@ -108,18 +108,18 @@ class ChatGptSessionCaptureStore:
             if isinstance(capture, dict)
             else ChatGptSessionCapture.from_dict(capture.to_dict())
         )
-        _write_json(self._record_path(validated.capture_id), validated.to_dict())
+        write_json_atomic(self._record_path(validated.capture_id), validated.to_dict())
         return validated
 
     def get(self, capture_id: str) -> ChatGptSessionCapture | None:
         path = self._record_path(capture_id)
         if not path.exists():
             return None
-        return ChatGptSessionCapture.from_dict(_read_json(path))
+        return ChatGptSessionCapture.from_dict(read_json_object(path))
 
     def list(self) -> list[ChatGptSessionCapture]:
         return [
-            ChatGptSessionCapture.from_dict(_read_json(path))
+            ChatGptSessionCapture.from_dict(read_json_object(path))
             for path in sorted(self.base_dir.glob("*.json"))
         ]
 
@@ -462,20 +462,6 @@ def _validate_optional_capture_string_fields(
             and not isinstance(value[field_name], str)
         ):
             raise ContractValidationError(f"ChatGptSessionCapture.{field_name} must be a string")
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(
-        json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    temp_path.replace(path)
 
 
 __all__ = [

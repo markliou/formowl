@@ -17,6 +17,7 @@ from formowl_ingestion.storage import UploadSessionRecordStore
 from formowl_ingestion.uploads import create_upload_session
 
 from ._guards import assert_public_payload_safe, safe_public_string
+from ._validation import dict_or_empty
 
 _MAIL_INTENDED_ASSET_TYPES = {"mail_archive", "pst", "ost", "msg", "eml", "mbox"}
 _MAIL_INGESTION_PROFILE = "mail_archive_phase1"
@@ -275,7 +276,7 @@ def validate_mail_upload_session_task(payload: Mapping[str, Any]) -> dict[str, A
         blockers.append("upload_session_id must be a non-empty string")
     if value.get("next_required_action") != "upload_prepared_mail_archive":
         blockers.append("next_required_action must require mail archive upload")
-    task_card = _dict_or_empty(value.get("upload_task_card"), "upload_task_card", blockers)
+    task_card = dict_or_empty(value.get("upload_task_card"), "upload_task_card", blockers)
     _expect_keys(
         task_card,
         {
@@ -300,7 +301,7 @@ def validate_mail_upload_session_task(payload: Mapping[str, Any]) -> dict[str, A
     )
     if task_card.get("card_type") != "mail_archive_upload_task":
         blockers.append("upload_task_card.card_type must be mail_archive_upload_task")
-    owner_scope = _dict_or_empty(
+    owner_scope = dict_or_empty(
         task_card.get("owner_scope"),
         "upload_task_card.owner_scope",
         blockers,
@@ -320,7 +321,7 @@ def validate_mail_upload_session_task(payload: Mapping[str, Any]) -> dict[str, A
     expected_locator = _upload_surface_locator(str(value.get("upload_session_id", "")))
     if task_card.get("upload_surface_locator") != expected_locator:
         blockers.append("upload surface locator must be session-bound")
-    guidance = _dict_or_empty(
+    guidance = dict_or_empty(
         value.get("source_preparation_guidance"),
         "source_preparation_guidance",
         blockers,
@@ -345,7 +346,7 @@ def validate_mail_upload_session_task(payload: Mapping[str, Any]) -> dict[str, A
         blockers.append("users must not choose parsers or workers")
     if not isinstance(guidance.get("instructions"), list) or not guidance["instructions"]:
         blockers.append("source preparation guidance must include instructions")
-    public_checks = _dict_or_empty(value.get("public_checks"), "public_checks", blockers)
+    public_checks = dict_or_empty(value.get("public_checks"), "public_checks", blockers)
     _expect_keys(
         public_checks,
         {
@@ -367,7 +368,7 @@ def validate_mail_upload_session_task(payload: Mapping[str, Any]) -> dict[str, A
     ):
         if public_checks.get(key) is not True:
             blockers.append(f"public check is not true: {key}")
-    safe_outputs = _dict_or_empty(value.get("safe_outputs"), "safe_outputs", blockers)
+    safe_outputs = dict_or_empty(value.get("safe_outputs"), "safe_outputs", blockers)
     _expect_keys(
         safe_outputs,
         {"upload_session_id_hash", "task_card_hash"},
@@ -378,7 +379,7 @@ def validate_mail_upload_session_task(payload: Mapping[str, Any]) -> dict[str, A
         item = safe_outputs.get(key)
         if not isinstance(item, str) or _SHA256_RE.fullmatch(item) is None:
             blockers.append(f"safe output must be sha256: {key}")
-    claim_boundary = _dict_or_empty(value.get("claim_boundary"), "claim_boundary", blockers)
+    claim_boundary = dict_or_empty(value.get("claim_boundary"), "claim_boundary", blockers)
     expected_claim_boundary = {
         "supports_chatgpt_mail_upload_task_card_claim": True,
         "supports_real_upload_iframe_claim": False,
@@ -400,7 +401,7 @@ def validate_mail_upload_session_task(payload: Mapping[str, Any]) -> dict[str, A
         if claim_boundary.get(key) is not expected:
             blockers.append(f"claim boundary mismatch: {key}")
     if "validation" in value:
-        validation = _dict_or_empty(value["validation"], "validation", blockers)
+        validation = dict_or_empty(value["validation"], "validation", blockers)
         _expect_keys(
             validation,
             {"passed", "blockers", "claim_boundary"},
@@ -411,7 +412,7 @@ def validate_mail_upload_session_task(payload: Mapping[str, Any]) -> dict[str, A
             blockers.append("embedded validation must pass")
         if validation.get("blockers") != []:
             blockers.append("embedded validation blockers must be empty")
-        validation_claim_boundary = _dict_or_empty(
+        validation_claim_boundary = dict_or_empty(
             validation.get("claim_boundary"),
             "validation.claim_boundary",
             blockers,
@@ -552,13 +553,6 @@ def _optional_public_string_or_none(value: Any) -> str | None:
     if value in (None, ""):
         return None
     return _optional_public_string(value, "")
-
-
-def _dict_or_empty(value: Any, context: str, blockers: list[str]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        blockers.append(f"{context} must be an object")
-        return {}
-    return value
 
 
 def _expect_keys(

@@ -30,8 +30,14 @@ for import_path in (PYTHON_ROOT, SCRIPT_ROOT):
         sys.path.insert(0, str(import_path))
 
 import mail_full_pst_domain_hard_case_eval as hard_eval  # noqa: E402
-from formowl_contract import assert_no_public_raw_references, sha256_json  # noqa: E402
-from formowl_gateway import validate_public_gateway_payload  # noqa: E402
+from formowl_contract import sha256_json  # noqa: E402
+from formowl_evaluator.report_validation import (  # noqa: E402
+    basis_points as _basis_points,
+    mapping_or_empty as _dict_or_empty,
+    public_outputs_are_safe,
+    require_sha256 as _require_sha256,
+    validate_exact_keys_missing_first as _validate_exact_keys,
+)
 
 DEFAULT_OUTPUT = ROOT / ".test-tmp" / "formowl-mail-exm-lexical-ontology-50000.json"
 DEFAULT_PRIVATE_DIR = ROOT / ".test-tmp" / "formowl-mail-exm-lexical-ontology-private"
@@ -141,7 +147,6 @@ PROGRAMMATIC_POLICIES = frozenset(
     }
 )
 
-_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _CJK_ORG_RE = re.compile(
     r"[\u4e00-\u9fffA-Za-z0-9]{2,32}"
@@ -3125,38 +3130,33 @@ def _claim_boundary(supports_eval: bool) -> dict[str, bool]:
 
 
 def _public_outputs_are_safe(report: Mapping[str, Any]) -> bool:
-    rendered = json.dumps(report, sort_keys=True).lower()
-    forbidden_fragments = (
-        "archive.pst",
-        "backup_may.pst",
-        "pst-exm",
-        ".test-tmp",
-        str(ROOT).lower(),
-        "formowl://object",
-        "payload.bin",
-        "storage_backend_id",
-        "traceback",
-        "readpst",
-        "pffexport",
-        "pst-scratch",
-        "object-root",
-        "query_text",
-        "source_observation_id",
-        "email_message_id",
-        "message_occurrence_id",
-        PRIVATE_MANIFEST_NAME.lower(),
-        PRIVATE_ROWS_NAME.lower(),
-        PRIVATE_CORPUS_NAME.lower(),
-        PRIVATE_SENTENCEPIECE_LOG_NAME.lower(),
+    return public_outputs_are_safe(
+        report,
+        forbidden_fragments=(
+            "archive.pst",
+            "backup_may.pst",
+            "pst-exm",
+            ".test-tmp",
+            str(ROOT).lower(),
+            "formowl://object",
+            "payload.bin",
+            "storage_backend_id",
+            "traceback",
+            "readpst",
+            "pffexport",
+            "pst-scratch",
+            "object-root",
+            "query_text",
+            "source_observation_id",
+            "email_message_id",
+            "message_occurrence_id",
+            PRIVATE_MANIFEST_NAME.lower(),
+            PRIVATE_ROWS_NAME.lower(),
+            PRIVATE_CORPUS_NAME.lower(),
+            PRIVATE_SENTENCEPIECE_LOG_NAME.lower(),
+        ),
+        raw_reference_context="mail_full_pst_exm_lexical_report",
     )
-    if any(fragment in rendered for fragment in forbidden_fragments):
-        return False
-    try:
-        validate_public_gateway_payload(report)
-        assert_no_public_raw_references(report, "mail_full_pst_exm_lexical_report")
-    except Exception:
-        return False
-    return True
 
 
 def _regex_lexemes(value: str) -> set[str]:
@@ -3518,42 +3518,6 @@ def _first_string(*values: Any) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
-
-
-def _basis_points(numerator: int, denominator: int) -> int:
-    return int((numerator * 10000) / denominator) if denominator else 0
-
-
-def _validate_exact_keys(
-    value: Mapping[str, Any],
-    expected: set[str],
-    context: str,
-    blockers: list[str],
-    *,
-    allowed_extra: set[str] | None = None,
-) -> None:
-    actual = set(value.keys())
-    allowed = expected | (allowed_extra or set())
-    missing = sorted(expected - actual)
-    extra = sorted(actual - allowed)
-    if missing:
-        blockers.append(f"{context} missing keys: count={len(missing)} hash={sha256_json(missing)}")
-    if extra:
-        blockers.append(
-            f"{context} contains unknown keys: count={len(extra)} hash={sha256_json(extra)}"
-        )
-
-
-def _dict_or_empty(value: Any, context: str, blockers: list[str]) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        blockers.append(f"{context} must be an object")
-        return {}
-    return value
-
-
-def _require_sha256(value: Any, context: str, blockers: list[str]) -> None:
-    if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
-        blockers.append(f"{context} must be a sha256 hash")
 
 
 def _validate_embedded_validation(

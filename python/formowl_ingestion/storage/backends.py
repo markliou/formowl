@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 import re
 from typing import Any
@@ -12,6 +11,7 @@ from formowl_contract import (
     stable_resource_contract_id,
     to_plain,
 )
+from formowl_core import read_json_object, write_json_atomic
 
 _SAFE_BACKEND_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -85,7 +85,7 @@ class StorageBackendRegistry:
             "backend": public_backend,
             "private": private,
         }
-        _write_json(self._record_path(backend_id), record)
+        write_json_atomic(self._record_path(backend_id), record)
         return StorageBackend.from_dict(public_backend)
 
     def get_backend(self, storage_backend_id: str) -> StorageBackend | None:
@@ -97,7 +97,7 @@ class StorageBackendRegistry:
     def list_backends(self) -> list[StorageBackend]:
         backends: list[StorageBackend] = []
         for path in sorted(self.registry_dir.glob("*.json")):
-            record = _read_json(path)
+            record = read_json_object(path)
             backends.append(StorageBackend.from_dict(record["backend"]))
         return backends
 
@@ -138,7 +138,7 @@ class StorageBackendRegistry:
         path = self._record_path(storage_backend_id)
         if not path.exists():
             return None
-        return _read_json(path)
+        return read_json_object(path)
 
     def _record_path(self, storage_backend_id: str) -> Path:
         if not storage_backend_id or not _SAFE_BACKEND_ID.fullmatch(storage_backend_id):
@@ -154,17 +154,3 @@ def _public_backend_dict(backend: StorageBackend) -> dict[str, Any]:
 
 def _short_hash(payload: Any) -> str:
     return sha256_json(payload).split(":", 1)[1][:16]
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(
-        json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    temp_path.replace(path)

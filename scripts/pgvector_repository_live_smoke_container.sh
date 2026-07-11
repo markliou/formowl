@@ -1,43 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${FORMOWL_PGVECTOR_LIVE_RUN_ID:?FORMOWL_PGVECTOR_LIVE_RUN_ID is required}"
-: "${FORMOWL_PGVECTOR_IMAGE:?FORMOWL_PGVECTOR_IMAGE is required}"
-: "${FORMOWL_PGVECTOR_RUNNER_SCRIPT_SHA256:?FORMOWL_PGVECTOR_RUNNER_SCRIPT_SHA256 is required}"
-: "${FORMOWL_PGVECTOR_CONTAINER_ENTRYPOINT_SHA256:?FORMOWL_PGVECTOR_CONTAINER_ENTRYPOINT_SHA256 is required}"
-: "${FORMOWL_PGVECTOR_MIGRATION_MANIFEST_SHA256:?FORMOWL_PGVECTOR_MIGRATION_MANIFEST_SHA256 is required}"
+source /workspace/scripts/postgres_container_harness.sh
+
+formowl_postgres_require_env FORMOWL_PGVECTOR_LIVE_RUN_ID FORMOWL_PGVECTOR_IMAGE FORMOWL_PGVECTOR_RUNNER_SCRIPT_SHA256 FORMOWL_PGVECTOR_CONTAINER_ENTRYPOINT_SHA256 FORMOWL_PGVECTOR_MIGRATION_MANIFEST_SHA256
 
 output_path="${1:?output path is required}"
 
-export PGUSER="${PGUSER:-postgres}"
-export POSTGRES_DB="${POSTGRES_DB:-postgres}"
-export POSTGRES_HOST_AUTH_METHOD="${POSTGRES_HOST_AUTH_METHOD:-trust}"
-export PGDATA="/tmp/formowl-main-repo-pgvector-live-smoke"
-
-rm -rf "$PGDATA"
-mkdir -p "$PGDATA"
-docker-entrypoint.sh postgres -c listen_addresses='' >/tmp/formowl-main-repo-pgvector.log 2>&1 &
-postgres_pid="$!"
-
-cleanup() {
-  if kill -0 "$postgres_pid" >/dev/null 2>&1; then
-    pg_ctl -D "$PGDATA" -m fast -w stop >/dev/null 2>&1 || true
-  fi
-}
-trap cleanup EXIT
-
-for _ in $(seq 1 60); do
-  if pg_isready -U "$PGUSER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-
-pg_isready -U "$PGUSER" -d "$POSTGRES_DB" >/dev/null
-psql -v ON_ERROR_STOP=1 -U "$PGUSER" -d "$POSTGRES_DB" \
-  -f /workspace/python/formowl_graph/storage/migrations/001_metadata_store.sql
-psql -v ON_ERROR_STOP=1 -U "$PGUSER" -d "$POSTGRES_DB" \
-  -f /workspace/python/formowl_graph/storage/migrations/002_vector_index.sql
+formowl_postgres_initialize /tmp/formowl-main-repo-pgvector-live-smoke /tmp/formowl-main-repo-pgvector.log
+formowl_postgres_apply_migration \
+  /workspace/python/formowl_graph/storage/migrations/001_metadata_store.sql \
+  /workspace/python/formowl_graph/storage/migrations/002_vector_index.sql
 
 psql -v ON_ERROR_STOP=1 -U "$PGUSER" -d "$POSTGRES_DB" <<'SQL'
 INSERT INTO formowl_grants (
