@@ -2719,6 +2719,10 @@ formowl/
       user_graphs.py
       storage/
 
+    formowl_observability/
+      __init__.py
+      logger.py
+
     formowl_project_mcp/
       __init__.py
       server.py
@@ -2738,7 +2742,8 @@ formowl/
       storage/
         evidence_snapshot_store.py
       observability/
-        logger.py
+        __init__.py  # deprecated compatibility import
+        logger.py    # deprecated compatibility import
 
     formowl_wiki_mcp/
       __init__.py
@@ -2762,7 +2767,8 @@ formowl/
         draft_store.py
         wiki_snapshot_store.py
       observability/
-        logger.py
+        __init__.py  # deprecated compatibility import
+        logger.py    # deprecated compatibility import
 
   docs/
     architecture.md

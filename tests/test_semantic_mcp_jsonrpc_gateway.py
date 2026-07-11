@@ -10,16 +10,15 @@ from typing import Any
 import unittest
 
 import _paths  # noqa: F401
+from _semantic_gateway_scenarios import (
+    build_raw_path_raw_sql_worker_internal_leak_transcript,
+    containerized_semantic_mcp_gateway_smoke,
+)
 from formowl_gateway import (
     SemanticMcpGateway,
     SemanticGatewaySession,
     SemanticMcpJsonRpcGateway,
-    build_raw_path_raw_sql_worker_internal_leak_transcript,
-    containerized_semantic_mcp_gateway_smoke,
     create_mail_upload_semantic_jsonrpc_gateway,
-    end_to_end_raw_path_raw_sql_worker_internal_leak_transcript,
-    session_auth_and_audit_store_integration,
-    standards_compliant_mcp_gateway_transport,
 )
 from formowl_ingestion.storage import UploadSessionStore
 
@@ -235,11 +234,6 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
             {"jsonrpc": "2.0", "id": "tools_001", "method": "tools/list"}
         )
 
-        standards_compliant_mcp_gateway_transport_marker = (
-            standards_compliant_mcp_gateway_transport()
-            == ("jsonrpc_2_0", "initialize", "tools/list", "tools/call")
-        )
-        self.assertTrue(standards_compliant_mcp_gateway_transport_marker)
         self.assertEqual(initialized["jsonrpc"], "2.0")
         self.assertEqual(initialized["result"]["protocolVersion"], "2024-11-05")
         self.assertEqual(
@@ -331,11 +325,6 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
         )
         transcript = gateway.leak_transcript()
 
-        session_auth_and_audit_store_integration_marker = (
-            session_auth_and_audit_store_integration()
-            == "session_context_bound_to_json_rpc_transcript_hashes"
-        )
-        self.assertTrue(session_auth_and_audit_store_integration_marker)
         self.assertFalse(result["result"]["isError"])
         self.assertEqual(
             result["result"]["session"]["actor_user_id"],
@@ -564,14 +553,8 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
 
     def test_end_to_end_raw_path_raw_sql_worker_internal_leak_transcript(self) -> None:
         transcript_packet = build_raw_path_raw_sql_worker_internal_leak_transcript()
-        alias_packet = end_to_end_raw_path_raw_sql_worker_internal_leak_transcript()
-
-        end_to_end_raw_path_raw_sql_worker_internal_leak_transcript_marker = (
-            transcript_packet["raw_request_retained"] is False
-            and transcript_packet["safe_response_count"] == 3
-        )
-        self.assertTrue(end_to_end_raw_path_raw_sql_worker_internal_leak_transcript_marker)
-        self.assertEqual(alias_packet, transcript_packet)
+        self.assertFalse(transcript_packet["raw_request_retained"])
+        self.assertEqual(transcript_packet["safe_response_count"], 3)
         rendered = str(transcript_packet).lower()
         self.assertNotIn("/srv/", rendered)
         self.assertNotIn("/tmp/", rendered)

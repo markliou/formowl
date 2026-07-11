@@ -16,7 +16,7 @@ from formowl_project_mcp.adapters.openproject import (
     OpenProjectClient,
     OpenProjectHttpError,
 )
-from formowl_project_mcp.observability import JsonlToolCallLogger
+from formowl_observability import JsonlToolCallLogger
 from formowl_project_mcp.storage import FileEvidenceSnapshotStore
 from formowl_project_mcp.tools import ProjectMcpTools
 

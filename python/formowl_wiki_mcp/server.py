@@ -6,7 +6,7 @@ from typing import Any
 
 from formowl_gateway.jsonline import run_jsonline_compat
 
-from .observability import JsonlToolCallLogger
+from formowl_observability import JsonlToolCallLogger
 from .storage import FileDraftStore, FileWikiSnapshotStore
 from .tools import WikiMcpTools
 

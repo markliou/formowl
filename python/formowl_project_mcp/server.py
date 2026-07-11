@@ -7,7 +7,7 @@ from typing import Any
 from formowl_gateway.jsonline import run_jsonline_compat
 
 from .adapters.openproject import MockOpenProjectAdapter
-from .observability import JsonlToolCallLogger
+from formowl_observability import JsonlToolCallLogger
 from .storage import FileEvidenceSnapshotStore
 from .tools import ProjectMcpTools
 

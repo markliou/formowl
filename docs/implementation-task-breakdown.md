@@ -35,6 +35,10 @@ archival is preserved at
 - Issue #39 MCP protocol and shadow-workflow consolidation is complete in this
   working tree.
 - Issue #40 archival maintenance is complete in this working tree.
+- Pre-feature production cleanup is complete: test-only gateway scenarios no
+  longer ship as public production APIs, mail evidence permission helpers are
+  shared, and deprecated Python import/query surfaces retain explicit
+  compatibility boundaries.
 
 ## Current Unchecked Work
 
@@ -75,6 +79,21 @@ archival is preserved at
     `docs/archive/2026-07-11/`.
   - Proof: active-file retention rules, archive-integrity tests, canonical
     dev-container suites, and a 3/3 read-only reviewer gate pass.
+
+## Pre-Feature Production Cleanup
+
+- [x] Remove high-confidence dead and duplicate production code without
+  changing KG, MCP, permission, or compatibility behavior.
+  - Production Python changed by 103 additions and 256 deletions: net `-153`
+    lines. Test scenarios moved out of `formowl_gateway`; mail bundle selection,
+    grant normalization, and grant expiry now have one shared implementation.
+  - Empty readiness markers and an unused JSON-RPC response helper were
+    removed. Retrieval uses one private implementation while preserving the
+    deprecated alias signature and canonical effective-view requirement.
+  - Project and Wiki servers use shared observability directly; legacy import
+    paths remain as documented deprecated re-exports.
+  - Proof: canonical dev-container suite 726 tests OK, full Ruff check passed,
+    325 files passed format check, and the 3/3 reviewer gate agreed.
 
 ## Agent Dispatch Notes
 

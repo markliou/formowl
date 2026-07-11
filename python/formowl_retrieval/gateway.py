@@ -6,7 +6,6 @@ from typing import Any, Literal, Protocol, Sequence
 
 from formowl_auth import FileAuditLogStore, write_audit_log
 from formowl_contract import (
-    AccessRequest,
     AuditLog,
     ContractValidationError,
     Grant,
@@ -166,6 +165,35 @@ class RetrievalGateway:
         self.minimum_evidence_count = minimum_evidence_count
 
     def query_effective_graph(
+        self,
+        *,
+        query_embedding: Sequence[float],
+        query_text: str,
+        requester_user_id: str,
+        workspace_id: str,
+        session_id: str,
+        grants: Sequence[Grant | dict[str, Any]] = (),
+        mode: RetrievalMode = "answer_only",
+        limit: int = 5,
+        now: str | None = None,
+        effective_graph_view: EffectiveGraphView | None = None,
+    ) -> RetrievalGatewayResult:
+        """Deprecated projection-compatible query alias."""
+
+        return self._query_effective_graph(
+            query_embedding=query_embedding,
+            query_text=query_text,
+            requester_user_id=requester_user_id,
+            workspace_id=workspace_id,
+            session_id=session_id,
+            grants=grants,
+            mode=mode,
+            limit=limit,
+            now=now,
+            effective_graph_view=effective_graph_view,
+        )
+
+    def _query_effective_graph(
         self,
         *,
         query_embedding: Sequence[float],
@@ -422,7 +450,7 @@ class RetrievalGateway:
     def query_effective_graph_view(self, **kwargs: Any) -> RetrievalGatewayResult:
         if kwargs.get("effective_graph_view") is None:
             raise ContractValidationError("effective_graph_view is required")
-        return self.query_effective_graph(**kwargs)
+        return self._query_effective_graph(**kwargs)
 
     def _projection_graph_view(
         self,
@@ -1032,23 +1060,3 @@ def _assert_public_payload(payload: object) -> None:
     walk(payload, "")
     if violations:
         raise ContractValidationError("; ".join(violations))
-
-
-def access_request() -> None:
-    """Identifier marker for production readiness audit: access_request."""
-
-
-def grant_check_before_content() -> None:
-    """Identifier marker for production readiness audit: grant_check_before_content."""
-
-
-def revocation_check_before_content() -> None:
-    """Identifier marker for production readiness audit: revocation_check_before_content."""
-
-
-def raw_asset_mode_requires_explicit_grant() -> None:
-    """Identifier marker for production readiness audit: raw_asset_mode_requires_explicit_grant."""
-
-
-def _contract_record_markers() -> tuple[type[AccessRequest], type[Grant], type[AuditLog]]:
-    return (AccessRequest, Grant, AuditLog)

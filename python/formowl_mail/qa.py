@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Sequence
 
 from formowl_contract import (
@@ -12,6 +11,7 @@ from formowl_contract import (
     to_plain,
 )
 
+from ._access import grant_expired, matching_bundles, normalize_grants
 from ._guards import assert_public_payload_safe, safe_public_string
 from .bundle import MailEvidenceBundle
 from .evidence import (
@@ -116,11 +116,12 @@ class MailCaseProgressGateway:
             mail_import_session_id=mail_import_session_id,
             mail_evidence_bundle_id=mail_evidence_bundle_id,
         )
-        matching_bundles = self._matching_bundles(
+        selected_bundles = matching_bundles(
+            self._bundles,
             mail_import_session_id=mail_import_session_id,
             mail_evidence_bundle_id=mail_evidence_bundle_id,
         )
-        if not matching_bundles:
+        if not selected_bundles:
             return MailCaseProgressAnswerResult(
                 status="not_found",
                 mail_import_session_id=mail_import_session_id,
@@ -132,10 +133,10 @@ class MailCaseProgressGateway:
             )
 
         resolved_now = now or "9999-12-31T23:59:59+00:00"
-        grant_objects = _normalize_grants(grants)
+        grant_objects = normalize_grants(grants)
         visible_bundles = [
             bundle
-            for bundle in matching_bundles
+            for bundle in selected_bundles
             if bundle.mail_import_session.workspace_id == workspace_id
             and _can_read_bundle(
                 bundle,
@@ -151,8 +152,8 @@ class MailCaseProgressGateway:
                 mail_evidence_bundle_id=mail_evidence_bundle_id,
                 case_id=safe_public_string(case_id.strip(), "case_id"),
                 redaction_counts={
-                    "hidden_bundles": len(matching_bundles),
-                    "hidden_messages": sum(len(bundle.messages) for bundle in matching_bundles),
+                    "hidden_bundles": len(selected_bundles),
+                    "hidden_messages": sum(len(bundle.messages) for bundle in selected_bundles),
                 },
                 warnings=["mail_case_progress_permission_denied"],
                 claim_boundary=_case_progress_claim_boundary(False),
@@ -180,27 +181,6 @@ class MailCaseProgressGateway:
             warnings=answer["warnings"],
             claim_boundary=_case_progress_claim_boundary(True),
         )
-
-    def _matching_bundles(
-        self,
-        *,
-        mail_import_session_id: str | None,
-        mail_evidence_bundle_id: str | None,
-    ) -> list[MailEvidenceBundle]:
-        matching: list[MailEvidenceBundle] = []
-        for bundle in self._bundles:
-            if (
-                mail_import_session_id is not None
-                and bundle.mail_import_session.mail_import_session_id != mail_import_session_id
-            ):
-                continue
-            if (
-                mail_evidence_bundle_id is not None
-                and bundle.mail_evidence_bundle_id != mail_evidence_bundle_id
-            ):
-                continue
-            matching.append(bundle)
-        return matching
 
 
 def build_mail_case_progress_handler(
@@ -378,7 +358,7 @@ def _can_read_bundle(
             continue
         if grant.permission not in _MAIL_CASE_PROGRESS_PERMISSIONS:
             continue
-        if grant.revoked_at or _grant_expired(grant, now):
+        if grant.revoked_at or grant_expired(grant, now):
             continue
         if (
             grant.scope_type == "workspace"
@@ -391,21 +371,6 @@ def _can_read_bundle(
         ):
             return True
     return False
-
-
-def _grant_expired(grant: Grant, now: str) -> bool:
-    try:
-        expires = datetime.fromisoformat(grant.expires_at.replace("Z", "+00:00"))
-        current = datetime.fromisoformat(now.replace("Z", "+00:00"))
-    except ValueError:
-        return True
-    return expires <= current
-
-
-def _normalize_grants(grants: Sequence[Grant | dict[str, Any]]) -> list[Grant]:
-    if isinstance(grants, (str, bytes)) or not isinstance(grants, Sequence):
-        raise ContractValidationError("grants must be a list")
-    return [grant if isinstance(grant, Grant) else Grant.from_dict(grant) for grant in grants]
 
 
 def _validate_case_progress_inputs(

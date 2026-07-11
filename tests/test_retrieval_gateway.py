@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import unittest
 
 import _paths  # noqa: F401
@@ -22,6 +23,33 @@ NOW = "2026-06-18T00:00:00+00:00"
 
 
 class RetrievalGatewayTests(unittest.TestCase):
+    def test_deprecated_query_alias_preserves_keyword_only_signature(self) -> None:
+        signature = inspect.signature(RetrievalGateway.query_effective_graph)
+
+        self.assertEqual(
+            list(signature.parameters),
+            [
+                "self",
+                "query_embedding",
+                "query_text",
+                "requester_user_id",
+                "workspace_id",
+                "session_id",
+                "grants",
+                "mode",
+                "limit",
+                "now",
+                "effective_graph_view",
+            ],
+        )
+        self.assertTrue(
+            all(
+                parameter.kind is inspect.Parameter.KEYWORD_ONLY
+                for name, parameter in signature.parameters.items()
+                if name != "self"
+            )
+        )
+
     def test_grant_check_before_content_filters_private_results(self) -> None:
         temp_dir = _paths.fresh_test_dir("retrieval-gateway-grant")
         gateway = _gateway_with_records(temp_dir)

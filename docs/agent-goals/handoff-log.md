@@ -150,3 +150,19 @@ Lifecycle label: `active`.
   authority suite 589 tests OK, MCP focused 132 tests OK, read-only repository
   enterprise/preflight 60 tests OK, archive integrity 4 tests OK, and full Ruff
   check/format check passed for 323 files.
+
+## 2026-07-11 — Pre-feature production cleanup
+
+- Removed test-only MCP gateway scenarios and assertion markers from production,
+  deleted unused retrieval/JSON-RPC marker helpers, and centralized mail bundle
+  selection, grant normalization, and grant-expiry behavior in one private mail
+  access helper. Production Python is net 153 lines smaller.
+- Retrieval now has one private implementation while the deprecated
+  `query_effective_graph` alias retains its full keyword-only signature and the
+  canonical `query_effective_graph_view` still requires an effective graph
+  view. Shared observability is canonical; Project/Wiki legacy imports remain
+  deprecated compatibility re-exports and `SPEC.md` documents that boundary.
+- Canonical dev-container verification passed 726 tests, full Ruff check, and
+  325-file format check. Engineering, governance/safety, and maintainability
+  reviewers returned 3/3 `RELEASE_DECISION: AGREE` after signature and
+  specification compatibility blockers were fixed.
