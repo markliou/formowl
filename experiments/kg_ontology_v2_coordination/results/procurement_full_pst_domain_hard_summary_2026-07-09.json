@@ -2,6 +2,12 @@
   "artifact_id": "procurement_full_pst_domain_hard_summary_2026_07_09",
   "artifact_type": "redacted_operator_provided_full_pst_domain_hard_summary",
   "generated_at": "2026-07-09",
+  "documentation_annotation": {
+    "updated_at": "2026-07-14",
+    "purpose": "Make the measured-arm boundary explicit so ontology_guided_kg is not misreported as coordination-frame Ontology v2.",
+    "measurement_rows_changed": false,
+    "original_measurements_preserved": true
+  },
   "source_fixture": {
     "description": "operator-provided procurement full-PST real-case fixture",
     "raw_content_included": false,
@@ -28,6 +34,7 @@
   "arms": [
     {
       "arm_id": "baseline_retrieval",
+      "execution_status": "measured",
       "passed_case_count": 11,
       "failed_case_count": 89,
       "pass_rate_basis_points": 1100,
@@ -37,6 +44,7 @@
     },
     {
       "arm_id": "candidate_kg_fusion",
+      "execution_status": "measured",
       "passed_case_count": 19,
       "failed_case_count": 81,
       "pass_rate_basis_points": 1900,
@@ -51,6 +59,16 @@
     },
     {
       "arm_id": "ontology_guided_kg",
+      "execution_status": "measured",
+      "implementation_semantics": {
+        "ontology_type_definitions": true,
+        "ontology_type_mappings": true,
+        "typed_candidate_nodes": true,
+        "ontology_supported_relations": true,
+        "coordination_frame_v2": false,
+        "frame_slot_scoring": false,
+        "coordination_frame_validation": false
+      },
       "passed_case_count": 19,
       "failed_case_count": 81,
       "pass_rate_basis_points": 1900,
@@ -70,6 +88,13 @@
     },
     {
       "arm_id": "best_ordered_ontology_factorial",
+      "execution_status": "measured",
+      "implementation_semantics": {
+        "ordered_type_relation_operators": true,
+        "coordination_frame_v2": false,
+        "frame_slot_scoring": false,
+        "coordination_frame_validation": false
+      },
       "passed_case_count": 19,
       "pass_rate_basis_points": 1900,
       "delta_vs_baseline_passed_case_count": 8,
@@ -79,13 +104,50 @@
       "permission_denied_passed_case_count": 10,
       "best_operator_count": 0,
       "best_operator_order": []
+    },
+    {
+      "arm_id": "coordination_frame_v2",
+      "execution_status": "not_executed_in_this_artifact",
+      "implementation_semantics": {
+        "candidate_kg": true,
+        "coordination_frame_v2": true,
+        "frame_slots": true,
+        "frame_scoring": true,
+        "frame_validation": true
+      },
+      "passed_case_count": null,
+      "positive_passed_case_count": null,
+      "no_match_passed_case_count": null,
+      "permission_denied_passed_case_count": null,
+      "reason_not_measured": "The operator-provided full-PST pipeline did not execute the coordination-frame v2 construction, slot, scoring, and validation path used by the fixed redacted challenge.",
+      "interpretation_rule": "Absence of a measurement is not a negative result and must not be summarized as Ontology v2 showing no incremental value."
+    },
+    {
+      "arm_id": "hybrid_soft_gate_v2_frame",
+      "execution_status": "not_executed_in_this_artifact",
+      "implementation_semantics": {
+        "candidate_kg": true,
+        "soft_type_compatibility": true,
+        "coordination_frame_v2": true,
+        "frame_slots": true,
+        "frame_scoring": true,
+        "frame_validation": true
+      },
+      "passed_case_count": null,
+      "positive_passed_case_count": null,
+      "no_match_passed_case_count": null,
+      "permission_denied_passed_case_count": null,
+      "reason_not_measured": "The operator-provided full-PST pipeline did not execute the hybrid soft-gate plus coordination-frame v2 path used by the fixed redacted challenge.",
+      "interpretation_rule": "Absence of a measurement is not a negative result and must not be summarized as the hybrid Ontology v2 path being ineffective."
     }
   ],
   "factorial_summary": {
     "ordered_arm_count": 326,
     "arms_better_than_candidate_kg_count": 0,
     "arms_equal_to_candidate_kg_count": 2,
-    "arms_worse_than_candidate_kg_count": 324
+    "arms_worse_than_candidate_kg_count": 324,
+    "coordination_frame_v2_included": false,
+    "hybrid_soft_gate_v2_frame_included": false
   },
   "timing_ms": {
     "baseline_import_elapsed_ms": 1929481,
@@ -104,13 +166,21 @@
     "baseline_retrieval_passed_case_count": 11,
     "candidate_kg_helped": true,
     "candidate_kg_delta_vs_baseline_passed_case_count": 8,
-    "current_ontology_helped_beyond_candidate_kg": false,
-    "current_ontology_regressed_below_candidate_kg": false,
+    "measured_ontology_guided_arm_helped_beyond_candidate_kg": false,
+    "measured_ontology_guided_arm_regressed_below_candidate_kg": false,
     "best_factorial_arm_used_zero_ontology_operators": true,
-    "summary": "Candidate KG structure improved the procurement real-case score from 11/100 to 19/100, but the current ontology-guided and ordered factorial arms did not improve beyond KG-only."
+    "coordination_frame_v2_real_evidence_transfer_status": "unverified_not_measured",
+    "hybrid_soft_gate_v2_frame_real_evidence_transfer_status": "unverified_not_measured",
+    "summary": "Candidate KG structure improved the procurement real-case score from 11/100 to 19/100. The measured type/relation-oriented ontology_guided_kg and ordered factorial arms did not improve beyond candidate KG. Coordination-frame Ontology v2 and the hybrid soft-gate plus v2-frame path were not executed in this artifact, so their real-evidence transfer remains unverified rather than negative."
   },
   "claim_boundary": {
     "supports_operator_provided_full_pst_domain_hard_measurement": true,
+    "supports_candidate_kg_incremental_value_on_this_artifact": true,
+    "supports_measured_ontology_guided_arm_incremental_value": false,
+    "supports_coordination_frame_v2_real_evidence_effectiveness_claim": false,
+    "supports_coordination_frame_v2_ineffectiveness_claim": false,
+    "supports_hybrid_soft_gate_v2_frame_real_evidence_effectiveness_claim": false,
+    "supports_hybrid_soft_gate_v2_frame_ineffectiveness_claim": false,
     "supports_business_answer_generation_claim": false,
     "supports_general_full_pst_parser_readiness_claim": false,
     "supports_actual_chatgpt_connected_upload_claim": false,
