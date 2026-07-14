@@ -94,6 +94,7 @@
       "arms": [
         {
           "arm_id": "baseline_retrieval",
+          "execution_status": "measured",
           "passed_case_count": 11,
           "positive_passed_case_count": 1,
           "no_match_passed_case_count": 0,
@@ -101,6 +102,7 @@
         },
         {
           "arm_id": "candidate_kg_fusion",
+          "execution_status": "measured",
           "passed_case_count": 19,
           "positive_passed_case_count": 9,
           "no_match_passed_case_count": 0,
@@ -108,6 +110,7 @@
         },
         {
           "arm_id": "ontology_guided_kg",
+          "execution_status": "measured",
           "passed_case_count": 19,
           "positive_passed_case_count": 9,
           "no_match_passed_case_count": 0,
@@ -119,17 +122,44 @@
             "ontology-supported relations"
           ],
           "coordination_frame_v2_equivalence_established": false
+        },
+        {
+          "arm_id": "coordination_frame_v2",
+          "execution_status": "not_executed_in_this_artifact",
+          "passed_case_count": null,
+          "implementation_semantics": [
+            "coordination-frame v2 construction",
+            "frame slots",
+            "frame scoring",
+            "frame validation"
+          ],
+          "interpretation_rule": "Not measured is not a negative result."
+        },
+        {
+          "arm_id": "hybrid_soft_gate_v2_frame",
+          "execution_status": "not_executed_in_this_artifact",
+          "passed_case_count": null,
+          "implementation_semantics": [
+            "soft type compatibility",
+            "coordination-frame v2 construction",
+            "frame slots",
+            "frame scoring",
+            "frame validation"
+          ],
+          "interpretation_rule": "Not measured is not a negative result."
         }
       ],
       "supported_claims": [
         "Candidate KG improves this aggregate score from 11/100 to 19/100.",
         "The measured ontology-guided KG arm does not improve beyond candidate KG on this full-PST experiment.",
+        "Coordination-frame v2 and hybrid soft-gate plus v2-frame were not executed in this artifact; their real-evidence transfer remains unverified.",
         "All measured no-match cases fail while all permission-denied cases are enforced."
       ],
       "unsupported_claims": [
         "Coordination-frame v2 is ineffective on real PST evidence.",
         "The ontology-guided KG arm is implementation-equivalent to the redacted challenge coordination_frame_v2 arm.",
         "The full-PST result negates or supersedes the redacted hard-challenge v2 result.",
+        "An unexecuted Ontology v2 arm scored the same as candidate KG.",
         "Production readiness."
       ]
     }
@@ -138,14 +168,16 @@
     "ontology_guided_kg must not be renamed or summarized as coordination_frame_v2 unless the report explicitly declares the same frame construction, slot semantics, scoring, and validation path.",
     "A later experiment does not automatically supersede an earlier experiment when it uses a different dataset, arm implementation, output target, or metric.",
     "A no-improvement result for a type-compatibility or ontology-guided arm does not prove that an unexecuted coordination-frame arm is ineffective.",
-    "A positive result on a designed redacted challenge proves only benchmark-scoped incremental value, not real-evidence transfer or production readiness."
+    "A positive result on a designed redacted challenge proves only benchmark-scoped incremental value, not real-evidence transfer or production readiness.",
+    "Every report table that lists candidate_kg_fusion and ontology_guided_kg must also list coordination_frame_v2 and hybrid_soft_gate_v2_frame with an explicit measured or not-executed status."
   ],
   "required_agent_summary": {
-    "current_supported_statement": "Ontology v2 has demonstrated clear incremental value over KG-only on the fixed redacted coordination hard challenge. The current operator-provided full-PST ontology-guided arm ties KG-only, so real-evidence transfer of the full coordination-frame v2 advantage remains unverified.",
+    "current_supported_statement": "Ontology v2 has demonstrated clear incremental value over KG-only on the fixed redacted coordination hard challenge. The current operator-provided full-PST ontology-guided arm ties KG-only, while coordination-frame v2 and the hybrid v2 arm were not executed in that artifact; real-evidence transfer of the full coordination-frame advantage therefore remains unverified, not negative.",
     "forbidden_unqualified_statements": [
       "Knowledge graph works but ontology does not.",
       "Ontology v2 has not shown incremental value.",
       "The full-PST experiment proves Ontology v2 is ineffective.",
+      "Ontology v2 tied candidate KG on full PST.",
       "Ontology v2 is production-proven."
     ]
   }
