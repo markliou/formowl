@@ -1,0 +1,152 @@
+{
+  "schema_version": "formowl_kg_experiment_claim_map_v1",
+  "purpose": "Prevent agents and reviewers from conflating different datasets, arm implementations, metrics, and claim boundaries when interpreting KG and Ontology v2 experiments.",
+  "mandatory_interpretation_rule": "An experiment result is identified by the tuple (artifact, dataset_kind, arm_id, implementation_semantics, metric, claim_boundary). Results from different tuples must not be substituted for one another.",
+  "experiments": [
+    {
+      "experiment_id": "ontology_v2_redacted_hard_challenge_100",
+      "canonical_source": "experiments/kg_ontology_v2_coordination/README.md",
+      "dataset_kind": "designed_redacted_fixed_challenge",
+      "case_count": 100,
+      "independent_raw_pst_parser_output": false,
+      "arms": [
+        {
+          "arm_id": "kg_without_ontology",
+          "implementation_semantics": {
+            "candidate_kg": true,
+            "type_compatibility": "none",
+            "coordination_frame_v2": false
+          },
+          "exact_match": 0.46,
+          "slot_value_f1": 0.801382,
+          "false_positive_count": 11,
+          "hard_false_reject_count": 0
+        },
+        {
+          "arm_id": "kg_hard_ontology",
+          "implementation_semantics": {
+            "candidate_kg": true,
+            "type_compatibility": "hard_gate",
+            "coordination_frame_v2": false
+          },
+          "exact_match": 0.22,
+          "slot_value_f1": 0.329239,
+          "false_positive_count": 0,
+          "hard_false_reject_count": 30
+        },
+        {
+          "arm_id": "kg_soft_ontology_gate",
+          "implementation_semantics": {
+            "candidate_kg": true,
+            "type_compatibility": "soft_gate",
+            "coordination_frame_v2": false
+          },
+          "exact_match": 0.74,
+          "slot_value_f1": 0.936396,
+          "false_positive_count": 0,
+          "hard_false_reject_count": 0
+        },
+        {
+          "arm_id": "coordination_frame_v2",
+          "implementation_semantics": {
+            "candidate_kg": true,
+            "type_compatibility": "frame_path",
+            "coordination_frame_v2": true
+          },
+          "exact_match": 0.82,
+          "slot_value_f1": 0.925859,
+          "false_positive_count": 1,
+          "hard_false_reject_count": 0
+        },
+        {
+          "arm_id": "hybrid_soft_gate_v2_frame",
+          "implementation_semantics": {
+            "candidate_kg": true,
+            "type_compatibility": "soft_gate",
+            "coordination_frame_v2": true
+          },
+          "exact_match": 0.90,
+          "slot_value_f1": 0.981133,
+          "false_positive_count": 1,
+          "hard_false_reject_count": 0
+        }
+      ],
+      "supported_claims": [
+        "Within this fixed redacted 100-case challenge, coordination-frame v2 outperforms KG without ontology.",
+        "Within this challenge, the hybrid soft-gate plus v2-frame arm is the best measured arm.",
+        "Within this challenge, the current hard ontology gate regresses below KG without ontology."
+      ],
+      "unsupported_claims": [
+        "Production PST parser readiness.",
+        "Independent real-evidence transfer.",
+        "General production effectiveness across domains.",
+        "Canonical graph or ontology write readiness."
+      ]
+    },
+    {
+      "experiment_id": "procurement_full_pst_domain_hard_100",
+      "canonical_source": "experiments/kg_ontology_v2_coordination/results/procurement_full_pst_domain_hard_summary_2026-07-09.json",
+      "dataset_kind": "operator_provided_full_pst_domain_hard_aggregate",
+      "case_count": 100,
+      "positive_case_count": 80,
+      "no_match_case_count": 10,
+      "permission_denied_case_count": 10,
+      "arms": [
+        {
+          "arm_id": "baseline_retrieval",
+          "passed_case_count": 11,
+          "positive_passed_case_count": 1,
+          "no_match_passed_case_count": 0,
+          "permission_denied_passed_case_count": 10
+        },
+        {
+          "arm_id": "candidate_kg_fusion",
+          "passed_case_count": 19,
+          "positive_passed_case_count": 9,
+          "no_match_passed_case_count": 0,
+          "permission_denied_passed_case_count": 10
+        },
+        {
+          "arm_id": "ontology_guided_kg",
+          "passed_case_count": 19,
+          "positive_passed_case_count": 9,
+          "no_match_passed_case_count": 0,
+          "permission_denied_passed_case_count": 10,
+          "publicly_reported_semantics": [
+            "ontology type definitions",
+            "ontology type mappings",
+            "typed candidate nodes",
+            "ontology-supported relations"
+          ],
+          "coordination_frame_v2_equivalence_established": false
+        }
+      ],
+      "supported_claims": [
+        "Candidate KG improves this aggregate score from 11/100 to 19/100.",
+        "The measured ontology-guided KG arm does not improve beyond candidate KG on this full-PST experiment.",
+        "All measured no-match cases fail while all permission-denied cases are enforced."
+      ],
+      "unsupported_claims": [
+        "Coordination-frame v2 is ineffective on real PST evidence.",
+        "The ontology-guided KG arm is implementation-equivalent to the redacted challenge coordination_frame_v2 arm.",
+        "The full-PST result negates or supersedes the redacted hard-challenge v2 result.",
+        "Production readiness."
+      ]
+    }
+  ],
+  "non_equivalence_rules": [
+    "ontology_guided_kg must not be renamed or summarized as coordination_frame_v2 unless the report explicitly declares the same frame construction, slot semantics, scoring, and validation path.",
+    "A later experiment does not automatically supersede an earlier experiment when it uses a different dataset, arm implementation, output target, or metric.",
+    "A no-improvement result for a type-compatibility or ontology-guided arm does not prove that an unexecuted coordination-frame arm is ineffective.",
+    "A positive result on a designed redacted challenge proves only benchmark-scoped incremental value, not real-evidence transfer or production readiness."
+  ],
+  "required_agent_summary": {
+    "current_supported_statement": "Ontology v2 has demonstrated clear incremental value over KG-only on the fixed redacted coordination hard challenge. The current operator-provided full-PST ontology-guided arm ties KG-only, so real-evidence transfer of the full coordination-frame v2 advantage remains unverified.",
+    "forbidden_unqualified_statements": [
+      "Knowledge graph works but ontology does not.",
+      "Ontology v2 has not shown incremental value.",
+      "The full-PST experiment proves Ontology v2 is ineffective.",
+      "Ontology v2 is production-proven."
+    ]
+  }
+}
