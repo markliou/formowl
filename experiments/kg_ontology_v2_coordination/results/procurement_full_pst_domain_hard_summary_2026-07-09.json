@@ -2,6 +2,10 @@
   "artifact_id": "procurement_full_pst_domain_hard_summary_2026_07_09",
   "artifact_type": "redacted_operator_provided_full_pst_domain_hard_summary",
   "generated_at": "2026-07-09",
+  "reporting_status": "historical_diagnostic_only",
+  "current_results_entrypoint": "experiments/kg_ontology_v2_coordination/CURRENT_RESULTS.md",
+  "superseded_as_current_headline_by": "experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json",
+  "agent_warning": "Do not use this 11/100 to 19/100 aggregate as the current KG or ontology headline, weekly-report breakthrough, or method recommendation. It is retained only as historical retrieval diagnostic evidence for this exact artifact tuple. Read CURRENT_RESULTS.md and claim_map.json before reporting.",
   "source_fixture": {
     "description": "operator-provided procurement full-PST real-case fixture",
     "raw_content_included": false,
@@ -107,10 +111,12 @@
     "current_ontology_helped_beyond_candidate_kg": false,
     "current_ontology_regressed_below_candidate_kg": false,
     "best_factorial_arm_used_zero_ontology_operators": true,
-    "summary": "Candidate KG structure improved the procurement real-case score from 11/100 to 19/100, but the current ontology-guided and ordered factorial arms did not improve beyond KG-only."
+    "summary": "Historical diagnostic only: Candidate KG structure improved this procurement real-case score from 11/100 to 19/100, but the particular ontology-guided and ordered factorial arms did not improve beyond KG-only. This is not the current method-selection result."
   },
   "claim_boundary": {
-    "supports_operator_provided_full_pst_domain_hard_measurement": true,
+    "supports_historical_operator_provided_full_pst_domain_hard_measurement": true,
+    "supports_current_method_headline": false,
+    "supports_current_weekly_report_breakthrough": false,
     "supports_business_answer_generation_claim": false,
     "supports_general_full_pst_parser_readiness_claim": false,
     "supports_actual_chatgpt_connected_upload_claim": false,
