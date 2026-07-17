@@ -29,6 +29,28 @@ the runner includes a synthetic hard-gate vs soft-gate noisy-type ablation
 scaffold. Those fixes address scoring bugs; the methodology analysis below
 still applies.
 
+## Default Candidate Evidence Retrieval
+
+The critique below explains why the old method failed; it is not a recipe for
+new harnesses. Current retrieval counts logical source items, resolves
+access/context/time before planning, forbids lexical transitive closure, and
+uses ontology only as a capped additive rerank. Hard gates, parser-chunk
+cardinality, and component-union behavior are historical ablation targets.
+The active index owns a `CandidateEvidenceTextPolicyRuntime` for the
+Unicode-NFKC/protected-ASCII/Jieba/corpus-bound SentencePiece/frozen-profile
+stack and exact admission/model/corpus SHA-256 hashes. The binding also pins
+the runtime id and tokenizer implementation hash; runtime code mismatch fails
+closed. Default callers pass query text only; raw tokens and free-form hashes
+fail closed. Access and explicit context/time admissibility run before
+tokenization; experiments use `retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
+
 ## Verdict Summary
 
 The v2 direction (frame semantics over noun labels for email coordination)

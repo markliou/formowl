@@ -1,184 +1,448 @@
-﻿# formowl Specification
+# FormOwl Specification
 
-## 1. Overview
+## 1. Authority and Product Boundary
 
-`formowl` is a source-preserving, graph-governed knowledge management system for turning multimodal resources, project execution data, conversations, and wiki/documentation systems into governed knowledge views.
+This document is the canonical product, knowledge-method, and architecture
+specification for FormOwl.
 
-The target architecture is a pipeline:
+When the product model changes, the affected canonical sections must be
+rewritten and obsolete statements removed. A later addendum must not silently
+override an older model. Subordinate documents may add implementation detail,
+but they must not replace the methodology defined here.
+
+FormOwl is a source-preserving, graph-governed knowledge system. It is not an
+email product, procurement product, finance product, parser, wiki generator, or
+project-management system. Those are source adapters, domain applications, or
+projection targets that use the same method.
+
+Its purpose is to turn heterogeneous evidence into knowledge that is:
+
+- traceable to source observations;
+- explicit about time, context, confidence, permission, and ontology lineage;
+- reviewable before it becomes governed shared state;
+- portable across departments and source formats; and
+- projectable into answers, reports, wiki drafts, or reviewed action proposals.
+
+The shortest statement of the methodology is:
+
+> Convert any source into evidence-backed, time- and context-bound candidate
+> assertions about business objects; govern those assertions before they become
+> reusable knowledge; then assemble task-specific views without losing source
+> lineage.
+
+## 2. Generalized Evidence-to-Knowledge Methodology
+
+The canonical pipeline is:
 
 ```text
-Raw Resources
-  -> Resource Extraction
-  -> Observation / Semantic Metadata
-  -> Candidate Graph
-  -> Governed Canonical Knowledge Graph
-  -> User Knowledge Graph
-  -> Wiki Projection / WikiRevision
-```
-
-The current repository starts with independently maintained MCP servers and a shared contract package:
-
-```text id="1b5hso"
-Project MCP
-Wiki MCP
-formowl-contract
-```
-
-These components are not the whole product boundary. They are the first concrete entrypoints for retrieving source context, preserving evidence, generating wiki artifacts, and validating the contract model that later resource extraction and graph assembly layers must also use.
-
-The goal is to keep raw resources, project execution state, canonical graph state, user-specific graph views, and wiki artifacts decoupled, while preserving provenance, citations, source traceability, extraction lineage, graph governance, and revision history.
-
-The system must be usable by people who are not software engineers. Administrative owners, project coordinators, reviewers, and process operators should be able to work through natural-language instructions and review-oriented actions. Technical mechanisms such as Git, object storage, schemas, hashes, and revision backends must remain implementation details unless an administrator explicitly asks to inspect them.
-
----
-
-## 2. Core Concept
-
-```text id="1mhwmd"
-ChatGPT / LLM Host
-  -> Project MCP
-  -> Wiki MCP
-  -> future ingestion and graph orchestration tools
-
-Shared Contract
-  -> formowl-contract
-
-Knowledge Pipeline
+Any governed source
+  -> Asset or EvidenceSnapshot
   -> Observation
-  -> Candidate Graph
-  -> Governed Canonical Graph
-  -> User Knowledge Graph
-  -> WikiRevision
+  -> Lexical and Mention Candidates for text-bearing observations
+       - Unicode and script normalization
+       - protected ASCII identifiers
+       - Jieba segmentation
+       - corpus-bound SentencePiece segmentation
+       - frozen-profile candidate admission
+  -> Candidate Knowledge
+       - CandidateBusinessObject
+       - property assertion
+       - relation assertion
+       - state assertion
+       - event assertion
+       - coordination assertion
+  -> Governance
+       - provenance and permission checks
+       - type and ontology alignment
+       - identity and relation resolution
+       - temporal and contradiction checks
+       - granularity and review policy
+  -> Governed Canonical Knowledge Graph
+  -> User or Task Effective Graph View
+  -> Projection or Reviewed Action Proposal
 ```
 
-Project MCP is responsible for project execution context.
+### 2.1 Register the source
 
-Wiki MCP is responsible for knowledge artifact creation and wiki publishing lifecycle.
+Every file, message, database response, project record, conversation, sensor
+reading, image, audio segment, video segment, or application event enters
+through a governed asset or evidence boundary. A source is evidence, not
+canonical knowledge.
 
-Resource extraction and graph assembly are responsible for converting raw resources into observations, candidate atoms, canonical atoms, canonical entities, canonical relations, user graph revisions, and projection-ready graph views.
+Physical paths, buckets, database connections, parser commands, and worker
+scratch locations are implementation details. They must not become graph
+identifiers or public MCP fields.
 
-`formowl-contract` defines the shared data structures that allow Project MCP, Wiki MCP, ingestion tools, and graph assembly tools to exchange information without depending on each other's internal implementation.
+### 2.2 Produce citeable observations and stable retrieval units
 
----
+An `Observation` is the smallest source-derived unit that can be independently
+located and cited. It may be a paragraph, table cell range, OCR block,
+transcript segment, ERP field group, application event, issue comment, slide
+text box, or email-authored paragraph. Observation size follows citation and
+extraction needs; it must not silently determine how many business records a
+query has found.
 
-## 3. Design Principles
+Every observation preserves:
 
-1. Raw data is the source of truth.
-2. Wiki pages are knowledge views, not source of truth.
-3. LLM-generated summaries, drafts, extracted observations, candidate atoms, and graph proposals are derived data.
-4. Project management systems own execution state.
-5. Wiki systems own published knowledge views.
-6. Raw resources do not directly generate wiki pages; they first become observations and semantic metadata.
-7. Observations are the common intermediate form for audio, video, image, document, text, project, wiki, and conversation resources.
-8. External extractors and LLM graph tools must write to observation stores, candidate stores, or import buffers, not directly to the canonical graph.
-9. Candidate graph output is a proposal layer; it must pass granularity policy, entity resolution, relation resolution, lifecycle policy, and review policy before canonical commit.
-10. Atom granularity is a first-class governance policy, not an incidental property of an extractor.
-11. Canonical atoms, canonical entities, and canonical relations are reusable governed knowledge parts, not any user's final graph.
-12. Different users may assemble different knowledge graphs from the same raw data, evidence snapshots, observations, candidate atoms, and canonical atoms.
-13. User knowledge graphs are derived, versioned views. They may reflect changing user goals, attention, terminology, permissions, tasks, and preferred granularity.
-14. Wiki projection must be controlled by projection specs and review flows, not by unconstrained one-off generation.
-15. Every generated knowledge artifact must preserve source references.
-16. Any external data used to generate knowledge must be traceable.
-17. Any user graph assembly must preserve provenance back to raw data, evidence snapshots, citations, observations, and canonical atoms when available.
-18. Write operations must use proposal and review flows.
-19. The primary user workflow must be natural-language-first and non-technical-user-friendly.
-20. Technical governance mechanisms must be hidden behind task-oriented actions such as save draft, submit for review, compare changes, publish, refresh from sources, and restore.
-21. Wiki artifacts are versioned knowledge views derived from graph views and source evidence; they are not raw truth.
-22. Regenerating a wiki artifact must create a reviewable proposal or diff, not silently overwrite reviewed or published knowledge.
-23. Git may be used as a revision backend, audit mirror, or engineering workflow, but it must not be required as the user-facing wiki workflow.
-24. Project MCP, Wiki MCP, ingestion tools, and graph assembly tools must remain independently maintainable.
-25. Integration between components must happen through shared schemas, not direct dependencies.
-26. Development, testing, and deployment must be container-first to maximize portability and avoid host-machine assumptions.
-27. Python is the implementation language for Phase 0.
-28. Python owns MCP service glue, workflows, adapters, tests, hashing helpers, diff helpers, and day-to-day debugging.
-29. Additional systems languages must not be introduced unless a concrete parser, validator, large-data transform, or safety boundary requires them.
-30. If a future system language is introduced, it must be hidden behind clear Python APIs and documented as a specific implementation boundary rather than a default architectural premise.
-31. Physical storage may be distributed, but knowledge identity must be centralized.
-32. Raw storage paths, NAS endpoints, PostgreSQL, object-store admin endpoints, worker scratch directories, and local filesystem paths must not be exposed through ChatGPT-facing MCP tools.
-33. Files must be registered as FormOwl assets before they participate in extraction, search, graph construction, or wiki projection.
-34. Phase 0 internal deployments may use manual trusted actor selection, but stable users, workspaces, grants, and audit records must exist from the beginning.
-35. Cross-user graph collaboration must use permissioned graph overlays and grants, not silent graph merging.
+```text
+observation id
+asset or evidence lineage
+extractor run
+modality-specific locator
+permission scope
+observed, captured, or recorded time when available
+confidence and extraction warnings
+```
 
----
+Retrieval additionally groups observations into a `LogicalSourceItem`. A
+logical source item is the stable source-level unit counted as one piece of
+evidence. Typical mappings are:
+
+```text
+mail archive        -> one authored message
+PDF or document     -> one page, section, or source-defined record
+PPT/PPTX            -> one slide
+CSV/XLS/XLSX        -> one row or source-defined transaction record
+OCR                 -> one page or region group from the same source record
+audio/video         -> one utterance, scene, or source-defined event
+project/wiki/chat   -> one issue activity, section, or authored message
+application data    -> one immutable response row or event
+```
+
+The adapter chooses the mapping from source semantics and records it in
+lineage. It must not choose a different retrieval algorithm for each
+department. One logical source item may contain several observations, and
+those observations may jointly support one query anchor set. Splitting a page,
+slide, row, or message into more observations must not increase its document
+frequency, evidence cardinality, or ranking weight.
+
+A `ContextBoundary` is separate from both observation and logical source item.
+It names the authorized container or business scope inside which evidence may
+be compared, such as a mail thread, document, presentation deck, worksheet or
+reporting period, inspection lot, project, contract, or case. Retrieval must
+not join observations across context boundaries unless the caller explicitly
+selects or is authorized for those contexts.
+
+Every text-bearing observation uses the same lexical candidate method,
+regardless of source format or department:
+
+```text
+Unicode and script normalization
+  -> protected ASCII identifier extraction
+  -> Jieba segmentation
+  -> corpus-bound SentencePiece segmentation
+  -> frozen-profile candidate admission
+  -> source-neutral evidence planning and retrieval
+```
+
+This is the normative default. Regex-only tokenization is allowed only as an
+explicit baseline or ablation, as protected ASCII extraction inside the
+default stack, or as a clearly reported degraded fallback. A default path must
+never silently switch to regex-only behavior.
+
+Lexical candidate and retrieval outputs bind the normalization and
+segmentation policy version, candidate-admission policy hash, model or
+vocabulary hash, and corpus hash. A binding change requires re-extraction or
+reevaluation.
+
+### 2.3 Identify candidate business objects
+
+A business object is the subject or object that knowledge is about. Source
+occurrences first create mentions or `CandidateBusinessObject` records; they do
+not directly create canonical entities.
+
+Lexical segments are candidate generators only. The frozen-profile admission
+gate decides which generated terms may enter candidate graph construction; it
+does not turn a token, phrase, mention, or type guess into canonical knowledge.
+
+Candidate object identity is distinct from:
+
+- source occurrence identity;
+- permission to read the source;
+- canonical merge decisions; and
+- user-specific labels or views.
+
+### 2.4 Create candidate assertions
+
+`CandidateAssertion` is the source-neutral semantic umbrella. Candidate
+knowledge uses five universal assertion families:
+
+```text
+property      a value or characteristic of an object
+relation      a relationship between business objects
+state         an object's state during a time or validity interval
+event         a change or occurrence
+coordination  a request, commitment, decision, assignment, blocker, deadline,
+              dependency, escalation, change, exception, constraint, or other
+              core coordination frame
+```
+
+A candidate assertion records:
+
+```text
+assertion kind
+subject business object
+predicate or core coordination frame
+object, value, actor, and counterparty when applicable
+previous and proposed value when applicable
+observed, effective, valid, asserted, and due time when applicable
+reason and context
+source observation ids and evidence spans
+permission scope
+confidence and review state
+extractor run
+ontology revision
+Domain Pack id and content hash
+```
+
+`CandidateAtom`, `CandidateRelation`, `CandidateFrame`, and
+`CandidateMention` remain specialized candidate contracts. They do not replace
+the universal assertion methodology. `CandidateFrame` is the specialized
+coordination representation; `CandidateAssertion` is the cross-domain semantic
+envelope.
+
+### 2.5 Govern before canonicalization
+
+Extractor, rule, import, and LLM output is always candidate knowledge.
+Candidates may be accepted, rejected, corrected, split, merged, deferred,
+marked ambiguous, or superseded.
+
+No extractor, LLM, Domain Pack, source adapter, or candidate store may directly
+mutate:
+
+```text
+canonical graph state
+canonical type state
+user graph revisions
+wiki revisions
+external business systems
+```
+
+### 2.6 Commit governed knowledge
+
+Canonical knowledge is reusable, reviewed knowledge within a defined scope.
+Canonical commits must pin candidate ids, observations, evidence, reviewer or
+policy decision, target scope, ontology revision, prior graph revision, and
+governance policies.
+
+Canonical does not mean universally true. Knowledge canonical in one owner,
+workspace, project, customer, or grant scope may remain candidate-only or
+invisible in another.
+
+### 2.7 Assemble effective views
+
+User and task views may select granularity, include or exclude authorized graph
+fragments, apply task labels, add private notes, and redact inaccessible
+evidence. The result is a versioned effective view, not a silent mutation of
+canonical state.
+
+Entity matching, data access, canonical merge, user-view assembly, and raw
+asset access are separate decisions.
+
+### 2.8 Project or propose action
+
+Governed graph views may produce cited answers, reports, review queues,
+dashboards, wiki drafts, or action proposals. Projection remains derived
+output. External writes remain proposal-only unless an explicitly authorized
+review workflow approves execution.
+
+## 3. Domain Portability and Invariants
+
+FormOwl uses one stable methodology plus scoped Domain Packs:
+
+```text
+evidence/source model
++ Observation model
++ CandidateBusinessObject
++ five universal assertion families
++ normalized TemporalContext, epistemic status, and assertion lifecycle status
++ stable coordination-frame core
++ closed core supertypes
++ scoped, content-hash-pinned Domain Packs
++ logical source items and context boundaries
++ permission-, context-, version-, and time-filtered candidate/effective views
++ governed projection definitions
+```
+
+A Domain Pack may define domain object labels, aliases, mappings to core
+supertypes, assertion mappings, coordination-frame extensions, normalization
+rules, temporal-role mappings, epistemic-status mappings, lifecycle-status
+mappings, extraction hints, and projection vocabulary. Domain-specific labels
+such as promised date, posting date, reporting period, contract effective date,
+media timecode, or source recorded time must map into the shared temporal
+vocabulary rather than creating department-specific time semantics.
+
+A Domain Pack must be a durable, provenance-linked definition:
+
+- it has a governed pack id and ontology revision;
+- its normalized content has a stable SHA-256 hash;
+- a `domain_pack_definition` Observation binds the definition payload to that
+  hash;
+- candidate business-object ids and metadata pin the pack, ontology revision,
+  resolved supertype, and content hash; and
+- candidate assertions pin the same pack id and content hash.
+
+A Domain Pack must not replace the evidence-to-knowledge pipeline, bypass
+candidate review, grant access, create an independent canonical graph, merge
+scopes, or write an external system.
+
+The closed, domain-neutral core supertypes are:
+
+```text
+Person
+Organization
+Project
+Artifact
+Document
+Event
+Concept
+Location
+Transaction
+Account
+Agreement
+PhysicalObject
+Measurement
+```
+
+The type system has three tiers:
+
+```text
+Core type       closed and stable; the only hard compatibility gate
+Extension type  scoped candidate vocabulary; a soft signal only
+Promoted type   governed within a scope and mapped to a core type
+```
+
+Adding procurement, finance, HR, legal, engineering, operations, or another
+domain should not require a new ingestion, observation, candidate-governance,
+canonical lifecycle, permission, or provenance pipeline. It should normally
+require source adapters, the smallest necessary Domain Pack, evaluation
+fixtures, and projections.
+
+The invariant safety rules are:
+
+1. raw resources and evidence snapshots remain source authority;
+2. observations and all candidate objects remain derived, review-required
+   records;
+3. no cross-permission candidate relation or assertion is created;
+4. no raw filesystem, object-store, database, credential, SQL, or worker
+   locator enters candidate or public payloads;
+5. stable ids bind the semantic and governance lineage that gives them meaning;
+6. candidate persistence is all-or-nothing for one extraction batch;
+7. candidate generation never implies canonical write;
+8. canonical merge never implies access; and
+9. projection never overwrites reviewed knowledge without a proposal;
+10. world-valid time and system-known time remain separate; and
+11. retrieval must exclude assertions that were not yet known at the requested
+    knowledge time before lexical or vector ranking; and
+12. every default text-bearing path uses the normative lexical candidate stack
+    and binds its policy, model or vocabulary, and corpus hashes; regex-only
+    behavior must be explicit and must never be a silent default; and
+13. evidence cardinality and IDF use logical source items, so parser chunking
+    cannot create extra evidence or ranking weight; and
+14. ontology guidance is contract-bound, additive, and capped; it cannot bypass
+    lexical support, permission, context, time, or candidate-only boundaries;
+    and
+15. candidate evidence retrieval requires a trusted access binding that pins
+    eligible observations, stable source-identity policies, source versions,
+    and permission scopes before query vocabulary, support counts, or IDF are
+    inspected. Missing bindings fail closed, and request bindings may narrow
+    but never broaden an index-level binding.
 
 ## 4. Current Implementation and Target Scope
 
-The current implementation proves this workflow:
+The tested baseline remains:
 
-```text id="lmvw9o"
-ChatGPT
-  -> Project MCP retrieves project/work item context
-  -> ChatGPT passes context to Wiki MCP
-  -> Wiki MCP generates a markdown/wiki draft
-  -> Generated draft includes source references and evidence snapshots
-```
-
-Currently implemented or scaffolded:
-
-```text id="ny0cw0"
+```text
 Project MCP
-Wiki MCP
-formowl-contract
-OpenProject adapter for Project MCP
-Markdown draft generation for Wiki MCP
-SourceRef schema
-EvidenceSnapshot schema
-Citation schema
-PermissionScope schema
-ContextPackage schema
-MCP tool-call logging
-Natural-language-first wiki review workflow
-Wiki revision abstraction
-Container-first development and deployment baseline
-Python-only Phase 0 implementation policy
+  -> ContextPackage and EvidenceSnapshot
+  -> Wiki MCP
+  -> sourced markdown draft
 ```
 
-Target architecture capabilities to add:
+The resource and graph layers also contain candidate-only contracts and stores.
+The current generalized minimum core supports:
 
 ```text
-Multimodal asset ingestion
-Asset and object stores
-Observation extraction for audio, video, image, document, text, project, wiki, and conversation resources
-Semantic metadata extraction from observations
-CandidateAtom and CandidateRelation stores
-Candidate graph preview and review
-AtomGranularityPolicy enforcement
-Entity and relation resolution
-Canonical graph commit workflow
-CanonicalAtom, CanonicalEntity, and CanonicalRelation contract objects
-AtomLifecycleEvent, EntityResolutionEvent, and RelationResolutionEvent records
-UserGraphAssemblyPolicy and UserKnowledgeGraphRevision
-WikiProjectionSpec-driven page generation
-Graph-aware WikiRevision lineage
-IngestionJob and ExtractorRun tracking
-Vector search and optional graph storage
+Observation
+  -> default lexical candidates for text-bearing observations
+       -> Jieba + corpus-bound SentencePiece
+       -> frozen-profile candidate admission
+  -> CandidateBusinessObject
+  -> CandidateAssertion
+       -> TemporalContext
+       -> epistemic status
+       -> lifecycle status
+  -> CandidateTemporalView(as_of_world_time, known_as_of)
+  -> CandidateEvidenceIndex
+       -> trusted access binding
+       -> logical source grouping by identity-policy + source-item id
+       -> context boundary filtering
+       -> query-derived evidence cardinality
+       -> multi-observation anchor coverage
+       -> bounded ontology reranking
+  -> candidate-only file stores
 ```
 
-Capabilities that should not be assumed to exist until implemented:
+Procurement email-shaped observations and finance ERP/application observations
+use the same deterministic candidate-knowledge extractor. The extractor has no
+source-family or department branch. Their Domain Packs map local vocabulary to
+the same closed core, the same five assertion families, the same temporal
+vocabulary, and separate epistemic and lifecycle vocabularies.
 
-```text id="lr46ln"
-Full Jira adapter
-Automatic wiki publishing
-Automatic project write-back
-Company-wide ontology
-Full permission engine
-User-facing Git workflow requirements
-Host-machine-specific development requirements
-```
+The tested lexical evaluator and MAY candidate-KG evaluator use the same
+normative segmentation and frozen-profile admission method. Their policy
+binding includes the segmentation version, admission-policy hash,
+SentencePiece model hash, and training-corpus hash. Raw Jieba plus
+SentencePiece without admission and regex-only retrieval remain explicit
+ablation arms, not defaults.
 
-This section is an implementation status boundary, not a product boundary. The product architecture is the full resource extraction, graph assembly, user graph, and wiki projection pipeline.
+The current minimum core:
 
-Current implementation alignment notes:
+- persists Domain Pack definitions, candidate business objects, and candidate
+  assertions as one atomic batch;
+- rejects missing or mismatched Domain Pack provenance;
+- rejects unsafe locators, SQL, empty assertion semantics, non-core
+  coordination predicates, duplicate candidate ids, and cross-permission
+  references;
+- validates normalized temporal field names and simple interval ordering;
+- supports candidate-only world-time, knowledge-time, and epistemic-status
+  filtering before ranking;
+- counts logical source items rather than parser chunks and allows observations
+  from one item to jointly cover query anchors;
+- requires every retrievable evidence record to carry a stable
+  source-identity-policy id, source-version id, and permission-scope id, and
+  refuses retrieval without a trusted access binding over those fields;
+- isolates finance periods, quality lots, documents, decks, threads, and other
+  authorized contexts through one context-boundary filter;
+- derives one, multiple, or explicit evidence counts from the query rather
+  than from a department or file-format rule;
+- binds ontology revision, supported signal vocabulary, and the complete
+  ontology contract before applying a capped additive rerank;
+- binds `TemporalContext.captured_at` to the latest source Observation capture
+  time and includes it in the stable candidate assertion identity;
+- also requires the candidate assertion's pipeline-owned `created_at` to be
+  present and no later than `known_as_of`; source capture alone does not make a
+  not-yet-materialized candidate visible;
+- requires explicit offsets on timestamps used for ordering; date-only values
+  remain calendar-day values;
+- preserves pack, ontology, extractor, permission, observation, and evidence
+  lineage; and
+- sets `canonical_write_allowed` to false.
 
-```text
-The Python Project MCP and Wiki MCP modules are runnable prototypes that use a JSON-line request/response protocol. They are MCP-shaped service boundaries, but they are not yet a standards-compliant MCP JSON-RPC transport.
+This is not a production procurement or finance integration. It does not claim
+live ERP access, generalized source parsing, semantic fusion, canonical graph
+commit, canonical type write, user-graph mutation, wiki mutation, or external
+system write.
 
-The earlier TypeScript workspace has been removed by architecture decision. The canonical runnable contract model is the Python `formowl_contract` package.
+The full target still includes reviewed canonical graph commits, lifecycle,
+entity and relation resolution, scoped ontology governance, effective user
+views, retrieval gateways, graph-derived projections, and governed external
+action proposals.
 
-The earlier Rust core and Python binding scaffold has been removed by architecture decision. Current hashing and diff helpers are pure Python utilities under `formowl_core`.
-
-The Python packages now use a single `python/` package root so package discovery, test paths, and local PYTHONPATH setup do not need per-package roots.
-```
+Development and verification are container-first. Python remains the primary
+implementation and debugging boundary. Shared contracts, not direct component
+dependencies, connect MCP services, extraction, graph governance, and
+projection layers.
 
 ---
 
@@ -319,6 +583,8 @@ CandidateRelation
 CandidateMention
 CandidateFrame
 CandidateBusinessObject
+CandidateAssertion
+DomainPackDefinition
 FusionCandidate
 EntityResolutionProposal
 EvidenceLink
@@ -383,6 +649,23 @@ extractor metadata capture
 location metadata capture such as timestamp, page, bounding box, frame, speaker, or section
 re-extraction when extractor versions or extraction policies change
 ```
+
+For text-bearing observations, resource extraction and candidate generation
+share one required lexical policy:
+
+```text
+normalized text
+  -> protected ASCII identifiers
+  -> Jieba
+  -> corpus-bound SentencePiece
+  -> frozen-profile candidate admission
+```
+
+Source adapters may produce different locators and text-quality warnings, but
+they may not silently choose a different default tokenizer. Missing external
+segmenters must fail closed or produce a clearly marked degraded fallback.
+Policy, model or vocabulary, and corpus hashes are provenance, not optional
+debug metadata.
 
 Resource extraction does not own:
 
@@ -1396,7 +1679,7 @@ Layer responsibilities:
 Raw resource -> source-of-truth records from files, external systems, captured sessions, media, documents, or wiki snapshots.
 EvidenceSnapshot / Citation / Asset -> traceable captured evidence, source locators, and raw-resource metadata.
 Observation / SemanticMetadata -> normalized extracted facts, spans, scenes, blocks, transcripts, OCR, captions, and semantic hints.
-Candidate graph -> proposed atoms and relations that have not yet passed governance.
+Candidate graph -> proposed business objects and assertions that have not yet passed governance.
 Governed canonical graph -> source-grounded reusable atoms, entities, relations, and lifecycle mappings.
 User knowledge graph -> a user's versioned assembly, filtering, grouping, labeling, weighting, and permission-aware view of canonical and user-authored knowledge.
 WikiProjection / WikiRevision -> a governed output artifact such as a markdown page or published wiki page generated from a graph view and source evidence.
@@ -1429,6 +1712,12 @@ created_at
 
 Observation and semantic metadata are not canonical truth. They are the substrate for candidate graph generation.
 
+Text-bearing observations first pass through the normative lexical candidate
+stack defined in Section 2.2. This rule is modality-neutral: text extracted
+from OCR, documents, tables, slides, mail, transcripts, conversations, or
+applications is segmented and admitted by the same policy before candidate
+graph ranking. Regex-only processing is not the general path.
+
 ## 9.1.2 Candidate Graph
 
 External extractors, LLM tools, rule-based processors, and user imports may produce graph-shaped output, but that output must first enter a candidate graph.
@@ -1436,26 +1725,54 @@ External extractors, LLM tools, rule-based processors, and user imports may prod
 Candidate graph objects should include:
 
 ```text
+CandidateBusinessObject
+CandidateAssertion
 CandidateAtom
 CandidateRelation
-CandidateEntityMention
 CandidateMention
 CandidateFrame
-CandidateBusinessObject
+DomainPackDefinition
 ExternalGraphImport
 ```
 
-Candidate atoms and relations represent possible knowledge units and links. They must record source observations, extractor metadata, confidence, proposed atom type, proposed granularity, and review state.
+The general source-neutral path is:
 
-Coordination-frame candidates represent enterprise coordination obligations
-such as requests, commitments, decisions, blockers, deadlines, dependencies,
-status changes, and open questions. A `CandidateFrame` should carry a stable
-frame type, named slots, evidence spans, domain hints, access boundary,
-granularity level, ontology revision id, source mention ids, linked candidate
-business object ids, confidence, and review state. It is still a candidate
-proposal and must not bypass canonical graph governance.
+```text
+Observation
+  -> CandidateBusinessObject
+  -> CandidateAssertion
+```
+
+`CandidateAssertion` distinguishes five assertion kinds: `property`,
+`relation`, `state`, `event`, and `coordination`. It carries business-object
+references, values or state change, temporal and contextual semantics, evidence
+spans, permission scope, extractor run, ontology revision, Domain Pack id and
+content hash, confidence, and review state.
+
+`CandidateAtom`, `CandidateRelation`, `CandidateMention`, and
+`CandidateFrame` remain valid specialized candidate representations.
+`CandidateFrame` represents the coordination family through stable core frame
+types and named slots; it is not the general semantic umbrella.
+
+Domain Packs map scoped object and assertion vocabulary onto the closed core.
+They are durable, content-hash-pinned definitions linked to
+`domain_pack_definition` observations. They are configuration and candidate
+lineage, not canonical type writes.
+
+All records from one candidate-knowledge extraction are persisted atomically.
+Any contract, permission, lineage, path-safety, duplicate-id, or write failure
+must leave no partial Domain Pack, business-object, or assertion records.
 
 Candidate graph state may be previewed, rejected, split, merged, revised, or committed. It must not be silently promoted to canonical graph state.
+
+Candidate graph construction must consume admitted lexical or mention
+candidates, not every raw Jieba or SentencePiece piece. The frozen admission
+profile is the default because the completed no-training ablation improved
+retrieval while preserving the no-match and permission guards in that EXM
+benchmark. This is not a universal no-match guarantee; the original MAY
+benchmark still requires separate rejection calibration. A different admission
+policy is permitted only when it is versioned, hash-bound, and evaluated as an
+explicit replacement or ablation.
 
 ## 9.2 Canonical Atom Model
 
@@ -1776,6 +2093,11 @@ Document
 Event
 Concept
 Location
+Transaction
+Account
+Agreement
+PhysicalObject
+Measurement
 ```
 
 Relation supertypes should reuse the reified relation model above. For example, a decision is modeled as a `Decision` node with source, lifecycle, confidence, and review metadata rather than only as a `DECIDED` edge. Atom types reuse the canonical atom type seed in section 9.2.
@@ -1863,24 +2185,23 @@ TypeAlignmentCandidate decisions provide a record-linkage training signal.
 Outputs of trained type classifiers remain candidates and never mutate canonical type state directly.
 ```
 
-## 9.5.2 Coordination-Frame Ontology
+## 9.5.2 Universal Assertion Core and Scoped Domain Packs
 
-The scoped type ontology is not enough by itself for enterprise coordination.
-FormOwl also needs a stable coordination-frame core that can represent what
-people request, commit, decide, block, depend on, escalate, and follow up
-across email, meetings, documents, project issues, wiki pages, and chat
-transcripts.
-
-Ontology v2 is layered:
+The scoped type ontology is combined with five universal assertion families:
 
 ```text
-Evidence/source ontology
-+ stable coordination-frame core
-+ scoped domain object packs
-+ projection/view ontology
+property
+relation
+state
+event
+coordination
 ```
 
-The coordination core should remain small and stable. Initial frame types are:
+These families are methodological primitives, not department schemas.
+Procurement, finance, project, operations, legal, HR, research, and future
+domains express their local semantics through the same families.
+
+The coordination family uses a small stable frame core:
 
 ```text
 Request
@@ -1901,42 +2222,51 @@ Exception
 Constraint
 ```
 
-Domain packs may add business objects and domain process frames, but they must
-extend the core rather than bypass it:
+Scoped Domain Packs may add local business-object names, aliases, assertion
+names, and process-frame extensions, but every mapping must resolve to a closed
+core supertype, universal assertion kind, or core coordination frame:
 
 ```text
-CustomerRequest -> Request
-InventoryShortage -> Blocker
-InvoiceApproval -> Decision
-FirmwareCapabilityQuestion -> OpenQuestion
-ShipmentDelay -> Issue or Blocker
-CustomerCommitment -> Commitment
+PurchaseOrderLine -> Transaction
+Invoice -> Transaction
+CostCenter -> Account
+CustomerRequest -> coordination / Request
+SupplierCommitment -> coordination / Commitment
+InvoiceAmount -> property / invoice_amount
+PaymentApproval -> event / payment_approval
 ```
 
-The required candidate path is:
+The general candidate path is:
 
 ```text
 Observation
-  -> CandidateMention
-  -> CandidateFrame
   -> CandidateBusinessObject
-  -> CandidateRelation
-  -> reviewed CanonicalFrame / CanonicalObject / CanonicalRelation
-  -> UserKnowledgeGraphRevision
-  -> WikiProjection
+  -> CandidateAssertion
+  -> governance and review
+  -> reviewed canonical objects, relations, states, events, or frames
+  -> UserKnowledgeGraphRevision / EffectiveGraphView
+  -> projection or reviewed action proposal
 ```
 
-`CandidateFrame` is the central abstraction. It is where evidence spans,
-permission scope, domain hints, obligation granularity, and named coordination
-slots meet. Email must not become a special ontology; it is only one source
-substrate that can emit the same coordination frames as meetings, documents,
-project issues, and chat transcripts.
+`CandidateAssertion` is the central cross-domain semantic abstraction.
+`CandidateFrame` is the specialized coordination representation and may
+continue to support coordination-specific experiments and slots.
 
-The current repository includes a deterministic issue #28 experiment under
-`experiments/kg_ontology_v2_coordination/`. It is a synthetic candidate-layer
-ablation and does not claim production email parsing, raw PST extraction,
-canonical frame commits, canonical type writes, user graph mutation, or wiki
-revision mutation.
+Every Domain Pack has a governed id, ontology revision, source observations,
+and normalized content hash. At least one source observation must carry the
+matching `domain_pack_definition` payload. Candidate business-object ids and
+candidate assertions pin the pack id and content hash so a pack revision cannot
+silently reinterpret an existing candidate id.
+
+Source formats do not define ontology. Email, spreadsheets, ERP rows,
+application events, meetings, documents, project issues, images, and
+transcripts are observation substrates that use the same candidate path.
+
+The current repository retains the deterministic issue #28 coordination
+experiment and adds a generalized procurement/finance candidate-only fixture.
+Neither path claims production parsing, canonical graph commits, canonical
+type writes, user graph mutation, wiki mutation, semantic fusion, or external
+system writes.
 
 ## 9.6 User Knowledge Graphs
 
@@ -2086,38 +2416,227 @@ NetworkX is not the production graph database. PyKEEN, OpenEA, and RDFLib are de
 
 Algorithmic packages may generate `FusionCandidate`, `EntityResolutionProposal`, `TypeAlignmentCandidate`, and `EvidenceLink` records, but they must never mutate the canonical graph or canonical type state directly.
 
-## 9.7.2 KG-First Evidence-Backed Cross-Resource Retrieval
+## 9.7.2 Default Candidate Evidence Retrieval
 
-ChatGPT-facing cross-resource retrieval must query a permission-filtered
-`EffectiveGraphView` before using metadata, full-text, vector, or
-observation-level fallback retrieval. Graph matching must be query-scored; the
-gateway must not present every permission-visible graph node as though it
-matched the question.
+FormOwl retrieval operates on evidence semantics, not file extensions,
+departments, or mail-specific templates. The same planner must accept
+observations from finance periods, quality lots, PDF pages, PPT slides,
+spreadsheet rows, OCR regions, messages, project events, and future modalities.
 
-The governed query sequence is:
+This section is the default authority for every new retrieval evaluator and
+harness. Regex-only retrieval, parser-chunk or Observation cardinality,
+lexical/thread transitive components, and ontology hard-pruning are permitted
+only as explicitly labeled ablation or historical baseline arms. They must not
+define current gold, current pass/fail, or a silent fallback.
+
+Every `CandidateEvidenceIndex` owns a
+`CandidateEvidenceTextPolicyRuntime`. That runtime binds the structured
+`CandidateEvidenceTextPolicyBinding` to the query tokenizer actually used by
+the index. The binding proves Unicode NFKC/script normalization, protected
+ASCII extraction, Jieba, corpus-bound SentencePiece, frozen-profile candidate
+admission, and exact admission-policy, SentencePiece-model, and
+training-corpus SHA-256 hashes. It also pins the runtime id and tokenizer
+implementation hash; the runtime rejects a different callable or runtime id.
+Default callers provide query text only, not raw query tokens or a
+caller-supplied policy hash. A free-form hash, placeholder hash, missing
+binding, regex-only declaration, or caller token override fails closed.
+Explicit experiments use `retrieve_ablation`; an ablation may extend the
+runtime-produced tokens but cannot silently replace or remove them.
+Raw query text may determine control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, supported content
+terms, and required lexical support must come from runtime-produced tokens or
+a named `retrieve_ablation` extension. Regex-parsed raw terms must never be
+reintroduced as retrieval vocabulary.
+
+The input contract is:
 
 ```text
 query text
--> query-scored EffectiveGraphView hits
--> source_observation_ids
--> permission-checked Observation resolution
--> evidence coverage decision
--> fallback retrieval only for graph miss, low confidence, or incomplete evidence
--> reviewable Candidate KG proposal seeds from fallback evidence
+index-owned CandidateEvidenceTextPolicyRuntime and structured binding
+optional positive requested-source-item count from a governed query parser
+trusted CandidateEvidenceAccessBinding
+  eligible observation ids
+  eligible stable source-identity policy ids
+  eligible source-version ids
+  eligible permission-scope ids
+accessible context ids
+explicitly selected query context ids
+explicit cross-context comparison authorization when more than one query context is selected
+explicit as_of_world_time and known_as_of for evaluation and harness runs
+optional epistemic and lifecycle filters
+independent logical-source and observation evidence budgets
+query timezone when a chronology boundary is date-only
+optional index-owned ontology query-signal resolver and ontology bindings
+explicit retrieve_ablation identifier and transforms for non-default arms only
 ```
 
-Each public graph hit must identify the graph object, object type, review state,
-confidence, permission scope, source observation ids, source asset ids, and
-resolved `formowl://observation/{observation_id}` evidence locators. Answering
-from a graph label alone is not sufficient for the normal high-trust path; the
-supporting observations must resolve before the gateway treats the graph path
-as complete.
+The canonical query sequence is:
 
-Fallback proposal seeds are candidate-layer handoffs only. They must require
-review, must not create `CandidateAtom` or `CandidateRelation` records as a
-hidden side effect, and must never write canonical graph state. Raw asset mode
-continues to require an explicit grant and may expose only governed
-`formowl://asset/{asset_id}` references with no raw content.
+```text
+1. Require a trusted access binding. If both the index and request carry one,
+   intersect them; a request may never broaden the index boundary.
+2. Build the access-eligible observation universe before reading query
+   vocabulary:
+     stable source-identity policy
+     permission scope
+     source version
+     observation id
+3. Build the remaining admissible observation universe:
+     accessible context boundaries
+     explicitly selected query context boundaries
+     known_as_of
+     as_of_world_time
+     epistemic status
+     lifecycle status
+   If this universe is empty, reject before invoking a query tokenizer,
+   ontology resolver, support counter, IDF calculation, or ranker.
+4. Invoke the index-owned runtime to normalize and tokenize the query with the
+   same structured policy that produced the indexed evidence. Default
+   `retrieve` has no raw-token or free-form query-policy-hash parameter.
+5. Derive a universal evidence plan from the question and only the admissible
+   vocabulary:
+     general lookup
+     actor/topic lookup
+     chronology
+     conflict or comparison
+     approval/decision
+     multi-source aggregation
+6. Derive evidence cardinality from the question:
+     governed structured count when supplied
+     explicit source-unit number or classifier when present
+     multi-source intent when stated
+     otherwise one authoritative logical source item
+   Numbers embedded in identifiers and quantities such as durations,
+   percentages, or money are not evidence counts. If an explicit count exceeds
+   the source-item budget, reject instead of silently lowering the count.
+   Structured count input lets future language or modality-aware query parsers
+   use the same retrieval core without adding a department-specific branch.
+7. Choose supported anchors. Actor matching is enabled only for actor intent;
+   domain words must not become accidental actor filters.
+8. Compute frequency and ranking statistics over logical source items, never
+   over observation chunks.
+9. Match anchors conjunctively at the logical-source level. Several
+   observations from the same source item may jointly cover the anchors.
+10. Rank admissible logical source items and select the requested number.
+11. Return the smallest observation set that covers the selected source items
+   and anchors within the independent source-item and observation budgets.
+12. Resolve governed observation locators and citations. Reject rather than
+    return partial evidence when required anchors, chronology, permission, or
+    cardinality cannot be satisfied.
+13. Run experimental token, eligibility, or ontology transforms only through
+    the explicitly named `retrieve_ablation` path after access and
+    context/time admissibility. Token transforms may add signals but cannot
+    remove the default runtime tokens.
+```
+
+These rules are mandatory:
+
+- A logical source identity is the pair
+  `(source_identity_policy_id, source_item_id)`. The same local item string
+  under two adapters or identity policies is not silently treated as one
+  source.
+- Every retrievable evidence record carries `source_identity_policy_id`,
+  `source_version_id`, and `permission_scope_id`. A trusted
+  `CandidateEvidenceAccessBinding` authorizes specific values on all four
+  access axes, including observation id. Absence of that binding rejects the
+  request. Per-call eligibility filters are additional narrowing only.
+- `CandidateEvidenceAccessBinding` is an exact immutable contract, not a
+  duck-typed mapping. Its four eligibility collections are `frozenset` values
+  containing exact nonblank strings. Index construction rejects malformed
+  bindings; request-time malformed bindings reject without entering retrieval.
+- Cross-context comparison authorization is an actual boolean. Strings,
+  integers, and other truthy values fail closed and cannot authorize a
+  multi-context query.
+- Permission, source-identity policy, source version, context, time,
+  epistemic status, and lifecycle filtering happen before support counts, IDF,
+  query planning, and ranking.
+  Inaccessible or future records must not influence a plan or reveal their
+  vocabulary through ranking statistics.
+- Evidence cardinality counts distinct logical source items. An identifier
+  containing digits is not a request for that many records.
+- Observation chunking is retrieval-invariant. Splitting one source page,
+  slide, row, message, or event into many observations must not increase its
+  IDF weight or make it appear to be multiple evidence items.
+- Anchors may aggregate across observations only inside one logical source
+  item. A shared term or context must not create lexical transitive closure
+  across unrelated source items.
+- Chronology uses normalized, offset-aware source timestamps. A source item
+  without a usable time cannot become the earliest or latest result.
+  `earliest`, `latest`, full-range, `before`, and `after` are distinct modes.
+  A requested three-item range must return three ordered source items rather
+  than collapsing to two endpoints. Date-only boundaries require an explicit
+  query timezone and are converted to timezone-aware day boundaries before
+  comparing instants; missing or invalid timezone context fails closed.
+- Access scope and query scope are different. When several contexts are
+  accessible, the caller must explicitly choose the query context. Comparing
+  more than one selected context also requires explicit cross-context
+  authorization. Merely having access to several periods, lots, decks,
+  documents, or threads must not create a semantic union.
+- A context boundary is not evidence by itself. Sharing a thread, deck,
+  document, period, lot, or project does not prove that two observations answer
+  the same question.
+- No-match, permission-denied, and insufficient-evidence results are valid
+  outcomes. The planner must not fill the budget with merely related evidence.
+
+Ontology guidance is a bounded reranker, not a replacement retrieval path:
+
+```text
+ontology revision
++ supported signal vocabulary hash
++ complete TypeDefinition/TypeMapping contract hash
++ candidate evidence index binding
+```
+
+An ontology-bound query fails closed when these bindings do not match the
+index. Only signals supported by the bound type definitions and mappings may
+contribute. Actor, time, measurement, or relation evidence facets are retrieval
+facets; they must not be reinterpreted as canonical `Person`, `Event`, or
+`Measurement` entities merely because the query asks about them.
+
+Evidence facets are derived from typed extraction metadata rather than source
+text shape alone:
+
+```text
+observation_type
++ modality
++ semantic field/value roles
+-> document, structured-record, audio/visual, image, event, artifact,
+   actor-attributed, temporal, concept, or measurement-bearing evidence
+```
+
+PDF/PPT observations, ERP/table rows, audio transcripts, images, and
+application events therefore do not all become `Document`. Digits in a lot
+number, purchase-order id, invoice id, or other identifier do not imply
+measurement. Measurement evidence requires an explicit semantic role such as
+amount, quantity, rate, duration, percentage, score, or unit value.
+
+Ontology overlap may add a capped score to lexically supported source items.
+It must not delete the lexical candidate set, bypass required anchors, join
+contexts, change permission or temporal admissibility, or create a canonical
+type/graph write. This prevents a shallow or incomplete ontology from making
+retrieval worse through hard pruning.
+
+ChatGPT-facing cross-resource retrieval first applies this method to a
+permission-filtered `EffectiveGraphView`. Graph hits then resolve
+`source_observation_ids` through governed
+`formowl://observation/{observation_id}` locators. A graph label alone is not
+high-trust evidence.
+
+Fallback metadata, full-text, vector, or observation retrieval is allowed only
+for graph miss, low confidence, or incomplete evidence. Fallback output may
+seed review-required Candidate KG proposals, but must not write candidate,
+canonical, user-graph, wiki, or external-system state as a hidden side effect.
+Raw asset access remains a separate explicitly granted operation.
+
+The current POC implements candidate-only logical-source grouping,
+query-derived cardinality, multi-observation coverage, context/time/status
+admissibility, chronology modes with timezone-aware date boundaries,
+logical-source IDF, separate source/observation budgets, chunk-invariant
+logical-source evaluation, separate observation-citation metrics, and bounded
+source-neutral ontology reranking. It does not claim full interval algebra,
+temporal entity resolution, causal inference, canonical bitemporal storage,
+production multilingual parsing, or production quality across every domain
+and modality.
 
 ## 9.8 Storage and Tool Boundaries
 
@@ -2918,7 +3437,27 @@ Physical storage can be distributed across registered storage backends without f
 Raw resources can be registered as assets with permission scope and source lineage.
 Resource extractors can create observations with location metadata and extractor runs.
 Mail and PST ingestion can preserve archive, message, attachment, and occurrence identity.
-Semantic metadata can produce candidate atoms and relations without committing them as truth.
+Observations can produce CandidateBusinessObject and CandidateAssertion records through one source-neutral pipeline.
+Candidate assertions distinguish property, relation, state, event, and coordination semantics.
+Domain Packs are provenance-linked, content-hash-pinned, and map scoped vocabulary onto the closed core.
+Candidate business-object and assertion ids pin Domain Pack and ontology lineage.
+One candidate-knowledge extraction persists its Domain Pack, business objects, and assertions atomically.
+Candidate extraction rejects cross-permission references, unsafe internal references, empty semantics, and non-core coordination mappings.
+Every retrievable observation maps to a stable logical source item under an explicit source-identity policy and carries a source-version id, permission-scope id, and zero or more explicit context boundaries.
+Candidate evidence retrieval requires a trusted access binding over eligible observation ids, source-identity policies, source versions, and permission scopes; missing bindings fail closed and request bindings cannot broaden an index binding.
+Evidence cardinality and IDF count logical source items rather than parser chunks.
+Multiple observations from one logical source item may jointly cover anchors without creating transitive links to other items.
+Permission, source-identity-policy, source-version, context, time, epistemic, and lifecycle admissibility precede query planning and ranking.
+Accessible contexts and explicitly selected query contexts remain separate; multi-context comparison requires explicit authorization.
+Chronology distinguishes earliest/latest/range/before/after, returns the requested range cardinality, excludes undated evidence, and requires a query timezone for date-only boundaries.
+Logical-source and observation budgets are independent.
+Primary retrieval evaluation gold is recorded as stable logical source item ids,
+not reconstructed from the current parser chunk ids. Exact observation
+citation recall, precision, and stale/unmapped citation diagnostics are
+reported separately and cannot change the primary pass/fail result.
+Evidence ontology facets derive from observation type, modality, and semantic roles; numeric identifiers do not imply measurement.
+Ontology-guided retrieval binds the ontology revision, signal vocabulary, and complete type/mapping contract.
+Ontology guidance is a capped additive rerank and cannot remove lexically supported candidates or bypass candidate-only boundaries.
 Candidate graph previews can be reviewed, split, merged, rejected, or committed.
 Entity and relation resolution events are recorded for canonical graph changes.
 Canonical atoms, entities, relations, and lifecycle mappings remain resolvable across revisions.
@@ -3018,4 +3557,14 @@ Canonical atoms, entities, and relations are reusable governed graph parts.
 Canonical graph state is scope-aware; canonical within a scope does not mean canonical across all scopes.
 User knowledge graphs are versioned assemblies for roles, tasks, permissions, and preferred granularity.
 Wiki revisions are governed output artifacts generated through projection specs and review flows.
-MCP exposes governed semantic operations, not raw storage, raw
+MCP exposes governed semantic operations, not raw storage, raw database
+queries, parser controls, or worker internals.
+Evidence retrieval counts source records, not parser chunks, and preserves
+permission, context, time, ontology, and citation lineage before projection.
+```
+
+The architectural rule is:
+
+> Preserve source evidence, create candidates, govern shared knowledge, and
+> derive views. Never turn extraction, retrieval, or ontology scoring into an
+> implicit canonical write.

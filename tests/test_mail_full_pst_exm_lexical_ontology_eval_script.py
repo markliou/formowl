@@ -27,6 +27,42 @@ def _load_eval_module(module_name: str = "mail_full_pst_exm_lexical_ontology_eva
 
 
 class MailFullPstExmLexicalOntologyEvalScriptTests(unittest.TestCase):
+    def test_frozen_profile_admits_source_neutral_ascii_whole_words(self) -> None:
+        module = _load_eval_module()
+        common = {
+            module.POLICY_REGEX: frozenset({"rx:invoice", "rx:variance"}),
+            module.POLICY_LEXICAL: frozenset({"rx:invoice", "rx:variance"}),
+            module.POLICY_DATA_DRIVEN_PROGRAMMATIC: frozenset({"rx:invoice", "rx:variance"}),
+            module.POLICY_FROZEN_PROGRAMMATIC: frozenset({"rx:invoice", "rx:variance"}),
+            module.POLICY_PROGRAMMATIC: frozenset({"rx:invoice", "rx:variance"}),
+        }
+        segments = [
+            module._Segment(
+                segment_id=f"segment_{index}",
+                corpus_id_hash="sha256:" + "1" * 64,
+                observation_id_hash="sha256:" + str(index + 2) * 64,
+                message_key=f"message_{index}",
+                thread_key=None,
+                text="invoice variance",
+                lexemes_by_policy=common,
+                categories=frozenset(),
+                term_occurrences=(),
+            )
+            for index in range(2)
+        ]
+
+        policy = module._compile_programmatic_ontology_policy(
+            segments,
+            scorer_kind=module.PROGRAMMATIC_SCORER_FROZEN_PROFILE,
+        )
+
+        self.assertIn("rx:invoice", policy.accepted_lexemes)
+        self.assertIn("rx:variance", policy.accepted_lexemes)
+        self.assertEqual(
+            policy.neural_model_version,
+            "formowl_exm_frozen_text_profile_v3",
+        )
+
     def test_blocks_without_opt_in_or_parsed_corpus(self) -> None:
         module = _load_eval_module()
         old_env = module.os.environ.pop(module.RUN_OPT_IN_ENV, None)

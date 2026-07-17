@@ -1,12 +1,15 @@
 """Stores and production-facing storage contracts for graph records."""
 
 from .records import (
+    CandidateAssertionStore,
     CandidateAtomStore,
     CandidateBusinessObjectStore,
     CandidateFrameStore,
     CandidateMentionStore,
     CandidateRelationStore,
     CanonicalGraphStore,
+    DomainPackStore,
+    persist_candidate_knowledge_batch,
     SemanticMetadataStore,
 )
 from .postgres import (
@@ -28,6 +31,7 @@ from .postgres import (
 )
 
 __all__ = [
+    "CandidateAssertionStore",
     "CandidateAtomStore",
     "CandidateBusinessObjectStore",
     "CandidateFrameStore",
@@ -35,6 +39,8 @@ __all__ = [
     "CandidateRelationStore",
     "CanonicalGraphStore",
     "CanonicalCommitProposal",
+    "DomainPackStore",
+    "persist_candidate_knowledge_batch",
     "PostgreSQLConnectionConfig",
     "PostgreSQLMigrationRunner",
     "PostgreSQLMetadataRepository",

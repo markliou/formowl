@@ -87,6 +87,30 @@ Near-term KG research implementation priorities:
 6. Evaluation harness for KG fusion quality, policy behavior, and provenance
    preservation.
 
+### Default Candidate Evidence Retrieval
+
+The KG Research Agent must use the source-neutral `CandidateEvidenceIndex`
+method as the starting point for retrieval, hardness, and harness work. It
+counts logical source items rather than parser chunks, resolves access and
+admissibility before query vocabulary, forbids lexical transitive closure
+between sources, and limits ontology to a capped additive rerank. Regex-only,
+chunk-count, component-union, and ontology hard-pruning methods are ablation or
+historical baseline arms only.
+Every index owns a `CandidateEvidenceTextPolicyRuntime` for the
+Unicode-NFKC/protected-ASCII/Jieba/corpus-bound SentencePiece/frozen-profile
+stack and exact SHA-256 bindings. The binding also pins the runtime id and
+tokenizer implementation hash; runtime code mismatch fails closed. Default
+callers pass query text, never raw tokens or free-form hashes; query text only
+is the default input. Access and explicit context/time admissibility finish
+before tokenization. Non-default transforms use `retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
+
 Top-tier review readiness requires more than passing unit tests. The KG
 research track must eventually provide:
 

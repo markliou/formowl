@@ -9,8 +9,14 @@ Target pipeline:
 ```text
 Raw Resources
   -> Resource Extraction
-  -> Observation / Semantic Metadata
-  -> Candidate Graph
+  -> Observation
+  -> Default Lexical / Mention Candidates for text-bearing observations
+       - protected ASCII identifiers
+       - Jieba + corpus-bound SentencePiece
+       - frozen-profile candidate admission
+  -> Candidate Knowledge
+       - CandidateBusinessObject
+       - property / relation / state / event / coordination assertion
   -> Governed Canonical Knowledge Graph
   -> User Knowledge Graph
   -> Wiki Projection / WikiRevision
@@ -34,6 +40,54 @@ FormOwl is container-first. Development, testing, and deployment should run from
 The Phase 0 implementation language is Python. Python is the readable orchestration, debugging, hashing, diffing, validation-glue, and service layer.
 
 Core helper functionality is exposed through the pure-Python `formowl_core` API.
+
+## Default Candidate Evidence Retrieval
+
+The default retrieval method is the source-neutral
+`CandidateEvidenceIndex`. It treats one stable logical source item as one
+piece of evidence, regardless of how many parser chunks or observations were
+created. It resolves trusted access, source identity, source version,
+permission, selected context, time, epistemic state, and lifecycle state
+before query planning or ranking. Anchors may combine only inside one logical
+source item.
+
+The index owns the query tokenizer through
+`CandidateEvidenceTextPolicyRuntime`. Its structured binding proves Unicode
+NFKC/script normalization, protected ASCII extraction, Jieba, corpus-bound
+SentencePiece, frozen-profile admission, and exact admission/model/corpus
+SHA-256 hashes. The binding also pins the runtime id and tokenizer
+implementation hash; runtime code mismatch fails closed. Default callers pass
+query text only; caller-supplied raw tokens, free-form hashes, placeholder
+hashes, or regex-only declarations are rejected. Explicit experimental
+transforms use `retrieve_ablation` and cannot remove the default runtime tokens.
+
+Access, explicitly selected context, `known_as_of`, `as_of_world_time`,
+epistemic state, and lifecycle state are resolved before the runtime tokenizer
+or ontology resolver is invoked. Active hardness and ontology harnesses must
+pass those context/time boundaries explicitly from source lineage rather than
+derive them from gold labels or query content.
+
+Ontology is a contract-bound capped additive rerank. It may change ordering,
+but it may not hard-prune lexically supported evidence, bypass source
+requirements, or create canonical writes. Regex-only retrieval, parser-chunk
+counting, lexical/thread transitive components, and ontology hard-pruning are
+historical baselines or explicit ablation arms only.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
+
+Every new hardness or evaluation harness must use the default harness contract
+from `formowl_graph.candidate_retrieval` and pass:
+
+```sh
+PYTHONPATH=tests:python python -m unittest \
+  test_candidate_evidence_hardness \
+  test_candidate_evidence_harness_onboarding
+```
 
 ## Current Implementation
 
@@ -234,36 +288,72 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   general parser readiness, actual ChatGPT upload/file transfer, production
   iframe readiness, live PostgreSQL readiness, production worker leasing, raw
   mail access, KG writes, wiki projection, or production readiness.
-- The current #21 non-BERT KG fusion rescore adds
-  `scripts/mail_full_pst_domain_hard_kg_fusion_eval.py`. It reuses the
-  preserved domain-hard full-PST work directory and private manifest without
-  reparsing the PST, builds deterministic candidate-only mail components from
-  full-PST body observations, and scores the same 100 hard-domain cases. This
-  path uses thread links and domain/conflict term overlap only; it does not yet
-  use the formal scoped ontology contracts, core supertype lattice, type
-  alignment candidates, ontology revision pins, BERT, SentenceTransformer,
-  torch, transformers, canonical KG writes, or wiki projection. The first
-  rescore improved the hard baseline from 20/100 to 30/100, with positives at
-  20/80, no-match probes still 0/10, and permission-denied probes still
-  10/10. This is a candidate-only research baseline, not business answer
-  generation or production readiness.
-- The current #21 ontology-guided ablation adds
-  `scripts/mail_full_pst_domain_hard_ontology_ablation_eval.py`. It compares
-  the same 100 hard-domain case hashes across three arms: baseline retrieval
-  (20/100), non-BERT candidate KG (30/100), and ontology-guided non-BERT
-  candidate KG (29/100). This arm uses FormOwl `TypeDefinition` and
-  `TypeMapping` contracts, a hash-bound ontology revision, and domain-lens to
-  closed-core-supertype mappings as candidate scoring/gating signals only. It
-  still does not write canonical graph/type state, user graphs, grants, raw
-  access, or wiki projections. The result is negative for quality: ontology
-  guidance as currently implemented did not beat the simpler candidate KG arm.
-- The next #21 ontology experiment is pre-registered in
-  `docs/mail-ontology-native-factorial-design.md`. It treats the negative
-  ablation above as KG-first evidence only, then defines an ontology-native
-  324-arm grid plus 8 controls over typed mail frames, relations, query
-  encoding, scoring/gating, and candidate-pool size. This document is a design
-  checkpoint, not an experiment result.
+- The active candidate-only evidence retrieval method is implemented by
+  `CandidateEvidenceIndex` and used by
+  `scripts/mail_full_pst_domain_hard_kg_fusion_eval.py`. It is source-neutral:
+  every record binds a stable source-identity policy, source version, and
+  permission scope; retrieval requires a trusted access binding and fails
+  closed without one; request bindings cannot broaden an index binding;
+  missing or empty effective access is rejected before query tokens or
+  ontology signals are materialized; and
+  permission/identity/version/context/time/status admissibility precedes
+  planning. Evidence cardinality and IDF count logical source items rather
+  than parser chunks, observations may jointly cover anchors only inside one
+  source item, accessible and selected query contexts remain separate,
+  chronology uses explicit modes and timezone-aware date boundaries, source
+  and observation budgets are independent, and no shared term or context
+  creates transitive graph closure.
+- The final implementation-bound July 17, 2026 MAY run scored 93/100: 73/80 answerable, 10/10
+  no-match, and 10/10 permission, with largest component size 6 and public
+  validator `blockers=[]`. Logical-source recall was 95.00%; exact Observation
+  citation recall was 94.37% and precision was 93.78%. Primary pass/fail uses
+  stable logical-source gold rather than reconstructing gold from current
+  Observation chunks, so parser re-chunking does not redefine retrieval
+  success. Stale Observation ids affect citation diagnostics only. The
+  previous 20/100, 30/100, and 29/100 results are historical
+  failure evidence for baseline retrieval, component overreach, and ontology
+  hard pruning; they are not the current defaults.
+- `scripts/mail_full_pst_domain_hard_ontology_ablation_eval.py` now builds a
+  contract-bound ontology evidence index. Ontology revision, signal vocabulary,
+  and complete `TypeDefinition`/`TypeMapping` content are hash-bound.
+  Ontology overlap is a capped additive rerank and cannot delete lexically
+  supported candidates. Evidence facets come from observation type, modality,
+  and semantic roles: document/slide, structured row, audio/video, image, and
+  event evidence remain distinct, and a numeric identifier is not a
+  measurement. The ontology arm also scored 93/100 and lost zero Candidate KG
+  passes.
+- Focused anti-overfitting tests cover Chinese actor/chronology/multi-record
+  questions and explicit classifiers; generic explicit counts for inspection
+  reports, lots, and periodic reports; exclusion of compact, labeled, English,
+  and Chinese business identifiers plus English and Chinese duration phrases;
+  whitespace-only access-axis rejection; denied-access vocabulary
+  non-materialization; finance periods and quality lots; PDF documents and PPT decks;
+  table/OCR-style observation shapes; logical-source chunk invariance; explicit
+  source and observation budgets; cross-context authorization; timezone-aware
+  chronology; source-neutral ontology facets; and
+  permission/time/status/ontology binding failures. The factorial permission
+  arm must obtain `no_accessible_evidence` from the retriever and cannot pass
+  from the manifest label alone. These tests do not claim
+  production quality on real finance, quality, PDF, PPT, or OCR corpora.
 - Candidate graph contract models for `CandidateAtom`, `CandidateRelation`, and `ExternalGraphImport` proposal records.
+- Generalized candidate-knowledge contracts and extraction for
+  `CandidateBusinessObject` and `CandidateAssertion`. Procurement email-shaped
+  observations and finance ERP/application observations use the same
+  source-neutral pipeline and the same five assertion families. Scoped Domain
+  Packs are provenance-linked and content-hash-pinned; the pack, business
+  objects, and assertions persist atomically as candidate-only records with no
+  canonical, user-graph, wiki, or external-system write.
+- The default text-bearing candidate path is Unicode/script normalization,
+  protected ASCII identifier extraction, Jieba, corpus-bound SentencePiece,
+  and hash-bound frozen-profile candidate admission before candidate graph
+  construction. The original MAY candidate-KG evaluator now uses this path.
+  Regex-only tokenization remains an explicit baseline/ablation or reported
+  degraded fallback and must never silently replace the default.
+- Candidate-only temporal-evidential POC for the same generalized path. Domain
+  Packs map procurement and finance time labels plus separate epistemic and
+  lifecycle statuses into one normalized `TemporalContext`;
+  `CandidateTemporalView` filters independently by world time and known-as-of
+  time before ranking, without canonical writes.
 - Ontology v2 coordination-frame candidate contracts for `CandidateMention`,
   `CandidateFrame`, `CandidateBusinessObject`, and `CanonicalFrame` target
   shape. The current implementation includes deterministic fixture extraction,
@@ -290,7 +380,9 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   definitions, aliases, mappings, and cross-scope type alignment candidates.
   Alignment candidates require review and cannot carry access grants or
   canonical type writes.
-- File-backed proposal stores for semantic metadata, candidate atoms, and candidate relations.
+- File-backed proposal stores for semantic metadata, Domain Packs, candidate
+  business objects, candidate assertions, candidate atoms, and candidate
+  relations.
 - File-backed vector and optional graph projection stores for derived retrieval
   indexes; stale vector results still require the same permission and grant
   checks as ready results.
@@ -427,6 +519,11 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 
 - Raw resources never directly become final wiki pages.
 - Extractors produce observations and semantic metadata.
+- Every text-bearing observation uses the same default lexical candidate
+  method: protected ASCII identifiers plus Jieba and corpus-bound
+  SentencePiece candidate generation, followed by frozen-profile admission.
+  File format and department do not select a different tokenizer. Regex-only
+  behavior must be explicit, never silent.
 - Implementation-level extractor routing, metadata schemas, provenance requirements, and adapter boundaries are specified in `RESOURCE_EXTRACTION_SPEC.md`.
 - Candidate atoms and relations are reviewed before canonical graph commit.
 - Atom granularity, entity resolution, relation resolution, lifecycle changes, and wiki projection are governed by explicit policies.
@@ -453,9 +550,9 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   effectiveness result, ablation results, and PST safety boundary.
 - `docs/ontology-v2-review-comments.md` - historical methodology critique and
   remaining limitations behind the ontology v2 experiment changes.
-- `docs/multimodal-ontology-term-extraction-decision.md` - data-driven
-  multimodal term, mention, tokenizer, and ontology-selection decision for
-  future PDF, PowerPoint, audio, OCR, mail, and mixed Chinese/English inputs.
+- `docs/multimodal-ontology-term-extraction-decision.md` - active default for
+  multimodal term, mention, tokenizer, and ontology selection across PDF,
+  PowerPoint, audio, OCR, mail, applications, and mixed Chinese/English inputs.
 - `docs/kg-eval-package.md` - packaged KG evaluation facade and integration
   contract for the System Backbone Agent.
 - `docs/kg-bert-runtime.md` - optional BERT/SentenceTransformer KG
@@ -697,8 +794,8 @@ message identifiers, subjects, senders, body text, private manifest contents,
 object-store locators, parser command lines, scratch paths, SQL, or environment
 values into public reports.
 
-Run the #21 non-BERT candidate-only KG fusion rescore over a preserved
-domain-hard work directory:
+Run the source-neutral candidate-only evidence retrieval evaluation over a
+preserved domain-hard work directory:
 
 ```sh
 docker run --rm -e FORMOWL_RUN_FULL_PST_DOMAIN_HARD_KG_FUSION_EVAL=1 -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_domain_hard_kg_fusion_eval.py --baseline-report .test-tmp/formowl-mail-domain-hard-case-baseline-v4.json --work-dir .test-tmp/formowl-mail-domain-hard-case-baseline-work-v4 --output .test-tmp/formowl-mail-domain-hard-kg-fusion-eval-v1.json"
@@ -710,13 +807,17 @@ Validate the saved KG fusion public report:
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_domain_hard_kg_fusion_eval.py --validate-report .test-tmp/formowl-mail-domain-hard-kg-fusion-eval-v1.json --output .test-tmp/formowl-mail-domain-hard-kg-fusion-eval-v1-validation.json"
 ```
 
-This rescore does not reparse the PST and does not use BERT or any neural
-package. It is a candidate-only graph-structure experiment over existing
-observations; the current implementation has not yet integrated formal ontology
-governance or canonical graph state.
+This evaluation does not reparse the PST and does not use BERT or another
+neural package. It builds a `CandidateEvidenceIndex` over existing
+observations, requires a trusted binding over eligible observations,
+source-identity policies, source versions, and permission scopes, groups
+logical sources by identity policy plus source id, applies
+permission/version/context/time/status admissibility before planning, and
+returns only candidate evidence selections. It does not write canonical graph
+state.
 
-Run the #21 ontology-guided non-BERT ablation over the same preserved
-domain-hard work directory:
+Run the contract-bound ontology rerank over the same preserved domain-hard work
+directory:
 
 ```sh
 docker run --rm -e FORMOWL_RUN_FULL_PST_DOMAIN_HARD_ONTOLOGY_ABLATION_EVAL=1 -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_domain_hard_ontology_ablation_eval.py --baseline-report .test-tmp/formowl-mail-domain-hard-case-baseline-v4.json --work-dir .test-tmp/formowl-mail-domain-hard-case-baseline-work-v4 --output .test-tmp/formowl-mail-domain-hard-ontology-ablation-eval-v1.json"
@@ -728,10 +829,13 @@ Validate the saved ontology ablation public report:
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local bash -c "python scripts/mail_full_pst_domain_hard_ontology_ablation_eval.py --validate-report .test-tmp/formowl-mail-domain-hard-ontology-ablation-eval-v1.json --output .test-tmp/formowl-mail-domain-hard-ontology-ablation-eval-v1-validation.json"
 ```
 
-The ontology arm is a candidate-only ablation. It validates formal ontology
-contract usage and a revision hash, but it does not claim completed ontology
-governance, canonical type writes, canonical KG writes, raw access, wiki
-projection, business answer generation, or production readiness.
+The ontology arm binds its revision, supported signal vocabulary, and complete
+`TypeDefinition`/`TypeMapping` contract to the candidate evidence index.
+Ontology overlap is a capped additive rerank and cannot delete lexical
+candidates or bypass permission/context/time checks. It remains candidate-only
+and does not claim completed ontology governance, canonical type or KG writes,
+raw access, wiki projection, business answer generation, or production
+readiness.
 
 Run the #21 ChatGPT MCP connection preflight package:
 

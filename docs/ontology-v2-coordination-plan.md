@@ -8,6 +8,29 @@ This was the working plan for issue #28 and is retained as its historical
 review packet. It describes what the slice implemented, what evidence it was
 intended to support, and what remained future work at that time.
 
+## Default Candidate Evidence Retrieval
+
+This historical plan is not an onboarding method. Current work starts from
+stable logical source item retrieval with access/context/time before planning,
+no lexical transitive closure, and capped additive ontology reranking. Any
+component union, parser-chunk count, regex-only path, or ontology hard gate
+described below is an ablation or historical design choice only.
+Current onboarding also requires an index-owned
+`CandidateEvidenceTextPolicyRuntime` for the
+Unicode-NFKC/protected-ASCII/Jieba/corpus-bound SentencePiece/frozen-profile
+stack and exact admission/model/corpus SHA-256 hashes. The binding also pins
+the runtime id and tokenizer implementation hash; runtime code mismatch fails
+closed. Default callers pass query text only; raw tokens and free-form hashes
+are rejected. Access and explicit context/time admissibility precede
+tokenization; experiments use `retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
+
 ## Objective
 
 Design and test a stable ontology method for cross-document, cross-department

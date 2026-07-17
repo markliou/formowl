@@ -4,8 +4,8 @@
 
 - Label: `active-blocked`
 - Lossless history: `../archive/2026-07-11/kg-research-agent.md`
-- Retention: keep role, current objective, status, blockers, and next action only;
-  target at most 180 lines and archive before 250 lines.
+- Retention: keep role, current objective, status, blockers, and next action
+  only; target at most 180 lines and archive before 250 lines.
 
 ## Role
 
@@ -15,46 +15,73 @@ Durable role definition: `../agent-roles.md`.
 
 ## Current Objective
 
-Complete the FormOwl Knowledge Graph method exploration and acceptance work:
-fill in external recent literature comparison, ontology integration method,
-multi-user KG and KG fusion experiments, multimodal enterprise-data validation,
-annotation/adjudication workflow through either legacy human evidence or a
-four-professional-specialist LLM subagent panel, production adapter gate, and a
-total acceptance suite that clearly marks passed and failed items.
+Complete the broad FormOwl KG real-evidence acceptance objective across
+sessions: recent external literature comparison, fair external baselines,
+ontology integration, multi-user fusion, multimodal enterprise validation,
+annotation/adjudication evidence, production adapter evidence, and synchronized
+total-acceptance authority.
 
-Historical source: Codex session `019eda5f-7dd6-74a2-ac56-4f84e5d58560`.
-
-Status: `blocked` for the broad KG real-evidence acceptance objective. Current
-repo-side tooling is synchronized, but four broad real-evidence gates still
-require operator-supplied or public reproducible evidence before completion can
-be claimed. Product-level production readiness, top-tier scientific validation,
-raw access, canonical graph writes, autonomous business judgment, and
-enterprise-scale latency/scalability remain outside any future completion
-claim.
+Repository-side authority tooling is reproducible and synchronized, but broad
+completion requires accepted real or public reproducible evidence rather than
+additional synthetic fixtures or implementation-only proofs.
 
 ## Status
 
 `blocked`
 
-## Current Acceptance State
+## Acceptance Criteria
 
-Do not treat the broad KG real-evidence acceptance objective as complete in the
-current authority state. The stricter current state is blocked, and no broad
-completion claim is supported until the four remaining gates have accepted
-canonical packets and all authority reports are synchronized and passing.
+- Canonical authority reports agree on 12 passed gates, zero failed gates, zero
+  remaining gates, and a complete objective audit.
+- Each broad gate is backed by an accepted canonical evidence packet rather than
+  a template, preview, candidate-only packet, or local ignored artifact.
+- Total acceptance, objective audit, preflight, work orders, progress, and the
+  tracked checklist all describe the same passing authority state.
+- Canonical dev-container verification, relevant research checks, full Ruff,
+  `git diff --check`, durable docs, and the required reviewer gate pass.
+- Claims remain bounded: broad acceptance does not imply raw asset access,
+  autonomous business judgment, canonical graph/type writes, or unrestricted
+  production readiness.
 
 ## Blockers
 
-- The broad KG real-evidence objective remains unchecked on the active board.
-- Issue #38's authority harness is state-independent and clean-clone
-  reproducible. Its explicit blocked fixture still correctly reports the four
-  unresolved real-evidence gates; that blocked evidence state is not harness
-  drift.
-- No canonical completion claim is valid until the required packets, reports,
-  dev-container checks, and reviewer gate agree.
+Four real-evidence gates still lack accepted canonical evidence:
+
+- `fair_external_baseline_comparison`
+- `annotation_adjudication_protocol`
+- `multimodal_semantic_validation`
+- `production_adapter_paths`
+
+The completed Candidate Assertion, Domain Pack, Issue #16
+temporal-evidential POC, and 93/100 source-neutral Candidate evidence retrieval
+iteration are bounded candidate-layer implementation slices. They add no
+canonical writes and do not satisfy or weaken these four broad evidence gates.
+
+Default Candidate Evidence Retrieval remains the mandatory base for any future
+response packet or evaluation harness: stable logical source item counting,
+access/time/context filtering before planning, no lexical transitive closure,
+and capped additive ontology reranking. Regex-only, parser-chunk,
+component-union, and ontology hard-pruning behavior is ablation-only.
+The index-owned `CandidateEvidenceTextPolicyRuntime` binds the actual query
+tokenizer to the structured Unicode-NFKC/protected-ASCII/Jieba/corpus-bound
+SentencePiece/frozen-profile policy and exact SHA-256 hashes. The binding also
+pins the runtime id and tokenizer implementation hash; runtime code mismatch
+fails closed. Default callers provide query text only and cannot supply raw
+tokens or a free-form hash. Access and explicit context/time admissibility
+precede tokenization; experiments use `retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
 
 ## Next Action
 
-Resume the single unchecked KG real-evidence board item from its archived proof
-requirements by collecting or selecting accepted evidence for the four blocked
-gates. Keep candidate-before-canonical and no-raw-path boundaries intact.
+Wait for operator-supplied or public reproducible response packets and
+artifacts. When evidence arrives, validate the submission manifest, preflight
+responses, execute candidate intakes, validate candidate manifests and
+governance approval, promote only approved evidence, then rerun all broad
+validators and total acceptance. Do not reinterpret an empty real-evidence
+root or a passing repository-only harness as completion.

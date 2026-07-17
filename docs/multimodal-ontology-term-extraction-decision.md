@@ -2,12 +2,36 @@
 
 Date: 2026-07-09
 
-Status: design decision. This is not an implementation completion claim.
+Status: active normative default for text-bearing candidate generation and
+evaluation. This is not a canonical-write or broad production-readiness claim.
+
+## Default Candidate Evidence Retrieval
+
+Term extraction feeds the source-neutral Candidate evidence method; it does
+not define evidence cardinality by itself. Retrieval counts a stable logical
+source item, applies access/context/time before query planning, avoids lexical
+transitive closure, and treats ontology as a capped additive rerank.
+Regex-only, parser-chunk, component-union, and ontology hard-pruning paths are
+ablation-only.
+The index-owned `CandidateEvidenceTextPolicyRuntime` must prove this
+Unicode-NFKC/protected-ASCII/Jieba/corpus-bound SentencePiece/frozen-profile
+stack and exact admission/model/corpus SHA-256 hashes. The binding also pins
+the runtime id and tokenizer implementation hash; runtime code mismatch fails
+closed. Default callers provide query text only and cannot supply raw tokens
+or a free-form hash. Access and explicit context/time admissibility precede
+tokenization; experiments use `retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
 
 ## Decision
 
-FormOwl will add a data-driven mention and term extraction layer before
-ontology selection, entity resolution, frame extraction, and KG fusion.
+FormOwl uses a data-driven mention and term extraction layer before ontology
+selection, entity resolution, frame extraction, and KG fusion.
 
 This layer is broader than a tokenizer. Tokenization is one replaceable adapter
 inside a governed pipeline:
@@ -27,6 +51,15 @@ RawResource
 
 The initial policy is data-driven first:
 
+- Use Unicode/script normalization, protected ASCII identifier extraction,
+  Jieba segmentation, corpus-bound SentencePiece segmentation, and the
+  hash-bound frozen-profile candidate-admission policy as the default path for
+  every text-bearing Observation.
+- Treat raw Jieba plus SentencePiece output and regex-only tokenization as
+  explicit ablations, not production/default retrieval policies.
+- Fail closed when required segmenters are missing. A deployment may use a
+  regex-only degraded fallback only when the extraction and evaluation output
+  clearly labels that mode.
 - Use corpus statistics, layout and role context, gazetteers, weak labels, and
   ablations as the primary source of term and ontology candidates.
 - Use LLMs only for low-confidence explanation, naming suggestions, ambiguity
@@ -37,12 +70,16 @@ The initial policy is data-driven first:
 - Do not apply ontology as an early hard filter unless a high-confidence,
   calibrated gate has passed end-task ablation.
 
-## Why This Is Needed
+## Why This Is The Default
 
-The current mail query, evidence, KG-fusion, and entity-resolution paths use
-simple regex tokenization. That is usable for ASCII identifiers, emails,
-domains, and many part numbers, but it is not a Chinese mention extractor and
-does not reliably preserve terms such as Chinese company names.
+Legacy mail query, evidence, KG-fusion, and entity-resolution paths used simple
+regex tokenization. That remains useful for ASCII identifiers, emails, domains,
+and many part numbers, but it is not a general Chinese or mixed-script mention
+extractor. Completed EXM experiments showed that broader Jieba plus
+SentencePiece candidate generation improves recall, while the frozen admission
+profile prevented the raw-token no-match collapse on that EXM benchmark. The
+original MAY questions still fail no-match calibration, so rejection remains a
+separate measured retrieval policy rather than an assumed tokenizer property.
 
 For example, a Chinese organization name should enter the KG pipeline as a
 `CandidateMention` or candidate entity instance typed as `Organization`. The
@@ -78,24 +115,25 @@ that may later support one candidate entity.
 
 ## Term Extraction Policy
 
-The first production-quality direction is not to retrain a supervised segmenter
-from scratch. The first direction is a corpus-adapted term extraction stack:
+The default is a corpus-adapted candidate stack, not a retrained supervised
+segmenter:
 
 1. Unicode normalization and script-aware normalization.
-2. Existing regex tokenization retained for ASCII identifiers, email addresses,
-   domains, and part-number-like strings.
-3. CJK span generation that does not depend on whitespace.
-4. Corpus phrase mining using frequency, document/thread spread, left and right
-   entropy, accessor variety, PMI-like association, and repeated layout fields.
-5. Domain lexicon induction from high-stability phrases across documents,
-   threads, senders, departments, and attachments.
-6. Gazetteer and suffix rules for organization, person, location, document,
-   artifact, amount, quantity, date, and project candidates.
-7. Context-role scoring from nearby cues such as supplier, vendor, customer,
-   buyer, quotation, invoice, purchase order, payment, shipment, owner, and
-   approver.
-8. Alias clustering across spelling variants, abbreviations, OCR variants,
-   email domains, document fields, and repeated graph neighborhoods.
+2. Protected regex extraction for ASCII identifiers, email addresses, domains,
+   and part-number-like strings.
+3. Jieba segmentation for Chinese term candidates.
+4. Corpus-bound SentencePiece segmentation for mixed-script and corpus-adapted
+   candidates.
+5. Frozen-profile candidate admission with document-frequency limits,
+   protected mention handling, and a hash-bound fixed score profile.
+6. Candidate graph construction only from admitted terms plus governed Domain
+   Pack protected vocabulary.
+7. Optional phrase mining, gazetteers, layout/role context, and alias clustering
+   as additional candidate signals, never as canonical writes.
+
+Tokenizer and admission outputs must bind segmentation-policy version,
+admission-policy hash, model or vocabulary hash, and corpus hash. A policy or
+binding change requires re-extraction or reevaluation.
 
 The output is a scored candidate set, not a single irreversible segmentation:
 
@@ -179,10 +217,12 @@ evaluation families:
 - KG retrieval and QA lift against KG-only and regex-tokenizer baselines.
 - Ontology ablation showing which term/type candidates actually contribute.
 - Cross-modality agreement tests, for example mail plus PDF plus transcript.
-- False-reject metrics for any hard gate.
+- False-reject metrics for every explicit non-default hard-gate ablation.
 - Permission and redaction safety checks.
 
-No hard type or ontology gate should ship without false-reject instrumentation.
+No hard type or ontology gate may replace Default Candidate Evidence Retrieval
+without a specification rewrite, independent cross-domain end-task evidence,
+and false-reject instrumentation.
 
 ## Relationship To Ontology v2
 
@@ -211,12 +251,11 @@ case because the lexical graph collapsed into very large components. The
 type-compatibility proxy arm tied the lexical KG arm, so the measured lift came
 from broader lexical matching, not from ontology selection.
 
-This result means the tokenizer stack should remain an upstream candidate
-generator. It should not be promoted directly into production retrieval,
-canonical ontology, canonical type, or canonical graph state. The next stable
-method needs term-quality scores, document-spread or IDF caps, component
-splitting, alias/entity clustering checks, and no-match calibration before
-ontology promotion decisions use those terms.
+This result means raw tokenizer output must remain candidate generation rather
+than direct graph admission. The raw lexical arm is retained only as an
+ablation. The default retrieval method uses the later frozen-profile admission
+policy before graph construction; tokenizer output still never becomes
+canonical ontology, canonical type, or canonical graph state directly.
 
 The weak-label MLP candidate-admission follow-up implements that principle as
 an executable policy. The policy accepts or rejects candidate terms before KG
@@ -228,19 +267,42 @@ retrieval over raw `jieba + SentencePiece`. This supports the design rule that
 candidate admission must be tested before graph construction. It does not
 establish a coordination-frame or ontology-semantic effect.
 
-The 2026-07-10 no-training control run further narrows the default method. A
+The 2026-07-10 no-training control run established the default method. A
 hashable fixed CJK scoring profile with zero training examples and zero
 training epochs scored 43,976/50,000 on the same generated EXM benchmark,
 while the weak-label MLP scored 43,369/50,000. The stable default should
-therefore be data-driven-first candidate admission with a frozen scoring
-profile, not a self-trained MLP. BGE-M3 through FlagEmbedding remains the best
-next optional true frozen neural adapter candidate, but it should run in a
-separate neural experiment/runtime image because the default dev container
-does not include torch, transformers, FlagEmbedding, GLiNER, HanLP, or CKIP.
+therefore be data-driven-first candidate admission with the frozen scoring
+profile, not a self-trained MLP.
 
-## Implementation Implications
+The MAY evaluator now keeps that tokenizer/admission stack but no longer treats
+token overlap as transitive graph connectivity. Its active retrieval method
+requires a trusted access binding over observation ids, source-identity
+policies, source versions, and permission scopes; filters those axes plus
+context, time, epistemic status, and lifecycle status before planning; counts
+and ranks logical source identities as `(policy, item id)` rather than
+observation chunks; derives evidence cardinality from source-unit syntax or
+classifiers while excluding identifier and duration numbers; and allows
+observations to aggregate anchors only within one source item.
 
-Future implementation should introduce contracts and reports along these lines:
+On the formal July 17, 2026 MAY 100-case run, the source-neutral Candidate KG
+scored 93/100: 73/80 answerable, 10/10 no-match, and 10/10 permission. The
+contract-bound capped ontology rerank also scored 93/100 and lost no Candidate
+KG passes. Both reports validated with `blockers=[]`; logical-source recall was
+95.00%, exact Observation citation recall was 94.37%, citation precision was
+93.78%, and the largest component contained 6 observations. Stable
+logical-source gold determines primary pass/fail; current parser chunk ids
+affect citation diagnostics only. The earlier 17/100 and 20/100
+tokenizer-only results remain historical evidence that a correct tokenizer is
+necessary but not sufficient.
+
+BGE-M3 through FlagEmbedding remains an optional neural ablation in a separate
+runtime image. The current 93/100 result is evidence-selection quality on one
+private mail-derived corpus, not a production generalization claim for
+finance, quality, PDF, PPT, OCR, or other modalities.
+
+## Required Implementation Contracts
+
+Implementations use contracts and reports along these lines:
 
 - `TermExtractionPolicy` or an extension of `ExtractionPolicy`.
 - `TermCandidateBatch` for corpus-level safe aggregate term candidates.
@@ -256,11 +318,10 @@ projection stay as separate layers.
 
 ## Current Claim Boundary
 
-This document sets direction only.
+This document does claim the normative default candidate method and its use by
+the tested EXM and MAY evaluators. It does not claim that every source adapter
+is already integrated, nor does it claim:
 
-It does not claim that FormOwl currently has:
-
-- a production Chinese tokenizer;
 - a trained mention/type classifier;
 - production multimodal extraction quality;
 - canonical ontology auto-promotion;

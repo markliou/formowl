@@ -4,6 +4,30 @@ FormOwl supports neural candidate-generation runtimes for BERT or
 SentenceTransformer-based KG experiments. These runtimes are optional and
 separate from the normal dev container.
 
+## Default Candidate Evidence Retrieval
+
+Neural similarity changes candidate features; it does not replace the default
+retrieval contract. End-task harnesses still count logical source items, apply
+access/context/time before query planning, forbid lexical transitive closure,
+and use ontology only as a capped additive rerank. The BGE-only, soft-score,
+and hard-gate results below are historical model-selection ablations, not the
+active retrieval default.
+End-task indexes own a `CandidateEvidenceTextPolicyRuntime` for the
+Unicode-NFKC/protected-ASCII/Jieba/corpus-bound SentencePiece/frozen-profile
+stack and exact admission/model/corpus SHA-256 hashes. The binding also pins
+the runtime id and tokenizer implementation hash; runtime code mismatch fails
+closed. Default callers pass query text only; an embedding runtime cannot
+replace the binding with raw tokens or a free-form hash. Access and explicit
+context/time admissibility precede tokenization; experiments use
+`retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
+
 ## Why It Is Separate
 
 The default `formowl-dev:local` image is the canonical lightweight development
@@ -504,9 +528,12 @@ charts: experiments/kg_bert_ablation/results/charts/kg_ontology_ablation_2026-06
         experiments/kg_bert_ablation/results/charts/kg_ontology_ablation_2026-06-29_bge_gpu_cu126_host_ontology_stress.svg
 ```
 
-This run directly supports keeping ontology/type compatibility in the matching
-algorithm: it eliminates all 10,000 cross-type stress false positives without
-reducing recall on the mixed benchmark slice.
+This run shows that type compatibility can be useful in a controlled pairwise
+matching stress ablation. It does not authorize ontology hard-pruning in
+Candidate evidence retrieval and does not override the logical source item
+default. A hard gate may remain an explicit matching ablation, but promotion
+would require a specification rewrite plus independent cross-domain
+false-reject and end-task evidence.
 
 The GPU base image manifest for
 `pytorch/pytorch:2.5.1-cuda11.8-cudnn9-runtime` resolved successfully on

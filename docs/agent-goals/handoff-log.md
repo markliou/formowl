@@ -185,3 +185,113 @@ Lifecycle label: `active`.
   dev-container verification passed 730 tests, full Ruff check, 331-file format
   check, and `git diff --check`. Production/API, evaluator/privacy, and
   shell/safety reviewers returned 3/3 `RELEASE_DECISION: AGREE`.
+
+## 2026-07-15 — Candidate Assertion and Domain Pack minimum core
+
+- Completed the bounded implementation in isolated worktree
+  `/tmp/formowl-candidate-assertion-domain-pack` on branch
+  `goal/candidate-assertion-domain-pack-core`; the primary working tree was not
+  modified.
+- Procurement mail-shaped and finance ERP/application fixtures use one
+  source-neutral `Observation -> CandidateBusinessObject ->
+  CandidateAssertion` pipeline with all five assertion kinds. Scoped Domain
+  Packs bind core mappings, ontology revision, provenance, and normalized
+  content hash.
+- Persistence is atomic and candidate-only. Reviewer hardening closed
+  participant permission/source-lineage bypasses, same-ID overwrite,
+  tuple/backend/SQL public-safety bypasses, and legacy stable-ID compatibility.
+  No canonical graph/type, user-graph, wiki, or external-system write is
+  authorized.
+- Canonical verification passed 764 unit tests, full Ruff check, 256-file
+  format check, and `git diff --check`. Planck, Bohr, and Kant returned 3/3
+  `RELEASE_DECISION: AGREE`.
+- The branch remains uncommitted and ready for deliberate integration. The
+  durable KG goal returns to the separate four-gate broad real-evidence blocker.
+
+## 2026-07-16 — Issue #16 temporal-evidential candidate graph POC
+
+- Extended the same isolated worktree and branch with one normalized
+  `TemporalContext`, Domain Pack temporal-role mappings, independent
+  epistemic/lifecycle axes, and candidate-only temporal views for
+  `as_of_world_time` and `known_as_of`.
+- Procurement and finance continue through the same source-neutral pipeline.
+  Source capture is bound to Observation lineage; candidate materialization is
+  a separate required knowledge boundary; missing source or materialization
+  time fails closed. Due dates do not hide already known future commitments.
+- The POC remains candidate-only: no canonical write, database migration,
+  SHACL runtime, full interval algebra, causal inference, temporal entity
+  resolution, or broad production-hardening claim.
+- Canonical verification passed 774 unit tests, full Ruff check, 338-file
+  format check, and `git diff --check`. Hubble, Aristotle, and Chandrasekhar
+  returned 3/3 `RELEASE_DECISION: AGREE`.
+- The Issue #16 scope is durable in the work board. The remote GitHub comment
+  could not be sent because both the GitHub connector and local `gh` token are
+  invalidated; re-authentication is required before synchronization.
+
+## 2026-07-16 — Original MAY 100-case / 50,000-variant retest restored
+
+- The exact reviewer-grounded MAY business-question evaluation can run again
+  against the authorized private corpus. The failure was a false-positive
+  public-safety regression: ordinary mail disclaimer and telephone prose was
+  classified as SQL by over-broad `COPY ... FROM/TO` and `CALL` patterns.
+- The SQL patterns were narrowed to statement-shaped syntax while retaining
+  rejection of actual `COPY ... TO STDOUT`, `COPY ... FROM STDIN/file`, and
+  `CALL procedure()` payloads. Private mail text remains private; public report
+  leak validation remains enabled.
+- The exact 100 source questions and 500 deterministic variants per question
+  completed and independently validated with zero blockers. Directly
+  comparable results are unchanged from the accepted prior run: governed mail
+  retrieval 11/100, Candidate KG 19/100, and ontology-guided KG 19/100. This
+  removes the operational regression but does not improve business-answer
+  quality.
+- Canonical verification after the fix passed 776 dev-container tests, full
+  Ruff check and format check, and `git diff --check`.
+
+## 2026-07-16 — Default tokenizer/admission made normative and retested
+
+- Rewrote the main specification, resource-extraction specification, README,
+  KG method, multimodal term-extraction decision, and active experiment README
+  so every text-bearing Observation defaults to Unicode/script normalization,
+  protected ASCII extraction, Jieba, corpus-bound SentencePiece, and
+  frozen-profile admission. Silent regex-only default behavior is forbidden.
+- The original MAY Candidate KG, ontology, factorial consumers, and grounded
+  50,000-variant evaluator now use the same hash-bound query/corpus tokenizer
+  path. Candidate/evaluation policy identity binds normalization,
+  segmentation, admission, model, and corpus hashes. No canonical writes were
+  added.
+- Focused dev-container tests passed: KG evaluator 9, ontology evaluator 9,
+  factorial evaluator 5, and ChatGPT 50,000 evaluator 17. The exact 100
+  questions times 500 variants completed and the independent saved-report
+  validator returned `blockers=[]`.
+- Result: mail evidence retrieval stayed 5,500/50,000; Candidate KG changed
+  from 9,500 to 8,500; ontology changed from 9,500 to 10,000 only because it
+  passed all no-match and permission variants while solving 0/40,000
+  answerable variants. Candidate grounded usefulness fell from 0.078432 to
+  0.070775; ontology grounded usefulness fell to 0. The default tokenizer is
+  corrected, but graph component collapse, rejection calibration, evidence
+  ranking, and ontology over-pruning remain the actual quality blockers.
+
+## 2026-07-17 — Source-neutral MAY retrieval target completed
+
+- The final private 100-case MAY run scored 93/100 for both Candidate evidence
+  retrieval and the contract-bound ontology rerank: 73/80 answerable, 10/10
+  no-match, and 10/10 permission. Both saved-report validators returned
+  `blockers=[]`; no private question, mail content, answer, or identifier was
+  added to tracked output.
+- The default counts logical source items and resolves exact immutable access,
+  context, and time before vocabulary. Raw query text controls only intent,
+  count, and chronology; anchors come from runtime-produced tokens or named
+  `retrieve_ablation` extensions. Cross-context authorization is an actual
+  boolean, and ontology remains a capped additive rerank.
+- The grounded 50,000 evaluator now uses the same `CandidateEvidenceIndex`
+  path. All 18 active retrieval documents are rewritten to reject regex-only,
+  parser-chunk, component-union, raw-term bypass, and ontology hard-pruning as
+  defaults; onboarding tests enforce that inventory.
+- Verification passed 147 focused tests, the exact 11-test hardness/harness
+  command, 884 full canonical dev-container tests, full Ruff and 264-file
+  format checks, and `git diff --check`. No PST, MSG, private question, answer,
+  or generated evaluation artifact is tracked.
+- Herschel, Popper, and Boole returned 3/3 `RELEASE_DECISION: AGREE`.
+- This remains candidate-only evidence selection: no canonical graph/type,
+  user-graph, wiki, raw-access, or external-system write is authorized, and the
+  four broad real-evidence acceptance gates remain blocked.

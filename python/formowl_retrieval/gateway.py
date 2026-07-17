@@ -241,6 +241,7 @@ class RetrievalGateway:
                 workspace_id=workspace_id,
                 session_id=session_id,
                 status="permission_denied",
+                timestamp=resolved_now,
                 metadata={"reason": "raw_asset_mode_requires_explicit_grant"},
             )
             trace = _retrieval_trace(
@@ -366,6 +367,7 @@ class RetrievalGateway:
                 workspace_id=workspace_id,
                 session_id=session_id,
                 status="permission_denied",
+                timestamp=resolved_now,
                 metadata={"reason": "raw_asset_scope_not_authorized"},
             )
             trace = _retrieval_trace(
@@ -392,6 +394,7 @@ class RetrievalGateway:
             workspace_id=workspace_id,
             session_id=session_id,
             status="ok",
+            timestamp=resolved_now,
             metadata={
                 "mode": mode,
                 "graph_hit_count": len(graph_hits),
@@ -546,6 +549,7 @@ class RetrievalGateway:
         workspace_id: str,
         session_id: str,
         status: str,
+        timestamp: str,
         metadata: dict[str, Any],
     ) -> AuditLog | None:
         if self.audit_store is None:
@@ -559,6 +563,7 @@ class RetrievalGateway:
             session_id=session_id,
             workspace_id=workspace_id,
             status=status,
+            timestamp=timestamp,
             metadata=metadata,
         )
 

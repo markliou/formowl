@@ -42,6 +42,34 @@ archival is preserved at
 - Pre-feature structural cleanup is complete: repeated evaluator validation,
   HTTP smoke orchestration, PostgreSQL smoke lifecycle, mail payload
   validation, and atomic JSON persistence now use shared implementations.
+- The general Candidate Assertion and Domain Pack minimum core is complete:
+  procurement and finance fixtures use one candidate-only, source-neutral
+  Observation pipeline with atomic persistence and no canonical writes.
+- Issue #16 temporal-evidential POC is complete: the same procurement and
+  finance pipeline now produces normalized temporal context, independent
+  epistemic/lifecycle state, and fail-closed candidate temporal views without
+  canonical writes.
+- The source-neutral Candidate evidence retrieval iteration is complete:
+  logical-source identity/cardinality, access-before-vocabulary filtering,
+  chronology/context boundaries, and capped additive ontology reranking reach
+  the bounded MAY target without canonical writes.
+- Default Candidate Evidence Retrieval is now the enforced onboarding path for
+  new hardness and harness work. It counts a stable logical source item;
+  historical chunk-count, transitive-component, regex-only, and ontology
+  hard-pruning methods remain ablation-only.
+  A structured text policy binding proves Unicode/protected-ASCII/Jieba/
+  corpus-bound SentencePiece/frozen-profile admission and its
+  admission/model/corpus hashes; free-form hashes fail closed. The index-owned
+  `CandidateEvidenceTextPolicyRuntime` is the only default query-token source,
+  and the binding pins its runtime id and tokenizer implementation hash.
+  Default callers provide query text only, explicit context/time admissibility
+  precedes tokenization, and non-default transforms use `retrieve_ablation`.
+  Raw query text may identify only control intent, evidence count, and
+  chronology syntax. Retrieval anchors and supported content terms come only
+  from runtime-produced tokens or a named `retrieve_ablation` extension.
+  Access uses a real `CandidateEvidenceAccessBinding` with four immutable
+  `frozenset` collections of exact nonblank strings, and cross-context
+  comparison authorization must be an actual boolean.
 
 ## Current Unchecked Work
 
@@ -59,12 +87,33 @@ archival is preserved at
 
 ## Recent Completions
 
-- [x] Issue #36 evidence-grounded ChatGPT × FormOwl MCP evaluation completed
-  with its documented deterministic offline claim boundary and reviewer gate.
+- [x] General Candidate Assertion, Domain Pack, and Issue #16
+  temporal-evidential POC completed.
+  Procurement mail-shaped and finance ERP/application fixtures use the same
+  `Observation -> CandidateBusinessObject -> CandidateAssertion` pipeline and
+  all five assertion kinds. Domain Packs are scoped and content-hash-pinned and
+  map local dates into one `TemporalContext`. Candidate temporal views separate
+  world time, source knowledge time, materialization time, epistemic status,
+  and lifecycle status; missing knowledge boundaries fail closed. Persistence
+  remains atomic and candidate-only. Proof: 774 canonical dev-container tests,
+  full Ruff check and 338-file format check, `git diff --check`, and 3/3
+  reviewer agreement. GitHub target Issue #16 is recorded here, but its remote
+  comment remains unsent because both the GitHub connector and local `gh` token
+  are invalidated.
 - [x] Issue #21 governed mail evidence reading milestones completed through the
   tracked local deterministic checkpoints; no production-readiness claim.
-- [x] Candidate KG, ontology-guided comparison, and governed effective graph
-  query slices completed without canonical graph/type writes.
+- [x] Source-neutral Candidate evidence retrieval and bounded ontology rerank
+  completed without canonical graph/type/user-graph/wiki/external writes.
+  The final 100-case MAY run scored 93/100 for both Candidate and ontology:
+  73/80 answerable, 10/10 no-match, and 10/10 permission; validators returned
+  `blockers=[]`. Anti-overfitting coverage includes finance, quality,
+  PDF/PPT/table/OCR/application shapes, English/Chinese cardinality and
+  duration handling, identifier exclusion, four-axis access binding,
+  access-before-query-vocabulary behavior, chronology/context isolation, and
+  label-independent permission evaluation. Proof: 147 focused tests including
+  the exact 11-test hardness/harness onboarding command, 884 full canonical
+  dev-container tests, full Ruff/264-file format checks, `git diff --check`,
+  and 3/3 agreement from Herschel, Popper, and Boole.
 - [x] Remaining backbone storage, worker, folder-ingestion, and readiness-smoke
   slices completed with their historical verification evidence archived.
 - [x] Completed-slice test hardening and required reviewer gates completed.
