@@ -234,3 +234,8 @@ Lifecycle label: `active`.
   full Ruff check, 335-file format check, and `git diff --check`. The
   engineering, governance/safety, and UAT UX reviewers returned 3/3
   `RELEASE_DECISION: AGREE` with no blocking findings.
+- Commit `847de94` was pushed to `uat/may-mail-web` and loaded by the existing
+  `formowl-may-uat` container. Live readiness reports
+  `authentication_required=false`, `shared_uat=true`, and
+  `upload_supported=true`; `/` serves the chat surface with frame embedding
+  denied, while `/upload` serves the same-origin iframe surface.
