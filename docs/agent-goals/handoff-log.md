@@ -190,15 +190,25 @@ Lifecycle label: `active`.
 
 - Added the temporary `uat/may-mail-web` branch and worktree with a browser
   surface that bypasses ChatGPT and queries one server-bound May mail evidence
-  bundle. Browser requests cannot choose user, workspace, grant, parser,
-  storage, or worker identity.
+  bundle plus private UAT-upload bundles. Browser requests cannot choose user,
+  workspace, grant, parser, storage, or worker identity.
 - The surface requires a temporary access code, exposes bounded cited evidence,
-  supports relevance/recent sorting and private tester feedback, and performs
-  no mail upload, Project/Wiki write, candidate/canonical graph write, or
-  autonomous business decision.
-- Private corpus data, bundle cache, access code, and UAT event logs remain
-  outside Git. The running container uses read-only source/corpus/cache mounts
-  and one writable private feedback mount.
-- Canonical dev-container verification passed 739 tests. Full Python/scripts
-  Ruff check and 255-file format check passed, along with four real May
-  evidence smoke queries and host-published HTTP health verification.
+  supports relevance/recent sorting, private tester feedback, and direct
+  multi-file EML upload. New EML is parsed into temporary searchable evidence
+  immediately and persists by content hash in the private UAT state volume.
+- The UAT path accepts `.eml` only, enforces count/size/authentication limits,
+  rejects unsupported formats, deduplicates identical bytes, does not index
+  attachment contents, and performs no Project/Wiki, candidate/canonical graph,
+  or autonomous business-decision write.
+- Private corpus data, bundle cache, uploaded EML, access code, and UAT event
+  logs remain outside Git. The running container uses read-only
+  source/corpus/cache mounts and one writable private UAT state mount.
+- Reviewer fixes now prune filename-bearing inline parts and complete
+  `message/rfc822` attachment subtrees from the searchable body, and publish
+  private EML only after permissions are set on the temporary file so failures
+  leave no restart-visible partial write.
+- Canonical dev-container verification passed 16 focused tests and 746 full
+  tests. Full Ruff check, 256-file format check, and `git diff --check` passed.
+  Engineering, governance/safety, and May-UAT reviewers returned 3/3
+  `RELEASE_DECISION: AGREE` after the attachment and partial-write blockers were
+  fixed.

@@ -12,17 +12,28 @@ from pathlib import Path
 import re
 import secrets
 import threading
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlparse
 
 from formowl_contract import ContractValidationError, now_iso, sha256_json
 
 from ._guards import assert_public_payload_safe, safe_public_string
 from .bundle import MailEvidenceBundle
+from .human_uat_upload import (
+    PrivateUatMailUploadStore,
+    UatUploadRequestTooLarge,
+    UatUploadedMailPart,
+    parse_uat_eml_multipart,
+    parse_uat_uploaded_eml,
+    upload_import_session_id,
+)
 from .query import MailEvidenceQueryGateway, _redact_mail_public_text
 
 _ACCESS_CODE_HEADER = "X-FormOwl-UAT-Code"
 _MAX_REQUEST_BYTES = 32 * 1024
+_MAX_UPLOAD_REQUEST_BYTES = 64 * 1024 * 1024
+_MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024
+_MAX_UPLOAD_FILES = 20
 _MAX_QUERY_CHARS = 500
 _MAX_NOTE_CHARS = 1000
 _MAX_RESULT_LIMIT = 20
@@ -65,6 +76,9 @@ class MailHumanUatHttpConfig:
     state_dir: str | Path
     fixed_now: str | None = None
     max_request_bytes: int = _MAX_REQUEST_BYTES
+    max_upload_request_bytes: int = _MAX_UPLOAD_REQUEST_BYTES
+    max_upload_file_bytes: int = _MAX_UPLOAD_FILE_BYTES
+    max_upload_files: int = _MAX_UPLOAD_FILES
 
 
 class MailHumanUatService:
@@ -79,25 +93,51 @@ class MailHumanUatService:
             or config.max_request_bytes <= 0
         ):
             raise ContractValidationError("UAT max request bytes must be positive")
+        for field_name, value in (
+            ("max_upload_request_bytes", config.max_upload_request_bytes),
+            ("max_upload_file_bytes", config.max_upload_file_bytes),
+            ("max_upload_files", config.max_upload_files),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ContractValidationError(f"UAT {field_name} must be positive")
+        if config.max_upload_file_bytes > config.max_upload_request_bytes:
+            raise ContractValidationError("UAT max upload file bytes must not exceed request bytes")
         if not config.bundle.messages or not config.bundle.body_segments:
             raise ContractValidationError("UAT mail evidence bundle must contain messages")
         safe_public_string(config.bundle.mail_evidence_bundle_id, "mail_evidence_bundle_id")
         config.bundle.mail_import_session.to_dict()
         self.config = config
-        self._gateway = MailEvidenceQueryGateway([config.bundle])
-        self._message_by_id = {
+        self._base_gateway = MailEvidenceQueryGateway([config.bundle])
+        self._base_message_by_id = {
             message.email_message_id: message for message in config.bundle.messages
         }
-        self._segments_by_message_id: dict[str, list[Any]] = {}
-        for segment in config.bundle.body_segments:
-            self._segments_by_message_id.setdefault(segment.email_message_id, []).append(segment)
         self._event_store = _PrivateUatEventStore(config.state_dir)
+        self._upload_store = PrivateUatMailUploadStore(
+            config.state_dir,
+            max_file_bytes=config.max_upload_file_bytes,
+        )
         self._known_query_ids: set[str] = set()
         self._verdict_counts: Counter[str] = Counter()
         self._query_count = 0
         self._feedback_count = 0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.started_at = _timestamp(config.fixed_now)
+        actor = config.bundle.mail_import_session
+        loaded_uploads = [
+            parse_uat_uploaded_eml(
+                content,
+                owner_user_id=actor.owner_user_id,
+                workspace_id=actor.workspace_id,
+                created_at=self.started_at,
+            )
+            for _, content in self._upload_store.load()
+        ]
+        self._uploaded_content_hashes = {parsed.content_hash for parsed in loaded_uploads}
+        self._uploaded_bundles = [parsed.bundle for parsed in loaded_uploads]
+        self._uploaded_warnings = Counter(
+            warning for parsed in loaded_uploads for warning in parsed.warnings
+        )
+        self._install_uploaded_index(self._uploaded_bundles)
 
     def access_allowed(self, supplied_code: str | None) -> bool:
         if not isinstance(supplied_code, str):
@@ -105,12 +145,16 @@ class MailHumanUatService:
         return hmac.compare_digest(supplied_code, self.config.access_code)
 
     def health(self) -> dict[str, Any]:
+        with self._lock:
+            uploaded_file_count = len(self._uploaded_bundles)
         payload = {
             "status": "ready",
             "surface": "mail_human_uat",
             "chatgpt_bypassed": True,
             "upload_required": False,
-            "read_only": True,
+            "upload_supported": True,
+            "uploaded_file_count": uploaded_file_count,
+            "read_only_business_systems": True,
         }
         assert_public_payload_safe(payload, "mail_human_uat_health")
         return payload
@@ -137,7 +181,7 @@ class MailHumanUatService:
         expanded_query, filter_groups = _expand_business_query(query_text)
         bundle = self.config.bundle
         actor = bundle.mail_import_session
-        gateway_result = self._gateway.query_mail_evidence(
+        base_result = self._base_gateway.query_mail_evidence(
             query_text=expanded_query,
             requester_user_id=actor.owner_user_id,
             workspace_id=actor.workspace_id,
@@ -146,12 +190,41 @@ class MailHumanUatService:
             limit=_RETRIEVAL_CANDIDATE_LIMIT,
             now=self.config.fixed_now,
         ).to_dict()
+        with self._lock:
+            upload_gateway = self._upload_gateway
+            message_by_id = self._message_by_id
+            all_bundles = self._all_bundles
+            uploaded_message_ids = self._uploaded_message_ids
+            uploaded_file_count = len(self._uploaded_bundles)
+        gateway_results = [base_result]
+        if upload_gateway is not None:
+            gateway_results.append(
+                upload_gateway.query_mail_evidence(
+                    query_text=expanded_query,
+                    requester_user_id=actor.owner_user_id,
+                    workspace_id=actor.workspace_id,
+                    session_id="session_mail_human_uat",
+                    mail_import_session_id=upload_import_session_id(),
+                    limit=_RETRIEVAL_CANDIDATE_LIMIT,
+                    now=self.config.fixed_now,
+                ).to_dict()
+            )
+        evidence_snippets = [
+            snippet
+            for gateway_result in gateway_results
+            for snippet in gateway_result["evidence_snippets"]
+        ]
+        citations = [
+            citation
+            for gateway_result in gateway_results
+            for citation in gateway_result["citations"]
+        ]
 
         citations_by_observation = {
-            citation["source_observation_id"]: citation for citation in gateway_result["citations"]
+            citation["source_observation_id"]: citation for citation in citations
         }
         results: list[dict[str, Any]] = []
-        for snippet in gateway_result["evidence_snippets"]:
+        for snippet in evidence_snippets:
             rendered = " ".join(
                 value
                 for value in (snippet.get("subject"), snippet.get("snippet"))
@@ -159,7 +232,8 @@ class MailHumanUatService:
             )
             if not _matches_filter_groups(rendered, filter_groups):
                 continue
-            message = self._message_by_id.get(str(snippet.get("email_message_id", "")))
+            email_message_id = str(snippet.get("email_message_id", ""))
+            message = message_by_id.get(email_message_id)
             subject = str(snippet.get("subject") or "（無主旨）")
             snippet_text = str(snippet.get("snippet", ""))
             matched_terms = [
@@ -178,6 +252,9 @@ class MailHumanUatService:
                     citations_by_observation.get(str(snippet.get("source_observation_id", "")))
                 ),
                 "content_redacted": bool(snippet.get("content_redacted", False)),
+                "source_kind": (
+                    "uploaded_uat" if email_message_id in uploaded_message_ids else "preloaded"
+                ),
             }
             (
                 result["_subject_business_matches"],
@@ -185,11 +262,13 @@ class MailHumanUatService:
             ) = _business_match_counts(subject, snippet_text, filter_groups)
             results.append(result)
 
-        if gateway_result["status"] == "ok":
+        if any(gateway_result["status"] == "ok" for gateway_result in gateway_results):
             results.extend(
                 self._exact_subject_results(
                     query_text=query_text,
                     filter_groups=filter_groups,
+                    bundles=all_bundles,
+                    uploaded_message_ids=uploaded_message_ids,
                 )
             )
         results = _deduplicate_results(results)
@@ -220,19 +299,25 @@ class MailHumanUatService:
 
         query_id = f"uatquery_{secrets.token_hex(12)}"
         generated_at = _timestamp(self.config.fixed_now)
-        warnings = list(gateway_result["warnings"])
+        warnings = [
+            warning for gateway_result in gateway_results for warning in gateway_result["warnings"]
+        ]
         if results:
             warnings = [
                 warning for warning in warnings if warning != "no_visible_mail_evidence_matched"
             ]
             if any(result["content_redacted"] for result in results):
                 warnings.append("unsafe_mail_evidence_content_redacted")
-        if filter_groups and gateway_result["evidence_snippets"] and not results:
+        if filter_groups and evidence_snippets and not results:
             warnings.append("business_filter_no_exact_match")
         if not results and "no_visible_mail_evidence_matched" not in warnings:
             warnings.append("no_visible_mail_evidence_matched")
         response = {
-            "status": gateway_result["status"],
+            "status": (
+                "ok"
+                if any(gateway_result["status"] == "ok" for gateway_result in gateway_results)
+                else gateway_results[0]["status"]
+            ),
             "query_id": query_id,
             "query_hash": sha256_json(query_text),
             "generated_at": generated_at,
@@ -247,6 +332,7 @@ class MailHumanUatService:
             "claim_boundary": {
                 "chatgpt_bypassed": True,
                 "mail_upload_performed": False,
+                "uploaded_mail_available": uploaded_file_count > 0,
                 "read_only_mail_evidence": True,
                 "project_or_wiki_write_performed": False,
                 "canonical_graph_write_performed": False,
@@ -279,26 +365,35 @@ class MailHumanUatService:
         *,
         query_text: str,
         filter_groups: tuple[tuple[str, ...], ...],
+        bundles: tuple[MailEvidenceBundle, ...],
+        uploaded_message_ids: frozenset[str],
     ) -> list[dict[str, Any]]:
         lowered_query = query_text.casefold()
         exact_terms = [term for term in _EXACT_BUSINESS_FILTERS if term.casefold() in lowered_query]
         if not exact_terms:
             return []
-        bundle = self.config.bundle
         results: list[dict[str, Any]] = []
         filter_needles = tuple(term for group in filter_groups for term in group)
-        matching_messages = [
-            message
-            for message in bundle.messages
-            if all(term.casefold() in (message.subject or "").casefold() for term in exact_terms)
-        ]
+        matching_messages = []
+        segments_by_message_id: dict[str, list[Any]] = {}
+        bundle_by_message_id: dict[str, MailEvidenceBundle] = {}
+        for bundle in bundles:
+            for message in bundle.messages:
+                bundle_by_message_id[message.email_message_id] = bundle
+                if all(
+                    term.casefold() in (message.subject or "").casefold() for term in exact_terms
+                ):
+                    matching_messages.append(message)
+            for segment in bundle.body_segments:
+                segments_by_message_id.setdefault(segment.email_message_id, []).append(segment)
         matching_messages.sort(
             key=lambda message: _timestamp_sort_key(message.sent_at),
             reverse=True,
         )
         for message in matching_messages:
             subject = message.subject or ""
-            for segment in self._segments_by_message_id.get(message.email_message_id, []):
+            bundle = bundle_by_message_id[message.email_message_id]
+            for segment in segments_by_message_id.get(message.email_message_id, []):
                 rendered = f"{subject} {segment.text}"
                 if not _matches_filter_groups(rendered, filter_groups):
                     continue
@@ -339,6 +434,11 @@ class MailHumanUatService:
                         "source_observation_id": segment.source_observation_id,
                     },
                     "content_redacted": bool(subject_redactions or snippet_redactions),
+                    "source_kind": (
+                        "uploaded_uat"
+                        if message.email_message_id in uploaded_message_ids
+                        else "preloaded"
+                    ),
                 }
                 (
                     result["_subject_business_matches"],
@@ -352,6 +452,121 @@ class MailHumanUatService:
                 if len(results) >= 500:
                     return results
         return results
+
+    def upload_mail_files(
+        self,
+        files: Sequence[UatUploadedMailPart],
+    ) -> dict[str, Any]:
+        if not files or len(files) > self.config.max_upload_files:
+            raise ContractValidationError("UAT upload file count is invalid")
+        actor = self.config.bundle.mail_import_session
+        created_at = _timestamp(self.config.fixed_now)
+        parsed_by_hash = {}
+        duplicate_in_request_count = 0
+        for uploaded_file in files:
+            parsed = parse_uat_uploaded_eml(
+                uploaded_file.content,
+                owner_user_id=actor.owner_user_id,
+                workspace_id=actor.workspace_id,
+                created_at=created_at,
+            )
+            if parsed.content_hash in parsed_by_hash:
+                duplicate_in_request_count += 1
+                continue
+            parsed_by_hash[parsed.content_hash] = (parsed, uploaded_file.content)
+
+        created_hashes: list[str] = []
+        with self._lock:
+            existing_hashes = set(self._uploaded_content_hashes)
+            new_items = [
+                item
+                for content_hash, item in parsed_by_hash.items()
+                if content_hash not in existing_hashes
+            ]
+            duplicate_count = duplicate_in_request_count + len(parsed_by_hash) - len(new_items)
+            prospective_bundles = [
+                *self._uploaded_bundles,
+                *(parsed.bundle for parsed, _ in new_items),
+            ]
+            prospective_gateway = (
+                MailEvidenceQueryGateway(prospective_bundles) if prospective_bundles else None
+            )
+            warnings = sorted({warning for parsed, _ in new_items for warning in parsed.warnings})
+            try:
+                for parsed, content in new_items:
+                    if self._upload_store.store(parsed.content_hash, content):
+                        created_hashes.append(parsed.content_hash)
+                self._event_store.append(
+                    {
+                        "event_type": "mail_upload",
+                        "created_at": created_at,
+                        "accepted_file_count": len(new_items),
+                        "duplicate_file_count": duplicate_count,
+                        "content_hashes": [parsed.content_hash for parsed, _ in new_items],
+                        "warnings": warnings,
+                    }
+                )
+            except Exception:
+                for content_hash in created_hashes:
+                    self._upload_store.remove(content_hash)
+                raise
+
+            self._uploaded_content_hashes.update(parsed.content_hash for parsed, _ in new_items)
+            self._uploaded_bundles = prospective_bundles
+            for parsed, _ in new_items:
+                self._uploaded_warnings.update(parsed.warnings)
+            self._install_uploaded_index(
+                prospective_bundles,
+                gateway=prospective_gateway,
+            )
+            total_uploaded_file_count = len(self._uploaded_bundles)
+            total_uploaded_message_count = len(self._uploaded_message_ids)
+
+        response = {
+            "status": "uploaded",
+            "accepted_file_count": len(new_items),
+            "duplicate_file_count": duplicate_count,
+            "uploaded_message_count": len(new_items),
+            "total_uploaded_file_count": total_uploaded_file_count,
+            "total_uploaded_message_count": total_uploaded_message_count,
+            "warnings": warnings,
+            "notice": (
+                "新郵件已加入 May 的私人 UAT 索引，可立即查詢。" "附件內容目前不會建立搜尋索引。"
+            ),
+            "claim_boundary": {
+                "chatgpt_bypassed": True,
+                "mail_upload_performed": bool(new_items),
+                "private_uat_storage_written": bool(new_items),
+                "project_or_wiki_write_performed": False,
+                "canonical_graph_write_performed": False,
+                "autonomous_business_decision": False,
+                "production_ready": False,
+            },
+        }
+        assert_public_payload_safe(response, "mail_human_uat_upload_response")
+        return response
+
+    def _install_uploaded_index(
+        self,
+        bundles: Sequence[MailEvidenceBundle],
+        *,
+        gateway: MailEvidenceQueryGateway | None = None,
+    ) -> None:
+        resolved_bundles = list(bundles)
+        self._upload_gateway = (
+            gateway
+            if gateway is not None
+            else (MailEvidenceQueryGateway(resolved_bundles) if resolved_bundles else None)
+        )
+        message_by_id = dict(self._base_message_by_id)
+        uploaded_message_ids: set[str] = set()
+        for bundle in resolved_bundles:
+            for message in bundle.messages:
+                message_by_id[message.email_message_id] = message
+                uploaded_message_ids.add(message.email_message_id)
+        self._message_by_id = message_by_id
+        self._uploaded_message_ids = frozenset(uploaded_message_ids)
+        self._all_bundles = (self.config.bundle, *resolved_bundles)
 
     def record_feedback(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         _expect_exact_keys(payload, _FEEDBACK_KEYS, required={"query_id", "verdict"})
@@ -407,7 +622,11 @@ class MailHumanUatService:
                 "verdict_counts": {
                     verdict: self._verdict_counts.get(verdict, 0) for verdict in sorted(_VERDICTS)
                 },
-                "read_only": True,
+                "upload_supported": True,
+                "uploaded_file_count": len(self._uploaded_bundles),
+                "uploaded_message_count": len(self._uploaded_message_ids),
+                "upload_warning_counts": dict(sorted(self._uploaded_warnings.items())),
+                "read_only_business_systems": True,
                 "upload_required": False,
             }
         assert_public_payload_safe(response, "mail_human_uat_session_summary")
@@ -440,17 +659,28 @@ def build_mail_human_uat_http_handler(
 
         def do_POST(self) -> None:  # noqa: N802
             route = urlparse(self.path).path
-            if route not in {"/api/query", "/api/feedback"}:
+            if route not in {"/api/query", "/api/feedback", "/api/upload"}:
                 self._send_error(HTTPStatus.NOT_FOUND, "route_not_found")
                 return
             if not self._authorized():
                 return
             try:
+                if route == "/api/upload":
+                    files = self._read_upload_files()
+                    response = service.upload_mail_files(files)
+                    self._send_json(HTTPStatus.CREATED, response)
+                    return
                 payload = self._read_json_body()
                 if route == "/api/query":
                     response = service.query(payload)
                 else:
                     response = service.record_feedback(payload)
+            except UatUploadRequestTooLarge:
+                self._send_error(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    "upload_request_too_large",
+                )
+                return
             except (ContractValidationError, ValueError, json.JSONDecodeError):
                 self._send_error(HTTPStatus.BAD_REQUEST, "request_rejected")
                 return
@@ -492,6 +722,26 @@ def build_mail_human_uat_http_handler(
             if not isinstance(value, dict):
                 raise ContractValidationError("request body must be a JSON object")
             return value
+
+        def _read_upload_files(self) -> list[UatUploadedMailPart]:
+            content_lengths = self.headers.get_all("Content-Length")
+            if not content_lengths or len(content_lengths) != 1:
+                raise ContractValidationError("exactly one upload content length is required")
+            content_length_value = self.headers.get("Content-Length")
+            if content_length_value is None or not content_length_value.isdigit():
+                raise ContractValidationError("upload content length is required")
+            content_length = int(content_length_value)
+            if content_length <= 0 or content_length > service.config.max_upload_request_bytes:
+                raise UatUploadRequestTooLarge("upload request size is invalid")
+            body = self.rfile.read(content_length)
+            if len(body) != content_length:
+                raise ContractValidationError("upload request body is incomplete")
+            return parse_uat_eml_multipart(
+                self.headers.get("Content-Type", ""),
+                body,
+                max_files=service.config.max_upload_files,
+                max_file_bytes=service.config.max_upload_file_bytes,
+            )
 
         def _send_error(
             self,
@@ -799,6 +1049,13 @@ _UAT_HTML = """<!doctype html>
       margin-top: 14px; border-left: 4px solid var(--accent); background: #fff8db;
       padding: 12px 14px; border-radius: 10px; color: #624f17; line-height: 1.55;
     }
+    .upload-panel { margin-top: 18px; }
+    .upload-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
+    .file-help { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 8px 0 0; }
+    .source-badge {
+      display: inline-block; margin-left: 8px; padding: 3px 7px; border-radius: 999px;
+      background: #fff1bd; color: #6c5310; font-size: 11px; font-weight: 800;
+    }
     .facts { display: grid; gap: 11px; margin: 0; }
     .fact { display: grid; grid-template-columns: 110px 1fr; gap: 12px; font-size: 14px; }
     .fact b { color: var(--brand-dark); }
@@ -835,7 +1092,7 @@ _UAT_HTML = """<!doctype html>
     @media (max-width: 820px) {
       header { display: block; }
       .status-pill { display: inline-block; margin-top: 14px; }
-      .grid, .row, .feedback-grid { grid-template-columns: 1fr; }
+      .grid, .row, .feedback-grid, .upload-row { grid-template-columns: 1fr; }
       .actions { justify-content: stretch; }
       .actions button { width: 100%; }
     }
@@ -846,7 +1103,7 @@ _UAT_HTML = """<!doctype html>
     <div class="gate-card">
       <div class="eyebrow">PRIVATE UAT</div>
       <h2>輸入測試存取碼</h2>
-      <p>這是 May 的臨時只讀測試介面。存取碼只保留在目前瀏覽器分頁，不會放進網址。</p>
+      <p>這是 May 的臨時郵件 UAT 介面。存取碼只保留在目前瀏覽器分頁，不會放進網址。</p>
       <div class="gate-actions">
         <input id="access-code" type="password" autocomplete="current-password" placeholder="UAT access code">
         <button id="unlock" type="button">進入</button>
@@ -860,7 +1117,7 @@ _UAT_HTML = """<!doctype html>
       <div>
         <div class="eyebrow">FORMOWL · MAIL EVIDENCE</div>
         <h1>郵件證據功能測試</h1>
-        <p class="subtitle">直接透過網頁查詢已預載的 May 測試資料，不經 ChatGPT，不需再次上傳信件。</p>
+        <p class="subtitle">可查詢已預載資料，也可上傳新的 EML 郵件立即測試；全程不經 ChatGPT。</p>
       </div>
       <div class="status-pill" id="server-status">檢查服務中…</div>
     </header>
@@ -905,12 +1162,29 @@ _UAT_HTML = """<!doctype html>
         </div>
         <hr style="border:0;border-top:1px solid var(--line);margin:20px 0">
         <div class="facts">
-          <div class="fact"><b>資料來源</b><span>預先解析的 May 測試郵件證據</span></div>
-          <div class="fact"><b>寫入行為</b><span>無；只有私人 UAT 回饋紀錄</span></div>
+          <div class="fact"><b>資料來源</b><span>預載資料與 May 上傳的新 EML 郵件</span></div>
+          <div class="fact"><b>已上傳</b><span id="upload-count">讀取中…</span></div>
+          <div class="fact"><b>寫入行為</b><span>只寫私人 UAT 郵件與回饋；不回寫業務系統</span></div>
           <div class="fact"><b>身分</b><span>由 server 固定綁定，瀏覽器不能指定</span></div>
           <div class="fact"><b>適用範圍</b><span>內網／VPN 臨時功能測試</span></div>
         </div>
       </aside>
+    </section>
+
+    <section class="panel upload-panel">
+      <h2>加入新的測試郵件</h2>
+      <div class="upload-row">
+        <div>
+          <label for="mail-files">選擇一封或多封 EML 郵件</label>
+          <input id="mail-files" type="file" accept=".eml,message/rfc822" multiple>
+          <p class="file-help">
+            每次最多 20 封、單封最多 25 MB。郵件會保存在 Server 的私人 UAT 空間並立即加入搜尋；
+            附件檔案內容目前不建立索引。MSG 暫不支援，請先另存為 EML。
+          </p>
+        </div>
+        <button id="upload-mails" type="button">上傳並建立索引</button>
+      </div>
+      <div class="toast" id="upload-message"></div>
     </section>
 
     <section class="results" id="results"></section>
@@ -951,14 +1225,17 @@ _UAT_HTML = """<!doctype html>
     }
 
     async function api(path, options = {}) {
+      const requestHeaders = {
+        "X-FormOwl-UAT-Code": accessCode,
+        ...(options.headers || {})
+      };
+      if (!(options.body instanceof FormData) && !requestHeaders["Content-Type"]) {
+        requestHeaders["Content-Type"] = "application/json";
+      }
       const response = await fetch(path, {
         ...options,
         cache: "no-store",
-        headers: {
-          "Content-Type": "application/json",
-          "X-FormOwl-UAT-Code": accessCode,
-          ...(options.headers || {})
-        }
+        headers: requestHeaders
       });
       let payload = {};
       try { payload = await response.json(); } catch (_) {}
@@ -982,6 +1259,7 @@ _UAT_HTML = """<!doctype html>
         sessionStorage.setItem(keyName, accessCode);
         byId("gate").classList.add("hidden");
         setToast("gate-message", "");
+        await refreshSummary();
       } catch (_) {
         accessCode = "";
         sessionStorage.removeItem(keyName);
@@ -1023,7 +1301,15 @@ _UAT_HTML = """<!doctype html>
         const card = document.createElement("article");
         card.className = "result-card";
         appendText(card, "h3", item.subject);
-        appendText(card, "div", item.sent_at ? `郵件時間：${item.sent_at}` : "郵件時間：未提供", "meta");
+        const meta = appendText(
+          card,
+          "div",
+          item.sent_at ? `郵件時間：${item.sent_at}` : "郵件時間：未提供",
+          "meta"
+        );
+        if (item.source_kind === "uploaded_uat") {
+          appendText(meta, "span", "May 新上傳", "source-badge");
+        }
         appendText(card, "p", item.snippet, "snippet");
         if (item.matched_terms.length) {
           const terms = document.createElement("div");
@@ -1095,11 +1381,67 @@ _UAT_HTML = """<!doctype html>
       }
     }
 
+    async function refreshSummary() {
+      if (!accessCode) return;
+      try {
+        const summary = await api("/api/session-summary", { method: "GET" });
+        byId("upload-count").textContent =
+          `${summary.uploaded_file_count} 封 EML（${summary.uploaded_message_count} 封可搜尋郵件）`;
+      } catch (_) {
+        byId("upload-count").textContent = "無法讀取";
+      }
+    }
+
+    async function uploadMails() {
+      const input = byId("mail-files");
+      const files = Array.from(input.files || []);
+      if (!files.length) {
+        setToast("upload-message", "請先選擇 EML 郵件。", true);
+        return;
+      }
+      if (files.length > 20 || files.some((file) => !file.name.toLowerCase().endsWith(".eml"))) {
+        setToast("upload-message", "一次最多 20 封，且目前只接受 .eml。", true);
+        return;
+      }
+      const button = byId("upload-mails");
+      const form = new FormData();
+      for (const file of files) form.append("mail_files", file, file.name);
+      button.disabled = true;
+      setToast("upload-message", `正在解析 ${files.length} 封郵件…`);
+      try {
+        const payload = await api("/api/upload", {
+          method: "POST",
+          body: form
+        });
+        input.value = "";
+        const duplicateText = payload.duplicate_file_count
+          ? `，另有 ${payload.duplicate_file_count} 封重複郵件未重建`
+          : "";
+        setToast(
+          "upload-message",
+          `完成：新增 ${payload.accepted_file_count} 封郵件${duplicateText}。現在可以直接查詢。`
+        );
+        await refreshSummary();
+      } catch (error) {
+        if (error.status === 401) {
+          sessionStorage.removeItem(keyName);
+          byId("gate").classList.remove("hidden");
+        }
+        const message = error.status === 413
+          ? "郵件檔案太大，請縮小檔案或分批上傳。"
+          : "上傳失敗；請確認檔案是有效的 EML 郵件。";
+        setToast("upload-message", message, true);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     byId("unlock").addEventListener("click", unlock);
     byId("access-code").addEventListener("keydown", (event) => {
       if (event.key === "Enter") unlock();
     });
     byId("search").addEventListener("click", search);
+    byId("upload-mails").addEventListener("click", uploadMails);
     byId("send-feedback").addEventListener("click", sendFeedback);
     for (const button of document.querySelectorAll(".quick")) {
       button.addEventListener("click", () => {
@@ -1118,7 +1460,10 @@ _UAT_HTML = """<!doctype html>
 
     if (accessCode) {
       api("/api/session-summary", { method: "GET", headers: {} })
-        .then(() => byId("gate").classList.add("hidden"))
+        .then(() => {
+          byId("gate").classList.add("hidden");
+          refreshSummary();
+        })
         .catch(() => {
           accessCode = "";
           sessionStorage.removeItem(keyName);

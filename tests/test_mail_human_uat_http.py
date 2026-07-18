@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import threading
 import unittest
+from unittest import mock
 
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError
@@ -37,13 +38,16 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(page_response.status, 200)
         self.assertEqual(health_response.status, 200)
         self.assertIn("郵件證據功能測試", html)
-        self.assertIn("不需再次上傳信件", html)
+        self.assertIn("上傳新的 EML 郵件", html)
+        self.assertIn('id="mail-files"', html)
         self.assertNotIn("user_may", html)
         self.assertNotIn("workspace_formowl", html)
         self.assertNotIn("/tmp/", html)
         self.assertTrue(health["chatgpt_bypassed"])
         self.assertFalse(health["upload_required"])
-        self.assertTrue(health["read_only"])
+        self.assertTrue(health["upload_supported"])
+        self.assertTrue(health["read_only_business_systems"])
+        self.assertEqual(health["uploaded_file_count"], 0)
         self.assertEqual(page_response.getheader("Cache-Control"), "no-store, max-age=0")
         self.assertEqual(page_response.getheader("X-Frame-Options"), "DENY")
 
@@ -164,6 +168,252 @@ class MailHumanUatHttpTests(unittest.TestCase):
             self.assertEqual(response.status, 400)
             self.assertEqual(json.loads(body)["error_code"], "request_rejected")
         self.assertEqual(service.session_summary()["query_count"], 0)
+
+    def test_uploaded_eml_is_private_persistent_and_immediately_queryable(self) -> None:
+        state_dir = _paths.fresh_test_dir("mail-human-uat-eml-upload")
+        service = _service_from_state_dir(state_dir)
+        eml = _eml(
+            subject="May new pull-in request",
+            body=(
+                "Please pull-in material NEW.PART.001, PO 470009999, "
+                "requested timing 2026-08-01."
+            ),
+        )
+        with _RunningSurface(service) as surface:
+            upload_response, upload_body = surface.request_upload([("may-new-message.eml", eml)])
+            query_response, query_body = surface.request_json(
+                "/api/query",
+                {
+                    "query_text": "NEW.PART.001 pull-in",
+                    "sort": "recent",
+                    "limit": 5,
+                },
+            )
+            summary_response, summary_body = surface.request(
+                "GET",
+                "/api/session-summary",
+                headers=_auth_headers(),
+            )
+
+        upload = json.loads(upload_body)
+        query = json.loads(query_body)
+        summary = json.loads(summary_body)
+        self.assertEqual(upload_response.status, 201)
+        self.assertEqual(upload["accepted_file_count"], 1)
+        self.assertEqual(upload["duplicate_file_count"], 0)
+        self.assertTrue(upload["claim_boundary"]["mail_upload_performed"])
+        self.assertFalse(upload["claim_boundary"]["project_or_wiki_write_performed"])
+        self.assertNotIn("may-new-message.eml", upload_body.decode("utf-8"))
+        self.assertNotIn("NEW.PART.001", upload_body.decode("utf-8"))
+        self.assertEqual(query_response.status, 200)
+        uploaded_results = [
+            result for result in query["results"] if result["source_kind"] == "uploaded_uat"
+        ]
+        self.assertEqual(len(uploaded_results), 1)
+        self.assertIn("NEW.PART.001", uploaded_results[0]["snippet"])
+        self.assertEqual(summary_response.status, 200)
+        self.assertEqual(summary["uploaded_file_count"], 1)
+        self.assertEqual(summary["uploaded_message_count"], 1)
+
+        upload_dir = state_dir / "mail-human-uat-uploads.private"
+        stored = list(upload_dir.iterdir())
+        self.assertEqual(len(stored), 1)
+        self.assertRegex(stored[0].name, r"^[0-9a-f]{64}\.eml$")
+        self.assertEqual(stored[0].stat().st_mode & 0o777, 0o600)
+
+        restarted = _service_from_state_dir(state_dir)
+        restarted_query = restarted.query(
+            {
+                "query_text": "NEW.PART.001 pull-in",
+                "sort": "recent",
+                "limit": 5,
+            }
+        )
+        self.assertEqual(restarted.session_summary()["uploaded_file_count"], 1)
+        self.assertEqual(restarted_query["results"][0]["source_kind"], "uploaded_uat")
+
+    def test_duplicate_upload_does_not_duplicate_searchable_mail(self) -> None:
+        service = _service("mail-human-uat-eml-duplicate")
+        eml = _eml(
+            subject="Unique UAT mail",
+            body="UniqueUploadTerm PO 470008888.",
+        )
+        with _RunningSurface(service) as surface:
+            first_response, first_body = surface.request_upload([("one.eml", eml)])
+            second_response, second_body = surface.request_upload([("same-copy.eml", eml)])
+
+        self.assertEqual(first_response.status, 201)
+        self.assertEqual(second_response.status, 201)
+        self.assertEqual(json.loads(first_body)["accepted_file_count"], 1)
+        self.assertEqual(json.loads(second_body)["accepted_file_count"], 0)
+        self.assertEqual(json.loads(second_body)["duplicate_file_count"], 1)
+        self.assertEqual(service.session_summary()["uploaded_message_count"], 1)
+        self.assertEqual(
+            service.query({"query_text": "UniqueUploadTerm", "limit": 5})["result_count"],
+            1,
+        )
+
+    def test_inline_text_attachment_is_warned_but_not_indexed(self) -> None:
+        service = _service("mail-human-uat-inline-attachment")
+        with _RunningSurface(service) as surface:
+            upload_response, upload_body = surface.request_upload(
+                [
+                    (
+                        "inline-attachment.eml",
+                        _eml_with_inline_text_attachment(
+                            body="SearchableMainBodyTerm PO 470007777.",
+                            attachment_body="ATTACHMENT_SECRET_94721",
+                        ),
+                    )
+                ]
+            )
+            main_query_response, main_query_body = surface.request_json(
+                "/api/query",
+                {"query_text": "SearchableMainBodyTerm", "limit": 5},
+            )
+            attachment_query_response, attachment_query_body = surface.request_json(
+                "/api/query",
+                {"query_text": "ATTACHMENT_SECRET_94721", "limit": 5},
+            )
+
+        upload = json.loads(upload_body)
+        main_query = json.loads(main_query_body)
+        attachment_query = json.loads(attachment_query_body)
+        self.assertEqual(upload_response.status, 201)
+        self.assertIn("uat_eml_attachments_not_indexed", upload["warnings"])
+        self.assertEqual(main_query_response.status, 200)
+        self.assertEqual(main_query["result_count"], 1)
+        self.assertEqual(attachment_query_response.status, 200)
+        self.assertEqual(attachment_query["result_count"], 0)
+        self.assertNotIn("ATTACHMENT_SECRET_94721", upload_body.decode("utf-8"))
+
+    def test_attached_eml_is_warned_but_not_indexed(self) -> None:
+        service = _service("mail-human-uat-attached-eml")
+        with _RunningSurface(service) as surface:
+            upload_response, upload_body = surface.request_upload(
+                [
+                    (
+                        "attached-message.eml",
+                        _eml_with_attached_message(
+                            body="VISIBLE_PARENT_BODY PO 470006666.",
+                            attached_body="ATTACHED_SECRET_TERM_56391",
+                        ),
+                    )
+                ]
+            )
+            parent_query_response, parent_query_body = surface.request_json(
+                "/api/query",
+                {"query_text": "VISIBLE_PARENT_BODY", "limit": 5},
+            )
+            attachment_query_response, attachment_query_body = surface.request_json(
+                "/api/query",
+                {"query_text": "ATTACHED_SECRET_TERM_56391", "limit": 5},
+            )
+
+        upload = json.loads(upload_body)
+        parent_query = json.loads(parent_query_body)
+        attachment_query = json.loads(attachment_query_body)
+        self.assertEqual(upload_response.status, 201)
+        self.assertIn("uat_eml_attachments_not_indexed", upload["warnings"])
+        self.assertEqual(parent_query_response.status, 200)
+        self.assertEqual(parent_query["result_count"], 1)
+        self.assertEqual(attachment_query_response.status, 200)
+        self.assertEqual(attachment_query["result_count"], 0)
+        self.assertNotIn("ATTACHED_SECRET_TERM_56391", upload_body.decode("utf-8"))
+
+    def test_upload_requires_access_code_and_rejects_msg_or_oversized_eml(self) -> None:
+        service = MailHumanUatService(
+            MailHumanUatHttpConfig(
+                bundle=_bundle(),
+                access_code=ACCESS_CODE,
+                state_dir=_paths.fresh_test_dir("mail-human-uat-upload-negative"),
+                fixed_now=NOW,
+                max_upload_request_bytes=2048,
+                max_upload_file_bytes=512,
+            )
+        )
+        with _RunningSurface(service) as surface:
+            denied, denied_body = surface.request_upload(
+                [("denied.eml", _eml(subject="Denied", body="Denied body"))],
+                authenticated=False,
+            )
+            unsupported, unsupported_body = surface.request_upload(
+                [("mail.msg", b"not a msg parser input")]
+            )
+            oversized, oversized_body = surface.request_upload(
+                [("large.eml", _eml(subject="Large", body="x" * 700))]
+            )
+
+        self.assertEqual(denied.status, 401)
+        self.assertEqual(json.loads(denied_body)["error_code"], "access_denied")
+        self.assertEqual(unsupported.status, 400)
+        self.assertEqual(json.loads(unsupported_body)["error_code"], "request_rejected")
+        self.assertEqual(oversized.status, 413)
+        self.assertEqual(
+            json.loads(oversized_body)["error_code"],
+            "upload_request_too_large",
+        )
+        self.assertEqual(service.session_summary()["uploaded_file_count"], 0)
+
+    def test_upload_event_failure_rolls_back_private_file_and_index(self) -> None:
+        state_dir = _paths.fresh_test_dir("mail-human-uat-upload-event-failure")
+        service = _service_from_state_dir(state_dir)
+
+        def fail_upload_event(payload):
+            if payload.get("event_type") == "mail_upload":
+                raise OSError("simulated upload event failure")
+            raise AssertionError("unexpected event")
+
+        service._event_store.append = fail_upload_event
+        with _RunningSurface(service) as surface:
+            response, body = surface.request_upload(
+                [
+                    (
+                        "rollback.eml",
+                        _eml(subject="Rollback", body="RollbackUploadTerm"),
+                    )
+                ]
+            )
+
+        self.assertEqual(response.status, 500)
+        self.assertEqual(json.loads(body)["error_code"], "request_failed")
+        self.assertEqual(service.session_summary()["uploaded_file_count"], 0)
+        self.assertEqual(
+            list((state_dir / "mail-human-uat-uploads.private").iterdir()),
+            [],
+        )
+
+    def test_upload_permission_failure_leaves_no_published_or_restart_visible_file(
+        self,
+    ) -> None:
+        state_dir = _paths.fresh_test_dir("mail-human-uat-upload-permission-failure")
+        service = _service_from_state_dir(state_dir)
+        with mock.patch(
+            "formowl_mail.human_uat_upload.os.fchmod",
+            side_effect=OSError("simulated permission failure"),
+        ):
+            with _RunningSurface(service) as surface:
+                response, body = surface.request_upload(
+                    [
+                        (
+                            "permission-failure.eml",
+                            _eml(
+                                subject="Permission failure",
+                                body="PermissionFailureUploadTerm",
+                            ),
+                        )
+                    ]
+                )
+
+        self.assertEqual(response.status, 500)
+        self.assertEqual(json.loads(body)["error_code"], "request_failed")
+        self.assertEqual(service.session_summary()["uploaded_file_count"], 0)
+        self.assertEqual(
+            list((state_dir / "mail-human-uat-uploads.private").iterdir()),
+            [],
+        )
+        restarted = _service_from_state_dir(state_dir)
+        self.assertEqual(restarted.session_summary()["uploaded_file_count"], 0)
 
     def test_rejects_unknown_feedback_query_and_unsafe_query_without_leaks(self) -> None:
         service = _service("mail-human-uat-negative")
@@ -389,6 +639,74 @@ def _auth_headers() -> dict[str, str]:
     return {"X-FormOwl-UAT-Code": ACCESS_CODE}
 
 
+def _eml(*, subject: str, body: str) -> bytes:
+    return (
+        "From: may@example.com\r\n"
+        "To: buyer@example.com\r\n"
+        f"Subject: {subject}\r\n"
+        "Date: Sat, 18 Jul 2026 12:30:00 +0800\r\n"
+        "Message-ID: <may-uat-message@example.com>\r\n"
+        "MIME-Version: 1.0\r\n"
+        'Content-Type: text/plain; charset="utf-8"\r\n'
+        "Content-Transfer-Encoding: 8bit\r\n"
+        "\r\n"
+        f"{body}\r\n"
+    ).encode("utf-8")
+
+
+def _eml_with_inline_text_attachment(*, body: str, attachment_body: str) -> bytes:
+    return (
+        "From: may@example.com\r\n"
+        "To: buyer@example.com\r\n"
+        "Subject: Inline attachment boundary\r\n"
+        "Date: Sat, 18 Jul 2026 12:30:00 +0800\r\n"
+        "Message-ID: <may-uat-inline-attachment@example.com>\r\n"
+        "MIME-Version: 1.0\r\n"
+        'Content-Type: multipart/mixed; boundary="formowl-uat-boundary"\r\n'
+        "\r\n"
+        "--formowl-uat-boundary\r\n"
+        'Content-Type: text/plain; charset="utf-8"\r\n'
+        "\r\n"
+        f"{body}\r\n"
+        "--formowl-uat-boundary\r\n"
+        'Content-Type: text/plain; charset="utf-8"; name="secret.txt"\r\n'
+        'Content-Disposition: inline; filename="secret.txt"\r\n'
+        "\r\n"
+        f"{attachment_body}\r\n"
+        "--formowl-uat-boundary--\r\n"
+    ).encode("utf-8")
+
+
+def _eml_with_attached_message(*, body: str, attached_body: str) -> bytes:
+    return (
+        "From: may@example.com\r\n"
+        "To: buyer@example.com\r\n"
+        "Subject: Attached EML boundary\r\n"
+        "Date: Sat, 18 Jul 2026 12:30:00 +0800\r\n"
+        "Message-ID: <may-uat-attached-eml@example.com>\r\n"
+        "MIME-Version: 1.0\r\n"
+        'Content-Type: multipart/mixed; boundary="formowl-uat-outer"\r\n'
+        "\r\n"
+        "--formowl-uat-outer\r\n"
+        'Content-Type: text/plain; charset="utf-8"\r\n'
+        "\r\n"
+        f"{body}\r\n"
+        "--formowl-uat-outer\r\n"
+        "Content-Type: message/rfc822\r\n"
+        'Content-Disposition: attachment; filename="attached.eml"\r\n'
+        "\r\n"
+        "From: supplier@example.com\r\n"
+        "To: may@example.com\r\n"
+        "Subject: Nested private message\r\n"
+        "Date: Sat, 18 Jul 2026 10:00:00 +0800\r\n"
+        "Message-ID: <nested-private@example.com>\r\n"
+        'Content-Type: text/plain; charset="utf-8"\r\n'
+        "\r\n"
+        f"{attached_body}\r\n"
+        "--formowl-uat-outer--\r\n"
+    ).encode("utf-8")
+
+
 class _RunningSurface:
     def __init__(self, service: MailHumanUatService) -> None:
         self.server = create_mail_human_uat_http_server("127.0.0.1", 0, service)
@@ -435,6 +753,40 @@ class _RunningSurface:
                 "Content-Type": "application/json",
                 "Content-Length": str(len(body)),
             },
+        )
+
+    def request_upload(
+        self,
+        files: list[tuple[str, bytes]],
+        *,
+        authenticated: bool = True,
+    ):
+        boundary = "----formowl-may-uat-test-boundary"
+        body = bytearray()
+        for filename, content in files:
+            body.extend(f"--{boundary}\r\n".encode("ascii"))
+            body.extend(
+                (
+                    'Content-Disposition: form-data; name="mail_files"; '
+                    f'filename="{filename}"\r\n'
+                    "Content-Type: application/octet-stream\r\n"
+                    "\r\n"
+                ).encode("utf-8")
+            )
+            body.extend(content)
+            body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode("ascii"))
+        headers = {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(body)),
+        }
+        if authenticated:
+            headers.update(_auth_headers())
+        return self.request(
+            "POST",
+            "/api/upload",
+            body=bytes(body),
+            headers=headers,
         )
 
 

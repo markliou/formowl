@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the temporary read-only FormOwl mail human-UAT web surface."""
+"""Run the temporary FormOwl mail upload and evidence human-UAT web surface."""
 
 from __future__ import annotations
 
@@ -59,7 +59,8 @@ def main() -> int:
     print(
         "FORMOWL_MAIL_UAT_READY "
         f"host={args.host} port={server.server_address[1]} "
-        f"messages={len(bundle.messages)} read_only=true",
+        f"messages={len(bundle.messages)} upload_supported=true "
+        "business_systems_read_only=true",
         flush=True,
     )
     try:
