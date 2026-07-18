@@ -148,7 +148,6 @@ function makeDocument(ids) {
   }
   const body = new FakeElement("body");
   body.scrollHeight = 1200;
-  const quickElements = [];
   const document = {
     body,
     getElementById(id) {
@@ -158,11 +157,8 @@ function makeDocument(ids) {
     createElement(tagName) {
       return new FakeElement(tagName);
     },
-    querySelectorAll(selector) {
-      return selector === ".quick" ? quickElements : [];
-    },
   };
-  return { document, elements, quickElements };
+  return { document, elements };
 }
 
 function makeWindow(origin = "http://formowl.test") {
@@ -225,14 +221,13 @@ async function settle() {
 }
 
 async function runChatSmoke() {
-  const { document, elements, quickElements } = makeDocument([
+  const { document, elements } = makeDocument([
     "conversation",
     "upload-modal",
     "upload-frame",
     "send",
     "chat-input",
     "open-upload",
-    "starter-upload",
     "close-upload",
     "new-chat",
     "upload-count",
@@ -250,10 +245,6 @@ async function runChatSmoke() {
     "top-avatar",
     "shell-toast",
   ]);
-  const quick = new FakeElement("button");
-  quick.dataset.promptId = "recent_schedule";
-  quick.dataset.query = "最近一次文顥的量產時間";
-  quickElements.push(quick);
   const frameWindow = {};
   elements.get("upload-frame").contentWindow = frameWindow;
   const window = makeWindow();
@@ -337,11 +328,16 @@ async function runChatSmoke() {
   await window.dispatch("message", {
     origin: window.location.origin,
     source: frameWindow,
-    data: { type: "formowl-upload-complete", accepted_file_count: 2 },
+    data: {
+      type: "formowl-upload-complete",
+      accepted_file_count: 2,
+      indexed_item_count: 37,
+    },
   });
   await settle();
   assert.equal(elements.get("upload-modal").classList.contains("hidden"), true);
-  assert.match(textTree(elements.get("conversation")), /已加入 2 封新郵件/u);
+  assert.match(textTree(elements.get("conversation")), /已加入 2 個檔案/u);
+  assert.match(textTree(elements.get("conversation")), /37 個可搜尋項目/u);
   assert.equal(document.body.classList.contains("has-conversation"), true);
 
   requests.length = 0;
@@ -362,21 +358,6 @@ async function runChatSmoke() {
   assert.equal(JSON.parse(queryRequest.options.body).sort, "relevance");
 
   requests.length = 0;
-  await quick.dispatch("click");
-  await settle();
-  interactionRequest = requests.find((item) => {
-    if (item.path !== "/api/interaction") return false;
-    return JSON.parse(item.options.body).action === "quick_prompt";
-  });
-  assert.ok(interactionRequest);
-  queryRequest = requests.find((item) => item.path === "/api/query");
-  assert.ok(queryRequest);
-  queryPayload = JSON.parse(queryRequest.options.body);
-  assert.equal(queryPayload.source, "quick_prompt");
-  const quickInteractionPayload = JSON.parse(interactionRequest.options.body);
-  assert.ok(quickInteractionPayload.sequence < queryPayload.sequence);
-
-  requests.length = 0;
   await elements.get("sidebar-toggle").dispatch("click");
   assert.equal(document.body.classList.contains("sidebar-collapsed"), true);
   interactionRequest = requests.find((item) => item.path === "/api/interaction");
@@ -390,7 +371,7 @@ async function runChatSmoke() {
     JSON.parse(interactionRequest.options.body).details.control,
     "tools_menu",
   );
-  assert.match(elements.get("shell-toast").textContent, /郵件上傳與郵件證據查詢/u);
+  assert.match(elements.get("shell-toast").textContent, /資料上傳與證據查詢/u);
   assert.equal(elements.get("shell-toast").classList.contains("visible"), true);
 
   requests.length = 0;
@@ -474,6 +455,7 @@ async function runUploadSmoke() {
     return response({
       accepted_file_count: 1,
       duplicate_file_count: 0,
+      indexed_item_count: 1,
     });
   };
   const context = vm.createContext({
@@ -491,8 +473,8 @@ async function runUploadSmoke() {
   });
   vm.runInContext(extractScript("_UPLOAD_IFRAME_HTML"), context);
 
-  context.selectFiles([{ name: "too-large.eml", size: 25 * 1024 * 1024 + 1 }]);
-  assert.match(elements.get("message").textContent, /不可超過 25 MB/u);
+  context.selectFiles([{ name: "too-large.pdf", size: 25 * 1024 * 1024 + 1 }]);
+  assert.match(elements.get("message").textContent, /其他格式單檔不可超過 25 MB/u);
   assert.equal(elements.get("message").classList.contains("error"), true);
   assert.equal(
     JSON.parse(requests.at(-1).options.body).details.reason,
@@ -500,17 +482,16 @@ async function runUploadSmoke() {
   );
 
   context.selectFiles([
-    { name: "one.eml", size: 21 * 1024 * 1024 },
-    { name: "two.eml", size: 21 * 1024 * 1024 },
-    { name: "three.eml", size: 21 * 1024 * 1024 },
+    { name: "one.pst", size: 300 * 1024 * 1024 },
+    { name: "two.pst", size: 300 * 1024 * 1024 },
   ]);
-  assert.match(elements.get("message").textContent, /合計不可超過 60 MB/u);
+  assert.match(elements.get("message").textContent, /合計不可超過 500 MB/u);
 
   context.selectFiles([{ name: "unsupported.msg", size: 1024 }]);
-  assert.match(elements.get("message").textContent, /只接受 .eml/u);
+  assert.match(elements.get("message").textContent, /EML、PST、PDF、TXT/u);
 
-  context.selectFiles([{ name: "valid.eml", size: 1024 }]);
-  assert.match(elements.get("message").textContent, /已選擇 1 封郵件/u);
+  context.selectFiles([{ name: "valid.pdf", size: 1024 }]);
+  assert.match(elements.get("message").textContent, /已選擇 1 個檔案/u);
   uploadShouldFail = true;
   await elements.get("upload").dispatch("click");
   assert.match(elements.get("message").textContent, /上傳失敗/u);
@@ -524,6 +505,7 @@ async function runUploadSmoke() {
   assert.equal(posted.at(-1).payload.type, "formowl-upload-complete");
   assert.equal(posted.at(-1).payload.accepted_file_count, 1);
   assert.equal(posted.at(-1).payload.duplicate_file_count, 0);
+  assert.equal(posted.at(-1).payload.indexed_item_count, 1);
   assert.equal(posted.at(-1).targetOrigin, window.location.origin);
   assert.equal(elements.get("files").children.length, 0);
   assert.equal(elements.get("mail-files").value, "");

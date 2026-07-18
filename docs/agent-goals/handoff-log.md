@@ -259,3 +259,19 @@ Lifecycle label: `active`.
   isolated Node 20 embedded-JavaScript smoke, full Ruff check/format check for
   256 files, and `git diff --check`. Engineering, governance/privacy, and UAT
   UX reviewers returned 3/3 `RELEASE_DECISION: AGREE`.
+
+## 2026-07-18 — Broader UAT source upload iteration
+
+- Removed all starter/example prompt cards from the shared UAT landing page so
+  colleagues must compose their own requests and the private behavior log can
+  capture their natural instruction patterns.
+- Generalized the private upload/index path from EML-only to EML, whole PST
+  batches, text-based PDF, and TXT. PST uses the existing `readpst` extraction
+  adapter, PDF uses `pdftotext`, and TXT decodes UTF-8, UTF-16, or CP950.
+  Scanned-PDF OCR and automatic indexing of EML-embedded attachments remain
+  explicit non-capabilities for this temporary surface.
+- Added a dedicated `formowl-may-uat:local` image tag so parallel agents can
+  rebuild `formowl-dev:local` without removing UAT parser dependencies.
+  Speed-focused verification passed 27 HTTP/upload tests, the embedded
+  JavaScript smoke, a real text-PDF parser smoke, and `git diff --check`; the
+  full suite and reviewer gate were intentionally not run for this iteration.

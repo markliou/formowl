@@ -5,8 +5,10 @@ Lifecycle: temporary development/UAT harness.
 This branch provides a shared browser surface for colleagues to test FormOwl
 mail retrieval without connecting ChatGPT. The page follows the familiar
 ChatGPT interaction skeleton: collapsible conversation sidebar, centered
-new-chat prompt, starter cards, bottom-docked composer after the first
-question, and a same-origin upload iframe opened from the composer.
+new-chat prompt, bottom-docked composer after the first question, and a
+same-origin upload iframe opened from the composer. The landing page
+intentionally has no starter prompts so the UAT log captures how colleagues
+word their own requests.
 
 ## Behavior
 
@@ -20,13 +22,16 @@ question, and a same-origin upload iframe opened from the composer.
   allows immediate questions about the new mail.
 - Uses one shared server-bound UAT identity and workspace; the browser still
   cannot provide identity, grant, storage, parser, worker, or path controls.
-- Accepts up to 20 `.eml` files per request, with a 25 MB per-file limit. The
-  browser preflight also keeps the combined selection at or below 60 MB so the
-  multipart request remains below the server's 64 MB request limit.
-- Parses searchable subject, sender, sent time, plain-text/HTML body, and
-  source observations immediately after upload.
-- Stores uploaded EML bytes by content hash in the private UAT state volume so
-  they remain queryable after a service restart.
+- Accepts up to 20 EML, PST, PDF, or TXT files per request. PST is limited to
+  500 MB per file; the other formats are limited to 25 MB per file; the browser
+  keeps the combined selection at or below 500 MB. This temporary stdlib HTTP
+  surface still buffers the multipart request in memory and is not the final
+  production streaming-upload implementation.
+- Parses EML subject, sender, sent time, and plain-text/HTML body; expands a PST
+  batch with the existing `readpst` adapter; extracts text from text-based PDF
+  files with `pdftotext`; and decodes UTF-8/UTF-16/CP950 TXT references.
+- Stores source bytes by content hash and format in the private UAT state
+  volume so they remain queryable after a service restart.
 - Accepts a question, PO, material number, supplier, or Pull-in keyword.
 - Automatically prefers recent ordering for questions containing terms such as
   `最近`, `最新`, `近期`, `latest`, or `recent`; other questions use relevance
@@ -35,13 +40,13 @@ question, and a same-origin upload iframe opened from the composer.
 - Records upload, query, and tester feedback events in a private runtime
   directory.
 - Records submitted questions together with an anonymous browser visitor id,
-  anonymous tab/session id, a browser-side sequence number, and whether the
-  question came from the composer or a starter prompt. The submitted-question
-  event is written before retrieval begins, so failed queries remain available
-  for diagnosis.
+  anonymous tab/session id, and a browser-side sequence number. Questions come
+  from the composer because the example prompt menu is intentionally absent.
+  The submitted-question event is written before retrieval begins, so failed
+  queries remain available for diagnosis.
 - Records a closed set of exploration actions: page view, sidebar toggle, new
-  chat, starter prompt, the visible ChatGPT-style shell controls, upload
-  open/close, coarse upload selection/validation, upload
+  chat, the visible ChatGPT-style shell controls, upload open/close, coarse
+  upload selection/validation, upload
   submission/completion, and query result/error.
 - Visible shell controls never fail silently: controls not implemented in this
   temporary UAT show a small in-page explanation and record only a closed
@@ -78,16 +83,15 @@ how colleagues discover the interface and what they ask:
 
 ## Upload format boundary
 
-The shared UAT upload path supports `.eml` only. It intentionally rejects
-`.msg`, `.pst`, `.ost`, and `.mbox` rather than pretending that an unsupported
-format was parsed. The current container has `readpst` for governed PST batch
-work but no MSG parser. If the testers' real workflow cannot produce EML, add a
-separately tested server-side MSG conversion adapter instead of accepting MSG
-as opaque EML.
+The shared UAT upload path currently supports `.eml`, `.pst`, `.pdf`, and
+`.txt`. PST is a batch source and may create many searchable mail items from
+one uploaded file. PDF support uses text extraction and does not yet perform
+OCR for scanned/image-only PDFs. TXT supports UTF-8, UTF-16, and CP950.
 
-Attachments remain part of the stored EML carrier, but attachment file content
-is not indexed by this UAT surface. The response reports a warning when an EML
-contains attachments.
+The surface still rejects `.msg`, `.ost`, and `.mbox` rather than claiming an
+unsupported parser. Attachments remain part of the stored EML carrier, but
+embedded attachment content is not indexed automatically. A tester can upload
+a PDF or TXT attachment separately when it should become searchable.
 
 ## Shared UAT boundary
 
@@ -104,7 +108,7 @@ submitting queries, feedback, analytics, or generated EML into the shared test
 index.
 
 Keyboard users can focus the composer, shell controls, feedback controls, and
-the visually hidden file input through its visible “選擇 EML” label. Mobile new
+the visually hidden file input through its visible “選擇檔案” label. Mobile new
 chat/current-conversation actions close the sidebar drawer before returning
 focus to the chat.
 
@@ -114,7 +118,16 @@ be exposed through a public tunnel.
 
 ## Container run
 
-The canonical runtime is the repository dev container:
+Build a dedicated UAT image so another agent rebuilding the shared
+`formowl-dev:local` tag cannot remove the PST/PDF parser dependencies:
+
+```sh
+docker build --progress=plain \
+  -f containers/dev/Dockerfile \
+  -t formowl-may-uat:local .
+```
+
+Run the shared surface from that dedicated image:
 
 ```sh
 docker run --rm \
@@ -124,7 +137,7 @@ docker run --rm \
   -v "<private-cache>:/private-cache:ro" \
   -v "<private-uat-state>:/uat-state" \
   -w /workspace \
-  formowl-dev:local \
+  formowl-may-uat:local \
   python scripts/mail_human_uat.py \
     --host 0.0.0.0 \
     --port 8088 \
@@ -134,16 +147,16 @@ docker run --rm \
     --state-dir /uat-state
 ```
 
-Do not commit the private corpus, private evidence-bundle cache, uploaded EML
+Do not commit the private corpus, private evidence-bundle cache, uploaded source
 files, or UAT event log. The private UAT state volume contains both the
 feedback JSONL and `mail-human-uat-uploads.private/`.
 
 ## Verification
 
-Run the Python service tests in the canonical dev container:
+Run the focused Python service tests in the dedicated UAT image:
 
 ```sh
-docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-may-uat:local \
   python -m unittest discover -s tests -p 'test_mail_human_uat_http.py'
 ```
 

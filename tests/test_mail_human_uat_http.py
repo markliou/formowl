@@ -9,6 +9,10 @@ from unittest import mock
 
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError
+from formowl_ingestion.extractors.mail.pst import (
+    PstMailArchiveExtractor,
+    _ParserCommandResult,
+)
 from formowl_mail.bundle import (
     EmailBodySegment,
     EmailMessage,
@@ -55,6 +59,11 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertIn("!event.isComposing", html)
         self.assertIn("sort: querySort(query)", html)
         self.assertIn('"最近", "最新", "近期", "目前", "現在"', html)
+        self.assertNotIn('id="starter-grid"', html)
+        self.assertNotIn('class="starter-card', html)
+        self.assertNotIn("最近一次文顥的量產時間", html)
+        self.assertNotIn("有哪些料件需要 pull-in", html)
+        self.assertNotIn("PO 470002154", html)
         self.assertNotIn('id="gate"', html)
         self.assertNotIn("輸入測試存取碼", html)
         self.assertNotIn("X-FormOwl-UAT-Code", html)
@@ -88,9 +97,15 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertIn('id="mail-files"', html)
         self.assertIn("formowl-upload-complete", html)
         self.assertIn("window.parent.postMessage", html)
-        self.assertIn("合計最多 60 MB", html)
-        self.assertIn("file.size > maxFileBytes", html)
+        self.assertIn("目前可處理 EML、PST、PDF、TXT", html)
+        self.assertIn("PST 單檔最多 500 MB", html)
+        self.assertIn("其他格式單檔最多 25 MB", html)
+        self.assertIn("合計最多 500 MB", html)
+        self.assertIn('accept=".eml,.pst,.pdf,.txt', html)
+        self.assertIn("file.size > limit", html)
         self.assertIn("> maxTotalBytes", html)
+        self.assertNotIn("目前只支援 EML", html)
+        self.assertNotIn("選擇 EML", html)
         self.assertEqual(response.getheader("X-Frame-Options"), "SAMEORIGIN")
         self.assertIn("frame-ancestors 'self'", response.getheader("Content-Security-Policy"))
 
@@ -166,14 +181,14 @@ class MailHumanUatHttpTests(unittest.TestCase):
                     "details": {"viewport": "desktop"},
                 },
             )
-            prompt_response, prompt_body = surface.request_json(
+            upload_open_response, upload_open_body = surface.request_json(
                 "/api/interaction",
                 {
                     "visitor_id": VISITOR_ID,
                     "session_id": SESSION_ID,
                     "sequence": 2,
-                    "action": "quick_prompt",
-                    "details": {"prompt_id": "pull_in"},
+                    "action": "upload_open",
+                    "details": {"source": "composer"},
                 },
             )
             query_response, query_body = surface.request_json(
@@ -185,7 +200,7 @@ class MailHumanUatHttpTests(unittest.TestCase):
                     "visitor_id": VISITOR_ID,
                     "session_id": SESSION_ID,
                     "sequence": 3,
-                    "source": "quick_prompt",
+                    "source": "composer",
                 },
             )
             summary_response, summary_body = surface.request(
@@ -195,8 +210,8 @@ class MailHumanUatHttpTests(unittest.TestCase):
 
         self.assertEqual(page_view_response.status, 200)
         self.assertEqual(json.loads(page_view_body)["action"], "page_view")
-        self.assertEqual(prompt_response.status, 200)
-        self.assertEqual(json.loads(prompt_body)["action"], "quick_prompt")
+        self.assertEqual(upload_open_response.status, 200)
+        self.assertEqual(json.loads(upload_open_body)["action"], "upload_open")
         self.assertEqual(query_response.status, 200)
         self.assertEqual(json.loads(query_body)["status"], "ok")
         summary = json.loads(summary_body)
@@ -204,7 +219,7 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(summary["interaction_count"], 2)
         self.assertEqual(
             summary["interaction_counts"],
-            {"page_view": 1, "quick_prompt": 1},
+            {"page_view": 1, "upload_open": 1},
         )
         self.assertEqual(summary["anonymous_visitor_count"], 1)
         self.assertEqual(summary["anonymous_session_count"], 1)
@@ -216,9 +231,9 @@ class MailHumanUatHttpTests(unittest.TestCase):
             ["interaction", "interaction", "query", "query_result"],
         )
         self.assertEqual(events[0]["details"], {"viewport": "desktop"})
-        self.assertEqual(events[1]["details"], {"prompt_id": "pull_in"})
+        self.assertEqual(events[1]["details"], {"source": "composer"})
         self.assertEqual(events[2]["query_text"], "有哪些料件需要 pull-in")
-        self.assertEqual(events[2]["source"], "quick_prompt")
+        self.assertEqual(events[2]["source"], "composer")
         self.assertEqual(events[2]["visitor_id"], VISITOR_ID)
         self.assertEqual(events[2]["session_id"], SESSION_ID)
         self.assertEqual([event["sequence"] for event in events[:3]], [1, 2, 3])
@@ -563,6 +578,110 @@ class MailHumanUatHttpTests(unittest.TestCase):
             service.query({"query_text": "UniqueUploadTerm", "limit": 5})["result_count"],
             1,
         )
+
+    def test_txt_reference_is_persistent_and_immediately_queryable(self) -> None:
+        state_dir = _paths.fresh_test_dir("mail-human-uat-txt-upload")
+        service = _service_from_state_dir(state_dir)
+        content = (
+            "量產會議附件\n\n"
+            "TXT_REFERENCE_TERM_8172 對應料件 SP.TXT.001，請確認 2026-08-03 排程。"
+        ).encode("utf-8")
+        with _RunningSurface(service) as surface:
+            upload_response, upload_body = surface.request_upload(
+                [("meeting-reference.txt", content)]
+            )
+            query_response, query_body = surface.request_json(
+                "/api/query",
+                {"query_text": "TXT_REFERENCE_TERM_8172", "limit": 5},
+            )
+
+        upload = json.loads(upload_body)
+        query = json.loads(query_body)
+        self.assertEqual(upload_response.status, 201)
+        self.assertEqual(upload["accepted_file_count"], 1)
+        self.assertEqual(upload["indexed_item_count"], 1)
+        self.assertEqual(query_response.status, 200)
+        self.assertEqual(query["result_count"], 1)
+        self.assertIn("SP.TXT.001", query["results"][0]["snippet"])
+        stored = list((state_dir / "mail-human-uat-uploads.private").iterdir())
+        self.assertEqual(len(stored), 1)
+        self.assertRegex(stored[0].name, r"^[0-9a-f]{64}\.txt$")
+
+        restarted = _service_from_state_dir(state_dir)
+        self.assertEqual(
+            restarted.query({"query_text": "TXT_REFERENCE_TERM_8172", "limit": 5})["result_count"],
+            1,
+        )
+
+    def test_text_pdf_is_accepted_as_searchable_reference(self) -> None:
+        service = _service("mail-human-uat-pdf-upload")
+        with mock.patch(
+            "formowl_mail.human_uat_upload._extract_pdf_text",
+            return_value=(
+                "PDF_REFERENCE_TERM_4921\n"
+                "附件內容指出料件 SP.PDF.002 需要 pull-in 到 2026-08-05。"
+            ),
+        ):
+            with _RunningSurface(service) as surface:
+                upload_response, upload_body = surface.request_upload(
+                    [("supplier-reference.pdf", b"%PDF-1.4\nmock-uplift-fixture")]
+                )
+                query_response, query_body = surface.request_json(
+                    "/api/query",
+                    {"query_text": "PDF_REFERENCE_TERM_4921", "limit": 5},
+                )
+
+        upload = json.loads(upload_body)
+        query = json.loads(query_body)
+        self.assertEqual(upload_response.status, 201)
+        self.assertEqual(upload["accepted_file_count"], 1)
+        self.assertEqual(upload["indexed_item_count"], 1)
+        self.assertEqual(query_response.status, 200)
+        self.assertEqual(query["result_count"], 1)
+        self.assertIn("SP.PDF.002", query["results"][0]["snippet"])
+
+    def test_pst_batch_is_expanded_into_searchable_mail(self) -> None:
+        state_dir = _paths.fresh_test_dir("mail-human-uat-pst-upload")
+
+        def runner(command, _timeout):
+            output_dir = Path(command[command.index("-o") + 1])
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "message-1.eml").write_bytes(
+                _eml(
+                    subject="PST batch mail",
+                    body="PST_BATCH_TERM_6631 includes material SP.PST.003.",
+                )
+            )
+            return _ParserCommandResult(returncode=0)
+
+        adapter = PstMailArchiveExtractor(
+            runner=runner,
+            scratch_parent=state_dir / "pst-adapter-scratch",
+        )
+        with mock.patch(
+            "formowl_mail.human_uat_upload.PstMailArchiveExtractor",
+            return_value=adapter,
+        ):
+            service = _service_from_state_dir(state_dir)
+            with _RunningSurface(service) as surface:
+                upload_response, upload_body = surface.request_upload(
+                    [("mail-archive.pst", b"!BDN synthetic-UAT-PST")]
+                )
+                query_response, query_body = surface.request_json(
+                    "/api/query",
+                    {"query_text": "PST_BATCH_TERM_6631", "limit": 5},
+                )
+
+        upload = json.loads(upload_body)
+        query = json.loads(query_body)
+        self.assertEqual(upload_response.status, 201)
+        self.assertEqual(upload["accepted_file_count"], 1)
+        self.assertEqual(upload["indexed_item_count"], 1)
+        self.assertEqual(query_response.status, 200)
+        self.assertEqual(query["result_count"], 1)
+        self.assertIn("SP.PST.003", query["results"][0]["snippet"])
+        stored = list((state_dir / "mail-human-uat-uploads.private").glob("*.pst"))
+        self.assertEqual(len(stored), 1)
 
     def test_inline_text_attachment_is_warned_but_not_indexed(self) -> None:
         service = _service("mail-human-uat-inline-attachment")

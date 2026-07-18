@@ -21,16 +21,16 @@ from .bundle import MailEvidenceBundle
 from .human_uat_upload import (
     PrivateUatMailUploadStore,
     UatUploadRequestTooLarge,
-    UatUploadedMailPart,
-    parse_uat_eml_multipart,
-    parse_uat_uploaded_eml,
-    upload_import_session_id,
+    UatUploadedResourcePart,
+    parse_uat_resource_multipart,
+    parse_uat_stored_resource,
+    parse_uat_uploaded_resource,
 )
 from .query import MailEvidenceQueryGateway, _redact_mail_public_text
 
 _MAX_REQUEST_BYTES = 32 * 1024
-_MAX_UPLOAD_REQUEST_BYTES = 64 * 1024 * 1024
-_MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024
+_MAX_UPLOAD_REQUEST_BYTES = 520 * 1024 * 1024
+_MAX_UPLOAD_FILE_BYTES = 500 * 1024 * 1024
 _MAX_UPLOAD_FILES = 20
 _MAX_QUERY_CHARS = 500
 _MAX_NOTE_CHARS = 1000
@@ -50,7 +50,7 @@ _VERDICTS = {
     "citation_issue",
 }
 _SORT_OPTIONS = {"relevance", "recent"}
-_QUERY_SOURCES = {"api", "composer", "quick_prompt"}
+_QUERY_SOURCES = {"api", "composer"}
 _QUERY_KEYS = {
     "query_text",
     "limit",
@@ -80,7 +80,6 @@ _INTERACTION_ACTIONS = {
     "sidebar_toggle",
     "new_chat",
     "shell_control",
-    "quick_prompt",
     "upload_open",
     "upload_close",
     "upload_files_selected",
@@ -99,11 +98,10 @@ _SHELL_CONTROLS = {
     "profile_card",
     "profile_avatar",
 }
-_PROMPT_IDS = {"recent_schedule", "pull_in", "purchase_order"}
 _UPLOAD_OPEN_SOURCES = {"composer", "landing", "no_result"}
 _UPLOAD_CLOSE_SOURCES = {"button", "backdrop", "iframe_cancel"}
 _UPLOAD_VALIDATION_REASONS = {"file_count", "file_type", "file_size", "total_size"}
-_UPLOAD_SIZE_BUCKETS = {"under_5mb", "5_to_25mb", "25_to_60mb"}
+_UPLOAD_SIZE_BUCKETS = {"under_5mb", "5_to_25mb", "25_to_60mb", "60_to_500mb"}
 _BUSINESS_ALIASES = (
     (
         ("量產", "打件", "生產排程", "投產"),
@@ -187,17 +185,20 @@ class MailHumanUatService:
         self._lock = threading.RLock()
         self.started_at = _timestamp(config.fixed_now)
         actor = config.bundle.mail_import_session
+        stored_resources = self._upload_store.load()
         loaded_uploads = [
-            parse_uat_uploaded_eml(
-                content,
+            parse_uat_stored_resource(
+                stored,
                 owner_user_id=actor.owner_user_id,
                 workspace_id=actor.workspace_id,
                 created_at=self.started_at,
+                scratch_parent=self._upload_store.root,
             )
-            for _, content in self._upload_store.load()
+            for stored in stored_resources
         ]
         self._uploaded_content_hashes = {parsed.content_hash for parsed in loaded_uploads}
-        self._uploaded_bundles = [parsed.bundle for parsed in loaded_uploads]
+        self._uploaded_resource_count = len(loaded_uploads)
+        self._uploaded_bundles = [bundle for parsed in loaded_uploads for bundle in parsed.bundles]
         self._uploaded_warnings = Counter(
             warning for parsed in loaded_uploads for warning in parsed.warnings
         )
@@ -205,7 +206,7 @@ class MailHumanUatService:
 
     def health(self) -> dict[str, Any]:
         with self._lock:
-            uploaded_file_count = len(self._uploaded_bundles)
+            uploaded_file_count = self._uploaded_resource_count
         payload = {
             "status": "ready",
             "surface": "mail_human_uat",
@@ -282,19 +283,21 @@ class MailHumanUatService:
             message_by_id = self._message_by_id
             all_bundles = self._all_bundles
             uploaded_message_ids = self._uploaded_message_ids
-            uploaded_file_count = len(self._uploaded_bundles)
+            uploaded_bundle_ids = self._uploaded_bundle_ids
+            uploaded_file_count = self._uploaded_resource_count
         gateway_results = [base_result]
         if upload_gateway is not None:
-            gateway_results.append(
+            gateway_results.extend(
                 upload_gateway.query_mail_evidence(
                     query_text=expanded_query,
                     requester_user_id=actor.owner_user_id,
                     workspace_id=actor.workspace_id,
                     session_id="session_mail_human_uat",
-                    mail_import_session_id=upload_import_session_id(),
+                    mail_evidence_bundle_id=bundle_id,
                     limit=_RETRIEVAL_CANDIDATE_LIMIT,
                     now=self.config.fixed_now,
                 ).to_dict()
+                for bundle_id in uploaded_bundle_ids
             )
         evidence_snippets = [
             snippet
@@ -538,7 +541,7 @@ class MailHumanUatService:
 
     def upload_mail_files(
         self,
-        files: Sequence[UatUploadedMailPart],
+        files: Sequence[UatUploadedResourcePart],
     ) -> dict[str, Any]:
         if not files or len(files) > self.config.max_upload_files:
             raise ContractValidationError("UAT upload file count is invalid")
@@ -547,18 +550,19 @@ class MailHumanUatService:
         parsed_by_hash = {}
         duplicate_in_request_count = 0
         for uploaded_file in files:
-            parsed = parse_uat_uploaded_eml(
-                uploaded_file.content,
+            parsed = parse_uat_uploaded_resource(
+                uploaded_file,
                 owner_user_id=actor.owner_user_id,
                 workspace_id=actor.workspace_id,
                 created_at=created_at,
+                scratch_parent=self._upload_store.root,
             )
             if parsed.content_hash in parsed_by_hash:
                 duplicate_in_request_count += 1
                 continue
             parsed_by_hash[parsed.content_hash] = (parsed, uploaded_file.content)
 
-        created_hashes: list[str] = []
+        created_resources: list[tuple[str, str]] = []
         with self._lock:
             existing_hashes = set(self._uploaded_content_hashes)
             new_items = [
@@ -569,7 +573,7 @@ class MailHumanUatService:
             duplicate_count = duplicate_in_request_count + len(parsed_by_hash) - len(new_items)
             prospective_bundles = [
                 *self._uploaded_bundles,
-                *(parsed.bundle for parsed, _ in new_items),
+                *(bundle for parsed, _ in new_items for bundle in parsed.bundles),
             ]
             prospective_gateway = (
                 MailEvidenceQueryGateway(prospective_bundles) if prospective_bundles else None
@@ -577,8 +581,12 @@ class MailHumanUatService:
             warnings = sorted({warning for parsed, _ in new_items for warning in parsed.warnings})
             try:
                 for parsed, content in new_items:
-                    if self._upload_store.store(parsed.content_hash, content):
-                        created_hashes.append(parsed.content_hash)
+                    if self._upload_store.store(
+                        parsed.content_hash,
+                        parsed.source_format,
+                        content,
+                    ):
+                        created_resources.append((parsed.content_hash, parsed.source_format))
                 self._event_store.append(
                     {
                         "event_type": "mail_upload",
@@ -586,15 +594,18 @@ class MailHumanUatService:
                         "accepted_file_count": len(new_items),
                         "duplicate_file_count": duplicate_count,
                         "content_hashes": [parsed.content_hash for parsed, _ in new_items],
+                        "source_formats": sorted({parsed.source_format for parsed, _ in new_items}),
+                        "indexed_item_count": sum(parsed.message_count for parsed, _ in new_items),
                         "warnings": warnings,
                     }
                 )
             except Exception:
-                for content_hash in created_hashes:
-                    self._upload_store.remove(content_hash)
+                for content_hash, source_format in created_resources:
+                    self._upload_store.remove(content_hash, source_format)
                 raise
 
             self._uploaded_content_hashes.update(parsed.content_hash for parsed, _ in new_items)
+            self._uploaded_resource_count += len(new_items)
             self._uploaded_bundles = prospective_bundles
             for parsed, _ in new_items:
                 self._uploaded_warnings.update(parsed.warnings)
@@ -602,19 +613,22 @@ class MailHumanUatService:
                 prospective_bundles,
                 gateway=prospective_gateway,
             )
-            total_uploaded_file_count = len(self._uploaded_bundles)
+            total_uploaded_file_count = self._uploaded_resource_count
             total_uploaded_message_count = len(self._uploaded_message_ids)
 
+        uploaded_message_count = sum(parsed.message_count for parsed, _ in new_items)
         response = {
             "status": "uploaded",
             "accepted_file_count": len(new_items),
             "duplicate_file_count": duplicate_count,
-            "uploaded_message_count": len(new_items),
+            "uploaded_message_count": uploaded_message_count,
+            "indexed_item_count": uploaded_message_count,
             "total_uploaded_file_count": total_uploaded_file_count,
             "total_uploaded_message_count": total_uploaded_message_count,
             "warnings": warnings,
             "notice": (
-                "新郵件已加入共享 UAT 索引，可立即回到聊天查詢。" "附件內容目前不會建立搜尋索引。"
+                "新資料已加入共享 UAT 索引，可立即回到聊天查詢。"
+                "EML 內嵌附件內容仍不會自動建立搜尋索引。"
             ),
             "claim_boundary": {
                 "chatgpt_bypassed": True,
@@ -649,6 +663,9 @@ class MailHumanUatService:
                 uploaded_message_ids.add(message.email_message_id)
         self._message_by_id = message_by_id
         self._uploaded_message_ids = frozenset(uploaded_message_ids)
+        self._uploaded_bundle_ids = tuple(
+            bundle.mail_evidence_bundle_id for bundle in resolved_bundles
+        )
         self._all_bundles = (self.config.bundle, *resolved_bundles)
 
     def record_interaction(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -745,7 +762,7 @@ class MailHumanUatService:
                     verdict: self._verdict_counts.get(verdict, 0) for verdict in sorted(_VERDICTS)
                 },
                 "upload_supported": True,
-                "uploaded_file_count": len(self._uploaded_bundles),
+                "uploaded_file_count": self._uploaded_resource_count,
                 "uploaded_message_count": len(self._uploaded_message_ids),
                 "upload_warning_counts": dict(sorted(self._uploaded_warnings.items())),
                 "read_only_business_systems": True,
@@ -883,7 +900,7 @@ def build_mail_human_uat_http_handler(
                 raise ContractValidationError("request body must be a JSON object")
             return value
 
-        def _read_upload_files(self) -> list[UatUploadedMailPart]:
+        def _read_upload_files(self) -> list[UatUploadedResourcePart]:
             content_lengths = self.headers.get_all("Content-Length")
             if not content_lengths or len(content_lengths) != 1:
                 raise ContractValidationError("exactly one upload content length is required")
@@ -896,7 +913,7 @@ def build_mail_human_uat_http_handler(
             body = self.rfile.read(content_length)
             if len(body) != content_length:
                 raise ContractValidationError("upload request body is incomplete")
-            return parse_uat_eml_multipart(
+            return parse_uat_resource_multipart(
                 self.headers.get("Content-Type", ""),
                 body,
                 max_files=service.config.max_upload_files,
@@ -1224,10 +1241,6 @@ def _validated_interaction_details(action: str, value: Any) -> dict[str, Any]:
         _expect_exact_keys(details, {"control"}, required={"control"})
         if details["control"] not in _SHELL_CONTROLS:
             raise ContractValidationError("interaction shell control is invalid")
-    elif action == "quick_prompt":
-        _expect_exact_keys(details, {"prompt_id"}, required={"prompt_id"})
-        if details["prompt_id"] not in _PROMPT_IDS:
-            raise ContractValidationError("interaction prompt id is invalid")
     elif action == "upload_open":
         _expect_exact_keys(details, {"source"}, required={"source"})
         if details["source"] not in _UPLOAD_OPEN_SOURCES:
@@ -1602,16 +1615,6 @@ _CHAT_UAT_HTML = """<!doctype html>
       place-items: center; background: var(--ink); color: white;
     }
     .send:disabled { opacity: .35; cursor: default; }
-    .starter-grid {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 18px;
-    }
-    .starter-card {
-      min-height: 64px; padding: 12px 14px; border: 1px solid var(--line);
-      border-radius: 15px; background: white; text-align: left;
-    }
-    .starter-card:hover { background: #fafafa; }
-    .starter-card strong { display: block; font-size: 13px; font-weight: 600; }
-    .starter-card span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
     .composer-note {
       margin-top: 10px; color: var(--muted); text-align: center; font-size: 11px;
     }
@@ -1619,8 +1622,7 @@ _CHAT_UAT_HTML = """<!doctype html>
       top: auto; bottom: 0; transform: none; padding: 18px 20px 12px;
       background: linear-gradient(transparent, rgba(255,255,255,.96) 24%, #fff 54%);
     }
-    body.has-conversation .landing-title,
-    body.has-conversation .starter-grid { display: none; }
+    body.has-conversation .landing-title { display: none; }
     body.has-conversation .prompt-box { box-shadow: 0 2px 14px rgba(0,0,0,.08); }
     .modal {
       position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
@@ -1673,8 +1675,6 @@ _CHAT_UAT_HTML = """<!doctype html>
       }
       .composer-dock { padding: 0 12px; }
       .conversation { width: min(100% - 26px, 768px); padding-top: 76px; }
-      .starter-grid { grid-template-columns: 1fr; }
-      .starter-card:nth-child(n+3) { display: none; }
       .landing-title h1 { font-size: 24px; }
       .message.user .bubble { max-width: 86%; }
       .test-badge { display: none; }
@@ -1756,10 +1756,10 @@ _CHAT_UAT_HTML = """<!doctype html>
           <h1>有什麼可以幫忙的？</h1>
         </div>
         <div class="prompt-box">
-          <textarea id="chat-input" rows="1" placeholder="詢問任何關於郵件的問題"></textarea>
+          <textarea id="chat-input" rows="1" placeholder="詢問郵件或上傳資料"></textarea>
           <div class="prompt-toolbar">
             <div class="prompt-left">
-              <button class="round-action" id="open-upload" type="button" title="上傳郵件" aria-label="上傳郵件">
+              <button class="round-action" id="open-upload" type="button" title="上傳資料" aria-label="上傳資料">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                 </svg>
@@ -1775,32 +1775,18 @@ _CHAT_UAT_HTML = """<!doctype html>
             </div>
           </div>
         </div>
-        <div class="starter-grid" id="starter-grid">
-          <button class="starter-card quick" data-prompt-id="recent_schedule" data-query="最近一次文顥的量產時間" type="button">
-            <strong>查詢最近排程</strong><span>文顥最近一次量產時間</span>
-          </button>
-          <button class="starter-card quick" data-prompt-id="pull_in" data-query="有哪些料件需要 pull-in" type="button">
-            <strong>整理 Pull-in 需求</strong><span>查看需要提前的料件</span>
-          </button>
-          <button class="starter-card quick" data-prompt-id="purchase_order" data-query="PO 470002154" type="button">
-            <strong>追蹤採購單</strong><span>查詢 PO 470002154</span>
-          </button>
-          <button class="starter-card" id="starter-upload" type="button">
-            <strong>加入新的郵件</strong><span>上傳 EML 後立即提問</span>
-          </button>
-        </div>
         <div class="composer-note">測試期間會記錄已送出的問題與按鈕操作以改善體驗；不記錄輸入中的文字，紀錄最多保留 30 天。</div>
       </div>
     </div>
   </main>
 
-  <div class="modal hidden" id="upload-modal" role="dialog" aria-modal="true" aria-label="上傳郵件">
+  <div class="modal hidden" id="upload-modal" role="dialog" aria-modal="true" aria-label="上傳資料">
     <div class="modal-card">
       <div class="modal-head">
-        <strong>加入郵件</strong>
+        <strong>加入資料</strong>
         <button class="close" id="close-upload" type="button" aria-label="關閉">×</button>
       </div>
-      <iframe id="upload-frame" src="/upload" title="FormOwl 郵件上傳"></iframe>
+      <iframe id="upload-frame" src="/upload" title="FormOwl 資料上傳"></iframe>
     </div>
   </div>
   <div class="shell-toast" id="shell-toast" role="status" aria-live="polite"></div>
@@ -2020,7 +2006,7 @@ _CHAT_UAT_HTML = """<!doctype html>
       explanation.className = "assistant-text";
       explanation.textContent = payload.results.length
         ? payload.notice
-        : "你可以改用 PO、料號或供應商等明確關鍵字，或先加入新的 EML 郵件。";
+        : "你可以改用 PO、料號或供應商等明確關鍵字，或先加入新的測試資料。";
       holder.appendChild(explanation);
 
       if (!payload.results.length) {
@@ -2157,9 +2143,9 @@ _CHAT_UAT_HTML = """<!doctype html>
     async function refreshSummary() {
       try {
         const summary = await api("/api/session-summary", { method: "GET" });
-        byId("upload-count").textContent = `${summary.uploaded_file_count} 封測試郵件`;
+        byId("upload-count").textContent = `${summary.uploaded_file_count} 個測試檔案`;
       } catch (_) {
-        byId("upload-count").textContent = "郵件狀態無法讀取";
+        byId("upload-count").textContent = "資料狀態無法讀取";
       }
     }
 
@@ -2171,7 +2157,6 @@ _CHAT_UAT_HTML = """<!doctype html>
       }
     });
     byId("open-upload").addEventListener("click", () => openUpload("composer"));
-    byId("starter-upload").addEventListener("click", () => openUpload("landing"));
     byId("close-upload").addEventListener("click", () => closeUpload("button"));
     byId("upload-modal").addEventListener("click", (event) => {
       if (event.target === byId("upload-modal")) closeUpload("backdrop");
@@ -2190,7 +2175,7 @@ _CHAT_UAT_HTML = """<!doctype html>
       trackShellControl("model_selector", "目前固定使用 FormOwl 郵件測試模型。");
     });
     byId("tools-control").addEventListener("click", () => {
-      trackShellControl("tools_menu", "目前可用工具是郵件上傳與郵件證據查詢。");
+      trackShellControl("tools_menu", "目前可用工具是資料上傳與證據查詢。");
     });
     byId("profile-card").addEventListener("click", () => {
       trackShellControl("profile_card", "這個共享測試版目前沒有個人帳號設定。");
@@ -2201,12 +2186,6 @@ _CHAT_UAT_HTML = """<!doctype html>
     byId("sidebar-toggle").addEventListener("click", toggleSidebar);
     byId("mobile-menu").addEventListener("click", toggleSidebar);
     byId("sidebar-overlay").addEventListener("click", toggleSidebar);
-    for (const button of document.querySelectorAll(".quick")) {
-      button.addEventListener("click", () => {
-        track("quick_prompt", { prompt_id: button.dataset.promptId });
-        ask(button.dataset.query || "", "quick_prompt");
-      });
-    }
     window.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
       if (!byId("upload-modal").classList.contains("hidden")) {
@@ -2225,16 +2204,17 @@ _CHAT_UAT_HTML = """<!doctype html>
         byId("upload-modal").classList.add("hidden");
         const accepted = Number(event.data.accepted_file_count || 0);
         const duplicate = Number(event.data.duplicate_file_count || 0);
+        const indexed = Number(event.data.indexed_item_count || 0);
         track("upload_complete", {
           accepted_file_count: accepted,
           duplicate_file_count: duplicate
         });
-        activateConversation("已加入新的郵件");
+        activateConversation("已加入新的資料");
         appendTextMessage(
           "assistant",
           accepted
-            ? `已加入 ${accepted} 封新郵件。現在可以直接詢問這些郵件。`
-            : "這些郵件先前已加入，現在可以直接查詢。"
+            ? `已加入 ${accepted} 個檔案，建立 ${indexed} 個可搜尋項目。現在可以直接提問。`
+            : "這些資料先前已加入，現在可以直接查詢。"
         );
         refreshSummary();
       } else if (event.data.type === "formowl-upload-close") {
@@ -2265,7 +2245,7 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>加入郵件</title>
+  <title>加入資料</title>
   <style>
     :root {
       color-scheme: light;
@@ -2337,17 +2317,17 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
 </head>
 <body>
   <main class="shell">
-    <h1>加入新的測試郵件</h1>
-    <p class="lead">選擇 EML 後，FormOwl 會立即解析並加入這個共同測試空間。完成後可回到聊天直接詢問。</p>
+    <h1>加入新的測試資料</h1>
+    <p class="lead">加入郵件、郵件封存檔或相關參考資料，完成後即可回到聊天直接提問。</p>
     <section class="drop" id="drop">
       <div class="drop-icon">＋</div>
-      <strong>將 EML 拖到這裡</strong>
-      <span>或從電腦選擇一封或多封郵件</span>
-      <input id="mail-files" type="file" accept=".eml,message/rfc822" multiple>
-      <label class="choose" for="mail-files">選擇 EML</label>
+      <strong>將檔案拖到這裡</strong>
+      <span>或從電腦選擇一個或多個檔案</span>
+      <input id="mail-files" type="file" accept=".eml,.pst,.pdf,.txt,message/rfc822,application/pdf,text/plain,application/vnd.ms-outlook" multiple>
+      <label class="choose" for="mail-files">選擇檔案</label>
     </section>
     <section class="files" id="files"></section>
-    <div class="limits">每次最多 20 封、單封最多 25 MB，合計最多 60 MB。目前只支援 EML；MSG 請先另存為 EML。附件會保留在原郵件中，但附件檔案內容不建立搜尋索引。</div>
+    <div class="limits">目前可處理 EML、PST、PDF、TXT。每次最多 20 個檔案；PST 單檔最多 500 MB，其他格式單檔最多 25 MB，合計最多 500 MB。文字型 PDF 會擷取文字；掃描型 PDF 暫不做 OCR。EML 內嵌附件內容不會自動建立搜尋索引，但可將 PDF、TXT 附件另行上傳。</div>
     <div class="message" id="message"></div>
     <div class="actions">
       <button class="cancel" id="cancel" type="button">取消</button>
@@ -2360,8 +2340,10 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
     const list = document.getElementById("files");
     const message = document.getElementById("message");
     const uploadButton = document.getElementById("upload");
-    const maxFileBytes = 25 * 1024 * 1024;
-    const maxTotalBytes = 60 * 1024 * 1024;
+    const supportedExtensions = new Set([".eml", ".pst", ".pdf", ".txt"]);
+    const maxStandardFileBytes = 25 * 1024 * 1024;
+    const maxPstFileBytes = 500 * 1024 * 1024;
+    const maxTotalBytes = 500 * 1024 * 1024;
     let selectedFiles = [];
 
     function randomTrackingId(prefix) {
@@ -2454,7 +2436,13 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
         row.append(name, size);
         list.appendChild(row);
       }
-      setMessage(selectedFiles.length ? `已選擇 ${selectedFiles.length} 封郵件。` : "");
+      setMessage(selectedFiles.length ? `已選擇 ${selectedFiles.length} 個檔案。` : "");
+    }
+
+    function extensionOf(filename) {
+      const lowered = filename.toLowerCase();
+      const dot = lowered.lastIndexOf(".");
+      return dot >= 0 ? lowered.slice(dot) : "";
     }
 
     function selectFiles(files) {
@@ -2463,23 +2451,28 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
         selectedFiles = [];
         input.value = "";
         renderFiles();
-        setMessage("一次最多選擇 20 封郵件。", true);
+        setMessage("一次最多選擇 20 個檔案。", true);
         track("upload_validation_error", { reason: "file_count" });
         return;
       }
-      if (selectedFiles.some((file) => !file.name.toLowerCase().endsWith(".eml"))) {
+      if (selectedFiles.some((file) => !supportedExtensions.has(extensionOf(file.name)))) {
         selectedFiles = [];
         input.value = "";
         renderFiles();
-        setMessage("目前只接受 .eml 郵件。", true);
+        setMessage("目前可處理 EML、PST、PDF、TXT。", true);
         track("upload_validation_error", { reason: "file_type" });
         return;
       }
-      if (selectedFiles.some((file) => file.size > maxFileBytes)) {
+      if (selectedFiles.some((file) => {
+        const limit = extensionOf(file.name) === ".pst"
+          ? maxPstFileBytes
+          : maxStandardFileBytes;
+        return file.size > limit;
+      })) {
         selectedFiles = [];
         input.value = "";
         renderFiles();
-        setMessage("單封郵件不可超過 25 MB。", true);
+        setMessage("PST 單檔不可超過 500 MB，其他格式單檔不可超過 25 MB。", true);
         track("upload_validation_error", { reason: "file_size" });
         return;
       }
@@ -2488,7 +2481,7 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
         selectedFiles = [];
         input.value = "";
         renderFiles();
-        setMessage("這次選擇的郵件合計不可超過 60 MB。", true);
+        setMessage("這次選擇的檔案合計不可超過 500 MB。", true);
         track("upload_validation_error", { reason: "total_size" });
         return;
       }
@@ -2496,7 +2489,11 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
       if (selectedFiles.length) {
         const sizeBucket = totalBytes < 5 * 1024 * 1024
           ? "under_5mb"
-          : (totalBytes <= 25 * 1024 * 1024 ? "5_to_25mb" : "25_to_60mb");
+          : (
+            totalBytes <= 25 * 1024 * 1024
+              ? "5_to_25mb"
+              : (totalBytes <= 60 * 1024 * 1024 ? "25_to_60mb" : "60_to_500mb")
+          );
         track("upload_files_selected", {
           file_count: selectedFiles.length,
           size_bucket: sizeBucket
@@ -2523,13 +2520,13 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
     });
     uploadButton.addEventListener("click", async () => {
       if (!selectedFiles.length) {
-        setMessage("請先選擇 EML 郵件。", true);
+        setMessage("請先選擇檔案。", true);
         return;
       }
       const form = new FormData();
       for (const file of selectedFiles) form.append("mail_files", file, file.name);
       uploadButton.disabled = true;
-      setMessage(`正在解析 ${selectedFiles.length} 封郵件…`);
+      setMessage(`正在解析 ${selectedFiles.length} 個檔案…`);
       track("upload_submit", { file_count: selectedFiles.length });
       try {
         const response = await fetch("/api/upload", {
@@ -2542,17 +2539,20 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
         selectedFiles = [];
         input.value = "";
         renderFiles();
-        setMessage(`完成：新增 ${payload.accepted_file_count} 封郵件。`);
+        setMessage(
+          `完成：新增 ${payload.accepted_file_count} 個檔案，建立 ${payload.indexed_item_count} 個可搜尋項目。`
+        );
         window.parent.postMessage(
           {
             type: "formowl-upload-complete",
             accepted_file_count: payload.accepted_file_count,
-            duplicate_file_count: payload.duplicate_file_count
+            duplicate_file_count: payload.duplicate_file_count,
+            indexed_item_count: payload.indexed_item_count
           },
           window.location.origin
         );
       } catch (_) {
-        setMessage("上傳失敗；請確認檔案是有效的 EML，且大小未超過限制。", true);
+        setMessage("上傳失敗；請確認檔案格式有效、含可擷取內容，且大小未超過限制。", true);
       } finally {
         uploadButton.disabled = false;
       }
