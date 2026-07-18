@@ -23,6 +23,8 @@ from formowl_mail.human_uat_http import (
 )
 
 NOW = "2026-07-18T12:00:00+00:00"
+VISITOR_ID = "uatvisitor_" + "1" * 32
+SESSION_ID = "uatsession_" + "2" * 32
 
 
 class MailHumanUatHttpTests(unittest.TestCase):
@@ -36,24 +38,39 @@ class MailHumanUatHttpTests(unittest.TestCase):
         health = json.loads(health_body)
         self.assertEqual(page_response.status, 200)
         self.assertEqual(health_response.status, 200)
-        self.assertIn("FormOwl 郵件助手", html)
+        self.assertIn("有什麼可以幫忙的？", html)
+        self.assertIn('id="sidebar-toggle"', html)
+        self.assertIn('id="current-chat-title"', html)
+        self.assertIn('id="search-conversations"', html)
+        self.assertIn('id="model-selector"', html)
+        self.assertIn('id="tools-control"', html)
+        self.assertIn('id="shell-toast"', html)
         self.assertIn('class="conversation"', html)
         self.assertIn('id="chat-input"', html)
         self.assertIn('id="upload-frame"', html)
         self.assertIn('src="/upload"', html)
+        self.assertIn("測試期間會記錄已送出的問題與按鈕操作", html)
+        self.assertIn('"/api/interaction"', html)
+        self.assertIn('"formowl_uat_visitor_id"', html)
         self.assertIn("!event.isComposing", html)
         self.assertIn("sort: querySort(query)", html)
         self.assertIn('"最近", "最新", "近期", "目前", "現在"', html)
         self.assertNotIn('id="gate"', html)
         self.assertNotIn("輸入測試存取碼", html)
         self.assertNotIn("X-FormOwl-UAT-Code", html)
-        self.assertIn("May、Maggie 與相關同事", html)
+        self.assertNotIn("May、Maggie 與相關同事", html)
         self.assertNotIn("user_may", html)
         self.assertNotIn("workspace_formowl", html)
         self.assertNotIn("/tmp/", html)
         self.assertTrue(health["chatgpt_bypassed"])
         self.assertFalse(health["authentication_required"])
         self.assertTrue(health["shared_uat"])
+        self.assertTrue(health["behavior_capture_enabled"])
+        self.assertEqual(
+            health["behavior_capture_scope"],
+            "submitted_questions_and_bounded_interactions",
+        )
+        self.assertEqual(health["behavior_capture_retention_days"], 30)
         self.assertFalse(health["upload_required"])
         self.assertTrue(health["upload_supported"])
         self.assertTrue(health["read_only_business_systems"])
@@ -95,6 +112,275 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(json.loads(query_body)["status"], "ok")
         self.assertEqual(upload_response.status, 201)
         self.assertEqual(json.loads(upload_body)["accepted_file_count"], 1)
+
+    def test_post_endpoints_require_same_origin_browser_requests(self) -> None:
+        service = _service("mail-human-uat-same-origin")
+        body = json.dumps({"query_text": "pull-in"}).encode("utf-8")
+        with _RunningSurface(service) as surface:
+            missing_origin, missing_body = surface.request(
+                "POST",
+                "/api/query",
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(body)),
+                },
+            )
+            cross_origin, cross_body = surface.request(
+                "POST",
+                "/api/query",
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(body)),
+                    "Origin": "https://attacker.example",
+                    "Sec-Fetch-Site": "cross-site",
+                },
+            )
+
+        for response, response_body in (
+            (missing_origin, missing_body),
+            (cross_origin, cross_body),
+        ):
+            self.assertEqual(response.status, 403)
+            self.assertEqual(
+                json.loads(response_body)["error_code"],
+                "same_origin_required",
+            )
+        self.assertEqual(service.session_summary()["query_count"], 0)
+        self.assertEqual(service.session_summary()["uploaded_file_count"], 0)
+
+    def test_anonymous_interactions_and_question_sources_are_recorded_privately(
+        self,
+    ) -> None:
+        state_dir = _paths.fresh_test_dir("mail-human-uat-interactions")
+        service = _service_from_state_dir(state_dir)
+        with _RunningSurface(service) as surface:
+            page_view_response, page_view_body = surface.request_json(
+                "/api/interaction",
+                {
+                    "visitor_id": VISITOR_ID,
+                    "session_id": SESSION_ID,
+                    "sequence": 1,
+                    "action": "page_view",
+                    "details": {"viewport": "desktop"},
+                },
+            )
+            prompt_response, prompt_body = surface.request_json(
+                "/api/interaction",
+                {
+                    "visitor_id": VISITOR_ID,
+                    "session_id": SESSION_ID,
+                    "sequence": 2,
+                    "action": "quick_prompt",
+                    "details": {"prompt_id": "pull_in"},
+                },
+            )
+            query_response, query_body = surface.request_json(
+                "/api/query",
+                {
+                    "query_text": "有哪些料件需要 pull-in",
+                    "sort": "relevance",
+                    "limit": 8,
+                    "visitor_id": VISITOR_ID,
+                    "session_id": SESSION_ID,
+                    "sequence": 3,
+                    "source": "quick_prompt",
+                },
+            )
+            summary_response, summary_body = surface.request(
+                "GET",
+                "/api/session-summary",
+            )
+
+        self.assertEqual(page_view_response.status, 200)
+        self.assertEqual(json.loads(page_view_body)["action"], "page_view")
+        self.assertEqual(prompt_response.status, 200)
+        self.assertEqual(json.loads(prompt_body)["action"], "quick_prompt")
+        self.assertEqual(query_response.status, 200)
+        self.assertEqual(json.loads(query_body)["status"], "ok")
+        summary = json.loads(summary_body)
+        self.assertEqual(summary_response.status, 200)
+        self.assertEqual(summary["interaction_count"], 2)
+        self.assertEqual(
+            summary["interaction_counts"],
+            {"page_view": 1, "quick_prompt": 1},
+        )
+        self.assertEqual(summary["anonymous_visitor_count"], 1)
+        self.assertEqual(summary["anonymous_session_count"], 1)
+
+        event_path = state_dir / "mail-human-uat-events.private.jsonl"
+        events = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(
+            [event["event_type"] for event in events],
+            ["interaction", "interaction", "query", "query_result"],
+        )
+        self.assertEqual(events[0]["details"], {"viewport": "desktop"})
+        self.assertEqual(events[1]["details"], {"prompt_id": "pull_in"})
+        self.assertEqual(events[2]["query_text"], "有哪些料件需要 pull-in")
+        self.assertEqual(events[2]["source"], "quick_prompt")
+        self.assertEqual(events[2]["visitor_id"], VISITOR_ID)
+        self.assertEqual(events[2]["session_id"], SESSION_ID)
+        self.assertEqual([event["sequence"] for event in events[:3]], [1, 2, 3])
+        self.assertEqual(events[3]["query_id"], events[2]["query_id"])
+        rendered = event_path.read_text(encoding="utf-8")
+        self.assertNotIn("filename", rendered)
+        self.assertNotIn("keystroke", rendered)
+        self.assertEqual(event_path.stat().st_mode & 0o777, 0o600)
+
+    def test_interaction_api_rejects_open_ended_or_invalid_tracking_payloads(self) -> None:
+        service = _service("mail-human-uat-interaction-negative")
+        cases = [
+            {
+                "visitor_id": "visitor_other",
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "action": "page_view",
+                "details": {"viewport": "desktop"},
+            },
+            {
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "action": "raw_click",
+                "details": {},
+            },
+            {
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "action": "quick_prompt",
+                "details": {"prompt_id": "arbitrary_text"},
+            },
+            {
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "action": "shell_control",
+                "details": {"control": "arbitrary_control"},
+            },
+            {
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "action": "upload_complete",
+                "details": {
+                    "accepted_file_count": 20,
+                    "duplicate_file_count": 1,
+                },
+            },
+        ]
+        with _RunningSurface(service) as surface:
+            responses = [surface.request_json("/api/interaction", payload) for payload in cases]
+
+        for response, body in responses:
+            self.assertEqual(response.status, 400)
+            self.assertEqual(json.loads(body)["error_code"], "request_rejected")
+        summary = service.session_summary()
+        self.assertEqual(summary["interaction_count"], 0)
+        self.assertEqual(summary["anonymous_visitor_count"], 0)
+        self.assertEqual(summary["anonymous_session_count"], 0)
+
+    def test_shell_control_exploration_is_recorded_with_closed_control_names(
+        self,
+    ) -> None:
+        state_dir = _paths.fresh_test_dir("mail-human-uat-shell-controls")
+        service = _service_from_state_dir(state_dir)
+        for sequence, control in enumerate(
+            (
+                "brand_home",
+                "search_conversations",
+                "current_history",
+                "model_selector",
+                "tools_menu",
+                "profile_card",
+                "profile_avatar",
+            ),
+            start=1,
+        ):
+            response = service.record_interaction(
+                {
+                    "visitor_id": VISITOR_ID,
+                    "session_id": SESSION_ID,
+                    "sequence": sequence,
+                    "action": "shell_control",
+                    "details": {"control": control},
+                }
+            )
+            self.assertEqual(response["action"], "shell_control")
+
+        summary = service.session_summary()
+        self.assertEqual(summary["interaction_count"], 7)
+        self.assertEqual(summary["interaction_counts"], {"shell_control": 7})
+        event_path = state_dir / "mail-human-uat-events.private.jsonl"
+        events = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(
+            [event["details"]["control"] for event in events],
+            [
+                "brand_home",
+                "search_conversations",
+                "current_history",
+                "model_selector",
+                "tools_menu",
+                "profile_card",
+                "profile_avatar",
+            ],
+        )
+        self.assertEqual([event["sequence"] for event in events], list(range(1, 8)))
+
+    def test_private_event_store_enforces_retention_and_size_bounds(self) -> None:
+        state_dir = _paths.fresh_test_dir("mail-human-uat-event-retention")
+        event_path = state_dir / "mail-human-uat-events.private.jsonl"
+        old_event = {
+            "event_type": "interaction",
+            "created_at": "2026-06-17T12:00:00+00:00",
+            "visitor_id": VISITOR_ID,
+            "session_id": SESSION_ID,
+            "sequence": 1,
+            "action": "page_view",
+            "details": {"viewport": "desktop"},
+        }
+        recent_event = {
+            **old_event,
+            "created_at": "2026-07-17T12:00:00+00:00",
+            "sequence": 2,
+        }
+        event_path.write_text(
+            "\n".join(json.dumps(event, ensure_ascii=False) for event in (old_event, recent_event))
+            + "\n",
+            encoding="utf-8",
+        )
+        service = MailHumanUatService(
+            MailHumanUatHttpConfig(
+                bundle=_bundle(),
+                state_dir=state_dir,
+                fixed_now=NOW,
+                max_event_store_bytes=900,
+            )
+        )
+        after_start = [
+            json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual([event["sequence"] for event in after_start], [2])
+
+        for sequence in range(3, 21):
+            service.record_interaction(
+                {
+                    "visitor_id": VISITOR_ID,
+                    "session_id": SESSION_ID,
+                    "sequence": sequence,
+                    "action": "shell_control",
+                    "details": {"control": "tools_menu"},
+                }
+            )
+
+        retained = [
+            json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertLessEqual(event_path.stat().st_size, 900)
+        self.assertEqual(retained[-1]["sequence"], 20)
+        self.assertGreater(retained[0]["sequence"], 2)
+        self.assertEqual(event_path.stat().st_mode & 0o777, 0o600)
 
     def test_chinese_business_query_expands_and_returns_cited_read_only_evidence(
         self,
@@ -164,8 +450,11 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(summary["verdict_counts"]["partially_correct"], 1)
         event_path = state_dir / "mail-human-uat-events.private.jsonl"
         events = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
-        self.assertEqual([event["event_type"] for event in events], ["query", "feedback"])
-        self.assertEqual(events[1]["note"], "料號正確，但需要再確認交期。")
+        self.assertEqual(
+            [event["event_type"] for event in events],
+            ["query", "query_result", "feedback"],
+        )
+        self.assertEqual(events[2]["note"], "料號正確，但需要再確認交期。")
         self.assertEqual(event_path.stat().st_mode & 0o777, 0o600)
 
     def test_browser_cannot_supply_identity_or_unrecognized_controls(self) -> None:
@@ -474,6 +763,64 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(summary["query_count"], 0)
         self.assertEqual(summary["feedback_count"], 0)
 
+    def test_retrieval_failure_preserves_submitted_question_for_uat_diagnosis(
+        self,
+    ) -> None:
+        state_dir = _paths.fresh_test_dir("mail-human-uat-query-runtime-failure")
+        service = _service_from_state_dir(state_dir)
+        with mock.patch.object(
+            service._base_gateway,
+            "query_mail_evidence",
+            side_effect=RuntimeError("simulated retrieval failure"),
+        ):
+            with self.assertRaises(RuntimeError):
+                service.query(
+                    {
+                        "query_text": "失敗時也要保留這個已送出的問題",
+                        "sort": "relevance",
+                        "limit": 5,
+                        "visitor_id": VISITOR_ID,
+                        "session_id": SESSION_ID,
+                        "sequence": 9,
+                        "source": "composer",
+                    }
+                )
+
+        summary = service.session_summary()
+        self.assertEqual(summary["query_count"], 1)
+        self.assertEqual(summary["anonymous_visitor_count"], 1)
+        event_path = state_dir / "mail-human-uat-events.private.jsonl"
+        events = [json.loads(line) for line in event_path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "query")
+        self.assertEqual(events[0]["query_text"], "失敗時也要保留這個已送出的問題")
+        self.assertEqual(events[0]["sequence"], 9)
+        self.assertNotIn("result_count", events[0])
+
+    def test_interaction_event_failure_does_not_advance_interaction_counts(self) -> None:
+        service = _service("mail-human-uat-interaction-event-failure")
+
+        def fail_event_write(_payload):
+            raise OSError("simulated private interaction write failure")
+
+        service._event_store.append = fail_event_write
+        with self.assertRaises(OSError):
+            service.record_interaction(
+                {
+                    "visitor_id": VISITOR_ID,
+                    "session_id": SESSION_ID,
+                    "sequence": 1,
+                    "action": "shell_control",
+                    "details": {"control": "tools_menu"},
+                }
+            )
+
+        summary = service.session_summary()
+        self.assertEqual(summary["interaction_count"], 0)
+        self.assertEqual(summary["interaction_counts"], {})
+        self.assertEqual(summary["anonymous_visitor_count"], 0)
+        self.assertEqual(summary["anonymous_session_count"], 0)
+
     def test_feedback_event_failure_does_not_advance_feedback_counts(self) -> None:
         service = _service("mail-human-uat-feedback-event-failure")
         query = service.query(
@@ -760,6 +1107,8 @@ class _RunningSurface:
             headers={
                 "Content-Type": "application/json",
                 "Content-Length": str(len(body)),
+                "Origin": self.origin,
+                "Sec-Fetch-Site": "same-origin",
             },
         )
 
@@ -785,6 +1134,8 @@ class _RunningSurface:
         headers = {
             "Content-Type": f"multipart/form-data; boundary={boundary}",
             "Content-Length": str(len(body)),
+            "Origin": self.origin,
+            "Sec-Fetch-Site": "same-origin",
         }
         return self.request(
             "POST",
@@ -792,6 +1143,11 @@ class _RunningSurface:
             body=bytes(body),
             headers=headers,
         )
+
+    @property
+    def origin(self) -> str:
+        host, port = self.server.server_address
+        return f"http://{host}:{port}"
 
 
 if __name__ == "__main__":

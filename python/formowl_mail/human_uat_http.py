@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -35,8 +35,13 @@ _MAX_UPLOAD_FILES = 20
 _MAX_QUERY_CHARS = 500
 _MAX_NOTE_CHARS = 1000
 _MAX_RESULT_LIMIT = 20
+_MAX_EVENT_SEQUENCE = (2**53) - 1
+_DEFAULT_EVENT_RETENTION_DAYS = 30
+_DEFAULT_MAX_EVENT_STORE_BYTES = 16 * 1024 * 1024
 _RETRIEVAL_CANDIDATE_LIMIT = 200
 _QUERY_ID_RE = re.compile(r"^uatquery_[0-9a-f]{24}$")
+_VISITOR_ID_RE = re.compile(r"^uatvisitor_[0-9a-f]{32}$")
+_SESSION_ID_RE = re.compile(r"^uatsession_[0-9a-f]{32}$")
 _VERDICTS = {
     "correct",
     "partially_correct",
@@ -45,8 +50,60 @@ _VERDICTS = {
     "citation_issue",
 }
 _SORT_OPTIONS = {"relevance", "recent"}
-_QUERY_KEYS = {"query_text", "limit", "sort"}
-_FEEDBACK_KEYS = {"query_id", "verdict", "note"}
+_QUERY_SOURCES = {"api", "composer", "quick_prompt"}
+_QUERY_KEYS = {
+    "query_text",
+    "limit",
+    "sort",
+    "visitor_id",
+    "session_id",
+    "sequence",
+    "source",
+}
+_FEEDBACK_KEYS = {
+    "query_id",
+    "verdict",
+    "note",
+    "visitor_id",
+    "session_id",
+    "sequence",
+}
+_INTERACTION_KEYS = {
+    "visitor_id",
+    "session_id",
+    "sequence",
+    "action",
+    "details",
+}
+_INTERACTION_ACTIONS = {
+    "page_view",
+    "sidebar_toggle",
+    "new_chat",
+    "shell_control",
+    "quick_prompt",
+    "upload_open",
+    "upload_close",
+    "upload_files_selected",
+    "upload_validation_error",
+    "upload_submit",
+    "upload_complete",
+    "query_result",
+    "query_error",
+}
+_SHELL_CONTROLS = {
+    "brand_home",
+    "search_conversations",
+    "current_history",
+    "model_selector",
+    "tools_menu",
+    "profile_card",
+    "profile_avatar",
+}
+_PROMPT_IDS = {"recent_schedule", "pull_in", "purchase_order"}
+_UPLOAD_OPEN_SOURCES = {"composer", "landing", "no_result"}
+_UPLOAD_CLOSE_SOURCES = {"button", "backdrop", "iframe_cancel"}
+_UPLOAD_VALIDATION_REASONS = {"file_count", "file_type", "file_size", "total_size"}
+_UPLOAD_SIZE_BUCKETS = {"under_5mb", "5_to_25mb", "25_to_60mb"}
 _BUSINESS_ALIASES = (
     (
         ("量產", "打件", "生產排程", "投產"),
@@ -76,6 +133,8 @@ class MailHumanUatHttpConfig:
     max_upload_request_bytes: int = _MAX_UPLOAD_REQUEST_BYTES
     max_upload_file_bytes: int = _MAX_UPLOAD_FILE_BYTES
     max_upload_files: int = _MAX_UPLOAD_FILES
+    event_retention_days: int = _DEFAULT_EVENT_RETENTION_DAYS
+    max_event_store_bytes: int = _DEFAULT_MAX_EVENT_STORE_BYTES
 
 
 class MailHumanUatService:
@@ -92,6 +151,8 @@ class MailHumanUatService:
             ("max_upload_request_bytes", config.max_upload_request_bytes),
             ("max_upload_file_bytes", config.max_upload_file_bytes),
             ("max_upload_files", config.max_upload_files),
+            ("event_retention_days", config.event_retention_days),
+            ("max_event_store_bytes", config.max_event_store_bytes),
         ):
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ContractValidationError(f"UAT {field_name} must be positive")
@@ -106,13 +167,21 @@ class MailHumanUatService:
         self._base_message_by_id = {
             message.email_message_id: message for message in config.bundle.messages
         }
-        self._event_store = _PrivateUatEventStore(config.state_dir)
+        self._event_store = _PrivateUatEventStore(
+            config.state_dir,
+            retention_days=config.event_retention_days,
+            max_bytes=config.max_event_store_bytes,
+            fixed_now=config.fixed_now,
+        )
         self._upload_store = PrivateUatMailUploadStore(
             config.state_dir,
             max_file_bytes=config.max_upload_file_bytes,
         )
         self._known_query_ids: set[str] = set()
         self._verdict_counts: Counter[str] = Counter()
+        self._interaction_counts: Counter[str] = Counter()
+        self._anonymous_visitor_ids: set[str] = set()
+        self._anonymous_session_ids: set[str] = set()
         self._query_count = 0
         self._feedback_count = 0
         self._lock = threading.RLock()
@@ -143,6 +212,9 @@ class MailHumanUatService:
             "chatgpt_bypassed": True,
             "authentication_required": False,
             "shared_uat": True,
+            "behavior_capture_enabled": True,
+            "behavior_capture_scope": "submitted_questions_and_bounded_interactions",
+            "behavior_capture_retention_days": self.config.event_retention_days,
             "upload_required": False,
             "upload_supported": True,
             "uploaded_file_count": uploaded_file_count,
@@ -169,6 +241,29 @@ class MailHumanUatService:
         sort = payload.get("sort", "relevance")
         if sort not in _SORT_OPTIONS:
             raise ContractValidationError("sort must be relevance or recent")
+        source = payload.get("source", "api")
+        if source not in _QUERY_SOURCES:
+            raise ContractValidationError("query source is invalid")
+        tracking = _validated_tracking_fields(payload)
+        query_id = f"uatquery_{secrets.token_hex(12)}"
+        submitted_at = _timestamp(self.config.fixed_now)
+        query_hash = sha256_json(query_text)
+        self._event_store.append(
+            {
+                "event_type": "query",
+                "created_at": submitted_at,
+                "query_id": query_id,
+                "query_text": query_text,
+                "query_hash": query_hash,
+                "sort": sort,
+                "source": source,
+                **tracking,
+            }
+        )
+        with self._lock:
+            self._known_query_ids.add(query_id)
+            self._query_count += 1
+            self._remember_tracking(tracking)
 
         expanded_query, filter_groups = _expand_business_query(query_text)
         bundle = self.config.bundle
@@ -289,7 +384,6 @@ class MailHumanUatService:
             result.pop("_subject_business_matches", None)
             result.pop("_snippet_business_matches", None)
 
-        query_id = f"uatquery_{secrets.token_hex(12)}"
         generated_at = _timestamp(self.config.fixed_now)
         warnings = [
             warning for gateway_result in gateway_results for warning in gateway_result["warnings"]
@@ -311,7 +405,7 @@ class MailHumanUatService:
                 else gateway_results[0]["status"]
             ),
             "query_id": query_id,
-            "query_hash": sha256_json(query_text),
+            "query_hash": query_hash,
             "generated_at": generated_at,
             "sort": sort,
             "result_count": len(results),
@@ -335,21 +429,18 @@ class MailHumanUatService:
         assert_public_payload_safe(response, "mail_human_uat_query_response")
         self._event_store.append(
             {
-                "event_type": "query",
+                "event_type": "query_result",
                 "created_at": generated_at,
                 "query_id": query_id,
-                "query_text": query_text,
-                "query_hash": response["query_hash"],
-                "sort": sort,
                 "result_count": len(results),
                 "citation_ids": [
                     item["citation"]["citation_id"] for item in results if item.get("citation")
                 ],
+                "has_uploaded_result": any(
+                    item["source_kind"] == "uploaded_uat" for item in results
+                ),
             }
         )
-        with self._lock:
-            self._known_query_ids.add(query_id)
-            self._query_count += 1
         return response
 
     def _exact_subject_results(
@@ -560,8 +651,41 @@ class MailHumanUatService:
         self._uploaded_message_ids = frozenset(uploaded_message_ids)
         self._all_bundles = (self.config.bundle, *resolved_bundles)
 
+    def record_interaction(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        _expect_exact_keys(
+            payload,
+            _INTERACTION_KEYS,
+            required={"visitor_id", "session_id", "sequence", "action", "details"},
+        )
+        tracking = _validated_tracking_fields(payload, required=True)
+        action = payload.get("action")
+        if action not in _INTERACTION_ACTIONS:
+            raise ContractValidationError("interaction action is invalid")
+        details = _validated_interaction_details(str(action), payload.get("details"))
+        created_at = _timestamp(self.config.fixed_now)
+        self._event_store.append(
+            {
+                "event_type": "interaction",
+                "created_at": created_at,
+                "action": action,
+                "details": details,
+                **tracking,
+            }
+        )
+        with self._lock:
+            self._interaction_counts[str(action)] += 1
+            self._remember_tracking(tracking)
+        response = {
+            "status": "recorded",
+            "action": action,
+            "created_at": created_at,
+        }
+        assert_public_payload_safe(response, "mail_human_uat_interaction_response")
+        return response
+
     def record_feedback(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         _expect_exact_keys(payload, _FEEDBACK_KEYS, required={"query_id", "verdict"})
+        tracking = _validated_tracking_fields(payload)
         query_id = _validated_text(payload.get("query_id"), "query_id", max_chars=64)
         if not _QUERY_ID_RE.fullmatch(query_id):
             raise ContractValidationError("query_id is invalid")
@@ -589,11 +713,13 @@ class MailHumanUatService:
                 "query_id": query_id,
                 "verdict": verdict,
                 "note": note,
+                **tracking,
             }
         )
         with self._lock:
             self._feedback_count += 1
             self._verdict_counts[str(verdict)] += 1
+            self._remember_tracking(tracking)
         response = {
             "status": "recorded",
             "feedback_id": feedback_id,
@@ -611,6 +737,10 @@ class MailHumanUatService:
                 "started_at": self.started_at,
                 "query_count": self._query_count,
                 "feedback_count": self._feedback_count,
+                "interaction_count": sum(self._interaction_counts.values()),
+                "interaction_counts": dict(sorted(self._interaction_counts.items())),
+                "anonymous_visitor_count": len(self._anonymous_visitor_ids),
+                "anonymous_session_count": len(self._anonymous_session_ids),
                 "verdict_counts": {
                     verdict: self._verdict_counts.get(verdict, 0) for verdict in sorted(_VERDICTS)
                 },
@@ -623,6 +753,14 @@ class MailHumanUatService:
             }
         assert_public_payload_safe(response, "mail_human_uat_session_summary")
         return response
+
+    def _remember_tracking(self, tracking: Mapping[str, Any]) -> None:
+        visitor_id = tracking.get("visitor_id")
+        session_id = tracking.get("session_id")
+        if visitor_id:
+            self._anonymous_visitor_ids.add(visitor_id)
+        if session_id:
+            self._anonymous_session_ids.add(session_id)
 
 
 def build_mail_human_uat_http_handler(
@@ -660,8 +798,16 @@ def build_mail_human_uat_http_handler(
 
         def do_POST(self) -> None:  # noqa: N802
             route = urlparse(self.path).path
-            if route not in {"/api/query", "/api/feedback", "/api/upload"}:
+            if route not in {
+                "/api/query",
+                "/api/feedback",
+                "/api/interaction",
+                "/api/upload",
+            }:
                 self._send_error(HTTPStatus.NOT_FOUND, "route_not_found")
+                return
+            if not self._same_origin_post_allowed():
+                self._send_error(HTTPStatus.FORBIDDEN, "same_origin_required")
                 return
             try:
                 if route == "/api/upload":
@@ -672,8 +818,10 @@ def build_mail_human_uat_http_handler(
                 payload = self._read_json_body()
                 if route == "/api/query":
                     response = service.query(payload)
-                else:
+                elif route == "/api/feedback":
                     response = service.record_feedback(payload)
+                else:
+                    response = service.record_interaction(payload)
             except UatUploadRequestTooLarge:
                 self._send_error(
                     HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
@@ -693,6 +841,29 @@ def build_mail_human_uat_http_handler(
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             return
+
+        def _same_origin_post_allowed(self) -> bool:
+            origins = self.headers.get_all("Origin")
+            hosts = self.headers.get_all("Host")
+            fetch_sites = self.headers.get_all("Sec-Fetch-Site")
+            if not origins or len(origins) != 1 or not hosts or len(hosts) != 1:
+                return False
+            if fetch_sites and (
+                len(fetch_sites) != 1 or fetch_sites[0].strip().lower() != "same-origin"
+            ):
+                return False
+            origin = urlparse(origins[0].strip())
+            return (
+                origin.scheme.lower() in {"http", "https"}
+                and bool(origin.netloc)
+                and origin.netloc.casefold() == hosts[0].strip().casefold()
+                and not origin.path
+                and not origin.params
+                and not origin.query
+                and not origin.fragment
+                and not origin.username
+                and not origin.password
+            )
 
         def _read_json_body(self) -> dict[str, Any]:
             content_type = self.headers.get("Content-Type", "")
@@ -839,7 +1010,14 @@ def render_mail_human_uat_upload_page() -> str:
 
 
 class _PrivateUatEventStore:
-    def __init__(self, state_dir: str | Path) -> None:
+    def __init__(
+        self,
+        state_dir: str | Path,
+        *,
+        retention_days: int,
+        max_bytes: int,
+        fixed_now: str | None,
+    ) -> None:
         self.root = Path(state_dir)
         if self.root.is_symlink():
             raise ContractValidationError("UAT state directory must not be a symlink")
@@ -849,16 +1027,34 @@ class _PrivateUatEventStore:
         if self.path.is_symlink():
             raise ContractValidationError("UAT event store must not be a symlink")
         self._lock = threading.Lock()
+        self.retention_days = retention_days
+        self.max_bytes = max_bytes
+        reference_time = _event_datetime(_timestamp(fixed_now))
+        with self._lock:
+            self._compact_locked(reference_time=reference_time, reserve_bytes=0)
+        self._last_compaction_date = reference_time.date()
 
     def append(self, payload: Mapping[str, Any]) -> None:
         encoded = (
             json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             + "\n"
         ).encode("utf-8")
+        if len(encoded) > self.max_bytes:
+            raise OSError("private UAT event exceeds store limit")
+        reference_time = _event_datetime(str(payload.get("created_at", "")))
         flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         with self._lock:
+            current_size = self.path.stat().st_size if self.path.exists() else 0
+            if (
+                self._last_compaction_date != reference_time.date()
+                or current_size + len(encoded) > self.max_bytes
+            ):
+                self._compact_locked(
+                    reference_time=reference_time,
+                    reserve_bytes=len(encoded),
+                )
             descriptor = os.open(self.path, flags, 0o600)
             try:
                 remaining = memoryview(encoded)
@@ -871,6 +1067,96 @@ class _PrivateUatEventStore:
             finally:
                 os.close(descriptor)
             os.chmod(self.path, 0o600)
+            self._last_compaction_date = reference_time.date()
+
+    def _compact_locked(
+        self,
+        *,
+        reference_time: datetime,
+        reserve_bytes: int,
+    ) -> None:
+        if reserve_bytes < 0 or reserve_bytes > self.max_bytes:
+            raise OSError("private UAT event reserve is invalid")
+        cutoff = reference_time - timedelta(days=self.retention_days)
+        source_lines = self._bounded_source_lines()
+        retained: list[bytes] = []
+        for line in source_lines:
+            try:
+                event = json.loads(line.decode("utf-8"))
+                created_at = _event_datetime(str(event.get("created_at", "")))
+            except (UnicodeDecodeError, ValueError, TypeError, json.JSONDecodeError):
+                continue
+            if created_at < cutoff:
+                continue
+            retained.append(line.rstrip(b"\r\n") + b"\n")
+
+        available = self.max_bytes - reserve_bytes
+        newest: list[bytes] = []
+        total = 0
+        for line in reversed(retained):
+            if total + len(line) > available:
+                break
+            newest.append(line)
+            total += len(line)
+        compacted = b"".join(reversed(newest))
+        self._replace_locked(compacted)
+
+    def _bounded_source_lines(self) -> list[bytes]:
+        if not self.path.exists():
+            return []
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(self.path, flags)
+        try:
+            size = os.fstat(descriptor).st_size
+            read_limit = self.max_bytes * 2
+            truncated = size > read_limit
+            if truncated:
+                os.lseek(descriptor, size - read_limit, os.SEEK_SET)
+            chunks: list[bytes] = []
+            remaining = read_limit
+            while remaining > 0:
+                chunk = os.read(descriptor, min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload = b"".join(chunks)
+        finally:
+            os.close(descriptor)
+        lines = payload.splitlines(keepends=True)
+        if truncated and lines:
+            lines = lines[1:]
+        return lines
+
+    def _replace_locked(self, payload: bytes) -> None:
+        temporary_path = self.root / f".mail-human-uat-events-{secrets.token_hex(8)}.tmp"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(temporary_path, flags, 0o600)
+        try:
+            remaining = memoryview(payload)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written <= 0:
+                    raise OSError("private UAT event compaction failed")
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+            os.fchmod(descriptor, 0o600)
+        except Exception:
+            os.close(descriptor)
+            temporary_path.unlink(missing_ok=True)
+            raise
+        else:
+            os.close(descriptor)
+        try:
+            os.replace(temporary_path, self.path)
+            os.chmod(self.path, 0o600)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
 
 
 def _expect_exact_keys(
@@ -890,6 +1176,131 @@ def _validated_text(value: Any, field_name: str, *, max_chars: int) -> str:
     resolved = value.strip()
     safe_public_string(resolved, field_name)
     return resolved
+
+
+def _validated_tracking_fields(
+    payload: Mapping[str, Any],
+    *,
+    required: bool = False,
+) -> dict[str, Any]:
+    visitor_id = payload.get("visitor_id")
+    session_id = payload.get("session_id")
+    sequence = payload.get("sequence")
+    if visitor_id is None and session_id is None and sequence is None and not required:
+        return {}
+    if (
+        not isinstance(visitor_id, str)
+        or not _VISITOR_ID_RE.fullmatch(visitor_id)
+        or not isinstance(session_id, str)
+        or not _SESSION_ID_RE.fullmatch(session_id)
+        or not isinstance(sequence, int)
+        or isinstance(sequence, bool)
+        or sequence < 1
+        or sequence > _MAX_EVENT_SEQUENCE
+    ):
+        raise ContractValidationError("anonymous UAT tracking ids are invalid")
+    return {
+        "visitor_id": visitor_id,
+        "session_id": session_id,
+        "sequence": sequence,
+    }
+
+
+def _validated_interaction_details(action: str, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ContractValidationError("interaction details must be an object")
+    details = dict(value)
+    if action == "page_view":
+        _expect_exact_keys(details, {"viewport"}, required={"viewport"})
+        if details["viewport"] not in {"desktop", "mobile"}:
+            raise ContractValidationError("interaction viewport is invalid")
+    elif action == "sidebar_toggle":
+        _expect_exact_keys(details, {"state"}, required={"state"})
+        if details["state"] not in {"open", "closed"}:
+            raise ContractValidationError("interaction sidebar state is invalid")
+    elif action in {"new_chat", "query_error"}:
+        _expect_exact_keys(details, set(), required=set())
+    elif action == "shell_control":
+        _expect_exact_keys(details, {"control"}, required={"control"})
+        if details["control"] not in _SHELL_CONTROLS:
+            raise ContractValidationError("interaction shell control is invalid")
+    elif action == "quick_prompt":
+        _expect_exact_keys(details, {"prompt_id"}, required={"prompt_id"})
+        if details["prompt_id"] not in _PROMPT_IDS:
+            raise ContractValidationError("interaction prompt id is invalid")
+    elif action == "upload_open":
+        _expect_exact_keys(details, {"source"}, required={"source"})
+        if details["source"] not in _UPLOAD_OPEN_SOURCES:
+            raise ContractValidationError("interaction upload source is invalid")
+    elif action == "upload_close":
+        _expect_exact_keys(details, {"source"}, required={"source"})
+        if details["source"] not in _UPLOAD_CLOSE_SOURCES:
+            raise ContractValidationError("interaction upload close source is invalid")
+    elif action == "upload_files_selected":
+        _expect_exact_keys(
+            details,
+            {"file_count", "size_bucket"},
+            required={"file_count", "size_bucket"},
+        )
+        _validated_interaction_count(details["file_count"], "file_count", maximum=20)
+        if details["size_bucket"] not in _UPLOAD_SIZE_BUCKETS:
+            raise ContractValidationError("interaction upload size bucket is invalid")
+    elif action == "upload_validation_error":
+        _expect_exact_keys(details, {"reason"}, required={"reason"})
+        if details["reason"] not in _UPLOAD_VALIDATION_REASONS:
+            raise ContractValidationError("interaction upload validation reason is invalid")
+    elif action == "upload_submit":
+        _expect_exact_keys(details, {"file_count"}, required={"file_count"})
+        _validated_interaction_count(details["file_count"], "file_count", maximum=20)
+    elif action == "upload_complete":
+        _expect_exact_keys(
+            details,
+            {"accepted_file_count", "duplicate_file_count"},
+            required={"accepted_file_count", "duplicate_file_count"},
+        )
+        accepted = _validated_interaction_count(
+            details["accepted_file_count"],
+            "accepted_file_count",
+            maximum=20,
+            minimum=0,
+        )
+        duplicate = _validated_interaction_count(
+            details["duplicate_file_count"],
+            "duplicate_file_count",
+            maximum=20,
+            minimum=0,
+        )
+        if accepted + duplicate > 20:
+            raise ContractValidationError("interaction upload counts are invalid")
+    elif action == "query_result":
+        _expect_exact_keys(
+            details,
+            {"result_count", "has_uploaded_result"},
+            required={"result_count", "has_uploaded_result"},
+        )
+        _validated_interaction_count(
+            details["result_count"],
+            "result_count",
+            maximum=_MAX_RESULT_LIMIT,
+            minimum=0,
+        )
+        if not isinstance(details["has_uploaded_result"], bool):
+            raise ContractValidationError("interaction query result flag is invalid")
+    else:
+        raise ContractValidationError("interaction action is invalid")
+    return details
+
+
+def _validated_interaction_count(
+    value: Any,
+    field_name: str,
+    *,
+    maximum: int,
+    minimum: int = 1,
+) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum or value > maximum:
+        raise ContractValidationError(f"interaction {field_name} is invalid")
+    return value
 
 
 def _expand_business_query(query_text: str) -> tuple[str, tuple[tuple[str, ...], ...]]:
@@ -981,6 +1392,15 @@ def _timestamp(value: str | None) -> str:
     return now_iso()
 
 
+def _event_datetime(value: str) -> datetime:
+    if not value:
+        raise ValueError("private UAT event timestamp is invalid")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("private UAT event timestamp is invalid")
+    return parsed.astimezone(timezone.utc)
+
+
 def _timestamp_sort_key(value: Any) -> float:
     if not isinstance(value, str) or not value:
         return float("-inf")
@@ -998,233 +1418,458 @@ _CHAT_UAT_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FormOwl 對話測試</title>
+  <title>FormOwl</title>
   <style>
     :root {
       color-scheme: light;
-      --sidebar: #171b20;
-      --sidebar-soft: #242a31;
-      --canvas: #f7f7f5;
-      --panel: #ffffff;
-      --line: #deded9;
-      --ink: #242723;
-      --muted: #73766f;
-      --brand: #147d64;
-      --brand-dark: #0e5f4c;
-      --user: #e7f3ee;
-      --danger: #a43b3b;
-      --shadow: 0 18px 50px rgba(25, 35, 31, .14);
+      --sidebar-width: 260px;
+      --sidebar: #f9f9f9;
+      --canvas: #ffffff;
+      --soft: #f4f4f4;
+      --hover: #ececec;
+      --line: #e5e5e5;
+      --ink: #0d0d0d;
+      --muted: #676767;
+      --brand: #10a37f;
+      --danger: #b42318;
+      --shadow: 0 8px 28px rgba(0, 0, 0, .08);
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; min-height: 100%; }
     body {
-      color: var(--ink);
-      background: var(--canvas);
-      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+      min-height: 100vh; overflow-x: hidden; color: var(--ink); background: var(--canvas);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
     }
     button, textarea { font: inherit; }
-    button { cursor: pointer; }
-    .app { min-height: 100vh; display: grid; grid-template-columns: 260px 1fr; }
+    button { color: inherit; cursor: pointer; }
+    button:focus-visible {
+      outline: 2px solid #595959; outline-offset: 2px;
+    }
     .sidebar {
-      position: sticky; top: 0; height: 100vh; padding: 22px 17px;
-      background: var(--sidebar); color: #f2f4f2; display: flex; flex-direction: column;
+      position: fixed; inset: 0 auto 0 0; z-index: 30; width: var(--sidebar-width);
+      background: var(--sidebar); padding: 8px 8px 12px; display: flex; flex-direction: column;
+      transition: transform .18s ease;
     }
-    .brand { display: flex; align-items: center; gap: 11px; padding: 3px 8px 20px; }
-    .brand-mark {
-      width: 35px; height: 35px; border-radius: 11px; display: grid; place-items: center;
-      background: linear-gradient(135deg, #27a780, #116852); font-weight: 900;
+    .sidebar-top { display: flex; align-items: center; justify-content: space-between; height: 44px; }
+    .brand-button, .sidebar-toggle, .nav-button, .history-item, .profile-card {
+      border: 0; background: transparent;
     }
-    .brand-title { font-weight: 800; }
-    .brand-subtitle { color: #9ba59f; font-size: 12px; margin-top: 2px; }
-    .new-chat {
-      width: 100%; border: 1px solid #3c444c; border-radius: 12px; padding: 11px 13px;
-      color: white; background: var(--sidebar-soft); text-align: left; font-weight: 700;
+    .brand-button {
+      display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 9px;
+      font-weight: 600;
     }
-    .sidebar-section { margin-top: 24px; padding: 0 8px; }
-    .sidebar-label {
-      color: #87918b; font-size: 11px; font-weight: 800; letter-spacing: .12em;
-      text-transform: uppercase; margin-bottom: 11px;
+    .brand-button:hover, .sidebar-toggle:hover, .nav-button:hover,
+    .history-item:hover, .profile-card:hover { background: var(--hover); }
+    .logo {
+      width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+      background: var(--ink); color: white; font-size: 13px; font-weight: 700;
     }
-    .side-fact { color: #c7cec9; font-size: 13px; line-height: 1.55; margin: 8px 0; }
-    .side-fact b { color: white; }
-    .sidebar-bottom { margin-top: auto; color: #89938d; font-size: 12px; line-height: 1.55; padding: 8px; }
-    .workspace { min-width: 0; min-height: 100vh; display: flex; flex-direction: column; }
+    .sidebar-toggle, .mobile-menu {
+      width: 36px; height: 36px; border: 0; border-radius: 9px; background: transparent;
+      display: grid; place-items: center;
+    }
+    .sidebar-toggle:hover, .mobile-menu:hover { background: var(--hover); }
+    .nav { margin-top: 8px; display: grid; gap: 2px; }
+    .nav-button {
+      width: 100%; min-height: 40px; padding: 8px 10px; border-radius: 9px;
+      display: flex; align-items: center; gap: 11px; text-align: left;
+    }
+    .nav-icon { width: 20px; height: 20px; display: grid; place-items: center; flex: none; }
+    .history { min-height: 0; overflow-y: auto; margin-top: 22px; flex: 1; }
+    .history-label {
+      padding: 0 10px 7px; color: var(--muted); font-size: 12px; font-weight: 600;
+    }
+    .history-item {
+      width: 100%; padding: 9px 10px; border-radius: 9px; overflow: hidden;
+      text-align: left; text-overflow: ellipsis; white-space: nowrap; font-size: 14px;
+    }
+    .profile-card {
+      width: 100%; padding: 9px 8px; border-radius: 9px; display: flex; align-items: center;
+      gap: 10px; text-align: left;
+    }
+    .profile-avatar {
+      width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+      background: #d9d9d9; font-size: 12px; font-weight: 700;
+    }
+    .profile-copy { min-width: 0; }
+    .profile-title { font-size: 13px; font-weight: 600; }
+    .profile-subtitle { color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .main { min-height: 100vh; margin-left: var(--sidebar-width); transition: margin-left .18s ease; }
     .topbar {
-      height: 58px; padding: 0 24px; border-bottom: 1px solid var(--line);
-      background: rgba(255,255,255,.88); backdrop-filter: blur(12px);
-      display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0;
-      z-index: 5;
+      position: fixed; top: 0; right: 0; left: var(--sidebar-width); z-index: 20;
+      height: 56px; padding: 0 14px; display: flex; align-items: center;
+      justify-content: space-between; background: rgba(255,255,255,.92);
+      backdrop-filter: blur(12px); transition: left .18s ease;
     }
-    .topbar strong { font-size: 14px; }
-    .status { color: var(--muted); font-size: 12px; }
-    .status::before {
-      content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-      background: #e5a31a; margin-right: 7px;
+    .topbar-left, .topbar-right { display: flex; align-items: center; gap: 8px; }
+    .mobile-menu { display: none; }
+    .model-selector {
+      border: 0; background: transparent; border-radius: 9px; padding: 8px 10px;
+      font-size: 17px; font-weight: 600;
     }
-    .status.ready::before { background: #22a06b; }
+    .model-selector:hover { background: var(--soft); }
+    .model-selector span { color: var(--muted); font-size: 12px; margin-left: 5px; }
+    .test-badge {
+      display: flex; align-items: center; gap: 7px; padding: 7px 10px;
+      border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 12px;
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #d9a400; }
+    .test-badge.ready .status-dot { background: var(--brand); }
+    .top-avatar {
+      width: 32px; height: 32px; border: 0; border-radius: 50%; background: #ededed;
+      display: grid; place-items: center; font-size: 12px; font-weight: 700;
+    }
     .conversation {
-      width: min(860px, calc(100% - 32px)); margin: 0 auto; flex: 1;
-      padding: 42px 0 170px;
+      display: none; width: min(768px, calc(100% - 40px)); margin: 0 auto;
+      padding: 88px 0 190px;
     }
-    .message { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 13px; margin: 0 0 30px; }
+    body.has-conversation .conversation { display: block; }
+    .message { margin-bottom: 34px; }
+    .message.assistant {
+      display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 14px;
+    }
+    .message.user { display: flex; justify-content: flex-end; }
+    .message.user .avatar { display: none; }
     .avatar {
-      width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
-      font-weight: 900; font-size: 13px; background: var(--brand); color: white;
+      width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+      background: var(--ink); color: white; font-size: 11px; font-weight: 700;
     }
-    .message.user .avatar { background: #4e5964; }
-    .bubble { min-width: 0; line-height: 1.7; }
+    .bubble { min-width: 0; line-height: 1.65; font-size: 15px; }
     .message.user .bubble {
-      justify-self: start; background: var(--user); padding: 12px 16px; border-radius: 16px;
-      max-width: 90%; white-space: pre-wrap;
+      max-width: min(72%, 620px); padding: 10px 16px; border-radius: 20px;
+      background: var(--soft); white-space: pre-wrap;
     }
-    .assistant-title { font-weight: 800; margin-bottom: 7px; }
+    .assistant-title { margin-bottom: 7px; font-weight: 650; }
     .assistant-text { white-space: pre-wrap; }
-    .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-    .chip {
-      border: 1px solid var(--line); background: white; color: #3d453f;
-      border-radius: 999px; padding: 8px 12px; font-size: 13px;
-    }
-    .chip:hover { border-color: var(--brand); color: var(--brand-dark); }
-    .evidence-list { display: grid; gap: 10px; margin-top: 15px; }
+    .evidence-list { display: grid; gap: 10px; margin-top: 16px; }
     .evidence {
-      border: 1px solid var(--line); border-radius: 15px; padding: 14px 15px;
-      background: var(--panel);
+      border: 1px solid var(--line); border-radius: 14px; padding: 14px 15px;
+      background: #fff;
     }
     .evidence h3 { margin: 0; font-size: 14px; line-height: 1.5; }
-    .evidence-meta { color: var(--muted); font-size: 12px; margin: 5px 0 9px; }
-    .evidence p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .evidence-meta { margin: 5px 0 8px; color: var(--muted); font-size: 12px; }
+    .evidence p { margin: 0; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
     .badge {
-      display: inline-block; margin-left: 7px; border-radius: 999px; padding: 2px 7px;
-      background: #fff0bf; color: #725a12; font-size: 10px; font-weight: 800;
+      display: inline-block; margin-left: 7px; padding: 2px 7px; border-radius: 999px;
+      background: #e8f6f1; color: #08745a; font-size: 10px; font-weight: 650;
     }
-    .citation { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10px; margin-top: 10px; }
-    .feedback-row { display: flex; gap: 7px; margin-top: 13px; align-items: center; }
-    .feedback-row span { color: var(--muted); font-size: 12px; }
+    .citation { margin-top: 9px; color: #8a8a8a; font-size: 10px; overflow-wrap: anywhere; }
+    .feedback-row { display: flex; align-items: center; gap: 3px; margin-top: 12px; }
+    .feedback-row span { color: var(--muted); font-size: 12px; margin-right: 4px; }
     .feedback-row button {
-      border: 1px solid var(--line); background: white; border-radius: 9px; padding: 6px 9px;
-      color: var(--muted);
+      width: 30px; height: 30px; border: 0; border-radius: 8px; background: transparent;
     }
-    .feedback-row button:hover { border-color: var(--brand); color: var(--brand); }
-    .composer-wrap {
-      position: fixed; left: 260px; right: 0; bottom: 0; z-index: 6;
-      padding: 18px 20px 24px; background: linear-gradient(transparent, var(--canvas) 28%);
+    .feedback-row button:hover { background: var(--soft); }
+    .composer-dock {
+      position: fixed; left: var(--sidebar-width); right: 0; top: 50%; z-index: 15;
+      transform: translateY(-48%); padding: 0 20px; transition: left .18s ease;
     }
-    .composer {
-      width: min(860px, 100%); margin: 0 auto; border: 1px solid #cfcfca;
-      border-radius: 19px; background: white; box-shadow: var(--shadow);
-      display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: 8px;
-      padding: 9px 10px;
+    .composer-panel { width: min(768px, 100%); margin: 0 auto; }
+    .landing-title { text-align: center; margin-bottom: 26px; }
+    .landing-logo {
+      width: 42px; height: 42px; margin: 0 auto 18px; border-radius: 50%;
+      display: grid; place-items: center; background: var(--ink); color: white;
+      font-size: 16px; font-weight: 700;
     }
-    .composer textarea {
-      border: 0; outline: 0; resize: none; min-height: 42px; max-height: 150px;
-      padding: 10px 6px; line-height: 1.5; color: var(--ink);
+    .landing-title h1 { margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -.02em; }
+    .prompt-box {
+      border: 1px solid #d7d7d7; border-radius: 26px; background: white;
+      box-shadow: var(--shadow); padding: 10px 12px 9px;
     }
-    .icon-button, .send {
-      width: 42px; height: 42px; border: 0; border-radius: 13px; display: grid;
-      place-items: center; font-weight: 900;
+    .prompt-box:focus-within {
+      border-color: #9b9b9b; box-shadow: 0 0 0 2px rgba(13, 13, 13, .08), var(--shadow);
     }
-    .icon-button { background: #f0f1ee; color: #4d554f; font-size: 20px; }
-    .icon-button:hover { background: #e3e9e5; color: var(--brand); }
-    .send { background: var(--brand); color: white; }
-    .send:hover { background: var(--brand-dark); }
-    .send:disabled { opacity: .5; cursor: wait; }
-    .composer-note { text-align: center; color: var(--muted); font-size: 11px; margin-top: 8px; }
+    .prompt-box textarea {
+      width: 100%; min-height: 48px; max-height: 180px; padding: 8px 8px 4px;
+      border: 0; outline: 0; resize: none; color: var(--ink); line-height: 1.45;
+      background: transparent; font-size: 16px;
+    }
+    .prompt-toolbar { display: flex; align-items: center; justify-content: space-between; }
+    .prompt-left, .prompt-right { display: flex; align-items: center; gap: 6px; }
+    .round-action {
+      width: 34px; height: 34px; border: 0; border-radius: 50%; display: grid;
+      place-items: center; background: transparent;
+    }
+    .round-action:hover { background: var(--soft); }
+    .tool-label {
+      border: 0; border-radius: 999px; background: transparent; padding: 7px 9px;
+      color: var(--muted); font-size: 13px;
+    }
+    .tool-label:hover { background: var(--soft); }
+    .send {
+      width: 34px; height: 34px; border: 0; border-radius: 50%; display: grid;
+      place-items: center; background: var(--ink); color: white;
+    }
+    .send:disabled { opacity: .35; cursor: default; }
+    .starter-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 18px;
+    }
+    .starter-card {
+      min-height: 64px; padding: 12px 14px; border: 1px solid var(--line);
+      border-radius: 15px; background: white; text-align: left;
+    }
+    .starter-card:hover { background: #fafafa; }
+    .starter-card strong { display: block; font-size: 13px; font-weight: 600; }
+    .starter-card span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .composer-note {
+      margin-top: 10px; color: var(--muted); text-align: center; font-size: 11px;
+    }
+    body.has-conversation .composer-dock {
+      top: auto; bottom: 0; transform: none; padding: 18px 20px 12px;
+      background: linear-gradient(transparent, rgba(255,255,255,.96) 24%, #fff 54%);
+    }
+    body.has-conversation .landing-title,
+    body.has-conversation .starter-grid { display: none; }
+    body.has-conversation .prompt-box { box-shadow: 0 2px 14px rgba(0,0,0,.08); }
     .modal {
-      position: fixed; inset: 0; z-index: 20; background: rgba(20, 24, 22, .60);
-      display: grid; place-items: center; padding: 22px; backdrop-filter: blur(7px);
+      position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+      padding: 22px; background: rgba(0,0,0,.5); backdrop-filter: blur(3px);
     }
     .modal.hidden { display: none; }
     .modal-card {
-      width: min(720px, 100%); height: min(650px, calc(100vh - 44px)); background: white;
-      border-radius: 22px; box-shadow: 0 28px 90px rgba(0,0,0,.3); overflow: hidden;
-      display: grid; grid-template-rows: 54px 1fr;
+      width: min(720px, 100%); height: min(650px, calc(100vh - 44px));
+      overflow: hidden; display: grid; grid-template-rows: 54px 1fr;
+      border-radius: 18px; background: white; box-shadow: 0 24px 80px rgba(0,0,0,.3);
     }
     .modal-head {
-      display: flex; align-items: center; justify-content: space-between; padding: 0 17px;
-      border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 17px; border-bottom: 1px solid var(--line);
     }
     .modal-head strong { font-size: 14px; }
     .close {
-      border: 0; background: #f0f1ee; width: 34px; height: 34px; border-radius: 10px;
-      font-size: 20px; line-height: 1;
+      width: 34px; height: 34px; border: 0; border-radius: 9px;
+      background: transparent; font-size: 20px;
     }
-    iframe { width: 100%; height: 100%; border: 0; background: #f7f7f5; }
+    .close:hover { background: var(--soft); }
+    iframe { width: 100%; height: 100%; border: 0; background: #f7f7f7; }
     .error-text { color: var(--danger); }
-    @media (max-width: 760px) {
-      .app { grid-template-columns: 1fr; }
-      .sidebar { display: none; }
-      .composer-wrap { left: 0; }
-      .conversation { padding-top: 26px; }
-      .topbar { padding: 0 16px; }
-      .message { grid-template-columns: 30px minmax(0, 1fr); gap: 10px; }
-      .avatar { width: 30px; height: 30px; border-radius: 9px; }
+    .shell-toast {
+      position: fixed; top: 68px; left: calc((100% + var(--sidebar-width)) / 2);
+      z-index: 45; max-width: min(420px, calc(100% - 32px)); padding: 10px 14px;
+      border: 1px solid var(--line); border-radius: 12px; background: #fff;
+      box-shadow: var(--shadow); color: #444; font-size: 13px; text-align: center;
+      opacity: 0; pointer-events: none; transform: translate(-50%, -8px);
+      transition: opacity .16s ease, transform .16s ease;
+    }
+    .shell-toast.visible { opacity: 1; transform: translate(-50%, 0); }
+    .sidebar-overlay { display: none; }
+    body.sidebar-collapsed .sidebar { transform: translateX(-100%); }
+    body.sidebar-collapsed .main { margin-left: 0; }
+    body.sidebar-collapsed .topbar,
+    body.sidebar-collapsed .composer-dock { left: 0; }
+    body.sidebar-collapsed .shell-toast { left: 50%; }
+    body.sidebar-collapsed .mobile-menu { display: grid; }
+    @media (max-width: 800px) {
+      .sidebar { transform: translateX(-100%); box-shadow: 8px 0 30px rgba(0,0,0,.12); }
+      .main { margin-left: 0; }
+      .topbar, .composer-dock { left: 0; }
+      .shell-toast { left: 50%; }
+      .mobile-menu { display: grid; }
+      body.mobile-sidebar-open .sidebar { transform: translateX(0); }
+      body.mobile-sidebar-open .sidebar-overlay {
+        position: fixed; inset: 0; z-index: 25; display: block; border: 0;
+        background: rgba(0,0,0,.22);
+      }
+      .composer-dock { padding: 0 12px; }
+      .conversation { width: min(100% - 26px, 768px); padding-top: 76px; }
+      .starter-grid { grid-template-columns: 1fr; }
+      .starter-card:nth-child(n+3) { display: none; }
+      .landing-title h1 { font-size: 24px; }
+      .message.user .bubble { max-width: 86%; }
+      .test-badge { display: none; }
     }
   </style>
 </head>
 <body>
-  <div class="app">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark">F</div>
-        <div>
-          <div class="brand-title">FormOwl</div>
-          <div class="brand-subtitle">Shared mail UAT</div>
-        </div>
-      </div>
-      <button class="new-chat" id="new-chat" type="button">＋ 新對話</button>
-      <div class="sidebar-section">
-        <div class="sidebar-label">共同測試空間</div>
-        <div class="side-fact">共享上傳：<b id="upload-count">讀取中…</b></div>
-        <div class="side-fact">不經 ChatGPT；不回寫郵件、專案或正式知識圖譜。</div>
-      </div>
-      <div class="sidebar-bottom">內網／VPN 功能測試介面<br>目前支援 EML，附件內容不建立索引。</div>
-    </aside>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-top">
+      <button class="brand-button" id="brand-home" type="button" aria-label="FormOwl 首頁">
+        <span class="logo">F</span><span>FormOwl</span>
+      </button>
+      <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="收合側邊欄">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="3.5" y="4" width="17" height="16" rx="3" stroke="currentColor" stroke-width="1.7"/>
+          <path d="M9 4v16" stroke="currentColor" stroke-width="1.7"/>
+        </svg>
+      </button>
+    </div>
+    <nav class="nav" aria-label="主要功能">
+      <button class="nav-button" id="new-chat" type="button">
+        <span class="nav-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 20H5a1 1 0 0 1-1-1v-7a8 8 0 0 1 8-8h7a1 1 0 0 1 1 1v7a8 8 0 0 1-8 8Z" stroke="currentColor" stroke-width="1.7"/>
+            <path d="M12 8v6M9 11h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span>新對話</span>
+      </button>
+      <button class="nav-button" id="search-conversations" type="button" aria-label="搜尋對話">
+        <span class="nav-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="1.7"/>
+            <path d="m16 16 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span>搜尋對話</span>
+      </button>
+    </nav>
+    <div class="history">
+      <div class="history-label">今天</div>
+      <button class="history-item" id="current-chat-title" type="button">新對話</button>
+    </div>
+    <button class="profile-card" id="profile-card" type="button">
+      <span class="profile-avatar">U</span>
+      <span class="profile-copy">
+        <span class="profile-title">功能測試</span>
+        <span class="profile-subtitle" id="upload-count">讀取郵件中…</span>
+      </span>
+    </button>
+  </aside>
+  <button class="sidebar-overlay" id="sidebar-overlay" type="button" aria-label="關閉側邊欄"></button>
 
-    <main class="workspace">
-      <header class="topbar">
-        <strong>FormOwl 郵件助手</strong>
-        <div class="status" id="server-status">連線中</div>
-      </header>
-      <section class="conversation" id="conversation">
-        <article class="message assistant">
-          <div class="avatar">F</div>
-          <div class="bubble">
-            <div class="assistant-title">你好，我是 FormOwl 測試助手。</div>
-            <div class="assistant-text">直接問我量產時間、Pull-in 料件、PO、料號或供應商進度。需要加入新郵件時，按下方的迴紋針，我會開啟郵件上傳視窗。</div>
-            <div class="quick-actions">
-              <button class="chip quick" data-query="最近一次文顥的量產時間" type="button">文顥最近排程</button>
-              <button class="chip quick" data-query="有哪些料件需要 pull-in" type="button">Pull-in 料件</button>
-              <button class="chip quick" data-query="PO 470002154" type="button">查 PO</button>
-              <button class="chip" id="welcome-upload" type="button">📎 上傳新郵件</button>
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="mobile-menu" id="mobile-menu" type="button" aria-label="開啟側邊欄">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="3.5" y="4" width="17" height="16" rx="3" stroke="currentColor" stroke-width="1.7"/>
+            <path d="M9 4v16" stroke="currentColor" stroke-width="1.7"/>
+          </svg>
+        </button>
+        <button class="model-selector" id="model-selector" type="button">FormOwl <span>▾</span></button>
+      </div>
+      <div class="topbar-right">
+        <div class="test-badge" id="server-status">
+          <span class="status-dot"></span><span class="status-copy" id="status-copy">連線中</span>
+        </div>
+        <button class="top-avatar" id="top-avatar" type="button" aria-label="測試使用者">U</button>
+      </div>
+    </header>
+
+    <section class="conversation" id="conversation" aria-live="polite"></section>
+
+    <div class="composer-dock">
+      <div class="composer-panel">
+        <div class="landing-title" id="landing-title">
+          <div class="landing-logo">F</div>
+          <h1>有什麼可以幫忙的？</h1>
+        </div>
+        <div class="prompt-box">
+          <textarea id="chat-input" rows="1" placeholder="詢問任何關於郵件的問題"></textarea>
+          <div class="prompt-toolbar">
+            <div class="prompt-left">
+              <button class="round-action" id="open-upload" type="button" title="上傳郵件" aria-label="上傳郵件">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+              </button>
+              <button class="tool-label" id="tools-control" type="button">工具</button>
+            </div>
+            <div class="prompt-right">
+              <button class="send" id="send" type="button" title="送出" aria-label="送出">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 19V5M6 11l6-6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
             </div>
           </div>
-        </article>
-      </section>
-      <div class="composer-wrap">
-        <div class="composer">
-          <button class="icon-button" id="open-upload" type="button" title="上傳 EML">📎</button>
-          <textarea id="chat-input" rows="1" placeholder="傳訊息給 FormOwl…"></textarea>
-          <button class="send" id="send" type="button" title="送出">↑</button>
         </div>
-        <div class="composer-note">FormOwl 可能只找到部分郵件證據；排程、交期與數量仍請依原信確認。</div>
+        <div class="starter-grid" id="starter-grid">
+          <button class="starter-card quick" data-prompt-id="recent_schedule" data-query="最近一次文顥的量產時間" type="button">
+            <strong>查詢最近排程</strong><span>文顥最近一次量產時間</span>
+          </button>
+          <button class="starter-card quick" data-prompt-id="pull_in" data-query="有哪些料件需要 pull-in" type="button">
+            <strong>整理 Pull-in 需求</strong><span>查看需要提前的料件</span>
+          </button>
+          <button class="starter-card quick" data-prompt-id="purchase_order" data-query="PO 470002154" type="button">
+            <strong>追蹤採購單</strong><span>查詢 PO 470002154</span>
+          </button>
+          <button class="starter-card" id="starter-upload" type="button">
+            <strong>加入新的郵件</strong><span>上傳 EML 後立即提問</span>
+          </button>
+        </div>
+        <div class="composer-note">測試期間會記錄已送出的問題與按鈕操作以改善體驗；不記錄輸入中的文字，紀錄最多保留 30 天。</div>
       </div>
-    </main>
-  </div>
+    </div>
+  </main>
 
   <div class="modal hidden" id="upload-modal" role="dialog" aria-modal="true" aria-label="上傳郵件">
     <div class="modal-card">
       <div class="modal-head">
-        <strong>加入新的測試郵件</strong>
+        <strong>加入郵件</strong>
         <button class="close" id="close-upload" type="button" aria-label="關閉">×</button>
       </div>
       <iframe id="upload-frame" src="/upload" title="FormOwl 郵件上傳"></iframe>
     </div>
   </div>
+  <div class="shell-toast" id="shell-toast" role="status" aria-live="polite"></div>
 
   <script>
     const byId = (id) => document.getElementById(id);
     const conversation = byId("conversation");
+    const body = document.body;
     let busy = false;
+    let conversationStarted = false;
+    let toastTimer = null;
+
+    function randomTrackingId(prefix) {
+      const bytes = new Uint8Array(16);
+      if (window.crypto && window.crypto.getRandomValues) {
+        window.crypto.getRandomValues(bytes);
+      } else {
+        for (let index = 0; index < bytes.length; index += 1) {
+          bytes[index] = Math.floor(Math.random() * 256);
+        }
+      }
+      return prefix + Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+    }
+
+    function storedTrackingId(storage, key, prefix, maxAgeMs = null) {
+      try {
+        const existing = storage.getItem(key);
+        const createdAt = Number(storage.getItem(`${key}_created_at`) || "0");
+        const isFresh = maxAgeMs === null
+          || (Number.isFinite(createdAt) && createdAt > 0 && Date.now() - createdAt <= maxAgeMs);
+        if (
+          existing
+          && existing.startsWith(prefix)
+          && existing.length === prefix.length + 32
+          && /^[0-9a-f]{32}$/.test(existing.slice(prefix.length))
+          && isFresh
+        ) return existing;
+        const created = randomTrackingId(prefix);
+        storage.setItem(key, created);
+        storage.setItem(`${key}_created_at`, String(Date.now()));
+        return created;
+      } catch (_) {
+        return randomTrackingId(prefix);
+      }
+    }
+
+    const visitorId = storedTrackingId(
+      window.localStorage,
+      "formowl_uat_visitor_id",
+      "uatvisitor_",
+      30 * 24 * 60 * 60 * 1000
+    );
+    const sessionId = storedTrackingId(
+      window.sessionStorage,
+      "formowl_uat_session_id",
+      "uatsession_"
+    );
+
+    function nextEventSequence() {
+      const key = "formowl_uat_event_sequence";
+      try {
+        const current = Number(window.sessionStorage.getItem(key) || "0");
+        const next = Number.isSafeInteger(current) && current >= 0 ? current + 1 : 1;
+        window.sessionStorage.setItem(key, String(next));
+        return next;
+      } catch (_) {
+        return Date.now();
+      }
+    }
 
     async function api(path, options = {}) {
       const headers = { ...(options.headers || {}) };
@@ -1242,8 +1887,40 @@ _CHAT_UAT_HTML = """<!doctype html>
       return payload;
     }
 
+    function track(action, details = {}) {
+      return fetch("/api/interaction", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          visitor_id: visitorId,
+          session_id: sessionId,
+          sequence: nextEventSequence(),
+          action,
+          details
+        })
+      }).catch(() => {});
+    }
+
     function scrollToLatest() {
       window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+    }
+
+    function showShellToast(message) {
+      const toast = byId("shell-toast");
+      toast.textContent = message;
+      toast.classList.add("visible");
+      if (toastTimer) window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => toast.classList.remove("visible"), 2200);
+    }
+
+    function activateConversation(query) {
+      if (!conversationStarted) {
+        conversationStarted = true;
+        body.classList.add("has-conversation");
+        const title = query.length > 28 ? query.slice(0, 28) + "…" : query;
+        byId("current-chat-title").textContent = title || "新對話";
+      }
     }
 
     function createMessage(role) {
@@ -1269,13 +1946,16 @@ _CHAT_UAT_HTML = """<!doctype html>
       return bubble;
     }
 
-    function openUpload() {
+    function openUpload(source) {
       byId("upload-modal").classList.remove("hidden");
       byId("upload-frame").focus();
+      track("upload_open", { source });
     }
 
-    function closeUpload() {
+    function closeUpload(source) {
+      if (byId("upload-modal").classList.contains("hidden")) return;
       byId("upload-modal").classList.add("hidden");
+      track("upload_close", { source });
     }
 
     function querySort(query) {
@@ -1290,15 +1970,28 @@ _CHAT_UAT_HTML = """<!doctype html>
       const label = document.createElement("span");
       label.textContent = "這個回答有幫助嗎？";
       row.appendChild(label);
-      for (const [text, verdict] of [["有", "correct"], ["部分", "partially_correct"], ["沒有", "incorrect"]]) {
+      for (const [text, verdict, title] of [
+        ["↑", "correct", "有幫助"],
+        ["◐", "partially_correct", "部分有幫助"],
+        ["↓", "incorrect", "沒有幫助"]
+      ]) {
         const button = document.createElement("button");
         button.type = "button";
         button.textContent = text;
+        button.title = title;
+        button.setAttribute("aria-label", title);
         button.addEventListener("click", async () => {
           try {
             await api("/api/feedback", {
               method: "POST",
-              body: JSON.stringify({ query_id: queryId, verdict, note: "" })
+              body: JSON.stringify({
+                query_id: queryId,
+                verdict,
+                note: "",
+                visitor_id: visitorId,
+                session_id: sessionId,
+                sequence: nextEventSequence()
+              })
             });
             row.replaceChildren();
             const saved = document.createElement("span");
@@ -1327,17 +2020,17 @@ _CHAT_UAT_HTML = """<!doctype html>
       explanation.className = "assistant-text";
       explanation.textContent = payload.results.length
         ? payload.notice
-        : "你可以換用 PO、料號、供應商等明確關鍵字，或先上傳新的 EML 郵件。";
+        : "你可以改用 PO、料號或供應商等明確關鍵字，或先加入新的 EML 郵件。";
       holder.appendChild(explanation);
 
       if (!payload.results.length) {
         const actions = document.createElement("div");
-        actions.className = "quick-actions";
+        actions.className = "feedback-row";
         const upload = document.createElement("button");
         upload.type = "button";
-        upload.className = "chip";
-        upload.textContent = "📎 上傳新郵件";
-        upload.addEventListener("click", openUpload);
+        upload.title = "加入新郵件";
+        upload.textContent = "＋";
+        upload.addEventListener("click", () => openUpload("no_result"));
         actions.appendChild(upload);
         holder.appendChild(actions);
       } else {
@@ -1351,7 +2044,7 @@ _CHAT_UAT_HTML = """<!doctype html>
           if (item.source_kind === "uploaded_uat") {
             const badge = document.createElement("span");
             badge.className = "badge";
-            badge.textContent = "共同測試上傳";
+            badge.textContent = "測試上傳";
             subject.appendChild(badge);
           }
           const meta = document.createElement("div");
@@ -1374,10 +2067,11 @@ _CHAT_UAT_HTML = """<!doctype html>
       scrollToLatest();
     }
 
-    async function ask(queryText) {
+    async function ask(queryText, source = "composer") {
       const query = queryText.trim();
       if (!query || busy) return;
       busy = true;
+      activateConversation(query);
       byId("send").disabled = true;
       byId("chat-input").value = "";
       appendTextMessage("user", query);
@@ -1390,15 +2084,30 @@ _CHAT_UAT_HTML = """<!doctype html>
       try {
         const payload = await api("/api/query", {
           method: "POST",
-          body: JSON.stringify({ query_text: query, sort: querySort(query), limit: 8 })
+          body: JSON.stringify({
+            query_text: query,
+            sort: querySort(query),
+            limit: 8,
+            visitor_id: visitorId,
+            session_id: sessionId,
+            sequence: nextEventSequence(),
+            source
+          })
         });
         renderAssistantResult(payload, bubble);
+        track("query_result", {
+          result_count: payload.result_count,
+          has_uploaded_result: payload.results.some(
+            (item) => item.source_kind === "uploaded_uat"
+          )
+        });
       } catch (_) {
         bubble.replaceChildren();
         const error = document.createElement("div");
         error.className = "error-text";
         error.textContent = "查詢暫時失敗，請稍後再試。";
         bubble.appendChild(error);
+        track("query_error", {});
       } finally {
         busy = false;
         byId("send").disabled = false;
@@ -1406,36 +2115,106 @@ _CHAT_UAT_HTML = """<!doctype html>
       }
     }
 
+    function toggleSidebar() {
+      let state;
+      if (window.innerWidth <= 800) {
+        body.classList.toggle("mobile-sidebar-open");
+        state = body.classList.contains("mobile-sidebar-open") ? "open" : "closed";
+      } else {
+        body.classList.toggle("sidebar-collapsed");
+        state = body.classList.contains("sidebar-collapsed") ? "closed" : "open";
+      }
+      track("sidebar_toggle", { state });
+    }
+
+    function closeMobileSidebar() {
+      body.classList.remove("mobile-sidebar-open");
+    }
+
+    function startNewChat() {
+      conversation.replaceChildren();
+      conversationStarted = false;
+      body.classList.remove("has-conversation");
+      closeMobileSidebar();
+      byId("current-chat-title").textContent = "新對話";
+      byId("chat-input").focus();
+      track("new_chat", {});
+    }
+
+    function trackShellControl(control, message, resetConversation = false) {
+      track("shell_control", { control });
+      if (resetConversation) {
+        conversation.replaceChildren();
+        conversationStarted = false;
+        body.classList.remove("has-conversation");
+        byId("current-chat-title").textContent = "新對話";
+        byId("chat-input").focus();
+      }
+      closeMobileSidebar();
+      showShellToast(message);
+    }
+
     async function refreshSummary() {
       try {
         const summary = await api("/api/session-summary", { method: "GET" });
-        byId("upload-count").textContent = `${summary.uploaded_file_count} 封 EML`;
+        byId("upload-count").textContent = `${summary.uploaded_file_count} 封測試郵件`;
       } catch (_) {
-        byId("upload-count").textContent = "暫時無法讀取";
+        byId("upload-count").textContent = "郵件狀態無法讀取";
       }
     }
 
-    byId("send").addEventListener("click", () => ask(byId("chat-input").value));
+    byId("send").addEventListener("click", () => ask(byId("chat-input").value, "composer"));
     byId("chat-input").addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
-        ask(event.currentTarget.value);
+        ask(event.currentTarget.value, "composer");
       }
     });
-    byId("open-upload").addEventListener("click", openUpload);
-    byId("welcome-upload").addEventListener("click", openUpload);
-    byId("close-upload").addEventListener("click", closeUpload);
+    byId("open-upload").addEventListener("click", () => openUpload("composer"));
+    byId("starter-upload").addEventListener("click", () => openUpload("landing"));
+    byId("close-upload").addEventListener("click", () => closeUpload("button"));
     byId("upload-modal").addEventListener("click", (event) => {
-      if (event.target === byId("upload-modal")) closeUpload();
+      if (event.target === byId("upload-modal")) closeUpload("backdrop");
     });
-    byId("new-chat").addEventListener("click", () => {
-      const messages = conversation.querySelectorAll(".message");
-      for (let index = 1; index < messages.length; index += 1) messages[index].remove();
-      byId("chat-input").focus();
+    byId("new-chat").addEventListener("click", startNewChat);
+    byId("brand-home").addEventListener("click", () => {
+      trackShellControl("brand_home", "已回到新對話。", true);
     });
+    byId("search-conversations").addEventListener("click", () => {
+      trackShellControl("search_conversations", "測試版目前只保留這個瀏覽器頁面的對話。");
+    });
+    byId("current-chat-title").addEventListener("click", () => {
+      trackShellControl("current_history", "你正在查看目前的對話。");
+    });
+    byId("model-selector").addEventListener("click", () => {
+      trackShellControl("model_selector", "目前固定使用 FormOwl 郵件測試模型。");
+    });
+    byId("tools-control").addEventListener("click", () => {
+      trackShellControl("tools_menu", "目前可用工具是郵件上傳與郵件證據查詢。");
+    });
+    byId("profile-card").addEventListener("click", () => {
+      trackShellControl("profile_card", "這個共享測試版目前沒有個人帳號設定。");
+    });
+    byId("top-avatar").addEventListener("click", () => {
+      trackShellControl("profile_avatar", "這個共享測試版目前沒有個人帳號設定。");
+    });
+    byId("sidebar-toggle").addEventListener("click", toggleSidebar);
+    byId("mobile-menu").addEventListener("click", toggleSidebar);
+    byId("sidebar-overlay").addEventListener("click", toggleSidebar);
     for (const button of document.querySelectorAll(".quick")) {
-      button.addEventListener("click", () => ask(button.dataset.query || ""));
+      button.addEventListener("click", () => {
+        track("quick_prompt", { prompt_id: button.dataset.promptId });
+        ask(button.dataset.query || "", "quick_prompt");
+      });
     }
+    window.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      if (!byId("upload-modal").classList.contains("hidden")) {
+        closeUpload("button");
+      } else if (body.classList.contains("mobile-sidebar-open")) {
+        toggleSidebar();
+      }
+    });
     window.addEventListener("message", (event) => {
       if (
         event.origin !== window.location.origin
@@ -1443,27 +2222,38 @@ _CHAT_UAT_HTML = """<!doctype html>
         || !event.data
       ) return;
       if (event.data.type === "formowl-upload-complete") {
-        closeUpload();
-        const count = Number(event.data.accepted_file_count || 0);
+        byId("upload-modal").classList.add("hidden");
+        const accepted = Number(event.data.accepted_file_count || 0);
+        const duplicate = Number(event.data.duplicate_file_count || 0);
+        track("upload_complete", {
+          accepted_file_count: accepted,
+          duplicate_file_count: duplicate
+        });
+        activateConversation("已加入新的郵件");
         appendTextMessage(
           "assistant",
-          count
-            ? `已加入 ${count} 封新郵件。現在可以直接問我這些郵件的內容。`
-            : "這些郵件先前已上傳，現在可以直接查詢。"
+          accepted
+            ? `已加入 ${accepted} 封新郵件。現在可以直接詢問這些郵件。`
+            : "這些郵件先前已加入，現在可以直接查詢。"
         );
         refreshSummary();
       } else if (event.data.type === "formowl-upload-close") {
-        closeUpload();
+        closeUpload("iframe_cancel");
       }
     });
 
     fetch("/api/health", { cache: "no-store" })
       .then((response) => response.json())
       .then((payload) => {
-        byId("server-status").textContent = payload.status === "ready" ? "服務已就緒" : "服務準備中";
-        byId("server-status").classList.toggle("ready", payload.status === "ready");
+        const status = byId("server-status");
+        byId("status-copy").textContent =
+          payload.status === "ready" ? "FormOwl 測試版" : "服務準備中";
+        status.classList.toggle("ready", payload.status === "ready");
       })
-      .catch(() => { byId("server-status").textContent = "服務未連線"; });
+      .catch(() => {
+        byId("status-copy").textContent = "服務未連線";
+      });
+    track("page_view", { viewport: window.innerWidth <= 800 ? "mobile" : "desktop" });
     refreshSummary();
   </script>
 </body>
@@ -1507,11 +2297,17 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
     }
     .drop strong { display: block; margin-bottom: 6px; }
     .drop span { color: var(--muted); font-size: 13px; }
-    input[type=file] { display: none; }
+    input[type=file] {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
     .choose {
       display: inline-block; margin-top: 15px; border: 1px solid var(--line);
       background: white; color: var(--brand-dark); border-radius: 11px; padding: 9px 13px;
       cursor: pointer; font-weight: 800;
+    }
+    input[type=file]:focus-visible + .choose {
+      outline: 2px solid var(--brand-dark); outline-offset: 3px;
     }
     .files { display: grid; gap: 8px; margin: 16px 0 0; }
     .file {
@@ -1547,8 +2343,8 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
       <div class="drop-icon">＋</div>
       <strong>將 EML 拖到這裡</strong>
       <span>或從電腦選擇一封或多封郵件</span>
-      <label class="choose" for="mail-files">選擇 EML</label>
       <input id="mail-files" type="file" accept=".eml,message/rfc822" multiple>
+      <label class="choose" for="mail-files">選擇 EML</label>
     </section>
     <section class="files" id="files"></section>
     <div class="limits">每次最多 20 封、單封最多 25 MB，合計最多 60 MB。目前只支援 EML；MSG 請先另存為 EML。附件會保留在原郵件中，但附件檔案內容不建立搜尋索引。</div>
@@ -1567,6 +2363,79 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
     const maxFileBytes = 25 * 1024 * 1024;
     const maxTotalBytes = 60 * 1024 * 1024;
     let selectedFiles = [];
+
+    function randomTrackingId(prefix) {
+      const bytes = new Uint8Array(16);
+      if (window.crypto && window.crypto.getRandomValues) {
+        window.crypto.getRandomValues(bytes);
+      } else {
+        for (let index = 0; index < bytes.length; index += 1) {
+          bytes[index] = Math.floor(Math.random() * 256);
+        }
+      }
+      return prefix + Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+    }
+
+    function storedTrackingId(storage, key, prefix, maxAgeMs = null) {
+      try {
+        const existing = storage.getItem(key);
+        const createdAt = Number(storage.getItem(`${key}_created_at`) || "0");
+        const isFresh = maxAgeMs === null
+          || (Number.isFinite(createdAt) && createdAt > 0 && Date.now() - createdAt <= maxAgeMs);
+        if (
+          existing
+          && existing.startsWith(prefix)
+          && existing.length === prefix.length + 32
+          && /^[0-9a-f]{32}$/.test(existing.slice(prefix.length))
+          && isFresh
+        ) return existing;
+        const created = randomTrackingId(prefix);
+        storage.setItem(key, created);
+        storage.setItem(`${key}_created_at`, String(Date.now()));
+        return created;
+      } catch (_) {
+        return randomTrackingId(prefix);
+      }
+    }
+
+    const visitorId = storedTrackingId(
+      window.localStorage,
+      "formowl_uat_visitor_id",
+      "uatvisitor_",
+      30 * 24 * 60 * 60 * 1000
+    );
+    const sessionId = storedTrackingId(
+      window.sessionStorage,
+      "formowl_uat_session_id",
+      "uatsession_"
+    );
+
+    function nextEventSequence() {
+      const key = "formowl_uat_event_sequence";
+      try {
+        const current = Number(window.sessionStorage.getItem(key) || "0");
+        const next = Number.isSafeInteger(current) && current >= 0 ? current + 1 : 1;
+        window.sessionStorage.setItem(key, String(next));
+        return next;
+      } catch (_) {
+        return Date.now();
+      }
+    }
+
+    function track(action, details = {}) {
+      return fetch("/api/interaction", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          visitor_id: visitorId,
+          session_id: sessionId,
+          sequence: nextEventSequence(),
+          action,
+          details
+        })
+      }).catch(() => {});
+    }
 
     function setMessage(text, error = false) {
       message.textContent = text;
@@ -1595,6 +2464,7 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
         input.value = "";
         renderFiles();
         setMessage("一次最多選擇 20 封郵件。", true);
+        track("upload_validation_error", { reason: "file_count" });
         return;
       }
       if (selectedFiles.some((file) => !file.name.toLowerCase().endsWith(".eml"))) {
@@ -1602,6 +2472,7 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
         input.value = "";
         renderFiles();
         setMessage("目前只接受 .eml 郵件。", true);
+        track("upload_validation_error", { reason: "file_type" });
         return;
       }
       if (selectedFiles.some((file) => file.size > maxFileBytes)) {
@@ -1609,16 +2480,28 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
         input.value = "";
         renderFiles();
         setMessage("單封郵件不可超過 25 MB。", true);
+        track("upload_validation_error", { reason: "file_size" });
         return;
       }
-      if (selectedFiles.reduce((total, file) => total + file.size, 0) > maxTotalBytes) {
+      const totalBytes = selectedFiles.reduce((total, file) => total + file.size, 0);
+      if (totalBytes > maxTotalBytes) {
         selectedFiles = [];
         input.value = "";
         renderFiles();
         setMessage("這次選擇的郵件合計不可超過 60 MB。", true);
+        track("upload_validation_error", { reason: "total_size" });
         return;
       }
       renderFiles();
+      if (selectedFiles.length) {
+        const sizeBucket = totalBytes < 5 * 1024 * 1024
+          ? "under_5mb"
+          : (totalBytes <= 25 * 1024 * 1024 ? "5_to_25mb" : "25_to_60mb");
+        track("upload_files_selected", {
+          file_count: selectedFiles.length,
+          size_bucket: sizeBucket
+        });
+      }
     }
 
     input.addEventListener("change", () => selectFiles(input.files));
@@ -1647,6 +2530,7 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
       for (const file of selectedFiles) form.append("mail_files", file, file.name);
       uploadButton.disabled = true;
       setMessage(`正在解析 ${selectedFiles.length} 封郵件…`);
+      track("upload_submit", { file_count: selectedFiles.length });
       try {
         const response = await fetch("/api/upload", {
           method: "POST",
@@ -1655,6 +2539,9 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
         });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error_code || "request_failed");
+        selectedFiles = [];
+        input.value = "";
+        renderFiles();
         setMessage(`完成：新增 ${payload.accepted_file_count} 封郵件。`);
         window.parent.postMessage(
           {

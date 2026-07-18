@@ -239,3 +239,23 @@ Lifecycle label: `active`.
   `authentication_required=false`, `shared_uat=true`, and
   `upload_supported=true`; `/` serves the chat surface with frame embedding
   denied, while `/upload` serves the same-origin iframe surface.
+
+## 2026-07-18 — ChatGPT-style UAT UX and behavior capture
+
+- Reworked the temporary shared UAT into a higher-fidelity, FormOwl-branded
+  ChatGPT-style light shell with sidebar/history, centered new-chat composer,
+  starter prompts, bottom-docked active composer, user/assistant messages,
+  accessible controls, mobile drawer behavior, and the same-origin upload
+  iframe.
+- Private UX evidence now records submitted questions before retrieval,
+  correlated result events, feedback, and a closed set of bounded exploration
+  actions with anonymous visitor/session labels plus a monotonic per-tab
+  sequence. Draft text, keystrokes, click coordinates, filenames, IP identity,
+  and device fingerprints are not recorded.
+- Every POST requires same-origin `Origin`/`Host`; cross-site fetch metadata is
+  rejected. Anonymous visitor labels rotate after 30 days, and the mode-0600
+  private event log enforces 30-day retention plus a 16 MiB cap.
+- Canonical verification passed 24 focused and 754 full Python tests, the
+  isolated Node 20 embedded-JavaScript smoke, full Ruff check/format check for
+  256 files, and `git diff --check`. Engineering, governance/privacy, and UAT
+  UX reviewers returned 3/3 `RELEASE_DECISION: AGREE`.

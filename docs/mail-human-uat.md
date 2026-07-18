@@ -2,16 +2,19 @@
 
 Lifecycle: temporary development/UAT harness.
 
-This branch provides a shared browser surface for May, Maggie, and other
-related colleagues to test FormOwl mail retrieval without connecting ChatGPT.
-The first screen is a chat interface, and mail upload opens only when needed in
-a same-origin custom iframe.
+This branch provides a shared browser surface for colleagues to test FormOwl
+mail retrieval without connecting ChatGPT. The page follows the familiar
+ChatGPT interaction skeleton: collapsible conversation sidebar, centered
+new-chat prompt, starter cards, bottom-docked composer after the first
+question, and a same-origin upload iframe opened from the composer.
 
 ## Behavior
 
 - Uses one server-loaded `MailEvidenceBundle` plus private UAT-upload bundles.
 - Opens directly into a FormOwl-style conversation without login or an access
   code.
+- Uses a high-fidelity ChatGPT-style light layout while retaining FormOwl
+  branding and the mail-evidence-only behavior boundary.
 - Opens `/upload` inside a same-origin iframe from the chat composer.
 - Returns uploaded-file completion to the parent chat with `postMessage`, then
   allows immediate questions about the new mail.
@@ -31,8 +34,47 @@ a same-origin custom iframe.
 - Shows bounded evidence context and stable observation citations.
 - Records upload, query, and tester feedback events in a private runtime
   directory.
+- Records submitted questions together with an anonymous browser visitor id,
+  anonymous tab/session id, a browser-side sequence number, and whether the
+  question came from the composer or a starter prompt. The submitted-question
+  event is written before retrieval begins, so failed queries remain available
+  for diagnosis.
+- Records a closed set of exploration actions: page view, sidebar toggle, new
+  chat, starter prompt, the visible ChatGPT-style shell controls, upload
+  open/close, coarse upload selection/validation, upload
+  submission/completion, and query result/error.
+- Visible shell controls never fail silently: controls not implemented in this
+  temporary UAT show a small in-page explanation and record only a closed
+  control name. This lets the operator see which familiar controls colleagues
+  try while preventing arbitrary DOM labels or click coordinates from entering
+  analytics.
 - Does not call ChatGPT, write Project/Wiki systems, or mutate
   candidate/canonical graph state.
+
+## UAT behavior capture
+
+The temporary UAT intentionally captures enough private evidence to understand
+how colleagues discover the interface and what they ask:
+
+- Question text is recorded only after the user sends it.
+- Button and workflow events use closed action names and bounded enum/count
+  details.
+- Anonymous visitor and session ids are random browser-local identifiers. They
+  are analytics labels, not authenticated identities and never authorize mail
+  access.
+- Client events include a monotonic per-tab sequence number so the operator can
+  reconstruct user action order even when the threaded HTTP server persists
+  concurrent requests in a different physical order.
+- The browser rotates the anonymous visitor id after 30 days. The private event
+  store removes events older than 30 days at startup and daily compaction, and
+  caps the active JSONL file at 16 MiB by retaining the newest complete events.
+- The page does not record draft/typing text, individual keystrokes, mouse
+  coordinates, original upload filenames, IP-derived identity, device
+  fingerprint, or attachment content.
+- Events remain in `mail-human-uat-events.private.jsonl` with mode `0600` in the
+  private UAT state volume and are not committed to Git.
+- `/api/session-summary` exposes only aggregate counts. Raw submitted questions
+  and event sequences remain in the private event log for later UX analysis.
 
 ## Upload format boundary
 
@@ -54,6 +96,17 @@ Query, upload, summary, and feedback APIs are directly available to colleagues
 who can reach the internal server. Uploaded mail is shared in the same UAT
 index. Upload responses expose counts and warnings only; original filenames and
 mail content are not echoed.
+
+All mutating browser requests require an exact same-origin `Origin`/`Host`
+match, and cross-site `Sec-Fetch-Site` requests are rejected. This preserves the
+no-login UAT experience while preventing another LAN webpage from silently
+submitting queries, feedback, analytics, or generated EML into the shared test
+index.
+
+Keyboard users can focus the composer, shell controls, feedback controls, and
+the visually hidden file input through its visible “選擇 EML” label. Mobile new
+chat/current-conversation actions close the sidebar drawer before returning
+focus to the chat.
 
 This is a temporary HTTP surface for an internal LAN or VPN. It is not a
 replacement for the connected FormOwl OAuth and HTTPS boundary, and it must not
