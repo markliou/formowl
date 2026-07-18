@@ -185,3 +185,20 @@ Lifecycle label: `active`.
   dev-container verification passed 730 tests, full Ruff check, 331-file format
   check, and `git diff --check`. Production/API, evaluator/privacy, and
   shell/safety reviewers returned 3/3 `RELEASE_DECISION: AGREE`.
+
+## 2026-07-18 — May mail human UAT branch
+
+- Added the temporary `uat/may-mail-web` branch and worktree with a browser
+  surface that bypasses ChatGPT and queries one server-bound May mail evidence
+  bundle. Browser requests cannot choose user, workspace, grant, parser,
+  storage, or worker identity.
+- The surface requires a temporary access code, exposes bounded cited evidence,
+  supports relevance/recent sorting and private tester feedback, and performs
+  no mail upload, Project/Wiki write, candidate/canonical graph write, or
+  autonomous business decision.
+- Private corpus data, bundle cache, access code, and UAT event logs remain
+  outside Git. The running container uses read-only source/corpus/cache mounts
+  and one writable private feedback mount.
+- Canonical dev-container verification passed 739 tests. Full Python/scripts
+  Ruff check and 255-file format check passed, along with four real May
+  evidence smoke queries and host-published HTTP health verification.
