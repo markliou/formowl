@@ -1174,7 +1174,6 @@ _CHAT_UAT_HTML = """<!doctype html>
       <button class="new-chat" id="new-chat" type="button">＋ 新對話</button>
       <div class="sidebar-section">
         <div class="sidebar-label">共同測試空間</div>
-        <div class="side-fact">May、Maggie 與相關同事可直接使用，<b>不需登入</b>。</div>
         <div class="side-fact">共享上傳：<b id="upload-count">讀取中…</b></div>
         <div class="side-fact">不經 ChatGPT；不回寫郵件、專案或正式知識圖譜。</div>
       </div>
