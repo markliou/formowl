@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -21,8 +20,6 @@ from formowl_mail.human_uat_http import (  # noqa: E402
     create_mail_human_uat_http_server,
 )
 
-_ACCESS_CODE_ENV = "FORMOWL_MAIL_UAT_ACCESS_CODE"
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -34,9 +31,6 @@ def main() -> int:
     parser.add_argument("--state-dir", type=Path, required=True)
     args = parser.parse_args()
 
-    access_code = os.environ.get(_ACCESS_CODE_ENV, "")
-    if len(access_code) < 12:
-        parser.error(f"{_ACCESS_CODE_ENV} must contain at least 12 characters")
     if args.port < 0 or args.port > 65535:
         parser.error("--port must be between 0 and 65535")
 
@@ -51,7 +45,6 @@ def main() -> int:
     service = MailHumanUatService(
         MailHumanUatHttpConfig(
             bundle=bundle,
-            access_code=access_code,
             state_dir=args.state_dir,
         )
     )
@@ -60,6 +53,7 @@ def main() -> int:
         "FORMOWL_MAIL_UAT_READY "
         f"host={args.host} port={server.server_address[1]} "
         f"messages={len(bundle.messages)} upload_supported=true "
+        "authentication_required=false shared_uat=true "
         "business_systems_read_only=true",
         flush=True,
     )

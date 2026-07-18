@@ -192,17 +192,19 @@ Lifecycle label: `active`.
   surface that bypasses ChatGPT and queries one server-bound May mail evidence
   bundle plus private UAT-upload bundles. Browser requests cannot choose user,
   workspace, grant, parser, storage, or worker identity.
-- The surface requires a temporary access code, exposes bounded cited evidence,
-  supports relevance/recent sorting, private tester feedback, and direct
-  multi-file EML upload. New EML is parsed into temporary searchable evidence
-  immediately and persists by content hash in the private UAT state volume.
-- The UAT path accepts `.eml` only, enforces count/size/authentication limits,
-  rejects unsupported formats, deduplicates identical bytes, does not index
-  attachment contents, and performs no Project/Wiki, candidate/canonical graph,
-  or autonomous business-decision write.
-- Private corpus data, bundle cache, uploaded EML, access code, and UAT event
-  logs remain outside Git. The running container uses read-only
-  source/corpus/cache mounts and one writable private UAT state mount.
+- The initial `c81e6c2` baseline used a temporary access code, exposed bounded
+  cited evidence, supported relevance/recent sorting, private tester feedback,
+  and direct multi-file EML upload. New EML was parsed into temporary searchable
+  evidence immediately and persisted by content hash in the private UAT state
+  volume. The later follow-up entry below records the current no-login design.
+- That initial UAT path accepted `.eml` only, enforced count, size, and
+  authentication limits, rejected unsupported formats, deduplicated identical
+  bytes, did not index attachment contents, and performed no Project/Wiki,
+  candidate/canonical graph, or autonomous business-decision write.
+- Private corpus data, bundle cache, uploaded EML, the initial access-code
+  configuration, and UAT event logs remain outside Git. The running container
+  uses read-only source/corpus/cache mounts and one writable private UAT state
+  mount.
 - Reviewer fixes now prune filename-bearing inline parts and complete
   `message/rfc822` attachment subtrees from the searchable body, and publish
   private EML only after permissions are set on the temporary file so failures
@@ -212,3 +214,23 @@ Lifecycle label: `active`.
   Engineering, governance/safety, and May-UAT reviewers returned 3/3
   `RELEASE_DECISION: AGREE` after the attachment and partial-write blockers were
   fixed.
+
+## 2026-07-18 — Shared mail UAT chat follow-up
+
+- This follow-up supersedes the earlier access-boundary description for the
+  current `uat/may-mail-web` branch head. The browser now opens directly into a
+  shared FormOwl-style chat for May, Maggie, and related colleagues; there is no
+  login, access code, or browser-supplied identity.
+- Mail upload is opened only when needed through same-origin `/upload` inside a
+  custom iframe. The parent accepts completion/close messages only from the
+  expected origin and iframe window. Query, upload, summary, and feedback remain
+  limited to this temporary shared UAT surface and do not write Project, Wiki,
+  candidate/canonical graph, or production mail systems.
+- Browser upload preflight enforces EML-only, at most 20 files, 25 MB per file,
+  and 60 MB combined before the server's 64 MB multipart request boundary.
+  Questions asking for the latest or most recent evidence use recent ordering.
+- Final verification for this follow-up passed 17 focused and 747 full Python
+  tests in `formowl-dev:local`, the isolated Node 20 embedded-JavaScript smoke,
+  full Ruff check, 335-file format check, and `git diff --check`. The
+  engineering, governance/safety, and UAT UX reviewers returned 3/3
+  `RELEASE_DECISION: AGREE` with no blocking findings.

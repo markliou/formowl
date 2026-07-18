@@ -1,0 +1,385 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import vm from "node:vm";
+
+const source = fs.readFileSync(
+  new URL("../../python/formowl_mail/human_uat_http.py", import.meta.url),
+  "utf8",
+);
+
+class FakeClassList {
+  constructor(initial = []) {
+    this.values = new Set(initial);
+  }
+
+  add(...names) {
+    for (const name of names) this.values.add(name);
+  }
+
+  remove(...names) {
+    for (const name of names) this.values.delete(name);
+  }
+
+  contains(name) {
+    return this.values.has(name);
+  }
+
+  toggle(name, force) {
+    if (force === true) {
+      this.values.add(name);
+      return true;
+    }
+    if (force === false) {
+      this.values.delete(name);
+      return false;
+    }
+    if (this.values.has(name)) {
+      this.values.delete(name);
+      return false;
+    }
+    this.values.add(name);
+    return true;
+  }
+}
+
+class FakeElement {
+  constructor(tagName = "div", initialClasses = []) {
+    this.tagName = tagName;
+    this.classList = new FakeClassList(initialClasses);
+    this.children = [];
+    this.listeners = new Map();
+    this.dataset = {};
+    this.value = "";
+    this.files = [];
+    this.disabled = false;
+    this.textContent = "";
+    this.contentWindow = null;
+    this.focused = false;
+    this.removed = false;
+  }
+
+  addEventListener(name, listener) {
+    if (!this.listeners.has(name)) this.listeners.set(name, []);
+    this.listeners.get(name).push(listener);
+  }
+
+  append(...children) {
+    this.children.push(...children);
+  }
+
+  appendChild(child) {
+    this.children.push(child);
+    return child;
+  }
+
+  replaceChildren(...children) {
+    this.children = [...children];
+    this.textContent = "";
+  }
+
+  querySelectorAll(selector) {
+    if (selector !== ".message") return [];
+    return this.children.filter(
+      (child) => typeof child.className === "string" && child.className.includes("message"),
+    );
+  }
+
+  focus() {
+    this.focused = true;
+  }
+
+  remove() {
+    this.removed = true;
+  }
+
+  async dispatch(name, values = {}) {
+    const event = {
+      target: this,
+      currentTarget: this,
+      preventDefault() {},
+      ...values,
+    };
+    for (const listener of this.listeners.get(name) || []) {
+      await listener(event);
+    }
+    return event;
+  }
+}
+
+class FakeFormData {
+  constructor() {
+    this.entries = [];
+  }
+
+  append(...entry) {
+    this.entries.push(entry);
+  }
+}
+
+function extractScript(constantName) {
+  const marker = `${constantName} = """`;
+  const start = source.indexOf(marker);
+  assert.notEqual(start, -1, `${constantName} must exist`);
+  const htmlStart = start + marker.length;
+  const htmlEnd = source.indexOf('\n"""', htmlStart);
+  assert.notEqual(htmlEnd, -1, `${constantName} must terminate`);
+  const html = source.slice(htmlStart, htmlEnd);
+  const match = html.match(/<script>([\s\S]*?)<\/script>/u);
+  assert.ok(match, `${constantName} must contain an inline script`);
+  return match[1];
+}
+
+function textTree(node) {
+  return [node.textContent, ...node.children.map(textTree)].join(" ");
+}
+
+function makeDocument(ids) {
+  const elements = new Map();
+  for (const id of ids) {
+    elements.set(
+      id,
+      new FakeElement("div", id === "upload-modal" ? ["hidden"] : []),
+    );
+  }
+  const document = {
+    body: { scrollHeight: 1200 },
+    getElementById(id) {
+      assert.ok(elements.has(id), `unexpected element id: ${id}`);
+      return elements.get(id);
+    },
+    createElement(tagName) {
+      return new FakeElement(tagName);
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  return { document, elements };
+}
+
+function makeWindow(origin = "http://formowl.test") {
+  const listeners = new Map();
+  const window = {
+    location: { origin },
+    parent: null,
+    scrollTo() {},
+    addEventListener(name, listener) {
+      if (!listeners.has(name)) listeners.set(name, []);
+      listeners.get(name).push(listener);
+    },
+    async dispatch(name, event) {
+      for (const listener of listeners.get(name) || []) {
+        await listener(event);
+      }
+    },
+  };
+  window.parent = window;
+  return window;
+}
+
+function response(payload, ok = true, status = ok ? 200 : 400) {
+  return {
+    ok,
+    status,
+    async json() {
+      return payload;
+    },
+  };
+}
+
+async function settle() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function runChatSmoke() {
+  const { document, elements } = makeDocument([
+    "conversation",
+    "upload-modal",
+    "upload-frame",
+    "send",
+    "chat-input",
+    "open-upload",
+    "welcome-upload",
+    "close-upload",
+    "new-chat",
+    "upload-count",
+    "server-status",
+  ]);
+  const frameWindow = {};
+  elements.get("upload-frame").contentWindow = frameWindow;
+  const window = makeWindow();
+  const requests = [];
+  const fetch = async (path, options = {}) => {
+    requests.push({ path, options });
+    if (path === "/api/health") {
+      return response({ status: "ready" });
+    }
+    if (path === "/api/session-summary") {
+      return response({ uploaded_file_count: 2 });
+    }
+    if (path === "/api/query") {
+      return response({
+        status: "ok",
+        query_id: "uatquery_111111111111111111111111",
+        result_count: 0,
+        results: [],
+        notice: "只讀測試結果",
+      });
+    }
+    if (path === "/api/feedback") {
+      return response({ status: "recorded" });
+    }
+    throw new Error(`unexpected fetch path: ${path}`);
+  };
+  const context = vm.createContext({
+    Array,
+    Error,
+    FormData: FakeFormData,
+    JSON,
+    Number,
+    Promise,
+    console,
+    document,
+    fetch,
+    setTimeout,
+    window,
+  });
+  vm.runInContext(extractScript("_CHAT_UAT_HTML"), context);
+  await settle();
+  requests.length = 0;
+
+  assert.equal(context.querySort("最近一次文顥的量產時間"), "recent");
+  assert.equal(context.querySort("LATEST supplier schedule"), "recent");
+  assert.equal(context.querySort("PO 470002154"), "relevance");
+
+  await elements.get("open-upload").dispatch("click");
+  assert.equal(elements.get("upload-modal").classList.contains("hidden"), false);
+  assert.equal(elements.get("upload-frame").focused, true);
+
+  const messageCountBeforeRejects = elements.get("conversation").children.length;
+  await window.dispatch("message", {
+    origin: "https://attacker.example",
+    source: frameWindow,
+    data: { type: "formowl-upload-complete", accepted_file_count: 9 },
+  });
+  assert.equal(elements.get("upload-modal").classList.contains("hidden"), false);
+  assert.equal(elements.get("conversation").children.length, messageCountBeforeRejects);
+
+  await window.dispatch("message", {
+    origin: window.location.origin,
+    source: {},
+    data: { type: "formowl-upload-complete", accepted_file_count: 9 },
+  });
+  assert.equal(elements.get("upload-modal").classList.contains("hidden"), false);
+  assert.equal(elements.get("conversation").children.length, messageCountBeforeRejects);
+
+  await window.dispatch("message", {
+    origin: window.location.origin,
+    source: frameWindow,
+    data: { type: "formowl-upload-complete", accepted_file_count: 2 },
+  });
+  await settle();
+  assert.equal(elements.get("upload-modal").classList.contains("hidden"), true);
+  assert.match(textTree(elements.get("conversation")), /已加入 2 封新郵件/u);
+
+  await context.ask("最近一次文顥的量產時間");
+  let queryRequest = requests.find((item) => item.path === "/api/query");
+  assert.ok(queryRequest);
+  assert.equal(JSON.parse(queryRequest.options.body).sort, "recent");
+
+  requests.length = 0;
+  await context.ask("PO 470002154");
+  queryRequest = requests.find((item) => item.path === "/api/query");
+  assert.ok(queryRequest);
+  assert.equal(JSON.parse(queryRequest.options.body).sort, "relevance");
+
+  requests.length = 0;
+  elements.get("chat-input").value = "最近的交期";
+  await elements.get("chat-input").dispatch("keydown", {
+    key: "Enter",
+    shiftKey: false,
+    isComposing: true,
+  });
+  await settle();
+  assert.equal(requests.some((item) => item.path === "/api/query"), false);
+
+  await elements.get("chat-input").dispatch("keydown", {
+    key: "Enter",
+    shiftKey: false,
+    isComposing: false,
+  });
+  await settle();
+  assert.equal(requests.some((item) => item.path === "/api/query"), true);
+}
+
+async function runUploadSmoke() {
+  const { document, elements } = makeDocument([
+    "mail-files",
+    "drop",
+    "files",
+    "message",
+    "upload",
+    "cancel",
+  ]);
+  const posted = [];
+  const window = makeWindow();
+  window.parent = {
+    postMessage(payload, targetOrigin) {
+      posted.push({ payload, targetOrigin });
+    },
+  };
+  const requests = [];
+  const fetch = async (path, options = {}) => {
+    requests.push({ path, options });
+    assert.equal(path, "/api/upload");
+    return response({
+      accepted_file_count: 1,
+      duplicate_file_count: 0,
+    });
+  };
+  const context = vm.createContext({
+    Array,
+    Error,
+    FormData: FakeFormData,
+    Promise,
+    console,
+    document,
+    fetch,
+    setTimeout,
+    window,
+  });
+  vm.runInContext(extractScript("_UPLOAD_IFRAME_HTML"), context);
+
+  context.selectFiles([{ name: "too-large.eml", size: 25 * 1024 * 1024 + 1 }]);
+  assert.match(elements.get("message").textContent, /不可超過 25 MB/u);
+  assert.equal(elements.get("message").classList.contains("error"), true);
+
+  context.selectFiles([
+    { name: "one.eml", size: 21 * 1024 * 1024 },
+    { name: "two.eml", size: 21 * 1024 * 1024 },
+    { name: "three.eml", size: 21 * 1024 * 1024 },
+  ]);
+  assert.match(elements.get("message").textContent, /合計不可超過 60 MB/u);
+
+  context.selectFiles([{ name: "unsupported.msg", size: 1024 }]);
+  assert.match(elements.get("message").textContent, /只接受 .eml/u);
+
+  context.selectFiles([{ name: "valid.eml", size: 1024 }]);
+  assert.match(elements.get("message").textContent, /已選擇 1 封郵件/u);
+  await elements.get("upload").dispatch("click");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].options.body.entries.length, 1);
+  assert.equal(posted.at(-1).payload.type, "formowl-upload-complete");
+  assert.equal(posted.at(-1).payload.accepted_file_count, 1);
+  assert.equal(posted.at(-1).payload.duplicate_file_count, 0);
+  assert.equal(posted.at(-1).targetOrigin, window.location.origin);
+
+  await elements.get("cancel").dispatch("click");
+  assert.equal(posted.at(-1).payload.type, "formowl-upload-close");
+  assert.equal(posted.at(-1).targetOrigin, window.location.origin);
+}
+
+await runChatSmoke();
+await runUploadSmoke();
+console.log("mail human UAT UI smoke: OK");

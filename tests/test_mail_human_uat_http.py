@@ -22,12 +22,11 @@ from formowl_mail.human_uat_http import (
     create_mail_human_uat_http_server,
 )
 
-ACCESS_CODE = "may-uat-access-code-2026"
 NOW = "2026-07-18T12:00:00+00:00"
 
 
 class MailHumanUatHttpTests(unittest.TestCase):
-    def test_page_is_safe_and_health_does_not_require_access_code(self) -> None:
+    def test_page_is_shared_chat_ui_without_login_gate(self) -> None:
         service = _service("mail-human-uat-page")
         with _RunningSurface(service) as surface:
             page_response, page_body = surface.request("GET", "/")
@@ -37,13 +36,24 @@ class MailHumanUatHttpTests(unittest.TestCase):
         health = json.loads(health_body)
         self.assertEqual(page_response.status, 200)
         self.assertEqual(health_response.status, 200)
-        self.assertIn("郵件證據功能測試", html)
-        self.assertIn("上傳新的 EML 郵件", html)
-        self.assertIn('id="mail-files"', html)
+        self.assertIn("FormOwl 郵件助手", html)
+        self.assertIn('class="conversation"', html)
+        self.assertIn('id="chat-input"', html)
+        self.assertIn('id="upload-frame"', html)
+        self.assertIn('src="/upload"', html)
+        self.assertIn("!event.isComposing", html)
+        self.assertIn("sort: querySort(query)", html)
+        self.assertIn('"最近", "最新", "近期", "目前", "現在"', html)
+        self.assertNotIn('id="gate"', html)
+        self.assertNotIn("輸入測試存取碼", html)
+        self.assertNotIn("X-FormOwl-UAT-Code", html)
+        self.assertIn("May、Maggie 與相關同事", html)
         self.assertNotIn("user_may", html)
         self.assertNotIn("workspace_formowl", html)
         self.assertNotIn("/tmp/", html)
         self.assertTrue(health["chatgpt_bypassed"])
+        self.assertFalse(health["authentication_required"])
+        self.assertTrue(health["shared_uat"])
         self.assertFalse(health["upload_required"])
         self.assertTrue(health["upload_supported"])
         self.assertTrue(health["read_only_business_systems"])
@@ -51,26 +61,40 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(page_response.getheader("Cache-Control"), "no-store, max-age=0")
         self.assertEqual(page_response.getheader("X-Frame-Options"), "DENY")
 
-    def test_summary_and_query_require_the_server_access_code(self) -> None:
-        service = _service("mail-human-uat-auth")
+    def test_upload_page_is_same_origin_iframe_surface(self) -> None:
+        service = _service("mail-human-uat-upload-iframe")
         with _RunningSurface(service) as surface:
-            denied, denied_body = surface.request("GET", "/api/session-summary")
-            wrong, _ = surface.request(
-                "GET",
-                "/api/session-summary",
-                headers={"X-FormOwl-UAT-Code": "wrong-code"},
+            response, body = surface.request("GET", "/upload")
+
+        html = body.decode("utf-8")
+        self.assertEqual(response.status, 200)
+        self.assertIn('id="mail-files"', html)
+        self.assertIn("formowl-upload-complete", html)
+        self.assertIn("window.parent.postMessage", html)
+        self.assertIn("合計最多 60 MB", html)
+        self.assertIn("file.size > maxFileBytes", html)
+        self.assertIn("> maxTotalBytes", html)
+        self.assertEqual(response.getheader("X-Frame-Options"), "SAMEORIGIN")
+        self.assertIn("frame-ancestors 'self'", response.getheader("Content-Security-Policy"))
+
+    def test_summary_query_and_upload_do_not_require_authentication(self) -> None:
+        service = _service("mail-human-uat-no-auth")
+        with _RunningSurface(service) as surface:
+            summary_response, summary_body = surface.request("GET", "/api/session-summary")
+            query_response, query_body = surface.request_json(
+                "/api/query",
+                {"query_text": "pull-in", "limit": 5},
             )
-            allowed, allowed_body = surface.request(
-                "GET",
-                "/api/session-summary",
-                headers=_auth_headers(),
+            upload_response, upload_body = surface.request_upload(
+                [("shared.eml", _eml(subject="Shared UAT", body="SharedUploadTerm"))]
             )
 
-        self.assertEqual(denied.status, 401)
-        self.assertEqual(wrong.status, 401)
-        self.assertEqual(json.loads(denied_body)["error_code"], "access_denied")
-        self.assertEqual(allowed.status, 200)
-        self.assertEqual(json.loads(allowed_body)["query_count"], 0)
+        self.assertEqual(summary_response.status, 200)
+        self.assertEqual(json.loads(summary_body)["query_count"], 0)
+        self.assertEqual(query_response.status, 200)
+        self.assertEqual(json.loads(query_body)["status"], "ok")
+        self.assertEqual(upload_response.status, 201)
+        self.assertEqual(json.loads(upload_body)["accepted_file_count"], 1)
 
     def test_chinese_business_query_expands_and_returns_cited_read_only_evidence(
         self,
@@ -124,7 +148,6 @@ class MailHumanUatHttpTests(unittest.TestCase):
             summary_response, summary_body = surface.request(
                 "GET",
                 "/api/session-summary",
-                headers=_auth_headers(),
             )
 
         feedback = json.loads(feedback_body)
@@ -192,7 +215,6 @@ class MailHumanUatHttpTests(unittest.TestCase):
             summary_response, summary_body = surface.request(
                 "GET",
                 "/api/session-summary",
-                headers=_auth_headers(),
             )
 
         upload = json.loads(upload_body)
@@ -321,11 +343,10 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(attachment_query["result_count"], 0)
         self.assertNotIn("ATTACHED_SECRET_TERM_56391", upload_body.decode("utf-8"))
 
-    def test_upload_requires_access_code_and_rejects_msg_or_oversized_eml(self) -> None:
+    def test_upload_rejects_msg_or_oversized_eml(self) -> None:
         service = MailHumanUatService(
             MailHumanUatHttpConfig(
                 bundle=_bundle(),
-                access_code=ACCESS_CODE,
                 state_dir=_paths.fresh_test_dir("mail-human-uat-upload-negative"),
                 fixed_now=NOW,
                 max_upload_request_bytes=2048,
@@ -333,10 +354,6 @@ class MailHumanUatHttpTests(unittest.TestCase):
             )
         )
         with _RunningSurface(service) as surface:
-            denied, denied_body = surface.request_upload(
-                [("denied.eml", _eml(subject="Denied", body="Denied body"))],
-                authenticated=False,
-            )
             unsupported, unsupported_body = surface.request_upload(
                 [("mail.msg", b"not a msg parser input")]
             )
@@ -344,8 +361,6 @@ class MailHumanUatHttpTests(unittest.TestCase):
                 [("large.eml", _eml(subject="Large", body="x" * 700))]
             )
 
-        self.assertEqual(denied.status, 401)
-        self.assertEqual(json.loads(denied_body)["error_code"], "access_denied")
         self.assertEqual(unsupported.status, 400)
         self.assertEqual(json.loads(unsupported_body)["error_code"], "request_rejected")
         self.assertEqual(oversized.status, 413)
@@ -497,7 +512,6 @@ class MailHumanUatHttpTests(unittest.TestCase):
             MailHumanUatService(
                 MailHumanUatHttpConfig(
                     bundle=_bundle(),
-                    access_code=ACCESS_CODE,
                     state_dir=link,
                     fixed_now=NOW,
                 )
@@ -512,7 +526,6 @@ def _service_from_state_dir(state_dir: Path) -> MailHumanUatService:
     return MailHumanUatService(
         MailHumanUatHttpConfig(
             bundle=_bundle(),
-            access_code=ACCESS_CODE,
             state_dir=state_dir,
             fixed_now=NOW,
         )
@@ -635,10 +648,6 @@ def _bundle() -> MailEvidenceBundle:
     )
 
 
-def _auth_headers() -> dict[str, str]:
-    return {"X-FormOwl-UAT-Code": ACCESS_CODE}
-
-
 def _eml(*, subject: str, body: str) -> bytes:
     return (
         "From: may@example.com\r\n"
@@ -749,7 +758,6 @@ class _RunningSurface:
             path,
             body=body,
             headers={
-                **_auth_headers(),
                 "Content-Type": "application/json",
                 "Content-Length": str(len(body)),
             },
@@ -758,8 +766,6 @@ class _RunningSurface:
     def request_upload(
         self,
         files: list[tuple[str, bytes]],
-        *,
-        authenticated: bool = True,
     ):
         boundary = "----formowl-may-uat-test-boundary"
         body = bytearray()
@@ -780,8 +786,6 @@ class _RunningSurface:
             "Content-Type": f"multipart/form-data; boundary={boundary}",
             "Content-Length": str(len(body)),
         }
-        if authenticated:
-            headers.update(_auth_headers())
         return self.request(
             "POST",
             "/api/upload",

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import hmac
 import json
 import os
 from pathlib import Path
@@ -29,7 +28,6 @@ from .human_uat_upload import (
 )
 from .query import MailEvidenceQueryGateway, _redact_mail_public_text
 
-_ACCESS_CODE_HEADER = "X-FormOwl-UAT-Code"
 _MAX_REQUEST_BYTES = 32 * 1024
 _MAX_UPLOAD_REQUEST_BYTES = 64 * 1024 * 1024
 _MAX_UPLOAD_FILE_BYTES = 25 * 1024 * 1024
@@ -72,7 +70,6 @@ _EXACT_BUSINESS_FILTERS = ("文顥",)
 @dataclass(frozen=True)
 class MailHumanUatHttpConfig:
     bundle: MailEvidenceBundle
-    access_code: str
     state_dir: str | Path
     fixed_now: str | None = None
     max_request_bytes: int = _MAX_REQUEST_BYTES
@@ -82,11 +79,9 @@ class MailHumanUatHttpConfig:
 
 
 class MailHumanUatService:
-    """Read-only human UAT facade over the governed mail evidence query gateway."""
+    """Shared human UAT facade over the governed mail evidence query gateway."""
 
     def __init__(self, config: MailHumanUatHttpConfig) -> None:
-        if not isinstance(config.access_code, str) or len(config.access_code) < 12:
-            raise ContractValidationError("UAT access code must be at least 12 characters")
         if (
             not isinstance(config.max_request_bytes, int)
             or isinstance(config.max_request_bytes, bool)
@@ -139,11 +134,6 @@ class MailHumanUatService:
         )
         self._install_uploaded_index(self._uploaded_bundles)
 
-    def access_allowed(self, supplied_code: str | None) -> bool:
-        if not isinstance(supplied_code, str):
-            return False
-        return hmac.compare_digest(supplied_code, self.config.access_code)
-
     def health(self) -> dict[str, Any]:
         with self._lock:
             uploaded_file_count = len(self._uploaded_bundles)
@@ -151,6 +141,8 @@ class MailHumanUatService:
             "status": "ready",
             "surface": "mail_human_uat",
             "chatgpt_bypassed": True,
+            "authentication_required": False,
+            "shared_uat": True,
             "upload_required": False,
             "upload_supported": True,
             "uploaded_file_count": uploaded_file_count,
@@ -531,7 +523,7 @@ class MailHumanUatService:
             "total_uploaded_message_count": total_uploaded_message_count,
             "warnings": warnings,
             "notice": (
-                "新郵件已加入 May 的私人 UAT 索引，可立即查詢。" "附件內容目前不會建立搜尋索引。"
+                "新郵件已加入共享 UAT 索引，可立即回到聊天查詢。" "附件內容目前不會建立搜尋索引。"
             ),
             "claim_boundary": {
                 "chatgpt_bypassed": True,
@@ -642,14 +634,23 @@ def build_mail_human_uat_http_handler(
         def do_GET(self) -> None:  # noqa: N802
             route = urlparse(self.path).path
             if route == "/":
-                self._send_html(HTTPStatus.OK, render_mail_human_uat_page())
+                self._send_html(
+                    HTTPStatus.OK,
+                    render_mail_human_uat_page(),
+                    allow_same_origin_embedding=False,
+                )
+                return
+            if route == "/upload":
+                self._send_html(
+                    HTTPStatus.OK,
+                    render_mail_human_uat_upload_page(),
+                    allow_same_origin_embedding=True,
+                )
                 return
             if route == "/api/health":
                 self._send_json(HTTPStatus.OK, service.health())
                 return
             if route == "/api/session-summary":
-                if not self._authorized():
-                    return
                 self._send_json(HTTPStatus.OK, service.session_summary())
                 return
             if route == "/favicon.ico":
@@ -661,8 +662,6 @@ def build_mail_human_uat_http_handler(
             route = urlparse(self.path).path
             if route not in {"/api/query", "/api/feedback", "/api/upload"}:
                 self._send_error(HTTPStatus.NOT_FOUND, "route_not_found")
-                return
-            if not self._authorized():
                 return
             try:
                 if route == "/api/upload":
@@ -694,16 +693,6 @@ def build_mail_human_uat_http_handler(
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             return
-
-        def _authorized(self) -> bool:
-            if service.access_allowed(self.headers.get(_ACCESS_CODE_HEADER)):
-                return True
-            self._send_error(
-                HTTPStatus.UNAUTHORIZED,
-                "access_denied",
-                extra_headers={"WWW-Authenticate": 'FormOwlUAT realm="mail"'},
-            )
-            return False
 
         def _read_json_body(self) -> dict[str, Any]:
             content_type = self.headers.get("Content-Type", "")
@@ -758,10 +747,19 @@ def build_mail_human_uat_http_handler(
             assert_public_payload_safe(payload, "mail_human_uat_http_error")
             self._send_json(status, payload, extra_headers=extra_headers)
 
-        def _send_html(self, status: HTTPStatus, html: str) -> None:
+        def _send_html(
+            self,
+            status: HTTPStatus,
+            html: str,
+            *,
+            allow_same_origin_embedding: bool,
+        ) -> None:
             encoded = html.encode("utf-8")
             self.send_response(status)
-            self._send_security_headers(content_type="text/html; charset=utf-8")
+            self._send_security_headers(
+                content_type="text/html; charset=utf-8",
+                allow_same_origin_embedding=allow_same_origin_embedding,
+            )
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
             self.wfile.write(encoded)
@@ -775,7 +773,10 @@ def build_mail_human_uat_http_handler(
         ) -> None:
             encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
             self.send_response(status)
-            self._send_security_headers(content_type="application/json; charset=utf-8")
+            self._send_security_headers(
+                content_type="application/json; charset=utf-8",
+                allow_same_origin_embedding=False,
+            )
             for key, value in (extra_headers or {}).items():
                 self.send_header(key, value)
             self.send_header("Content-Length", str(len(encoded)))
@@ -784,16 +785,27 @@ def build_mail_human_uat_http_handler(
 
         def _send_empty(self, status: HTTPStatus) -> None:
             self.send_response(status)
-            self._send_security_headers(content_type="text/plain; charset=utf-8")
+            self._send_security_headers(
+                content_type="text/plain; charset=utf-8",
+                allow_same_origin_embedding=False,
+            )
             self.send_header("Content-Length", "0")
             self.end_headers()
 
-        def _send_security_headers(self, *, content_type: str) -> None:
+        def _send_security_headers(
+            self,
+            *,
+            content_type: str,
+            allow_same_origin_embedding: bool,
+        ) -> None:
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store, max-age=0")
             self.send_header("Pragma", "no-cache")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("X-Frame-Options", "DENY")
+            self.send_header(
+                "X-Frame-Options",
+                "SAMEORIGIN" if allow_same_origin_embedding else "DENY",
+            )
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header(
                 "Content-Security-Policy",
@@ -802,7 +814,9 @@ def build_mail_human_uat_http_handler(
                 "script-src 'unsafe-inline'; "
                 "connect-src 'self'; "
                 "img-src 'self' data:; "
-                "base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+                "frame-src 'self'; "
+                "base-uri 'none'; form-action 'self'; "
+                "frame-ancestors " + ("'self'" if allow_same_origin_embedding else "'none'"),
             )
 
     return MailHumanUatHttpHandler
@@ -817,7 +831,11 @@ def create_mail_human_uat_http_server(
 
 
 def render_mail_human_uat_page() -> str:
-    return _UAT_HTML
+    return _CHAT_UAT_HTML
+
+
+def render_mail_human_uat_upload_page() -> str:
+    return _UPLOAD_IFRAME_HTML
 
 
 class _PrivateUatEventStore:
@@ -975,268 +993,246 @@ def _timestamp_sort_key(value: Any) -> float:
     return parsed.timestamp()
 
 
-_UAT_HTML = """<!doctype html>
+_CHAT_UAT_HTML = """<!doctype html>
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FormOwl 郵件證據 UAT</title>
+  <title>FormOwl 對話測試</title>
   <style>
     :root {
       color-scheme: light;
-      --ink: #17312b;
-      --muted: #66756f;
-      --paper: #fffdf7;
+      --sidebar: #171b20;
+      --sidebar-soft: #242a31;
+      --canvas: #f7f7f5;
       --panel: #ffffff;
-      --line: #d8e0dc;
-      --brand: #136f63;
-      --brand-dark: #0c4e46;
-      --accent: #f3b61f;
-      --danger: #9b2c2c;
-      --shadow: 0 16px 40px rgba(27, 60, 52, 0.10);
+      --line: #deded9;
+      --ink: #242723;
+      --muted: #73766f;
+      --brand: #147d64;
+      --brand-dark: #0e5f4c;
+      --user: #e7f3ee;
+      --danger: #a43b3b;
+      --shadow: 0 18px 50px rgba(25, 35, 31, .14);
     }
     * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
     body {
-      margin: 0;
-      min-height: 100vh;
       color: var(--ink);
-      background:
-        radial-gradient(circle at 10% 5%, rgba(243, 182, 31, .16), transparent 30%),
-        linear-gradient(145deg, #f7fbf7 0%, var(--paper) 55%, #eef6f3 100%);
+      background: var(--canvas);
       font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
     }
-    .shell { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 34px 0 70px; }
-    header {
-      display: flex; justify-content: space-between; gap: 24px; align-items: flex-start;
-      margin-bottom: 22px;
+    button, textarea { font: inherit; }
+    button { cursor: pointer; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 260px 1fr; }
+    .sidebar {
+      position: sticky; top: 0; height: 100vh; padding: 22px 17px;
+      background: var(--sidebar); color: #f2f4f2; display: flex; flex-direction: column;
     }
-    .eyebrow { color: var(--brand); font-weight: 800; letter-spacing: .14em; font-size: 12px; }
-    h1 { margin: 7px 0 8px; font-size: clamp(30px, 5vw, 48px); line-height: 1.05; }
-    .subtitle { margin: 0; color: var(--muted); max-width: 720px; line-height: 1.7; }
-    .status-pill {
-      border: 1px solid var(--line); background: rgba(255,255,255,.75); border-radius: 999px;
-      padding: 9px 13px; font-weight: 700; white-space: nowrap;
+    .brand { display: flex; align-items: center; gap: 11px; padding: 3px 8px 20px; }
+    .brand-mark {
+      width: 35px; height: 35px; border-radius: 11px; display: grid; place-items: center;
+      background: linear-gradient(135deg, #27a780, #116852); font-weight: 900;
     }
-    .grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 18px; }
-    .panel {
-      background: rgba(255,255,255,.94); border: 1px solid rgba(216,224,220,.9);
-      border-radius: 22px; box-shadow: var(--shadow); padding: 22px;
+    .brand-title { font-weight: 800; }
+    .brand-subtitle { color: #9ba59f; font-size: 12px; margin-top: 2px; }
+    .new-chat {
+      width: 100%; border: 1px solid #3c444c; border-radius: 12px; padding: 11px 13px;
+      color: white; background: var(--sidebar-soft); text-align: left; font-weight: 700;
     }
-    .panel h2 { margin: 0 0 14px; font-size: 20px; }
-    label { display: block; font-size: 14px; font-weight: 800; margin-bottom: 8px; }
-    input, textarea, select, button { font: inherit; }
-    input, textarea, select {
-      width: 100%; border: 1px solid #bdcac5; border-radius: 13px; background: #fff;
-      color: var(--ink); padding: 12px 14px; outline: none;
+    .sidebar-section { margin-top: 24px; padding: 0 8px; }
+    .sidebar-label {
+      color: #87918b; font-size: 11px; font-weight: 800; letter-spacing: .12em;
+      text-transform: uppercase; margin-bottom: 11px;
     }
-    input:focus, textarea:focus, select:focus {
-      border-color: var(--brand); box-shadow: 0 0 0 3px rgba(19,111,99,.12);
+    .side-fact { color: #c7cec9; font-size: 13px; line-height: 1.55; margin: 8px 0; }
+    .side-fact b { color: white; }
+    .sidebar-bottom { margin-top: auto; color: #89938d; font-size: 12px; line-height: 1.55; padding: 8px; }
+    .workspace { min-width: 0; min-height: 100vh; display: flex; flex-direction: column; }
+    .topbar {
+      height: 58px; padding: 0 24px; border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.88); backdrop-filter: blur(12px);
+      display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0;
+      z-index: 5;
     }
-    textarea { min-height: 116px; resize: vertical; line-height: 1.55; }
-    button {
-      border: 0; border-radius: 13px; padding: 12px 17px; cursor: pointer; font-weight: 800;
-      background: var(--brand); color: white; transition: transform .12s, background .12s;
+    .topbar strong { font-size: 14px; }
+    .status { color: var(--muted); font-size: 12px; }
+    .status::before {
+      content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: #e5a31a; margin-right: 7px;
     }
-    button:hover { background: var(--brand-dark); transform: translateY(-1px); }
-    button:disabled { cursor: wait; opacity: .55; transform: none; }
-    button.secondary { background: #edf4f1; color: var(--brand-dark); }
-    button.secondary:hover { background: #dcebe6; }
-    .row { display: grid; grid-template-columns: 1fr 160px; gap: 12px; margin: 12px 0; }
-    .actions { display: flex; justify-content: flex-end; gap: 10px; }
-    .quick-list { display: flex; flex-wrap: wrap; gap: 8px; }
-    .quick-list button { padding: 9px 11px; font-size: 13px; }
-    .notice {
-      margin-top: 14px; border-left: 4px solid var(--accent); background: #fff8db;
-      padding: 12px 14px; border-radius: 10px; color: #624f17; line-height: 1.55;
+    .status.ready::before { background: #22a06b; }
+    .conversation {
+      width: min(860px, calc(100% - 32px)); margin: 0 auto; flex: 1;
+      padding: 42px 0 170px;
     }
-    .upload-panel { margin-top: 18px; }
-    .upload-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
-    .file-help { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 8px 0 0; }
-    .source-badge {
-      display: inline-block; margin-left: 8px; padding: 3px 7px; border-radius: 999px;
-      background: #fff1bd; color: #6c5310; font-size: 11px; font-weight: 800;
+    .message { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 13px; margin: 0 0 30px; }
+    .avatar {
+      width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+      font-weight: 900; font-size: 13px; background: var(--brand); color: white;
     }
-    .facts { display: grid; gap: 11px; margin: 0; }
-    .fact { display: grid; grid-template-columns: 110px 1fr; gap: 12px; font-size: 14px; }
-    .fact b { color: var(--brand-dark); }
-    .results { margin-top: 20px; display: grid; gap: 14px; }
-    .result-card {
-      background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
-      padding: 18px; box-shadow: 0 8px 24px rgba(27,60,52,.06);
+    .message.user .avatar { background: #4e5964; }
+    .bubble { min-width: 0; line-height: 1.7; }
+    .message.user .bubble {
+      justify-self: start; background: var(--user); padding: 12px 16px; border-radius: 16px;
+      max-width: 90%; white-space: pre-wrap;
     }
-    .result-card h3 { margin: 0; font-size: 17px; line-height: 1.45; }
-    .meta { color: var(--muted); margin: 7px 0 11px; font-size: 13px; }
-    .snippet { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; margin: 0; }
-    .terms { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-    .term { background: #edf4f1; color: var(--brand-dark); padding: 4px 8px; border-radius: 999px; font-size: 12px; }
-    .citation { margin-top: 12px; color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
-    .empty { text-align: center; padding: 34px 12px; color: var(--muted); }
-    .feedback { margin-top: 18px; display: none; }
-    .feedback.visible { display: block; }
-    .feedback-grid { display: grid; grid-template-columns: 220px 1fr auto; gap: 10px; align-items: end; }
-    .toast { min-height: 24px; margin-top: 10px; color: var(--brand-dark); font-weight: 700; }
-    .toast.error { color: var(--danger); }
-    .gate {
-      position: fixed; inset: 0; z-index: 20; background: rgba(10,35,31,.72);
-      backdrop-filter: blur(9px); display: grid; place-items: center; padding: 20px;
+    .assistant-title { font-weight: 800; margin-bottom: 7px; }
+    .assistant-text { white-space: pre-wrap; }
+    .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    .chip {
+      border: 1px solid var(--line); background: white; color: #3d453f;
+      border-radius: 999px; padding: 8px 12px; font-size: 13px;
     }
-    .gate.hidden { display: none; }
-    .gate-card {
-      width: min(440px, 100%); background: white; border-radius: 24px; padding: 28px;
-      box-shadow: 0 30px 80px rgba(0,0,0,.3);
+    .chip:hover { border-color: var(--brand); color: var(--brand-dark); }
+    .evidence-list { display: grid; gap: 10px; margin-top: 15px; }
+    .evidence {
+      border: 1px solid var(--line); border-radius: 15px; padding: 14px 15px;
+      background: var(--panel);
     }
-    .gate-card h2 { margin-top: 0; }
-    .gate-card p { color: var(--muted); line-height: 1.6; }
-    .gate-actions { margin-top: 12px; display: flex; gap: 9px; }
-    .gate-actions input { flex: 1; }
-    @media (max-width: 820px) {
-      header { display: block; }
-      .status-pill { display: inline-block; margin-top: 14px; }
-      .grid, .row, .feedback-grid, .upload-row { grid-template-columns: 1fr; }
-      .actions { justify-content: stretch; }
-      .actions button { width: 100%; }
+    .evidence h3 { margin: 0; font-size: 14px; line-height: 1.5; }
+    .evidence-meta { color: var(--muted); font-size: 12px; margin: 5px 0 9px; }
+    .evidence p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .badge {
+      display: inline-block; margin-left: 7px; border-radius: 999px; padding: 2px 7px;
+      background: #fff0bf; color: #725a12; font-size: 10px; font-weight: 800;
+    }
+    .citation { color: var(--muted); font-family: ui-monospace, monospace; font-size: 10px; margin-top: 10px; }
+    .feedback-row { display: flex; gap: 7px; margin-top: 13px; align-items: center; }
+    .feedback-row span { color: var(--muted); font-size: 12px; }
+    .feedback-row button {
+      border: 1px solid var(--line); background: white; border-radius: 9px; padding: 6px 9px;
+      color: var(--muted);
+    }
+    .feedback-row button:hover { border-color: var(--brand); color: var(--brand); }
+    .composer-wrap {
+      position: fixed; left: 260px; right: 0; bottom: 0; z-index: 6;
+      padding: 18px 20px 24px; background: linear-gradient(transparent, var(--canvas) 28%);
+    }
+    .composer {
+      width: min(860px, 100%); margin: 0 auto; border: 1px solid #cfcfca;
+      border-radius: 19px; background: white; box-shadow: var(--shadow);
+      display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: 8px;
+      padding: 9px 10px;
+    }
+    .composer textarea {
+      border: 0; outline: 0; resize: none; min-height: 42px; max-height: 150px;
+      padding: 10px 6px; line-height: 1.5; color: var(--ink);
+    }
+    .icon-button, .send {
+      width: 42px; height: 42px; border: 0; border-radius: 13px; display: grid;
+      place-items: center; font-weight: 900;
+    }
+    .icon-button { background: #f0f1ee; color: #4d554f; font-size: 20px; }
+    .icon-button:hover { background: #e3e9e5; color: var(--brand); }
+    .send { background: var(--brand); color: white; }
+    .send:hover { background: var(--brand-dark); }
+    .send:disabled { opacity: .5; cursor: wait; }
+    .composer-note { text-align: center; color: var(--muted); font-size: 11px; margin-top: 8px; }
+    .modal {
+      position: fixed; inset: 0; z-index: 20; background: rgba(20, 24, 22, .60);
+      display: grid; place-items: center; padding: 22px; backdrop-filter: blur(7px);
+    }
+    .modal.hidden { display: none; }
+    .modal-card {
+      width: min(720px, 100%); height: min(650px, calc(100vh - 44px)); background: white;
+      border-radius: 22px; box-shadow: 0 28px 90px rgba(0,0,0,.3); overflow: hidden;
+      display: grid; grid-template-rows: 54px 1fr;
+    }
+    .modal-head {
+      display: flex; align-items: center; justify-content: space-between; padding: 0 17px;
+      border-bottom: 1px solid var(--line);
+    }
+    .modal-head strong { font-size: 14px; }
+    .close {
+      border: 0; background: #f0f1ee; width: 34px; height: 34px; border-radius: 10px;
+      font-size: 20px; line-height: 1;
+    }
+    iframe { width: 100%; height: 100%; border: 0; background: #f7f7f5; }
+    .error-text { color: var(--danger); }
+    @media (max-width: 760px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .composer-wrap { left: 0; }
+      .conversation { padding-top: 26px; }
+      .topbar { padding: 0 16px; }
+      .message { grid-template-columns: 30px minmax(0, 1fr); gap: 10px; }
+      .avatar { width: 30px; height: 30px; border-radius: 9px; }
     }
   </style>
 </head>
 <body>
-  <div class="gate" id="gate">
-    <div class="gate-card">
-      <div class="eyebrow">PRIVATE UAT</div>
-      <h2>輸入測試存取碼</h2>
-      <p>這是 May 的臨時郵件 UAT 介面。存取碼只保留在目前瀏覽器分頁，不會放進網址。</p>
-      <div class="gate-actions">
-        <input id="access-code" type="password" autocomplete="current-password" placeholder="UAT access code">
-        <button id="unlock" type="button">進入</button>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">F</div>
+        <div>
+          <div class="brand-title">FormOwl</div>
+          <div class="brand-subtitle">Shared mail UAT</div>
+        </div>
       </div>
-      <div class="toast" id="gate-message"></div>
+      <button class="new-chat" id="new-chat" type="button">＋ 新對話</button>
+      <div class="sidebar-section">
+        <div class="sidebar-label">共同測試空間</div>
+        <div class="side-fact">May、Maggie 與相關同事可直接使用，<b>不需登入</b>。</div>
+        <div class="side-fact">共享上傳：<b id="upload-count">讀取中…</b></div>
+        <div class="side-fact">不經 ChatGPT；不回寫郵件、專案或正式知識圖譜。</div>
+      </div>
+      <div class="sidebar-bottom">內網／VPN 功能測試介面<br>目前支援 EML，附件內容不建立索引。</div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <strong>FormOwl 郵件助手</strong>
+        <div class="status" id="server-status">連線中</div>
+      </header>
+      <section class="conversation" id="conversation">
+        <article class="message assistant">
+          <div class="avatar">F</div>
+          <div class="bubble">
+            <div class="assistant-title">你好，我是 FormOwl 測試助手。</div>
+            <div class="assistant-text">直接問我量產時間、Pull-in 料件、PO、料號或供應商進度。需要加入新郵件時，按下方的迴紋針，我會開啟郵件上傳視窗。</div>
+            <div class="quick-actions">
+              <button class="chip quick" data-query="最近一次文顥的量產時間" type="button">文顥最近排程</button>
+              <button class="chip quick" data-query="有哪些料件需要 pull-in" type="button">Pull-in 料件</button>
+              <button class="chip quick" data-query="PO 470002154" type="button">查 PO</button>
+              <button class="chip" id="welcome-upload" type="button">📎 上傳新郵件</button>
+            </div>
+          </div>
+        </article>
+      </section>
+      <div class="composer-wrap">
+        <div class="composer">
+          <button class="icon-button" id="open-upload" type="button" title="上傳 EML">📎</button>
+          <textarea id="chat-input" rows="1" placeholder="傳訊息給 FormOwl…"></textarea>
+          <button class="send" id="send" type="button" title="送出">↑</button>
+        </div>
+        <div class="composer-note">FormOwl 可能只找到部分郵件證據；排程、交期與數量仍請依原信確認。</div>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal hidden" id="upload-modal" role="dialog" aria-modal="true" aria-label="上傳郵件">
+    <div class="modal-card">
+      <div class="modal-head">
+        <strong>加入新的測試郵件</strong>
+        <button class="close" id="close-upload" type="button" aria-label="關閉">×</button>
+      </div>
+      <iframe id="upload-frame" src="/upload" title="FormOwl 郵件上傳"></iframe>
     </div>
   </div>
 
-  <main class="shell">
-    <header>
-      <div>
-        <div class="eyebrow">FORMOWL · MAIL EVIDENCE</div>
-        <h1>郵件證據功能測試</h1>
-        <p class="subtitle">可查詢已預載資料，也可上傳新的 EML 郵件立即測試；全程不經 ChatGPT。</p>
-      </div>
-      <div class="status-pill" id="server-status">檢查服務中…</div>
-    </header>
-
-    <section class="grid">
-      <div class="panel">
-        <h2>輸入測試問題</h2>
-        <label for="query">問題、PO、料號或關鍵字</label>
-        <textarea id="query" placeholder="例如：最近一次文顥的量產時間？"></textarea>
-        <div class="row">
-          <div>
-            <label for="sort">結果排序</label>
-            <select id="sort">
-              <option value="relevance">相關度優先</option>
-              <option value="recent">最新郵件優先</option>
-            </select>
-          </div>
-          <div>
-            <label for="limit">顯示筆數</label>
-            <select id="limit">
-              <option value="5">5 筆</option>
-              <option value="8" selected>8 筆</option>
-              <option value="12">12 筆</option>
-              <option value="20">20 筆</option>
-            </select>
-          </div>
-        </div>
-        <div class="actions">
-          <button id="search" type="button">查詢郵件證據</button>
-        </div>
-        <div class="toast" id="query-message"></div>
-        <div class="notice">排程不代表已完成量產；Pull-in、交期與數量請依證據內容再次確認。本介面不會回寫郵件、專案或知識圖譜。</div>
-      </div>
-
-      <aside class="panel">
-        <h2>快速測試情境</h2>
-        <div class="quick-list">
-          <button class="secondary quick" data-sort="recent" data-query="最近一次文顥的量產時間">文顥最近排程</button>
-          <button class="secondary quick" data-sort="recent" data-query="有哪些料件需要 pull-in">Pull-in 料件</button>
-          <button class="secondary quick" data-sort="relevance" data-query="PO 470002154">查 PO</button>
-          <button class="secondary quick" data-sort="recent" data-query="料號 SP.Z6H02G003 的最新進度">查料號</button>
-        </div>
-        <hr style="border:0;border-top:1px solid var(--line);margin:20px 0">
-        <div class="facts">
-          <div class="fact"><b>資料來源</b><span>預載資料與 May 上傳的新 EML 郵件</span></div>
-          <div class="fact"><b>已上傳</b><span id="upload-count">讀取中…</span></div>
-          <div class="fact"><b>寫入行為</b><span>只寫私人 UAT 郵件與回饋；不回寫業務系統</span></div>
-          <div class="fact"><b>身分</b><span>由 server 固定綁定，瀏覽器不能指定</span></div>
-          <div class="fact"><b>適用範圍</b><span>內網／VPN 臨時功能測試</span></div>
-        </div>
-      </aside>
-    </section>
-
-    <section class="panel upload-panel">
-      <h2>加入新的測試郵件</h2>
-      <div class="upload-row">
-        <div>
-          <label for="mail-files">選擇一封或多封 EML 郵件</label>
-          <input id="mail-files" type="file" accept=".eml,message/rfc822" multiple>
-          <p class="file-help">
-            每次最多 20 封、單封最多 25 MB。郵件會保存在 Server 的私人 UAT 空間並立即加入搜尋；
-            附件檔案內容目前不建立索引。MSG 暫不支援，請先另存為 EML。
-          </p>
-        </div>
-        <button id="upload-mails" type="button">上傳並建立索引</button>
-      </div>
-      <div class="toast" id="upload-message"></div>
-    </section>
-
-    <section class="results" id="results"></section>
-
-    <section class="panel feedback" id="feedback">
-      <h2>這次結果如何？</h2>
-      <div class="feedback-grid">
-        <div>
-          <label for="verdict">判定</label>
-          <select id="verdict">
-            <option value="correct">正確</option>
-            <option value="partially_correct">部分正確</option>
-            <option value="incorrect">錯誤</option>
-            <option value="no_result">找不到資料</option>
-            <option value="citation_issue">引用／證據有問題</option>
-          </select>
-        </div>
-        <div>
-          <label for="feedback-note">補充說明（選填）</label>
-          <input id="feedback-note" maxlength="1000" placeholder="例如：排程日期正確，但料號少了一筆">
-        </div>
-        <button id="send-feedback" type="button">送出回饋</button>
-      </div>
-      <div class="toast" id="feedback-message"></div>
-    </section>
-  </main>
-
   <script>
-    const keyName = "formowl-mail-uat-code";
-    let accessCode = sessionStorage.getItem(keyName) || "";
-    let currentQueryId = "";
     const byId = (id) => document.getElementById(id);
-
-    function setToast(id, text, isError = false) {
-      const node = byId(id);
-      node.textContent = text;
-      node.classList.toggle("error", isError);
-    }
+    const conversation = byId("conversation");
+    let busy = false;
 
     async function api(path, options = {}) {
-      const requestHeaders = {
-        "X-FormOwl-UAT-Code": accessCode,
-        ...(options.headers || {})
-      };
-      if (!(options.body instanceof FormData) && !requestHeaders["Content-Type"]) {
-        requestHeaders["Content-Type"] = "application/json";
+      const headers = { ...(options.headers || {}) };
+      if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
+        headers["Content-Type"] = "application/json";
       }
-      const response = await fetch(path, {
-        ...options,
-        cache: "no-store",
-        headers: requestHeaders
-      });
+      const response = await fetch(path, { ...options, cache: "no-store", headers });
       let payload = {};
       try { payload = await response.json(); } catch (_) {}
       if (!response.ok) {
@@ -1247,228 +1243,434 @@ _UAT_HTML = """<!doctype html>
       return payload;
     }
 
-    async function unlock() {
-      const code = byId("access-code").value.trim();
-      if (!code) {
-        setToast("gate-message", "請輸入存取碼。", true);
-        return;
-      }
-      accessCode = code;
-      try {
-        await api("/api/session-summary", { method: "GET", headers: {} });
-        sessionStorage.setItem(keyName, accessCode);
-        byId("gate").classList.add("hidden");
-        setToast("gate-message", "");
-        await refreshSummary();
-      } catch (_) {
-        accessCode = "";
-        sessionStorage.removeItem(keyName);
-        setToast("gate-message", "存取碼不正確，請再試一次。", true);
-      }
+    function scrollToLatest() {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
     }
 
-    function appendText(parent, tag, text, className = "") {
-      const node = document.createElement(tag);
+    function createMessage(role) {
+      const article = document.createElement("article");
+      article.className = `message ${role}`;
+      const avatar = document.createElement("div");
+      avatar.className = "avatar";
+      avatar.textContent = role === "user" ? "你" : "F";
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      article.append(avatar, bubble);
+      conversation.appendChild(article);
+      return { article, bubble };
+    }
+
+    function appendTextMessage(role, text, className = "") {
+      const { bubble } = createMessage(role);
+      const node = document.createElement("div");
+      node.className = className || "assistant-text";
       node.textContent = text;
-      if (className) node.className = className;
-      parent.appendChild(node);
-      return node;
+      bubble.appendChild(node);
+      scrollToLatest();
+      return bubble;
     }
 
-    function renderResults(payload) {
-      const root = byId("results");
-      root.replaceChildren();
-      currentQueryId = payload.query_id;
-      byId("feedback").classList.add("visible");
-      byId("feedback-note").value = "";
-      setToast("feedback-message", "");
+    function openUpload() {
+      byId("upload-modal").classList.remove("hidden");
+      byId("upload-frame").focus();
+    }
+
+    function closeUpload() {
+      byId("upload-modal").classList.add("hidden");
+    }
+
+    function querySort(query) {
+      const normalized = query.toLowerCase();
+      const recentTerms = ["最近", "最新", "近期", "目前", "現在", "latest", "recent"];
+      return recentTerms.some((term) => normalized.includes(term)) ? "recent" : "relevance";
+    }
+
+    function addFeedbackControls(parent, queryId) {
+      const row = document.createElement("div");
+      row.className = "feedback-row";
+      const label = document.createElement("span");
+      label.textContent = "這個回答有幫助嗎？";
+      row.appendChild(label);
+      for (const [text, verdict] of [["有", "correct"], ["部分", "partially_correct"], ["沒有", "incorrect"]]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = text;
+        button.addEventListener("click", async () => {
+          try {
+            await api("/api/feedback", {
+              method: "POST",
+              body: JSON.stringify({ query_id: queryId, verdict, note: "" })
+            });
+            row.replaceChildren();
+            const saved = document.createElement("span");
+            saved.textContent = "已記錄，謝謝。";
+            row.appendChild(saved);
+          } catch (_) {
+            label.textContent = "回饋暫時無法記錄。";
+            label.className = "error-text";
+          }
+        });
+        row.appendChild(button);
+      }
+      parent.appendChild(row);
+    }
+
+    function renderAssistantResult(payload, holder) {
+      holder.replaceChildren();
+      const title = document.createElement("div");
+      title.className = "assistant-title";
+      title.textContent = payload.results.length
+        ? `我找到 ${payload.result_count} 筆相關郵件證據。`
+        : "目前沒有找到符合的郵件證據。";
+      holder.appendChild(title);
+
+      const explanation = document.createElement("div");
+      explanation.className = "assistant-text";
+      explanation.textContent = payload.results.length
+        ? payload.notice
+        : "你可以換用 PO、料號、供應商等明確關鍵字，或先上傳新的 EML 郵件。";
+      holder.appendChild(explanation);
 
       if (!payload.results.length) {
-        const panel = document.createElement("div");
-        panel.className = "panel empty";
-        panel.textContent = "沒有找到符合的郵件證據。請改用 PO、料號、供應商或 pull-in 等較明確關鍵字。";
-        root.appendChild(panel);
-        return;
+        const actions = document.createElement("div");
+        actions.className = "quick-actions";
+        const upload = document.createElement("button");
+        upload.type = "button";
+        upload.className = "chip";
+        upload.textContent = "📎 上傳新郵件";
+        upload.addEventListener("click", openUpload);
+        actions.appendChild(upload);
+        holder.appendChild(actions);
+      } else {
+        const list = document.createElement("div");
+        list.className = "evidence-list";
+        for (const item of payload.results) {
+          const card = document.createElement("article");
+          card.className = "evidence";
+          const subject = document.createElement("h3");
+          subject.textContent = item.subject;
+          if (item.source_kind === "uploaded_uat") {
+            const badge = document.createElement("span");
+            badge.className = "badge";
+            badge.textContent = "共同測試上傳";
+            subject.appendChild(badge);
+          }
+          const meta = document.createElement("div");
+          meta.className = "evidence-meta";
+          meta.textContent = item.sent_at ? `郵件時間：${item.sent_at}` : "郵件時間：未提供";
+          const snippet = document.createElement("p");
+          snippet.textContent = item.snippet;
+          card.append(subject, meta, snippet);
+          if (item.citation) {
+            const citation = document.createElement("div");
+            citation.className = "citation";
+            citation.textContent = `證據：${item.citation.citation_id} · ${item.citation.source_observation_id}`;
+            card.appendChild(citation);
+          }
+          list.appendChild(card);
+        }
+        holder.appendChild(list);
       }
-
-      const summary = document.createElement("div");
-      summary.className = "panel";
-      appendText(summary, "h2", `找到 ${payload.result_count} 筆證據`);
-      appendText(summary, "p", payload.notice, "subtitle");
-      root.appendChild(summary);
-
-      for (const item of payload.results) {
-        const card = document.createElement("article");
-        card.className = "result-card";
-        appendText(card, "h3", item.subject);
-        const meta = appendText(
-          card,
-          "div",
-          item.sent_at ? `郵件時間：${item.sent_at}` : "郵件時間：未提供",
-          "meta"
-        );
-        if (item.source_kind === "uploaded_uat") {
-          appendText(meta, "span", "May 新上傳", "source-badge");
-        }
-        appendText(card, "p", item.snippet, "snippet");
-        if (item.matched_terms.length) {
-          const terms = document.createElement("div");
-          terms.className = "terms";
-          for (const term of item.matched_terms) appendText(terms, "span", term, "term");
-          card.appendChild(terms);
-        }
-        if (item.citation) {
-          appendText(
-            card,
-            "div",
-            `證據：${item.citation.citation_id} · ${item.citation.source_observation_id}`,
-            "citation"
-          );
-        }
-        root.appendChild(card);
-      }
+      addFeedbackControls(holder, payload.query_id);
+      scrollToLatest();
     }
 
-    async function search() {
-      const queryText = byId("query").value.trim();
-      if (!queryText) {
-        setToast("query-message", "請先輸入問題或關鍵字。", true);
-        return;
-      }
-      const button = byId("search");
-      button.disabled = true;
-      setToast("query-message", "查詢中，常見詞可能需要數秒…");
+    async function ask(queryText) {
+      const query = queryText.trim();
+      if (!query || busy) return;
+      busy = true;
+      byId("send").disabled = true;
+      byId("chat-input").value = "";
+      appendTextMessage("user", query);
+      const { bubble } = createMessage("assistant");
+      const loading = document.createElement("div");
+      loading.className = "assistant-text";
+      loading.textContent = "正在查詢郵件證據…";
+      bubble.appendChild(loading);
+      scrollToLatest();
       try {
         const payload = await api("/api/query", {
           method: "POST",
-          body: JSON.stringify({
-            query_text: queryText,
-            sort: byId("sort").value,
-            limit: Number(byId("limit").value)
-          })
+          body: JSON.stringify({ query_text: query, sort: querySort(query), limit: 8 })
         });
-        renderResults(payload);
-        setToast("query-message", `完成：顯示 ${payload.result_count} 筆證據。`);
-      } catch (error) {
-        if (error.status === 401) {
-          sessionStorage.removeItem(keyName);
-          byId("gate").classList.remove("hidden");
-        }
-        setToast("query-message", "查詢失敗，請確認存取碼或稍後重試。", true);
-      } finally {
-        button.disabled = false;
-      }
-    }
-
-    async function sendFeedback() {
-      if (!currentQueryId) return;
-      const button = byId("send-feedback");
-      button.disabled = true;
-      try {
-        await api("/api/feedback", {
-          method: "POST",
-          body: JSON.stringify({
-            query_id: currentQueryId,
-            verdict: byId("verdict").value,
-            note: byId("feedback-note").value
-          })
-        });
-        setToast("feedback-message", "回饋已記錄，謝謝。");
+        renderAssistantResult(payload, bubble);
       } catch (_) {
-        setToast("feedback-message", "回饋未送出，請稍後重試。", true);
+        bubble.replaceChildren();
+        const error = document.createElement("div");
+        error.className = "error-text";
+        error.textContent = "查詢暫時失敗，請稍後再試。";
+        bubble.appendChild(error);
       } finally {
-        button.disabled = false;
+        busy = false;
+        byId("send").disabled = false;
+        byId("chat-input").focus();
       }
     }
 
     async function refreshSummary() {
-      if (!accessCode) return;
       try {
         const summary = await api("/api/session-summary", { method: "GET" });
-        byId("upload-count").textContent =
-          `${summary.uploaded_file_count} 封 EML（${summary.uploaded_message_count} 封可搜尋郵件）`;
+        byId("upload-count").textContent = `${summary.uploaded_file_count} 封 EML`;
       } catch (_) {
-        byId("upload-count").textContent = "無法讀取";
+        byId("upload-count").textContent = "暫時無法讀取";
       }
     }
 
-    async function uploadMails() {
-      const input = byId("mail-files");
-      const files = Array.from(input.files || []);
-      if (!files.length) {
-        setToast("upload-message", "請先選擇 EML 郵件。", true);
-        return;
+    byId("send").addEventListener("click", () => ask(byId("chat-input").value));
+    byId("chat-input").addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        ask(event.currentTarget.value);
       }
-      if (files.length > 20 || files.some((file) => !file.name.toLowerCase().endsWith(".eml"))) {
-        setToast("upload-message", "一次最多 20 封，且目前只接受 .eml。", true);
-        return;
-      }
-      const button = byId("upload-mails");
-      const form = new FormData();
-      for (const file of files) form.append("mail_files", file, file.name);
-      button.disabled = true;
-      setToast("upload-message", `正在解析 ${files.length} 封郵件…`);
-      try {
-        const payload = await api("/api/upload", {
-          method: "POST",
-          body: form
-        });
-        input.value = "";
-        const duplicateText = payload.duplicate_file_count
-          ? `，另有 ${payload.duplicate_file_count} 封重複郵件未重建`
-          : "";
-        setToast(
-          "upload-message",
-          `完成：新增 ${payload.accepted_file_count} 封郵件${duplicateText}。現在可以直接查詢。`
-        );
-        await refreshSummary();
-      } catch (error) {
-        if (error.status === 401) {
-          sessionStorage.removeItem(keyName);
-          byId("gate").classList.remove("hidden");
-        }
-        const message = error.status === 413
-          ? "郵件檔案太大，請縮小檔案或分批上傳。"
-          : "上傳失敗；請確認檔案是有效的 EML 郵件。";
-        setToast("upload-message", message, true);
-      } finally {
-        button.disabled = false;
-      }
-    }
-
-    byId("unlock").addEventListener("click", unlock);
-    byId("access-code").addEventListener("keydown", (event) => {
-      if (event.key === "Enter") unlock();
     });
-    byId("search").addEventListener("click", search);
-    byId("upload-mails").addEventListener("click", uploadMails);
-    byId("send-feedback").addEventListener("click", sendFeedback);
+    byId("open-upload").addEventListener("click", openUpload);
+    byId("welcome-upload").addEventListener("click", openUpload);
+    byId("close-upload").addEventListener("click", closeUpload);
+    byId("upload-modal").addEventListener("click", (event) => {
+      if (event.target === byId("upload-modal")) closeUpload();
+    });
+    byId("new-chat").addEventListener("click", () => {
+      const messages = conversation.querySelectorAll(".message");
+      for (let index = 1; index < messages.length; index += 1) messages[index].remove();
+      byId("chat-input").focus();
+    });
     for (const button of document.querySelectorAll(".quick")) {
-      button.addEventListener("click", () => {
-        byId("query").value = button.dataset.query;
-        byId("sort").value = button.dataset.sort;
-        search();
-      });
+      button.addEventListener("click", () => ask(button.dataset.query || ""));
     }
+    window.addEventListener("message", (event) => {
+      if (
+        event.origin !== window.location.origin
+        || event.source !== byId("upload-frame").contentWindow
+        || !event.data
+      ) return;
+      if (event.data.type === "formowl-upload-complete") {
+        closeUpload();
+        const count = Number(event.data.accepted_file_count || 0);
+        appendTextMessage(
+          "assistant",
+          count
+            ? `已加入 ${count} 封新郵件。現在可以直接問我這些郵件的內容。`
+            : "這些郵件先前已上傳，現在可以直接查詢。"
+        );
+        refreshSummary();
+      } else if (event.data.type === "formowl-upload-close") {
+        closeUpload();
+      }
+    });
 
     fetch("/api/health", { cache: "no-store" })
       .then((response) => response.json())
       .then((payload) => {
         byId("server-status").textContent = payload.status === "ready" ? "服務已就緒" : "服務準備中";
+        byId("server-status").classList.toggle("ready", payload.status === "ready");
       })
       .catch(() => { byId("server-status").textContent = "服務未連線"; });
+    refreshSummary();
+  </script>
+</body>
+</html>
+"""
 
-    if (accessCode) {
-      api("/api/session-summary", { method: "GET", headers: {} })
-        .then(() => {
-          byId("gate").classList.add("hidden");
-          refreshSummary();
-        })
-        .catch(() => {
-          accessCode = "";
-          sessionStorage.removeItem(keyName);
-        });
+_UPLOAD_IFRAME_HTML = """<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>加入郵件</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #242723;
+      --muted: #73766f;
+      --line: #deded9;
+      --brand: #147d64;
+      --brand-dark: #0e5f4c;
+      --danger: #a43b3b;
     }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: #f7f7f5; color: var(--ink);
+      font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    }
+    button, input { font: inherit; }
+    .shell { padding: 28px; }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    .lead { color: var(--muted); line-height: 1.65; margin: 0 0 22px; }
+    .drop {
+      border: 2px dashed #b8c3bd; border-radius: 19px; background: white; padding: 34px 20px;
+      text-align: center; transition: border .15s, background .15s;
+    }
+    .drop.dragging { border-color: var(--brand); background: #eef8f4; }
+    .drop-icon {
+      width: 50px; height: 50px; margin: 0 auto 13px; border-radius: 16px;
+      display: grid; place-items: center; background: #e7f3ee; color: var(--brand);
+      font-size: 25px; font-weight: 900;
+    }
+    .drop strong { display: block; margin-bottom: 6px; }
+    .drop span { color: var(--muted); font-size: 13px; }
+    input[type=file] { display: none; }
+    .choose {
+      display: inline-block; margin-top: 15px; border: 1px solid var(--line);
+      background: white; color: var(--brand-dark); border-radius: 11px; padding: 9px 13px;
+      cursor: pointer; font-weight: 800;
+    }
+    .files { display: grid; gap: 8px; margin: 16px 0 0; }
+    .file {
+      border: 1px solid var(--line); border-radius: 11px; background: white; padding: 10px 12px;
+      display: flex; justify-content: space-between; gap: 10px; font-size: 13px;
+    }
+    .file span:last-child { color: var(--muted); white-space: nowrap; }
+    .actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 20px; }
+    button {
+      border: 0; border-radius: 12px; padding: 11px 16px; cursor: pointer; font-weight: 800;
+    }
+    .cancel { background: #e9ebe8; color: #4e554f; }
+    .upload { background: var(--brand); color: white; }
+    .upload:hover { background: var(--brand-dark); }
+    button:disabled { opacity: .5; cursor: wait; }
+    .message { min-height: 24px; margin-top: 12px; color: var(--brand-dark); font-weight: 700; }
+    .message.error { color: var(--danger); }
+    .limits {
+      margin-top: 18px; border-left: 4px solid #e8b541; background: #fff8df;
+      border-radius: 9px; padding: 11px 13px; color: #695519; font-size: 12px; line-height: 1.6;
+    }
+    @media (max-width: 560px) {
+      .shell { padding: 20px; }
+      .actions { display: grid; grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <h1>加入新的測試郵件</h1>
+    <p class="lead">選擇 EML 後，FormOwl 會立即解析並加入這個共同測試空間。完成後可回到聊天直接詢問。</p>
+    <section class="drop" id="drop">
+      <div class="drop-icon">＋</div>
+      <strong>將 EML 拖到這裡</strong>
+      <span>或從電腦選擇一封或多封郵件</span>
+      <label class="choose" for="mail-files">選擇 EML</label>
+      <input id="mail-files" type="file" accept=".eml,message/rfc822" multiple>
+    </section>
+    <section class="files" id="files"></section>
+    <div class="limits">每次最多 20 封、單封最多 25 MB，合計最多 60 MB。目前只支援 EML；MSG 請先另存為 EML。附件會保留在原郵件中，但附件檔案內容不建立搜尋索引。</div>
+    <div class="message" id="message"></div>
+    <div class="actions">
+      <button class="cancel" id="cancel" type="button">取消</button>
+      <button class="upload" id="upload" type="button">上傳並加入聊天</button>
+    </div>
+  </main>
+  <script>
+    const input = document.getElementById("mail-files");
+    const drop = document.getElementById("drop");
+    const list = document.getElementById("files");
+    const message = document.getElementById("message");
+    const uploadButton = document.getElementById("upload");
+    const maxFileBytes = 25 * 1024 * 1024;
+    const maxTotalBytes = 60 * 1024 * 1024;
+    let selectedFiles = [];
+
+    function setMessage(text, error = false) {
+      message.textContent = text;
+      message.classList.toggle("error", error);
+    }
+
+    function renderFiles() {
+      list.replaceChildren();
+      for (const file of selectedFiles) {
+        const row = document.createElement("div");
+        row.className = "file";
+        const name = document.createElement("span");
+        name.textContent = file.name;
+        const size = document.createElement("span");
+        size.textContent = `${(file.size / 1024 / 1024).toFixed(2)} MB`;
+        row.append(name, size);
+        list.appendChild(row);
+      }
+      setMessage(selectedFiles.length ? `已選擇 ${selectedFiles.length} 封郵件。` : "");
+    }
+
+    function selectFiles(files) {
+      selectedFiles = Array.from(files || []);
+      if (selectedFiles.length > 20) {
+        selectedFiles = [];
+        input.value = "";
+        renderFiles();
+        setMessage("一次最多選擇 20 封郵件。", true);
+        return;
+      }
+      if (selectedFiles.some((file) => !file.name.toLowerCase().endsWith(".eml"))) {
+        selectedFiles = [];
+        input.value = "";
+        renderFiles();
+        setMessage("目前只接受 .eml 郵件。", true);
+        return;
+      }
+      if (selectedFiles.some((file) => file.size > maxFileBytes)) {
+        selectedFiles = [];
+        input.value = "";
+        renderFiles();
+        setMessage("單封郵件不可超過 25 MB。", true);
+        return;
+      }
+      if (selectedFiles.reduce((total, file) => total + file.size, 0) > maxTotalBytes) {
+        selectedFiles = [];
+        input.value = "";
+        renderFiles();
+        setMessage("這次選擇的郵件合計不可超過 60 MB。", true);
+        return;
+      }
+      renderFiles();
+    }
+
+    input.addEventListener("change", () => selectFiles(input.files));
+    for (const eventName of ["dragenter", "dragover"]) {
+      drop.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        drop.classList.add("dragging");
+      });
+    }
+    for (const eventName of ["dragleave", "drop"]) {
+      drop.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        drop.classList.remove("dragging");
+      });
+    }
+    drop.addEventListener("drop", (event) => selectFiles(event.dataTransfer.files));
+    document.getElementById("cancel").addEventListener("click", () => {
+      window.parent.postMessage({ type: "formowl-upload-close" }, window.location.origin);
+    });
+    uploadButton.addEventListener("click", async () => {
+      if (!selectedFiles.length) {
+        setMessage("請先選擇 EML 郵件。", true);
+        return;
+      }
+      const form = new FormData();
+      for (const file of selectedFiles) form.append("mail_files", file, file.name);
+      uploadButton.disabled = true;
+      setMessage(`正在解析 ${selectedFiles.length} 封郵件…`);
+      try {
+        const response = await fetch("/api/upload", {
+          method: "POST",
+          cache: "no-store",
+          body: form
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error_code || "request_failed");
+        setMessage(`完成：新增 ${payload.accepted_file_count} 封郵件。`);
+        window.parent.postMessage(
+          {
+            type: "formowl-upload-complete",
+            accepted_file_count: payload.accepted_file_count,
+            duplicate_file_count: payload.duplicate_file_count
+          },
+          window.location.origin
+        );
+      } catch (_) {
+        setMessage("上傳失敗；請確認檔案是有效的 EML，且大小未超過限制。", true);
+      } finally {
+        uploadButton.disabled = false;
+      }
+    });
   </script>
 </body>
 </html>
@@ -1481,4 +1683,5 @@ __all__ = [
     "build_mail_human_uat_http_handler",
     "create_mail_human_uat_http_server",
     "render_mail_human_uat_page",
+    "render_mail_human_uat_upload_page",
 ]
