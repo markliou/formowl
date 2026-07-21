@@ -24,16 +24,25 @@ _INTERNAL_FORMOWL_LOCATOR = re.compile(
     re.IGNORECASE,
 )
 _SQL_TEXT = re.compile(
-    r"\b("
-    r"select\s+.+\s+from|"
-    r"insert\s+into|"
-    r"update\s+[A-Za-z_][\w.]*\s+set|"
-    r"delete\s+from|"
-    r"drop\s+table|"
-    r"alter\s+table|"
-    r"create\s+table|"
-    r"truncate\s+table"
-    r")\b",
+    r"\bselect\b[\s\S]{0,300}\bfrom\b|"
+    r"\bwith\b[\s\S]{0,300}\bas\s*\(|"
+    r"\bcopy\b\s+"
+    r"(?:[A-Za-z_][A-Za-z0-9_.]*(?:\s*\([^)]{0,200}\))?|\([^)]{1,300}\))\s+"
+    r"(?:"
+    r"from\s+(?:stdin\b|program\b|['\"]|/|[A-Za-z]:[\\/])|"
+    r"to\s+(?:stdout\b|program\b|['\"]|/|[A-Za-z]:[\\/])"
+    r")|"
+    r"\binsert\b\s+into\b|"
+    r"\bupdate\b\s+[A-Za-z_][A-Za-z0-9_.]*\s+\bset\b|"
+    r"\bdelete\b\s+from\b|"
+    r"\bgrant\b[\s\S]{0,120}\bon\b[\s\S]{0,120}\bto\b|"
+    r"\brevoke\b[\s\S]{0,120}\bon\b[\s\S]{0,120}\bfrom\b|"
+    r"\bmerge\b\s+into\b[\s\S]{0,150}\busing\b|"
+    r"\bcall\b\s+[A-Za-z_][A-Za-z0-9_.]*\(|"
+    r"\bdrop\b\s+(?:table|schema|database|index|view)\b|"
+    r"\balter\b\s+(?:table|schema|database|index|view)\b|"
+    r"\bcreate\b\s+(?:table|schema|database|index|view)\b|"
+    r"\btruncate\b\s+table\b",
     re.IGNORECASE,
 )
 _SECRET_ASSIGNMENT_TEXT = re.compile(
@@ -99,7 +108,7 @@ def assert_no_public_raw_references(payload: Any, context: str = "payload") -> N
                 ):
                     violations.append(f"{item_path}.key")
                 walk(item, item_path)
-        elif isinstance(value, list):
+        elif isinstance(value, (list, tuple)):
             for index, item in enumerate(value):
                 walk(item, f"{path}[{index}]")
         elif isinstance(value, str) and _unsafe_public_string(value):

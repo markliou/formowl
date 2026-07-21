@@ -1,14 +1,39 @@
-# Ontology v2 Coordination Frames
+# Ontology v2 Temporal-Evidential Coordination Frames
 
-This note records the issue #28 experiment slice. It does not replace the
-existing scoped type ontology outright. It adds a reversible candidate-layer
-coordination-frame path so the current type gate can remain a baseline and a
-hybrid guard.
+This note records the historical issue #28 specialized coordination
+experiment. The canonical general methodology is defined in `SPEC.md`:
+`Observation -> CandidateBusinessObject -> CandidateAssertion`, where
+coordination is one of five universal assertion families. This experiment
+retains `CandidateFrame` as a reversible coordination-specific representation;
+it does not redefine the cross-domain core.
 
 For historical implementation context, see
 `docs/ontology-v2-coordination-plan.md`. For the methodology critique that
 motivated the soft-gate and evaluation changes, see
 `docs/ontology-v2-review-comments.md`.
+
+## Default Candidate Evidence Retrieval
+
+Coordination-frame extraction does not replace retrieval. New harnesses first
+use stable logical source item identity, access/context/time admissibility
+before planning, conjunctive same-source anchors, and capped additive ontology
+reranking. The historical frame, hard-gate, and component comparisons in this
+document are ablation evidence only; ontology hard-pruning is not the default.
+The active harness also requires an index-owned
+`CandidateEvidenceTextPolicyRuntime` for the
+Unicode-NFKC/protected-ASCII/Jieba/corpus-bound SentencePiece/frozen-profile
+stack and exact admission/model/corpus SHA-256 hashes. The binding also pins
+the runtime id and tokenizer implementation hash; runtime code mismatch fails
+closed. Default callers pass query text only; raw tokens and free-form hashes
+are not sufficient. Access and explicit context/time admissibility precede
+tokenization; experiments use `retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
 
 ## Diagnosis
 
@@ -31,31 +56,36 @@ decisions, commitments, status changes, and follow-up obligations.
 
 ## Method
 
-Ontology v2 uses an evidence-backed coordination-frame model:
+Ontology v2 uses an evidence-backed, temporal-evidential coordination-frame
+model:
 
 ```text
 Layer 0 Evidence/source ontology
   -> Asset, Observation, EvidenceSnapshot, Citation, EvidenceSpan, PermissionScope
-Layer 1 Stable coordination-frame core
+Layer 1 Temporal-evidential assertion core
+  -> CandidateAssertion, TemporalContext, epistemic status, lifecycle status,
+     provenance, as_of_world_time, known_as_of
+Layer 2 Stable coordination-frame core
   -> Request, Commitment, Decision, Assignment, StatusUpdate, StatusChange,
      Blocker, Risk, Issue, OpenQuestion, Deadline, Dependency, Escalation,
      Change, Exception, Constraint
-Layer 2 Scoped domain packs
-  -> domain objects and domain-specific process frames that extend core frames
-Layer 3 Projection/view ontology
+Layer 3 Scoped domain packs
+  -> domain objects, process frames, temporal-role mappings, epistemic
+     mappings, and lifecycle mappings that extend but do not replace the core
+Layer 4 Projection/view ontology
   -> follow-up queues, decision logs, risk registers, case progress views,
      project hubs, and other user-facing graph projections
 ```
 
-This follows the same candidate-first FormOwl boundary as the rest of the KG
-layer:
+The canonical method and this specialized experiment relate as follows:
 
 ```text
 Observation
-  -> CandidateMention
-  -> CandidateFrame
   -> CandidateBusinessObject
-  -> CandidateRelation
+  -> CandidateAssertion(kind=coordination, TemporalContext,
+       epistemic_status, lifecycle_status)
+  -> CandidateTemporalView(as_of_world_time, known_as_of)
+  -> optional CandidateMention / CandidateFrame / CandidateRelation experiment
   -> reviewed CanonicalFrame / CanonicalObject / CanonicalRelation
 ```
 
@@ -74,12 +104,25 @@ sentences rather than reading one entity pair at a time.
 
 The contract layer adds:
 
+- `TemporalContext`: a normalized, source-neutral qualifier for phenomenon,
+  source, observation, assertion, effective, valid, result, recorded, due, and
+  supersession time. The POC validates field names and simple interval order;
+  `captured_at` is bound to source Observation capture time rather than supplied
+  by a Domain Pack. Candidate materialization remains a separate
+  `CandidateAssertion.created_at` knowledge boundary; source capture alone does
+  not make the candidate visible.
+- `CandidateAssertion.epistemic_status`: separates planned, expected,
+  committed, requested, asserted, observed, and actual semantics from candidate
+  review state.
+- `CandidateAssertion.lifecycle_status`: independently records active,
+  cancelled, corrected, or superseded state, allowing an actual assertion to
+  also be corrected or superseded.
 - `CandidateMention`: a source-grounded mention with location, hash,
   confidence, review state, and source observations.
 - `CandidateBusinessObject`: a work object candidate such as a quote,
   firmware spec, invoice, work order, shipment, or project plan. Its
   `object_supertype` must be one of the coordination object supertypes.
-- `CandidateFrame`: the critical v2 unit. It has a stable coordination
+- `CandidateFrame`: the specialized issue #28 coordination unit. It has a stable coordination
   `frame_type`, structured `slots`, evidence spans, domain hints, granularity,
   access boundary, ontology revision pin, review state, source mention ids, and
   optional linked business objects.
@@ -91,6 +134,10 @@ such as `InvoiceApproval`, `InventoryShortage`, or
 `FirmwareCapabilityQuestion` must map to a stable coordination core frame. A
 domain object such as `Invoice`, `Quote`, or `FirmwareSpec` must map to a
 coordination object supertype. A pack that bypasses the core is rejected.
+Domain Packs may also map domain labels such as promised date or posting date to
+shared `TemporalContext` fields and select shared epistemic and lifecycle
+statuses. The extractor normalizes those labels before candidate ids are
+generated.
 
 ## Experiment
 
@@ -153,10 +200,12 @@ requires an evidence span with a case-local source observation, locator, and
 The report also includes slot-value recall, so a frame with the correct slot
 key and incorrect value no longer receives full quality credit.
 
-The runner includes a synthetic noisy-type gate ablation inspired by Claude's
-review. It does not change the current hard type gate. It only shows why a
-future real-email experiment should compare hard gate and soft prior behavior
-under predicted/noisy types.
+The runner includes a historical synthetic noisy-type hard-vs-soft ablation.
+Neither arm is the retrieval default. Current Candidate evidence retrieval
+uses capped additive ontology reranking and never hard-prunes source evidence.
+Core-type incompatibility may still govern a later type-alignment or canonical
+review decision, but it must not be moved into retrieval as an early evidence
+gate.
 
 ## Redacted Effectiveness Regression
 
@@ -337,6 +386,10 @@ artifacts.
 - Projection/view ontology is evaluated through competency questions only in
   this slice; it does not yet generate real follow-up queue or case progress
   graph views.
+- The temporal implementation is a fast candidate-only POC. It does not yet
+  provide full interval algebra, cross-assertion temporal cycle detection,
+  temporal entity resolution, causal inference, SHACL execution, or canonical
+  bitemporal PostgreSQL storage.
 - The `KG alone > KG + current ontology` regression is reproduced on the fixed
   redacted replay pack. A production claim still requires the same comparison
   on real/private PST-redacted cases generated from the actual parser path.

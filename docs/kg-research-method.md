@@ -29,7 +29,8 @@ FormOwl uses a scoped emergent ontology, not a global top-down ontology.
 The current code-level method is:
 
 - `CORE_SUPERTYPE_IDS` is closed and small: `Person`, `Organization`,
-  `Project`, `Artifact`, `Document`, `Event`, `Concept`, and `Location`.
+  `Project`, `Artifact`, `Document`, `Event`, `Concept`, `Location`,
+  `Transaction`, `Account`, `Agreement`, `PhysicalObject`, and `Measurement`.
 - `TypeDefinition` separates `core`, `extension`, and `promoted` tiers.
 - Core type definitions must use `core/formowl_core` scope.
 - Extension and promoted types must use a non-core scope and source
@@ -39,8 +40,35 @@ The current code-level method is:
   supertype.
 - `TypeAlignmentCandidate` is cross-scope, requires review, carries evidence
   links, and explicitly forbids canonical type writes and access grants.
-- `core_supertypes_compatible()` is the only hard compatibility gate in v1.
-  Extension and promoted labels are soft scoring signals only.
+- `core_supertypes_compatible()` is the only hard compatibility gate in the
+  governed type-alignment workflow. It is not an evidence-retrieval gate.
+  Extension and promoted labels are soft scoring signals only, and retrieval
+  ontology remains capped and additive.
+- `CandidateAssertion` is the source-neutral semantic umbrella for `property`,
+  `relation`, `state`, `event`, and `coordination` assertions.
+- `TemporalContext` gives every assertion family one vocabulary for phenomenon,
+  source, observation, assertion, effective, valid, result, recorded, due, and
+  supersession time. `epistemic_status` distinguishes expectations,
+  commitments, requests, observations, and actual events. A separate
+  `lifecycle_status` records active, cancelled, corrected, or superseded state;
+  both remain separate from candidate review status.
+- `captured_at` is not a Domain Pack opinion. The source-neutral pipeline binds
+  it to the latest source Observation capture time, and it participates in the
+  stable CandidateAssertion id and known-as-of filtering.
+- Candidate materialization is a separate boundary:
+  `CandidateAssertion.created_at` must not precede source capture, and
+  `known_as_of` fails closed when it is absent or later than the requested
+  knowledge time. It remains outside semantic identity so deterministic reruns
+  can retain the same candidate id.
+- `DomainPackDefinition` maps scoped object and assertion vocabulary to the
+  closed core. Its normalized content hash is bound to a
+  `domain_pack_definition` Observation and pinned by generated candidate ids.
+  It may map domain time labels, epistemic status, and lifecycle status into the
+  shared core but may not create a separate temporal pipeline.
+- Procurement email observations and finance ERP/application observations use
+  the same deterministic `Observation -> CandidateBusinessObject ->
+  CandidateAssertion` path. Domain Packs specialize vocabulary; they do not
+  create department-specific pipelines.
 
 This keeps "Customer" in one workspace and "Client" in another workspace as a
 reviewable alignment candidate. It does not grant either owner access to the
@@ -48,19 +76,24 @@ other scope's evidence and does not merge the type state.
 
 ### Data-Driven Term And Mention Extraction
 
-The next ontology method decision is recorded in
-`docs/multimodal-ontology-term-extraction-decision.md`. FormOwl should add a
-data-driven term and mention extraction layer before ontology selection,
-coordination frames, entity resolution, and KG fusion. This layer is broader
-than a tokenizer: it uses corpus phrase mining, CJK span generation, layout and
-role context, gazetteers, weak labels, and ablations to produce scored
-candidate mentions and typed mention candidates.
+The active default is recorded in
+`docs/multimodal-ontology-term-extraction-decision.md`. Every text-bearing
+Observation uses one source-neutral candidate stack before ontology selection,
+coordination frames, entity resolution, and KG fusion:
 
-This decision is motivated by the current regex tokenizer limit and the
-operator-provided procurement PST result: KG structure helped, but the current
-ontology operators did not beat KG-only. A stable ontology therefore needs
-better upstream term/mention evidence before it can safely promote data-driven
-types or domain packs.
+```text
+Unicode/script normalization
+  -> protected ASCII identifiers
+  -> Jieba
+  -> corpus-bound SentencePiece
+  -> frozen-profile candidate admission
+```
+
+This is broader than a tokenizer because admission, corpus evidence, Domain
+Pack protection, provenance, and downstream candidate governance are part of
+the method. Regex-only tokenization is now only an explicit baseline,
+ablation, protected ASCII substep, or clearly reported degraded fallback. It
+must not remain the silent default in any evaluator.
 
 Large raw corpora are enough for vocabulary adaptation, phrase mining, weak
 labels, and gazetteer induction. They are not, by themselves, a reliable source
@@ -68,36 +101,53 @@ of supervised typed labels. Trained models may be added later, but their output
 remains candidate-only and must record model version, training manifest hash,
 policy id, confidence, and source evidence.
 
-## Ontology v2 Coordination-Frame Experiment
+## Universal Assertion And Coordination Experiments
 
-Issue #28 adds an ontology-method experiment because the scoped type ontology
-is still too entity-centric for enterprise coordination. The v1 type system
-remains useful as a baseline and compatibility gate, but it does not by itself
-represent requests, commitments, decisions, blockers, deadlines, status
-changes, dependencies, evidence spans, or follow-up obligations.
+Issue #28 established that a type ontology alone is too entity-centric for
+enterprise coordination. The resulting `CandidateFrame` experiment remains a
+specialized coordination representation for requests, commitments, decisions,
+blockers, deadlines, status changes, dependencies, evidence spans, and
+follow-up obligations.
 
-The additive v2 path is:
+The current general method is broader:
 
 ```text
 Observation
-  -> CandidateMention
-  -> CandidateFrame
   -> CandidateBusinessObject
-  -> CandidateRelation
-  -> reviewed CanonicalFrame / CanonicalObject / CanonicalRelation
+  -> CandidateAssertion
+       - property
+       - relation
+       - state
+       - event
+       - coordination
+       - TemporalContext
+       - epistemic_status
+       - lifecycle_status
+  -> CandidateTemporalView(as_of_world_time, known_as_of)
+  -> governance and review
+  -> reviewed canonical knowledge
 ```
+
+`CandidateFrame` remains the specialized coordination path. It is not the
+cross-domain umbrella and it does not make email a special ontology.
 
 Current implementation files:
 
-- `python/formowl_contract/models.py` defines `CandidateMention`,
-  `CandidateFrame`, `CandidateBusinessObject`, and `CanonicalFrame`.
-- `python/formowl_graph/coordination_frames.py` defines deterministic fixture
-  extraction, domain-pack validation, candidate-store persistence, and
-  competency-question answerability evaluation.
-- `experiments/kg_ontology_v2_coordination/` contains the synthetic
-  email-first cross-domain fixture, gold competency questions, and runner.
-- `docs/ontology-v2-coordination-frames.md` records the method, results,
-  limits, and PST boundary.
+- `python/formowl_contract/models.py` defines `CandidateAssertion`,
+  `CandidateMention`, `CandidateFrame`, `CandidateBusinessObject`, and
+  `CanonicalFrame`.
+- `python/formowl_graph/domain_packs.py` defines governed scoped vocabulary,
+  closed-core mappings, content hashes, and provenance validation.
+- `python/formowl_graph/candidate_knowledge.py` defines the source-neutral
+  procurement/finance candidate path and candidate-only safety checks.
+- `python/formowl_contract/temporal.py` and
+  `python/formowl_graph/temporal_views.py` define the normalized temporal
+  contract and candidate-only bitemporal filtering POC.
+- `python/formowl_graph/coordination_frames.py` retains deterministic
+  coordination fixture extraction and competency-question evaluation.
+- `experiments/kg_ontology_v2_coordination/` and
+  `docs/ontology-v2-coordination-frames.md` preserve the historical
+  coordination experiment, results, limits, and PST boundary.
 
 Current experiment result on the checked synthetic marker fixture:
 
@@ -157,8 +207,8 @@ false positives, and the hybrid still has 100 false positives plus 900 partial
 answers. It is not an independent held-out production claim.
 
 The EXM lexical candidate-admission follow-up tested all currently available
-EXM PST parsed corpora with the requested `jieba + SentencePiece` tokenizer
-plan across 50,000 generated same-corpus cases. The historical aggregate
+EXM PST parsed corpora with `Jieba + SentencePiece` candidate generation
+across 50,000 generated same-corpus cases. The historical aggregate
 artifact remains at
 `experiments/kg_ontology_v2_coordination/results/exm_lexical_ontology_50000_summary_2026-07-09.json`.
 Regex candidate admission solved 0/40,000 positive cases. Jieba + SentencePiece
@@ -183,9 +233,11 @@ remains at
 `experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json`.
 The frequency-rule arm solves 23,277/40,000 positive cases. The frozen-profile
 arm solves 33,976/40,000, 607 more than the weak-label MLP, while all three
-preserve the no-match and permission-safety cases. The frozen profile remains
-the stable candidate-admission default; this is an engineering default, not a
-production or semantic-quality claim.
+preserve the no-match and permission-safety cases. This result established the
+normative engineering default used by text-bearing candidate and evaluation
+paths: Jieba plus corpus-bound SentencePiece candidate generation followed by
+the frozen profile. It is not a canonical-write, ontology-semantic, or broad
+production-readiness claim.
 
 Issue #33 Work Package A corrects the generated report boundary. New reports
 use `development_case_count` and `evaluation_case_count`, never a holdout label
@@ -319,97 +371,139 @@ These fixtures validate contract shape and provenance. They are not claims
 that production OCR, ASR, diarization, video understanding, or enterprise mail
 quality has been achieved.
 
-### Full-PST Mail KG Fusion Rescore Without BERT
+### Default Candidate Evidence Retrieval
 
-On 2026-07-07, the #21 hard-domain full-PST baseline was rescored through a
-non-BERT candidate-only KG fusion probe. The experiment reuses the preserved
-full-PST domain-hard work directory and private manifest from checkpoint S, so
-it does not reparse the PST and does not create new raw-mail artifacts. Public
-results remain hash/status/count/timing only.
+The active retrieval method replaces the earlier thread/domain-component
+heuristic. Historical 20/100, 30/100, and 29/100 results remain useful failure
+evidence, but they are not the current method.
 
-The tested graph method is intentionally narrow:
+This is the required base for new hardness and harness evaluations. Historical
+regex-only retrieval, parser-chunk cardinality, lexical/thread transitive
+components, and ontology hard-pruning remain explicit ablation arms only; they
+must not become current gold or silently replace this method.
 
-- each email body observation is treated as a candidate graph node;
-- observations sharing a thread identifier are connected into candidate
-  components;
-- observations sharing bounded domain/conflict vocabulary terms are connected
-  when the term is not too common; and
-- hard-domain cases are rescored by whether the required evidence can be
-  reached from the ranked candidate components.
+Every index owns a `CandidateEvidenceTextPolicyRuntime` that binds the actual
+query tokenizer to Unicode NFKC/script normalization, protected ASCII
+extraction, Jieba, corpus-bound SentencePiece, frozen-profile admission, and
+exact admission/model/corpus SHA-256 hashes. The binding also pins the runtime
+id and tokenizer implementation hash; runtime code mismatch fails closed.
+Default callers provide query text only; raw token overrides, free-form or
+placeholder hashes, and regex-only declarations fail closed. Access and
+explicit context/time admissibility complete before tokenization or ontology
+resolution. Non-default transforms use `retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
 
-This is not the full FormOwl ontology integration method. It does not use
-`TypeDefinition`, the closed core supertype lattice, scoped extension/promoted
-types, `TypeAlignmentCandidate`, ontology revision pins, BERT,
-SentenceTransformer, torch, transformers, canonical KG writes, user graph
-assembly, or wiki projection. It is best understood as a deterministic
-candidate-graph structure ablation over mail observations.
+The active method is implemented by `CandidateEvidenceIndex` and treats mail
+as one adapter instance rather than the ontology or retrieval model. Every
+observation is mapped to:
 
-The first preserved-workdir non-BERT KG run improved the domain-hard baseline
-from 20/100 to 30/100. Positive evidence retrieval improved to 20/80,
-permission-denied cases remained 10/10, and no-match near-miss cases remained
-0/10. The KG graph summary had 4,965 candidate nodes, 3,460 candidate
-relations, 1,505 components, largest component size 1,193, largest component
-share 2,402 basis points, zero oversized components, and 103 searchable terms.
-Host timing for the rescore path was 14,060 ms observation loading, 44 ms graph
-build, 83 ms scoring, and 14,360 ms total, compared with the baseline import
-bottleneck of 3,160,357 ms. The canonical dev-container bind-mount rerun
-preserved the same counts but took 190,596 ms total, dominated by 190,366 ms
-observation loading; KG build and scoring were only 28 ms and 60 ms.
+```text
+one logical source item under an explicit source-identity policy
+one source-version id
+zero or more context boundaries
+one permission-scope id
+observed / known / valid time when available
+epistemic and lifecycle status when available
+lexical tokens and optional ontology evidence facets
+```
 
-A follow-up ontology-guided ablation compared the same 100 case hashes across
-three arms: baseline retrieval, non-BERT candidate KG, and ontology-guided
-non-BERT candidate KG. The ontology arm uses FormOwl `TypeDefinition` and
-`TypeMapping` contracts, maps the ten business-function lenses into the closed
-core supertype lattice as `Concept`, records a hash-bound ontology revision,
-and uses type evidence as a candidate scoring/gating signal only.
+Retrieval also requires a trusted access binding over eligible observation
+ids, source-identity policies, source versions, and permission scopes. Missing
+bindings fail closed. If both the index and request carry a binding, their
+intersection is used so the request cannot broaden the index boundary.
+Missing or empty effective access is resolved before query tokens or ontology
+signals are materialized. The evaluators therefore bind requester access before
+calling the corpus-bound tokenizer or ontology query-signal extractor.
+Logical-source equality is
+`(source_identity_policy_id, source_item_id)`, preventing equal local ids from
+different adapters or identity policies from collapsing.
 
-That ontology-guided arm did not improve quality. It scored 29/100, compared
-with 20/100 for baseline retrieval and 30/100 for the simpler candidate KG. It
-kept permission-denied probes at 10/10 and no-match probes at 0/10, but
-positive evidence retrieval fell from 20/80 in the pure KG arm to 19/80. The
-ontology summary had 10 type definitions, 10 type mappings, zero invalid
-mappings, 784 typed candidate nodes, 229 typed components, 1,571
-ontology-supported relations, 1,579 basis points type-evidence coverage, 4,181
-missing type-evidence nodes, and 412 conflicting type-evidence nodes.
-The canonical dev-container bind-mount run preserved the same counts and took
-190,695 ms total, with 190,371 ms observation loading, 70 ms KG/ontology build,
-and 127 ms scoring.
+The planner uses universal question intents: general lookup, actor/topic,
+chronology, conflict/comparison, approval/decision, and multi-source
+aggregation. It derives evidence cardinality from source-unit syntax or
+classifiers, never from a department or file extension. Identifier digits and
+duration, money, percentage, or measurement values are not evidence counts;
+this includes compact and labeled business identifiers, English and Chinese
+duration phrases, and generic Chinese classifiers that are not followed by a
+source noun. Periodic report nouns remain valid evidence units. An explicit
+count beyond the source budget fails closed. A governed query parser may
+provide the positive structured count directly, so future languages or
+interfaces do not require a new retrieval branch. Support counts and IDF
+operate on logical source items, so one PDF page split into many blocks, one
+slide split into title/body observations, or one message split into body
+segments remains one evidence item.
 
-The result is useful but still weak: candidate graph structure recovered 13
-cases that the baseline missed, but the ontology-guided variant recovered 12
-and lost one case that the simpler KG arm passed. This means the current
-ontology use is valid as a candidate-only ablation, but too shallow to improve
-hard mail evidence retrieval. The next research step should type observations
-more precisely than broad business-function lenses, test incompatible-core
-pruning on real false-positive components, and preserve ontology revision pins
-without writing canonical graph/type state.
+Permission, source-identity policy, source version, context, world time, known
+time, epistemic status, and lifecycle status are applied before
+supported-vocabulary planning, IDF, and ranking. Several observations may
+jointly cover anchors only when they belong to the same logical source item.
+Shared terms or contexts never create lexical transitive closure between
+unrelated items. Chronology excludes source items without usable time from
+earliest/latest selection. Accessible contexts and selected query contexts are
+separate; multiple selected contexts require explicit comparison
+authorization. `earliest`, `latest`, `range`, `before`, and `after` are
+distinct modes, date-only boundaries require an explicit query timezone, and
+range selection preserves requested cardinality. Logical-source and
+observation budgets are independent.
 
-A second follow-up factorial experiment tested whether simply combining more
-deterministic ontology operators would fix the quality gap. The script
-`scripts/mail_full_pst_domain_hard_ontology_factorial_eval.py` evaluates every
-ordered subset of five non-neural operators in one shared-load run:
-`broad_domain`, `skos_expansion`, `fine_type`, `relation_slot`, and
-`shacl_pruning`. With five operators this produces 326 KG arms, including the
-empty operator sequence as the KG-only control. The canonical dev-container
-run over the same preserved work directory completed and validated with no
-blockers. Results: baseline retrieval 20/100, KG-only 30/100, best factorial
-arm 30/100, best delta versus KG-only 0. Thirty-seven arms tied KG-only at
-30/100 and 289 arms scored 29/100; no ordered ontology combination beat the
-existing KG-only control. The best arm by the configured tie-breaker was the
-empty KG-only sequence. Positive, no-match, and permission-denied counts for
-the best arm remained 20/80, 0/10, and 10/10. The factorial run took 332,262 ms
-total in the dev container, dominated by 310,180 ms observation loading; KG
-build took 63 ms and all 326 arm scorings took 21,893 ms.
+The ontology arm now binds:
 
-This does not prove ontology is useless. It proves that these five lightweight
-operators, implemented as deterministic query expansion, broad/fine type
-scoring, relation-slot scoring, and SHACL-style pruning over the current
-candidate components, still do not add enough evidence-specific structure. The
-next useful ontology attempt needs stronger typed candidate extraction from
-mail content itself: explicit entities, documents, decisions, blockers,
-commitments, dates, owners, customer/vendor/supplier roles, and typed relations
-between them. Merely rearranging vocabulary-based ontology operators is now a
-measured dead end for this 100-case benchmark.
+```text
+ontology revision
+supported evidence-signal vocabulary hash
+complete TypeDefinition/TypeMapping contract hash
+CandidateEvidenceIndex
+```
+
+Only signals supported by the bound ontology contract can rerank evidence.
+Evidence facets derive from observation type, modality, and explicit semantic
+roles, so documents/slides, structured rows, audio/video, images, and events
+remain distinct. Numeric identifiers do not imply measurement. Ontology overlap
+is capped and additive; it cannot delete a lexical candidate, bypass required
+anchors, cross permission/context boundaries, or convert actor, time,
+measurement, or relation evidence facets into canonical entity types.
+
+The final implementation-bound 100-case MAY run on July 17, 2026 produced:
+
+| Arm | Total | Answerable | No-match | Permission |
+| --- | ---: | ---: | ---: | ---: |
+| governed baseline | 11/100 | 1/80 | 0/10 | 10/10 |
+| source-neutral Candidate KG | 93/100 | 73/80 | 10/10 | 10/10 |
+| contract-bound ontology rerank | 93/100 | 73/80 | 10/10 | 10/10 |
+
+Both public reports and standalone validators completed with `blockers=[]`.
+The largest candidate component was 6 observations; no oversized component was
+reported. The ontology arm lost zero Candidate KG passes and gained zero, which
+is the intended safety result for a shallow ontology: it is usable without
+hard-pruning evidence that the lexical method can support.
+
+Primary retrieval pass/fail uses manifest-bound stable logical-source gold,
+not exact parser chunk ids or source ids reconstructed from the current
+Observation layout. On this run logical-source recall was 95.00%; exact
+Observation citation recall was 94.37% and precision was 93.78%. Re-chunking
+one stable logical source therefore leaves the main score unchanged while
+stale/unmapped Observation ids, citation precision, and citation recall remain
+visible as separate quality signals.
+
+Focused tests exercise Chinese actor, chronology, and multi-record questions;
+finance reporting-period and quality-lot contexts; PDF document and PPT deck
+contexts; multimodal source families; observation-split anchor aggregation;
+logical-source IDF invariance; explicit evidence counts; permission/time/status
+admissibility; cross-context authorization; timezone-aware chronology;
+source-neutral ontology facets; and ontology binding mismatches. These are
+structural anti-overfitting tests, not claims of production accuracy on real
+finance, quality, PDF, PPT, or OCR corpora.
+
+This remains a candidate-only evidence-selection POC. It does not generate a
+business answer, read raw assets through public tools, write canonical
+graph/type state, mutate user graphs or wiki revisions, or prove production
+multilingual and multimodal quality.
 
 ## Human Operation, Annotation, And Adjudication Workflow
 
@@ -520,19 +614,25 @@ Current ablations:
   positives on the cross-type stress slice; BGE plus hard or soft ontology
   guidance reduces stress false positives to `0` and raises overall F1 from
   `0.342860` to `0.757744`.
-- In the #21 full-PST domain-hard mail comparison, deterministic candidate
-  graph componenting without BERT improved the retrieval score from 20/100 to
-  30/100, but no-match near-miss cases still scored 0/10 and total quality
-  remains far below the user's earlier 99/100 target.
-- In the same #21 comparison, ontology-guided non-BERT candidate scoring with
-  formal `TypeDefinition`/`TypeMapping` contracts scored 29/100. This is a
-  negative ablation result: the current broad business-function ontology lens
-  did not beat the simpler candidate KG structure.
-- That negative #21 ontology result is now treated as KG-first evidence only.
-  The next registered method is `docs/mail-ontology-native-factorial-design.md`:
-  it builds typed mail frames, slots, values, and relations before graph fusion
-  and evaluates a 324-arm ontology-native grid plus 8 controls on identical
-  hard-domain case hashes.
+- The earlier thread/domain-component method scored 30/100 and the broad
+  ontology variant scored 29/100. Those results identify component overreach
+  and ontology hard-pruning as historical failure modes, not active defaults.
+- The active source-neutral Candidate KG scored 93/100: 73/80 answerable,
+  10/10 no-match, and 10/10 permission. It computes evidence support and IDF
+  over logical source items, requires a trusted observation /
+  identity-policy / source-version / permission binding, and applies
+  context/time/status admissibility before planning.
+- The contract-bound ontology rerank also scored 93/100 and lost zero Candidate
+  KG passes. This shows that capped additive ontology guidance can avoid the
+  earlier regression; it does not prove incremental ontology lift.
+- Observation chunk-count invariance, multilingual query intent, explicit
+  source-unit cardinality, identifier/duration-number exclusion, periodic
+  report handling, context selection/comparison, timezone-aware chronology,
+  source-neutral modality facets, non-whitespace access axes, access-before-
+  query-vocabulary ordering, access-binding narrowing, and multi-observation
+  anchor coverage are now explicit anti-overfitting tests. The factorial
+  permission arm must execute retrieval and obtain `no_accessible_evidence`;
+  its expected label cannot auto-pass.
 - Without candidate review, package outputs would be overclaimed as truth.
 - Without permission-aware rendering, hidden endpoints leak through fusion
   candidates.
@@ -547,8 +647,16 @@ Current error analysis cases:
 | hidden_endpoint_visible_without_grant | A requester-visible fusion candidate exposes the other user's private endpoint. | Permission-aware rendering redacts hidden endpoints and asks for an access overlay. |
 | package_output_treated_as_truth | RapidFuzz, Splink, or an LLM output is treated as canonical state. | Adapter manifests and claim boundaries keep output in candidate or review packet stores. |
 | alignment_without_provenance | A type decision cannot be traced to observations or candidate records. | Extension and promoted type validators require source provenance before acceptance. |
-| full_pst_mail_component_overreach | Deterministic thread/domain-term components retrieve related but insufficient evidence for hard business questions. | Public row-derived metrics show the 30/100 baseline, no-match failures, component size, and no canonical KG/write claim; next ablation must add ontology pins and stricter candidate typing. |
-| full_pst_mail_broad_ontology_lens | A broad business-function lens maps many mail observations to `Concept` but does not distinguish the evidence relation needed by hard questions. | The ontology-guided ablation scores 29/100 versus 30/100 for pure candidate KG; future work needs finer typed atoms/relations and real false-positive pruning evidence. |
+| source_component_overreach | Thread/domain-term components retrieve related but insufficient evidence and let chunk count affect topology. | The active method has no lexical transitive closure, counts logical source items, uses conjunctive anchors, and reports a largest component of 6 on the formal run. |
+| ontology_hard_pruning | A shallow ontology deletes lexically supported evidence or maps an evidence facet to the wrong entity type. | Ontology revision, signal vocabulary, and complete type/mapping contracts are hash-bound; reranking is additive/capped and lost zero Candidate KG passes. |
+| context_union | Similar words from different periods, lots, documents, decks, or threads are combined as one answer. | Accessible and selected query contexts are separate; multiple query contexts require explicit comparison authorization before planning/ranking. |
+| observation_chunk_bias | A parser that emits more blocks changes IDF, evidence count, or selected sources. | IDF and cardinality use logical source items; a 100-extra-chunk invariance test preserves the result. |
+| missing_or_broadened_access_binding | Retrieval defaults to every indexed observation or a request overrides an index restriction. | The production index fails closed without a trusted binding and intersects request and index bindings across observation, identity-policy, version, and permission axes before planning. |
+| local_source_id_collision | Two adapters emit the same local item id and are silently treated as one source. | Logical-source identity includes the source-identity-policy id; cross-policy collision tests keep the sources distinct. |
+| explicit_cardinality_misread | A domain noun list misses “inspection reports” or “lots,” or an identifier/duration digit becomes an evidence count. | Source-unit grammar/classifier tests cover English and Chinese counts, while identifier and duration numbers are excluded and over-budget counts fail closed. |
+| chronology_offset_inversion | Local source dates from different UTC offsets are compared as if they shared one timezone. | Chronology compares instants; date-only boundaries require an explicit query timezone and range mode preserves requested cardinality. |
+| numeric_identifier_as_measurement | A lot, PO, invoice, or other numeric identifier is typed as measurement evidence. | Evidence facets use observation type, modality, and semantic roles; digits alone never activate measurement. |
+| evaluator_chunk_overfit | Exact parser Observation ids determine the main pass/fail score. | Manifests store stable logical-source gold; scoring never reconstructs it from the current chunks. Exact Observation citation recall, precision, and stale/unmapped diagnostics are separate metrics. |
 
 Known limitations:
 
@@ -559,12 +667,13 @@ Known limitations:
 - No production-sized latency/scalability benchmark is available.
 - RapidFuzz and Splink package bindings are candidate-only boundaries, not
   enterprise matching quality evidence.
-- The full-PST mail KG fusion rescore is candidate-only and non-BERT; it does
-  not yet prove ontology-aware mail reasoning, business answer generation, raw
-  mail access, canonical graph writes, wiki projection, or production readiness.
-- The ontology-native #21 factorial plan is only a pre-registered design until
-  its harness, public report validation, reviewer share-back, and any required
-  reruns are complete.
+- The 93/100 run is still one private mail-derived corpus. Structural tests
+  cover finance, quality, PDF, PPT, table, OCR-style, and Chinese query shapes,
+  but real cross-domain/multimodal corpora are still required before a
+  production generalization claim.
+- The method selects citeable evidence; it does not yet prove business answer
+  generation, raw access, canonical graph writes, wiki projection, or
+  production readiness.
 
 ## Total Acceptance Suite
 

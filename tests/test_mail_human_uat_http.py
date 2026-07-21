@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import http.client
 import json
 from pathlib import Path
@@ -58,7 +59,10 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertIn('"formowl_uat_visitor_id"', html)
         self.assertIn("!event.isComposing", html)
         self.assertIn("sort: querySort(query)", html)
+        self.assertIn("limit: 50", html)
         self.assertIn('"最近", "最新", "近期", "目前", "現在"', html)
+        self.assertIn('className = "evidence-table"', html)
+        self.assertIn('["內容", "主旨", "時間", "證據"]', html)
         self.assertNotIn('id="starter-grid"', html)
         self.assertNotIn('class="starter-card', html)
         self.assertNotIn("最近一次文顥的量產時間", html)
@@ -471,6 +475,124 @@ class MailHumanUatHttpTests(unittest.TestCase):
         )
         self.assertEqual(events[2]["note"], "料號正確，但需要再確認交期。")
         self.assertEqual(event_path.stat().st_mode & 0o777, 0o600)
+
+    def test_follow_ups_revise_task_projection_and_new_chat_resets_context(self) -> None:
+        service = _service("mail-human-uat-task-frame")
+        first = service.query(
+            {
+                "query_text": "pull-in",
+                "limit": 50,
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "source": "composer",
+            }
+        )
+        self.assertEqual(first["task_frame"]["revision"], 1)
+        self.assertEqual(first["coverage"]["cardinality_mode"], "all_matching")
+        self.assertEqual(first["projection"]["output_format"], "narrative")
+        self.assertGreater(first["result_count"], 0)
+
+        table = service.query(
+            {
+                "query_text": "我只想看到表格，不要給我寄件人跟收件人的資訊",
+                "limit": 50,
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 2,
+                "source": "composer",
+            }
+        )
+        self.assertEqual(table["task_frame"]["revision"], 2)
+        self.assertEqual(table["task_frame"]["changed_dimensions"], ["projection"])
+        self.assertEqual(table["projection"]["output_format"], "table")
+        self.assertGreater(table["result_count"], 0)
+        self.assertEqual(
+            service._task_frames_by_session_id[SESSION_ID].retrieval_query_text,
+            "pull-in",
+        )
+        self.assertNotIn("sender", table["results"][0])
+        self.assertNotIn("recipient", table["results"][0])
+
+        refined = service.query(
+            {
+                "query_text": "寄件者應該是DENNIS",
+                "limit": 50,
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 3,
+                "source": "composer",
+            }
+        )
+        self.assertEqual(refined["task_frame"]["revision"], 3)
+        self.assertIn("anchors", refined["task_frame"]["changed_dimensions"])
+        self.assertIn("retrieval_query", refined["task_frame"]["changed_dimensions"])
+        self.assertIn(
+            "DENNIS",
+            service._task_frames_by_session_id[SESSION_ID].retrieval_query_text,
+        )
+
+        new_identifier = service.query(
+            {
+                "query_text": "請查 NEW.12345 的內容",
+                "limit": 50,
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 4,
+                "source": "composer",
+            }
+        )
+        self.assertEqual(new_identifier["task_frame"]["revision"], 1)
+        identifier_frame_id = new_identifier["task_frame"]["task_frame_id"]
+
+        service.record_interaction(
+            {
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 5,
+                "action": "new_chat",
+                "details": {},
+            }
+        )
+        reset = service.query(
+            {
+                "query_text": "只想看到表格",
+                "limit": 50,
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 6,
+                "source": "composer",
+            }
+        )
+        self.assertEqual(reset["task_frame"]["revision"], 1)
+        self.assertNotEqual(reset["task_frame"]["task_frame_id"], identifier_frame_id)
+
+    def test_default_query_returns_more_than_eight_and_reports_display_coverage(
+        self,
+    ) -> None:
+        bundle = _bulk_bundle(12)
+        service = MailHumanUatService(
+            MailHumanUatHttpConfig(
+                bundle=bundle,
+                state_dir=_paths.fresh_test_dir("mail-human-uat-all-matches"),
+                fixed_now=NOW,
+            )
+        )
+
+        complete = service.query({"query_text": "BULK_MATCH_TERM"})
+        self.assertEqual(complete["total_result_count"], 12)
+        self.assertEqual(complete["displayed_result_count"], 12)
+        self.assertEqual(complete["result_count"], 12)
+        self.assertEqual(complete["coverage"]["returned_source_item_count"], 12)
+        self.assertTrue(complete["coverage"]["is_exhaustive"])
+        self.assertFalse(complete["coverage"]["has_more"])
+
+        paged = service.query({"query_text": "BULK_MATCH_TERM", "limit": 8})
+        self.assertEqual(paged["total_result_count"], 12)
+        self.assertEqual(paged["displayed_result_count"], 8)
+        self.assertEqual(paged["coverage"]["returned_source_item_count"], 12)
+        self.assertTrue(paged["coverage"]["is_exhaustive"])
+        self.assertTrue(paged["coverage"]["has_more"])
 
     def test_browser_cannot_supply_identity_or_unrecognized_controls(self) -> None:
         service = _service("mail-human-uat-identity-guard")
@@ -1111,6 +1233,45 @@ def _bundle() -> MailEvidenceBundle:
         mail_parse_run=parse_run,
         parse_warnings=[],
         created_at=NOW,
+    )
+
+
+def _bulk_bundle(count: int) -> MailEvidenceBundle:
+    base = _bundle()
+    messages = []
+    body_segments = []
+    for index in range(count):
+        message_id = f"emailmessage_bulk_{index:03d}"
+        observation_id = f"obs_bulk_{index:03d}"
+        messages.append(
+            EmailMessage(
+                email_message_id=message_id,
+                message_fingerprint="sha256:" + f"{index + 100:064x}",
+                message_id=f"message_bulk_{index:03d}",
+                archive_id="archive_bulk",
+                mailbox_id="mailbox_bulk",
+                source_observation_ids=[observation_id],
+                subject=f"Bulk evidence {index + 1}",
+                sender="source@example.com",
+                sent_at=f"2026-07-{(index % 20) + 1:02d}T08:00:00+00:00",
+            )
+        )
+        body_segments.append(
+            EmailBodySegment(
+                email_body_segment_id=f"body_bulk_{index:03d}",
+                email_message_id=message_id,
+                message_occurrence_id=f"occ_bulk_{index:03d}",
+                source_observation_id=observation_id,
+                text=f"BULK_MATCH_TERM source content number {index + 1}.",
+                body_segment_hash="sha256:" + f"{index + 1000:064x}",
+                body_segment_index=0,
+            )
+        )
+    return replace(
+        base,
+        mail_evidence_bundle_id="mailevidencebundle_bulk_uat",
+        messages=messages,
+        body_segments=body_segments,
     )
 
 

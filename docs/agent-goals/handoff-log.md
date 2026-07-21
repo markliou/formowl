@@ -186,92 +186,115 @@ Lifecycle label: `active`.
   check, and `git diff --check`. Production/API, evaluator/privacy, and
   shell/safety reviewers returned 3/3 `RELEASE_DECISION: AGREE`.
 
-## 2026-07-18 — May mail human UAT branch
+## 2026-07-15 — Candidate Assertion and Domain Pack minimum core
 
-- Added the temporary `uat/may-mail-web` branch and worktree with a browser
-  surface that bypasses ChatGPT and queries one server-bound May mail evidence
-  bundle plus private UAT-upload bundles. Browser requests cannot choose user,
-  workspace, grant, parser, storage, or worker identity.
-- The initial `c81e6c2` baseline used a temporary access code, exposed bounded
-  cited evidence, supported relevance/recent sorting, private tester feedback,
-  and direct multi-file EML upload. New EML was parsed into temporary searchable
-  evidence immediately and persisted by content hash in the private UAT state
-  volume. The later follow-up entry below records the current no-login design.
-- That initial UAT path accepted `.eml` only, enforced count, size, and
-  authentication limits, rejected unsupported formats, deduplicated identical
-  bytes, did not index attachment contents, and performed no Project/Wiki,
-  candidate/canonical graph, or autonomous business-decision write.
-- Private corpus data, bundle cache, uploaded EML, the initial access-code
-  configuration, and UAT event logs remain outside Git. The running container
-  uses read-only source/corpus/cache mounts and one writable private UAT state
-  mount.
-- Reviewer fixes now prune filename-bearing inline parts and complete
-  `message/rfc822` attachment subtrees from the searchable body, and publish
-  private EML only after permissions are set on the temporary file so failures
-  leave no restart-visible partial write.
-- Canonical dev-container verification passed 16 focused tests and 746 full
-  tests. Full Ruff check, 256-file format check, and `git diff --check` passed.
-  Engineering, governance/safety, and May-UAT reviewers returned 3/3
-  `RELEASE_DECISION: AGREE` after the attachment and partial-write blockers were
-  fixed.
+- Completed the bounded implementation in isolated worktree
+  `/tmp/formowl-candidate-assertion-domain-pack` on branch
+  `goal/candidate-assertion-domain-pack-core`; the primary working tree was not
+  modified.
+- Procurement mail-shaped and finance ERP/application fixtures use one
+  source-neutral `Observation -> CandidateBusinessObject ->
+  CandidateAssertion` pipeline with all five assertion kinds. Scoped Domain
+  Packs bind core mappings, ontology revision, provenance, and normalized
+  content hash.
+- Persistence is atomic and candidate-only. Reviewer hardening closed
+  participant permission/source-lineage bypasses, same-ID overwrite,
+  tuple/backend/SQL public-safety bypasses, and legacy stable-ID compatibility.
+  No canonical graph/type, user-graph, wiki, or external-system write is
+  authorized.
+- Canonical verification passed 764 unit tests, full Ruff check, 256-file
+  format check, and `git diff --check`. Planck, Bohr, and Kant returned 3/3
+  `RELEASE_DECISION: AGREE`.
+- The branch remains uncommitted and ready for deliberate integration. The
+  durable KG goal returns to the separate four-gate broad real-evidence blocker.
 
-## 2026-07-18 — Shared mail UAT chat follow-up
+## 2026-07-16 — Issue #16 temporal-evidential candidate graph POC
 
-- This follow-up supersedes the earlier access-boundary description for the
-  current `uat/may-mail-web` branch head. The browser now opens directly into a
-  shared FormOwl-style chat for May, Maggie, and related colleagues; there is no
-  login, access code, or browser-supplied identity.
-- Mail upload is opened only when needed through same-origin `/upload` inside a
-  custom iframe. The parent accepts completion/close messages only from the
-  expected origin and iframe window. Query, upload, summary, and feedback remain
-  limited to this temporary shared UAT surface and do not write Project, Wiki,
-  candidate/canonical graph, or production mail systems.
-- Browser upload preflight enforces EML-only, at most 20 files, 25 MB per file,
-  and 60 MB combined before the server's 64 MB multipart request boundary.
-  Questions asking for the latest or most recent evidence use recent ordering.
-- Final verification for this follow-up passed 17 focused and 747 full Python
-  tests in `formowl-dev:local`, the isolated Node 20 embedded-JavaScript smoke,
-  full Ruff check, 335-file format check, and `git diff --check`. The
-  engineering, governance/safety, and UAT UX reviewers returned 3/3
-  `RELEASE_DECISION: AGREE` with no blocking findings.
-- Commit `847de94` was pushed to `uat/may-mail-web` and loaded by the existing
-  `formowl-may-uat` container. Live readiness reports
-  `authentication_required=false`, `shared_uat=true`, and
-  `upload_supported=true`; `/` serves the chat surface with frame embedding
-  denied, while `/upload` serves the same-origin iframe surface.
+- Extended the same isolated worktree and branch with one normalized
+  `TemporalContext`, Domain Pack temporal-role mappings, independent
+  epistemic/lifecycle axes, and candidate-only temporal views for
+  `as_of_world_time` and `known_as_of`.
+- Procurement and finance continue through the same source-neutral pipeline.
+  Source capture is bound to Observation lineage; candidate materialization is
+  a separate required knowledge boundary; missing source or materialization
+  time fails closed. Due dates do not hide already known future commitments.
+- The POC remains candidate-only: no canonical write, database migration,
+  SHACL runtime, full interval algebra, causal inference, temporal entity
+  resolution, or broad production-hardening claim.
+- Canonical verification passed 774 unit tests, full Ruff check, 338-file
+  format check, and `git diff --check`. Hubble, Aristotle, and Chandrasekhar
+  returned 3/3 `RELEASE_DECISION: AGREE`.
+- The Issue #16 scope is durable in the work board. The remote GitHub comment
+  could not be sent because both the GitHub connector and local `gh` token are
+  invalidated; re-authentication is required before synchronization.
 
-## 2026-07-18 — ChatGPT-style UAT UX and behavior capture
+## 2026-07-16 — Original MAY 100-case / 50,000-variant retest restored
 
-- Reworked the temporary shared UAT into a higher-fidelity, FormOwl-branded
-  ChatGPT-style light shell with sidebar/history, centered new-chat composer,
-  starter prompts, bottom-docked active composer, user/assistant messages,
-  accessible controls, mobile drawer behavior, and the same-origin upload
-  iframe.
-- Private UX evidence now records submitted questions before retrieval,
-  correlated result events, feedback, and a closed set of bounded exploration
-  actions with anonymous visitor/session labels plus a monotonic per-tab
-  sequence. Draft text, keystrokes, click coordinates, filenames, IP identity,
-  and device fingerprints are not recorded.
-- Every POST requires same-origin `Origin`/`Host`; cross-site fetch metadata is
-  rejected. Anonymous visitor labels rotate after 30 days, and the mode-0600
-  private event log enforces 30-day retention plus a 16 MiB cap.
-- Canonical verification passed 24 focused and 754 full Python tests, the
-  isolated Node 20 embedded-JavaScript smoke, full Ruff check/format check for
-  256 files, and `git diff --check`. Engineering, governance/privacy, and UAT
-  UX reviewers returned 3/3 `RELEASE_DECISION: AGREE`.
+- The exact reviewer-grounded MAY business-question evaluation can run again
+  against the authorized private corpus. The failure was a false-positive
+  public-safety regression: ordinary mail disclaimer and telephone prose was
+  classified as SQL by over-broad `COPY ... FROM/TO` and `CALL` patterns.
+- The SQL patterns were narrowed to statement-shaped syntax while retaining
+  rejection of actual `COPY ... TO STDOUT`, `COPY ... FROM STDIN/file`, and
+  `CALL procedure()` payloads. Private mail text remains private; public report
+  leak validation remains enabled.
+- The exact 100 source questions and 500 deterministic variants per question
+  completed and independently validated with zero blockers. Directly
+  comparable results are unchanged from the accepted prior run: governed mail
+  retrieval 11/100, Candidate KG 19/100, and ontology-guided KG 19/100. This
+  removes the operational regression but does not improve business-answer
+  quality.
+- Canonical verification after the fix passed 776 dev-container tests, full
+  Ruff check and format check, and `git diff --check`.
 
-## 2026-07-18 — Broader UAT source upload iteration
+## 2026-07-16 — Default tokenizer/admission made normative and retested
 
-- Removed all starter/example prompt cards from the shared UAT landing page so
-  colleagues must compose their own requests and the private behavior log can
-  capture their natural instruction patterns.
-- Generalized the private upload/index path from EML-only to EML, whole PST
-  batches, text-based PDF, and TXT. PST uses the existing `readpst` extraction
-  adapter, PDF uses `pdftotext`, and TXT decodes UTF-8, UTF-16, or CP950.
-  Scanned-PDF OCR and automatic indexing of EML-embedded attachments remain
-  explicit non-capabilities for this temporary surface.
-- Added a dedicated `formowl-may-uat:local` image tag so parallel agents can
-  rebuild `formowl-dev:local` without removing UAT parser dependencies.
-  Speed-focused verification passed 27 HTTP/upload tests, the embedded
-  JavaScript smoke, a real text-PDF parser smoke, and `git diff --check`; the
-  full suite and reviewer gate were intentionally not run for this iteration.
+- Rewrote the main specification, resource-extraction specification, README,
+  KG method, multimodal term-extraction decision, and active experiment README
+  so every text-bearing Observation defaults to Unicode/script normalization,
+  protected ASCII extraction, Jieba, corpus-bound SentencePiece, and
+  frozen-profile admission. Silent regex-only default behavior is forbidden.
+- The original MAY Candidate KG, ontology, factorial consumers, and grounded
+  50,000-variant evaluator now use the same hash-bound query/corpus tokenizer
+  path. Candidate/evaluation policy identity binds normalization,
+  segmentation, admission, model, and corpus hashes. No canonical writes were
+  added.
+- Focused dev-container tests passed: KG evaluator 9, ontology evaluator 9,
+  factorial evaluator 5, and ChatGPT 50,000 evaluator 17. The exact 100
+  questions times 500 variants completed and the independent saved-report
+  validator returned `blockers=[]`.
+- Result: mail evidence retrieval stayed 5,500/50,000; Candidate KG changed
+  from 9,500 to 8,500; ontology changed from 9,500 to 10,000 only because it
+  passed all no-match and permission variants while solving 0/40,000
+  answerable variants. Candidate grounded usefulness fell from 0.078432 to
+  0.070775; ontology grounded usefulness fell to 0. The default tokenizer is
+  corrected, but graph component collapse, rejection calibration, evidence
+  ranking, and ontology over-pruning remain the actual quality blockers.
+
+## 2026-07-17 — Source-neutral MAY retrieval target completed
+
+- The final private 100-case MAY run scored 93/100 for both Candidate evidence
+  retrieval and the contract-bound ontology rerank: 73/80 answerable, 10/10
+  no-match, and 10/10 permission. Both saved-report validators returned
+  `blockers=[]`; no private question, mail content, answer, or identifier was
+  added to tracked output.
+- The default counts logical source items and resolves exact immutable access,
+  context, and time before vocabulary. Raw query text controls only intent,
+  count, and chronology; anchors come from runtime-produced tokens or named
+  `retrieve_ablation` extensions. Cross-context authorization is an actual
+  boolean, and ontology remains a capped additive rerank.
+- The grounded 50,000 evaluator now uses the same `CandidateEvidenceIndex`
+  path. All 18 active retrieval documents are rewritten to reject regex-only,
+  parser-chunk, component-union, raw-term bypass, and ontology hard-pruning as
+  defaults; onboarding tests enforce that inventory.
+- Verification passed 147 focused tests, the exact 11-test hardness/harness
+  command, 884 full canonical dev-container tests, full Ruff and 264-file
+  format checks, and `git diff --check`. No PST, MSG, private question, answer,
+  or generated evaluation artifact is tracked.
+- Herschel, Popper, and Boole returned 3/3 `RELEASE_DECISION: AGREE`.
+- This remains candidate-only evidence selection: no canonical graph/type,
+  user-graph, wiki, raw-access, or external-system write is authorized, and the
+  four broad real-evidence acceptance gates remain blocked.
+## 2026-07-21 — Source-neutral Task Answering methodology in progress
+
+- Isolated branch `goal/task-answering-methodology` now separates TaskFrame, all-matching retrieval coverage, source-item field assembly, answerability, and content-first projection across mail/PDF/TXT/XLSX/application tests; 895 canonical tests plus full Ruff/345-file format checks pass, and only the 3-reviewer gate remains.

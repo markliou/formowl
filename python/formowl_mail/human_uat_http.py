@@ -15,6 +15,13 @@ from typing import Any, Mapping, Sequence
 from urllib.parse import urlparse
 
 from formowl_contract import ContractValidationError, now_iso, sha256_json
+from formowl_graph import (
+    EvidenceRequirement,
+    ProjectionSpec,
+    TaskAnchor,
+    TaskFrame,
+    revise_task_frame,
+)
 
 from ._guards import assert_public_payload_safe, safe_public_string
 from .bundle import MailEvidenceBundle
@@ -34,14 +41,37 @@ _MAX_UPLOAD_FILE_BYTES = 500 * 1024 * 1024
 _MAX_UPLOAD_FILES = 20
 _MAX_QUERY_CHARS = 500
 _MAX_NOTE_CHARS = 1000
-_MAX_RESULT_LIMIT = 20
+_DEFAULT_RESULT_LIMIT = 50
+_MAX_RESULT_LIMIT = 100
 _MAX_EVENT_SEQUENCE = (2**53) - 1
 _DEFAULT_EVENT_RETENTION_DAYS = 30
 _DEFAULT_MAX_EVENT_STORE_BYTES = 16 * 1024 * 1024
-_RETRIEVAL_CANDIDATE_LIMIT = 200
 _QUERY_ID_RE = re.compile(r"^uatquery_[0-9a-f]{24}$")
 _VISITOR_ID_RE = re.compile(r"^uatvisitor_[0-9a-f]{32}$")
 _SESSION_ID_RE = re.compile(r"^uatsession_[0-9a-f]{32}$")
+_EXPLICIT_IDENTIFIER_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])(?=[A-Za-z0-9_.-]{4,}(?![A-Za-z0-9_.-]))"
+    r"(?=[A-Za-z0-9_.-]*\d)[A-Za-z0-9_.-]+",
+)
+_PROJECTION_FORMAT_TERMS = {
+    "table": ("表格", "table", "tabular"),
+    "list": ("條列", "清單", "列表", "list", "bullet"),
+    "timeline": ("時間軸", "時序", "timeline"),
+    "narrative": ("敘述", "摘要", "narrative", "summary"),
+}
+_FOLLOW_UP_MARKERS = (
+    "應該是",
+    "只看",
+    "只想",
+    "不要",
+    "改成",
+    "補充",
+    "另外",
+    "同一",
+    "這個",
+    "那個",
+    "來自",
+)
 _VERDICTS = {
     "correct",
     "partially_correct",
@@ -180,6 +210,7 @@ class MailHumanUatService:
         self._interaction_counts: Counter[str] = Counter()
         self._anonymous_visitor_ids: set[str] = set()
         self._anonymous_session_ids: set[str] = set()
+        self._task_frames_by_session_id: dict[str, TaskFrame] = {}
         self._query_count = 0
         self._feedback_count = 0
         self._lock = threading.RLock()
@@ -231,14 +262,14 @@ class MailHumanUatService:
             "query_text",
             max_chars=_MAX_QUERY_CHARS,
         )
-        limit = payload.get("limit", 8)
+        limit = payload.get("limit", _DEFAULT_RESULT_LIMIT)
         if (
             not isinstance(limit, int)
             or isinstance(limit, bool)
             or limit < 1
             or limit > _MAX_RESULT_LIMIT
         ):
-            raise ContractValidationError("limit must be between 1 and 20")
+            raise ContractValidationError("limit must be between 1 and 100")
         sort = payload.get("sort", "relevance")
         if sort not in _SORT_OPTIONS:
             raise ContractValidationError("sort must be relevance or recent")
@@ -246,6 +277,21 @@ class MailHumanUatService:
         if source not in _QUERY_SOURCES:
             raise ContractValidationError("query source is invalid")
         tracking = _validated_tracking_fields(payload)
+        session_id = tracking.get("session_id")
+        with self._lock:
+            prior_task_frame = (
+                self._task_frames_by_session_id.get(session_id)
+                if isinstance(session_id, str)
+                else None
+            )
+        task_frame, changed_dimensions = _resolve_task_frame(
+            query_text,
+            page_size=limit,
+            prior=prior_task_frame,
+        )
+        if isinstance(session_id, str):
+            with self._lock:
+                self._task_frames_by_session_id[session_id] = task_frame
         query_id = f"uatquery_{secrets.token_hex(12)}"
         submitted_at = _timestamp(self.config.fixed_now)
         query_hash = sha256_json(query_text)
@@ -256,6 +302,11 @@ class MailHumanUatService:
                 "query_id": query_id,
                 "query_text": query_text,
                 "query_hash": query_hash,
+                "effective_query_hash": sha256_json(task_frame.retrieval_query_text),
+                "task_frame_id": task_frame.task_frame_id,
+                "task_frame_revision": task_frame.revision,
+                "task_frame_changed_dimensions": list(changed_dimensions),
+                "projection_format": task_frame.projection.output_format,
                 "sort": sort,
                 "source": source,
                 **tracking,
@@ -266,22 +317,27 @@ class MailHumanUatService:
             self._query_count += 1
             self._remember_tracking(tracking)
 
-        expanded_query, filter_groups = _expand_business_query(query_text)
+        expanded_query, filter_groups = _expand_business_query(task_frame.retrieval_query_text)
         bundle = self.config.bundle
         actor = bundle.mail_import_session
+        with self._lock:
+            all_bundles = self._all_bundles
+        retrieval_candidate_limit = max(
+            1,
+            sum(len(candidate_bundle.body_segments) for candidate_bundle in all_bundles),
+        )
         base_result = self._base_gateway.query_mail_evidence(
             query_text=expanded_query,
             requester_user_id=actor.owner_user_id,
             workspace_id=actor.workspace_id,
             session_id="session_mail_human_uat",
             mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
-            limit=_RETRIEVAL_CANDIDATE_LIMIT,
+            limit=retrieval_candidate_limit,
             now=self.config.fixed_now,
         ).to_dict()
         with self._lock:
             upload_gateway = self._upload_gateway
             message_by_id = self._message_by_id
-            all_bundles = self._all_bundles
             uploaded_message_ids = self._uploaded_message_ids
             uploaded_bundle_ids = self._uploaded_bundle_ids
             uploaded_file_count = self._uploaded_resource_count
@@ -294,7 +350,7 @@ class MailHumanUatService:
                     workspace_id=actor.workspace_id,
                     session_id="session_mail_human_uat",
                     mail_evidence_bundle_id=bundle_id,
-                    limit=_RETRIEVAL_CANDIDATE_LIMIT,
+                    limit=retrieval_candidate_limit,
                     now=self.config.fixed_now,
                 ).to_dict()
                 for bundle_id in uploaded_bundle_ids
@@ -333,7 +389,10 @@ class MailHumanUatService:
                 "subject": subject,
                 "snippet": _context_window(
                     snippet_text,
-                    needles=(*matched_terms, *_query_needles(query_text)),
+                    needles=(
+                        *matched_terms,
+                        *_query_needles(task_frame.retrieval_query_text),
+                    ),
                 ),
                 "sent_at": message.sent_at if message is not None else None,
                 "score": int(snippet.get("score", 0)),
@@ -345,6 +404,7 @@ class MailHumanUatService:
                 "source_kind": (
                     "uploaded_uat" if email_message_id in uploaded_message_ids else "preloaded"
                 ),
+                "_source_item_id": email_message_id,
             }
             (
                 result["_subject_business_matches"],
@@ -355,7 +415,7 @@ class MailHumanUatService:
         if any(gateway_result["status"] == "ok" for gateway_result in gateway_results):
             results.extend(
                 self._exact_subject_results(
-                    query_text=query_text,
+                    query_text=task_frame.retrieval_query_text,
                     filter_groups=filter_groups,
                     bundles=all_bundles,
                     uploaded_message_ids=uploaded_message_ids,
@@ -382,25 +442,29 @@ class MailHumanUatService:
                 ),
                 reverse=True,
             )
-        results = results[:limit]
-        for result in results:
+        total_result_count = len(results)
+        displayed_results = results[:limit]
+        for result in displayed_results:
             result.pop("_subject_business_matches", None)
             result.pop("_snippet_business_matches", None)
+            result.pop("_source_item_id", None)
 
         generated_at = _timestamp(self.config.fixed_now)
         warnings = [
             warning for gateway_result in gateway_results for warning in gateway_result["warnings"]
         ]
-        if results:
+        if displayed_results:
             warnings = [
                 warning for warning in warnings if warning != "no_visible_mail_evidence_matched"
             ]
             if any(result["content_redacted"] for result in results):
                 warnings.append("unsafe_mail_evidence_content_redacted")
-        if filter_groups and evidence_snippets and not results:
+        if filter_groups and evidence_snippets and not displayed_results:
             warnings.append("business_filter_no_exact_match")
-        if not results and "no_visible_mail_evidence_matched" not in warnings:
+        if not displayed_results and "no_visible_mail_evidence_matched" not in warnings:
             warnings.append("no_visible_mail_evidence_matched")
+        has_more = total_result_count > len(displayed_results)
+        answerability_status = "sufficient_evidence" if displayed_results else "target_not_found"
         response = {
             "status": (
                 "ok"
@@ -411,13 +475,40 @@ class MailHumanUatService:
             "query_hash": query_hash,
             "generated_at": generated_at,
             "sort": sort,
-            "result_count": len(results),
-            "results": results,
+            "result_count": len(displayed_results),
+            "total_result_count": total_result_count,
+            "displayed_result_count": len(displayed_results),
+            "results": displayed_results,
             "warnings": sorted(set(warnings)),
-            "notice": (
-                "這是郵件證據的只讀測試結果；排程不等於已完成量產，"
-                "Pull-in 與交期仍須以原始郵件內容確認。"
-            ),
+            "notice": "以下先呈現來源內容；主旨與時間僅作為次要脈絡。",
+            "task_frame": {
+                "task_frame_id": task_frame.task_frame_id,
+                "revision": task_frame.revision,
+                "changed_dimensions": list(changed_dimensions),
+            },
+            "coverage": {
+                "cardinality_mode": (task_frame.evidence_requirement.cardinality_mode),
+                "total_source_item_count": total_result_count,
+                "returned_source_item_count": total_result_count,
+                "displayed_source_item_count": len(displayed_results),
+                "is_exhaustive": True,
+                "has_more": has_more,
+            },
+            "answerability": {
+                "status": answerability_status,
+                "reason_codes": (
+                    ["evidence_requirement_satisfied"]
+                    if displayed_results
+                    else ["no_matching_target"]
+                ),
+            },
+            "projection": {
+                "output_format": task_frame.projection.output_format,
+                "primary_fields": list(task_frame.projection.primary_fields),
+                "secondary_fields": list(task_frame.projection.secondary_fields),
+                "page_size": task_frame.projection.page_size,
+                "page_offset": task_frame.projection.page_offset,
+            },
             "claim_boundary": {
                 "chatgpt_bypassed": True,
                 "mail_upload_performed": False,
@@ -435,12 +526,17 @@ class MailHumanUatService:
                 "event_type": "query_result",
                 "created_at": generated_at,
                 "query_id": query_id,
-                "result_count": len(results),
+                "result_count": len(displayed_results),
+                "total_result_count": total_result_count,
+                "has_more": has_more,
+                "answerability_status": answerability_status,
                 "citation_ids": [
-                    item["citation"]["citation_id"] for item in results if item.get("citation")
+                    item["citation"]["citation_id"]
+                    for item in displayed_results
+                    if item.get("citation")
                 ],
                 "has_uploaded_result": any(
-                    item["source_kind"] == "uploaded_uat" for item in results
+                    item["source_kind"] == "uploaded_uat" for item in displayed_results
                 ),
             }
         )
@@ -525,6 +621,7 @@ class MailHumanUatService:
                         if message.email_message_id in uploaded_message_ids
                         else "preloaded"
                     ),
+                    "_source_item_id": message.email_message_id,
                 }
                 (
                     result["_subject_business_matches"],
@@ -692,6 +789,8 @@ class MailHumanUatService:
         with self._lock:
             self._interaction_counts[str(action)] += 1
             self._remember_tracking(tracking)
+            if action == "new_chat":
+                self._task_frames_by_session_id.pop(tracking["session_id"], None)
         response = {
             "status": "recorded",
             "action": action,
@@ -1357,6 +1456,118 @@ def _query_needles(query_text: str) -> tuple[str, ...]:
     return tuple(values[:12])
 
 
+def _resolve_task_frame(
+    query_text: str,
+    *,
+    page_size: int,
+    prior: TaskFrame | None,
+) -> tuple[TaskFrame, tuple[str, ...]]:
+    projection_format = _requested_projection_format(query_text)
+    projection = ProjectionSpec(
+        output_format=projection_format or "narrative",
+        primary_fields=("content",),
+        secondary_fields=("subject", "sent_at"),
+        page_size=page_size,
+    )
+    if prior is None:
+        return _new_task_frame(query_text, projection=projection), (
+            "task",
+            "evidence_requirement",
+            "projection",
+        )
+
+    if projection_format is not None and not _explicit_identifiers(query_text):
+        revision = revise_task_frame(
+            prior,
+            query_text,
+            projection=projection,
+        )
+        return revision.task_frame, revision.changed_dimensions
+
+    if _should_refine_task(prior, query_text):
+        follow_up_anchor = TaskAnchor(
+            anchor_id=f"follow_up_{prior.revision + 1}",
+            anchor_type="refinement",
+            value=query_text,
+        )
+        revision = revise_task_frame(
+            prior,
+            query_text,
+            anchor_updates=(follow_up_anchor,),
+            projection=ProjectionSpec(
+                output_format=projection_format or prior.projection.output_format,
+                primary_fields=("content",),
+                secondary_fields=("subject", "sent_at"),
+                page_size=page_size,
+            ),
+            retrieval_query_text=f"{prior.retrieval_query_text} {query_text}",
+        )
+        return revision.task_frame, revision.changed_dimensions
+
+    return _new_task_frame(query_text, projection=projection), (
+        "task",
+        "evidence_requirement",
+        "projection",
+    )
+
+
+def _new_task_frame(query_text: str, *, projection: ProjectionSpec) -> TaskFrame:
+    task_frame_id = (
+        "task_frame_"
+        + sha256_json(
+            {
+                "query_text": query_text,
+                "projection": projection.output_format,
+                "page_size": projection.page_size,
+            }
+        ).removeprefix("sha256:")[:24]
+    )
+    return TaskFrame(
+        task_frame_id=task_frame_id,
+        revision=1,
+        retrieval_query_text=query_text,
+        latest_utterance=query_text,
+        anchors=(
+            TaskAnchor(
+                anchor_id="initial_request",
+                anchor_type="user_request",
+                value=query_text,
+            ),
+        ),
+        hard_constraints=(),
+        evidence_requirement=EvidenceRequirement(
+            requirement_id=f"evidence_requirement_{task_frame_id[-12:]}",
+            cardinality_mode="all_matching",
+        ),
+        projection=projection,
+    )
+
+
+def _requested_projection_format(query_text: str) -> str | None:
+    normalized = query_text.casefold()
+    for output_format, terms in _PROJECTION_FORMAT_TERMS.items():
+        if any(term in normalized for term in terms):
+            return output_format
+    return None
+
+
+def _explicit_identifiers(query_text: str) -> frozenset[str]:
+    return frozenset(
+        match.group(0).casefold() for match in _EXPLICIT_IDENTIFIER_RE.finditer(query_text)
+    )
+
+
+def _should_refine_task(prior: TaskFrame, query_text: str) -> bool:
+    current_identifiers = _explicit_identifiers(query_text)
+    prior_identifiers = _explicit_identifiers(prior.retrieval_query_text)
+    if current_identifiers:
+        return current_identifiers.issubset(prior_identifiers)
+    normalized = query_text.casefold()
+    if any(marker in normalized for marker in _FOLLOW_UP_MARKERS):
+        return True
+    return len(query_text.strip()) <= 24
+
+
 def _context_window(text: str, *, needles: tuple[str, ...], max_chars: int = 1600) -> str:
     if len(text) <= max_chars:
         return text
@@ -1386,15 +1597,27 @@ def _public_citation(citation: Mapping[str, Any] | None) -> dict[str, Any] | Non
 
 
 def _deduplicate_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    selected: dict[tuple[Any, Any, Any], dict[str, Any]] = {}
+    selected: dict[tuple[Any, ...], dict[str, Any]] = {}
     for result in results:
+        source_item_id = result.get("_source_item_id")
         key = (
-            result.get("subject"),
-            result.get("sent_at"),
-            result.get("snippet"),
+            ("source_item", source_item_id)
+            if source_item_id
+            else (
+                "rendered",
+                result.get("subject"),
+                result.get("sent_at"),
+                result.get("snippet"),
+            )
         )
         current = selected.get(key)
-        if current is None or int(result["score"]) > int(current["score"]):
+        if current is None or (
+            int(result["score"]),
+            len(str(result.get("snippet", ""))),
+        ) > (
+            int(current["score"]),
+            len(str(current.get("snippet", ""))),
+        ):
             selected[key] = result
     return list(selected.values())
 
@@ -1562,7 +1785,30 @@ _CHAT_UAT_HTML = """<!doctype html>
     }
     .evidence h3 { margin: 0; font-size: 14px; line-height: 1.5; }
     .evidence-meta { margin: 5px 0 8px; color: var(--muted); font-size: 12px; }
-    .evidence p { margin: 0; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .evidence-content {
+      margin: 0 0 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere;
+    }
+    .evidence-table-wrap {
+      width: 100%; margin-top: 16px; overflow-x: auto;
+      border: 1px solid var(--line); border-radius: 14px; background: #fff;
+    }
+    .evidence-table {
+      width: 100%; min-width: 720px; border-collapse: collapse; table-layout: fixed;
+    }
+    .evidence-table th, .evidence-table td {
+      padding: 11px 12px; border-bottom: 1px solid var(--line);
+      text-align: left; vertical-align: top; overflow-wrap: anywhere;
+    }
+    .evidence-table th {
+      background: #f7f7f7; color: #555; font-size: 12px; font-weight: 650;
+    }
+    .evidence-table td { font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+    .evidence-table th:first-child, .evidence-table td:first-child { width: 48%; }
+    .evidence-table th:nth-child(2), .evidence-table td:nth-child(2) { width: 23%; }
+    .evidence-table th:nth-child(3), .evidence-table td:nth-child(3) { width: 17%; }
+    .evidence-table th:nth-child(4), .evidence-table td:nth-child(4) { width: 12%; }
+    .evidence-table tbody tr:last-child td { border-bottom: 0; }
+    .table-citation { color: #777; font-size: 11px; }
     .badge {
       display: inline-block; margin-left: 7px; padding: 2px 7px; border-radius: 999px;
       background: #e8f6f1; color: #08745a; font-size: 10px; font-weight: 650;
@@ -1995,18 +2241,24 @@ _CHAT_UAT_HTML = """<!doctype html>
 
     function renderAssistantResult(payload, holder) {
       holder.replaceChildren();
+      const totalCount = Number.isInteger(payload.total_result_count)
+        ? payload.total_result_count
+        : payload.results.length;
+      const displayedCount = Number.isInteger(payload.displayed_result_count)
+        ? payload.displayed_result_count
+        : payload.results.length;
       const title = document.createElement("div");
       title.className = "assistant-title";
       title.textContent = payload.results.length
-        ? `我找到 ${payload.result_count} 筆相關郵件證據。`
-        : "目前沒有找到符合的郵件證據。";
+        ? `共找到 ${totalCount} 筆相關來源內容，目前顯示 ${displayedCount} 筆。`
+        : "目前沒有找到符合的來源內容。";
       holder.appendChild(title);
 
       const explanation = document.createElement("div");
       explanation.className = "assistant-text";
       explanation.textContent = payload.results.length
         ? payload.notice
-        : "你可以改用 PO、料號或供應商等明確關鍵字，或先加入新的測試資料。";
+        : "你可以改用更明確的名稱、編號、日期或內容關鍵字，或先加入新的測試資料。";
       holder.appendChild(explanation);
 
       if (!payload.results.length) {
@@ -2014,17 +2266,57 @@ _CHAT_UAT_HTML = """<!doctype html>
         actions.className = "feedback-row";
         const upload = document.createElement("button");
         upload.type = "button";
-        upload.title = "加入新郵件";
+        upload.title = "加入新資料";
         upload.textContent = "＋";
         upload.addEventListener("click", () => openUpload("no_result"));
         actions.appendChild(upload);
         holder.appendChild(actions);
+      } else if (payload.projection && payload.projection.output_format === "table") {
+        const tableWrap = document.createElement("div");
+        tableWrap.className = "evidence-table-wrap";
+        const table = document.createElement("table");
+        table.className = "evidence-table";
+        const head = document.createElement("thead");
+        const headRow = document.createElement("tr");
+        for (const label of ["內容", "主旨", "時間", "證據"]) {
+          const cell = document.createElement("th");
+          cell.textContent = label;
+          headRow.appendChild(cell);
+        }
+        head.appendChild(headRow);
+        const body = document.createElement("tbody");
+        for (const item of payload.results) {
+          const row = document.createElement("tr");
+          const content = document.createElement("td");
+          content.textContent = item.snippet;
+          const subject = document.createElement("td");
+          subject.textContent = item.subject;
+          if (item.source_kind === "uploaded_uat") {
+            const badge = document.createElement("span");
+            badge.className = "badge";
+            badge.textContent = "測試上傳";
+            subject.appendChild(badge);
+          }
+          const time = document.createElement("td");
+          time.textContent = item.sent_at || "未提供";
+          const citation = document.createElement("td");
+          citation.className = "table-citation";
+          citation.textContent = item.citation ? item.citation.citation_id : "—";
+          row.append(content, subject, time, citation);
+          body.appendChild(row);
+        }
+        table.append(head, body);
+        tableWrap.appendChild(table);
+        holder.appendChild(tableWrap);
       } else {
         const list = document.createElement("div");
         list.className = "evidence-list";
         for (const item of payload.results) {
           const card = document.createElement("article");
           card.className = "evidence";
+          const snippet = document.createElement("p");
+          snippet.className = "evidence-content";
+          snippet.textContent = item.snippet;
           const subject = document.createElement("h3");
           subject.textContent = item.subject;
           if (item.source_kind === "uploaded_uat") {
@@ -2036,9 +2328,7 @@ _CHAT_UAT_HTML = """<!doctype html>
           const meta = document.createElement("div");
           meta.className = "evidence-meta";
           meta.textContent = item.sent_at ? `郵件時間：${item.sent_at}` : "郵件時間：未提供";
-          const snippet = document.createElement("p");
-          snippet.textContent = item.snippet;
-          card.append(subject, meta, snippet);
+          card.append(snippet, subject, meta);
           if (item.citation) {
             const citation = document.createElement("div");
             citation.className = "citation";
@@ -2064,7 +2354,7 @@ _CHAT_UAT_HTML = """<!doctype html>
       const { bubble } = createMessage("assistant");
       const loading = document.createElement("div");
       loading.className = "assistant-text";
-      loading.textContent = "正在查詢郵件證據…";
+      loading.textContent = "正在查詢資料內容…";
       bubble.appendChild(loading);
       scrollToLatest();
       try {
@@ -2073,7 +2363,7 @@ _CHAT_UAT_HTML = """<!doctype html>
           body: JSON.stringify({
             query_text: query,
             sort: querySort(query),
-            limit: 8,
+            limit: 50,
             visitor_id: visitorId,
             session_id: sessionId,
             sequence: nextEventSequence(),

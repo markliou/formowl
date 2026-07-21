@@ -14,6 +14,7 @@ from .primitives import (
     sha256_json as sha256_json,
     stable_asset_id as stable_asset_id,
     stable_asset_metadata_hash as stable_asset_metadata_hash,
+    stable_candidate_assertion_id as stable_candidate_assertion_id,
     stable_candidate_atom_id as stable_candidate_atom_id,
     stable_candidate_relation_id as stable_candidate_relation_id,
     stable_canonical_atom_id as stable_canonical_atom_id,
@@ -40,6 +41,8 @@ from .primitives import (
     stable_wiki_projection_spec_id as stable_wiki_projection_spec_id,
     to_plain,
 )
+from .public_safety import assert_no_public_raw_references
+from .temporal import TemporalContext, parse_temporal_value
 
 McpResultStatus = Literal[
     "ok",
@@ -65,6 +68,23 @@ UPLOAD_SESSION_STATUS_VALUES = (
     "expired",
 )
 CANDIDATE_STATUS_VALUES = ("pending_review", "approved", "rejected", "deferred")
+ASSERTION_KIND_VALUES = ("property", "relation", "state", "event", "coordination")
+EPISTEMIC_STATUS_VALUES = (
+    "planned",
+    "expected",
+    "predicted",
+    "requested",
+    "committed",
+    "asserted",
+    "observed",
+    "actual",
+)
+ASSERTION_LIFECYCLE_STATUS_VALUES = (
+    "active",
+    "cancelled",
+    "corrected",
+    "superseded",
+)
 CANONICAL_RECORD_STATUS_VALUES = ("active", "deprecated", "superseded", "archived")
 CANONICAL_GRAPH_REVISION_STATUS_VALUES = ("draft", "committed", "superseded", "archived")
 POLICY_STATUS_VALUES = ("draft", "active", "deprecated", "archived")
@@ -105,6 +125,11 @@ CORE_SUPERTYPE_IDS = (
     "Event",
     "Concept",
     "Location",
+    "Transaction",
+    "Account",
+    "Agreement",
+    "PhysicalObject",
+    "Measurement",
 )
 JobStatus = Literal[*JOB_STATUS_VALUES]
 ExtractorRunStatus = Literal[*EXTRACTOR_RUN_STATUS_VALUES]
@@ -114,6 +139,7 @@ WorkspaceMemberRole = Literal[*WORKSPACE_MEMBER_ROLE_VALUES]
 AccessRequestStatus = Literal[*ACCESS_REQUEST_STATUS_VALUES]
 UploadSessionStatus = Literal[*UPLOAD_SESSION_STATUS_VALUES]
 CandidateStatus = Literal[*CANDIDATE_STATUS_VALUES]
+AssertionKind = Literal[*ASSERTION_KIND_VALUES]
 CanonicalRecordStatus = Literal[*CANONICAL_RECORD_STATUS_VALUES]
 CanonicalGraphRevisionStatus = Literal[*CANONICAL_GRAPH_REVISION_STATUS_VALUES]
 PolicyStatus = Literal[*POLICY_STATUS_VALUES]
@@ -124,6 +150,7 @@ TypeStatus = Literal[*TYPE_STATUS_VALUES]
 CoordinationFrameType = Literal[*COORDINATION_FRAME_TYPES]
 CoordinationObjectSupertype = Literal[*COORDINATION_OBJECT_SUPERTYPE_IDS]
 _GRAPH_REFERENCE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_SHA256_HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
 _RAW_SQL_REFERENCE_PATTERN = re.compile(
     r"\bselect\b[\s\S]{0,300}\bfrom\b|"
     r"\bwith\b[\s\S]{0,300}\bas\s*\(|"
@@ -411,17 +438,37 @@ def stable_candidate_business_object_id(
     label: str,
     properties: dict[str, JsonValue],
     extractor_run_id: str,
+    object_supertype: str | None = None,
+    ontology_revision_id: str | None = None,
+    domain_pack_id: str | None = None,
+    domain_pack_content_hash: str | None = None,
 ) -> str:
+    payload: dict[str, JsonValue] = {
+        "source_observation_ids": sorted(source_observation_ids),
+        "object_type": object_type,
+        "label": label,
+        "properties": properties,
+        "extractor_run_id": extractor_run_id,
+    }
+    # Keep the pre-Domain-Pack stable-ID payload byte-for-byte compatible for
+    # legacy coordination-frame callers. New candidate-knowledge callers bind
+    # only the lineage fields they explicitly provide.
+    payload.update(
+        {
+            key: value
+            for key, value in {
+                "object_supertype": object_supertype,
+                "ontology_revision_id": ontology_revision_id,
+                "domain_pack_id": domain_pack_id,
+                "domain_pack_content_hash": domain_pack_content_hash,
+            }.items()
+            if value is not None
+        }
+    )
     return stable_resource_contract_id(
         "cbobj",
         "CandidateBusinessObject",
-        {
-            "source_observation_ids": sorted(source_observation_ids),
-            "object_type": object_type,
-            "label": label,
-            "properties": properties,
-            "extractor_run_id": extractor_run_id,
-        },
+        payload,
     )
 
 
@@ -1109,6 +1156,79 @@ class SemanticMetadata:
 
 
 @dataclass(frozen=True)
+class CandidateAssertion:
+    candidate_assertion_id: str
+    assertion_kind: AssertionKind
+    subject_candidate_business_object_id: str
+    predicate: str
+    source_observation_ids: list[str]
+    evidence_spans: list[dict[str, JsonValue]]
+    permission_scope: PermissionScope | dict[str, Any]
+    confidence: float
+    extractor_run_id: str
+    ontology_revision_id: str
+    domain_pack_id: str
+    domain_pack_content_hash: str
+    status: CandidateStatus
+    requires_review: bool = True
+    epistemic_status: str = "asserted"
+    lifecycle_status: str = "active"
+    object_candidate_business_object_id: str | None = None
+    actor_candidate_business_object_id: str | None = None
+    counterparty_candidate_business_object_id: str | None = None
+    value: JsonValue | None = None
+    previous_value: JsonValue | None = None
+    proposed_value: JsonValue | None = None
+    temporal_context: dict[str, JsonValue] = field(default_factory=dict)
+    context: dict[str, JsonValue] = field(default_factory=dict)
+    created_at: str | None = None
+    metadata: dict[str, JsonValue] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "CandidateAssertion":
+        assertion = validate_candidate_assertion(value)
+        return cls(
+            candidate_assertion_id=str(assertion["candidate_assertion_id"]),
+            assertion_kind=assertion["assertion_kind"],
+            subject_candidate_business_object_id=str(
+                assertion["subject_candidate_business_object_id"]
+            ),
+            predicate=str(assertion["predicate"]),
+            source_observation_ids=list(assertion["source_observation_ids"]),
+            evidence_spans=list(assertion["evidence_spans"]),
+            permission_scope=assertion["permission_scope"],
+            confidence=float(assertion["confidence"]),
+            extractor_run_id=str(assertion["extractor_run_id"]),
+            ontology_revision_id=str(assertion["ontology_revision_id"]),
+            domain_pack_id=str(assertion["domain_pack_id"]),
+            domain_pack_content_hash=str(assertion["domain_pack_content_hash"]),
+            status=assertion["status"],
+            requires_review=bool(assertion.get("requires_review", True)),
+            epistemic_status=str(assertion.get("epistemic_status", "asserted")),
+            lifecycle_status=str(assertion.get("lifecycle_status", "active")),
+            object_candidate_business_object_id=assertion.get(
+                "object_candidate_business_object_id"
+            ),
+            actor_candidate_business_object_id=assertion.get("actor_candidate_business_object_id"),
+            counterparty_candidate_business_object_id=assertion.get(
+                "counterparty_candidate_business_object_id"
+            ),
+            value=assertion.get("value"),
+            previous_value=assertion.get("previous_value"),
+            proposed_value=assertion.get("proposed_value"),
+            temporal_context=dict(assertion.get("temporal_context", {})),
+            context=dict(assertion.get("context", {})),
+            created_at=assertion.get("created_at"),
+            metadata=dict(assertion.get("metadata", {})),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data = to_plain(self)
+        validate_candidate_assertion(data)
+        return data
+
+
+@dataclass(frozen=True)
 class CandidateAtom:
     candidate_atom_id: str
     source_observation_ids: list[str]
@@ -1228,7 +1348,7 @@ class CandidateBusinessObject:
     candidate_business_object_id: str
     source_observation_ids: list[str]
     object_type: str
-    object_supertype: CoordinationObjectSupertype
+    object_supertype: str
     label: str
     domain_hints: list[str]
     properties: dict[str, JsonValue]
@@ -2972,6 +3092,250 @@ def validate_semantic_metadata(value: Any) -> dict[str, Any]:
     return metadata
 
 
+def validate_candidate_assertion(value: Any) -> dict[str, Any]:
+    assertion = _require_mapping(value, "CandidateAssertion")
+    supported_fields = {
+        "candidate_assertion_id",
+        "assertion_kind",
+        "subject_candidate_business_object_id",
+        "predicate",
+        "source_observation_ids",
+        "evidence_spans",
+        "permission_scope",
+        "confidence",
+        "extractor_run_id",
+        "ontology_revision_id",
+        "domain_pack_id",
+        "domain_pack_content_hash",
+        "status",
+        "requires_review",
+        "epistemic_status",
+        "lifecycle_status",
+        "object_candidate_business_object_id",
+        "actor_candidate_business_object_id",
+        "counterparty_candidate_business_object_id",
+        "value",
+        "previous_value",
+        "proposed_value",
+        "temporal_context",
+        "context",
+        "created_at",
+        "metadata",
+    }
+    unexpected_fields = set(assertion).difference(supported_fields)
+    if unexpected_fields:
+        raise ContractValidationError(
+            "CandidateAssertion contains unsupported fields: "
+            + ", ".join(sorted(unexpected_fields))
+        )
+    _require_fields(
+        assertion,
+        (
+            "candidate_assertion_id",
+            "assertion_kind",
+            "subject_candidate_business_object_id",
+            "predicate",
+            "source_observation_ids",
+            "evidence_spans",
+            "permission_scope",
+            "confidence",
+            "extractor_run_id",
+            "ontology_revision_id",
+            "domain_pack_id",
+            "domain_pack_content_hash",
+            "status",
+            "requires_review",
+        ),
+        "CandidateAssertion",
+    )
+    _validate_string_fields(
+        assertion,
+        (
+            "candidate_assertion_id",
+            "assertion_kind",
+            "subject_candidate_business_object_id",
+            "predicate",
+            "extractor_run_id",
+            "ontology_revision_id",
+            "domain_pack_id",
+            "status",
+        ),
+        "CandidateAssertion",
+    )
+    assertion.setdefault("epistemic_status", "asserted")
+    _validate_string_fields(assertion, ("epistemic_status",), "CandidateAssertion")
+    assertion.setdefault("lifecycle_status", "active")
+    _validate_string_fields(assertion, ("lifecycle_status",), "CandidateAssertion")
+    _validate_optional_string_fields(
+        assertion,
+        (
+            "object_candidate_business_object_id",
+            "actor_candidate_business_object_id",
+            "counterparty_candidate_business_object_id",
+            "created_at",
+        ),
+        "CandidateAssertion",
+    )
+    _validate_optional_iso_timestamp_fields(
+        assertion,
+        ("created_at",),
+        "CandidateAssertion",
+    )
+    for field_name in (
+        "candidate_assertion_id",
+        "subject_candidate_business_object_id",
+        "extractor_run_id",
+        "ontology_revision_id",
+        "domain_pack_id",
+    ):
+        _validate_graph_reference_id(
+            assertion[field_name],
+            f"CandidateAssertion.{field_name}",
+        )
+    _validate_sha256_hash(
+        assertion["domain_pack_content_hash"],
+        "CandidateAssertion.domain_pack_content_hash",
+    )
+    for field_name in (
+        "object_candidate_business_object_id",
+        "actor_candidate_business_object_id",
+        "counterparty_candidate_business_object_id",
+    ):
+        if assertion.get(field_name) is not None:
+            _validate_graph_reference_id(
+                assertion[field_name],
+                f"CandidateAssertion.{field_name}",
+            )
+    if assertion["assertion_kind"] not in ASSERTION_KIND_VALUES:
+        raise ContractValidationError("CandidateAssertion.assertion_kind is not supported")
+    if assertion["epistemic_status"] not in EPISTEMIC_STATUS_VALUES:
+        raise ContractValidationError("CandidateAssertion.epistemic_status is not supported")
+    if assertion["lifecycle_status"] not in ASSERTION_LIFECYCLE_STATUS_VALUES:
+        raise ContractValidationError("CandidateAssertion.lifecycle_status is not supported")
+    if not assertion["predicate"].strip():
+        raise ContractValidationError(
+            "CandidateAssertion.predicate must contain non-whitespace text"
+        )
+    _validate_candidate_common(
+        assertion,
+        "CandidateAssertion",
+        properties_field="context",
+    )
+    _validate_unique_provenance_id_list(
+        assertion["source_observation_ids"],
+        "CandidateAssertion.source_observation_ids",
+        allow_empty=False,
+    )
+    if not isinstance(assertion.get("temporal_context", {}), dict):
+        raise ContractValidationError("CandidateAssertion.temporal_context must be an object")
+    assertion["temporal_context"] = TemporalContext.from_dict(
+        assertion.get("temporal_context", {})
+    ).to_dict()
+    captured_at = assertion["temporal_context"].get("captured_at")
+    if (
+        assertion.get("created_at") is not None
+        and captured_at is not None
+        and parse_temporal_value(
+            assertion["created_at"],
+            "CandidateAssertion.created_at",
+        )
+        < parse_temporal_value(
+            captured_at,
+            "CandidateAssertion.temporal_context.captured_at",
+        )
+    ):
+        raise ContractValidationError(
+            "CandidateAssertion.created_at must not precede source capture"
+        )
+    if not isinstance(assertion.get("metadata", {}), dict):
+        raise ContractValidationError("CandidateAssertion.metadata must be an object")
+    validate_permission_scope(assertion["permission_scope"])
+    _validate_evidence_spans(
+        assertion["evidence_spans"],
+        "CandidateAssertion.evidence_spans",
+    )
+    source_observation_ids = set(assertion["source_observation_ids"])
+    evidence_observation_ids = {
+        span["source_observation_id"] for span in assertion["evidence_spans"]
+    }
+    if not evidence_observation_ids.issubset(source_observation_ids):
+        raise ContractValidationError(
+            "CandidateAssertion evidence spans must reference source observations"
+        )
+    assertion_kind = assertion["assertion_kind"]
+    if assertion_kind in {"property", "state"} and not _has_assertion_semantic_value(
+        assertion.get("value")
+    ):
+        raise ContractValidationError(
+            "CandidateAssertion property and state assertions require a non-empty value"
+        )
+    if (
+        assertion_kind == "relation"
+        and assertion.get("object_candidate_business_object_id") is None
+    ):
+        raise ContractValidationError("CandidateAssertion relation assertions require an object")
+    if assertion_kind == "event" and not any(
+        _has_assertion_semantic_value(assertion.get(field_name))
+        for field_name in ("value", "previous_value", "proposed_value")
+    ):
+        raise ContractValidationError(
+            "CandidateAssertion event assertions require a non-empty value or state change"
+        )
+    if (
+        assertion_kind == "event"
+        and _has_assertion_semantic_value(assertion.get("previous_value"))
+        and _has_assertion_semantic_value(assertion.get("proposed_value"))
+        and assertion.get("previous_value") == assertion.get("proposed_value")
+        and not _has_assertion_semantic_value(assertion.get("value"))
+    ):
+        raise ContractValidationError(
+            "CandidateAssertion event previous and proposed values must describe a change"
+        )
+    if assertion_kind == "coordination":
+        if assertion["predicate"] not in COORDINATION_FRAME_TYPES:
+            raise ContractValidationError(
+                "CandidateAssertion coordination predicate must be a core coordination frame"
+            )
+        if not (
+            assertion.get("actor_candidate_business_object_id")
+            or assertion.get("counterparty_candidate_business_object_id")
+            or _has_assertion_semantic_value(assertion.get("value"))
+        ):
+            raise ContractValidationError(
+                "CandidateAssertion coordination assertions require a participant or content"
+            )
+    if assertion.get("metadata", {}).get("canonical_write_allowed") is not False:
+        raise ContractValidationError(
+            "CandidateAssertion.metadata.canonical_write_allowed must be false"
+        )
+    assert_no_public_raw_references(
+        {
+            "predicate": assertion["predicate"],
+            "value": assertion.get("value"),
+            "previous_value": assertion.get("previous_value"),
+            "proposed_value": assertion.get("proposed_value"),
+            "temporal_context": assertion.get("temporal_context", {}),
+            "context": assertion.get("context", {}),
+            "metadata": assertion.get("metadata", {}),
+            "evidence_spans": assertion["evidence_spans"],
+        },
+        "CandidateAssertion",
+    )
+    return assertion
+
+
+def _has_assertion_semantic_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_has_assertion_semantic_value(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_assertion_semantic_value(item) for item in value)
+    return True
+
+
 def validate_candidate_atom(value: Any) -> dict[str, Any]:
     atom = _require_mapping(value, "CandidateAtom")
     _require_fields(
@@ -3158,7 +3522,7 @@ def validate_candidate_business_object(value: Any) -> dict[str, Any]:
         "CandidateBusinessObject.candidate_business_object_id",
     )
     _validate_candidate_common(business_object, "CandidateBusinessObject")
-    _validate_coordination_object_supertype(
+    _validate_business_object_supertype(
         business_object["object_supertype"],
         "CandidateBusinessObject.object_supertype",
     )
@@ -3174,7 +3538,7 @@ def validate_candidate_business_object(value: Any) -> dict[str, Any]:
         business_object.get("source_candidate_mention_ids", []),
         "CandidateBusinessObject.source_candidate_mention_ids",
     )
-    _validate_no_raw_public_reference(
+    assert_no_public_raw_references(
         {
             "object_type": business_object["object_type"],
             "label": business_object["label"],
@@ -3940,8 +4304,8 @@ def _validate_citation_list(value: Any, field_name: str) -> None:
 
 
 def _validate_sha256_hash(value: Any, field_name: str) -> None:
-    if not isinstance(value, str) or not value.startswith("sha256:"):
-        raise ContractValidationError(f"{field_name} must be a sha256-prefixed hash")
+    if not isinstance(value, str) or not _SHA256_HASH.fullmatch(value):
+        raise ContractValidationError(f"{field_name} must be a lowercase sha256 digest")
 
 
 def _validate_candidate_common(
@@ -3970,9 +4334,12 @@ def _validate_coordination_frame_type(value: Any, field_name: str) -> None:
         raise ContractValidationError(f"{field_name} must be a coordination frame type")
 
 
-def _validate_coordination_object_supertype(value: Any, field_name: str) -> None:
-    if value not in COORDINATION_OBJECT_SUPERTYPE_IDS:
-        raise ContractValidationError(f"{field_name} must be a coordination object supertype")
+def _validate_business_object_supertype(value: Any, field_name: str) -> None:
+    supported = set(CORE_SUPERTYPE_IDS).union(COORDINATION_OBJECT_SUPERTYPE_IDS)
+    if value not in supported:
+        raise ContractValidationError(
+            f"{field_name} must be a FormOwl core or legacy coordination supertype"
+        )
 
 
 def _validate_evidence_spans(value: Any, field_name: str) -> None:

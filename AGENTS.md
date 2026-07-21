@@ -44,6 +44,41 @@ lifecycle, user graph, graph-derived wiki semantics, and research-evaluation
 work. Leave broad system backbone work to the FormOwl System Backbone Agent
 unless the user explicitly assigns it here.
 
+## Default Candidate Evidence Retrieval
+
+All new retrieval, hardness, benchmark, ablation, and harness work must start
+from the source-neutral `CandidateEvidenceIndex` contract in `SPEC.md` Section
+9.7.2. The default counts a stable logical source item rather than parser
+chunks, binds access before query vocabulary, requires explicit context and
+time admissibility, permits anchor aggregation only inside one logical source,
+and limits ontology to a capped additive rerank.
+A `CandidateEvidenceTextPolicyRuntime` owned by the index must bind the actual
+query tokenizer to a structured policy proving Unicode NFKC/script
+normalization, protected ASCII extraction, Jieba, corpus-bound SentencePiece,
+frozen-profile admission, and exact admission/model/corpus SHA-256 hashes.
+The binding also pins the runtime id and tokenizer implementation hash; runtime
+code mismatch fails closed. Default callers pass query text only. Raw caller
+tokens, free-form or placeholder hashes, and regex-only declarations are not
+acceptable substitutes. Access plus explicit context and time admissibility
+must finish before the runtime tokenizer or ontology resolver runs.
+
+Regex-only retrieval, observation/chunk cardinality, lexical or thread
+transitive components, and ontology hard-pruning are historical baselines or
+explicit ablation arms only. They must never be silently used as the current
+method or as gold construction. Before accepting a new evaluator, run
+`tests/test_candidate_evidence_hardness.py` and
+`tests/test_candidate_evidence_harness_onboarding.py` in the dev container.
+Any non-default token, eligibility, or ontology transform must use the named
+`retrieve_ablation` entrypoint and may not remove the runtime-produced default
+tokens.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
+
 ## Working Rules
 
 - Treat these instructions as session startup requirements, not one-time

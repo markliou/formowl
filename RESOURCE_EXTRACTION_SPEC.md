@@ -12,10 +12,12 @@ AssetMetadata
 ExtractorRun
 Observation
 SemanticMetadata
+DomainPackDefinition
+CandidateBusinessObject
+CandidateAssertion
 CandidateAtom
 CandidateMention
 CandidateFrame
-CandidateBusinessObject
 ExtractionWarning
 ExtractionError
 ```
@@ -35,10 +37,12 @@ AssetStore
 ObjectStore
 ObservationStore
 SemanticMetadataStore
+DomainPackStore
+CandidateBusinessObjectStore
+CandidateAssertionStore
 CandidateAtomStore
 CandidateMentionStore
 CandidateFrameStore
-CandidateBusinessObjectStore
 ExternalGraphImportStore
 ExtractorRunStore
 JobStore
@@ -145,7 +149,9 @@ location metadata
 
 Observations are evidence-like intermediate records.
 
-They may later support candidate atoms, graph edges, wiki revisions, summaries, or retrieval results, but they are not the canonical knowledge graph.
+They may later support candidate business objects, candidate assertions,
+specialized candidate atoms or frames, wiki revisions, summaries, or retrieval
+results, but they are not the canonical knowledge graph.
 
 ---
 
@@ -266,7 +272,52 @@ Example schema:
 }
 ```
 
-### 3.5 SemanticMetadata
+### 3.5 LogicalSourceItem and ContextBoundary
+
+Observation chunking is an extractor concern. Evidence counting and ranking
+use a separate source-neutral retrieval identity:
+
+```text
+LogicalSourceItem
+- source_item_id
+- source_identity_policy_id
+- source family and source-defined identity
+- source_version_id
+- source observation ids
+- modality-specific locator
+- observed / recorded / known time when available
+- context ids
+- permission_scope_id
+- source-version lineage
+```
+
+Typical logical source items include one authored message, PDF page or
+section, presentation slide, spreadsheet row, OCR page/region group,
+transcript utterance, video scene, project activity, wiki section, or
+application event. An adapter may choose another source-defined unit when its
+lineage and stability are explicit. Retrieval identity is the pair
+`(source_identity_policy_id, source_item_id)`, not the local item string alone.
+Every retrievable observation also carries a source-version id and
+permission-scope id.
+
+Several observations may belong to one logical source item. For example, a PDF
+page may produce separate heading, paragraph, table, and OCR observations; a
+slide may produce title, body, speaker-note, and image-caption observations.
+Those observations may jointly support one query, but they remain one evidence
+item for cardinality and IDF.
+
+`ContextBoundary` is the authorized container or business scope around source
+items. Examples include a document, presentation deck, mail thread, worksheet,
+reporting period, inspection lot, contract, project, or case. Adapters must
+emit enough stable lineage to select these boundaries without exposing raw
+paths. A shared context never creates evidence or graph edges by itself.
+Accessible contexts and selected query contexts are separate. If a caller can
+access several periods, lots, decks, documents, or threads, retrieval must not
+compare or union them until the caller selects the query context. Selecting
+more than one query context also requires explicit cross-context comparison
+authorization.
+
+### 3.6 SemanticMetadata
 
 `SemanticMetadata` stores structured meaning extracted from one or more observations.
 
@@ -304,26 +355,238 @@ Example schema:
 }
 ```
 
-### 3.6 CandidateAtom
+### 3.7 Candidate Knowledge
 
-A `CandidateAtom` is a possible graph atom generated from observations or semantic metadata.
+The source-neutral minimum candidate path is:
 
-It must not be considered canonical until reviewed and committed by the graph governance pipeline.
+```text
+Observation
+  -> Lexical and Mention Candidates when text is present
+       -> Unicode and script normalization
+       -> protected ASCII identifiers
+       -> Jieba
+       -> corpus-bound SentencePiece
+       -> frozen-profile candidate admission
+  -> CandidateBusinessObject
+  -> CandidateAssertion
+```
 
-Example schema:
+This lexical path is the default for every text-bearing observation. File type,
+department, and modality do not select different tokenizer methodologies.
+Regex-only tokenization is restricted to explicit baseline or ablation runs,
+protected ASCII identifier extraction within the default stack, or a reported
+degraded fallback. A default evaluator or extractor must not silently fall back
+to regex-only behavior.
+
+Candidate batches and evaluation reports must bind the segmentation policy
+version, candidate-admission policy hash, model or vocabulary hash, and corpus
+hash. A binding change requires re-extraction or reevaluation.
+
+### 3.7.1 Default Candidate Evidence Retrieval
+
+Candidate retrieval uses the same source-neutral evidence contract for every
+modality and every new hardness or harness evaluation:
+
+```text
+structured Unicode/protected-ASCII/Jieba/SentencePiece/frozen-profile binding
+  -> exact admission, model, and corpus hash match
+trusted access binding over observation / identity-policy / version / permission
+  -> context/time/status admissibility
+  -> universal query intent and evidence-cardinality planning
+  -> logical-source conjunctive anchor support
+  -> logical-source IDF and ranking
+  -> minimal observation coverage within independent source/observation budgets
+  -> optional contract-bound capped ontology rerank
+```
+
+The index must own a `CandidateEvidenceTextPolicyRuntime` that binds the
+structured `CandidateEvidenceTextPolicyBinding` to the query tokenizer it
+actually invokes. The binding carries Unicode NFKC/script normalization,
+protected ASCII extraction, Jieba, corpus-bound SentencePiece, frozen-profile
+admission, and exact admission/model/corpus SHA-256 hashes. It also pins the
+runtime id and tokenizer implementation hash; runtime code mismatch fails
+closed. Default callers provide query text only; they cannot attest compliance
+by supplying raw tokens or a free-form policy hash. Missing, placeholder,
+regex-only, mismatched, or caller-overridden bindings fail closed.
+Experimental token or ontology transforms use the named `retrieve_ablation`
+entrypoint and cannot remove runtime-produced default tokens.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back.
+
+A trusted access binding is mandatory. It pins eligible observation ids,
+source-identity policy ids, source-version ids, and permission-scope ids.
+Missing bindings fail closed. If an index-level and request-level binding are
+both present, retrieval intersects them; the request cannot broaden the index.
+The binding must be a real `CandidateEvidenceAccessBinding`; all four
+eligibility collections are immutable `frozenset` values containing exact
+nonblank strings. Cross-context comparison authorization must be an actual
+boolean. Duck-typed bindings, mutable collections, string booleans, and other
+truthy substitutes fail closed.
+Those access axes, followed by context, `known_as_of`, `as_of_world_time`,
+epistemic status, and lifecycle status, are applied before query tokenization,
+ontology-signal resolution, support counts, IDF, planning, or ranking. An empty
+admissible universe returns without invoking those query-dependent steps.
+Observation chunk counts must not change retrieval results. Several
+observations may cover different anchors only when they share the same logical
+source identity; no shared token or context may create transitive closure
+across unrelated items.
+
+Evidence cardinality comes from source-unit syntax or classifiers, not a
+department vocabulary. Explicit counts such as report, lot, page, row, slide,
+event, or equivalent classifier phrases use the requested count. Digits inside
+identifiers and values denoting time, money, percentages, or measurements do
+not. An explicit count beyond the source budget fails closed rather than being
+silently reduced. A governed upstream query parser may instead provide a
+positive structured source-item count, allowing future languages and input
+surfaces to reuse the same planner without a department-specific parser fork.
+
+Chronology has separate `earliest`, `latest`, `range`, `before`, and `after`
+modes. Range selection preserves the requested number of ordered logical
+sources instead of always collapsing to two endpoints. Date-only boundaries
+require an explicit query timezone and are converted to timezone-aware day
+boundaries before comparing source instants. Missing timezone or source time
+fails closed.
+
+Primary retrieval evaluation stores stable logical-source ids as gold and
+scores logical-source recall so a harmless re-chunking does not change the
+pass/fail result. Evaluators must not reconstruct that primary gold from the
+current Observation ids during scoring. Exact Observation citation recall,
+precision, and stale/unmapped citation diagnostics remain separate metrics and
+cannot fail an otherwise correct logical-source selection.
+
+Optional evidence ontology facets are derived from `observation_type`,
+`modality`, and explicit semantic field/value roles. PDF/PPT content, ERP/table
+rows, audio/video transcripts, images, and application events retain distinct
+evidence facets. Digits in an identifier are not measurement evidence;
+measurement requires a role such as amount, quantity, rate, duration,
+percentage, score, or unit value.
+
+### 3.7.2 Task evidence assembly boundary
+
+Source adapters emit observations and normalized evidence fields. They do not
+decide which fields should dominate a user-facing answer.
+
+Every source shape should expose the richest citeable content that its governed
+extractor can support:
+
+```text
+mail                 -> body content plus separately named header metadata
+PDF/TXT/document     -> paragraph, section, table, and semantic fields
+CSV/XLS/XLSX         -> row content plus named cell or property fields
+project/application  -> authored content, event content, and named state fields
+image/audio/video    -> OCR, transcript, caption, event, and semantic fields
+```
+
+These mappings remain presentation-neutral. A mail adapter must not declare
+sender or recipient to be more important than body content. A spreadsheet
+adapter must not force every answer into a table. A PDF adapter must not decide
+that filenames or page numbers replace paragraph content. The downstream
+`ProjectionSpec` owns that decision.
+
+The task-answering layer consumes these fields through:
+
+```text
+TaskFrame
+  -> EvidenceRequirement
+  -> CandidateEvidenceIndex
+  -> permission-filtered selected logical source items
+  -> all admissible observations for those selected source items
+  -> EvidenceCoverage
+  -> AnswerabilityDecision
+  -> AnswerProjection
+```
+
+Retrieval keeps minimal supporting observation ids for citation and search
+diagnostics. Evidence assembly may additionally read normalized fields from all
+admissible observations inside the selected logical source item. It must not
+cross permission, source-version, context, or selected-source boundaries.
+
+The normalized default answer field is `content`. Header, participant,
+filename, locator label, and source-system metadata are secondary unless an
+explicit task asks for those fields. If no primary content is available, the
+answering layer reports partial evidence; it must not silently substitute a
+metadata-only card.
+
+Evidence cardinality and presentation cardinality remain separate. Extractors
+and adapters must not truncate evidence to a UI page size. The downstream
+retriever reports total matching source items, returned source items,
+`is_exhaustive`, and `has_more`; the projection independently reports how many
+items are displayed on the current page.
+
+`CandidateBusinessObject` identifies the proposed subject or object of
+knowledge and maps its domain label to one closed core supertype.
+
+`CandidateAssertion` expresses one of five universal semantic families:
+
+```text
+property
+relation
+state
+event
+coordination
+```
+
+Each assertion must preserve source observations, evidence spans, permission
+scope, extractor run, normalized `TemporalContext`, epistemic status, assertion
+lifecycle status, contextual semantics, ontology revision, Domain Pack id and
+content hash, confidence, and review state.
+
+The shared temporal vocabulary separates source, observation, assertion,
+effective/world-valid, result, recorded/known, due, and supersession times.
+Domain Packs may map local labels into these fields, but they may not add a
+department-specific temporal pipeline. The shared epistemic vocabulary
+distinguishes planned, expected, predicted, requested, committed, asserted,
+observed, and actual assertions. A separate lifecycle field distinguishes
+active, cancelled, corrected, and superseded assertions, so an actual fact can
+also be corrected or superseded. Ordered timestamps must include an explicit
+offset; date-only values remain calendar-day values.
+
+`TemporalContext.captured_at` is pipeline-owned. The candidate extractor binds
+it to the latest `Observation.created_at` among the assertion's source
+observations, and stable candidate assertion ids include the resulting
+temporal context. A Domain Pack may not forge an earlier source-capture time.
+`CandidateAssertion.created_at` separately records candidate materialization.
+It must not precede source capture, and `known_as_of` requires both source
+capture/recording boundaries and candidate materialization to have occurred.
+Materialization time is not part of semantic candidate identity, so a
+deterministic rerun may retain the same candidate id while producing a later
+materialization timestamp.
+
+A `DomainPackDefinition` is a scoped vocabulary and mapping definition, not an
+ontology bypass. Its normalized content hash is bound to a
+`domain_pack_definition` Observation. Candidate business-object ids and
+assertion ids pin that hash.
+
+`CandidateAtom`, `CandidateRelation`, `CandidateMention`, and
+`CandidateFrame` remain specialized candidate representations. They must not
+be considered canonical until reviewed and committed by graph governance.
+
+Regex-only retrieval, parser-chunk cardinality, lexical/thread transitive
+components, and ontology hard-pruning remain explicit ablation or historical
+baseline paths. They are not default candidate evidence retrieval and must not
+be silently selected by an extractor, evaluator, or harness.
+
+Example candidate assertion:
 
 ```json
 {
-  "candidate_atom_id": "catom_001",
-  "source_observation_ids": ["obs_001"],
-  "atom_type": "decision",
-  "label": "Avoid graph database in MVP",
-  "properties": {
-    "reason": "Small per-user graphs and rebuild frequency make pgvector more appropriate initially."
-  },
-  "confidence": 0.74,
-  "extractor_run_id": "run_004",
-  "status": "pending_review"
+  "candidate_assertion_id": "cassert_example",
+  "assertion_kind": "state",
+  "subject_candidate_business_object_id": "cbobj_invoice_example",
+  "predicate": "payment_status",
+  "value": "unpaid",
+  "source_observation_ids": ["obs_invoice_row"],
+  "extractor_run_id": "run_candidate_knowledge",
+  "ontology_revision_id": "ontology_rev_candidate_core_v1",
+  "domain_pack_id": "domain_pack_finance_v1",
+  "domain_pack_content_hash": "sha256:<normalized-pack-hash>",
+  "status": "pending_review",
+  "requires_review": true,
+  "metadata": {
+    "canonical_write_allowed": false
+  }
 }
 ```
 
@@ -822,6 +1085,11 @@ candidate atoms
 candidate graph edges
 coordination frames
 business object candidates
+property assertions
+relation assertions
+state assertions
+event assertions
+coordination assertions
 ```
 
 Possible tools:
@@ -841,12 +1109,77 @@ These tools may write only to:
 
 ```text
 SemanticMetadataStore
+DomainPackStore
+CandidateBusinessObjectStore
+CandidateAssertionStore
 CandidateAtomStore
 CandidateMentionStore
 CandidateFrameStore
-CandidateBusinessObjectStore
 ExternalGraphImportStore
 ```
+
+Different source formats and departments must use the same candidate-knowledge
+method. Source adapters may normalize email, ERP, application, document,
+table, image, audio, video, or project records into observations, but they must
+not introduce separate source-specific candidate ontologies or source-specific
+task-answering methods. They emit content, semantic properties, and metadata as
+separate normalized fields; they do not determine answer priority, evidence
+completeness, or UI pagination.
+
+For every normalized text-bearing observation, the required candidate method
+is:
+
+```text
+Unicode/script normalization
+  -> protected ASCII identifier extraction
+  -> Jieba segmentation
+  -> corpus-bound SentencePiece segmentation
+  -> frozen-profile candidate admission
+  -> candidate graph construction and retrieval
+```
+
+Jieba and SentencePiece generate candidates; they do not authorize graph edges
+by themselves. The frozen profile admits candidates before graph construction
+and preserved no-match behavior in the EXM benchmark that selected this
+default. That result is not a universal no-match guarantee; every domain
+evaluation still requires explicit rejection-calibration metrics. Domain Pack
+protected vocabulary may supplement admitted candidates, but it does not
+replace the shared tokenizer or create a department-specific pipeline.
+
+If required segmenters are unavailable, the normal path must fail closed.
+Deployments that intentionally allow a degraded regex fallback must label that
+mode in the extraction and evaluation output. Silent regex-only fallback is a
+specification violation.
+
+Candidate retrieval must not infer evidence count from the number of parser
+chunks. Adapters provide stable logical-source and context lineage; the shared
+retriever then:
+
+```text
+requires trusted observation / identity-policy / version / permission binding
+-> filters context, time, epistemic, and lifecycle state
+-> derives universal intent and evidence cardinality from the query
+-> computes support and IDF over logical source items
+-> permits same-source observations to jointly cover anchors
+-> returns minimal citeable observations inside independent source/observation budgets
+```
+
+Assertions or observations not yet recorded and visible at `known_as_of`, not
+valid at `as_of_world_time`, outside the selected context, or outside caller
+permission are excluded before planning and ranking. Undated source items
+cannot become earliest/latest chronology evidence.
+
+Optional ontology guidance must bind the ontology revision, supported signal
+vocabulary hash, and complete `TypeDefinition`/`TypeMapping` contract hash.
+Ontology overlap may provide a capped additive rerank only. It must not remove
+lexically supported candidates, bypass source evidence, or turn an evidence
+facet into a canonical entity/type assertion.
+
+One candidate-knowledge extraction must persist its Domain Pack definition,
+business objects, and assertions atomically. Missing or mismatched Domain Pack
+provenance, cross-permission references, unsafe internal references, duplicate
+ids, invalid mappings, empty semantics, or a write failure must leave no
+partial candidate records.
 
 They must not directly write to:
 
@@ -1059,10 +1392,12 @@ AssetStore
 ObjectStore
 ObservationStore
 SemanticMetadataStore
+DomainPackStore
+CandidateBusinessObjectStore
+CandidateAssertionStore
 CandidateAtomStore
 CandidateMentionStore
 CandidateFrameStore
-CandidateBusinessObjectStore
 ExternalGraphImportStore
 ExtractorRunStore
 JobStore
@@ -1081,7 +1416,10 @@ Downstream conversion should follow this path:
 ```text
 Observation
 -> SemanticMetadata
--> CandidateMention / CandidateFrame / CandidateBusinessObject / CandidateAtom / CandidateGraph
+-> DomainPackDefinition
+-> CandidateBusinessObject
+-> CandidateAssertion
+-> optional CandidateMention / CandidateFrame / CandidateAtom / CandidateRelation
 -> GranularityPolicyEngine
 -> EntityResolver
 -> RelationResolver
@@ -1150,6 +1488,11 @@ Video:
   - OCR on keyframes
 
 Semantic metadata:
+  - Unicode/script normalization
+  - protected ASCII identifier extraction
+  - Jieba segmentation
+  - corpus-bound SentencePiece segmentation
+  - frozen-profile candidate admission
   - LLM structured extraction adapter
   - later: LangChain LLMGraphTransformer / LlamaIndex PropertyGraphIndex / Neo4j LLM Graph Builder
 
@@ -1158,10 +1501,12 @@ Storage:
   - ObjectStore
   - ObservationStore
   - SemanticMetadataStore
+  - DomainPackStore
+  - CandidateBusinessObjectStore
+  - CandidateAssertionStore
   - CandidateAtomStore
   - CandidateMentionStore
   - CandidateFrameStore
-  - CandidateBusinessObjectStore
   - ExtractorRunStore
   - JobStore
 ```
@@ -1176,7 +1521,43 @@ The Resource Extraction implementation is aligned with this specification when:
 RESOURCE_EXTRACTION_SPEC.md exists.
 It clearly states that FormOwl does not train neural networks.
 It explains that neural-network-based tools may be used only as replaceable external extractors.
-It defines the difference between raw resources, technical metadata, observations, semantic metadata, candidate atoms, and canonical graph state.
+It defines the difference between raw resources, technical metadata, observations, semantic metadata, candidate knowledge, and canonical graph state.
+It defines CandidateBusinessObject and the five CandidateAssertion families as the source-neutral minimum core.
+It defines Domain Packs as provenance-linked, content-hash-pinned scoped mappings rather than source- or department-specific ontologies.
+It defines one TemporalContext plus separate epistemic and lifecycle vocabularies shared by all source modalities and Domain Packs.
+It requires future-knowledge exclusion before ranking when a known-as-of query boundary is supplied.
+It defines LogicalSourceItem separately from Observation chunks and ContextBoundary separately from both.
+It defines logical source identity as source-identity-policy id plus source-item id and requires source-version and permission-scope ids on retrievable evidence.
+It requires a trusted access binding over eligible observations, source-identity policies, source versions, and permission scopes; missing bindings fail closed and request bindings cannot broaden index bindings.
+It requires evidence cardinality and IDF to count logical source items rather than parser chunks.
+It allows multiple observations to cover anchors only within the same logical source item.
+It requires permission, source-identity-policy, source-version, context, time, epistemic, and lifecycle admissibility before planning and ranking.
+It derives explicit evidence cardinality from source-unit syntax/classifiers, excludes identifiers and measurement units, and rejects counts beyond the source budget.
+It separates accessible contexts from explicitly selected query contexts and requires authorization for multi-context comparison.
+It requires chronology modes to preserve requested cardinality, exclude undated items, and use an explicit query timezone for date-only boundaries.
+It keeps logical-source and observation budgets independent.
+It defines TaskFrame, EvidenceRequirement, EvidenceCoverage,
+AnswerabilityDecision, and ProjectionSpec as separate downstream contracts.
+It defines explicit sufficient, exact, at-least, and all-matching cardinality
+modes without treating corpus size or UI page size as the requested count.
+It requires retrieval to report total/returned logical-source counts plus
+is-exhaustive and has-more state.
+It requires evidence assembly to gather normalized fields from admissible
+observations inside selected logical source items without crossing access or
+source boundaries.
+It makes content the default primary projection field and keeps sender,
+recipient, headers, filenames, and other metadata secondary unless explicitly
+requested.
+It distinguishes permission denied, target not found, property absent, partial
+evidence, conflicting evidence, and sufficient evidence before presentation.
+It stores stable logical-source gold, scores primary retrieval at logical-source level, and reports exact Observation citation and stale/unmapped diagnostics separately.
+It derives ontology evidence facets from observation type, modality, and semantic roles and forbids numeric-identifier-as-measurement inference.
+It binds ontology-guided reranking to the ontology revision, signal vocabulary, and complete type/mapping contract.
+It limits ontology guidance to a capped additive rerank that cannot delete lexically supported candidates.
+It defines Jieba plus corpus-bound SentencePiece candidate generation with frozen-profile admission as the default for every text-bearing Observation.
+It restricts regex-only tokenization to protected ASCII extraction, explicit baselines/ablations, or a clearly reported degraded fallback.
+It requires tokenizer, admission-policy, model/vocabulary, and corpus hash bindings and forbids silent regex-only fallback.
+It requires atomic candidate-only persistence and forbids direct canonical, user-graph, wiki, and external-system writes.
 It lists recommended tools for file metadata, document parsing, OCR, ASR, speaker diarization, video scene detection, and semantic extraction.
 It defines extractor provenance requirements.
 It defines locator metadata standards.

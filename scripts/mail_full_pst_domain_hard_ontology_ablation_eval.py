@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Compare baseline, non-BERT KG, and ontology-guided KG on hard mail cases.
+"""Compare baseline and default Candidate retrieval with an ontology ablation.
 
 This experiment reuses the preserved #21 full-PST domain-hard work directory.
 It does not reparse the PST and does not run BERT, SentenceTransformer, local
-LLMs, or other neural packages. The ontology arm uses FormOwl ontology contract
-objects as a candidate scoring/gating signal only; it does not write canonical
-KG, user graph, wiki, grant, or raw-access state.
+LLMs, or other neural packages. Both active arms onboard the exact default
+source-neutral harness contract. The ontology arm uses FormOwl ontology
+contract objects as capped additive evidence-facet signals over the same
+lexical candidate pool. Extension types never prune candidates. The experiment
+does not write canonical KG, user graph, wiki, grant, or raw-access state.
 """
 
 from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -44,7 +46,13 @@ from formowl_evaluator.report_validation import (  # noqa: E402
     require_sha256 as _require_sha256,
     validate_exact_keys as _validate_exact_keys,
 )
-from formowl_graph import core_supertypes_compatible  # noqa: E402
+from formowl_graph import (  # noqa: E402
+    DEFAULT_CANDIDATE_EVIDENCE_ONTOLOGY_POLICY_ID,
+    CandidateEvidenceIndex,
+    build_default_candidate_evidence_harness_contract,
+    core_supertypes_compatible,
+    require_default_candidate_evidence_harness_contract,
+)
 
 DEFAULT_BASELINE_REPORT = ROOT / ".test-tmp" / "formowl-mail-domain-hard-case-baseline-v4.json"
 DEFAULT_WORK_DIR = ROOT / ".test-tmp" / "formowl-mail-domain-hard-case-baseline-work-v4"
@@ -52,10 +60,24 @@ DEFAULT_OUTPUT = ROOT / ".test-tmp" / "formowl-mail-domain-hard-ontology-ablatio
 NOW = "2026-07-07T13:00:00+00:00"
 REPORT_TYPE = "mail_full_pst_domain_hard_ontology_ablation_eval"
 RUN_OPT_IN_ENV = "FORMOWL_RUN_FULL_PST_DOMAIN_HARD_ONTOLOGY_ABLATION_EVAL"
-ONTOLOGY_REVISION_ID = "ontology_revision_mail_domain_hard_ablation_v1"
-ONTOLOGY_POLICY_VERSION = "formowl_domain_hard_non_bert_ontology_ablation_v1"
+ONTOLOGY_REVISION_ID = "ontology_revision_source_neutral_evidence_facets_v2"
+ONTOLOGY_POLICY_VERSION = DEFAULT_CANDIDATE_EVIDENCE_ONTOLOGY_POLICY_ID
+HARNESS_CONTRACT = build_default_candidate_evidence_harness_contract()
+require_default_candidate_evidence_harness_contract(HARNESS_CONTRACT)
 CASE_COUNT = 100
 MAX_COMPONENT_EVIDENCE_PER_CASE = 10
+_ONTOLOGY_FACETS = {
+    "actor_attributed_evidence": "Concept",
+    "artifact_evidence": "Artifact",
+    "audio_visual_evidence": "Artifact",
+    "concept_evidence": "Concept",
+    "document_evidence": "Document",
+    "event_evidence": "Event",
+    "image_evidence": "Artifact",
+    "measurement_bearing_evidence": "Measurement",
+    "structured_record_evidence": "Artifact",
+    "temporally_ordered_evidence": "Concept",
+}
 
 _TOP_LEVEL_KEYS = {
     "report_type",
@@ -82,12 +104,13 @@ _FORBIDDEN_TRUE_CLAIMS = {
 _REQUIRED_SUCCESS_METRICS = {
     "baseline_report_loaded",
     "baseline_report_validation_passed",
+    "baseline_manifest_binding_validated",
     "private_manifest_loaded",
     "observations_loaded",
     "body_segments_loaded",
     "deterministic_candidate_kg_built",
     "uses_formal_formowl_ontology_contracts",
-    "uses_domain_lens_to_core_supertype_mappings",
+    "uses_source_neutral_evidence_facet_mappings",
     "uses_type_evidence",
     "ontology_contracts_validated",
     "ontology_revision_hash_recorded",
@@ -108,9 +131,12 @@ _BLOCKED_REASONS = {
     "explicit_work_dir_required",
     "baseline_report_missing",
     "baseline_report_invalid",
+    "baseline_manifest_binding_mismatch",
     "work_dir_missing",
     "private_manifest_missing",
+    "private_manifest_logical_source_gold_missing",
     "observations_missing",
+    "stable_source_identity_missing",
     "ontology_ablation_eval_failed",
 }
 
@@ -118,38 +144,43 @@ _BLOCKED_REASONS = {
 @dataclass(frozen=True)
 class _DomainOntology:
     ontology_revision_id: str
-    type_by_domain: dict[str, TypeDefinition]
-    mapping_by_domain: dict[str, TypeMapping]
+    type_by_signal: dict[str, TypeDefinition]
+    mapping_by_signal: dict[str, TypeMapping]
     ontology_hash: str
 
     @property
     def type_count(self) -> int:
-        return len(self.type_by_domain)
+        return len(self.type_by_signal)
 
     @property
     def mapping_count(self) -> int:
-        return len(self.mapping_by_domain)
+        return len(self.mapping_by_signal)
 
 
 @dataclass(frozen=True)
 class _OntologyIndex:
-    domains_by_observation_id: dict[str, frozenset[str]]
-    domain_scores_by_component: dict[str, dict[str, int]]
-    component_ids_by_domain: dict[str, tuple[str, ...]]
+    evidence_index: CandidateEvidenceIndex
+    ontology_contract_hash: str
+    ontology_signal_vocabulary_hash: str
+    supported_signals: frozenset[str]
+    signals_by_observation_id: dict[str, frozenset[str]]
+    signal_scores_by_component: dict[str, dict[str, int]]
+    component_ids_by_signal: dict[str, tuple[str, ...]]
 
     @property
     def typed_node_count(self) -> int:
-        return sum(1 for domains in self.domains_by_observation_id.values() if domains)
+        return sum(1 for signals in self.signals_by_observation_id.values() if signals)
 
     @property
     def typed_component_count(self) -> int:
-        return sum(1 for scores in self.domain_scores_by_component.values() if scores)
+        return sum(1 for scores in self.signal_scores_by_component.values() if scores)
 
 
 def run_ontology_ablation_eval(
     *,
     baseline_report_path: Path | None = None,
     work_dir: Path | None = None,
+    private_manifest_path: Path | None = None,
 ) -> dict[str, Any]:
     if os.environ.get(RUN_OPT_IN_ENV) != "1":
         return _blocked_report("ontology_ablation_requires_explicit_opt_in")
@@ -159,6 +190,9 @@ def run_ontology_ablation_eval(
         return _run_ontology_ablation_eval_inner(
             baseline_report_path=baseline_report_path,
             work_dir=work_dir,
+            private_manifest_path=(
+                private_manifest_path or work_dir / kg_eval.PRIVATE_MANIFEST_RELATIVE
+            ),
         )
     except FileNotFoundError as exc:
         reason = str(exc)
@@ -173,6 +207,7 @@ def _run_ontology_ablation_eval_inner(
     *,
     baseline_report_path: Path,
     work_dir: Path,
+    private_manifest_path: Path,
 ) -> dict[str, Any]:
     started = time.monotonic()
     baseline_report = _read_json_file(baseline_report_path, "baseline_report_missing")
@@ -192,18 +227,22 @@ def _run_ontology_ablation_eval_inner(
     kg_started = time.monotonic()
     kg_index = kg_eval._build_candidate_kg_index(segments)
     ontology = _build_domain_ontology()
-    ontology_index = _build_ontology_index(segments, kg_index)
+    ontology_index = _build_ontology_index(
+        tuple(kg_index.segment_by_observation_id.values()),
+        kg_index,
+        ontology,
+    )
     kg_build_elapsed_ms = int((time.monotonic() - kg_started) * 1000)
 
-    manifest = _read_json_file(
-        work_dir / kg_eval.PRIVATE_MANIFEST_RELATIVE,
-        "private_manifest_missing",
-    )
+    manifest = _read_json_file(private_manifest_path, "private_manifest_missing")
     manifest_hash = sha256_json(manifest)
     cases = kg_eval._validate_private_manifest_cases(manifest)
 
     scoring_started = time.monotonic()
-    baseline_rows = kg_eval._baseline_rows_by_manifest_hash(baseline_report)
+    baseline_rows = kg_eval._validate_baseline_manifest_binding(
+        baseline_report,
+        cases=cases,
+    )
     rows = []
     for case in cases:
         baseline_row = baseline_rows.get(case["private_fingerprint"])
@@ -233,12 +272,13 @@ def _run_ontology_ablation_eval_inner(
     metrics = {
         "baseline_report_loaded": True,
         "baseline_report_validation_passed": True,
+        "baseline_manifest_binding_validated": True,
         "private_manifest_loaded": True,
         "observations_loaded": True,
         "body_segments_loaded": safe_outputs["body_segment_count"] > 0,
         "deterministic_candidate_kg_built": safe_outputs["candidate_graph_node_count"] > 0,
         "uses_formal_formowl_ontology_contracts": True,
-        "uses_domain_lens_to_core_supertype_mappings": True,
+        "uses_source_neutral_evidence_facet_mappings": True,
         "uses_type_evidence": True,
         "ontology_contracts_validated": True,
         "ontology_revision_hash_recorded": True,
@@ -273,13 +313,13 @@ def _run_ontology_ablation_eval_inner(
 
 
 def _build_domain_ontology() -> _DomainOntology:
-    type_by_domain: dict[str, TypeDefinition] = {}
-    mapping_by_domain: dict[str, TypeMapping] = {}
-    for domain in hard_eval.DOMAINS:
-        pref_label = domain.replace("_", " ").title()
+    type_by_signal: dict[str, TypeDefinition] = {}
+    mapping_by_signal: dict[str, TypeMapping] = {}
+    for signal, core_supertype_id in _ONTOLOGY_FACETS.items():
+        pref_label = signal.replace("_", " ").title()
         type_id = stable_type_definition_id(
             tier="extension",
-            core_supertype_id="Concept",
+            core_supertype_id=core_supertype_id,
             pref_label=pref_label,
             scope_type="workspace",
             scope_id=hard_eval.WORKSPACE_ID,
@@ -289,7 +329,7 @@ def _build_domain_ontology() -> _DomainOntology:
             {
                 "type_id": type_id,
                 "tier": "extension",
-                "core_supertype_id": "Concept",
+                "core_supertype_id": core_supertype_id,
                 "pref_label": pref_label,
                 "scope_type": "workspace",
                 "scope_id": hard_eval.WORKSPACE_ID,
@@ -297,11 +337,11 @@ def _build_domain_ontology() -> _DomainOntology:
                 "ontology_revision_id": ONTOLOGY_REVISION_ID,
                 "confidence": 0.72,
                 "created_at": NOW,
-                "created_by": "formowl_domain_hard_ontology_ablation",
-                "source_candidate_ids": ["catom_mail_domain_type_" + domain],
+                "created_by": "formowl_source_neutral_ontology_ablation",
+                "source_candidate_ids": ["catom_evidence_facet_" + signal],
                 "metadata": {
                     "candidate_only": True,
-                    "domain_hash": sha256_json(domain),
+                    "evidence_facet_hash": sha256_json(signal),
                 },
             }
         )
@@ -309,21 +349,21 @@ def _build_domain_ontology() -> _DomainOntology:
             {
                 "mapping_id": stable_type_mapping_id(
                     source_type_id=type_id,
-                    target_core_supertype_id="Concept",
+                    target_core_supertype_id=core_supertype_id,
                     scope_type="workspace",
                     scope_id=hard_eval.WORKSPACE_ID,
                     ontology_revision_id=ONTOLOGY_REVISION_ID,
                 ),
                 "source_type_id": type_id,
-                "target_core_supertype_id": "Concept",
+                "target_core_supertype_id": core_supertype_id,
                 "scope_type": "workspace",
                 "scope_id": hard_eval.WORKSPACE_ID,
                 "status": "active",
                 "ontology_revision_id": ONTOLOGY_REVISION_ID,
                 "confidence": 0.9,
                 "created_at": NOW,
-                "created_by": "formowl_domain_hard_ontology_ablation",
-                "source_candidate_ids": ["catom_mail_domain_type_" + domain],
+                "created_by": "formowl_source_neutral_ontology_ablation",
+                "source_candidate_ids": ["catom_evidence_facet_" + signal],
                 "review_event_id": "review_mail_domain_ontology_ablation",
                 "metadata": {"candidate_only": True},
             }
@@ -334,18 +374,18 @@ def _build_domain_ontology() -> _DomainOntology:
         )
         if not compatibility.compatible:
             raise RuntimeError("ontology_type_mapping_incompatible")
-        type_by_domain[domain] = type_definition
-        mapping_by_domain[domain] = mapping
+        type_by_signal[signal] = type_definition
+        mapping_by_signal[signal] = mapping
     ontology_payload = {
         "ontology_revision_id": ONTOLOGY_REVISION_ID,
         "policy_version": ONTOLOGY_POLICY_VERSION,
-        "type_definitions": [item.to_dict() for item in type_by_domain.values()],
-        "type_mappings": [item.to_dict() for item in mapping_by_domain.values()],
+        "type_definitions": [item.to_dict() for item in type_by_signal.values()],
+        "type_mappings": [item.to_dict() for item in mapping_by_signal.values()],
     }
     return _DomainOntology(
         ontology_revision_id=ONTOLOGY_REVISION_ID,
-        type_by_domain=type_by_domain,
-        mapping_by_domain=mapping_by_domain,
+        type_by_signal=type_by_signal,
+        mapping_by_signal=mapping_by_signal,
         ontology_hash=sha256_json(ontology_payload),
     )
 
@@ -353,28 +393,67 @@ def _build_domain_ontology() -> _DomainOntology:
 def _build_ontology_index(
     segments: Sequence[kg_eval._MailSegment],
     kg_index: kg_eval._CandidateKgIndex,
+    ontology: _DomainOntology,
 ) -> _OntologyIndex:
-    domains_by_observation_id = {
-        segment.observation_id: frozenset(_domains_for_tokens(segment.tokens))
-        for segment in segments
+    supported_signals = frozenset(
+        signal
+        for signal, mapping in ontology.mapping_by_signal.items()
+        if signal in ontology.type_by_signal
+        and mapping.source_type_id == ontology.type_by_signal[signal].type_id
+        and mapping.target_core_supertype_id == ontology.type_by_signal[signal].core_supertype_id
+        and mapping.status == "active"
+    )
+    signals_by_observation_id = {
+        segment.observation_id: segment.ontology_signals & supported_signals for segment in segments
     }
-    domain_scores_by_component: dict[str, dict[str, int]] = defaultdict(dict)
+    signal_scores_by_component: dict[str, dict[str, int]] = defaultdict(dict)
     for component_id, observation_ids in kg_index.observation_ids_by_component.items():
         scores: Counter[str] = Counter()
         for observation_id in observation_ids:
-            for domain in domains_by_observation_id.get(observation_id, frozenset()):
-                scores[domain] += 1
-        domain_scores_by_component[component_id] = dict(scores)
-    component_ids_by_domain: dict[str, list[str]] = defaultdict(list)
-    for component_id, scores in domain_scores_by_component.items():
-        for domain in scores:
-            component_ids_by_domain[domain].append(component_id)
+            for signal in signals_by_observation_id.get(observation_id, frozenset()):
+                scores[signal] += 1
+        signal_scores_by_component[component_id] = dict(scores)
+    component_ids_by_signal: dict[str, list[str]] = defaultdict(list)
+    for component_id, scores in signal_scores_by_component.items():
+        for signal in scores:
+            component_ids_by_signal[signal].append(component_id)
+    ontology_signal_vocabulary_hash = sha256_json(sorted(supported_signals))
+    evidence_records = tuple(
+        [
+            replace(
+                record,
+                ontology_signals=signals_by_observation_id.get(
+                    record.observation_id,
+                    frozenset(),
+                ),
+            )
+            for record in kg_index.evidence_index.records
+        ]
+    )
+    evidence_index = CandidateEvidenceIndex(
+        evidence_records,
+        access_binding=kg_eval._access_binding_for_records(
+            evidence_records,
+            binding_context="ontology_index",
+        ),
+        text_policy_runtime=kg_index.text_policy_runtime,
+        ontology_revision_id=ontology.ontology_revision_id,
+        ontology_signal_vocabulary_hash=ontology_signal_vocabulary_hash,
+        ontology_contract_hash=ontology.ontology_hash,
+        ontology_query_signal_resolver=lambda query_text, query_tokens: (
+            kg_eval._query_ontology_signals(query_text, set(query_tokens)) & supported_signals
+        ),
+    )
     return _OntologyIndex(
-        domains_by_observation_id=domains_by_observation_id,
-        domain_scores_by_component=dict(domain_scores_by_component),
-        component_ids_by_domain={
-            domain: tuple(sorted(component_ids))
-            for domain, component_ids in component_ids_by_domain.items()
+        evidence_index=evidence_index,
+        ontology_contract_hash=ontology.ontology_hash,
+        ontology_signal_vocabulary_hash=ontology_signal_vocabulary_hash,
+        supported_signals=supported_signals,
+        signals_by_observation_id=signals_by_observation_id,
+        signal_scores_by_component=dict(signal_scores_by_component),
+        component_ids_by_signal={
+            signal: tuple(sorted(component_ids))
+            for signal, component_ids in component_ids_by_signal.items()
         },
     )
 
@@ -387,49 +466,55 @@ def _score_case_with_ontology(
     baseline_row: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     started = time.monotonic()
-    result_kind = str(case["result_kind"])
-    required_ids = tuple(str(value) for value in case.get("required_source_observation_ids", []))
-    required_match_count = int(case.get("required_match_count", 0))
+    query_text = str(case.get("query_text", ""))
+    access_binding = kg_eval._access_binding_for_requester(
+        str(case.get("requester_user_id", "")),
+        kg_index=kg_index,
+    )
+    retrieval = ontology_index.evidence_index.retrieve(
+        query_text=query_text,
+        limit=kg_eval.EVIDENCE_BUDGET,
+        enable_ontology_rerank=True,
+        access_binding=access_binding,
+        ontology_revision_id=kg_eval.EVIDENCE_ONTOLOGY_REVISION_ID,
+        ontology_signal_vocabulary_hash=(ontology_index.ontology_signal_vocabulary_hash),
+        ontology_contract_hash=ontology_index.ontology_contract_hash,
+        **kg_eval._retrieval_scope(kg_index),
+    )
+    selected_ids = retrieval.selected_observation_ids
+    selection_score = kg_eval._score_selection(
+        case,
+        selected_observation_ids=selected_ids,
+        kg_index=kg_index,
+    )
+
     baseline_status = (
         str(baseline_row.get("status"))
         if isinstance(baseline_row, Mapping) and isinstance(baseline_row.get("status"), str)
         else "unknown"
     )
 
-    if result_kind == "permission_denied":
-        selected_ids: tuple[str, ...] = ()
-        selected_components: tuple[str, ...] = ()
-        matched_required_count = 0
-        status = "passed"
-        query_domain_count = 0
-    else:
-        query_tokens = kg_eval._tokenize(str(case.get("query_text", "")))
-        query_domains = _domains_for_tokens(query_tokens)
-        selected_components = _rank_components_with_ontology(
-            query_tokens,
-            query_domains=query_domains,
-            kg_index=kg_index,
-            ontology_index=ontology_index,
-            limit=4,
+    query_domain_count = 0
+    if not retrieval.rejected:
+        query_tokens = kg_index.text_policy_runtime.tokenize(query_text)
+        query_domain_count = len(
+            kg_eval._query_ontology_signals(query_text, set(query_tokens))
+            & ontology_index.supported_signals
         )
-        selected_ids = kg_eval._evidence_from_components(
-            selected_components,
-            query_tokens=query_tokens,
-            kg_index=kg_index,
-            limit=MAX_COMPONENT_EVIDENCE_PER_CASE,
-        )
-        matched_required_count = len(set(required_ids) & set(selected_ids))
-        if result_kind == "owner_match":
-            status = "passed" if matched_required_count >= required_match_count else "failed"
-        else:
-            status = "passed" if len(selected_ids) == 0 else "failed"
-        query_domain_count = len(query_domains)
 
     row = {
         "baseline_status": baseline_status,
-        "ontology_status": status,
-        "ontology_matched_required_evidence_count": matched_required_count,
-        "ontology_selected_component_count": len(selected_components),
+        "ontology_status": selection_score.status,
+        "ontology_matched_required_evidence_count": (
+            selection_score.matched_required_observation_count
+        ),
+        "ontology_unmapped_required_evidence_count": (
+            selection_score.unmapped_required_observation_count
+        ),
+        "ontology_matched_required_source_item_count": (
+            selection_score.matched_required_source_item_count
+        ),
+        "ontology_selected_component_count": len(selection_score.selected_source_item_ids),
         "ontology_selected_evidence_count": len(selected_ids),
         "ontology_query_domain_count": query_domain_count,
         "ontology_elapsed_ms": int((time.monotonic() - started) * 1000),
@@ -438,56 +523,15 @@ def _score_case_with_ontology(
         {
             "case": sha256_json(str(case.get("case_id", ""))),
             "baseline_status": baseline_status,
-            "ontology_status": status,
-            "selected_components": selected_components,
+            "ontology_status": selection_score.status,
+            "selected_components": selection_score.selected_source_item_ids,
             "selected_evidence": selected_ids,
-            "matched_required": matched_required_count,
+            "matched_required_source_items": (selection_score.matched_required_source_item_count),
+            "matched_required_observations": (selection_score.matched_required_observation_count),
             "query_domain_count": query_domain_count,
         }
     )
     return row
-
-
-def _rank_components_with_ontology(
-    query_tokens: set[str],
-    *,
-    query_domains: set[str],
-    kg_index: kg_eval._CandidateKgIndex,
-    ontology_index: _OntologyIndex,
-    limit: int,
-) -> tuple[str, ...]:
-    if not query_domains:
-        return kg_eval._rank_components(query_tokens, kg_index, limit=limit)
-    candidate_components: set[str] = set()
-    for domain in query_domains:
-        candidate_components.update(ontology_index.component_ids_by_domain.get(domain, ()))
-    scores: list[tuple[int, int, int, str]] = []
-    important_query_terms = query_tokens & kg_eval._IMPORTANT_TERMS
-    for component_id in candidate_components:
-        component_terms = kg_index.tokens_by_component.get(component_id, frozenset())
-        term_score = len(component_terms & important_query_terms)
-        domain_score = sum(
-            ontology_index.domain_scores_by_component.get(component_id, {}).get(domain, 0)
-            for domain in query_domains
-        )
-        if term_score <= 0 and domain_score <= 0:
-            continue
-        scores.append(
-            (
-                -(term_score + min(domain_score, 4)),
-                -term_score,
-                len(kg_index.observation_ids_by_component[component_id]),
-                component_id,
-            )
-        )
-    return tuple(component_id for *_unused, component_id in sorted(scores)[:limit])
-
-
-def _domains_for_tokens(tokens: set[str] | frozenset[str]) -> set[str]:
-    scores = {
-        domain: len(tokens & hard_eval.DOMAIN_VOCABULARY[domain]) for domain in hard_eval.DOMAINS
-    }
-    return {domain for domain, score in scores.items() if score > 0}
 
 
 def _ablation_row(
@@ -507,9 +551,16 @@ def _ablation_row(
         "kg_status": str(kg_row["kg_status"]),
         "ontology_status": str(ontology_row["ontology_status"]),
         "required_evidence_count": int(kg_row["required_evidence_count"]),
+        "unmapped_required_evidence_count": int(kg_row["unmapped_required_evidence_count"]),
+        "required_source_item_count": int(kg_row["required_source_item_count"]),
+        "required_source_item_match_threshold": int(kg_row["required_source_item_match_threshold"]),
         "kg_matched_required_evidence_count": int(kg_row["matched_required_evidence_count"]),
         "ontology_matched_required_evidence_count": int(
             ontology_row["ontology_matched_required_evidence_count"]
+        ),
+        "kg_matched_required_source_item_count": int(kg_row["matched_required_source_item_count"]),
+        "ontology_matched_required_source_item_count": int(
+            ontology_row["ontology_matched_required_source_item_count"]
         ),
         "kg_selected_component_count": int(kg_row["selected_component_count"]),
         "ontology_selected_component_count": int(ontology_row["ontology_selected_component_count"]),
@@ -617,7 +668,7 @@ def _safe_outputs(
         "typed_component_count": ontology_index.typed_component_count,
         "ontology_type_definition_count": ontology.type_count,
         "ontology_type_mapping_count": ontology.mapping_count,
-        "ontology_mapped_lens_count": ontology.mapping_count,
+        "ontology_mapped_evidence_facet_count": ontology.mapping_count,
         "ontology_invalid_mapping_count": 0,
         "type_evidence_coverage_basis_points": _basis_points(
             ontology_index.typed_node_count,
@@ -629,9 +680,9 @@ def _safe_outputs(
         - ontology_index.typed_node_count,
         "weak_type_evidence_count": 0,
         "conflicting_type_evidence_count": sum(
-            1 for domains in ontology_index.domains_by_observation_id.values() if len(domains) > 1
+            1 for signals in ontology_index.signals_by_observation_id.values() if len(signals) > 1
         ),
-        "ontology_component_domain_count": len(ontology_index.component_ids_by_domain),
+        "ontology_component_domain_count": len(ontology_index.component_ids_by_signal),
         "largest_component_size": kg_index.largest_component_size,
         "largest_component_basis_points": int(
             (kg_index.largest_component_size / max(kg_index.candidate_atom_count, 1)) * 10000
@@ -778,6 +829,20 @@ _EXPECTED_SAFE_OUTPUT_KEYS = {
     "permission_denied_case_count",
     "kg_permission_denied_passed_count",
     "ontology_permission_denied_passed_count",
+    "required_source_item_count",
+    "kg_matched_required_source_item_count",
+    "ontology_matched_required_source_item_count",
+    "kg_source_item_recall_basis_points",
+    "ontology_source_item_recall_basis_points",
+    "required_observation_citation_count",
+    "kg_matched_required_observation_citation_count",
+    "ontology_matched_required_observation_citation_count",
+    "kg_selected_observation_citation_count",
+    "ontology_selected_observation_citation_count",
+    "kg_observation_citation_recall_basis_points",
+    "ontology_observation_citation_recall_basis_points",
+    "kg_observation_citation_precision_basis_points",
+    "ontology_observation_citation_precision_basis_points",
     "unique_case_id_hash_count",
     "unique_comparison_hash_count",
     "duplicate_comparison_hash_count",
@@ -797,7 +862,7 @@ _EXPECTED_SAFE_OUTPUT_KEYS = {
     "typed_component_count",
     "ontology_type_definition_count",
     "ontology_type_mapping_count",
-    "ontology_mapped_lens_count",
+    "ontology_mapped_evidence_facet_count",
     "ontology_invalid_mapping_count",
     "type_evidence_coverage_basis_points",
     "ontology_supported_relation_count",
@@ -829,6 +894,32 @@ def _aggregate_ablation_scores(rows: Sequence[Mapping[str, Any]]) -> dict[str, i
     positive_count = sum(1 for row in rows if row.get("result_kind") == "owner_match")
     no_match_count = sum(1 for row in rows if row.get("result_kind") == "no_match")
     denied_count = sum(1 for row in rows if row.get("result_kind") == "permission_denied")
+    positive_rows = [row for row in rows if row.get("result_kind") == "owner_match"]
+    required_source_item_count = sum(
+        _int_or_zero(row.get("required_source_item_count")) for row in positive_rows
+    )
+    kg_matched_source_item_count = sum(
+        _int_or_zero(row.get("kg_matched_required_source_item_count")) for row in positive_rows
+    )
+    ontology_matched_source_item_count = sum(
+        _int_or_zero(row.get("ontology_matched_required_source_item_count"))
+        for row in positive_rows
+    )
+    required_observation_count = sum(
+        _int_or_zero(row.get("required_evidence_count")) for row in positive_rows
+    )
+    kg_matched_observation_count = sum(
+        _int_or_zero(row.get("kg_matched_required_evidence_count")) for row in positive_rows
+    )
+    ontology_matched_observation_count = sum(
+        _int_or_zero(row.get("ontology_matched_required_evidence_count")) for row in positive_rows
+    )
+    kg_selected_observation_count = sum(
+        _int_or_zero(row.get("kg_selected_evidence_count")) for row in positive_rows
+    )
+    ontology_selected_observation_count = sum(
+        _int_or_zero(row.get("ontology_selected_evidence_count")) for row in positive_rows
+    )
     return {
         "case_count": case_count,
         "positive_case_count": positive_count,
@@ -846,14 +937,48 @@ def _aggregate_ablation_scores(rows: Sequence[Mapping[str, Any]]) -> dict[str, i
         "ontology_passed_case_count": sum(
             1 for row in rows if row.get("ontology_status") == "passed"
         ),
+        "required_source_item_count": required_source_item_count,
+        "kg_matched_required_source_item_count": kg_matched_source_item_count,
+        "ontology_matched_required_source_item_count": (ontology_matched_source_item_count),
+        "kg_source_item_recall_basis_points": _basis_points(
+            kg_matched_source_item_count,
+            required_source_item_count,
+        ),
+        "ontology_source_item_recall_basis_points": _basis_points(
+            ontology_matched_source_item_count,
+            required_source_item_count,
+        ),
+        "required_observation_citation_count": required_observation_count,
+        "kg_matched_required_observation_citation_count": (kg_matched_observation_count),
+        "ontology_matched_required_observation_citation_count": (
+            ontology_matched_observation_count
+        ),
+        "kg_selected_observation_citation_count": kg_selected_observation_count,
+        "ontology_selected_observation_citation_count": (ontology_selected_observation_count),
+        "kg_observation_citation_recall_basis_points": _basis_points(
+            kg_matched_observation_count,
+            required_observation_count,
+        ),
+        "ontology_observation_citation_recall_basis_points": _basis_points(
+            ontology_matched_observation_count,
+            required_observation_count,
+        ),
+        "kg_observation_citation_precision_basis_points": _basis_points(
+            kg_matched_observation_count,
+            kg_selected_observation_count,
+        ),
+        "ontology_observation_citation_precision_basis_points": _basis_points(
+            ontology_matched_observation_count,
+            ontology_selected_observation_count,
+        ),
     }
 
 
 def _ontology_supported_relation_count(ontology_index: _OntologyIndex) -> int:
     return sum(
-        max(0, domain_count - 1)
-        for domain_scores in ontology_index.domain_scores_by_component.values()
-        for domain_count in domain_scores.values()
+        max(0, signal_count - 1)
+        for signal_scores in ontology_index.signal_scores_by_component.values()
+        for signal_count in signal_scores.values()
     )
 
 
@@ -877,8 +1002,13 @@ def _validate_ablation_rows(rows: Sequence[Mapping[str, Any]], blockers: list[st
         "kg_status",
         "ontology_status",
         "required_evidence_count",
+        "unmapped_required_evidence_count",
+        "required_source_item_count",
+        "required_source_item_match_threshold",
         "kg_matched_required_evidence_count",
         "ontology_matched_required_evidence_count",
+        "kg_matched_required_source_item_count",
+        "ontology_matched_required_source_item_count",
         "kg_selected_component_count",
         "ontology_selected_component_count",
         "kg_selected_evidence_count",
@@ -1321,6 +1451,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--baseline-report", type=Path, default=None)
     parser.add_argument("--work-dir", type=Path, default=None)
+    parser.add_argument("--private-manifest", type=Path, default=None)
     parser.add_argument("--validate-report", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -1340,6 +1471,7 @@ def main(argv: list[str] | None = None) -> int:
     report = run_ontology_ablation_eval(
         baseline_report_path=args.baseline_report,
         work_dir=args.work_dir,
+        private_manifest_path=args.private_manifest,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

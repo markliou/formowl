@@ -138,6 +138,13 @@ function textTree(node) {
   return [node.textContent, ...node.children.map(textTree)].join(" ");
 }
 
+function tagTree(node, tagName) {
+  return [
+    ...(node.tagName === tagName ? [node] : []),
+    ...node.children.flatMap((child) => tagTree(child, tagName)),
+  ];
+}
+
 function makeDocument(ids) {
   const elements = new Map();
   for (const id of ids) {
@@ -266,8 +273,11 @@ async function runChatSmoke() {
         status: "ok",
         query_id: "uatquery_111111111111111111111111",
         result_count: 0,
+        total_result_count: 0,
+        displayed_result_count: 0,
         results: [],
         notice: "只讀測試結果",
+        projection: { output_format: "narrative" },
       });
     }
     if (path === "/api/feedback") {
@@ -346,6 +356,7 @@ async function runChatSmoke() {
   assert.ok(queryRequest);
   let queryPayload = JSON.parse(queryRequest.options.body);
   assert.equal(queryPayload.sort, "recent");
+  assert.equal(queryPayload.limit, 50);
   assert.equal(queryPayload.source, "composer");
   assert.match(queryPayload.visitor_id, /^uatvisitor_[0-9a-f]{32}$/u);
   assert.match(queryPayload.session_id, /^uatsession_[0-9a-f]{32}$/u);
@@ -356,6 +367,64 @@ async function runChatSmoke() {
   queryRequest = requests.find((item) => item.path === "/api/query");
   assert.ok(queryRequest);
   assert.equal(JSON.parse(queryRequest.options.body).sort, "relevance");
+
+  const tableHolder = new FakeElement("div");
+  context.renderAssistantResult(
+    {
+      query_id: "uatquery_222222222222222222222222",
+      total_result_count: 12,
+      displayed_result_count: 2,
+      results: [
+        {
+          snippet: "最重要的來源內容",
+          subject: "次要主旨",
+          sent_at: "2026-07-20T08:00:00+00:00",
+          source_kind: "preloaded",
+          citation: { citation_id: "mailcitation_table" },
+        },
+        {
+          snippet: "第二筆來源內容",
+          subject: "第二筆主旨",
+          sent_at: null,
+          source_kind: "uploaded_uat",
+          citation: null,
+        },
+      ],
+      notice: "內容優先",
+      projection: { output_format: "table" },
+    },
+    tableHolder,
+  );
+  assert.match(textTree(tableHolder), /共找到 12 筆/u);
+  assert.match(textTree(tableHolder), /目前顯示 2 筆/u);
+  assert.equal(tagTree(tableHolder, "table").length, 1);
+  assert.equal(tagTree(tableHolder, "th")[0].textContent, "內容");
+  assert.doesNotMatch(textTree(tableHolder), /寄件者|收件者/u);
+
+  const narrativeHolder = new FakeElement("div");
+  context.renderAssistantResult(
+    {
+      query_id: "uatquery_333333333333333333333333",
+      total_result_count: 1,
+      displayed_result_count: 1,
+      results: [
+        {
+          snippet: "內容先出現",
+          subject: "主旨後出現",
+          sent_at: "2026-07-20T08:00:00+00:00",
+          source_kind: "preloaded",
+          citation: null,
+        },
+      ],
+      notice: "內容優先",
+      projection: { output_format: "narrative" },
+    },
+    narrativeHolder,
+  );
+  const evidenceCard = tagTree(narrativeHolder, "article")[0];
+  assert.equal(evidenceCard.children[0].tagName, "p");
+  assert.equal(evidenceCard.children[0].textContent, "內容先出現");
+  assert.equal(evidenceCard.children[1].tagName, "h3");
 
   requests.length = 0;
   await elements.get("sidebar-toggle").dispatch("click");

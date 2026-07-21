@@ -18,7 +18,7 @@ locators, parser commands, scratch paths, SQL, or environment values.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -449,6 +449,7 @@ class _DomainCase:
     query_text: str
     requester_user_id: str
     required_source_observation_ids: tuple[str, ...]
+    required_logical_source_item_ids: tuple[str, ...] = ()
     forbidden_source_observation_ids: tuple[str, ...] = ()
     required_match_count: int = 2
     limit: int = 10
@@ -464,6 +465,7 @@ class _DomainCase:
                 "query_text": self.query_text,
                 "requester_user_id": self.requester_user_id,
                 "required_source_observation_ids": self.required_source_observation_ids,
+                "required_logical_source_item_ids": self.required_logical_source_item_ids,
                 "forbidden_source_observation_ids": self.forbidden_source_observation_ids,
                 "required_match_count": self.required_match_count,
                 "limit": self.limit,
@@ -480,6 +482,7 @@ class _DomainCase:
             "query_text": self.query_text,
             "requester_user_id": self.requester_user_id,
             "required_source_observation_ids": list(self.required_source_observation_ids),
+            "required_logical_source_item_ids": list(self.required_logical_source_item_ids),
             "forbidden_source_observation_ids": list(self.forbidden_source_observation_ids),
             "required_match_count": self.required_match_count,
             "limit": self.limit,
@@ -882,6 +885,9 @@ def _generate_domain_case_manifest(
     )
     segments = _segment_infos(bundle)
     token_sources = _token_sources(segments)
+    logical_source_by_observation_id = {
+        segment.source_observation_id: segment.email_message_id for segment in segments
+    }
     all_cases: list[_DomainCase] = []
     for domain in DOMAINS:
         positives = _positive_domain_cases(
@@ -892,7 +898,25 @@ def _generate_domain_case_manifest(
         )
         if len(positives) < 8:
             raise RuntimeError("insufficient_domain_evidence")
-        selected = positives[:8]
+        selected = [
+            replace(
+                case,
+                required_logical_source_item_ids=tuple(
+                    dict.fromkeys(
+                        logical_source_by_observation_id[observation_id]
+                        for observation_id in case.required_source_observation_ids
+                        if observation_id in logical_source_by_observation_id
+                    )
+                ),
+            )
+            for case in positives[:8]
+        ]
+        if any(
+            len(case.required_logical_source_item_ids) < 1
+            for case in selected
+            if case.result_kind == "owner_match"
+        ):
+            raise RuntimeError("logical_source_gold_missing")
         all_cases.extend(selected)
         all_cases.extend(_negative_domain_cases(domain, selected[0], seed=seed))
     if len(all_cases) != CASE_COUNT or len({case.case_id for case in all_cases}) != CASE_COUNT:

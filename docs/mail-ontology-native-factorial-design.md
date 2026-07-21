@@ -2,8 +2,35 @@
 
 Date: 2026-07-07
 
-Status: design pre-registration draft. Do not treat this as an experiment
-completion claim.
+Status: historical pre-registration design, superseded for active retrieval by
+the source-neutral `CandidateEvidenceIndex` method in `SPEC.md` Section 9.7.2
+and `docs/kg-research-method.md`. Keep this file as the design record for the
+older ontology-native factorial question; do not treat its 20/30/29 scores or
+planned grid as the current FormOwl retrieval method.
+
+## Default Candidate Evidence Retrieval
+
+Any rerun must onboard the current logical source item method first: trusted
+access before query vocabulary, explicit context/time admissibility,
+conjunctive anchors within one source, and capped additive ontology reranking.
+The node/component grids and late ontology hard gates below are historical
+ablation definitions only. They must not be used as the default harness or as
+current gold.
+The rerun must use an index-owned `CandidateEvidenceTextPolicyRuntime` for the
+Unicode-NFKC/protected-ASCII/Jieba/corpus-bound SentencePiece/frozen-profile
+stack and exact admission/model/corpus SHA-256 hashes. The binding also pins
+the runtime id and tokenizer implementation hash; runtime code mismatch fails
+closed. Default callers pass query text only; raw tokens and free-form hashes
+are not onboarding evidence. Access and explicit context/time admissibility
+precedes tokenization. Every operator arm below must enter through
+`retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
 
 ## Why This Rework Exists
 

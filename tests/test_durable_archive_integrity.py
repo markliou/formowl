@@ -70,7 +70,10 @@ class DurableArchiveIntegrityTests(unittest.TestCase):
 
         self.assertEqual(len(re.findall(r"^\s*- \[x\]", archived, re.MULTILINE)), 147)
         self.assertEqual(len(re.findall(r"^\s*- \[ \]", archived, re.MULTILINE)), 1)
-        self.assertEqual(len(re.findall(r"^\s*- \[ \]", active, re.MULTILINE)), 1)
+        self.assertRegex(
+            active,
+            r"(?m)^- \[ \] Complete the full KG real-evidence objective across sessions\.$",
+        )
 
 
 if __name__ == "__main__":

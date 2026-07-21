@@ -249,6 +249,129 @@ class MailFullPstChatgptMcp50000EvalScriptTests(unittest.TestCase):
             rebuilt,
         )
 
+    def test_grounded_answer_evaluation_uses_default_candidate_retrieval_pipeline(
+        self,
+    ) -> None:
+        module = _load_eval_module("mail_chatgpt_mcp_default_candidate_retrieval")
+        corpus_root = _paths.fresh_test_dir("mail-chatgpt-mcp-grounded-retrieval")
+        observations_dir = corpus_root / "data" / "ingestion" / "observations"
+        observations_dir.mkdir(parents=True)
+        owner_observation_id = "obs_grounded_owner"
+        _write_grounded_observation(
+            observations_dir / f"{owner_observation_id}.json",
+            observation_id=owner_observation_id,
+            text=(
+                "Supplier release is blocked. " "Owner: Maggie must review the issue by 2026-07-20."
+            ),
+        )
+        owner_fingerprint = sha256_json("grounded-owner")
+        denied_fingerprint = sha256_json("grounded-denied")
+        cases = [
+            {
+                "case_id": "grounded-owner",
+                "private_fingerprint": owner_fingerprint,
+                "result_kind": "owner_match",
+                "query_text": "Which supplier release is blocked?",
+                "requester_user_id": module.baseline_eval.ACTOR_USER_ID,
+                "required_source_observation_ids": [owner_observation_id],
+                "limit": 5,
+            },
+            {
+                "case_id": "grounded-denied",
+                "private_fingerprint": denied_fingerprint,
+                "result_kind": "permission_denied",
+                "query_text": "Which supplier release is blocked?",
+                "requester_user_id": module.baseline_eval.DENIED_USER_ID,
+                "required_source_observation_ids": [],
+                "limit": 5,
+            },
+        ]
+        replay_artifact = module.ReplayArtifact(
+            unique_evidence_case_count=2,
+            tools_list_response={},
+            tools_list_response_hash=sha256_json("tools-list"),
+            public_rows=(),
+            private_rows=(
+                _grounded_replay_row(
+                    owner_fingerprint,
+                    semantic_kind="owner_match",
+                    selected_observation_ids=(owner_observation_id,),
+                ),
+                _grounded_replay_row(
+                    denied_fingerprint,
+                    semantic_kind="permission_denied",
+                    selected_observation_ids=(),
+                ),
+            ),
+            public_rows_root_hash=sha256_json([]),
+            private_rows_root_hash=sha256_json([]),
+            attestation_hash=sha256_json("attestation"),
+        )
+        retrieve_calls: list[dict] = []
+        original_retrieve = module.kg_eval.CandidateEvidenceIndex.retrieve
+
+        def recording_retrieve(index, **kwargs):
+            retrieve_calls.append(dict(kwargs))
+            return original_retrieve(index, **kwargs)
+
+        with mock.patch.object(
+            module.kg_eval.CandidateEvidenceIndex,
+            "retrieve",
+            new=recording_retrieve,
+        ):
+            evaluation = module._build_grounded_answer_evaluation(
+                bundle=None,
+                cases=cases,
+                replay_artifact=replay_artifact,
+                corpus_root=corpus_root,
+            )
+
+        self.assertEqual(evaluation["unique_evidence_case_count"], 2)
+        self.assertEqual(len(retrieve_calls), 4)
+        for call in retrieve_calls:
+            self.assertEqual(call["query_text"], "Which supplier release is blocked?")
+            self.assertEqual(call["limit"], 5)
+            self.assertIn("access_binding", call)
+            self.assertIn("accessible_context_ids", call)
+            self.assertIn("query_context_ids", call)
+            self.assertIn("known_as_of", call)
+            self.assertIn("as_of_world_time", call)
+            self.assertNotIn("query_tokens", call)
+            self.assertNotIn("query_policy_binding_hash", call)
+        self.assertEqual(
+            sum(call.get("enable_ontology_rerank") is True for call in retrieve_calls),
+            2,
+        )
+        self.assertEqual(
+            sum(not call["access_binding"].eligible_observation_ids for call in retrieve_calls),
+            2,
+        )
+
+        rows = {row["case_id"]: row for row in evaluation["rows"]}
+        owner_arms = {item["arm"]: item for item in rows["grounded-owner"]["arm_results"]}
+        denied_arms = {item["arm"]: item for item in rows["grounded-denied"]["arm_results"]}
+        self.assertEqual(
+            owner_arms[module.CHATGPT_WITH_CANDIDATE_KG]["selected_evidence_ids"],
+            [owner_observation_id],
+        )
+        self.assertEqual(
+            owner_arms[module.CHATGPT_WITH_ONTOLOGY_GUIDED_KG]["selected_evidence_ids"],
+            [owner_observation_id],
+        )
+        self.assertEqual(
+            denied_arms[module.CHATGPT_WITH_CANDIDATE_KG]["selected_evidence_ids"],
+            [],
+        )
+        self.assertEqual(
+            denied_arms[module.CHATGPT_WITH_ONTOLOGY_GUIDED_KG]["selected_evidence_ids"],
+            [],
+        )
+        for row in rows.values():
+            self.assertIn("kg_retrieval_result_hash", row)
+            self.assertIn("ontology_retrieval_result_hash", row)
+            self.assertNotIn("kg_selected_component_hash", row)
+            self.assertNotIn("ontology_selected_component_hash", row)
+
     def test_blocks_without_opt_in_and_on_manifest_binding_mismatch(self) -> None:
         module = _load_eval_module()
         temp_dir = _paths.fresh_test_dir("mail-chatgpt-mcp-50k-blocked")
@@ -928,6 +1051,73 @@ def _factorial_summary(index: int):
         "unique_response_hash_count": 3,
     }
     return {**without_hash, "arm_summary_hash": sha256_json(without_hash)}
+
+
+def _write_grounded_observation(
+    path: Path,
+    *,
+    observation_id: str,
+    text: str,
+) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "observation_id": observation_id,
+                "asset_id": "asset_grounded_candidate_retrieval",
+                "extractor_run_id": "run_grounded_candidate_retrieval",
+                "observation_type": "email_body_segment",
+                "modality": "mail",
+                "text": text,
+                "location": {
+                    "message_id": "<grounded-owner@example.test>",
+                    "message_occurrence_id": "occurrence-grounded-owner",
+                    "thread_id": "thread-grounded-owner",
+                },
+                "payload": {
+                    "message_id": "<grounded-owner@example.test>",
+                    "message_occurrence_id": "occurrence-grounded-owner",
+                    "message_fingerprint": "grounded-owner-fingerprint",
+                    "semantic_roles": ["deadline"],
+                },
+                "permission_scope": {
+                    "scope_type": "workspace",
+                    "scope_id": "workspace_formowl",
+                    "visibility": "restricted",
+                },
+                "created_at": "2026-07-07T12:00:00+00:00",
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _grounded_replay_row(
+    case_fingerprint: str,
+    *,
+    semantic_kind: str,
+    selected_observation_ids: tuple[str, ...],
+) -> dict:
+    return {
+        "case_fingerprint": case_fingerprint,
+        "steps": [{"semantic_kind": semantic_kind}],
+        "response": {
+            "result": {
+                "content": [
+                    {
+                        "json": {
+                            "data": {
+                                "evidence_snippets": [
+                                    {"source_observation_id": observation_id}
+                                    for observation_id in selected_observation_ids
+                                ]
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+    }
 
 
 if __name__ == "__main__":
