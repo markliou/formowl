@@ -245,6 +245,7 @@ _SEGMENTATION_POLICY_ID_RE = re.compile(r"jieba_sentencepiece(?:_[a-z0-9]+)*_v[1
 _CANDIDATE_ADMISSION_POLICY_ID_RE = re.compile(r"frozen_profile(?:_[a-z0-9]+)+")
 _RUNTIME_ID_RE = re.compile(r"[a-z0-9][a-z0-9_.:+-]*")
 _LogicalSourceKey = tuple[str, str]
+_CARDINALITY_MODES = frozenset({"sufficient", "exact", "at_least", "all_matching"})
 
 
 @dataclass(frozen=True)
@@ -624,6 +625,7 @@ class CandidateQueryPlan:
     chronology_mode: str | None = None
     chronology_boundary: str | None = None
     chronology_timezone: str | None = None
+    cardinality_mode: str = "sufficient"
 
 
 @dataclass(frozen=True)
@@ -634,6 +636,27 @@ class CandidateRetrievalResult:
     selected_observation_ids: tuple[str, ...]
     rejected: bool
     rejection_reason: str | None = None
+    selected_source_item_keys: tuple[_LogicalSourceKey, ...] = ()
+    assembled_observation_ids: tuple[str, ...] = ()
+    total_source_item_count: int = 0
+    returned_source_item_count: int = 0
+    is_exhaustive: bool = False
+    has_more: bool = False
+
+
+@dataclass(frozen=True)
+class _CandidateSelection:
+    selected_observation_ids: tuple[str, ...] = ()
+    selected_source_item_keys: tuple[_LogicalSourceKey, ...] = ()
+    total_source_item_count: int = 0
+
+    @property
+    def returned_source_item_count(self) -> int:
+        return len(self.selected_source_item_keys)
+
+    @property
+    def is_exhaustive(self) -> bool:
+        return self.returned_source_item_count == self.total_source_item_count
 
 
 def infer_evidence_ontology_signals(
@@ -790,6 +813,7 @@ class CandidateEvidenceIndex:
         source_item_budget: int | None = None,
         observation_budget: int | None = None,
         requested_source_item_count: int | None = None,
+        cardinality_mode: str = "sufficient",
         enable_ontology_rerank: bool = False,
         access_binding: CandidateEvidenceAccessBinding | None = None,
         eligible_observation_ids: Iterable[str] | None = None,
@@ -812,6 +836,7 @@ class CandidateEvidenceIndex:
             source_item_budget=source_item_budget,
             observation_budget=observation_budget,
             requested_source_item_count=requested_source_item_count,
+            cardinality_mode=cardinality_mode,
             enable_ontology_rerank=enable_ontology_rerank,
             access_binding=access_binding,
             eligible_observation_ids=eligible_observation_ids,
@@ -849,6 +874,7 @@ class CandidateEvidenceIndex:
         source_item_budget: int | None = None,
         observation_budget: int | None = None,
         requested_source_item_count: int | None = None,
+        cardinality_mode: str = "sufficient",
         enable_ontology_rerank: bool = False,
         access_binding: CandidateEvidenceAccessBinding | None = None,
         eligible_observation_ids: Iterable[str] | None = None,
@@ -881,6 +907,7 @@ class CandidateEvidenceIndex:
             source_item_budget=source_item_budget,
             observation_budget=observation_budget,
             requested_source_item_count=requested_source_item_count,
+            cardinality_mode=cardinality_mode,
             enable_ontology_rerank=enable_ontology_rerank,
             access_binding=access_binding,
             eligible_observation_ids=eligible_observation_ids,
@@ -910,6 +937,7 @@ class CandidateEvidenceIndex:
         source_item_budget: int | None,
         observation_budget: int | None,
         requested_source_item_count: int | None,
+        cardinality_mode: str,
         enable_ontology_rerank: bool,
         access_binding: CandidateEvidenceAccessBinding | None,
         eligible_observation_ids: Iterable[str] | None,
@@ -957,6 +985,35 @@ class CandidateEvidenceIndex:
                 rejected=True,
                 rejection_reason="invalid_cross_context_comparison_authorization",
             )
+        if type(cardinality_mode) is not str or cardinality_mode not in _CARDINALITY_MODES:
+            return CandidateRetrievalResult(
+                plan=CandidateQueryPlan(intent="general", anchor_tokens=()),
+                selected_observation_ids=(),
+                rejected=True,
+                rejection_reason="invalid_cardinality_mode",
+            )
+        if cardinality_mode in {"exact", "at_least"} and requested_source_item_count is None:
+            return CandidateRetrievalResult(
+                plan=CandidateQueryPlan(
+                    intent="general",
+                    anchor_tokens=(),
+                    cardinality_mode=cardinality_mode,
+                ),
+                selected_observation_ids=(),
+                rejected=True,
+                rejection_reason="requested_source_item_count_required",
+            )
+        if cardinality_mode == "all_matching" and requested_source_item_count is not None:
+            return CandidateRetrievalResult(
+                plan=CandidateQueryPlan(
+                    intent="general",
+                    anchor_tokens=(),
+                    cardinality_mode=cardinality_mode,
+                ),
+                selected_observation_ids=(),
+                rejected=True,
+                rejection_reason="all_matching_does_not_accept_exact_count",
+            )
         permission_eligible_ids = set(self._by_id)
         for effective_access_binding in access_bindings:
             permission_eligible_ids &= {
@@ -977,11 +1034,24 @@ class CandidateEvidenceIndex:
                 rejected=True,
                 rejection_reason="no_accessible_evidence",
             )
-        effective_source_item_budget = limit if source_item_budget is None else source_item_budget
-        effective_observation_budget = limit if observation_budget is None else observation_budget
-        if effective_source_item_budget <= 0 or effective_observation_budget <= 0:
+        if (
+            type(limit) is not int
+            or limit <= 0
+            or (
+                source_item_budget is not None
+                and (type(source_item_budget) is not int or source_item_budget <= 0)
+            )
+            or (
+                observation_budget is not None
+                and (type(observation_budget) is not int or observation_budget <= 0)
+            )
+        ):
             return CandidateRetrievalResult(
-                plan=CandidateQueryPlan(intent="general", anchor_tokens=()),
+                plan=CandidateQueryPlan(
+                    intent="general",
+                    anchor_tokens=(),
+                    cardinality_mode=cardinality_mode,
+                ),
                 selected_observation_ids=(),
                 rejected=True,
                 rejection_reason="evidence_budget_exhausted",
@@ -1051,6 +1121,27 @@ class CandidateEvidenceIndex:
                 selected_observation_ids=(),
                 rejected=True,
                 rejection_reason="no_admissible_evidence",
+            )
+        if cardinality_mode == "all_matching":
+            effective_source_item_budget = (
+                len(
+                    {
+                        _logical_source_key(self._by_id[observation_id])
+                        for observation_id in eligible_ids
+                    }
+                )
+                if source_item_budget is None
+                else source_item_budget
+            )
+            effective_observation_budget = (
+                len(eligible_ids) if observation_budget is None else observation_budget
+            )
+        else:
+            effective_source_item_budget = (
+                limit if source_item_budget is None else source_item_budget
+            )
+            effective_observation_budget = (
+                limit if observation_budget is None else observation_budget
             )
         binding_error = self._binding_error(
             enable_ontology_rerank=enable_ontology_rerank,
@@ -1122,6 +1213,7 @@ class CandidateEvidenceIndex:
             limit=effective_source_item_budget,
             query_timezone=query_timezone,
             requested_source_item_count=requested_source_item_count,
+            cardinality_mode=cardinality_mode,
         )
         if plan.minimum_source_items > effective_source_item_budget:
             return CandidateRetrievalResult(
@@ -1136,18 +1228,17 @@ class CandidateEvidenceIndex:
             eligible_ids=eligible_ids,
             limit=effective_observation_budget,
         )
-        if planned:
-            return CandidateRetrievalResult(
-                plan=plan,
-                selected_observation_ids=planned,
-                rejected=False,
-            )
+        if planned.selected_observation_ids:
+            return self._retrieval_result(plan, planned, eligible_ids=eligible_ids)
         if plan.intent != "general":
             return CandidateRetrievalResult(
                 plan=plan,
                 selected_observation_ids=(),
                 rejected=True,
                 rejection_reason="insufficient_supported_evidence",
+                total_source_item_count=planned.total_source_item_count,
+                is_exhaustive=planned.total_source_item_count == 0,
+                has_more=planned.total_source_item_count > 0,
             )
         fallback = self._rank_direct(
             normalized_query_tokens,
@@ -1156,11 +1247,41 @@ class CandidateEvidenceIndex:
             source_item_limit=effective_source_item_budget,
             observation_limit=effective_observation_budget,
         )
+        if fallback.selected_observation_ids:
+            return self._retrieval_result(plan, fallback, eligible_ids=eligible_ids)
         return CandidateRetrievalResult(
             plan=plan,
-            selected_observation_ids=fallback,
-            rejected=not fallback,
-            rejection_reason=None if fallback else "no_supported_evidence",
+            selected_observation_ids=(),
+            rejected=True,
+            rejection_reason="no_supported_evidence",
+            total_source_item_count=fallback.total_source_item_count,
+            is_exhaustive=fallback.total_source_item_count == 0,
+            has_more=fallback.total_source_item_count > 0,
+        )
+
+    def _retrieval_result(
+        self,
+        plan: CandidateQueryPlan,
+        selection: _CandidateSelection,
+        *,
+        eligible_ids: set[str],
+    ) -> CandidateRetrievalResult:
+        assembled_observation_ids = tuple(
+            record.observation_id
+            for source_item_key in selection.selected_source_item_keys
+            for record in self._by_source_item[source_item_key]
+            if record.observation_id in eligible_ids
+        )
+        return CandidateRetrievalResult(
+            plan=plan,
+            selected_observation_ids=selection.selected_observation_ids,
+            selected_source_item_keys=selection.selected_source_item_keys,
+            assembled_observation_ids=assembled_observation_ids,
+            total_source_item_count=selection.total_source_item_count,
+            returned_source_item_count=selection.returned_source_item_count,
+            is_exhaustive=selection.is_exhaustive,
+            has_more=not selection.is_exhaustive,
+            rejected=False,
         )
 
     def _admissible_ids(
@@ -1252,6 +1373,7 @@ class CandidateEvidenceIndex:
         limit: int,
         query_timezone: str | None,
         requested_source_item_count: int | None,
+        cardinality_mode: str,
     ) -> CandidateQueryPlan:
         term_sequence = _normalized_query_term_sequence(query_text)
         raw_terms = set(term_sequence)
@@ -1275,25 +1397,32 @@ class CandidateEvidenceIndex:
         )
         if intent == "general" and explicit_multi:
             intent = "multi_record"
-        requested_source_items = _requested_source_item_count(
-            term_sequence,
-            query_text=query_text,
-            default=(
-                2
-                if explicit_multi
-                or intent in {"conflict", "multi_record"}
-                or (intent == "chronology" and chronology_mode == "range")
+        if cardinality_mode == "all_matching":
+            requested_source_items = limit
+            minimum_source_items = 1
+            target_source_items = limit
+        else:
+            requested_source_items = _requested_source_item_count(
+                term_sequence,
+                query_text=query_text,
+                default=(
+                    2
+                    if explicit_multi
+                    or intent in {"conflict", "multi_record"}
+                    or (intent == "chronology" and chronology_mode == "range")
+                    else 1
+                ),
+                maximum=limit,
+                explicit_count=explicit_source_item_count,
+            )
+            minimum_source_items = (
+                requested_source_items
+                if cardinality_mode in {"exact", "at_least"}
+                or explicit_multi
+                or intent in {"chronology", "conflict", "multi_record"}
                 else 1
-            ),
-            maximum=limit,
-            explicit_count=explicit_source_item_count,
-        )
-        minimum_source_items = (
-            requested_source_items
-            if explicit_multi or intent in {"chronology", "conflict", "multi_record"}
-            else 1
-        )
-        target_source_items = requested_source_items
+            )
+            target_source_items = requested_source_items
         actor_tokens = (
             self._query_actor_tokens(
                 query_tokens,
@@ -1330,6 +1459,9 @@ class CandidateEvidenceIndex:
                 )
             )
         )
+        preferred_anchor_source_items = (
+            minimum_source_items if cardinality_mode == "all_matching" else target_source_items
+        )
 
         if intent == "actor_topic":
             anchors = self._supported_token_set_with_fallback(
@@ -1338,7 +1470,7 @@ class CandidateEvidenceIndex:
                 actor_tokens=set(actor_tokens),
                 eligible_ids=eligible_ids,
                 maximum_size=1,
-                preferred_source_items=target_source_items,
+                preferred_source_items=preferred_anchor_source_items,
                 minimum_source_items=minimum_source_items,
             )
         elif intent == "conflict":
@@ -1348,7 +1480,7 @@ class CandidateEvidenceIndex:
                 actor_tokens=set(),
                 eligible_ids=eligible_ids,
                 maximum_size=2,
-                preferred_source_items=target_source_items,
+                preferred_source_items=preferred_anchor_source_items,
                 minimum_source_items=minimum_source_items,
             )
             if len(content_tokens) >= 2 and len(anchors) < 2:
@@ -1362,7 +1494,7 @@ class CandidateEvidenceIndex:
                 actor_tokens=set(),
                 eligible_ids=eligible_ids,
                 maximum_size=1,
-                preferred_source_items=target_source_items,
+                preferred_source_items=preferred_anchor_source_items,
                 minimum_source_items=minimum_source_items,
                 required_tokens=semantic_terms,
             )
@@ -1378,7 +1510,7 @@ class CandidateEvidenceIndex:
                 actor_tokens=set(),
                 eligible_ids=eligible_ids,
                 maximum_size=maximum_size,
-                preferred_source_items=target_source_items,
+                preferred_source_items=preferred_anchor_source_items,
                 minimum_source_items=minimum_source_items,
             )
         else:
@@ -1387,6 +1519,7 @@ class CandidateEvidenceIndex:
             intent=intent,
             anchor_tokens=anchors,
             actor_tokens=actor_tokens,
+            cardinality_mode=cardinality_mode,
             minimum_source_items=minimum_source_items,
             target_source_items=target_source_items,
             chronology_mode=chronology_mode if intent == "chronology" else None,
@@ -1546,16 +1679,16 @@ class CandidateEvidenceIndex:
         ontology_query_signals: set[str],
         eligible_ids: set[str],
         limit: int,
-    ) -> tuple[str, ...]:
+    ) -> _CandidateSelection:
         if not plan.anchor_tokens:
-            return ()
+            return _CandidateSelection()
         source_item_ids = self._matching_source_item_ids(
             plan.anchor_tokens,
             actor_tokens=set(plan.actor_tokens),
             eligible_ids=eligible_ids,
         )
         if len(source_item_ids) < plan.minimum_source_items:
-            return ()
+            return _CandidateSelection(total_source_item_count=len(source_item_ids))
         ordered = sorted(
             source_item_ids,
             key=lambda source_item_id: (
@@ -1583,7 +1716,7 @@ class CandidateEvidenceIndex:
                 is not None
             }
             if len(chronological_source_ids) < plan.minimum_source_items:
-                return ()
+                return _CandidateSelection(total_source_item_count=len(chronological_source_ids))
             chronological = sorted(
                 chronological_source_ids,
                 key=lambda source_item_id: self._source_item_order_key(
@@ -1594,7 +1727,7 @@ class CandidateEvidenceIndex:
             chronology_mode = plan.chronology_mode or "range"
             if chronology_mode in {"before", "after"}:
                 if plan.chronology_boundary is None:
-                    return ()
+                    return _CandidateSelection()
                 chronological = [
                     source_item_id
                     for source_item_id in chronological
@@ -1609,7 +1742,8 @@ class CandidateEvidenceIndex:
                     )
                 ]
                 if len(chronological) < plan.minimum_source_items:
-                    return ()
+                    return _CandidateSelection(total_source_item_count=len(chronological))
+            matching_source_items = tuple(chronological)
             if chronology_mode == "earliest":
                 selected_source_items = tuple(chronological[: plan.target_source_items])
             elif chronology_mode in {"latest", "before"}:
@@ -1622,9 +1756,10 @@ class CandidateEvidenceIndex:
                     target_count=plan.target_source_items,
                 )
         else:
+            matching_source_items = tuple(ordered)
             selected_source_items = tuple(ordered[: plan.target_source_items])
         selected: list[str] = []
-        represented_source_items: set[str] = set()
+        represented_source_items: list[_LogicalSourceKey] = []
         for source_item_id in selected_source_items:
             representatives = self._representative_observation_ids(
                 source_item_id,
@@ -1637,12 +1772,16 @@ class CandidateEvidenceIndex:
             if not representatives:
                 continue
             selected.extend(representatives)
-            represented_source_items.add(source_item_id)
+            represented_source_items.append(source_item_id)
             if len(selected) >= limit:
                 break
         if len(represented_source_items) < plan.minimum_source_items:
-            return ()
-        return tuple(selected[:limit])
+            return _CandidateSelection(total_source_item_count=len(matching_source_items))
+        return _CandidateSelection(
+            selected_observation_ids=tuple(selected[:limit]),
+            selected_source_item_keys=tuple(represented_source_items),
+            total_source_item_count=len(matching_source_items),
+        )
 
     def _representative_observation_ids(
         self,
@@ -1698,7 +1837,7 @@ class CandidateEvidenceIndex:
         eligible_ids: set[str],
         source_item_limit: int,
         observation_limit: int,
-    ) -> tuple[str, ...]:
+    ) -> _CandidateSelection:
         candidate_source_item_ids = {
             _logical_source_key(self._by_id[observation_id])
             for token in query_tokens
@@ -1727,7 +1866,7 @@ class CandidateEvidenceIndex:
             coverage = len(overlap) / max(len(query_tokens), 1)
             ranked.append((-(lexical_score + ontology_bonus), -coverage, source_item_id))
         selected: list[str] = []
-        represented_source_items = 0
+        selected_source_item_keys: list[_LogicalSourceKey] = []
         for *_score, source_item_id in sorted(ranked):
             anchor_tokens = {
                 token
@@ -1747,10 +1886,17 @@ class CandidateEvidenceIndex:
             if not representatives:
                 continue
             selected.extend(representatives)
-            represented_source_items += 1
-            if represented_source_items >= source_item_limit or len(selected) >= observation_limit:
+            selected_source_item_keys.append(source_item_id)
+            if (
+                len(selected_source_item_keys) >= source_item_limit
+                or len(selected) >= observation_limit
+            ):
                 break
-        return tuple(selected[:observation_limit])
+        return _CandidateSelection(
+            selected_observation_ids=tuple(selected[:observation_limit]),
+            selected_source_item_keys=tuple(selected_source_item_keys),
+            total_source_item_count=len(ranked),
+        )
 
     def _source_item_planned_score(
         self,

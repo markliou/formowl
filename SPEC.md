@@ -260,7 +260,74 @@ canonical state.
 Entity matching, data access, canonical merge, user-view assembly, and raw
 asset access are separate decisions.
 
-### 2.8 Project or propose action
+### 2.8 Understand the task, evaluate evidence, then project or propose action
+
+Natural-language interaction does not send every utterance directly to a new
+isolated search. FormOwl first represents the task as a versioned `TaskFrame`:
+
+```text
+latest utterance
++ prior TaskFrame when this is a follow-up
++ typed semantic anchors
++ hard context, time, permission, and state constraints
++ EvidenceRequirement
++ ProjectionSpec
+```
+
+A follow-up revises only the dimensions it changes. For example, "只想看到表格"
+changes the projection but preserves the prior target, anchors, constraints,
+and evidence requirement. A refined target or period updates the prior frame
+instead of discarding its still-applicable context.
+
+Task answering then uses four separate stages:
+
+```text
+TaskFrame
+  -> Candidate evidence retrieval
+  -> source-item evidence and requested-field assembly
+  -> EvidenceCoverage and AnswerabilityDecision
+  -> AnswerProjection or reviewed action proposal
+```
+
+Retrieval identifies admissible logical source items and citeable supporting
+observations. Evidence assembly gathers the normalized fields belonging to
+those selected source items; it is not limited to the one observation that
+matched a search token. This allows, for example, a header observation to help
+locate a message while its body observations provide the primary answer.
+
+`EvidenceCoverage` reports at least:
+
+```text
+target found or not
+total matching logical source items
+returned logical source items
+assembled observations
+required, covered, and missing properties
+conflicting assertion keys
+is_exhaustive
+has_more
+```
+
+`AnswerabilityDecision` distinguishes:
+
+```text
+permission denied
+target not found
+target found but requested property absent
+partial evidence
+conflicting evidence
+sufficient evidence
+```
+
+These states must not be collapsed into an empty answer, a generic no-match,
+or a confidently worded partial result.
+
+Projection is presentation only. Its default primary field is `content`.
+Sender, recipient, headers, filenames, source-system labels, and similar
+metadata are secondary and are omitted unless explicitly requested. They may
+become primary only when the task explicitly asks for them. A table, list,
+timeline, narrative, page size, or page offset changes presentation, not
+retrieval anchors or evidence completeness.
 
 Governed graph views may produce cited answers, reports, review queues,
 dashboards, wiki drafts, or action proposals. Projection remains derived
@@ -382,6 +449,13 @@ The invariant safety rules are:
 20. original-file preview or download is a separately authorized Retrieval
     Gateway operation using opaque FormOwl identifiers, lifecycle/retention
     checks, and audit.
+21. task semantics, evidence requirements, retrieval, evidence assembly,
+    answerability, and projection remain separate contracts; and
+22. display pagination must never define evidence completeness or silently
+    truncate an `all_matching` task; and
+23. source adapters emit normalized observations and fields but do not decide
+    which fields are primary in an answer; default projection is
+    content-first, with metadata primary only by explicit request.
 
 ## 4. Current Implementation and Target Scope
 
@@ -427,6 +501,13 @@ Observation
        -> query-derived evidence cardinality
        -> multi-observation anchor coverage
        -> bounded ontology reranking
+  -> TaskFrame
+       -> EvidenceRequirement
+       -> CandidateRetrievalResult coverage counts
+       -> source-item evidence assembly
+       -> EvidenceCoverage
+       -> AnswerabilityDecision
+       -> content-first AnswerProjection
   -> candidate-only file stores
 ```
 
@@ -2853,6 +2934,11 @@ The input contract is:
 query text
 index-owned CandidateEvidenceTextPolicyRuntime and structured binding
 optional positive requested-source-item count from a governed query parser
+explicit cardinality mode:
+  sufficient
+  exact
+  at_least
+  all_matching
 trusted CandidateEvidenceAccessBinding
   eligible observation ids
   eligible stable source-identity policy ids
@@ -2910,18 +2996,27 @@ The canonical query sequence is:
    the source-item budget, reject instead of silently lowering the count.
    Structured count input lets future language or modality-aware query parsers
    use the same retrieval core without adding a department-specific branch.
+   `all_matching` is an explicit retrieval mode. It must enumerate the
+   admissible matching set within a separately reported safety budget; it must
+   not be simulated by requesting the size of the entire corpus as an exact
+   count.
 7. Choose supported anchors. Actor matching is enabled only for actor intent;
    domain words must not become accidental actor filters.
 8. Compute frequency and ranking statistics over logical source items, never
    over observation chunks.
 9. Match anchors conjunctively at the logical-source level. Several
    observations from the same source item may jointly cover the anchors.
-10. Rank admissible logical source items and select the requested number.
+10. Rank admissible logical source items and select the requested number, or
+    the complete admissible matching set for `all_matching`.
 11. Return the smallest observation set that covers the selected source items
    and anchors within the independent source-item and observation budgets.
-12. Resolve governed observation locators and citations. Reject rather than
+12. Report `total_source_item_count`, `returned_source_item_count`,
+    `is_exhaustive`, and `has_more`. Resolve governed observation locators and
+    citations. Reject rather than
     return partial evidence when required anchors, chronology, permission, or
-    cardinality cannot be satisfied.
+    exact/at-least cardinality cannot be satisfied. A separately bounded
+    `all_matching` result may be returned as explicitly partial only when
+    `is_exhaustive=false` and `has_more=true`.
 13. Run experimental token, eligibility, or ontology transforms only through
     the explicitly named `retrieve_ablation` path after access and
     context/time admissibility. Token transforms may add signals but cannot
@@ -3032,10 +3127,87 @@ query-derived cardinality, multi-observation coverage, context/time/status
 admissibility, chronology modes with timezone-aware date boundaries,
 logical-source IDF, separate source/observation budgets, chunk-invariant
 logical-source evaluation, separate observation-citation metrics, and bounded
-source-neutral ontology reranking. It does not claim full interval algebra,
+source-neutral ontology reranking. Retrieval results now also preserve selected
+logical-source keys, minimal supporting observation ids, admissible
+source-item observation ids for downstream evidence assembly, total and
+returned source-item counts, and explicit exhaustive/has-more state. It does
+not claim full interval algebra,
 temporal entity resolution, causal inference, canonical bitemporal storage,
 production multilingual parsing, or production quality across every domain
 and modality.
+
+## 9.7.3 Task Answering, Evidence Coverage, and Projection
+
+`CandidateRetrievalResult` is evidence-selection input, not a raw UI card.
+ChatGPT-facing or standalone interfaces use the same source-neutral task
+answering sequence:
+
+```text
+Utterance + prior TaskFrame
+  -> TaskFrameRevision
+  -> typed anchors and hard constraints
+  -> EvidenceRequirement
+  -> CandidateEvidenceIndex
+  -> selected logical source items and supporting observations
+  -> source-item field assembly
+  -> EvidenceCoverage
+  -> AnswerabilityDecision
+  -> AnswerProjection
+```
+
+`EvidenceRequirement.cardinality_mode` has four meanings:
+
+- `sufficient`: return enough evidence to support the task;
+- `exact`: return the requested number or report insufficiency;
+- `at_least`: meet the requested minimum or report insufficiency; and
+- `all_matching`: evaluate and return the complete admissible matching set,
+  subject only to an explicit evidence safety budget that must surface
+  non-exhaustiveness.
+
+The evidence safety budget and projection page size are different controls.
+Retrieving twelve matching spreadsheet rows and displaying three table rows
+must report twelve total and returned source items, exhaustive coverage, three
+displayed items, and more display pages. If an evidence safety budget returns
+only four of six matching items, coverage must report six total, four returned,
+`is_exhaustive=false`, `has_more=true`, and partial answerability.
+
+Evidence assembly groups normalized fields by the permission-filtered logical
+source identities returned by retrieval. It may use all admissible observations
+within those selected source items, while keeping the retriever's minimal
+supporting observation ids for citation and diagnostics. It must not fetch
+unselected or inaccessible source items.
+
+Source adapters provide presentation-neutral normalized fields such as
+`content`, semantic properties, and source metadata. They do not choose answer
+priority. `ProjectionSpec` defaults to:
+
+```text
+primary_fields = content
+secondary_fields = none
+include citations = true
+```
+
+Headers, participants, filenames, and other metadata remain omitted unless
+explicitly requested. If the selected source item has no projectable primary
+content, the system reports partial evidence rather than displaying metadata as
+a substitute. Explicit metadata questions may name those metadata fields as
+primary.
+
+Answerability is evaluated before wording or layout:
+
+- inaccessible target -> `permission_denied`;
+- exhaustive search with no target -> `target_not_found`;
+- target found and exhaustively inspected but requested property absent ->
+  `property_absent`;
+- incomplete cardinality, missing some requested fields, missing projectable
+  primary content, or unassembled evidence -> `partial_evidence`;
+- incompatible values for the same subject-qualified assertion key ->
+  `conflicting_evidence`; and
+- satisfied evidence and projection requirements -> `sufficient_evidence`.
+
+This layer remains derived and candidate-only. It does not canonicalize an
+entity, resolve a contradiction, grant access, publish a wiki revision, or
+execute an external action.
 
 ## 9.8 Storage and Tool Boundaries
 

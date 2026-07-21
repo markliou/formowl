@@ -31,6 +31,7 @@ ACTIVE_RETRIEVAL_DOCUMENTS = (
     "docs/ontology-v2-review-comments.md",
     "docs/workflows.md",
     "experiments/kg_bert_ablation/README.md",
+    "experiments/kg_ontology_v2_coordination/CURRENT_RESULTS.md",
     "experiments/kg_ontology_v2_coordination/README.md",
 )
 DEFAULT_HARNESS_SCRIPTS = (

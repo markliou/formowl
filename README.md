@@ -19,7 +19,10 @@ Raw Resources
        - property / relation / state / event / coordination assertion
   -> Governed Canonical Knowledge Graph
   -> User Knowledge Graph
-  -> Wiki Projection / WikiRevision
+  -> TaskFrame
+  -> EvidenceRequirement
+  -> EvidenceCoverage / AnswerabilityDecision
+  -> Content-first AnswerProjection / Wiki Projection / WikiRevision
 ```
 
 The current repository starts with two decoupled MCP servers:
@@ -88,6 +91,53 @@ PYTHONPATH=tests:python python -m unittest \
   test_candidate_evidence_hardness \
   test_candidate_evidence_harness_onboarding
 ```
+
+## Source-Neutral Task Answering
+
+Retrieval is not the user interface. FormOwl keeps task understanding,
+evidence selection, evidence assembly, answerability, and presentation as
+separate steps:
+
+```text
+Utterance + prior TaskFrame
+  -> TaskFrame revision
+  -> EvidenceRequirement
+  -> CandidateEvidenceIndex
+  -> selected logical source items and supporting observations
+  -> source-item evidence-field assembly
+  -> EvidenceCoverage
+  -> AnswerabilityDecision
+  -> AnswerProjection
+```
+
+Follow-up prompts revise the prior task instead of becoming unrelated searches.
+A prompt such as `只想看到表格` changes only the `ProjectionSpec`; it preserves
+the prior anchors, constraints, retrieval query, and evidence requirement.
+
+Evidence cardinality is explicit:
+
+- `sufficient`
+- `exact`
+- `at_least`
+- `all_matching`
+
+`all_matching` returns the complete admissible match set unless a separately
+reported evidence safety budget is reached. Retrieval reports
+`total_source_item_count`, `returned_source_item_count`, `is_exhaustive`, and
+`has_more`. Projection pagination is independent: retrieving twelve matching
+records while displaying three table rows is still exhaustive retrieval with
+another display page.
+
+Evidence assembly uses all admissible observations inside the selected logical
+source items, not only the observation that matched a token. Default projection
+is content-first. Sender, recipient, headers, filenames, and other metadata are
+omitted unless explicitly requested, and become primary only for an explicit
+metadata question.
+
+Answerability distinguishes permission denied, target not found, target found
+but requested property absent, partial evidence, conflicting evidence, and
+sufficient evidence. These states are determined before narrative, table,
+list, or timeline rendering.
 
 ## Current Implementation
 
@@ -302,7 +352,19 @@ PYTHONPATH=tests:python python -m unittest \
   source item, accessible and selected query contexts remain separate,
   chronology uses explicit modes and timezone-aware date boundaries, source
   and observation budgets are independent, and no shared term or context
-  creates transitive graph closure.
+  creates transitive graph closure. `CandidateRetrievalResult` also reports total and
+  returned logical-source counts, exhaustive/has-more state, selected logical
+  source identities, minimal supporting observations, and admissible
+  source-item observations for downstream field assembly.
+- The source-neutral task-answering contracts are implemented by
+  `formowl_graph.task_answering`. `TaskFrame` preserves task semantics across
+  follow-ups; `EvidenceRequirement` defines completeness independently of UI
+  pagination; `EvidenceCoverage` and `AnswerabilityDecision` distinguish
+  missing targets, absent properties, partial evidence, conflicts, and
+  sufficiency; and `AnswerProjection` defaults to content while keeping
+  metadata secondary unless explicitly requested. The implementation is
+  candidate-only and creates no canonical graph, user-graph, wiki, or external
+  writes.
 - The final implementation-bound July 17, 2026 MAY run scored 93/100: 73/80 answerable, 10/10
   no-match, and 10/10 permission, with largest component size 6 and public
   validator `blockers=[]`. Logical-source recall was 95.00%; exact Observation

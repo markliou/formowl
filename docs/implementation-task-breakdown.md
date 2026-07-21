@@ -73,6 +73,25 @@ archival is preserved at
 
 ## Current Unchecked Work
 
+- [ ] Complete the source-neutral Task Answering methodology slice.
+  - Owner paths: `python/formowl_graph/task_answering.py`,
+    `python/formowl_graph/candidate_retrieval.py`, task-answering tests, and
+    affected canonical specifications.
+  - Current implementation: `TaskFrame` revisions preserve follow-up context;
+    `EvidenceRequirement` supports sufficient, exact, at-least, and
+    all-matching cardinality; retrieval reports total/returned source counts
+    plus exhaustive/has-more state; permission-filtered source-item evidence
+    assembly feeds content-first projection; and answerability distinguishes
+    permission denial, missing target, absent property, partial evidence,
+    conflict, and sufficiency.
+  - Scope boundary: one method applies to mail, document, table, application,
+    and future source shapes. No procurement-specific aliases, source-specific
+    query path, canonical graph/type write, user-graph write, wiki write, or
+    external action is authorized.
+  - Verification: 895 canonical dev-container tests passed; full Ruff and
+    345-file format checks passed; `git diff --check` passed.
+  - Remaining gate: the required 3-reviewer gate. Keep unchecked until reviewer
+    agreement is complete.
 - [ ] Complete the full KG real-evidence objective across sessions.
   - Owner paths: `docs/agent-goals/`, `.formowl/kg-eval/`, KG-owned graph,
     ontology, evaluation, and test files.

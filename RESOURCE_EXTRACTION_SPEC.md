@@ -463,6 +463,58 @@ evidence facets. Digits in an identifier are not measurement evidence;
 measurement requires a role such as amount, quantity, rate, duration,
 percentage, score, or unit value.
 
+### 3.7.2 Task evidence assembly boundary
+
+Source adapters emit observations and normalized evidence fields. They do not
+decide which fields should dominate a user-facing answer.
+
+Every source shape should expose the richest citeable content that its governed
+extractor can support:
+
+```text
+mail                 -> body content plus separately named header metadata
+PDF/TXT/document     -> paragraph, section, table, and semantic fields
+CSV/XLS/XLSX         -> row content plus named cell or property fields
+project/application  -> authored content, event content, and named state fields
+image/audio/video    -> OCR, transcript, caption, event, and semantic fields
+```
+
+These mappings remain presentation-neutral. A mail adapter must not declare
+sender or recipient to be more important than body content. A spreadsheet
+adapter must not force every answer into a table. A PDF adapter must not decide
+that filenames or page numbers replace paragraph content. The downstream
+`ProjectionSpec` owns that decision.
+
+The task-answering layer consumes these fields through:
+
+```text
+TaskFrame
+  -> EvidenceRequirement
+  -> CandidateEvidenceIndex
+  -> permission-filtered selected logical source items
+  -> all admissible observations for those selected source items
+  -> EvidenceCoverage
+  -> AnswerabilityDecision
+  -> AnswerProjection
+```
+
+Retrieval keeps minimal supporting observation ids for citation and search
+diagnostics. Evidence assembly may additionally read normalized fields from all
+admissible observations inside the selected logical source item. It must not
+cross permission, source-version, context, or selected-source boundaries.
+
+The normalized default answer field is `content`. Header, participant,
+filename, locator label, and source-system metadata are secondary unless an
+explicit task asks for those fields. If no primary content is available, the
+answering layer reports partial evidence; it must not silently substitute a
+metadata-only card.
+
+Evidence cardinality and presentation cardinality remain separate. Extractors
+and adapters must not truncate evidence to a UI page size. The downstream
+retriever reports total matching source items, returned source items,
+`is_exhaustive`, and `has_more`; the projection independently reports how many
+items are displayed on the current page.
+
 `CandidateBusinessObject` identifies the proposed subject or object of
 knowledge and maps its domain label to one closed core supertype.
 
@@ -1069,7 +1121,10 @@ ExternalGraphImportStore
 Different source formats and departments must use the same candidate-knowledge
 method. Source adapters may normalize email, ERP, application, document,
 table, image, audio, video, or project records into observations, but they must
-not introduce separate source-specific candidate ontologies.
+not introduce separate source-specific candidate ontologies or source-specific
+task-answering methods. They emit content, semantic properties, and metadata as
+separate normalized fields; they do not determine answer priority, evidence
+completeness, or UI pagination.
 
 For every normalized text-bearing observation, the required candidate method
 is:
@@ -1481,6 +1536,20 @@ It derives explicit evidence cardinality from source-unit syntax/classifiers, ex
 It separates accessible contexts from explicitly selected query contexts and requires authorization for multi-context comparison.
 It requires chronology modes to preserve requested cardinality, exclude undated items, and use an explicit query timezone for date-only boundaries.
 It keeps logical-source and observation budgets independent.
+It defines TaskFrame, EvidenceRequirement, EvidenceCoverage,
+AnswerabilityDecision, and ProjectionSpec as separate downstream contracts.
+It defines explicit sufficient, exact, at-least, and all-matching cardinality
+modes without treating corpus size or UI page size as the requested count.
+It requires retrieval to report total/returned logical-source counts plus
+is-exhaustive and has-more state.
+It requires evidence assembly to gather normalized fields from admissible
+observations inside selected logical source items without crossing access or
+source boundaries.
+It makes content the default primary projection field and keeps sender,
+recipient, headers, filenames, and other metadata secondary unless explicitly
+requested.
+It distinguishes permission denied, target not found, property absent, partial
+evidence, conflicting evidence, and sufficient evidence before presentation.
 It stores stable logical-source gold, scores primary retrieval at logical-source level, and reports exact Observation citation and stale/unmapped diagnostics separately.
 It derives ontology evidence facets from observation type, modality, and semantic roles and forbids numeric-identifier-as-measurement inference.
 It binds ontology-guided reranking to the ontology revision, signal vocabulary, and complete type/mapping contract.

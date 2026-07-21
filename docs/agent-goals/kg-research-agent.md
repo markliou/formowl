@@ -2,7 +2,7 @@
 
 ## Lifecycle
 
-- Label: `active-blocked`
+- Label: `active`
 - Lossless history: `../archive/2026-07-11/kg-research-agent.md`
 - Retention: keep role, current objective, status, blockers, and next action
   only; target at most 180 lines and archive before 250 lines.
@@ -15,11 +15,26 @@ Durable role definition: `../agent-roles.md`.
 
 ## Current Objective
 
-Complete the broad FormOwl KG real-evidence acceptance objective across
-sessions: recent external literature comparison, fair external baselines,
-ontology integration, multi-user fusion, multimodal enterprise validation,
-annotation/adjudication evidence, production adapter evidence, and synchronized
-total-acceptance authority.
+Complete the bounded source-neutral Task Answering methodology slice while
+preserving the separate broad FormOwl KG real-evidence objective across
+sessions.
+
+The active bounded slice separates:
+
+```text
+TaskFrame revision
+-> EvidenceRequirement
+-> Candidate evidence retrieval
+-> permission-filtered source-item field assembly
+-> EvidenceCoverage
+-> AnswerabilityDecision
+-> content-first AnswerProjection
+```
+
+It must generalize across mail, documents, tables, application events, and
+future source shapes. It must not introduce procurement-specific aliases,
+source-specific query methods, UI-defined evidence completeness, canonical
+writes, or external actions.
 
 Repository-side authority tooling is reproducible and synchronized, but broad
 completion requires accepted real or public reproducible evidence rather than
@@ -27,9 +42,24 @@ additional synthetic fixtures or implementation-only proofs.
 
 ## Status
 
-`blocked`
+`active`
 
 ## Acceptance Criteria
+
+- TaskFrame follow-ups preserve prior anchors, hard constraints, retrieval
+  semantics, and evidence requirements unless the new utterance revises them.
+- Retrieval reports total and returned logical-source counts plus explicit
+  exhaustive/has-more state; all-matching does not use corpus size as a fake
+  exact count.
+- Evidence assembly can recover content from admissible observations inside a
+  selected logical source item even when another observation matched search.
+- Projection defaults to content and keeps sender, recipient, headers,
+  filenames, and other metadata secondary unless explicitly requested.
+- Answerability distinguishes permission denial, missing target, absent
+  property, partial evidence, conflict, and sufficiency.
+- Mail, PDF/TXT, XLSX/table, and application-event tests use the same contracts.
+- Canonical dev-container verification, relevant docs, and the required
+  reviewer gate pass before the board item is marked complete.
 
 - Canonical authority reports agree on 12 passed gates, zero failed gates, zero
   remaining gates, and a complete objective audit.
@@ -44,6 +74,10 @@ additional synthetic fixtures or implementation-only proofs.
   production readiness.
 
 ## Blockers
+
+The bounded Task Answering slice passed 895 canonical dev-container tests,
+full Ruff, 345-file format check, and `git diff --check`. The required
+3-reviewer gate remains before completion.
 
 Four real-evidence gates still lack accepted canonical evidence:
 
@@ -79,9 +113,8 @@ authorization must be an actual boolean; string values fail closed.
 
 ## Next Action
 
-Wait for operator-supplied or public reproducible response packets and
-artifacts. When evidence arrives, validate the submission manifest, preflight
-responses, execute candidate intakes, validate candidate manifests and
-governance approval, promote only approved evidence, then rerun all broad
-validators and total acceptance. Do not reinterpret an empty real-evidence
-root or a passing repository-only harness as completion.
+Complete the required reviewer gate for the Task Answering slice before marking
+the work-board item complete. After that bounded slice, return to waiting for
+operator-supplied or public reproducible response packets for the four broad
+real-evidence gates. Do not reinterpret a passing repository-only harness as
+broad KG objective completion.
