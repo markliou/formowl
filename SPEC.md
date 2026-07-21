@@ -35,8 +35,9 @@ The shortest statement of the methodology is:
 The canonical pipeline is:
 
 ```text
-Any governed source
-  -> Asset or EvidenceSnapshot
+Any governed source or controlled ingress
+  -> Managed Asset in durable ObjectStore or EvidenceSnapshot
+  -> Resource Extraction
   -> Observation
   -> Lexical and Mention Candidates for text-bearing observations
        - Unicode and script normalization
@@ -62,6 +63,21 @@ Any governed source
   -> Projection or Reviewed Action Proposal
 ```
 
+`resources` or another controlled local folder is ingress, quarantine, or a
+processing workspace. It is not authoritative long-term byte storage and must
+not become retrieval identity. Accepted files are hashed, durably written to
+an S3-compatible `ObjectStore`, verified, registered as governed `Asset`
+records, and only then removed from ingress according to cleanup policy.
+MinIO, another S3-compatible service, or the local `FileObjectStore`
+development implementation may satisfy the same vendor-neutral interface.
+
+The current Project MCP, Wiki MCP, connected gateway, and
+`formowl-contract` package are independently maintained entrypoints and shared
+boundaries, not the whole product. Normal users work through natural-language
+and review-oriented actions; Git, object storage, schemas, hashes, and revision
+backends remain implementation details unless an authorized administrator
+explicitly requests them.
+
 ### 2.1 Register the source
 
 Every file, message, database response, project record, conversation, sensor
@@ -72,6 +88,11 @@ canonical knowledge.
 Physical paths, buckets, database connections, parser commands, and worker
 scratch locations are implementation details. They must not become graph
 identifiers or public MCP fields.
+
+Resource extraction and graph assembly are responsible for converting managed
+source Assets and governed external source records into observations, candidate
+atoms, canonical atoms, canonical entities, canonical relations, user graph
+revisions, and projection-ready graph views.
 
 ### 2.2 Produce citeable observations and stable retrieval units
 
@@ -346,21 +367,47 @@ The invariant safety rules are:
     eligible observations, stable source-identity policies, source versions,
     and permission scopes before query vocabulary, support counts, or IDF are
     inspected. Missing bindings fail closed, and request bindings may narrow
-    but never broaden an index-level binding.
+    but never broaden an index-level binding; and
+16. controlled folders, upload staging, quarantine, and worker scratch are
+    temporary processing layers, not authoritative Asset storage or retrieval
+    identity; and
+17. managed raw bytes become active only after durable ObjectStore write,
+    content-hash verification, PostgreSQL Asset/occurrence registration, and
+    required audit commit; and
+18. byte deduplication remains separate from Asset authorization, ownership,
+    grants, retention, and occurrence lineage; and
+19. attachments and embedded resources become independently governed child
+    Assets routed by detected MIME type while preserving parent/import lineage;
+    and
+20. original-file preview or download is a separately authorized Retrieval
+    Gateway operation using opaque FormOwl identifiers, lifecycle/retention
+    checks, and audit.
 
 ## 4. Current Implementation and Target Scope
 
-The tested baseline remains:
+The repository contains two bounded, complementary implementation tracks.
+
+The connected identity and service boundary provides:
 
 ```text
-Project MCP
-  -> ContextPackage and EvidenceSnapshot
-  -> Wiki MCP
-  -> sourced markdown draft
+ChatGPT
+  -> public HTTPS FormOwl /mcp resource
+  -> FormOwl OAuth 2.1 with PKCE and exact resource/callback binding
+  -> Google OIDC identity mapping
+  -> resource-bound FormOwl access token
+  -> fresh gateway-controlled ActorContext
+  -> governed semantic tools
 ```
 
-The resource and graph layers also contain candidate-only contracts and stores.
-The current generalized minimum core supports:
+Project MCP and Wiki MCP separately prove the bounded
+`ContextPackage/EvidenceSnapshot -> sourced wiki draft` compatibility
+workflow. They are not alternate connected identity or ChatGPT attachment
+paths. The connected implementation has deterministic and container-backed
+repository evidence, while real public HTTPS, Google account, ChatGPT
+connector, MCP Inspector, restart, and operator-journey evidence remain
+external completion gates.
+
+The resource and graph layers provide this generalized candidate-only core:
 
 ```text
 Observation
@@ -434,10 +481,18 @@ live ERP access, generalized source parsing, semantic fusion, canonical graph
 commit, canonical type write, user-graph mutation, wiki mutation, or external
 system write.
 
+The canonical connected ChatGPT-facing runtime is `formowl-connected-mcp`. It
+uses the official MCP SDK's stateless Streamable HTTP transport on exact `/mcp`
+and exposes FormOwl OAuth routes on the same origin. The Project MCP and Wiki
+MCP JSON-line commands, plus the hand-built semantic JSON-RPC runner, remain
+test and local compatibility surfaces only.
+
 The full target still includes reviewed canonical graph commits, lifecycle,
 entity and relation resolution, scoped ontology governance, effective user
 views, retrieval gateways, graph-derived projections, and governed external
-action proposals.
+action proposals. Issue #20 establishes identity and `ActorContext`; it does
+not complete issue #41's generic Asset tenant, ownership, byte-storage,
+lifecycle, retention, or authorization boundary.
 
 Development and verification are container-first. Python remains the primary
 implementation and debugging boundary. Shared contracts, not direct component
@@ -576,6 +631,9 @@ Target graph and ingestion objects:
 StorageBackend
 Asset
 AssetOccurrence
+AssetRelationship
+AssetLifecycleEvent
+RetentionPolicy
 Observation
 SemanticMetadata
 CandidateAtom
@@ -620,9 +678,15 @@ No MCP server should depend on another MCP server's internal types.
 
 ## 5.4 Resource Extraction Layer
 
-The Resource Extraction Layer converts raw resources into observations and semantic metadata.
+The Resource Extraction Layer converts registered managed Assets and governed
+external source records into observations and semantic metadata.
 
-For implementation-level details of multimedia extraction, extractor routing, observation schemas, semantic metadata schemas, and adapter boundaries, see `RESOURCE_EXTRACTION_SPEC.md`.
+For implementation-level details of multimedia extraction, extractor routing,
+observation schemas, semantic metadata schemas, and adapter boundaries, see
+`RESOURCE_EXTRACTION_SPEC.md`. That detailed specification must implement the
+ingress, durable ObjectStore, Asset lifecycle, nested-resource, and Retrieval
+Gateway boundaries defined here; it must not redefine `resources` as permanent
+storage.
 
 Supported resource families should include:
 
@@ -641,12 +705,16 @@ wiki source
 Resource extraction owns:
 
 ```text
-asset registration
-storage backend registration
+ingestion profile and extraction-job orchestration after Asset activation
+MIME detection
 extractor selection
 observation creation
 extractor metadata capture
 location metadata capture such as timestamp, page, bounding box, frame, speaker, or section
+attachment and embedded-member byte discovery
+child Asset commit requests through the Storage, Deployment, and Worker Layer
+parent-child and occurrence lineage metadata for nested resources
+MIME-based child extractor routing after child Asset activation
 re-extraction when extractor versions or extraction policies change
 ```
 
@@ -670,6 +738,10 @@ debug metadata.
 Resource extraction does not own:
 
 ```text
+storage backend selection or registration
+durable object commit, verification, or ingress cleanup
+Asset, occurrence, relationship, lifecycle, retention, or purge persistence
+original-file preview or download delivery
 final atom granularity
 canonical entity merges
 canonical relation commits
@@ -679,7 +751,13 @@ wiki page generation
 
 All extractor output must remain derived data until reviewed or committed through the graph assembly workflow.
 
-Resource extraction must run from registered assets and object references, not from arbitrary storage paths. Raw storage locations are implementation details behind `StorageBackend`, `AssetStore`, and `ObjectStore`.
+Resource extraction must run from registered assets and object references, not
+from arbitrary storage paths. A local `resources` folder may feed the Storage
+layer's ingress adapter, but an extractor must not open that folder as its
+source. After durable object commit and Asset activation, workers resolve the
+managed object through `asset_id` and internal `object_uri`. Raw storage
+locations are implementation details behind `StorageBackend`, `AssetStore`,
+and `ObjectStore`.
 
 ---
 
@@ -766,7 +844,17 @@ how wiki artifacts are projected from graph views
 
 The Storage, Deployment, and Worker Layer keeps physical storage flexible while preserving centralized knowledge identity.
 
-For internal company or lab deployments, raw data may remain on Synology NAS, internal object storage, MinIO, or controlled ingress folders behind the firewall. Public AWS S3 is not required for Phase 0. The required abstraction is an S3-like object interface and a central storage backend registry, not a specific public-cloud provider.
+For normal managed ingestion, controlled local folders such as `resources`
+serve only as ingress, quarantine, or processing workspaces. Accepted raw bytes
+must be copied into a durable managed `ObjectStore`. Public AWS S3 is not
+required: MinIO, another S3-compatible internal service, or a local
+`FileObjectStore` in development may implement the same interface. Synology,
+SMB, NFS, or another external source may be configured as a read-only reference
+or import source, but it must not blur the distinction between ingress and the
+managed authoritative object copy. A deployment that deliberately keeps an
+external source as the only authoritative byte location requires an explicit
+storage policy and must not be represented as the default managed-ingestion
+path.
 
 The layer owns:
 
@@ -775,6 +863,13 @@ StorageBackend registry
 Asset registration
 ObjectStore adapters
 ingress adapters
+durable object commit and verification
+quarantine and failed-ingress isolation
+ingress cleanup after successful commit
+AssetOccurrence and Asset relationship persistence
+byte-level deduplication without permission merging
+retention, legal hold, redaction, deletion, and purge orchestration
+preview and download delivery behind the Retrieval Gateway
 storage health tracking
 worker locality metadata
 local scratch policy
@@ -782,15 +877,57 @@ GPU worker capability metadata
 backup and retention placement
 ```
 
-PostgreSQL remains the source of truth for metadata, governance, permissions, audit, job state, and graph state. It should run on local SSD, NVMe, or reliable block storage, not ordinary NAS, SMB, WebDAV, or NFS-mounted storage.
+PostgreSQL remains the source of truth for metadata, governance, permissions,
+Asset and occurrence lineage, lifecycle, retention, audit, job state, and graph
+state. The managed `ObjectStore` remains the source of bytes for active Assets
+and large derived artifacts. PostgreSQL should run on local SSD, NVMe, or
+reliable block storage, not ordinary NAS, SMB, WebDAV, or NFS-mounted storage.
 
-Workers process registered assets by `asset_id` and `object_uri`. Large files should be copied to local scratch before parsing. Worker locality affects performance and scheduling, but it must not fragment graph identity.
+Workers process registered assets by `asset_id` and internal `object_uri`.
+Large files may be copied from ObjectStore to local scratch before parsing.
+Scratch is disposable and must be cleaned after the run. Worker locality
+affects performance and scheduling, but it must not fragment Asset, occurrence,
+or graph identity.
 
 ## 5.8 Identity, Access, and MCP Gateway Layer
 
-For the internal closed beta, FormOwl may use Manual Trusted Internal identity mode. A user selects their FormOwl identity at MCP session start, and that selected identity becomes the `actor_user_id` for MCP calls and audit records.
+For the internal closed beta, the sole connected human identity path is:
 
-This is not production authentication. It is allowed only for trusted internal company or lab deployments and must sit behind an `AuthProvider` interface so company SSO, OIDC, SAML, or another provider can replace it later.
+```text
+public HTTPS /mcp
+  -> OAuth protected-resource challenge
+  -> FormOwl OAuth 2.1 authorization endpoint
+  -> PKCE S256 and exact ChatGPT callback/resource validation
+  -> Google OIDC authorization and callback
+  -> verified Google (issuer, subject, email) mapping through a FormOwl invitation
+  -> resource-bound FormOwl access token
+  -> server-side token-session, user, membership, grant, and revocation lookup
+  -> fresh ActorContext
+  -> protected MCP tool
+```
+
+Google access tokens and Google ID tokens are never FormOwl MCP bearer tokens.
+Google is the upstream authentication provider; FormOwl remains the OAuth
+authorization server and the authority for users, workspace membership, grants,
+client authorization, token-session state, revocation, and audit.
+
+The predefined ChatGPT OAuth client must use PKCE S256, an exact registered
+redirect URI, and the exact canonical FormOwl resource. The connected runtime
+must use HTTPS except for explicit loopback-only tests. It must reject
+caller-controlled user, workspace, session, grant, storage, parser, and worker
+identity fields.
+
+On each protected tool call, the MCP Gateway verifies the FormOwl token, reloads
+the token session and current authorization state from PostgreSQL, and builds a
+fresh `ActorContext`. `ActorContext` carries the FormOwl user, external identity,
+OAuth client and token-session lineage, current workspace and role, memberships,
+and active grants. Authentication does not by itself authorize an Asset, raw
+byte stream, graph fragment, or canonical mutation.
+
+`ManualTrustedInternalAuthProvider`, the hand-built JSON-RPC runner, JSON-line
+commands, and stdio session environment variables remain available only for
+tests and local compatibility. They are not valid connected deployment modes
+and must not be documented as a ChatGPT connection method.
 
 Even in Phase 0, FormOwl must model:
 
@@ -798,6 +935,14 @@ Even in Phase 0, FormOwl must model:
 User
 SessionIdentity
 WorkspaceMember
+ExternalIdentity
+OAuthInvitation
+OAuthOwnerBootstrap
+OAuthClientAuthorization
+OAuthTransaction
+OAuthAuthorizationCode
+OAuthTokenSession
+ActorContext
 AccessRequest
 Grant
 AuditLog
@@ -887,19 +1032,25 @@ Example:
   ],
   "request_hash": "sha256:...",
   "response_hash": "sha256:...",
-  "storage_uri": "/raw/evidence/project/2026/06/16/ev_project_20260616_001/"
+  "evidence_asset_id": "asset_evidence_project_20260616_001",
+  "storage_locator": "formowl://asset/asset_evidence_project_20260616_001"
 }
 ```
 
-Recommended storage layout:
+Recommended internal ObjectStore prefix shape:
 
 ```text id="injjtr"
-/raw/evidence/{source}/{yyyy}/{mm}/{dd}/{evidence_snapshot_id}/
+evidence/{tenant_id}/{workspace_id}/{yyyy}/{mm}/{dd}/{evidence_snapshot_id}/
   request.json
   response.json
   normalized.md
   metadata.json
 ```
+
+This prefix is an internal adapter detail. Public responses expose the
+`evidence_snapshot_id`, the registered evidence Asset when one exists, and
+permission-checked FormOwl locators. They must not expose a local filesystem
+path, bucket name, object key, or storage credential.
 
 ---
 
@@ -1106,18 +1257,48 @@ error
 
 ## 6.8 StorageBackend and Asset
 
-`StorageBackend` describes a physical or logical storage backend that may hold raw or derived bytes.
+`StorageBackend` describes a physical or logical storage role. The role is
+separate from the vendor or protocol:
+
+```text
+ingress -> accepts unstable or newly supplied bytes for bounded processing
+quarantine -> isolates rejected, suspicious, or failed input
+authoritative_object_store -> holds managed Asset bytes and large derived artifacts
+external_reference -> identifies a governed read-only source that is not a FormOwl inbox
+scratch -> disposable worker-local processing space
+```
+
+The default managed-ingestion path is:
+
+```text
+controlled resources/inbox or UploadSession body
+  -> stability, size, type, and security checks
+  -> content hash
+  -> durable write to authoritative ObjectStore
+  -> read-after-write or checksum verification
+  -> Asset and AssetOccurrence registration in PostgreSQL
+  -> required audit commit
+  -> ingress cleanup
+  -> IngestionJob / ExtractorRun
+```
+
+Extraction may begin only after the policy-required durable commit point.
+Parsing directly from bounded staging is allowed only when the same transaction
+or recovery protocol guarantees that accepted Asset bytes are durably committed
+and that failure cannot leave successful metadata pointing to missing bytes.
 
 Recommended fields:
 
 ```text
 storage_backend_id
-type: synology_smb | synology_nfs | s3_compatible | minio | local_fs | ingress_only
+type: s3_compatible | minio | local_object_store | synology_smb | synology_nfs | external_reference | ingress_only | scratch
+role: authoritative_object_store | external_reference | ingress | quarantine | scratch
 display_name
 internal_endpoint
 root_prefix
-access_mode: read_only | read_write | ingress_only
+access_mode: read_only | read_write | ingress_only | disposable
 trust_level
+tenant_scope
 workspace_scope
 health_status
 bandwidth_class
@@ -1125,36 +1306,189 @@ latency_class
 allowed_workers
 ```
 
-`Asset` describes a registered raw resource. It is the stable identity used by extraction, graph, search, and wiki projection layers.
+`internal_endpoint` and `root_prefix` are configuration secrets or internal
+deployment metadata. They must not appear in normal MCP results.
+
+`Asset` describes one governed raw or derived resource identity. It is the
+stable identity used by extraction, graph, search, and wiki projection layers.
+An Asset is not a path and is not defined by the contents of the ingress folder.
 
 Recommended fields:
 
 ```text
 asset_id
+tenant_id
+workspace_id
+owner_scope_type
+owner_scope_id
 storage_backend_id
 object_uri
 content_hash
 file_size
 mime_type
+original_filename
 created_at
 registered_at
 owner_user_id
-workspace_id
 permission_scope
 lifecycle_state
+retention_policy_id
+retention_until
+legal_hold
+redacted_at
+purged_at
 ```
 
-The canonical graph must not reference raw storage paths. It should reference `asset_id`, `observation_id`, `extractor_run_id`, `evidence_id`, `entity_id`, `relation_id`, `workspace_id`, `user_id`, and `grant_id` where applicable.
+`object_uri` is an internal adapter locator. The public locator for an Asset is
+`formowl://asset/{asset_id}`. Knowledge and MCP records must not use an S3 URL,
+bucket/key pair, NAS path, local path, or ingress filename as Asset identity.
 
-## 6.9 Identity, AccessRequest, Grant, and AuditLog
+`AssetOccurrence` records each governed appearance or acquisition of an Asset.
+Identical bytes may share an immutable storage blob at the ObjectStore adapter
+layer while retaining separate Asset identities and occurrences, owners,
+permissions, source relationships, import sessions, and retention decisions.
 
-Minimum Phase 0 identity objects:
+Recommended fields:
+
+```text
+asset_occurrence_id
+asset_id
+tenant_id
+workspace_id
+owner_scope_type
+owner_scope_id
+source_ref
+source_parent_asset_id optional
+source_parent_occurrence_id optional
+relationship_type: uploaded_as | attached_to | embedded_in | exported_from | captured_from | derived_from
+source_message_id optional
+source_attachment_occurrence_id optional
+source_import_session_id optional
+permission_scope
+created_at
+```
+
+`AssetRelationship` represents parent-child or derived-resource lineage without
+requiring two resources to share authorization:
+
+```text
+asset_relationship_id
+from_asset_id
+to_asset_id
+relationship_type
+source_occurrence_id
+source_observation_id optional
+created_at
+```
+
+`AssetLifecycleEvent` records every governed transition without rewriting
+history:
+
+```text
+asset_lifecycle_event_id
+asset_id
+from_state
+to_state
+reason
+policy_id optional
+actor_user_id or service_actor_id
+audit_event_id
+occurred_at
+```
+
+`RetentionPolicy` governs the durable managed copy independently of ingress and
+scratch cleanup:
+
+```text
+retention_policy_id
+tenant_id
+workspace_id optional
+retention_period
+retention_basis
+legal_hold_behavior
+redaction_behavior
+purge_behavior
+created_by
+created_at
+```
+
+Byte deduplication and authorization must remain separate:
+
+```text
+same content_hash -> storage implementation may reuse one immutable byte object
+same content_hash -> does not merge Asset ids, owner scope, permission scope, grants, retention, or occurrences
+same attachment in multiple messages -> preserves every attachment occurrence and parent relationship
+```
+
+Recommended Asset lifecycle states:
+
+```text
+staged
+active
+quarantined
+retention_hold
+redacted
+pending_purge
+purged
+superseded
+```
+
+Ingress cleanup and Asset retention are separate decisions:
+
+```text
+Ingress cleanup removes the temporary resources/inbox or upload-staging copy.
+Asset retention governs the durable ObjectStore copy.
+Worker scratch cleanup removes disposable parser-local copies.
+Purge removes or cryptographically invalidates durable bytes only after policy,
+authorization, legal-hold, lineage, and audit checks succeed.
+```
+
+For nested resources such as email attachments, archive members, and embedded
+documents, the parser must create a child Asset and AssetOccurrence, preserve
+the parent relationship, and route the child by detected MIME type. The
+ObjectStore adapter may reuse an immutable byte blob by content hash, but that
+optimization must not replace the child Asset or occurrence:
+
+```text
+PDF / DOCX / PPTX / XLSX -> document or tabular extractor
+image -> image / OCR extractor
+audio / video -> media extractor
+MSG / EML / message/rfc822 -> mail extractor
+unknown or unsafe -> quarantine or metadata-only observation according to policy
+```
+
+Normal retrieval resolves observations, evidence snippets, and citations.
+Original-file access is a stronger operation:
+
+```text
+requester -> MCP Gateway ActorContext
+  -> Retrieval Gateway
+  -> Asset, occurrence, lifecycle, retention, and Grant checks
+  -> audit
+  -> bounded stream, preview rendition, or short-lived opaque gateway URL
+```
+
+ObjectStore signed URLs may be used only as internal delivery primitives. If a
+provider URL reveals bucket names, object keys, internal endpoints, or storage
+topology, the Retrieval Gateway must proxy it rather than return it to the
+caller. User-facing download capabilities must be short-lived, opaque, scoped
+to one Asset and operation, and must not expose object-store credentials or
+administrative endpoints.
+
+The canonical graph must not reference raw storage paths. It should reference
+`asset_id`, `asset_occurrence_id`, `observation_id`, `extractor_run_id`,
+`evidence_id`, `entity_id`, `relation_id`, `workspace_id`, `user_id`, and
+`grant_id` where applicable.
+
+## 6.9 Identity, OAuth Session, AccessRequest, Grant, and AuditLog
+
+Minimum connected identity objects:
 
 ```text
 User
 - user_id
 - display_name
-- email optional for Phase 0
+- email
 - status: active | disabled
 - created_at
 
@@ -1162,13 +1496,54 @@ SessionIdentity
 - session_id
 - selected_user_id
 - selected_at
-- selection_method: manual_trusted_internal
+- selection_method: google_oidc_oauth
 
 WorkspaceMember
 - workspace_id
 - user_id
 - role: owner | member | viewer
+
+ExternalIdentity
+- external_identity_id
+- provider: google
+- issuer
+- subject
+- user_id
+- verified email
+- status: active | disabled
+
+OAuthInvitation / OAuthOwnerBootstrap
+- invitation or bootstrap id
+- normalized invited email
+- workspace and role
+- status and expiry
+- operator or inviting-owner attribution
+
+OAuthClientAuthorization
+- predefined client id
+- user and external identity
+- granted scopes
+- default workspace
+- revocation state
+
+OAuthTransaction / OAuthAuthorizationCode
+- exact client, callback, resource, and scopes
+- PKCE S256 challenge
+- one-way state/code/nonce bindings
+- expiry and one-time consumption state
+
+OAuthTokenSession
+- token_session_id
+- user, external identity, client authorization, and workspace lineage
+- resource and scopes
+- one-way token-jti binding
+- issue, expiry, and revocation state
 ```
+
+`manual_trusted_internal` remains a valid `SessionIdentity.selection_method`
+only for tests and local compatibility. A connected request must resolve to
+`google_oidc_oauth` and must never accept user or workspace selection from the
+MCP caller.
 
 Access governance objects:
 
@@ -1198,12 +1573,21 @@ Grant
 
 AuditLog
 - audit_log_id
-- actor_user_id
+- actor_type: user | service | external_unauthenticated
+- actor_user_id optional according to actor_type
+- actor_service_id optional according to actor_type
 - action
 - target_type
 - target_id
 - grant_id optional
 - session_id
+- workspace_id optional
+- external_identity_id optional
+- oauth_client_id optional
+- oauth_token_session_id optional
+- request_id optional
+- tool_call_id optional
+- reason_code
 - timestamp
 ```
 
@@ -1215,13 +1599,20 @@ AuthProvider
 - resolve_user(identity): User
 ```
 
-Phase 0 provider:
+Connected provider and bridge:
 
 ```text
-ManualTrustedInternalAuthProvider
+GoogleOidcClient
+FormOwlOAuthBridge
+PostgreSQLOAuthRepository
+FormOwlTokenCodec
 ```
 
-Later providers may include company SSO, Google Workspace OIDC, Microsoft Entra OIDC, SAML, or external tenant providers. Authorization, grants, provenance, and audit must not depend on the Phase 0 authentication facade.
+Google OIDC is the sole upstream human identity provider for the current
+connected closed beta. Later providers may include Microsoft Entra OIDC, SAML,
+or external tenant providers only after a separate architecture decision.
+Authorization, grants, provenance, and audit remain FormOwl authority and must
+not depend on Google group or storage semantics.
 
 ---
 
@@ -1653,7 +2044,9 @@ Git-specific operations such as commit, branch, pull request, merge, or rebase m
 
 ## 9. Multimodal Knowledge Graph and Wiki Projection Model
 
-Wiki specifications must distinguish between raw resources, observations, candidate knowledge, reusable canonical graph parts, user knowledge graphs, and published wiki artifacts.
+Wiki specifications must distinguish between managed source Assets or governed
+external source records, observations, candidate knowledge, reusable canonical
+graph parts, user knowledge graphs, and published wiki artifacts.
 
 The system must not assume that one source document, work item, meeting recording, image, ChatGPT session, or wiki page has one correct knowledge graph. Different users may read the same evidence with different goals, attention, terminology, and preferred granularity. A project owner may want a coarse operational summary. A reviewer may care about policy exceptions. An engineer may inspect method details. These are all valid derived views if their provenance is preserved.
 
@@ -1664,8 +2057,8 @@ This chapter defines the model boundary. It requires the architecture to support
 The knowledge model has seven layers:
 
 ```text id="knowledge-graph-layers"
-Raw resource
-EvidenceSnapshot / Citation / Asset
+Managed source resource: Asset or governed external SourceRef
+AssetOccurrence / AssetRelationship / EvidenceSnapshot / Citation
 Observation / SemanticMetadata
 Candidate graph
 Governed canonical graph
@@ -1676,8 +2069,8 @@ WikiProjection / WikiRevision
 Layer responsibilities:
 
 ```text id="knowledge-layer-responsibilities"
-Raw resource -> source-of-truth records from files, external systems, captured sessions, media, documents, or wiki snapshots.
-EvidenceSnapshot / Citation / Asset -> traceable captured evidence, source locators, and raw-resource metadata.
+Managed source resource -> verified durable Asset bytes in ObjectStore, or an explicitly governed external source record when policy permits reference-only access.
+AssetOccurrence / AssetRelationship / EvidenceSnapshot / Citation -> Asset identity, acquisition and parent-child lineage, traceable captured evidence, and permission-checked source locators.
 Observation / SemanticMetadata -> normalized extracted facts, spans, scenes, blocks, transcripts, OCR, captions, and semantic hints.
 Candidate graph -> proposed business objects and assertions that have not yet passed governance.
 Governed canonical graph -> source-grounded reusable atoms, entities, relations, and lifecycle mappings.
@@ -1691,7 +2084,10 @@ WikiProjection / WikiRevision -> a governed output artifact such as a markdown p
 
 All resource extractors should produce `Observation` records before graph assembly.
 
-An `Observation` is a normalized description of something found in a raw resource. Examples include transcript segments, video scenes, OCR blocks, document paragraphs, page regions, issue comments, wiki sections, or ChatGPT messages.
+An `Observation` is a normalized description of something found in a managed
+Asset or governed external source record. Examples include transcript segments,
+video scenes, OCR blocks, document paragraphs, page regions, issue comments,
+wiki sections, or ChatGPT messages.
 
 An observation should carry:
 
@@ -2394,7 +2790,10 @@ Recommended v1 implementation components:
 
 ```text
 PostgreSQL:
-  source of truth for assets, observations, graph state, permissions, grants, and audit records
+  source of truth for Asset identity and metadata, observations, graph state, permissions, grants, lifecycle, retention, and audit records
+
+ObjectStore:
+  source of truth for managed Asset bytes and large durable derived artifacts
 
 pgvector:
   semantic candidate retrieval for entity descriptions, document sections, email summaries, and graph nodes
@@ -2644,8 +3043,10 @@ The system should maintain separate stores for separate responsibilities:
 
 ```text
 StorageBackendRegistry -> physical storage backend metadata and health
-AssetStore -> raw resource metadata
-ObjectStore -> raw binary files
+IngressStore -> bounded arrival, quarantine, and processing state
+AssetStore -> PostgreSQL identity, scope, lineage, lifecycle, retention, and audit metadata
+AssetRelationshipStore -> occurrence, parent-child, attachment, and derivation lineage
+ObjectStore -> authoritative managed source bytes and large derived artifacts
 ObservationStore -> extracted observations
 CandidateAtomStore -> uncommitted candidate atoms and relations
 CanonicalGraphStore -> canonical atoms, entities, relations, and graph revisions
@@ -2655,7 +3056,38 @@ VectorStore -> embeddings for similarity search
 JobStore -> ingestion and extraction jobs
 ```
 
-All files that participate in extraction, graph construction, search, or wiki projection must first be registered in the central FormOwl catalog. Distributed physical storage does not imply distributed graph identity.
+For normal managed ingestion, `resources`, an UploadSession body, or another
+controlled arrival location feeds `IngressStore`; it is not an additional
+permanent store. The required transition is:
+
+```text
+ingress item
+  -> stability, safety, size, and type checks
+  -> content hash
+  -> durable ObjectStore write
+  -> checksum or read-after-write verification
+  -> Asset, AssetOccurrence, permission, and audit commit in PostgreSQL
+  -> ingress cleanup
+  -> IngestionJob / ExtractorRun
+```
+
+If any required commit step fails, the item remains recoverable in ingress or
+quarantine and must not appear as an active Asset. All managed files that
+participate in extraction, graph construction, search, or wiki projection must
+first pass this commit point and be registered in the central FormOwl catalog.
+Distributed physical storage does not imply distributed Asset or graph
+identity.
+
+Container members, mail attachments, embedded documents, and similar nested
+resources must use the same boundary. The parent parser emits attachment or
+member bytes, FormOwl commits them as child Assets with AssetOccurrence records,
+records parent and occurrence lineage, and routes each child by detected MIME
+type. The ObjectStore adapter may reuse an immutable byte blob by content hash,
+but that optimization does not replace the child Asset or occurrence. PDF,
+PPTX, DOCX, spreadsheets, images, audio, and video use their normal extractors;
+MSG, EML, and `message/rfc822` may recursively enter the mail extractor.
+Deduplicating bytes must not merge owners, permissions, grants, retention, or
+occurrence history.
 
 External tools may be used for media parsing, OCR, ASR, speaker diarization, scene detection, document parsing, candidate graph extraction, graph visualization, and graph-assisted retrieval.
 
@@ -2703,7 +3135,7 @@ Hiding backend operations is both a usability rule and a safety rule. Storage ro
 User-initiated uploads must begin with an `UploadSession`. The UploadSession captures intent before file transfer begins:
 
 ```text
-selected user
+authenticated actor
 owner scope
 workspace scope
 project scope
@@ -2724,27 +3156,41 @@ The required principle is:
 
 ```text
 Source preparation produces a file.
-UploadSession determines where and how that file enters FormOwl.
-Storage routing, parser execution, asset registration, and graph integration are handled by FormOwl.
+UploadSession determines how that file enters FormOwl ingress.
+FormOwl commits and verifies the durable ObjectStore copy before Asset activation.
+Storage routing, parser execution, Asset registration, ingress cleanup, and graph integration are handled by FormOwl.
 ```
 
-Recommended future MCP tools include:
+Current connected MCP tools include `whoami` plus whichever governed semantic
+handlers are configured by the connected runtime. The semantic set currently
+includes:
 
 ```text
-select_actor
 whoami
+open_upload_session
+create_ingestion_job
+list_observations
+preview_graph_candidates
+query_effective_graph
+query_effective_graph_view
+query_mail_evidence
+answer_mail_case_progress
+request_graph_access
+submit_graph_review_decision
+generate_wiki_draft_from_graph_view
+```
+
+Planned tools include:
+
+```text
 capture_current_chatgpt_session
-create_upload_session
 get_upload_session
 prepare_upload_source
 get_upload_task_card
 complete_upload_session
 upload_asset_reference
-create_ingestion_job
 get_ingestion_job
-list_observations
 extract_graph_candidates
-preview_graph_candidates
 resolve_entity_candidate
 commit_candidates_to_graph
 list_types
@@ -2756,8 +3202,6 @@ commit_types
 propose_type_alignment
 get_entity
 search_graph
-query_effective_graph
-query_effective_graph_view
 search_assets
 search_mail
 fetch_email_thread
@@ -2769,6 +3213,9 @@ deny_access_request
 revoke_grant
 generate_wiki_page
 ```
+
+`select_actor` is not a connected tool. Identity selection exists only inside
+the manual-trusted test/local compatibility facade.
 
 Disallowed MCP tool shapes include:
 
@@ -2787,7 +3234,13 @@ choose_worker_queue(name)
 
 `upload_asset_reference` must not bypass UploadSession intent capture for normal user uploads. It is reserved for controlled imports, migration adapters, or trusted backend references that still create asset, permission, and audit records.
 
-`capture_current_chatgpt_session` is a convenience shortcut, not a separate ingestion backbone. It should capture the current ChatGPT conversation into a governed ChatGPT session artifact with selected user, workspace scope, permission scope, source account metadata, capture method, and audit records. After capture, it must still register an Asset or RawResource and create the normal ingestion or extraction job path.
+`capture_current_chatgpt_session` is a convenience shortcut, not a separate
+ingestion backbone. It should capture the current ChatGPT conversation into a
+governed ChatGPT session artifact with the authenticated actor, current
+workspace scope, permission scope, source account metadata, capture method, and
+audit records. After capture, it must still commit and verify the artifact in
+ObjectStore, register an Asset and occurrence, and create the normal ingestion
+or extraction job path.
 
 ## 9.9 Current Implementation Boundary
 
@@ -2810,7 +3263,7 @@ Provenance and review correctness can be validated without graph storage.
 Atom granularity rules should be tested before they are hardened into a database schema.
 User graph assembly behavior depends on real user workflows and should not be guessed too early.
 WikiRevision governance must remain useful even when graph infrastructure is absent.
-Raw data, evidence snapshots, and citations must remain source-of-truth layers regardless of storage backend.
+Managed Asset bytes and metadata, governed external source records, evidence snapshots, and citations must remain source-of-truth layers regardless of storage backend.
 ```
 
 The current implementation must still avoid designs that would block this model later. In particular, wiki drafts, citations, evidence snapshots, and revision metadata should preserve enough source traceability for future observation extraction, candidate graph generation, canonical graph commits, and user graph assembly.
@@ -2889,8 +3342,10 @@ The shortcut should behave as:
 User asks ChatGPT to save the current session
   -> MCP Gateway calls capture_current_chatgpt_session
   -> FormOwl creates a ChatGPT session capture record
-  -> FormOwl stores the session dump as an internal raw artifact
-  -> FormOwl registers the dump as an Asset / RawResource
+  -> FormOwl serializes the session dump in bounded processing space
+  -> FormOwl hashes, durably writes, and verifies the dump in ObjectStore
+  -> FormOwl registers the dump as an Asset and AssetOccurrence
+  -> FormOwl removes the temporary processing copy
   -> FormOwl creates the normal IngestionJob / ExtractorRun path
 ```
 
@@ -2900,7 +3355,7 @@ The shortcut output should be a task card that shows:
 
 ```text
 capture ID
-selected user
+authenticated actor
 workspace / project / customer scope
 visibility scope
 source account status
@@ -2908,7 +3363,17 @@ capture method
 processing status
 ```
 
-The stored session dump should be treated as a source artifact. `raw_folder` or any object-store locator is an internal storage locator, not a user-selected destination.
+The stored session dump is a managed source Asset. The public capture record
+uses `asset_id` and a governed `formowl://asset/{asset_id}` locator.
+ObjectStore bucket names, object keys, local processing folders, and any
+`raw_folder`-style field remain internal adapter details and must not appear in
+the user-facing capture contract.
+
+If the captured session includes uploaded files, each file must be committed as
+a child Asset with an AssetOccurrence and relationship to the session or
+message. Its detected MIME type determines whether it enters the PDF,
+presentation, document, spreadsheet, image, audio, video, mail, or quarantine
+path.
 
 Minimum capture metadata:
 
@@ -2923,7 +3388,8 @@ Minimum capture metadata:
   "captured_at": "2026-06-16T10:30:00+08:00",
   "ingested_at": "2026-06-16T10:35:00+08:00",
   "permission_scope": "private:user_yifan",
-  "raw_folder": "/raw/sessions/chatgpt/2026/06/16/session-id/",
+  "asset_id": "asset_chatgpt_session_20260616_001",
+  "storage_locator": "formowl://asset/asset_chatgpt_session_20260616_001",
   "manifest_hash": "sha256:..."
 }
 ```
@@ -2943,7 +3409,7 @@ User message record:
   "source_account_id": "chatgpt:yifanliou@gmail.com",
   "timestamp": null,
   "content": "Please turn the project discussion into a wiki draft.",
-  "attachments": [],
+  "attachment_asset_ids": [],
   "authorship": {
     "message_author": "person_yifan",
     "verification_level": "source_account_attributed"
@@ -2976,7 +3442,7 @@ Assistant message record:
 Rule:
 
 ```text id="w3md25"
-A ChatGPT raw session without source_account_id must not enter the verified raw data pool.
+A ChatGPT session Asset without source_account_id must not enter the verified managed Asset pool.
 It may only enter an unverified import queue.
 ```
 
@@ -3026,26 +3492,51 @@ The handoff object is:
 
 ---
 
-## 12.3 Multimodal Resource to Wiki Projection
+## 12.3 Managed Resource Ingress and Nested Attachment
+
+```text
+User or source adapter supplies a file to resources/inbox or an UploadSession.
+FormOwl:
+  1. Creates bounded ingress state and waits for the input to become stable.
+  2. Applies size, type, malware, archive, and policy checks.
+  3. Computes the content hash.
+  4. Writes the bytes to the authoritative ObjectStore.
+  5. Verifies the durable write by checksum or read-after-write.
+  6. Registers Asset, AssetOccurrence, permission, lineage, lifecycle, and audit records in PostgreSQL.
+  7. Removes the ingress copy only after the durable and metadata commits succeed.
+  8. Creates IngestionJob and ExtractorRun records.
+  9. When a parser finds an attachment or embedded member, commits it as a child Asset and AssetOccurrence; the ObjectStore adapter may independently reuse an immutable byte blob.
+  10. Records parent, attachment occurrence, archive/import, and derivation lineage.
+  11. Routes PDF, PPTX, DOCX, spreadsheet, image, audio, video, MSG, EML, and other child Assets by detected MIME type.
+  12. Quarantines unsafe, unsupported, or failed content without representing it as an active Asset.
+```
+
+Preview and download later resolve by `asset_id` through the Retrieval Gateway;
+they do not read from `resources`, worker scratch, a bucket/key supplied by the
+caller, or the original attachment path.
+
+## 12.4 Multimodal Resource to Wiki Projection
 
 ```text
 User:
   Turn this meeting recording and related project issues into a meeting page and update the project hub.
 FormOwl:
-  1. Registers the audio/video file and project references as assets.
-  2. Creates an ingestion job.
-  3. Runs ASR, speaker diarization, scene detection, OCR, and project context extraction.
-  4. Stores transcript segments, scene descriptions, OCR blocks, and issue records as observations.
-  5. Extracts candidate decisions, action items, topics, risks, and dependencies.
-  6. Shows the candidate graph for review.
-  7. Applies atom granularity, entity resolution, relation resolution, and lifecycle policies.
-  8. Commits approved candidates to the canonical graph.
-  9. Assembles a project-manager user graph.
-  10. Applies meeting-page and project-hub WikiProjectionSpec objects.
-  11. Generates reviewable WikiRevision drafts with citations and graph lineage.
+  1. Accepts the audio/video file through managed ingress.
+  2. Commits and verifies the durable ObjectStore copy.
+  3. Registers the Asset, occurrence, scope, lineage, lifecycle, and audit metadata.
+  4. Cleans the ingress copy and creates an ingestion job.
+  5. Runs ASR, speaker diarization, scene detection, OCR, and project context extraction.
+  6. Stores transcript segments, scene descriptions, OCR blocks, and issue records as observations.
+  7. Extracts candidate decisions, action items, topics, risks, and dependencies.
+  8. Shows the candidate graph for review.
+  9. Applies atom granularity, entity resolution, relation resolution, and lifecycle policies.
+  10. Commits approved candidates to the canonical graph.
+  11. Assembles a project-manager user graph.
+  12. Applies meeting-page and project-hub WikiProjectionSpec objects.
+  13. Generates reviewable WikiRevision drafts with citations and graph lineage.
 ```
 
-## 12.4 Candidate Graph Review Workflow
+## 12.5 Candidate Graph Review Workflow
 
 ```text
 Observation batch
@@ -3111,7 +3602,14 @@ Container images must include the required Python runtime and service dependenci
 MCP servers must be runnable from containers without requiring host-installed Python or system libraries.
 Development containers should support repeatable local testing and linting.
 Production containers should prefer small runtime images and explicit dependency pinning.
-Compose or equivalent local orchestration should be available for Project MCP, Wiki MCP, raw data storage, and metadata storage when those services exist.
+Compose or equivalent local orchestration should be available for Project MCP,
+Wiki MCP, controlled ingress, the durable ObjectStore, PostgreSQL metadata, and
+workers when those services exist.
+Container volume mounts for `resources`, upload staging, quarantine, or worker
+scratch must be labeled and operated as temporary processing storage. They must
+not be documented, backed up, or restored as the authoritative Asset store.
+ObjectStore durability and PostgreSQL backup/restore must be tested as separate
+responsibilities.
 ```
 
 Implementation language:
@@ -3189,8 +3687,19 @@ formowl/
     runtime/
       Containerfile
 
+  resources/
+    README.md       # documents runtime-only ingress and cleanup policy
+    inbox/          # temporary; never authoritative
+    quarantine/     # temporary isolation pending policy/recovery
+    processing/     # disposable bounded staging
+
   schemas/
+    storage-backend.schema.json
     asset.schema.json
+    asset-occurrence.schema.json
+    asset-relationship.schema.json
+    asset-lifecycle-event.schema.json
+    retention-policy.schema.json
     observation.schema.json
     semantic-metadata.schema.json
     candidate-atom.schema.json
@@ -3224,10 +3733,16 @@ formowl/
       __init__.py
       assets.py
       extraction.py
+      ingress.py
       jobs.py
+      lifecycle.py
       observations.py
+      retrieval.py
       extractors/
       storage/
+        object_store.py
+        asset_store.py
+        relationship_store.py
 
     formowl_graph/
       __init__.py
@@ -3316,10 +3831,12 @@ formowl/
 ````md id="3mp5w0"
 # formowl
 
-formowl is a source-preserving, graph-governed knowledge management system that turns raw resources into governed wiki views:
+formowl is a source-preserving, graph-governed knowledge management system that
+turns managed source resources into governed wiki views:
 
 ```text
-Raw Resources
+Ingress / External Source
+  -> Managed Asset in durable ObjectStore
   -> Observation / Semantic Metadata
   -> Candidate Graph
   -> Governed Canonical Graph
@@ -3343,13 +3860,21 @@ FormOwl is container-first. The canonical development, test, and runtime environ
 
 The implementation language for Phase 0 is Python. Python owns readable orchestration, debugging, hashing helpers, diff helpers, validation glue, and service behavior.
 
+`resources` is a temporary ingress, quarantine, and processing workspace. It is
+not permanent storage. PostgreSQL is authoritative for Asset identity, scope,
+lineage, lifecycle, retention, and audit; the S3-compatible ObjectStore is
+authoritative for managed bytes. Attachments and embedded files become child
+Assets and are routed through the same MIME-specific extractor pipeline.
+
 ## Core Principle
 
 Project systems own execution state.
 
 Wiki systems own published knowledge views.
 
-Raw resources do not directly become final wiki pages. They first become observations, candidate graph proposals, governed canonical graph commits, user graph revisions, and projection-spec-driven wiki revisions.
+Managed source Assets do not directly become final wiki pages. They first
+become observations, candidate graph proposals, governed canonical graph
+commits, user graph revisions, and projection-spec-driven wiki revisions.
 
 ````
 
@@ -3377,36 +3902,42 @@ Recommended order:
 Pipeline extension order:
 
 ```text id="pipeline-extension-order"
-1. Define StorageBackend, Asset, Observation, SemanticMetadata, IngestionJob, and ExtractorRun contract schemas
-2. Add StorageBackendRegistry, AssetStore, ObjectStore, ObservationStore, and JobStore
-3. Define User, SessionIdentity, WorkspaceMember, AccessRequest, Grant, AuditLog, and AuthProvider contracts
-4. Implement Phase 0 ManualTrustedInternalAuthProvider for trusted internal deployment
-5. Implement resource extraction for project data, markdown/wiki pages, ChatGPT sessions, document blocks, and mail archives
-6. Add audio/video/image extractors behind the same Observation contract
-7. Add PST/mail ingestion as Asset -> IngestionJob -> ExtractorRun -> Observation, with attachments as independent Assets
-8. Define CandidateAtom, CandidateRelation, and ExternalGraphImport contract schemas
-9. Implement candidate graph extraction and preview from observations
-10. Define CanonicalAtom, CanonicalEntity, CanonicalRelation, and CanonicalGraphRevision contract schemas
-11. Define ExtractionPolicy, AtomGranularityPolicy, EntityResolutionPolicy, RelationResolutionPolicy, LifecyclePolicy, and WikiProjectionPolicy
-12. Implement granularity policy enforcement, entity resolution, and relation resolution
-13. Define AtomLifecycleEvent, EntityResolutionEvent, and RelationResolutionEvent mappings
-14. Implement reviewed canonical graph commits with provenance
-15. Define UserGraphProfile, UserGraphAssemblyPolicy, and UserKnowledgeGraphRevision contract schemas
-16. Implement user graph assembly policies, permissioned overlays, grants, and revision history
-17. Define FusionCandidate, EntityResolutionProposal, EvidenceLink, EffectiveGraphView, ScopeAwareCanonicalGraph, and MergeDecision contracts
-18. Implement matching, access overlay, and canonical merge as separate governed workflows
-19. Define WikiProjectionSpec and add graph lineage fields to markdown frontmatter
-20. Implement projection-spec-driven wiki generation from user graph revisions
-21. Implement controlled Retrieval Gateway access for evidence snippets and raw assets
-22. Implement usage-signal collection for split and merge proposals
-23. Implement reviewed atom split, merge, archive, deprecate, supersede, and equivalence workflows
-24. Add vector search and graph storage once the contract and review workflows stabilize
+1. Define StorageBackend, Asset, AssetOccurrence, AssetRelationship, AssetLifecycleEvent, and RetentionPolicy contract schemas.
+2. Add StorageBackendRegistry, PostgreSQL Asset and relationship stores, and the authoritative ObjectStore interface.
+3. Implement controlled resources/UploadSession ingress, stability and safety checks, durable object commit, checksum verification, quarantine, recovery, and post-commit ingress cleanup.
+4. Implement Asset lifecycle, retention, legal hold, redaction, deletion, purge, and immutable lifecycle-event audit.
+5. Define User, SessionIdentity, WorkspaceMember, OAuth identity/session, AccessRequest, Grant, AuditLog, ActorContext, and AuthProvider contracts.
+6. Implement Google-backed FormOwl OAuth 2.1 and gateway-controlled ActorContext for connected deployment; retain ManualTrustedInternalAuthProvider only for tests/local compatibility.
+7. Implement the Retrieval Gateway for permission-checked evidence snippets, previews, bounded streams, and short-lived opaque download capabilities.
+8. Define Observation, SemanticMetadata, IngestionJob, ExtractorRun, and extraction-policy contract schemas and stores.
+9. Implement generic MIME detection, extractor routing, and child Asset/occurrence creation for archive members, attachments, and embedded resources.
+10. Implement resource extraction for project data, markdown/wiki pages, ChatGPT sessions, and document blocks.
+11. Add audio, video, image, presentation, spreadsheet, PDF, and word-processing extractors behind the same Observation contract.
+12. Add PST/mail ingestion as Asset -> IngestionJob -> ExtractorRun -> Observation; reuse the generic nested-resource path for attachments and recurse only for mail MIME types.
+13. Define CandidateAtom, CandidateRelation, and ExternalGraphImport contract schemas.
+14. Implement candidate graph extraction and preview from observations.
+15. Define CanonicalAtom, CanonicalEntity, CanonicalRelation, and CanonicalGraphRevision contract schemas.
+16. Define ExtractionPolicy, AtomGranularityPolicy, EntityResolutionPolicy, RelationResolutionPolicy, LifecyclePolicy, and WikiProjectionPolicy.
+17. Implement granularity policy enforcement, entity resolution, and relation resolution.
+18. Define AtomLifecycleEvent, EntityResolutionEvent, and RelationResolutionEvent mappings.
+19. Implement reviewed canonical graph commits with provenance.
+20. Define UserGraphProfile, UserGraphAssemblyPolicy, and UserKnowledgeGraphRevision contract schemas.
+21. Implement user graph assembly policies, permissioned overlays, grants, and revision history.
+22. Define FusionCandidate, EntityResolutionProposal, EvidenceLink, EffectiveGraphView, ScopeAwareCanonicalGraph, and MergeDecision contracts.
+23. Implement matching, access overlay, and canonical merge as separate governed workflows.
+24. Define WikiProjectionSpec and add graph lineage fields to markdown frontmatter.
+25. Implement projection-spec-driven wiki generation from user graph revisions.
+26. Implement usage-signal collection for split and merge proposals.
+27. Implement reviewed atom split, merge, archive, deprecate, supersede, and equivalence workflows.
+28. Add vector search and graph storage once the contract and review workflows stabilize.
 ```
 
 Implementation alignment cleanup order:
 
 ```text
-1. Replace the JSON-line MCP-shaped prototype transport with standards-compliant MCP JSON-RPC over stdio or implement a compatibility gateway.
+1. Keep the official stateless Streamable HTTP `/mcp` runtime as the only
+   connected ChatGPT-facing transport; retain JSON-line, hand-built JSON-RPC,
+   and stdio only as explicit test/local compatibility entrypoints.
 2. Add real graph fusion contracts and workflows for matching, access overlay, and canonical merge.
 ```
 
@@ -3430,13 +3961,42 @@ Project-system writes are proposal-only.
 Wiki publishing is proposal-only unless explicitly configured otherwise.
 ```
 
+The connected identity implementation is repository-complete only when:
+
+```text
+The public MCP resource is exactly the canonical HTTPS /mcp URL.
+OAuth protected-resource and authorization-server metadata agree on that origin.
+The predefined ChatGPT client uses PKCE S256 and exact callback/resource binding.
+Google OIDC issuer and subject map through a valid FormOwl invitation.
+Google tokens are never accepted as FormOwl MCP bearer tokens.
+FormOwl access tokens are signed, short-lived, resource-bound, and backed by server-side token sessions.
+Every protected tool call resolves a fresh ActorContext from current PostgreSQL state.
+Caller-supplied identity, workspace, session, and grant fields are rejected or overwritten by gateway authority.
+whoami reports only the authenticated FormOwl user and current workspace.
+Revocation, disabled identity/user/client authorization, expiry, and membership removal fail closed and are audited.
+Manual trusted, JSON-line, hand-built JSON-RPC, and stdio identity flows are test/local compatibility only.
+```
+
+Repository-complete does not mean issue #20 is closed. Fresh PostgreSQL,
+restart persistence, first-owner and second-user journeys, signing-key rotation,
+real MCP Inspector, real ChatGPT plus Google, documentation alignment, and the
+configured reviewer gate must all have accepted external evidence first.
+
 The target pipeline is usable when:
 
 ```text
 Physical storage can be distributed across registered storage backends without fragmenting graph identity.
-Raw resources can be registered as assets with permission scope and source lineage.
+Controlled resources folders and upload staging are treated as temporary ingress, not permanent Asset storage.
+A managed ingress item becomes active only after hashing, durable ObjectStore write, verification, PostgreSQL Asset/occurrence registration, and required audit commit.
+Ingress cleanup occurs only after the durable byte and metadata commit succeeds; failed, incomplete, or suspicious inputs remain recoverable in ingress or quarantine.
+PostgreSQL is authoritative for Asset identity, tenant/workspace scope, ownership, permission, lineage, lifecycle, retention, and audit.
+The S3-compatible ObjectStore is authoritative for active managed bytes and large durable derived artifacts.
+Managed source resources can be registered as Assets with permission scope, source lineage, lifecycle state, and retention policy.
 Resource extractors can create observations with location metadata and extractor runs.
 Mail and PST ingestion can preserve archive, message, attachment, and occurrence identity.
+PDF, presentation, document, spreadsheet, image, audio, video, MSG, and EML attachments become child Assets with AssetOccurrence records and are routed by detected MIME type.
+Attachment lineage preserves the parent message, attachment occurrence, source archive/import session, and derivation relationship.
+Byte deduplication never merges Asset authorization, owner scope, grants, retention, or occurrence history.
 Observations can produce CandidateBusinessObject and CandidateAssertion records through one source-neutral pipeline.
 Candidate assertions distinguish property, relation, state, event, and coordination semantics.
 Domain Packs are provenance-linked, content-hash-pinned, and map scoped vocabulary onto the closed core.
@@ -3458,6 +4018,7 @@ reported separately and cannot change the primary pass/fail result.
 Evidence ontology facets derive from observation type, modality, and semantic roles; numeric identifiers do not imply measurement.
 Ontology-guided retrieval binds the ontology revision, signal vocabulary, and complete type/mapping contract.
 Ontology guidance is a capped additive rerank and cannot remove lexically supported candidates or bypass candidate-only boundaries.
+Semantic metadata can produce candidate atoms and relations without committing them as truth.
 Candidate graph previews can be reviewed, split, merged, rejected, or committed.
 Entity and relation resolution events are recorded for canonical graph changes.
 Canonical atoms, entities, relations, and lifecycle mappings remain resolvable across revisions.
@@ -3476,6 +4037,10 @@ External tools cannot directly mutate canonical graph state.
 External tools and LLMs cannot directly mutate canonical type state.
 ChatGPT-facing MCP tools cannot expose raw NAS paths, arbitrary file reads, raw SQL, or object-store admin endpoints.
 User-initiated uploads start with an UploadSession and do not require users to choose storage backends, buckets, parser paths, or worker queues.
+Public records and tools identify originals with `asset_id` or `formowl://asset/{asset_id}`, never ingress paths, local paths, bucket names, object keys, or credentials.
+Original-file preview and download go through the Retrieval Gateway with fresh ActorContext, permission, grant, lifecycle, retention, and audit checks.
+Short-lived download capabilities are opaque, scoped to one Asset and operation, and do not expose bucket names, object keys, storage credentials, or administrative endpoints.
+Retention expiry does not bypass legal hold, authorization, lineage, or audit requirements for redaction, deletion, or purge.
 ```
 
 ---
@@ -3490,7 +4055,9 @@ Do not allow automatic project-system writes without approval.
 Do not treat LLM-generated output as source of truth.
 Do not let external extractors or LLM graph tools write directly to the canonical graph.
 Do not treat transcript chunks, OCR blocks, PDF paragraphs, or issue comments as canonical atoms without governance.
-Do not generate final wiki pages directly from raw resources without observation, graph, projection, and review boundaries.
+Do not generate final wiki pages directly from managed source Assets or
+governed external source records without observation, graph, projection, and
+review boundaries.
 Do not require a full knowledge graph database before the graph contracts and workflows are stable.
 Do not treat a canonical atom graph as a company-wide ontology.
 Do not create a standalone ontology subsystem outside the candidate -> canonical governance pipeline.
@@ -3502,9 +4069,19 @@ Do not require non-engineering wiki authors to use Git or inspect backend revisi
 Do not require contributors to install host-level runtimes when a container can provide them.
 Do not expose Synology NAS, SMB, NFS, WebDAV, MinIO admin, PostgreSQL, raw object storage, or worker scratch paths directly to ChatGPT.
 Do not build the canonical graph from raw storage paths.
+Do not use `resources`, upload staging, quarantine, or worker scratch as the authoritative permanent Asset store.
+Do not mark an ingress file active or delete its temporary copy before durable ObjectStore verification, Asset registration, and audit commit succeed.
+Do not expose bucket names, object keys, S3/MinIO URLs, storage credentials, local paths, or attachment extraction paths as public Asset identity.
+Do not let byte-level deduplication merge Asset ids, owners, permissions, grants, retention policies, or attachment occurrence lineage.
+Do not special-case mail attachments as opaque mail-only blobs when their detected MIME type belongs to the generic PDF, presentation, document, spreadsheet, image, audio, or video extraction path.
+Do not serve original Asset bytes or download capabilities without Retrieval Gateway authorization and audit.
+Do not equate ingress cleanup, worker scratch cleanup, durable retention expiry, redaction, and purge; they are separate lifecycle decisions.
 Do not make normal users switch into backend control planes, storage browsers, parser configuration screens, or worker queues.
 Do not let source preparation guidance produce untracked local files without an UploadSession.
-Do not treat Phase 0 manual identity selection as production authentication.
+Do not treat test/local manual identity selection as connected authentication.
+Do not enable manual trusted identity selection, caller-supplied identity
+environment variables, JSON-line, hand-built JSON-RPC, or stdio as the
+connected ChatGPT authentication path.
 Do not silently merge another user's private graph into the requester's graph.
 Do not grant raw asset access without FormOwl permission checks, grant scope, and audit.
 Do not treat entity matching as data access.
@@ -3520,7 +4097,8 @@ Do not introduce TypeScript, Rust, or another runtime language without changing 
 formowl's target architecture is a governed knowledge pipeline:
 
 ```text
-Raw Resources
+Ingress / External Source
+  -> Managed Asset in durable ObjectStore
   -> Observation / SemanticMetadata
   -> Candidate Graph
   -> Governed Canonical Graph
@@ -3528,11 +4106,13 @@ Raw Resources
   -> WikiProjection / WikiRevision
 ```
 
-The current implementation uses two decoupled MCP servers:
+The current connected implementation uses one governed public gateway and keeps
+the two original MCP services as compatibility boundaries:
 
 ```text id="kbd0ln"
-Project MCP = project execution context
-Wiki MCP = knowledge artifact lifecycle
+FormOwl connected MCP Gateway = public HTTPS OAuth and protected /mcp boundary
+Project MCP compatibility service = project execution context
+Wiki MCP compatibility service = knowledge artifact lifecycle
 ```
 
 They interoperate through:
@@ -3549,19 +4129,33 @@ MCPResultEnvelope
 Graph and wiki work must preserve this separation:
 
 ```text id="final-graph-boundary-summary"
-Raw resources, assets, evidence snapshots, and citations remain source-of-truth and locator layers.
-Physical storage may be distributed, but FormOwl asset and graph identity are centralized.
+Controlled resources folders, upload staging, quarantine, and worker scratch are temporary processing layers, not permanent Asset storage.
+The S3-compatible ObjectStore is authoritative for managed source bytes and large durable derived artifacts.
+PostgreSQL is authoritative for Asset identity, tenant/workspace scope, ownership, permissions, occurrence and parent-child lineage, lifecycle, retention, grants, and audit.
+Managed Assets, governed external source records, evidence snapshots, and citations remain source-of-truth and locator layers.
+Physical storage may be distributed, but FormOwl Asset and graph identity are centralized.
+Attachments and embedded members become child Assets with AssetOccurrence records, preserve parent and import lineage, and route through the normal MIME-specific extractor path; immutable byte blobs may be deduplicated separately.
+Preview and download resolve governed Asset identifiers through the Retrieval Gateway; public tools never expose ingress paths, bucket/key pairs, credentials, or storage administration.
 Observations and semantic metadata are extracted intermediate data.
 Candidate graphs are reviewable proposals.
 Canonical atoms, entities, and relations are reusable governed graph parts.
 Canonical graph state is scope-aware; canonical within a scope does not mean canonical across all scopes.
 User knowledge graphs are versioned assemblies for roles, tasks, permissions, and preferred granularity.
 Wiki revisions are governed output artifacts generated through projection specs and review flows.
-MCP exposes governed semantic operations, not raw storage, raw database
-queries, parser controls, or worker internals.
+MCP exposes governed semantic operations, not raw storage, raw database,
+object-store administration, worker control, or parser internals.
+Connected human identity flows through FormOwl OAuth 2.1 and Google OIDC, then
+resolves a fresh gateway-controlled ActorContext from current FormOwl state.
+Manual trusted identity, JSON-line, hand-built JSON-RPC, and stdio remain
+test/local compatibility surfaces only.
 Evidence retrieval counts source records, not parser chunks, and preserves
 permission, context, time, ontology, and citation lineage before projection.
 ```
+
+Issue #20 establishes identity and `ActorContext`; it does not complete issue
+#41's generic Asset tenant, ownership, byte-storage, lifecycle, retention, or
+authorization boundary. Issue #21 remains a downstream governed mail-evidence
+consumer of that generic Asset boundary.
 
 The architectural rule is:
 
