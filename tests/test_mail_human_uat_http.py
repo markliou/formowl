@@ -586,13 +586,15 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(complete["coverage"]["returned_source_item_count"], 12)
         self.assertTrue(complete["coverage"]["is_exhaustive"])
         self.assertFalse(complete["coverage"]["has_more"])
+        self.assertFalse(complete["projection"]["has_more"])
 
         paged = service.query({"query_text": "BULK_MATCH_TERM", "limit": 8})
         self.assertEqual(paged["total_result_count"], 12)
         self.assertEqual(paged["displayed_result_count"], 8)
         self.assertEqual(paged["coverage"]["returned_source_item_count"], 12)
         self.assertTrue(paged["coverage"]["is_exhaustive"])
-        self.assertTrue(paged["coverage"]["has_more"])
+        self.assertFalse(paged["coverage"]["has_more"])
+        self.assertTrue(paged["projection"]["has_more"])
 
     def test_browser_cannot_supply_identity_or_unrecognized_controls(self) -> None:
         service = _service("mail-human-uat-identity-guard")

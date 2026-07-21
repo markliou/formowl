@@ -463,7 +463,7 @@ class MailHumanUatService:
             warnings.append("business_filter_no_exact_match")
         if not displayed_results and "no_visible_mail_evidence_matched" not in warnings:
             warnings.append("no_visible_mail_evidence_matched")
-        has_more = total_result_count > len(displayed_results)
+        display_has_more = total_result_count > len(displayed_results)
         answerability_status = "sufficient_evidence" if displayed_results else "target_not_found"
         response = {
             "status": (
@@ -492,7 +492,7 @@ class MailHumanUatService:
                 "returned_source_item_count": total_result_count,
                 "displayed_source_item_count": len(displayed_results),
                 "is_exhaustive": True,
-                "has_more": has_more,
+                "has_more": False,
             },
             "answerability": {
                 "status": answerability_status,
@@ -508,6 +508,7 @@ class MailHumanUatService:
                 "secondary_fields": list(task_frame.projection.secondary_fields),
                 "page_size": task_frame.projection.page_size,
                 "page_offset": task_frame.projection.page_offset,
+                "has_more": display_has_more,
             },
             "claim_boundary": {
                 "chatgpt_bypassed": True,
@@ -528,7 +529,7 @@ class MailHumanUatService:
                 "query_id": query_id,
                 "result_count": len(displayed_results),
                 "total_result_count": total_result_count,
-                "has_more": has_more,
+                "has_more": display_has_more,
                 "answerability_status": answerability_status,
                 "citation_ids": [
                     item["citation"]["citation_id"]
