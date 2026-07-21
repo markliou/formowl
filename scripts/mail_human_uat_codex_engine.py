@@ -19,6 +19,7 @@ from formowl_mail.human_uat_orchestrator import (  # noqa: E402
     build_codex_runtime_environment,
     build_hardened_codex_app_server_command,
     prepare_codex_runtime_state,
+    prepare_codex_runtime_state_from_auth_cache,
     validate_codex_runtime_state,
 )
 
@@ -27,10 +28,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("init", "serve"))
     parser.add_argument("--state-dir", type=Path, required=True)
-    parser.add_argument(
+    auth_group = parser.add_mutually_exclusive_group()
+    auth_group.add_argument(
         "--api-key-file",
         type=Path,
         help="Required only for the one-shot init command.",
+    )
+    auth_group.add_argument(
+        "--chatgpt-auth-stdin",
+        action="store_true",
+        help="Read an existing Codex ChatGPT auth.json from stdin during init.",
     )
     parser.add_argument(
         "--socket-path",
@@ -48,26 +55,33 @@ def main() -> int:
 
     try:
         if args.command == "init":
-            if args.api_key_file is None:
-                parser.error("init requires --api-key-file")
+            if args.api_key_file is None and not args.chatgpt_auth_stdin:
+                parser.error("init requires exactly one Codex authentication source")
             if args.socket_path is not None:
                 parser.error("init does not accept --socket-path")
-            api_key = _read_secret(args.api_key_file)
-            paths = prepare_codex_runtime_state(
-                codex_command=args.codex_command,
-                state_dir=args.state_dir,
-                api_key=api_key,
-            )
+            if args.chatgpt_auth_stdin:
+                paths = prepare_codex_runtime_state_from_auth_cache(
+                    state_dir=args.state_dir,
+                    auth_cache=_read_auth_cache_stdin(),
+                )
+            else:
+                api_key = _read_secret(args.api_key_file)
+                paths = prepare_codex_runtime_state(
+                    codex_command=args.codex_command,
+                    state_dir=args.state_dir,
+                    api_key=api_key,
+                )
             print(
-                "FORMOWL_CODEX_UAT_RUNTIME_INITIALIZED " f"state_dir={paths.state_dir}",
+                "FORMOWL_CODEX_UAT_RUNTIME_INITIALIZED "
+                f"state_dir={paths.state_dir} login_method={paths.login_method}",
                 flush=True,
             )
             return 0
 
         if args.socket_path is None:
             parser.error("serve requires --socket-path")
-        if args.api_key_file is not None:
-            parser.error("serve does not accept --api-key-file")
+        if args.api_key_file is not None or args.chatgpt_auth_stdin:
+            parser.error("serve does not accept authentication input")
         paths = validate_codex_runtime_state(args.state_dir)
         socket_path = _prepare_socket_path(args.socket_path)
         command = build_hardened_codex_app_server_command(
@@ -90,6 +104,15 @@ def _read_secret(path: Path) -> str:
         raise ContractValidationError("API key file could not be read") from exc
     if not value:
         raise ContractValidationError("API key file is empty")
+    return value
+
+
+def _read_auth_cache_stdin() -> str:
+    value = sys.stdin.read(64 * 1024 + 1)
+    if len(value.encode("utf-8")) > 64 * 1024:
+        raise ContractValidationError("Codex ChatGPT auth cache is invalid")
+    if not value.strip():
+        raise ContractValidationError("Codex ChatGPT auth cache is empty")
     return value
 
 

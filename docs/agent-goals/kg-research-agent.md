@@ -87,17 +87,21 @@ The bounded Task Answering slice passed 895 canonical dev-container tests,
 full Ruff, 345-file format check, and `git diff --check`. The required
 3-reviewer gate remains before completion.
 
-Issue #44 passed 949 canonical dev-container tests, full Ruff, 354-file format
+Issue #44 passed 951 canonical dev-container tests, full Ruff, 275-file format
 check, the Node 20 UI smoke, a dedicated non-root UAT image build with pinned
 `codex-cli 0.144.6`, real direct and Unix-socket app-server attestation, a
 non-root three-container init/serve/client smoke, and `git diff --check`.
-API-key-only auth is provisioned in a one-shot container; the serving sidecar
-does not mount the key, repository, corpus, evidence cache, or UAT state.
+Authentication is provisioned in a one-shot container. The current deployment
+is explicitly authorized to copy the server's existing Codex ChatGPT auth
+cache into isolated sidecar state; the serving sidecar does not mount the
+developer's Codex home, authentication input, repository, corpus, evidence
+cache, or UAT state.
 Full disabled-feature attestation and failed-turn thread rollback closed the
 final reviewer blockers; Plato, Volta, and Mencius returned 3/3
-`RELEASE_DECISION: AGREE`. ChatGPT or a developer's normal Codex login/session
-must not be reused. One authenticated live Codex/FormOwl turn remains before
-completion.
+`RELEASE_DECISION: AGREE`. The authenticated deployed `8088` live gate also
+passed: a greeting used no FormOwl tool, while the source-backed 文顥/pull-in
+request invoked the single evidence tool exactly once and returned governed
+evidence. The test thread was deleted after verification.
 
 Four real-evidence gates still lack accepted canonical evidence:
 
@@ -133,9 +137,7 @@ authorization must be an actual boolean; string values fail closed.
 
 ## Next Action
 
-Complete, verify, publish, and hand off the explicitly assigned issue #44
-orchestrator slice without weakening the separate Task Answering reviewer gate.
-Then complete that reviewer gate before marking its work-board item complete.
-After those bounded slices, return to waiting for operator-supplied or public
+Complete the separate Task Answering reviewer gate before marking its work-board
+item complete. Then return to waiting for operator-supplied or public
 reproducible response packets for the four broad real-evidence gates. Do not
 reinterpret a passing repository-only harness as broad KG objective completion.

@@ -23,6 +23,7 @@ from formowl_mail.human_uat_orchestrator import (
     build_codex_app_server_proxy_command,
     build_hardened_codex_app_server_command,
     prepare_codex_runtime_state,
+    prepare_codex_runtime_state_from_auth_cache,
     validate_codex_runtime_state,
 )
 
@@ -208,6 +209,22 @@ _FAKE_APP_SERVER = textwrap.dedent(
             )
             send(
                 {
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turnId": "turn_stdio",
+                        "completedAtMs": 1,
+                        "item": {
+                            "id": "message_stdio",
+                            "type": "agentMessage",
+                            "text": final_message,
+                            "phase": "final_answer",
+                        },
+                    },
+                }
+            )
+            send(
+                {
                     "method": "turn/completed",
                     "params": {
                         "threadId": "thread_stdio",
@@ -215,13 +232,8 @@ _FAKE_APP_SERVER = textwrap.dedent(
                             "id": "turn_stdio",
                             "status": "completed",
                             "error": None,
-                            "items": [
-                                {
-                                    "id": "message_stdio",
-                                    "type": "agentMessage",
-                                    "text": final_message,
-                                }
-                            ],
+                            "items": [],
+                            "itemsView": "notLoaded",
                         },
                     },
                 }
@@ -726,14 +738,21 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         self.assertEqual(turn.tool_invocations[0].turn_id, "turn_stdio")
         self.assertEqual(turn.tool_invocations[0].call_id, "call_stdio")
         initialize = next(item for item in trace if item.get("method") == "initialize")
-        self.assertFalse(initialize["params"]["capabilities"]["experimentalApi"])
+        self.assertTrue(initialize["params"]["capabilities"]["experimentalApi"])
         thread_start = next(item for item in trace if item.get("method") == "thread/start")
         self.assertEqual(thread_start["params"]["sandbox"], "read-only")
+        self.assertFalse(thread_start["params"]["ephemeral"])
+        self.assertNotIn("runtimeWorkspaceRoots", thread_start["params"])
+        self.assertNotIn("historyMode", thread_start["params"])
+        self.assertNotIn("environments", thread_start["params"])
         self.assertEqual(
             thread_start["params"]["dynamicTools"][0]["name"],
             "search_formowl_evidence",
         )
         turn_start = next(item for item in trace if item.get("method") == "turn/start")
+        self.assertNotIn("runtimeWorkspaceRoots", turn_start["params"])
+        self.assertNotIn("environments", turn_start["params"])
+        self.assertNotIn("responsesapiClientMetadata", turn_start["params"])
         self.assertEqual(
             turn_start["params"]["sandboxPolicy"]["type"],
             "readOnly",
@@ -843,6 +862,13 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
     def test_prepare_codex_runtime_uses_stdin_and_sanitized_environment(self) -> None:
         secret = "super-secret-key"
         with tempfile.TemporaryDirectory() as temp_dir:
+
+            def fake_login(*_args, **kwargs):
+                auth_path = Path(kwargs["env"]["CODEX_HOME"]) / "auth.json"
+                auth_path.write_text('{"auth_mode":"apikey"}\n', encoding="utf-8")
+                auth_path.chmod(0o600)
+                return subprocess.CompletedProcess([], 0)
+
             with mock.patch.dict(
                 os.environ,
                 {
@@ -854,7 +880,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
             ):
                 with mock.patch(
                     "formowl_mail.human_uat_orchestrator.subprocess.run",
-                    return_value=subprocess.CompletedProcess([], 0),
+                    side_effect=fake_login,
                 ) as run:
                     paths = prepare_codex_runtime_state(
                         codex_command="codex",
@@ -873,10 +899,60 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         self.assertEqual(keyword["env"]["HOME"], keyword["env"]["CODEX_HOME"])
         self.assertEqual(paths.codex_home, paths.state_dir / "codex-home")
         self.assertEqual(paths.workspace, paths.state_dir / "codex-workspace")
+        self.assertEqual(paths.login_method, "api")
         self.assertIn('sandbox_mode = "read-only"', config)
         self.assertIn("[mcp_servers]", config)
         self.assertEqual(config.count("[[skills.config]]"), 5)
         self.assertEqual(validated_paths, paths)
+
+    def test_prepare_codex_runtime_copies_only_valid_chatgpt_auth_cache(self) -> None:
+        secret = "never-print-this-token"
+        auth_cache = json.dumps(
+            {
+                "OPENAI_API_KEY": None,
+                "auth_mode": "chatgpt",
+                "last_refresh": "2026-07-21T00:00:00Z",
+                "tokens": {
+                    "access_token": secret,
+                    "account_id": "00000000-0000-0000-0000-000000000000",
+                    "id_token": "id-token",
+                    "refresh_token": "refresh-token",
+                },
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = prepare_codex_runtime_state_from_auth_cache(
+                state_dir=Path(temp_dir) / "runtime",
+                auth_cache=auth_cache,
+            )
+            config = (paths.codex_home / "config.toml").read_text(encoding="utf-8")
+            copied = json.loads((paths.codex_home / "auth.json").read_text(encoding="utf-8"))
+            validated_paths = validate_codex_runtime_state(paths.state_dir)
+
+        self.assertEqual(paths.login_method, "chatgpt")
+        self.assertEqual(copied["tokens"]["access_token"], secret)
+        self.assertIn('forced_login_method = "chatgpt"', config)
+        self.assertEqual(validated_paths, paths)
+
+    def test_prepare_codex_runtime_rejects_invalid_chatgpt_auth_without_leak(self) -> None:
+        secret = "never-print-this-token"
+        auth_cache = json.dumps(
+            {
+                "OPENAI_API_KEY": None,
+                "auth_mode": "api",
+                "tokens": {"access_token": secret},
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(
+                ValueError,
+                "^Codex ChatGPT auth cache is invalid$",
+            ) as captured:
+                prepare_codex_runtime_state_from_auth_cache(
+                    state_dir=Path(temp_dir) / "runtime",
+                    auth_cache=auth_cache,
+                )
+        self.assertNotIn(secret, str(captured.exception))
 
     def test_prepare_codex_runtime_errors_do_not_leak_key(self) -> None:
         secret = "super-secret-key"
@@ -922,7 +998,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
 
     def test_runtime_attestation_rejects_enabled_skills_or_mcp(self) -> None:
         safe_config = {
-            "forced_login_method": "api",
+            "forced_login_method": "chatgpt",
             "cli_auth_credentials_store": "file",
             "approval_policy": "never",
             "sandbox_mode": "read-only",

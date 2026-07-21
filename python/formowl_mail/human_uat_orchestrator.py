@@ -28,7 +28,9 @@ _MAX_REQUIRED_TERM_CHARS = 120
 _MAX_MODEL_EVIDENCE_ITEMS = 30
 _MAX_MODEL_EVIDENCE_CHARS = 1_200
 _MAX_CODEX_THREADS = 256
-_CODEX_RUNTIME_MARKER = "formowl-uat-codex-runtime-v1.json"
+_MAX_CODEX_AUTH_CACHE_BYTES = 64 * 1024
+_CODEX_RUNTIME_MARKER = "formowl-uat-codex-runtime-v2.json"
+_CODEX_LOGIN_METHODS = frozenset({"api", "chatgpt"})
 _CODEX_SYSTEM_SKILL_NAMES = (
     "imagegen",
     "openai-docs",
@@ -350,6 +352,7 @@ class _ActiveTurn:
     turn_ready: threading.Event = field(default_factory=threading.Event)
     turn_id: str | None = None
     completion: dict[str, Any] | None = None
+    completed_items: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     tool_invocations: list[CodexDynamicToolInvocation] = field(default_factory=list)
     call_ids: set[str] = field(default_factory=set)
     tool_error: str | None = None
@@ -361,6 +364,7 @@ class CodexRuntimePaths:
     state_dir: Path
     codex_home: Path
     workspace: Path
+    login_method: str
 
 
 def build_hardened_codex_app_server_command(
@@ -455,17 +459,10 @@ def prepare_codex_runtime_state(
         raise ContractValidationError("Codex authentication timeout is invalid")
     if not isinstance(api_key, str) or not api_key.strip():
         raise ContractValidationError("Codex API key is required")
-    state = _prepare_new_runtime_state_directory(state_dir)
-    home = _prepare_private_directory(state / "codex-home", "Codex home")
-    workspace = _prepare_private_directory(
-        state / "codex-workspace",
-        "Codex app-server workspace",
-        require_empty=True,
+    state, home, workspace, config_path, config_text = _prepare_codex_runtime_layout(
+        state_dir=state_dir,
+        login_method="api",
     )
-    config_path = home / "config.toml"
-    config_text = _render_hardened_codex_config(home)
-    config_path.write_text(config_text, encoding="utf-8")
-    config_path.chmod(0o600)
     environment = _codex_process_environment(home)
     command = [codex_command.strip(), "login", "--with-api-key"]
     try:
@@ -483,22 +480,44 @@ def prepare_codex_runtime_state(
         raise RuntimeError("Codex authentication setup failed") from exc
     if completed.returncode != 0:
         raise RuntimeError("Codex authentication setup failed")
-    marker = {
-        "format": "formowl_uat_codex_runtime",
-        "version": 1,
-        "config_sha256": hashlib.sha256(config_text.encode("utf-8")).hexdigest(),
-    }
-    marker_path = state / _CODEX_RUNTIME_MARKER
-    marker_path.write_text(
-        json.dumps(marker, sort_keys=True, separators=(",", ":")) + "\n",
-        encoding="utf-8",
+    _finalize_codex_runtime_state(
+        state=state,
+        config_path=config_path,
+        config_text=config_text,
+        login_method="api",
     )
-    marker_path.chmod(0o400)
-    config_path.chmod(0o400)
     return CodexRuntimePaths(
         state_dir=state,
         codex_home=home,
         workspace=workspace,
+        login_method="api",
+    )
+
+
+def prepare_codex_runtime_state_from_auth_cache(
+    *,
+    state_dir: str | Path,
+    auth_cache: str,
+) -> CodexRuntimePaths:
+    """Provision an isolated runtime from an existing ChatGPT Codex auth cache."""
+
+    normalized_auth_cache = _validate_chatgpt_auth_cache(auth_cache)
+    state, home, workspace, config_path, config_text = _prepare_codex_runtime_layout(
+        state_dir=state_dir,
+        login_method="chatgpt",
+    )
+    _write_private_new_file(home / "auth.json", normalized_auth_cache)
+    _finalize_codex_runtime_state(
+        state=state,
+        config_path=config_path,
+        config_text=config_text,
+        login_method="chatgpt",
+    )
+    return CodexRuntimePaths(
+        state_dir=state,
+        codex_home=home,
+        workspace=workspace,
+        login_method="chatgpt",
     )
 
 
@@ -526,17 +545,33 @@ def validate_codex_runtime_state(state_dir: str | Path) -> CodexRuntimePaths:
         config_text = config_path.read_text(encoding="utf-8")
     except (OSError, json.JSONDecodeError) as exc:
         raise ContractValidationError("Codex runtime state is not provisioned") from exc
+    login_method = marker.get("login_method") if isinstance(marker, Mapping) else None
+    if login_method not in _CODEX_LOGIN_METHODS:
+        raise ContractValidationError("Codex runtime state integrity check failed")
     expected_marker = {
         "format": "formowl_uat_codex_runtime",
-        "version": 1,
+        "version": 2,
+        "login_method": login_method,
         "config_sha256": hashlib.sha256(config_text.encode("utf-8")).hexdigest(),
     }
-    if marker != expected_marker or config_text != _render_hardened_codex_config(home):
+    if marker != expected_marker or config_text != _render_hardened_codex_config(
+        home,
+        login_method=login_method,
+    ):
         raise ContractValidationError("Codex runtime state integrity check failed")
+    auth_path = home / "auth.json"
+    _validate_private_auth_file(auth_path)
+    if login_method == "chatgpt":
+        try:
+            auth_cache = auth_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ContractValidationError("Codex runtime state is not provisioned") from exc
+        _validate_chatgpt_auth_cache(auth_cache)
     return CodexRuntimePaths(
         state_dir=state,
         codex_home=home,
         workspace=workspace,
+        login_method=login_method,
     )
 
 
@@ -621,7 +656,9 @@ class CodexAppServerStdioTransport:
                         "version": "0.1.0",
                     },
                     "capabilities": {
-                        "experimentalApi": False,
+                        # Dynamic tools and additional context are experimental
+                        # app-server protocol fields in pinned Codex 0.144.6.
+                        "experimentalApi": True,
                         "optOutNotificationMethods": [
                             "item/agentMessage/delta",
                             "item/reasoning/textDelta",
@@ -654,10 +691,7 @@ class CodexAppServerStdioTransport:
             "baseInstructions": base_instructions,
             "developerInstructions": developer_instructions,
             "dynamicTools": [dict(tool) for tool in dynamic_tools],
-            "environments": [],
-            "runtimeWorkspaceRoots": [],
-            "ephemeral": True,
-            "historyMode": "paginated",
+            "ephemeral": False,
             "personality": "friendly",
             "serviceName": "formowl-uat",
             "threadSource": "formowl_uat",
@@ -717,9 +751,6 @@ class CodexAppServerStdioTransport:
                         "type": "readOnly",
                         "networkAccess": False,
                     },
-                    "environments": [],
-                    "runtimeWorkspaceRoots": [],
-                    "responsesapiClientMetadata": dict(client_metadata),
                 }
                 result = self._request("turn/start", params)
                 turn = result.get("turn")
@@ -750,7 +781,16 @@ class CodexAppServerStdioTransport:
                     raise RuntimeError("Codex app-server completion turn mismatch")
                 if completed_turn.get("status") != "completed" or completed_turn.get("error"):
                     raise RuntimeError("Codex app-server turn failed")
-                final_message = _final_agent_message(completed_turn.get("items"))
+                with context.lock:
+                    completed_items = tuple(
+                        item
+                        for item_turn_id, item in context.completed_items
+                        if item_turn_id == turn_id
+                    )
+                final_message = _final_agent_message(
+                    completed_turn.get("items"),
+                    completed_items=completed_items,
+                )
                 return CodexAppServerTurn(
                     thread_id=thread_id,
                     turn_id=turn_id,
@@ -928,6 +968,9 @@ class CodexAppServerStdioTransport:
                         daemon=True,
                     ).start()
                     continue
+                if message.get("method") == "item/completed":
+                    self._deliver_item_completion(message.get("params"))
+                    continue
                 if message.get("method") == "turn/completed":
                     self._deliver_turn_completion(message.get("params"))
         except (OSError, UnicodeError):
@@ -965,6 +1008,25 @@ class CodexAppServerStdioTransport:
             return
         context.completion = dict(params)
         context.event.set()
+
+    def _deliver_item_completion(self, params: Any) -> None:
+        if not isinstance(params, Mapping):
+            return
+        thread_id = params.get("threadId")
+        turn_id = params.get("turnId")
+        item = params.get("item")
+        if (
+            not isinstance(thread_id, str)
+            or not isinstance(turn_id, str)
+            or not isinstance(item, Mapping)
+        ):
+            return
+        with self._state_lock:
+            context = self._active_turns.get(thread_id)
+        if context is None:
+            return
+        with context.lock:
+            context.completed_items.append((turn_id, dict(item)))
 
     def _handle_server_request(self, message: Mapping[str, Any]) -> None:
         request_id = message.get("id")
@@ -1329,6 +1391,107 @@ def _prepare_new_runtime_state_directory(path: str | Path) -> Path:
     return resolved
 
 
+def _prepare_codex_runtime_layout(
+    *,
+    state_dir: str | Path,
+    login_method: str,
+) -> tuple[Path, Path, Path, Path, str]:
+    if login_method not in _CODEX_LOGIN_METHODS:
+        raise ContractValidationError("Codex login method is invalid")
+    state = _prepare_new_runtime_state_directory(state_dir)
+    home = _prepare_private_directory(state / "codex-home", "Codex home")
+    workspace = _prepare_private_directory(
+        state / "codex-workspace",
+        "Codex app-server workspace",
+        require_empty=True,
+    )
+    config_path = home / "config.toml"
+    config_text = _render_hardened_codex_config(
+        home,
+        login_method=login_method,
+    )
+    _write_private_new_file(config_path, config_text)
+    return state, home, workspace, config_path, config_text
+
+
+def _finalize_codex_runtime_state(
+    *,
+    state: Path,
+    config_path: Path,
+    config_text: str,
+    login_method: str,
+) -> None:
+    marker = {
+        "format": "formowl_uat_codex_runtime",
+        "version": 2,
+        "login_method": login_method,
+        "config_sha256": hashlib.sha256(config_text.encode("utf-8")).hexdigest(),
+    }
+    marker_path = state / _CODEX_RUNTIME_MARKER
+    _write_private_new_file(
+        marker_path,
+        json.dumps(marker, sort_keys=True, separators=(",", ":")) + "\n",
+    )
+    marker_path.chmod(0o400)
+    config_path.chmod(0o400)
+
+
+def _write_private_new_file(path: Path, content: str) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise ContractValidationError("Codex runtime state could not be written") from exc
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError as exc:
+        raise ContractValidationError("Codex runtime state could not be written") from exc
+
+
+def _validate_private_auth_file(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ContractValidationError("Codex runtime state is not provisioned") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_mode & 0o077
+        or metadata.st_size <= 0
+        or metadata.st_size > _MAX_CODEX_AUTH_CACHE_BYTES
+    ):
+        raise ContractValidationError("Codex runtime state integrity check failed")
+
+
+def _validate_chatgpt_auth_cache(auth_cache: str) -> str:
+    if not isinstance(auth_cache, str) or not auth_cache.strip():
+        raise ContractValidationError("Codex ChatGPT auth cache is required")
+    if len(auth_cache.encode("utf-8")) > _MAX_CODEX_AUTH_CACHE_BYTES:
+        raise ContractValidationError("Codex ChatGPT auth cache is invalid")
+    try:
+        parsed = json.loads(auth_cache)
+    except json.JSONDecodeError as exc:
+        raise ContractValidationError("Codex ChatGPT auth cache is invalid") from exc
+    tokens = parsed.get("tokens") if isinstance(parsed, Mapping) else None
+    if (
+        not isinstance(parsed, Mapping)
+        or parsed.get("auth_mode") != "chatgpt"
+        or parsed.get("OPENAI_API_KEY") not in (None, "")
+        or not isinstance(tokens, Mapping)
+        or any(
+            not isinstance(tokens.get(key), str) or not tokens[key]
+            for key in ("access_token", "account_id", "id_token", "refresh_token")
+        )
+    ):
+        raise ContractValidationError("Codex ChatGPT auth cache is invalid")
+    return json.dumps(parsed, sort_keys=True, separators=(",", ":")) + "\n"
+
+
 def _prepare_private_directory(
     path: str | Path,
     label: str,
@@ -1361,9 +1524,15 @@ def _reject_symlink_ancestry(path: Path, label: str) -> None:
             raise ContractValidationError(f"{label} ancestry must not contain symlinks")
 
 
-def _render_hardened_codex_config(codex_home: Path) -> str:
+def _render_hardened_codex_config(
+    codex_home: Path,
+    *,
+    login_method: str,
+) -> str:
+    if login_method not in _CODEX_LOGIN_METHODS:
+        raise ContractValidationError("Codex login method is invalid")
     lines = [
-        'forced_login_method = "api"',
+        f'forced_login_method = "{login_method}"',
         'cli_auth_credentials_store = "file"',
         'approval_policy = "never"',
         'sandbox_mode = "read-only"',
@@ -1405,7 +1574,7 @@ def _assert_hardened_codex_runtime(
     if not isinstance(config, Mapping):
         raise RuntimeError("Codex runtime attestation returned no configuration")
     if (
-        config.get("forced_login_method") != "api"
+        config.get("forced_login_method") not in _CODEX_LOGIN_METHODS
         or config.get("cli_auth_credentials_store") != "file"
         or config.get("approval_policy") != "never"
         or config.get("sandbox_mode") != "read-only"
@@ -1546,12 +1715,15 @@ def _parse_decision(final_message: str) -> dict[str, str]:
     }
 
 
-def _final_agent_message(items: Any) -> str:
-    if not isinstance(items, list):
-        raise RuntimeError("Codex app-server completion has no items")
+def _final_agent_message(
+    items: Any,
+    *,
+    completed_items: Sequence[Mapping[str, Any]] = (),
+) -> str:
+    turn_items = items if isinstance(items, list) else []
     messages = [
         item.get("text")
-        for item in items
+        for item in (*turn_items, *completed_items)
         if isinstance(item, Mapping)
         and item.get("type") == "agentMessage"
         and isinstance(item.get("text"), str)
@@ -1611,5 +1783,6 @@ __all__ = [
     "build_hardened_codex_app_server_command",
     "build_codex_runtime_environment",
     "prepare_codex_runtime_state",
+    "prepare_codex_runtime_state_from_auth_cache",
     "validate_codex_runtime_state",
 ]

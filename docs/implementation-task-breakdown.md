@@ -73,7 +73,7 @@ archival is preserved at
 
 ## Current Unchecked Work
 
-- [ ] Complete GitHub issue #44: add a source-neutral UAT conversation
+- [x] Complete GitHub issue #44: add a source-neutral UAT conversation
   orchestrator that treats FormOwl as governed MCP-style tools.
   - Isolated branch/worktree: `uat/issue-44-orchestrator` at
     `/tmp/formowl-uat-orchestrator`, based on pushed/live baseline `5dffd68`.
@@ -84,23 +84,29 @@ archival is preserved at
     `search_formowl_evidence` dynamic tool. FormOwl remains the governed
     read-only evidence capability rather than the chatbot. Required terms are
     generic literal source-item constraints, not procurement routing heuristics.
+    Final agent output is consumed from the protocol's `item/completed`
+    notification because pinned Codex returns `turn/completed.itemsView` as
+    `notLoaded`; persistent threads make failed-turn deletion enforceable.
   - Preserved boundaries: `/api/query` remains the lower-level compatibility
     evidence surface; uploads, citations, permission filtering, evidence
     coverage, private UAT logs, no-login sharing, and read-only business-system
     behavior remain intact. The HTTP and Codex processes run in separate
     non-root containers; the sidecar sees neither repository, corpus, evidence
-    cache, upload state, nor API-key file while serving. Runtime attestation
+    cache, upload state, nor authentication input while serving. Runtime attestation
     rejects unsafe config, MCP servers, enabled skills, accessible apps, or a
     non-empty/symlinked workspace before a conversation starts.
-  - Verification: 949 canonical dev-container tests passed, full Ruff passed,
-    354 files passed format check, the Node 20 UI smoke passed, the dedicated
+  - Verification: 951 canonical dev-container tests passed, full Ruff passed,
+    275 files passed format check, the Node 20 UI smoke passed, the dedicated
     UAT image built with pinned `codex-cli 0.144.6`, real direct and Unix-socket
     app-server attestation passed, a non-root three-container init/serve/client
     smoke passed, and `git diff --check` passed. Plato, Volta, and Mencius
     returned 3/3 `RELEASE_DECISION: AGREE` after full disabled-feature
     attestation and failed-turn thread rollback were added.
-  - Remaining gates: one authenticated live Codex/FormOwl UAT turn using the
-    dedicated server-side API key.
+  - Authenticated live proof on the deployed `8088` surface used the explicitly
+    authorized server Codex ChatGPT login in isolated sidecar state. A greeting
+    returned `answer_without_tool` with zero FormOwl calls. The source-backed
+    文顥/pull-in question invoked `search_formowl_evidence` exactly once and
+    returned six governed evidence items. The test thread was then deleted.
 - [ ] Complete the source-neutral Task Answering methodology slice.
   - Owner paths: `python/formowl_graph/task_answering.py`,
     `python/formowl_graph/candidate_retrieval.py`, task-answering tests, and

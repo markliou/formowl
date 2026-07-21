@@ -18,6 +18,10 @@ how colleagues word their own requests.
   conversationally, ask a clarification question, re-render the latest
   governed evidence, or invoke the one structured
   `search_formowl_evidence` dynamic tool.
+- Uses persistent app-server threads so failed-turn cleanup can delete actual
+  server state. Pinned Codex `0.144.6` emits the authoritative final agent
+  message through `item/completed`; `turn/completed` may report
+  `itemsView=notLoaded` with an empty `items` list.
 - Treats FormOwl as governed MCP-style evidence tooling rather than as the
   chatbot. Explanations, `我看不懂`, summaries, and presentation changes do
   not automatically trigger another evidence search.
@@ -72,10 +76,11 @@ how colleagues word their own requests.
   mutate candidate/canonical graph state. The HTTP container starts only
   Codex's stdio-to-Unix-socket proxy. The actual app-server runs in a separate
   non-root container that never mounts the FormOwl repository, private corpus,
-  evidence cache, upload state, or API-key file during serving.
+  evidence cache, upload state, or authentication input during serving.
 - Runs Codex from a dedicated empty workspace with a generated, integrity-
-  checked home. API-key-only auth is provisioned in a separate one-shot
-  container. Effective config, MCP inventory, skills, and apps are attested
+  checked home. Authentication is provisioned in a separate one-shot container
+  from either an API key or an explicitly authorized existing Codex ChatGPT
+  auth cache. Effective config, MCP inventory, skills, and apps are attested
   after every app-server connection; startup fails if MCP servers, enabled
   skills, accessible apps, unsafe sandbox settings, or non-FormOwl capability
   config is found.
@@ -109,7 +114,7 @@ how colleagues discover the interface and what they ask:
   private UAT state volume and are not committed to Git.
 - Orchestration traces record the closed action, model name, tool-call flag,
   tool name, query/required-term hashes, result count, and assistant-response
-  hash. They do not store the API key, raw Codex protocol stream, reasoning, or
+  hash. They do not store credentials, raw Codex protocol stream, reasoning, or
   dynamic-tool payload.
 - `/api/session-summary` exposes only aggregate counts. Raw submitted questions
   and event sequences remain in the private event log for later UX analysis.
@@ -174,27 +179,28 @@ sudo install -d -m 0700 -o 65532 -g 65532 \
   "<private-uat-state>"
 ```
 
-Provision API-key-only Codex auth once. This one-shot container sees the API
-key and Codex state, but no FormOwl corpus, cache, repository, upload state, or
-HTTP port:
+Provision the explicitly authorized existing Codex ChatGPT login once. The
+auth cache is streamed over stdin into the isolated runtime state; the
+one-shot container does not mount the developer's normal Codex home and sees
+no FormOwl corpus, cache, repository, upload state, or HTTP port:
 
 ```sh
-docker run --rm \
+docker run --rm -i \
   --read-only \
   --user 65532:65532 \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
   -v "<codex-state>:/codex-state" \
-  -v "<openai-api-key-file>:/run/secrets/codex_api_key:ro" \
   formowl-may-uat:local \
   python scripts/mail_human_uat_codex_engine.py init \
     --state-dir /codex-state \
-    --api-key-file /run/secrets/codex_api_key
+    --chatgpt-auth-stdin \
+  < "$HOME/.codex/auth.json"
 ```
 
 Start the isolated Codex engine. It mounts only its dedicated state and the
-private socket directory; the API-key file is no longer present:
+private socket directory; the authentication input is no longer present:
 
 ```sh
 docker run --rm -d \
@@ -213,7 +219,7 @@ docker run --rm -d \
 ```
 
 Finally, start the shared HTTP surface. It mounts the corpus/cache/UAT state and
-the socket, but not Codex state or the API key:
+the socket, but not Codex state or authentication input:
 
 ```sh
 docker run --rm \
@@ -246,12 +252,18 @@ default. `FORMOWL_UAT_CODEX_REASONING_EFFORT` defaults to `low`.
 aliases. The HTTP server no longer accepts API-key, Codex-home, or
 Codex-workspace arguments.
 
-The one-shot initializer pipes the API key to
-`codex login --with-api-key`, writes a locked-down `config.toml`, disables all
-bundled system skills by their pinned-version paths, and records a config hash.
-The serving sidecar refuses an unprovisioned, modified, symlinked, or non-empty
-workspace. Never mount or copy a developer's normal `~/.codex`, interactive
-Codex session, ChatGPT browser session, or ChatGPT product credentials.
+The one-shot initializer validates the streamed cache as a ChatGPT-mode Codex
+`auth.json`, copies only that credential cache into isolated state, forces
+`forced_login_method = "chatgpt"`, writes a locked-down `config.toml`, disables
+all bundled system skills by their pinned-version paths, and records the login
+method plus config hash. The serving sidecar refuses an unprovisioned,
+modified, symlinked, or non-empty workspace. Never mount the developer's
+normal `~/.codex`, session history, memories, plugin cache, ChatGPT browser
+session, or other Codex state.
+
+The older one-shot `--api-key-file` mode remains available for a future
+dedicated UAT account. It is not required for the currently authorized
+server-login deployment.
 
 Codex app-server is an experimental Codex integration surface. Keep it pinned
 to the version in `containers/dev/Dockerfile`, validate the JSON schemas when
@@ -287,12 +299,12 @@ classification, direct-answer and evidence rendering, IME Enter handling,
 completion/close messages, new-chat session rotation, and client-side file
 count/type/size preflight.
 
-The completed isolated-runtime verification also includes:
+The completed isolated-runtime verification includes:
 
 - real direct-stdio and Unix-socket app-server runtime attestation;
-- a non-root three-container smoke separating one-shot API-key init, Codex
+- a non-root three-container smoke separating one-shot auth init, Codex
   serving, and the HTTP/client process; and
-- a 949-test canonical dev-container suite, full Ruff, 354-file format check,
+- a 951-test canonical dev-container suite, full Ruff, 275-file format check,
   and `git diff --check`.
 
 Runtime attestation checks every feature disabled by the hardened command.
@@ -300,6 +312,9 @@ When response validation, durable result logging, or local history persistence
 fails after a Codex turn, the service discards that persistent Codex thread so
 the next request cannot inherit hidden divergent state.
 
-An authenticated live UAT turn remains a deployment gate. It must demonstrate
-that an ordinary greeting does not call `search_formowl_evidence` and that a
-source-backed evidence question invokes the tool only when required.
+The authenticated live deployment gate passed on the `8088` surface using the
+isolated, explicitly authorized server Codex ChatGPT login. The active model
+was `gpt-5.6-sol`: an ordinary greeting returned `answer_without_tool` with zero
+FormOwl calls, while the source-backed 文顥/pull-in question invoked
+`search_formowl_evidence` exactly once and returned six governed evidence
+items. The verification conversation was deleted afterward.
