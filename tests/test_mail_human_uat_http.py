@@ -26,10 +26,56 @@ from formowl_mail.human_uat_http import (
     MailHumanUatService,
     create_mail_human_uat_http_server,
 )
+from formowl_mail.human_uat_orchestrator import (
+    UatConversationMessage,
+    UatConversationOutcome,
+    UatEvidenceToolRequest,
+)
 
 NOW = "2026-07-18T12:00:00+00:00"
 VISITOR_ID = "uatvisitor_" + "1" * 32
 SESSION_ID = "uatsession_" + "2" * 32
+
+
+class _ScriptedConversationModel:
+    model_name = "test-orchestrator"
+
+    def __init__(self, steps: list[dict[str, object]]) -> None:
+        self.steps = list(steps)
+        self.calls: list[dict[str, object]] = []
+        self.tool_call_count = 0
+
+    def respond(
+        self,
+        *,
+        history,
+        user_text,
+        latest_evidence,
+        safety_identifier,
+        evidence_tool,
+    ) -> UatConversationOutcome:
+        self.calls.append(
+            {
+                "history": tuple(history),
+                "user_text": user_text,
+                "latest_evidence": latest_evidence,
+                "safety_identifier": safety_identifier,
+            }
+        )
+        step = self.steps.pop(0)
+        tool_request = step.get("tool_request")
+        tool_result = None
+        if isinstance(tool_request, UatEvidenceToolRequest):
+            self.tool_call_count += 1
+            tool_result = evidence_tool(tool_request)
+        return UatConversationOutcome(
+            response_kind=str(step["response_kind"]),
+            answer_text=str(step["answer_text"]),
+            display_format=str(step.get("display_format", "narrative")),
+            model_name=self.model_name,
+            tool_request=tool_request,
+            tool_result=tool_result,
+        )
 
 
 class MailHumanUatHttpTests(unittest.TestCase):
@@ -56,11 +102,13 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertIn('src="/upload"', html)
         self.assertIn("測試期間會記錄已送出的問題與按鈕操作", html)
         self.assertIn('"/api/interaction"', html)
+        self.assertIn('"/api/chat"', html)
         self.assertIn('"formowl_uat_visitor_id"', html)
         self.assertIn("!event.isComposing", html)
-        self.assertIn("sort: querySort(query)", html)
-        self.assertIn("limit: 50", html)
-        self.assertIn('"最近", "最新", "近期", "目前", "現在"', html)
+        self.assertIn("正在思考", html)
+        self.assertNotIn("sort: querySort(query)", html)
+        self.assertNotIn("limit: 50", html)
+        self.assertNotIn('api("/api/query"', html)
         self.assertIn('className = "evidence-table"', html)
         self.assertIn('["內容", "主旨", "時間", "證據"]', html)
         self.assertNotIn('id="starter-grid"', html)
@@ -79,6 +127,8 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertFalse(health["authentication_required"])
         self.assertTrue(health["shared_uat"])
         self.assertTrue(health["behavior_capture_enabled"])
+        self.assertFalse(health["conversation_orchestrator_enabled"])
+        self.assertIsNone(health["conversation_model"])
         self.assertEqual(
             health["behavior_capture_scope"],
             "submitted_questions_and_bounded_interactions",
@@ -131,6 +181,250 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(json.loads(query_body)["status"], "ok")
         self.assertEqual(upload_response.status, 201)
         self.assertEqual(json.loads(upload_body)["accepted_file_count"], 1)
+
+    def test_chat_orchestrator_calls_formowl_only_for_new_evidence(self) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "你好，我可以先了解你想處理的資料問題。",
+                },
+                {
+                    "response_kind": "answer",
+                    "answer_text": "PO470002002 的來源內容顯示目前交期資訊如下。",
+                    "tool_request": UatEvidenceToolRequest(
+                        query_text="SMT delivery PO470002002",
+                        required_terms=("PO470002002",),
+                        sort="relevance",
+                        limit=50,
+                    ),
+                },
+                {
+                    "response_kind": "answer",
+                    "answer_text": "簡單說，前一筆證據是在描述該採購單的交期。",
+                },
+                {
+                    "response_kind": "render_prior_evidence",
+                    "answer_text": "我把同一批證據整理成表格。",
+                    "display_format": "table",
+                },
+                {
+                    "response_kind": "answer",
+                    "answer_text": "這是另一個一般問題，不沿用前一個搜尋任務。",
+                },
+            ]
+        )
+        state_dir = _paths.fresh_test_dir("mail-human-uat-chat-orchestrator")
+        service = _service_with_model(state_dir, model)
+        tracking = {
+            "visitor_id": VISITOR_ID,
+            "session_id": SESSION_ID,
+            "source": "composer",
+        }
+
+        greeting = service.chat(
+            {
+                "query_text": "你好，你可以做什麼？",
+                "sequence": 1,
+                **tracking,
+            }
+        )
+        evidence = service.chat(
+            {
+                "query_text": "查 PO470002002 的交期",
+                "sequence": 2,
+                **tracking,
+            }
+        )
+        explanation = service.chat(
+            {
+                "query_text": "上面的東西我看不懂",
+                "sequence": 3,
+                **tracking,
+            }
+        )
+        table = service.chat(
+            {
+                "query_text": "整理成表格",
+                "sequence": 4,
+                **tracking,
+            }
+        )
+        unrelated = service.chat(
+            {
+                "query_text": "你可以幫我寫一段會議開場白嗎？",
+                "sequence": 5,
+                **tracking,
+            }
+        )
+
+        self.assertEqual(
+            greeting["orchestration"]["action"],
+            "answer_without_tool",
+        )
+        self.assertEqual(greeting["results"], [])
+        self.assertEqual(
+            evidence["orchestration"]["action"],
+            "call_formowl_tool",
+        )
+        self.assertEqual(evidence["total_result_count"], 1)
+        self.assertEqual(evidence["results"][0]["subject"], "Supplier pull-in request")
+        self.assertEqual(
+            explanation["orchestration"]["action"],
+            "answer_without_tool",
+        )
+        self.assertEqual(explanation["results"], [])
+        self.assertEqual(
+            table["orchestration"]["action"],
+            "render_prior_evidence",
+        )
+        self.assertEqual(table["results"], evidence["results"])
+        self.assertEqual(table["projection"]["output_format"], "table")
+        self.assertEqual(
+            unrelated["orchestration"]["action"],
+            "answer_without_tool",
+        )
+        self.assertEqual(unrelated["results"], [])
+        self.assertEqual(model.tool_call_count, 1)
+        self.assertIsNone(model.calls[0]["latest_evidence"])
+        self.assertIsNotNone(model.calls[2]["latest_evidence"])
+        self.assertEqual(
+            model.calls[2]["history"][-1],
+            UatConversationMessage(
+                role="assistant",
+                content="PO470002002 的來源內容顯示目前交期資訊如下。",
+            ),
+        )
+        self.assertRegex(
+            str(model.calls[0]["safety_identifier"]),
+            r"^formowl_uat_[0-9a-f]{48}$",
+        )
+        summary = service.session_summary()
+        self.assertEqual(summary["chat_count"], 5)
+        self.assertEqual(summary["query_count"], 1)
+        self.assertEqual(summary["formowl_tool_call_count"], 1)
+
+        events = [
+            json.loads(line)
+            for line in (state_dir / "mail-human-uat-events.private.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        chat_results = [event for event in events if event["event_type"] == "chat_result"]
+        self.assertEqual(
+            [event["orchestration_action"] for event in chat_results],
+            [
+                "answer_without_tool",
+                "call_formowl_tool",
+                "answer_without_tool",
+                "render_prior_evidence",
+                "answer_without_tool",
+            ],
+        )
+        self.assertEqual(chat_results[1]["tool_name"], "search_formowl_evidence")
+        self.assertEqual(len(chat_results[1]["required_term_hashes"]), 1)
+        self.assertNotIn(
+            "PO470002002",
+            json.dumps(chat_results[1]["required_term_hashes"]),
+        )
+
+    def test_chat_clarification_and_new_chat_do_not_reuse_prior_evidence(self) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "先提供來源證據。",
+                    "tool_request": UatEvidenceToolRequest(
+                        query_text="delivery PO470002002",
+                        required_terms=("PO470002002",),
+                        sort="relevance",
+                        limit=20,
+                    ),
+                },
+                {
+                    "response_kind": "clarification",
+                    "answer_text": "你想查哪一份資料或哪一個主題？",
+                },
+            ]
+        )
+        service = _service_with_model(
+            _paths.fresh_test_dir("mail-human-uat-chat-reset"),
+            model,
+        )
+        tracking = {
+            "visitor_id": VISITOR_ID,
+            "session_id": SESSION_ID,
+            "source": "composer",
+        }
+        service.chat(
+            {
+                "query_text": "查 PO470002002 的交期",
+                "sequence": 1,
+                **tracking,
+            }
+        )
+        service.record_interaction(
+            {
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 2,
+                "action": "new_chat",
+                "details": {},
+            }
+        )
+        clarification = service.chat(
+            {
+                "query_text": "幫我看一下",
+                "sequence": 3,
+                **tracking,
+            }
+        )
+
+        self.assertEqual(clarification["orchestration"]["action"], "clarify")
+        self.assertFalse(clarification["orchestration"]["formowl_tool_called"])
+        self.assertEqual(model.calls[1]["history"], ())
+        self.assertIsNone(model.calls[1]["latest_evidence"])
+        self.assertEqual(model.tool_call_count, 1)
+        self.assertEqual(service.session_summary()["query_count"], 1)
+
+    def test_chat_http_route_is_same_origin_and_feedback_compatible(self) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "這一題不需要調閱來源。",
+                }
+            ]
+        )
+        service = _service_with_model(
+            _paths.fresh_test_dir("mail-human-uat-chat-http"),
+            model,
+        )
+        with _RunningSurface(service) as surface:
+            response, body = surface.request_json(
+                "/api/chat",
+                {
+                    "query_text": "請解釋 FormOwl 的用途",
+                    "visitor_id": VISITOR_ID,
+                    "session_id": SESSION_ID,
+                    "sequence": 1,
+                    "source": "composer",
+                },
+            )
+            payload = json.loads(body)
+            feedback_response, _ = surface.request_json(
+                "/api/feedback",
+                {
+                    "query_id": payload["query_id"],
+                    "verdict": "correct",
+                    "note": "",
+                },
+            )
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["assistant_text"], "這一題不需要調閱來源。")
+        self.assertEqual(payload["orchestration"]["action"], "answer_without_tool")
+        self.assertEqual(feedback_response.status, 200)
 
     def test_post_endpoints_require_same_origin_browser_requests(self) -> None:
         service = _service("mail-human-uat-same-origin")
@@ -1122,6 +1416,20 @@ def _service_from_state_dir(state_dir: Path) -> MailHumanUatService:
     )
 
 
+def _service_with_model(
+    state_dir: Path,
+    model: _ScriptedConversationModel,
+) -> MailHumanUatService:
+    return MailHumanUatService(
+        MailHumanUatHttpConfig(
+            bundle=_bundle(),
+            state_dir=state_dir,
+            conversation_model=model,
+            fixed_now=NOW,
+        )
+    )
+
+
 def _bundle() -> MailEvidenceBundle:
     import_session = MailImportSession(
         mail_import_session_id="mailimport_may_uat",
@@ -1188,7 +1496,8 @@ def _bundle() -> MailEvidenceBundle:
             message_occurrence_id="occ_pullin",
             source_observation_id="obs_pullin",
             text=(
-                "Please pull-in material 09.B0540GW71, PO 470002154, "
+                "Please pull-in material 09.B0540GW71, PO470002002, "
+                "legacy reference PO 470002154, "
                 "current delivery 2027-03-26 and requested timing 9/E."
             ),
             body_segment_hash="sha256:" + "5" * 64,

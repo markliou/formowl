@@ -2,17 +2,31 @@
 
 Lifecycle: temporary development/UAT harness.
 
-This branch provides a shared browser surface for colleagues to test FormOwl
-mail retrieval without connecting ChatGPT. The page follows the familiar
-ChatGPT interaction skeleton: collapsible conversation sidebar, centered
-new-chat prompt, bottom-docked composer after the first question, and a
-same-origin upload iframe opened from the composer. The landing page
-intentionally has no starter prompts so the UAT log captures how colleagues
-word their own requests.
+This branch provides a shared browser surface for colleagues to test the
+FormOwl-plus-conversation experience without connecting the ChatGPT product UI.
+The page follows the familiar ChatGPT interaction skeleton: collapsible
+conversation sidebar, centered new-chat prompt, bottom-docked composer after
+the first question, and a same-origin upload iframe opened from the composer.
+The landing page intentionally has no starter prompts so the UAT log captures
+how colleagues word their own requests.
 
 ## Behavior
 
 - Uses one server-loaded `MailEvidenceBundle` plus private UAT-upload bundles.
+- Sends each submitted chat turn to a server-side conversation orchestrator.
+  The orchestrator can answer conversationally, ask a clarification question,
+  re-render the latest governed evidence, or invoke a structured
+  `search_formowl_evidence` tool.
+- Treats FormOwl as governed MCP-style evidence tooling rather than as the
+  chatbot. Explanations, `我看不懂`, summaries, and presentation changes do
+  not automatically trigger another evidence search.
+- Keeps bounded conversation history and the latest governed evidence result
+  as separate per-tab session state. New chat clears both the conversation
+  state and the lower-level compatibility task frame.
+- Uses source-neutral structured tool arguments: standalone `query_text`,
+  literal `required_terms`, `sort`, and `limit`. Literal constraints are
+  checked against the complete source record's subject and body, not
+  against procurement-specific routing rules.
 - Opens directly into a FormOwl-style conversation without login or an access
   code.
 - Uses a high-fidelity ChatGPT-style light layout while retaining FormOwl
@@ -32,18 +46,18 @@ word their own requests.
   files with `pdftotext`; and decodes UTF-8/UTF-16/CP950 TXT references.
 - Stores source bytes by content hash and format in the private UAT state
   volume so they remain queryable after a service restart.
-- Accepts a question, PO, material number, supplier, or Pull-in keyword.
-- Automatically prefers recent ordering for questions containing terms such as
-  `最近`, `最新`, `近期`, `latest`, or `recent`; other questions use relevance
-  ordering.
+- Accepts ordinary conversation plus evidence requests across the preloaded and
+  uploaded source adapters. The browser does not classify the prompt or choose
+  retrieval ordering; the conversation orchestrator decides whether a FormOwl
+  tool is needed and supplies the structured tool arguments.
 - Shows bounded evidence context and stable observation citations.
-- Records upload, query, and tester feedback events in a private runtime
-  directory.
+- Records upload, chat, FormOwl tool query, orchestration outcome, and tester
+  feedback events in a private runtime directory.
 - Records submitted questions together with an anonymous browser visitor id,
   anonymous tab/session id, and a browser-side sequence number. Questions come
   from the composer because the example prompt menu is intentionally absent.
-  The submitted-question event is written before retrieval begins, so failed
-  queries remain available for diagnosis.
+  The submitted-question event is written before model or retrieval work
+  begins, so failed turns remain available for diagnosis.
 - Records a closed set of exploration actions: page view, sidebar toggle, new
   chat, the visible ChatGPT-style shell controls, upload open/close, coarse
   upload selection/validation, upload
@@ -53,8 +67,10 @@ word their own requests.
   control name. This lets the operator see which familiar controls colleagues
   try while preventing arbitrary DOM labels or click coordinates from entering
   analytics.
-- Does not call ChatGPT, write Project/Wiki systems, or mutate
-  candidate/canonical graph state.
+- Does not connect to the ChatGPT product UI, write Project/Wiki systems, or
+  mutate candidate/canonical graph state. The temporary server-side
+  orchestrator calls the OpenAI Responses API with `store: false`; API
+  credentials remain server-side and are never sent to the browser or logs.
 
 ## UAT behavior capture
 
@@ -78,6 +94,9 @@ how colleagues discover the interface and what they ask:
   fingerprint, or attachment content.
 - Events remain in `mail-human-uat-events.private.jsonl` with mode `0600` in the
   private UAT state volume and are not committed to Git.
+- Orchestration traces record the closed action, model name, tool-call flag,
+  tool name, query/required-term hashes, result count, and assistant-response
+  hash. They do not store the API key or raw OpenAI response envelope.
 - `/api/session-summary` exposes only aggregate counts. Raw submitted questions
   and event sequences remain in the private event log for later UX analysis.
 
@@ -136,6 +155,7 @@ docker run --rm \
   -v "<private-corpus>:/private-corpus:ro" \
   -v "<private-cache>:/private-cache:ro" \
   -v "<private-uat-state>:/uat-state" \
+  -v "<openai-api-key-file>:/run/secrets/openai_api_key:ro" \
   -w /workspace \
   formowl-may-uat:local \
   python scripts/mail_human_uat.py \
@@ -144,8 +164,15 @@ docker run --rm \
     --corpus-root /private-corpus \
     --private-manifest /private-corpus/artifacts/domain_hard_case_manifest.private.json \
     --bundle-cache /private-cache/may-mail-evidence-bundle.private.json \
-    --state-dir /uat-state
+    --state-dir /uat-state \
+    --orchestrator-api-key-file /run/secrets/openai_api_key
 ```
+
+`FORMOWL_UAT_MODEL` defaults to `gpt-5.6-terra`.
+`FORMOWL_UAT_REASONING_EFFORT` defaults to `low`, and `OPENAI_BASE_URL`
+defaults to the OpenAI API. `OPENAI_API_KEY` is also accepted, but a read-only
+mounted key file avoids placing the credential in the container command or
+image. Do not reuse ChatGPT/Codex login credentials.
 
 Do not commit the private corpus, private evidence-bundle cache, uploaded source
 files, or UAT event log. The private UAT state volume contains both the
@@ -157,7 +184,9 @@ Run the focused Python service tests in the dedicated UAT image:
 
 ```sh
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-may-uat:local \
-  python -m unittest discover -s tests -p 'test_mail_human_uat_http.py'
+  bash -lc \
+  "python -m unittest discover -s tests -p 'test_mail_human_uat_orchestrator.py' \
+  && python -m unittest discover -s tests -p 'test_mail_human_uat_http.py'"
 ```
 
 Run the embedded browser JavaScript smoke in the isolated Node runtime:
@@ -168,6 +197,8 @@ docker run --rm -v "$PWD:/workspace:ro" -w /workspace \
 ```
 
 The JavaScript smoke executes the actual inline chat and upload scripts. It
-covers modal open/close, recent-query ordering, IME Enter handling,
+covers modal open/close, `/api/chat` routing without browser-side retrieval
+classification, direct-answer and evidence rendering, IME Enter handling,
 `postMessage` origin/source rejection, trusted iframe completion, upload
-completion/close messages, and client-side file count/type/size preflight.
+completion/close messages, new-chat session rotation, and client-side file
+count/type/size preflight.

@@ -295,6 +295,6 @@ Lifecycle label: `active`.
 - This remains candidate-only evidence selection: no canonical graph/type,
   user-graph, wiki, raw-access, or external-system write is authorized, and the
   four broad real-evidence acceptance gates remain blocked.
-## 2026-07-21 — Source-neutral Task Answering methodology in progress
-
-- Isolated branch `goal/task-answering-methodology` now separates TaskFrame, all-matching retrieval coverage, source-item field assembly, answerability, and content-first projection across mail/PDF/TXT/XLSX/application tests; 895 canonical tests plus full Ruff/345-file format checks pass, and only the 3-reviewer gate remains.
+## 2026-07-21 — Active isolated methodology and UAT orchestration work
+- `goal/task-answering-methodology` separates TaskFrame, all-matching coverage, source-item assembly, answerability, and content-first projection across source shapes; 895 canonical tests and full Ruff/format pass, with the 3-reviewer gate remaining.
+- User-assigned issue #44 is isolated on `uat/issue-44-orchestrator` from `5dffd68`: `/api/chat` now owns model-based tool selection, clarification, prior-evidence rendering, bounded state, generic literal constraints, hashed traces, and new-chat session rotation while `/api/query` remains the governed evidence tool. Verification passed 931 canonical tests, full Ruff/272-file format, Node 20 UI smoke, and `git diff --check`; secure API-key deployment, live smoke, and reviewer gate remain.

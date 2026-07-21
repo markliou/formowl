@@ -170,6 +170,7 @@ function makeDocument(ids) {
 
 function makeWindow(origin = "http://formowl.test") {
   const listeners = new Map();
+  let randomCallCount = 0;
   const makeStorage = () => {
     const values = new Map();
     return {
@@ -188,8 +189,9 @@ function makeWindow(origin = "http://formowl.test") {
     sessionStorage: makeStorage(),
     crypto: {
       getRandomValues(bytes) {
+        randomCallCount += 1;
         for (let index = 0; index < bytes.length; index += 1) {
-          bytes[index] = index + 1;
+          bytes[index] = index + randomCallCount;
         }
         return bytes;
       },
@@ -265,19 +267,23 @@ async function runChatSmoke() {
     if (path === "/api/session-summary") {
       return response({ uploaded_file_count: 2 });
     }
-    if (path === "/api/query") {
+    if (path === "/api/chat") {
       if (queryShouldFail) {
         return response({ error_code: "request_failed" }, false, 500);
       }
       return response({
         status: "ok",
         query_id: "uatquery_111111111111111111111111",
+        assistant_text: "這是一個不需要搜尋來源的直接回答。",
         result_count: 0,
         total_result_count: 0,
         displayed_result_count: 0,
         results: [],
-        notice: "只讀測試結果",
-        projection: { output_format: "narrative" },
+        orchestration: {
+          action: "answer_without_tool",
+          formowl_tool_called: false,
+        },
+        projection: {},
       });
     }
     if (path === "/api/feedback") {
@@ -306,10 +312,6 @@ async function runChatSmoke() {
   vm.runInContext(extractScript("_CHAT_UAT_HTML"), context);
   await settle();
   requests.length = 0;
-
-  assert.equal(context.querySort("最近一次文顥的量產時間"), "recent");
-  assert.equal(context.querySort("LATEST supplier schedule"), "recent");
-  assert.equal(context.querySort("PO 470002154"), "relevance");
 
   await elements.get("open-upload").dispatch("click");
   assert.equal(elements.get("upload-modal").classList.contains("hidden"), false);
@@ -352,26 +354,28 @@ async function runChatSmoke() {
 
   requests.length = 0;
   await context.ask("最近一次文顥的量產時間");
-  let queryRequest = requests.find((item) => item.path === "/api/query");
+  let queryRequest = requests.find((item) => item.path === "/api/chat");
   assert.ok(queryRequest);
   let queryPayload = JSON.parse(queryRequest.options.body);
-  assert.equal(queryPayload.sort, "recent");
-  assert.equal(queryPayload.limit, 50);
+  assert.equal("sort" in queryPayload, false);
+  assert.equal("limit" in queryPayload, false);
   assert.equal(queryPayload.source, "composer");
   assert.match(queryPayload.visitor_id, /^uatvisitor_[0-9a-f]{32}$/u);
   assert.match(queryPayload.session_id, /^uatsession_[0-9a-f]{32}$/u);
   assert.equal(Number.isSafeInteger(queryPayload.sequence), true);
+  const initialSessionId = queryPayload.session_id;
 
   requests.length = 0;
   await context.ask("PO 470002154");
-  queryRequest = requests.find((item) => item.path === "/api/query");
+  queryRequest = requests.find((item) => item.path === "/api/chat");
   assert.ok(queryRequest);
-  assert.equal(JSON.parse(queryRequest.options.body).sort, "relevance");
+  assert.equal(JSON.parse(queryRequest.options.body).query_text, "PO 470002154");
 
   const tableHolder = new FakeElement("div");
   context.renderAssistantResult(
     {
       query_id: "uatquery_222222222222222222222222",
+      assistant_text: "以下是來源證據的整理結果。",
       total_result_count: 12,
       displayed_result_count: 2,
       results: [
@@ -391,6 +395,10 @@ async function runChatSmoke() {
         },
       ],
       notice: "內容優先",
+      orchestration: {
+        action: "render_prior_evidence",
+        formowl_tool_called: false,
+      },
       projection: { output_format: "table" },
     },
     tableHolder,
@@ -405,6 +413,7 @@ async function runChatSmoke() {
   context.renderAssistantResult(
     {
       query_id: "uatquery_333333333333333333333333",
+      assistant_text: "以下是來源內容。",
       total_result_count: 1,
       displayed_result_count: 1,
       results: [
@@ -417,6 +426,10 @@ async function runChatSmoke() {
         },
       ],
       notice: "內容優先",
+      orchestration: {
+        action: "call_formowl_tool",
+        formowl_tool_called: true,
+      },
       projection: { output_format: "narrative" },
     },
     narrativeHolder,
@@ -450,6 +463,20 @@ async function runChatSmoke() {
     JSON.parse(interactionRequest.options.body).details.control,
     "brand_home",
   );
+  const brandHomeNewChatRequest = requests.find((item) => {
+    if (item.path !== "/api/interaction") return false;
+    return JSON.parse(item.options.body).action === "new_chat";
+  });
+  assert.ok(brandHomeNewChatRequest);
+  assert.equal(
+    JSON.parse(brandHomeNewChatRequest.options.body).session_id,
+    initialSessionId,
+  );
+  const brandHomeSessionId = window.sessionStorage.getItem(
+    "formowl_uat_session_id",
+  );
+  assert.match(brandHomeSessionId, /^uatsession_[0-9a-f]{32}$/u);
+  assert.notEqual(brandHomeSessionId, initialSessionId);
   assert.equal(document.body.classList.contains("has-conversation"), false);
   assert.equal(elements.get("current-chat-title").textContent, "新對話");
 
@@ -461,7 +488,7 @@ async function runChatSmoke() {
     isComposing: true,
   });
   await settle();
-  assert.equal(requests.some((item) => item.path === "/api/query"), false);
+  assert.equal(requests.some((item) => item.path === "/api/chat"), false);
 
   await elements.get("chat-input").dispatch("keydown", {
     key: "Enter",
@@ -469,9 +496,29 @@ async function runChatSmoke() {
     isComposing: false,
   });
   await settle();
-  assert.equal(requests.some((item) => item.path === "/api/query"), true);
+  queryRequest = requests.find((item) => item.path === "/api/chat");
+  assert.ok(queryRequest);
+  assert.equal(
+    JSON.parse(queryRequest.options.body).session_id,
+    brandHomeSessionId,
+  );
 
+  requests.length = 0;
   await elements.get("new-chat").dispatch("click");
+  const newChatRequest = requests.find((item) => {
+    if (item.path !== "/api/interaction") return false;
+    return JSON.parse(item.options.body).action === "new_chat";
+  });
+  assert.ok(newChatRequest);
+  assert.equal(
+    JSON.parse(newChatRequest.options.body).session_id,
+    brandHomeSessionId,
+  );
+  const rotatedSessionId = window.sessionStorage.getItem(
+    "formowl_uat_session_id",
+  );
+  assert.match(rotatedSessionId, /^uatsession_[0-9a-f]{32}$/u);
+  assert.notEqual(rotatedSessionId, brandHomeSessionId);
   assert.equal(document.body.classList.contains("has-conversation"), false);
   assert.equal(elements.get("current-chat-title").textContent, "新對話");
 
@@ -483,7 +530,13 @@ async function runChatSmoke() {
   requests.length = 0;
   queryShouldFail = true;
   await context.ask("模擬查詢失敗");
-  assert.match(textTree(elements.get("conversation")), /查詢暫時失敗/u);
+  queryRequest = requests.find((item) => item.path === "/api/chat");
+  assert.ok(queryRequest);
+  assert.equal(
+    JSON.parse(queryRequest.options.body).session_id,
+    rotatedSessionId,
+  );
+  assert.match(textTree(elements.get("conversation")), /回覆暫時失敗/u);
   assert.equal(elements.get("send").disabled, false);
   assert.equal(
     requests.some((item) => {

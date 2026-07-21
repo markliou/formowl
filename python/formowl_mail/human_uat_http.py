@@ -12,6 +12,7 @@ import re
 import secrets
 import threading
 from typing import Any, Mapping, Sequence
+import unicodedata
 from urllib.parse import urlparse
 
 from formowl_contract import ContractValidationError, now_iso, sha256_json
@@ -33,6 +34,12 @@ from .human_uat_upload import (
     parse_uat_stored_resource,
     parse_uat_uploaded_resource,
 )
+from .human_uat_orchestrator import (
+    UatConversationMessage,
+    UatConversationModel,
+    UatConversationOutcome,
+    UatEvidenceToolRequest,
+)
 from .query import MailEvidenceQueryGateway, _redact_mail_public_text
 
 _MAX_REQUEST_BYTES = 32 * 1024
@@ -41,6 +48,7 @@ _MAX_UPLOAD_FILE_BYTES = 500 * 1024 * 1024
 _MAX_UPLOAD_FILES = 20
 _MAX_QUERY_CHARS = 500
 _MAX_NOTE_CHARS = 1000
+_MAX_CHAT_HISTORY_MESSAGES = 16
 _DEFAULT_RESULT_LIMIT = 50
 _MAX_RESULT_LIMIT = 100
 _MAX_EVENT_SEQUENCE = (2**53) - 1
@@ -81,6 +89,13 @@ _VERDICTS = {
 }
 _SORT_OPTIONS = {"relevance", "recent"}
 _QUERY_SOURCES = {"api", "composer"}
+_CHAT_KEYS = {
+    "query_text",
+    "visitor_id",
+    "session_id",
+    "sequence",
+    "source",
+}
 _QUERY_KEYS = {
     "query_text",
     "limit",
@@ -156,6 +171,7 @@ _EXACT_BUSINESS_FILTERS = ("文顥",)
 class MailHumanUatHttpConfig:
     bundle: MailEvidenceBundle
     state_dir: str | Path
+    conversation_model: UatConversationModel | None = None
     fixed_now: str | None = None
     max_request_bytes: int = _MAX_REQUEST_BYTES
     max_upload_request_bytes: int = _MAX_UPLOAD_REQUEST_BYTES
@@ -163,6 +179,12 @@ class MailHumanUatHttpConfig:
     max_upload_files: int = _MAX_UPLOAD_FILES
     event_retention_days: int = _DEFAULT_EVENT_RETENTION_DAYS
     max_event_store_bytes: int = _DEFAULT_MAX_EVENT_STORE_BYTES
+
+
+@dataclass
+class _UatConversationState:
+    history: list[UatConversationMessage]
+    latest_evidence: dict[str, Any] | None = None
 
 
 class MailHumanUatService:
@@ -211,7 +233,11 @@ class MailHumanUatService:
         self._anonymous_visitor_ids: set[str] = set()
         self._anonymous_session_ids: set[str] = set()
         self._task_frames_by_session_id: dict[str, TaskFrame] = {}
+        self._conversation_states_by_session_id: dict[str, _UatConversationState] = {}
+        self._conversation_turn_locks: dict[str, threading.Lock] = {}
         self._query_count = 0
+        self._chat_count = 0
+        self._formowl_tool_call_count = 0
         self._feedback_count = 0
         self._lock = threading.RLock()
         self.started_at = _timestamp(config.fixed_now)
@@ -247,6 +273,12 @@ class MailHumanUatService:
             "behavior_capture_enabled": True,
             "behavior_capture_scope": "submitted_questions_and_bounded_interactions",
             "behavior_capture_retention_days": self.config.event_retention_days,
+            "conversation_orchestrator_enabled": self.config.conversation_model is not None,
+            "conversation_model": (
+                self.config.conversation_model.model_name
+                if self.config.conversation_model is not None
+                else None
+            ),
             "upload_required": False,
             "upload_supported": True,
             "uploaded_file_count": uploaded_file_count,
@@ -254,6 +286,144 @@ class MailHumanUatService:
         }
         assert_public_payload_safe(payload, "mail_human_uat_health")
         return payload
+
+    def chat(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        _expect_exact_keys(payload, _CHAT_KEYS, required={"query_text"})
+        user_text = _validated_text(
+            payload.get("query_text"),
+            "query_text",
+            max_chars=_MAX_QUERY_CHARS,
+        )
+        source = payload.get("source", "api")
+        if source not in _QUERY_SOURCES:
+            raise ContractValidationError("chat source is invalid")
+        tracking = _validated_tracking_fields(payload)
+        model = self.config.conversation_model
+        if model is None:
+            raise RuntimeError("UAT conversation orchestrator is not configured")
+
+        query_id = f"uatquery_{secrets.token_hex(12)}"
+        submitted_at = _timestamp(self.config.fixed_now)
+        self._event_store.append(
+            {
+                "event_type": "chat",
+                "created_at": submitted_at,
+                "query_id": query_id,
+                "query_text": user_text,
+                "query_hash": sha256_json(user_text),
+                "source": source,
+                **tracking,
+            }
+        )
+        with self._lock:
+            self._known_query_ids.add(query_id)
+            self._chat_count += 1
+            self._remember_tracking(tracking)
+
+        session_id = tracking.get("session_id")
+        turn_lock = self._conversation_turn_lock(session_id)
+        with turn_lock:
+            with self._lock:
+                state = (
+                    self._conversation_states_by_session_id.get(session_id)
+                    if isinstance(session_id, str)
+                    else None
+                )
+                history = tuple(state.history) if state is not None else ()
+                latest_evidence = (
+                    dict(state.latest_evidence)
+                    if state is not None and state.latest_evidence is not None
+                    else None
+                )
+
+            def call_formowl_tool(
+                request: UatEvidenceToolRequest,
+            ) -> Mapping[str, Any]:
+                with self._lock:
+                    self._formowl_tool_call_count += 1
+                result = self._execute_evidence_query(
+                    query_text=request.query_text,
+                    limit=request.limit,
+                    sort=request.sort,
+                    source="orchestrator",
+                    tracking=tracking,
+                    required_terms=request.required_terms,
+                    preserve_session_task=False,
+                    parent_query_id=query_id,
+                )
+                return result
+
+            try:
+                outcome = model.respond(
+                    history=history,
+                    user_text=user_text,
+                    latest_evidence=latest_evidence,
+                    safety_identifier=_conversation_safety_identifier(tracking),
+                    evidence_tool=call_formowl_tool,
+                )
+                response = self._chat_response(
+                    query_id=query_id,
+                    user_text=user_text,
+                    outcome=outcome,
+                    latest_evidence=latest_evidence,
+                )
+            except Exception:
+                self._event_store.append(
+                    {
+                        "event_type": "chat_error",
+                        "created_at": _timestamp(self.config.fixed_now),
+                        "query_id": query_id,
+                        "model": model.model_name,
+                    }
+                )
+                raise
+
+            self._event_store.append(
+                {
+                    "event_type": "chat_result",
+                    "created_at": response["generated_at"],
+                    "query_id": query_id,
+                    "orchestration_action": response["orchestration"]["action"],
+                    "model": outcome.model_name,
+                    "formowl_tool_called": outcome.tool_request is not None,
+                    "tool_name": (
+                        "search_formowl_evidence" if outcome.tool_request is not None else None
+                    ),
+                    "tool_query_hash": (
+                        sha256_json(outcome.tool_request.query_text)
+                        if outcome.tool_request is not None
+                        else None
+                    ),
+                    "required_term_hashes": (
+                        [sha256_json(term) for term in outcome.tool_request.required_terms]
+                        if outcome.tool_request is not None
+                        else []
+                    ),
+                    "tool_result_count": response["result_count"],
+                    "assistant_response_hash": sha256_json(outcome.answer_text),
+                    **tracking,
+                }
+            )
+
+            if isinstance(session_id, str):
+                with self._lock:
+                    state = self._conversation_states_by_session_id.setdefault(
+                        session_id,
+                        _UatConversationState(history=[]),
+                    )
+                    state.history.extend(
+                        (
+                            UatConversationMessage(role="user", content=user_text),
+                            UatConversationMessage(
+                                role="assistant",
+                                content=outcome.answer_text,
+                            ),
+                        )
+                    )
+                    del state.history[:-_MAX_CHAT_HISTORY_MESSAGES]
+                    if outcome.tool_result is not None:
+                        state.latest_evidence = dict(outcome.tool_result)
+        return response
 
     def query(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         _expect_exact_keys(payload, _QUERY_KEYS, required={"query_text"})
@@ -277,11 +447,32 @@ class MailHumanUatService:
         if source not in _QUERY_SOURCES:
             raise ContractValidationError("query source is invalid")
         tracking = _validated_tracking_fields(payload)
+        return self._execute_evidence_query(
+            query_text=query_text,
+            limit=limit,
+            sort=sort,
+            source=source,
+            tracking=tracking,
+        )
+
+    def _execute_evidence_query(
+        self,
+        *,
+        query_text: str,
+        limit: int,
+        sort: str,
+        source: str,
+        tracking: Mapping[str, Any],
+        required_terms: Sequence[str] = (),
+        preserve_session_task: bool = True,
+        parent_query_id: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_required_terms = _normalized_required_terms(required_terms)
         session_id = tracking.get("session_id")
         with self._lock:
             prior_task_frame = (
                 self._task_frames_by_session_id.get(session_id)
-                if isinstance(session_id, str)
+                if preserve_session_task and isinstance(session_id, str)
                 else None
             )
         task_frame, changed_dimensions = _resolve_task_frame(
@@ -289,7 +480,7 @@ class MailHumanUatService:
             page_size=limit,
             prior=prior_task_frame,
         )
-        if isinstance(session_id, str):
+        if preserve_session_task and isinstance(session_id, str):
             with self._lock:
                 self._task_frames_by_session_id[session_id] = task_frame
         query_id = f"uatquery_{secrets.token_hex(12)}"
@@ -309,6 +500,8 @@ class MailHumanUatService:
                 "projection_format": task_frame.projection.output_format,
                 "sort": sort,
                 "source": source,
+                "parent_query_id": parent_query_id,
+                "required_term_hashes": [sha256_json(term) for term in normalized_required_terms],
                 **tracking,
             }
         )
@@ -322,6 +515,7 @@ class MailHumanUatService:
         actor = bundle.mail_import_session
         with self._lock:
             all_bundles = self._all_bundles
+        source_search_text_by_id = _source_item_search_text(all_bundles)
         retrieval_candidate_limit = max(
             1,
             sum(len(candidate_bundle.body_segments) for candidate_bundle in all_bundles),
@@ -421,6 +615,18 @@ class MailHumanUatService:
                     uploaded_message_ids=uploaded_message_ids,
                 )
             )
+        if normalized_required_terms:
+            results = [
+                result
+                for result in results
+                if _matches_required_terms(
+                    source_search_text_by_id.get(
+                        str(result.get("_source_item_id", "")),
+                        "",
+                    ),
+                    normalized_required_terms,
+                )
+            ]
         results = _deduplicate_results(results)
         if sort == "recent":
             results.sort(
@@ -461,6 +667,8 @@ class MailHumanUatService:
                 warnings.append("unsafe_mail_evidence_content_redacted")
         if filter_groups and evidence_snippets and not displayed_results:
             warnings.append("business_filter_no_exact_match")
+        if normalized_required_terms and evidence_snippets and not displayed_results:
+            warnings.append("required_terms_no_exact_match")
         if not displayed_results and "no_visible_mail_evidence_matched" not in warnings:
             warnings.append("no_visible_mail_evidence_matched")
         display_has_more = total_result_count > len(displayed_results)
@@ -541,6 +749,80 @@ class MailHumanUatService:
                 ),
             }
         )
+        return response
+
+    def _conversation_turn_lock(self, session_id: Any) -> threading.Lock:
+        if not isinstance(session_id, str):
+            return threading.Lock()
+        with self._lock:
+            return self._conversation_turn_locks.setdefault(
+                session_id,
+                threading.Lock(),
+            )
+
+    def _chat_response(
+        self,
+        *,
+        query_id: str,
+        user_text: str,
+        outcome: UatConversationOutcome,
+        latest_evidence: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if outcome.tool_request is not None:
+            if outcome.response_kind != "answer":
+                raise RuntimeError("UAT tool calls must end in an answer")
+            action = "call_formowl_tool"
+            evidence = dict(outcome.tool_result or {})
+        elif outcome.response_kind == "render_prior_evidence":
+            if latest_evidence is None:
+                raise RuntimeError("UAT model requested missing prior evidence")
+            action = "render_prior_evidence"
+            evidence = dict(latest_evidence)
+        elif outcome.response_kind == "clarification":
+            action = "clarify"
+            evidence = {}
+        else:
+            action = "answer_without_tool"
+            evidence = {}
+
+        results = evidence.get("results", [])
+        if not isinstance(results, list):
+            raise RuntimeError("UAT evidence results are invalid")
+        results = [dict(item) for item in results if isinstance(item, Mapping)]
+        projection = evidence.get("projection", {})
+        projection = dict(projection) if isinstance(projection, Mapping) else {}
+        if evidence:
+            projection["output_format"] = outcome.display_format
+        generated_at = _timestamp(self.config.fixed_now)
+        response = {
+            "status": str(evidence.get("status", "ok")),
+            "query_id": query_id,
+            "query_hash": sha256_json(user_text),
+            "generated_at": generated_at,
+            "assistant_text": outcome.answer_text,
+            "sort": evidence.get("sort"),
+            "result_count": len(results),
+            "total_result_count": int(evidence.get("total_result_count", len(results))),
+            "displayed_result_count": int(evidence.get("displayed_result_count", len(results))),
+            "results": results,
+            "warnings": list(evidence.get("warnings", [])),
+            "notice": evidence.get("notice"),
+            "task_frame": dict(evidence.get("task_frame", {})),
+            "coverage": dict(evidence.get("coverage", {})),
+            "answerability": dict(evidence.get("answerability", {})),
+            "projection": projection,
+            "orchestration": {
+                "action": action,
+                "response_kind": outcome.response_kind,
+                "model": outcome.model_name,
+                "formowl_tool_called": outcome.tool_request is not None,
+                "tool_name": (
+                    "search_formowl_evidence" if outcome.tool_request is not None else None
+                ),
+            },
+            "claim_boundary": dict(evidence.get("claim_boundary", {})),
+        }
+        assert_public_payload_safe(response, "mail_human_uat_chat_response")
         return response
 
     def _exact_subject_results(
@@ -792,6 +1074,10 @@ class MailHumanUatService:
             self._remember_tracking(tracking)
             if action == "new_chat":
                 self._task_frames_by_session_id.pop(tracking["session_id"], None)
+                self._conversation_states_by_session_id.pop(
+                    tracking["session_id"],
+                    None,
+                )
         response = {
             "status": "recorded",
             "action": action,
@@ -853,6 +1139,8 @@ class MailHumanUatService:
                 "status": "ready",
                 "started_at": self.started_at,
                 "query_count": self._query_count,
+                "chat_count": self._chat_count,
+                "formowl_tool_call_count": self._formowl_tool_call_count,
                 "feedback_count": self._feedback_count,
                 "interaction_count": sum(self._interaction_counts.values()),
                 "interaction_counts": dict(sorted(self._interaction_counts.items())),
@@ -916,6 +1204,7 @@ def build_mail_human_uat_http_handler(
         def do_POST(self) -> None:  # noqa: N802
             route = urlparse(self.path).path
             if route not in {
+                "/api/chat",
                 "/api/query",
                 "/api/feedback",
                 "/api/interaction",
@@ -933,7 +1222,9 @@ def build_mail_human_uat_http_handler(
                     self._send_json(HTTPStatus.CREATED, response)
                     return
                 payload = self._read_json_body()
-                if route == "/api/query":
+                if route == "/api/chat":
+                    response = service.chat(payload)
+                elif route == "/api/query":
                     response = service.query(payload)
                 elif route == "/api/feedback":
                     response = service.record_feedback(payload)
@@ -1414,6 +1705,53 @@ def _validated_interaction_count(
     if not isinstance(value, int) or isinstance(value, bool) or value < minimum or value > maximum:
         raise ContractValidationError(f"interaction {field_name} is invalid")
     return value
+
+
+def _normalized_required_terms(values: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)) or len(values) > 12:
+        raise ContractValidationError("required terms are invalid")
+    normalized: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip() or len(value) > 120:
+            raise ContractValidationError("required term is invalid")
+        safe_public_string(value, "required_term")
+        term = unicodedata.normalize("NFKC", value).casefold().strip()
+        if not term or term in normalized:
+            raise ContractValidationError("required terms must be unique")
+        normalized.append(term)
+    return tuple(normalized)
+
+
+def _source_item_search_text(
+    bundles: Sequence[MailEvidenceBundle],
+) -> dict[str, str]:
+    values_by_source: dict[str, list[str]] = {}
+    for bundle in bundles:
+        for message in bundle.messages:
+            values_by_source.setdefault(message.email_message_id, []).append(message.subject or "")
+        for segment in bundle.body_segments:
+            values_by_source.setdefault(segment.email_message_id, []).append(segment.text)
+    return {
+        source_id: unicodedata.normalize("NFKC", "\n".join(values)).casefold()
+        for source_id, values in values_by_source.items()
+    }
+
+
+def _matches_required_terms(
+    source_text: str,
+    required_terms: Sequence[str],
+) -> bool:
+    return bool(source_text) and all(term in source_text for term in required_terms)
+
+
+def _conversation_safety_identifier(tracking: Mapping[str, Any]) -> str:
+    digest = sha256_json(
+        {
+            "visitor_id": tracking.get("visitor_id", "anonymous"),
+            "session_id": tracking.get("session_id", "anonymous"),
+        }
+    ).removeprefix("sha256:")
+    return f"formowl_uat_{digest[:48]}"
 
 
 def _expand_business_query(query_text: str) -> tuple[str, tuple[tuple[str, ...], ...]]:
@@ -2086,11 +2424,24 @@ _CHAT_UAT_HTML = """<!doctype html>
       "uatvisitor_",
       30 * 24 * 60 * 60 * 1000
     );
-    const sessionId = storedTrackingId(
+    let sessionId = storedTrackingId(
       window.sessionStorage,
       "formowl_uat_session_id",
       "uatsession_"
     );
+
+    function rotateSessionId() {
+      const created = randomTrackingId("uatsession_");
+      sessionId = created;
+      try {
+        window.sessionStorage.setItem("formowl_uat_session_id", created);
+        window.sessionStorage.setItem(
+          "formowl_uat_session_id_created_at",
+          String(Date.now())
+        );
+        window.sessionStorage.setItem("formowl_uat_event_sequence", "0");
+      } catch (_) {}
+    }
 
     function nextEventSequence() {
       const key = "formowl_uat_event_sequence";
@@ -2191,12 +2542,6 @@ _CHAT_UAT_HTML = """<!doctype html>
       track("upload_close", { source });
     }
 
-    function querySort(query) {
-      const normalized = query.toLowerCase();
-      const recentTerms = ["最近", "最新", "近期", "目前", "現在", "latest", "recent"];
-      return recentTerms.some((term) => normalized.includes(term)) ? "recent" : "relevance";
-    }
-
     function addFeedbackControls(parent, queryId) {
       const row = document.createElement("div");
       row.className = "feedback-row";
@@ -2242,37 +2587,54 @@ _CHAT_UAT_HTML = """<!doctype html>
 
     function renderAssistantResult(payload, holder) {
       holder.replaceChildren();
+      const results = Array.isArray(payload.results) ? payload.results : [];
+      if (payload.assistant_text) {
+        const answer = document.createElement("div");
+        answer.className = "assistant-text";
+        answer.textContent = payload.assistant_text;
+        holder.appendChild(answer);
+      }
+
+      if (!results.length) {
+        if (
+          payload.orchestration
+          && payload.orchestration.action === "call_formowl_tool"
+        ) {
+          const actions = document.createElement("div");
+          actions.className = "feedback-row";
+          const upload = document.createElement("button");
+          upload.type = "button";
+          upload.title = "加入新資料";
+          upload.textContent = "＋";
+          upload.addEventListener("click", () => openUpload("no_result"));
+          actions.appendChild(upload);
+          holder.appendChild(actions);
+        }
+        addFeedbackControls(holder, payload.query_id);
+        scrollToLatest();
+        return;
+      }
+
       const totalCount = Number.isInteger(payload.total_result_count)
         ? payload.total_result_count
-        : payload.results.length;
+        : results.length;
       const displayedCount = Number.isInteger(payload.displayed_result_count)
         ? payload.displayed_result_count
-        : payload.results.length;
+        : results.length;
       const title = document.createElement("div");
       title.className = "assistant-title";
-      title.textContent = payload.results.length
-        ? `共找到 ${totalCount} 筆相關來源內容，目前顯示 ${displayedCount} 筆。`
-        : "目前沒有找到符合的來源內容。";
+      title.textContent =
+        `共找到 ${totalCount} 筆相關來源內容，目前顯示 ${displayedCount} 筆。`;
       holder.appendChild(title);
 
-      const explanation = document.createElement("div");
-      explanation.className = "assistant-text";
-      explanation.textContent = payload.results.length
-        ? payload.notice
-        : "你可以改用更明確的名稱、編號、日期或內容關鍵字，或先加入新的測試資料。";
-      holder.appendChild(explanation);
+      if (payload.notice) {
+        const explanation = document.createElement("div");
+        explanation.className = "assistant-text";
+        explanation.textContent = payload.notice;
+        holder.appendChild(explanation);
+      }
 
-      if (!payload.results.length) {
-        const actions = document.createElement("div");
-        actions.className = "feedback-row";
-        const upload = document.createElement("button");
-        upload.type = "button";
-        upload.title = "加入新資料";
-        upload.textContent = "＋";
-        upload.addEventListener("click", () => openUpload("no_result"));
-        actions.appendChild(upload);
-        holder.appendChild(actions);
-      } else if (payload.projection && payload.projection.output_format === "table") {
+      if (payload.projection && payload.projection.output_format === "table") {
         const tableWrap = document.createElement("div");
         tableWrap.className = "evidence-table-wrap";
         const table = document.createElement("table");
@@ -2286,7 +2648,7 @@ _CHAT_UAT_HTML = """<!doctype html>
         }
         head.appendChild(headRow);
         const body = document.createElement("tbody");
-        for (const item of payload.results) {
+        for (const item of results) {
           const row = document.createElement("tr");
           const content = document.createElement("td");
           content.textContent = item.snippet;
@@ -2312,7 +2674,7 @@ _CHAT_UAT_HTML = """<!doctype html>
       } else {
         const list = document.createElement("div");
         list.className = "evidence-list";
-        for (const item of payload.results) {
+        for (const item of results) {
           const card = document.createElement("article");
           card.className = "evidence";
           const snippet = document.createElement("p");
@@ -2355,16 +2717,14 @@ _CHAT_UAT_HTML = """<!doctype html>
       const { bubble } = createMessage("assistant");
       const loading = document.createElement("div");
       loading.className = "assistant-text";
-      loading.textContent = "正在查詢資料內容…";
+      loading.textContent = "正在思考…";
       bubble.appendChild(loading);
       scrollToLatest();
       try {
-        const payload = await api("/api/query", {
+        const payload = await api("/api/chat", {
           method: "POST",
           body: JSON.stringify({
             query_text: query,
-            sort: querySort(query),
-            limit: 50,
             visitor_id: visitorId,
             session_id: sessionId,
             sequence: nextEventSequence(),
@@ -2382,7 +2742,7 @@ _CHAT_UAT_HTML = """<!doctype html>
         bubble.replaceChildren();
         const error = document.createElement("div");
         error.className = "error-text";
-        error.textContent = "查詢暫時失敗，請稍後再試。";
+        error.textContent = "回覆暫時失敗，請稍後再試。";
         bubble.appendChild(error);
         track("query_error", {});
       } finally {
@@ -2409,18 +2769,21 @@ _CHAT_UAT_HTML = """<!doctype html>
     }
 
     function startNewChat() {
+      track("new_chat", {});
+      rotateSessionId();
       conversation.replaceChildren();
       conversationStarted = false;
       body.classList.remove("has-conversation");
       closeMobileSidebar();
       byId("current-chat-title").textContent = "新對話";
       byId("chat-input").focus();
-      track("new_chat", {});
     }
 
     function trackShellControl(control, message, resetConversation = false) {
       track("shell_control", { control });
       if (resetConversation) {
+        track("new_chat", {});
+        rotateSessionId();
         conversation.replaceChildren();
         conversationStarted = false;
         body.classList.remove("has-conversation");

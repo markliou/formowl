@@ -73,6 +73,24 @@ archival is preserved at
 
 ## Current Unchecked Work
 
+- [ ] Complete GitHub issue #44: add a source-neutral UAT conversation
+  orchestrator that treats FormOwl as governed MCP-style tools.
+  - Isolated branch/worktree: `uat/issue-44-orchestrator` at
+    `/tmp/formowl-uat-orchestrator`, based on pushed/live baseline `5dffd68`.
+  - Current implementation: `/api/chat` preserves bounded conversation state
+    separately from the latest governed evidence; the model returns
+    `answer_without_tool`, `clarify`, `render_prior_evidence`, or invokes the
+    structured `search_formowl_evidence` tool. Required terms are generic
+    literal source-item constraints, not procurement routing heuristics.
+  - Preserved boundaries: `/api/query` remains the lower-level compatibility
+    evidence surface; uploads, citations, permission filtering, evidence
+    coverage, private UAT logs, no-login sharing, and read-only business-system
+    behavior remain intact.
+  - Verification: 931 canonical dev-container tests passed, full Ruff passed,
+    272 files passed format check, the Node 20 UI smoke passed, and
+    `git diff --check` passed.
+  - Remaining gates: deployment with a server-side OpenAI API key, live UAT
+    smoke, and the required reviewer gate.
 - [ ] Complete the source-neutral Task Answering methodology slice.
   - Owner paths: `python/formowl_graph/task_answering.py`,
     `python/formowl_graph/candidate_retrieval.py`, task-answering tests, and

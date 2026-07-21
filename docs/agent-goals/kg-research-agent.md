@@ -40,6 +40,12 @@ Repository-side authority tooling is reproducible and synchronized, but broad
 completion requires accepted real or public reproducible evidence rather than
 additional synthetic fixtures or implementation-only proofs.
 
+The user explicitly assigned the cross-track temporary UAT issue #44 in an
+isolated worktree. That bounded slice adds a conversation orchestrator above
+FormOwl MCP-style evidence tools without changing canonical graph, ontology,
+user-graph, wiki, or external-system write authority. The source-neutral Task
+Answering objective and its reviewer gate remain separate.
+
 ## Status
 
 `active`
@@ -79,6 +85,12 @@ The bounded Task Answering slice passed 895 canonical dev-container tests,
 full Ruff, 345-file format check, and `git diff --check`. The required
 3-reviewer gate remains before completion.
 
+Issue #44 passed 931 canonical dev-container tests, full Ruff, 272-file format
+check, the Node 20 UI smoke, and `git diff --check`. It can be pushed, but live
+UAT deployment requires a server-side OpenAI API key or read-only mounted key
+file. ChatGPT or Codex login credentials must not be reused. The required
+reviewer gate and live UAT smoke also remain before completion.
+
 Four real-evidence gates still lack accepted canonical evidence:
 
 - `fair_external_baseline_comparison`
@@ -113,8 +125,9 @@ authorization must be an actual boolean; string values fail closed.
 
 ## Next Action
 
-Complete the required reviewer gate for the Task Answering slice before marking
-the work-board item complete. After that bounded slice, return to waiting for
-operator-supplied or public reproducible response packets for the four broad
-real-evidence gates. Do not reinterpret a passing repository-only harness as
-broad KG objective completion.
+Complete, verify, publish, and hand off the explicitly assigned issue #44
+orchestrator slice without weakening the separate Task Answering reviewer gate.
+Then complete that reviewer gate before marking its work-board item complete.
+After those bounded slices, return to waiting for operator-supplied or public
+reproducible response packets for the four broad real-evidence gates. Do not
+reinterpret a passing repository-only harness as broad KG objective completion.
