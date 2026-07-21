@@ -77,20 +77,30 @@ archival is preserved at
   orchestrator that treats FormOwl as governed MCP-style tools.
   - Isolated branch/worktree: `uat/issue-44-orchestrator` at
     `/tmp/formowl-uat-orchestrator`, based on pushed/live baseline `5dffd68`.
-  - Current implementation: `/api/chat` preserves bounded conversation state
-    separately from the latest governed evidence; the model returns
-    `answer_without_tool`, `clarify`, `render_prior_evidence`, or invokes the
-    structured `search_formowl_evidence` tool. Required terms are generic
-    literal source-item constraints, not procurement routing heuristics.
+  - Current implementation: `/api/chat` reaches a pinned Codex app-server
+    sidecar through a private Unix socket and a narrow JSONL/WebSocket bridge.
+    Codex owns the persistent thread and decides whether to answer, clarify,
+    re-render prior evidence, or invoke the single structured
+    `search_formowl_evidence` dynamic tool. FormOwl remains the governed
+    read-only evidence capability rather than the chatbot. Required terms are
+    generic literal source-item constraints, not procurement routing heuristics.
   - Preserved boundaries: `/api/query` remains the lower-level compatibility
     evidence surface; uploads, citations, permission filtering, evidence
     coverage, private UAT logs, no-login sharing, and read-only business-system
-    behavior remain intact.
-  - Verification: 931 canonical dev-container tests passed, full Ruff passed,
-    272 files passed format check, the Node 20 UI smoke passed, and
-    `git diff --check` passed.
-  - Remaining gates: deployment with a server-side OpenAI API key, live UAT
-    smoke, and the required reviewer gate.
+    behavior remain intact. The HTTP and Codex processes run in separate
+    non-root containers; the sidecar sees neither repository, corpus, evidence
+    cache, upload state, nor API-key file while serving. Runtime attestation
+    rejects unsafe config, MCP servers, enabled skills, accessible apps, or a
+    non-empty/symlinked workspace before a conversation starts.
+  - Verification: 949 canonical dev-container tests passed, full Ruff passed,
+    354 files passed format check, the Node 20 UI smoke passed, the dedicated
+    UAT image built with pinned `codex-cli 0.144.6`, real direct and Unix-socket
+    app-server attestation passed, a non-root three-container init/serve/client
+    smoke passed, and `git diff --check` passed. Plato, Volta, and Mencius
+    returned 3/3 `RELEASE_DECISION: AGREE` after full disabled-feature
+    attestation and failed-turn thread rollback were added.
+  - Remaining gates: one authenticated live Codex/FormOwl UAT turn using the
+    dedicated server-side API key.
 - [ ] Complete the source-neutral Task Answering methodology slice.
   - Owner paths: `python/formowl_graph/task_answering.py`,
     `python/formowl_graph/candidate_retrieval.py`, task-answering tests, and

@@ -13,16 +13,17 @@ how colleagues word their own requests.
 ## Behavior
 
 - Uses one server-loaded `MailEvidenceBundle` plus private UAT-upload bundles.
-- Sends each submitted chat turn to a server-side conversation orchestrator.
-  The orchestrator can answer conversationally, ask a clarification question,
-  re-render the latest governed evidence, or invoke a structured
-  `search_formowl_evidence` tool.
+- Sends each submitted chat turn through a private Unix socket to an isolated
+  `codex app-server` sidecar. Codex is the conversation engine: it can answer
+  conversationally, ask a clarification question, re-render the latest
+  governed evidence, or invoke the one structured
+  `search_formowl_evidence` dynamic tool.
 - Treats FormOwl as governed MCP-style evidence tooling rather than as the
   chatbot. Explanations, `我看不懂`, summaries, and presentation changes do
   not automatically trigger another evidence search.
-- Keeps bounded conversation history and the latest governed evidence result
-  as separate per-tab session state. New chat clears both the conversation
-  state and the lower-level compatibility task frame.
+- Keys bounded conversation history, latest governed evidence, compatibility
+  task frames, and turn serialization to the same hash of anonymous visitor id
+  plus tab/session id. New chat clears only that exact visitor/session pair.
 - Uses source-neutral structured tool arguments: standalone `query_text`,
   literal `required_terms`, `sort`, and `limit`. Literal constraints are
   checked against the complete source record's subject and body, not
@@ -68,9 +69,21 @@ how colleagues word their own requests.
   try while preventing arbitrary DOM labels or click coordinates from entering
   analytics.
 - Does not connect to the ChatGPT product UI, write Project/Wiki systems, or
-  mutate candidate/canonical graph state. The temporary server-side
-  orchestrator calls the OpenAI Responses API with `store: false`; API
-  credentials remain server-side and are never sent to the browser or logs.
+  mutate candidate/canonical graph state. The HTTP container starts only
+  Codex's stdio-to-Unix-socket proxy. The actual app-server runs in a separate
+  non-root container that never mounts the FormOwl repository, private corpus,
+  evidence cache, upload state, or API-key file during serving.
+- Runs Codex from a dedicated empty workspace with a generated, integrity-
+  checked home. API-key-only auth is provisioned in a separate one-shot
+  container. Effective config, MCP inventory, skills, and apps are attested
+  after every app-server connection; startup fails if MCP servers, enabled
+  skills, accessible apps, unsafe sandbox settings, or non-FormOwl capability
+  config is found.
+- Disables shell, unified exec, browser, computer use, apps, plugins, hooks,
+  image generation, subagents, memories, goals, remote plugins, tool
+  suggestions, and workspace dependency tools. Threads use `read-only`; turns
+  use the `readOnly` sandbox policy with model-tool network access disabled.
+  The FormOwl dynamic tool is the only model-visible business-data capability.
 
 ## UAT behavior capture
 
@@ -96,7 +109,8 @@ how colleagues discover the interface and what they ask:
   private UAT state volume and are not committed to Git.
 - Orchestration traces record the closed action, model name, tool-call flag,
   tool name, query/required-term hashes, result count, and assistant-response
-  hash. They do not store the API key or raw OpenAI response envelope.
+  hash. They do not store the API key, raw Codex protocol stream, reasoning, or
+  dynamic-tool payload.
 - `/api/session-summary` exposes only aggregate counts. Raw submitted questions
   and event sequences remain in the private event log for later UX analysis.
 
@@ -135,28 +149,85 @@ This is a temporary HTTP surface for an internal LAN or VPN. It is not a
 replacement for the connected FormOwl OAuth and HTTPS boundary, and it must not
 be exposed through a public tunnel.
 
-## Container run
+## Isolated container run
 
-Build a dedicated UAT image so another agent rebuilding the shared
-`formowl-dev:local` tag cannot remove the PST/PDF parser dependencies:
+Build the non-root UAT runtime target. The application source is baked into the
+image, so neither runtime container mounts the repository:
 
 ```sh
 docker build --progress=plain \
   -f containers/dev/Dockerfile \
+  --target formowl-uat-runtime \
   -t formowl-may-uat:local .
 ```
 
-Run the shared surface from that dedicated image:
+Prepare four separate host directories owned by runtime uid/gid `65532`.
+`<private-cache>` must be writable because the evidence bundle is rebuilt when
+the cache is absent. Remove an outdated cache deliberately before restart; the
+loader does not silently decide that an existing cache is stale:
+
+```sh
+sudo install -d -m 0700 -o 65532 -g 65532 \
+  "<codex-state>" \
+  "<codex-socket-dir>" \
+  "<private-cache>" \
+  "<private-uat-state>"
+```
+
+Provision API-key-only Codex auth once. This one-shot container sees the API
+key and Codex state, but no FormOwl corpus, cache, repository, upload state, or
+HTTP port:
 
 ```sh
 docker run --rm \
+  --read-only \
+  --user 65532:65532 \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+  -v "<codex-state>:/codex-state" \
+  -v "<openai-api-key-file>:/run/secrets/codex_api_key:ro" \
+  formowl-may-uat:local \
+  python scripts/mail_human_uat_codex_engine.py init \
+    --state-dir /codex-state \
+    --api-key-file /run/secrets/codex_api_key
+```
+
+Start the isolated Codex engine. It mounts only its dedicated state and the
+private socket directory; the API-key file is no longer present:
+
+```sh
+docker run --rm -d \
+  --name formowl-codex-uat-engine \
+  --read-only \
+  --user 65532:65532 \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m \
+  -v "<codex-state>:/codex-state" \
+  -v "<codex-socket-dir>:/run/formowl-codex" \
+  formowl-may-uat:local \
+  python scripts/mail_human_uat_codex_engine.py serve \
+    --state-dir /codex-state \
+    --socket-path /run/formowl-codex/app-server.sock
+```
+
+Finally, start the shared HTTP surface. It mounts the corpus/cache/UAT state and
+the socket, but not Codex state or the API key:
+
+```sh
+docker run --rm \
+  --name formowl-mail-uat \
+  --read-only \
+  --user 65532:65532 \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m \
   -p 8088:8088 \
-  -v "$PWD:/workspace:ro" \
   -v "<private-corpus>:/private-corpus:ro" \
-  -v "<private-cache>:/private-cache:ro" \
+  -v "<private-cache>:/private-cache" \
   -v "<private-uat-state>:/uat-state" \
-  -v "<openai-api-key-file>:/run/secrets/openai_api_key:ro" \
-  -w /workspace \
+  -v "<codex-socket-dir>:/run/formowl-codex" \
   formowl-may-uat:local \
   python scripts/mail_human_uat.py \
     --host 0.0.0.0 \
@@ -165,18 +236,31 @@ docker run --rm \
     --private-manifest /private-corpus/artifacts/domain_hard_case_manifest.private.json \
     --bundle-cache /private-cache/may-mail-evidence-bundle.private.json \
     --state-dir /uat-state \
-    --orchestrator-api-key-file /run/secrets/openai_api_key
+    --codex-socket /run/formowl-codex/app-server.sock \
+    --codex-runtime-state-dir /codex-state
 ```
 
-`FORMOWL_UAT_MODEL` defaults to `gpt-5.6-terra`.
-`FORMOWL_UAT_REASONING_EFFORT` defaults to `low`, and `OPENAI_BASE_URL`
-defaults to the OpenAI API. `OPENAI_API_KEY` is also accepted, but a read-only
-mounted key file avoids placing the credential in the container command or
-image. Do not reuse ChatGPT/Codex login credentials.
+`FORMOWL_UAT_CODEX_MODEL` is optional; when omitted, Codex selects its current
+default. `FORMOWL_UAT_CODEX_REASONING_EFFORT` defaults to `low`.
+`FORMOWL_UAT_MODEL` and `FORMOWL_UAT_REASONING_EFFORT` remain compatibility
+aliases. The HTTP server no longer accepts API-key, Codex-home, or
+Codex-workspace arguments.
+
+The one-shot initializer pipes the API key to
+`codex login --with-api-key`, writes a locked-down `config.toml`, disables all
+bundled system skills by their pinned-version paths, and records a config hash.
+The serving sidecar refuses an unprovisioned, modified, symlinked, or non-empty
+workspace. Never mount or copy a developer's normal `~/.codex`, interactive
+Codex session, ChatGPT browser session, or ChatGPT product credentials.
+
+Codex app-server is an experimental Codex integration surface. Keep it pinned
+to the version in `containers/dev/Dockerfile`, validate the JSON schemas when
+upgrading, and never publish the app-server Unix socket to testers. Testers use
+only the FormOwl HTTP page.
 
 Do not commit the private corpus, private evidence-bundle cache, uploaded source
-files, or UAT event log. The private UAT state volume contains both the
-feedback JSONL and `mail-human-uat-uploads.private/`.
+files, UAT event log, Codex state, or socket. The UAT state and Codex state are
+separate secret-bearing directories.
 
 ## Verification
 
@@ -202,3 +286,20 @@ classification, direct-answer and evidence rendering, IME Enter handling,
 `postMessage` origin/source rejection, trusted iframe completion, upload
 completion/close messages, new-chat session rotation, and client-side file
 count/type/size preflight.
+
+The completed isolated-runtime verification also includes:
+
+- real direct-stdio and Unix-socket app-server runtime attestation;
+- a non-root three-container smoke separating one-shot API-key init, Codex
+  serving, and the HTTP/client process; and
+- a 949-test canonical dev-container suite, full Ruff, 354-file format check,
+  and `git diff --check`.
+
+Runtime attestation checks every feature disabled by the hardened command.
+When response validation, durable result logging, or local history persistence
+fails after a Codex turn, the service discards that persistent Codex thread so
+the next request cannot inherit hidden divergent state.
+
+An authenticated live UAT turn remains a deployment gate. It must demonstrate
+that an ordinary greeting does not call `search_formowl_evidence` and that a
+source-backed evidence question invokes the tool only when required.

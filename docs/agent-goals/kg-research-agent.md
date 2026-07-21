@@ -41,10 +41,12 @@ completion requires accepted real or public reproducible evidence rather than
 additional synthetic fixtures or implementation-only proofs.
 
 The user explicitly assigned the cross-track temporary UAT issue #44 in an
-isolated worktree. That bounded slice adds a conversation orchestrator above
-FormOwl MCP-style evidence tools without changing canonical graph, ontology,
-user-graph, wiki, or external-system write authority. The source-neutral Task
-Answering objective and its reviewer gate remain separate.
+isolated worktree. That bounded slice now reaches a pinned Codex app-server
+sidecar through a private Unix socket and a narrow JSONL/WebSocket bridge.
+Codex is the conversation engine above one FormOwl MCP-style evidence tool
+without changing canonical graph, ontology, user-graph, wiki, or
+external-system write authority. The source-neutral Task Answering objective
+and its reviewer gate remain separate.
 
 ## Status
 
@@ -85,11 +87,17 @@ The bounded Task Answering slice passed 895 canonical dev-container tests,
 full Ruff, 345-file format check, and `git diff --check`. The required
 3-reviewer gate remains before completion.
 
-Issue #44 passed 931 canonical dev-container tests, full Ruff, 272-file format
-check, the Node 20 UI smoke, and `git diff --check`. It can be pushed, but live
-UAT deployment requires a server-side OpenAI API key or read-only mounted key
-file. ChatGPT or Codex login credentials must not be reused. The required
-reviewer gate and live UAT smoke also remain before completion.
+Issue #44 passed 949 canonical dev-container tests, full Ruff, 354-file format
+check, the Node 20 UI smoke, a dedicated non-root UAT image build with pinned
+`codex-cli 0.144.6`, real direct and Unix-socket app-server attestation, a
+non-root three-container init/serve/client smoke, and `git diff --check`.
+API-key-only auth is provisioned in a one-shot container; the serving sidecar
+does not mount the key, repository, corpus, evidence cache, or UAT state.
+Full disabled-feature attestation and failed-turn thread rollback closed the
+final reviewer blockers; Plato, Volta, and Mencius returned 3/3
+`RELEASE_DECISION: AGREE`. ChatGPT or a developer's normal Codex login/session
+must not be reused. One authenticated live Codex/FormOwl turn remains before
+completion.
 
 Four real-evidence gates still lack accepted canonical evidence:
 

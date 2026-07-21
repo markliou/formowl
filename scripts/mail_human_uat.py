@@ -21,8 +21,9 @@ from formowl_mail.human_uat_http import (  # noqa: E402
     create_mail_human_uat_http_server,
 )
 from formowl_mail.human_uat_orchestrator import (  # noqa: E402
-    OpenAIResponsesConversationModel,
-    OpenAIResponsesHttpTransport,
+    CodexAppServerConversationModel,
+    CodexAppServerStdioTransport,
+    build_codex_app_server_proxy_command,
 )
 
 
@@ -34,13 +35,14 @@ def main() -> int:
     parser.add_argument("--private-manifest", type=Path, required=True)
     parser.add_argument("--bundle-cache", type=Path, required=True)
     parser.add_argument("--state-dir", type=Path, required=True)
+    parser.add_argument("--codex-socket", type=Path, required=True)
     parser.add_argument(
-        "--orchestrator-api-key-file",
+        "--codex-runtime-state-dir",
         type=Path,
-        default=(
-            Path(os.environ["FORMOWL_UAT_OPENAI_API_KEY_FILE"])
-            if os.environ.get("FORMOWL_UAT_OPENAI_API_KEY_FILE")
-            else None
+        default=Path("/codex-state"),
+        help=(
+            "Path used by the isolated Codex sidecar; only the derived "
+            "<path>/codex-workspace is sent over the private socket."
         ),
     )
     args = parser.parse_args()
@@ -51,56 +53,63 @@ def main() -> int:
     manifest = json.loads(args.private_manifest.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         parser.error("--private-manifest must contain a JSON object")
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if args.orchestrator_api_key_file is not None:
-        try:
-            api_key = args.orchestrator_api_key_file.read_text(encoding="utf-8").strip()
-        except OSError:
-            parser.error("--orchestrator-api-key-file could not be read")
-    if not api_key:
-        parser.error(
-            "OPENAI_API_KEY or --orchestrator-api-key-file is required "
-            "for the UAT conversation orchestrator"
-        )
-    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-    model_name = os.environ.get("FORMOWL_UAT_MODEL", "gpt-5.6-terra")
-    reasoning_effort = os.environ.get("FORMOWL_UAT_REASONING_EFFORT", "low")
-    conversation_model = OpenAIResponsesConversationModel(
-        OpenAIResponsesHttpTransport(
-            api_key=api_key,
-            base_url=base_url,
+    proxy_home = args.state_dir / "codex-proxy-home"
+    proxy_workspace = args.state_dir / "codex-proxy-workspace"
+    codex_runtime_workspace = args.codex_runtime_state_dir / "codex-workspace"
+    model_name = os.environ.get(
+        "FORMOWL_UAT_CODEX_MODEL",
+        os.environ.get("FORMOWL_UAT_MODEL", ""),
+    ).strip()
+    reasoning_effort = os.environ.get(
+        "FORMOWL_UAT_CODEX_REASONING_EFFORT",
+        os.environ.get("FORMOWL_UAT_REASONING_EFFORT", "low"),
+    )
+    transport = CodexAppServerStdioTransport(
+        command=build_codex_app_server_proxy_command(
+            socket_path=args.codex_socket,
         ),
-        model=model_name,
+        cwd=proxy_workspace,
+        codex_home=proxy_home,
+        runtime_workspace=codex_runtime_workspace,
+    )
+    conversation_model = CodexAppServerConversationModel(
+        transport,
+        workspace_dir=codex_runtime_workspace,
+        model=model_name or None,
         reasoning_effort=reasoning_effort,
     )
-    bundle = load_or_rebuild_may_mail_evidence_bundle(
-        args.corpus_root,
-        manifest,
-        cache_path=args.bundle_cache,
-    )
-    service = MailHumanUatService(
-        MailHumanUatHttpConfig(
-            bundle=bundle,
-            state_dir=args.state_dir,
-            conversation_model=conversation_model,
-        )
-    )
-    server = create_mail_human_uat_http_server(args.host, args.port, service)
-    print(
-        "FORMOWL_MAIL_UAT_READY "
-        f"host={args.host} port={server.server_address[1]} "
-        f"messages={len(bundle.messages)} upload_supported=true "
-        f"orchestrator_model={conversation_model.model_name} "
-        "authentication_required=false shared_uat=true "
-        "business_systems_read_only=true",
-        flush=True,
-    )
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
+        bundle = load_or_rebuild_may_mail_evidence_bundle(
+            args.corpus_root,
+            manifest,
+            cache_path=args.bundle_cache,
+        )
+        service = MailHumanUatService(
+            MailHumanUatHttpConfig(
+                bundle=bundle,
+                state_dir=args.state_dir,
+                conversation_model=conversation_model,
+            )
+        )
+        server = create_mail_human_uat_http_server(args.host, args.port, service)
+        print(
+            "FORMOWL_MAIL_UAT_READY "
+            f"host={args.host} port={server.server_address[1]} "
+            f"messages={len(bundle.messages)} upload_supported=true "
+            f"orchestrator_model={conversation_model.model_name} "
+            "conversation_engine=codex_app_server "
+            "authentication_required=false shared_uat=true "
+            "business_systems_read_only=true",
+            flush=True,
+        )
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
     finally:
-        server.server_close()
+        conversation_model.close()
     return 0
 
 

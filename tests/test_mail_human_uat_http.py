@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 import _paths  # noqa: F401
-from formowl_contract import ContractValidationError
+from formowl_contract import ContractValidationError, sha256_json
 from formowl_ingestion.extractors.mail.pst import (
     PstMailArchiveExtractor,
     _ParserCommandResult,
@@ -37,6 +37,16 @@ VISITOR_ID = "uatvisitor_" + "1" * 32
 SESSION_ID = "uatsession_" + "2" * 32
 
 
+def _conversation_id(visitor_id: str, session_id: str) -> str:
+    digest = sha256_json(
+        {
+            "visitor_id": visitor_id,
+            "session_id": session_id,
+        }
+    ).removeprefix("sha256:")
+    return f"formowl_uat_{digest[:48]}"
+
+
 class _ScriptedConversationModel:
     model_name = "test-orchestrator"
 
@@ -44,6 +54,7 @@ class _ScriptedConversationModel:
         self.steps = list(steps)
         self.calls: list[dict[str, object]] = []
         self.tool_call_count = 0
+        self.discarded_identifiers: list[str] = []
 
     def respond(
         self,
@@ -76,6 +87,9 @@ class _ScriptedConversationModel:
             tool_request=tool_request,
             tool_result=tool_result,
         )
+
+    def discard_conversation(self, safety_identifier: str) -> None:
+        self.discarded_identifiers.append(safety_identifier)
 
 
 class MailHumanUatHttpTests(unittest.TestCase):
@@ -425,6 +439,291 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(payload["assistant_text"], "這一題不需要調閱來源。")
         self.assertEqual(payload["orchestration"]["action"], "answer_without_tool")
         self.assertEqual(feedback_response.status, 200)
+
+    def test_chat_requires_tracking_to_isolate_persistent_codex_threads(self) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "不應執行。",
+                }
+            ]
+        )
+        service = _service_with_model(
+            _paths.fresh_test_dir("mail-human-uat-chat-tracking-required"),
+            model,
+        )
+
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "anonymous UAT tracking ids are invalid",
+        ):
+            service.chat(
+                {
+                    "query_text": "沒有 session 的請求",
+                    "source": "api",
+                }
+            )
+
+        self.assertEqual(model.calls, [])
+
+    def test_chat_discards_model_thread_when_response_validation_fails(self) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "render_prior_evidence",
+                    "answer_text": "不應保留這個遠端 turn。",
+                }
+            ]
+        )
+        service = _service_with_model(
+            _paths.fresh_test_dir("mail-human-uat-chat-discard-invalid-response"),
+            model,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "missing prior evidence"):
+            service.chat(
+                {
+                    "query_text": "重新顯示上一筆",
+                    "visitor_id": VISITOR_ID,
+                    "session_id": SESSION_ID,
+                    "sequence": 1,
+                    "source": "composer",
+                }
+            )
+
+        conversation_id = _conversation_id(VISITOR_ID, SESSION_ID)
+        self.assertEqual(model.discarded_identifiers, [conversation_id])
+        self.assertNotIn(
+            conversation_id,
+            service._conversation_states_by_conversation_id,
+        )
+
+    def test_chat_discards_model_thread_when_result_persistence_fails(self) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "這個 turn 不得成為隱藏歷史。",
+                }
+            ]
+        )
+        service = _service_with_model(
+            _paths.fresh_test_dir("mail-human-uat-chat-discard-persistence-failure"),
+            model,
+        )
+        original_append = service._event_store.append
+
+        def append_with_failure(event):
+            if event.get("event_type") == "chat_result":
+                raise OSError("simulated durable event failure")
+            return original_append(event)
+
+        with mock.patch.object(
+            service._event_store,
+            "append",
+            side_effect=append_with_failure,
+        ):
+            with self.assertRaisesRegex(OSError, "durable event failure"):
+                service.chat(
+                    {
+                        "query_text": "一般問題",
+                        "visitor_id": VISITOR_ID,
+                        "session_id": SESSION_ID,
+                        "sequence": 1,
+                        "source": "composer",
+                    }
+                )
+
+        conversation_id = _conversation_id(VISITOR_ID, SESSION_ID)
+        self.assertEqual(model.discarded_identifiers, [conversation_id])
+        self.assertNotIn(
+            conversation_id,
+            service._conversation_states_by_conversation_id,
+        )
+
+    def test_chat_keeps_history_and_evidence_isolated_between_sessions(self) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "第一個 session 的證據。",
+                    "tool_request": UatEvidenceToolRequest(
+                        query_text="PO470002002 delivery",
+                        required_terms=("PO470002002",),
+                        sort="relevance",
+                        limit=20,
+                    ),
+                },
+                {
+                    "response_kind": "answer",
+                    "answer_text": "第二個 session 的一般回答。",
+                },
+                {
+                    "response_kind": "answer",
+                    "answer_text": "延續第一個 session。",
+                },
+                {
+                    "response_kind": "answer",
+                    "answer_text": "延續第二個 session。",
+                },
+            ]
+        )
+        service = _service_with_model(
+            _paths.fresh_test_dir("mail-human-uat-chat-session-isolation"),
+            model,
+        )
+        second_session_id = "uatsession_" + "3" * 32
+
+        service.chat(
+            {
+                "query_text": "查 PO470002002 的交期",
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "source": "composer",
+            }
+        )
+        service.chat(
+            {
+                "query_text": "你好",
+                "visitor_id": VISITOR_ID,
+                "session_id": second_session_id,
+                "sequence": 1,
+                "source": "composer",
+            }
+        )
+        service.chat(
+            {
+                "query_text": "解釋上一筆",
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 2,
+                "source": "composer",
+            }
+        )
+        service.chat(
+            {
+                "query_text": "接著說",
+                "visitor_id": VISITOR_ID,
+                "session_id": second_session_id,
+                "sequence": 2,
+                "source": "composer",
+            }
+        )
+
+        first, second, first_follow_up, second_follow_up = model.calls
+        self.assertEqual(
+            first["safety_identifier"],
+            first_follow_up["safety_identifier"],
+        )
+        self.assertEqual(
+            second["safety_identifier"],
+            second_follow_up["safety_identifier"],
+        )
+        self.assertNotEqual(
+            first["safety_identifier"],
+            second["safety_identifier"],
+        )
+        self.assertEqual(first["history"], ())
+        self.assertEqual(second["history"], ())
+        self.assertIsNone(first["latest_evidence"])
+        self.assertIsNone(second["latest_evidence"])
+        self.assertEqual(
+            first_follow_up["history"],
+            (
+                UatConversationMessage(
+                    role="user",
+                    content="查 PO470002002 的交期",
+                ),
+                UatConversationMessage(
+                    role="assistant",
+                    content="第一個 session 的證據。",
+                ),
+            ),
+        )
+        self.assertIsNotNone(first_follow_up["latest_evidence"])
+        self.assertEqual(
+            second_follow_up["history"],
+            (
+                UatConversationMessage(role="user", content="你好"),
+                UatConversationMessage(
+                    role="assistant",
+                    content="第二個 session 的一般回答。",
+                ),
+            ),
+        )
+        self.assertIsNone(second_follow_up["latest_evidence"])
+
+    def test_chat_keeps_history_isolated_between_visitors_with_same_session_id(self) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "第一位訪客的回答。",
+                },
+                {
+                    "response_kind": "answer",
+                    "answer_text": "第二位訪客的回答。",
+                },
+                {
+                    "response_kind": "answer",
+                    "answer_text": "第一位訪客的後續回答。",
+                },
+                {
+                    "response_kind": "answer",
+                    "answer_text": "第二位訪客的後續回答。",
+                },
+            ]
+        )
+        service = _service_with_model(
+            _paths.fresh_test_dir("mail-human-uat-chat-visitor-isolation"),
+            model,
+        )
+        second_visitor_id = "uatvisitor_" + "4" * 32
+
+        for visitor_id, query_text, sequence in (
+            (VISITOR_ID, "第一位訪客", 1),
+            (second_visitor_id, "第二位訪客", 1),
+            (VISITOR_ID, "延續第一位", 2),
+            (second_visitor_id, "延續第二位", 2),
+        ):
+            service.chat(
+                {
+                    "query_text": query_text,
+                    "visitor_id": visitor_id,
+                    "session_id": SESSION_ID,
+                    "sequence": sequence,
+                    "source": "composer",
+                }
+            )
+
+        first, second, first_follow_up, second_follow_up = model.calls
+        self.assertNotEqual(first["safety_identifier"], second["safety_identifier"])
+        self.assertEqual(
+            first["safety_identifier"],
+            first_follow_up["safety_identifier"],
+        )
+        self.assertEqual(
+            second["safety_identifier"],
+            second_follow_up["safety_identifier"],
+        )
+        self.assertEqual(first["history"], ())
+        self.assertEqual(second["history"], ())
+        self.assertEqual(
+            first_follow_up["history"],
+            (
+                UatConversationMessage(role="user", content="第一位訪客"),
+                UatConversationMessage(role="assistant", content="第一位訪客的回答。"),
+            ),
+        )
+        self.assertEqual(
+            second_follow_up["history"],
+            (
+                UatConversationMessage(role="user", content="第二位訪客"),
+                UatConversationMessage(role="assistant", content="第二位訪客的回答。"),
+            ),
+        )
 
     def test_post_endpoints_require_same_origin_browser_requests(self) -> None:
         service = _service("mail-human-uat-same-origin")
@@ -802,7 +1101,9 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(table["projection"]["output_format"], "table")
         self.assertGreater(table["result_count"], 0)
         self.assertEqual(
-            service._task_frames_by_session_id[SESSION_ID].retrieval_query_text,
+            service._task_frames_by_conversation_id[
+                _conversation_id(VISITOR_ID, SESSION_ID)
+            ].retrieval_query_text,
             "pull-in",
         )
         self.assertNotIn("sender", table["results"][0])
@@ -823,7 +1124,9 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertIn("retrieval_query", refined["task_frame"]["changed_dimensions"])
         self.assertIn(
             "DENNIS",
-            service._task_frames_by_session_id[SESSION_ID].retrieval_query_text,
+            service._task_frames_by_conversation_id[
+                _conversation_id(VISITOR_ID, SESSION_ID)
+            ].retrieval_query_text,
         )
 
         new_identifier = service.query(

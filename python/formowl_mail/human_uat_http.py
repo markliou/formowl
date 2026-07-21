@@ -232,8 +232,8 @@ class MailHumanUatService:
         self._interaction_counts: Counter[str] = Counter()
         self._anonymous_visitor_ids: set[str] = set()
         self._anonymous_session_ids: set[str] = set()
-        self._task_frames_by_session_id: dict[str, TaskFrame] = {}
-        self._conversation_states_by_session_id: dict[str, _UatConversationState] = {}
+        self._task_frames_by_conversation_id: dict[str, TaskFrame] = {}
+        self._conversation_states_by_conversation_id: dict[str, _UatConversationState] = {}
         self._conversation_turn_locks: dict[str, threading.Lock] = {}
         self._query_count = 0
         self._chat_count = 0
@@ -297,7 +297,10 @@ class MailHumanUatService:
         source = payload.get("source", "api")
         if source not in _QUERY_SOURCES:
             raise ContractValidationError("chat source is invalid")
-        tracking = _validated_tracking_fields(payload)
+        # Persistent Codex threads must always be bound to one browser-created
+        # visitor/session pair. Falling back to a shared anonymous identifier
+        # would mix unrelated testers' conversation history.
+        tracking = _validated_tracking_fields(payload, required=True)
         model = self.config.conversation_model
         if model is None:
             raise RuntimeError("UAT conversation orchestrator is not configured")
@@ -320,15 +323,11 @@ class MailHumanUatService:
             self._chat_count += 1
             self._remember_tracking(tracking)
 
-        session_id = tracking.get("session_id")
-        turn_lock = self._conversation_turn_lock(session_id)
+        conversation_id = _conversation_safety_identifier(tracking)
+        turn_lock = self._conversation_turn_lock(conversation_id)
         with turn_lock:
             with self._lock:
-                state = (
-                    self._conversation_states_by_session_id.get(session_id)
-                    if isinstance(session_id, str)
-                    else None
-                )
+                state = self._conversation_states_by_conversation_id.get(conversation_id)
                 history = tuple(state.history) if state is not None else ()
                 latest_evidence = (
                     dict(state.latest_evidence)
@@ -358,7 +357,7 @@ class MailHumanUatService:
                     history=history,
                     user_text=user_text,
                     latest_evidence=latest_evidence,
-                    safety_identifier=_conversation_safety_identifier(tracking),
+                    safety_identifier=conversation_id,
                     evidence_tool=call_formowl_tool,
                 )
                 response = self._chat_response(
@@ -367,48 +366,36 @@ class MailHumanUatService:
                     outcome=outcome,
                     latest_evidence=latest_evidence,
                 )
-            except Exception:
                 self._event_store.append(
                     {
-                        "event_type": "chat_error",
-                        "created_at": _timestamp(self.config.fixed_now),
+                        "event_type": "chat_result",
+                        "created_at": response["generated_at"],
                         "query_id": query_id,
-                        "model": model.model_name,
+                        "orchestration_action": response["orchestration"]["action"],
+                        "model": outcome.model_name,
+                        "formowl_tool_called": outcome.tool_request is not None,
+                        "tool_name": (
+                            "search_formowl_evidence" if outcome.tool_request is not None else None
+                        ),
+                        "tool_query_hash": (
+                            sha256_json(outcome.tool_request.query_text)
+                            if outcome.tool_request is not None
+                            else None
+                        ),
+                        "required_term_hashes": (
+                            [sha256_json(term) for term in outcome.tool_request.required_terms]
+                            if outcome.tool_request is not None
+                            else []
+                        ),
+                        "tool_result_count": response["result_count"],
+                        "assistant_response_hash": sha256_json(outcome.answer_text),
+                        **tracking,
                     }
                 )
-                raise
 
-            self._event_store.append(
-                {
-                    "event_type": "chat_result",
-                    "created_at": response["generated_at"],
-                    "query_id": query_id,
-                    "orchestration_action": response["orchestration"]["action"],
-                    "model": outcome.model_name,
-                    "formowl_tool_called": outcome.tool_request is not None,
-                    "tool_name": (
-                        "search_formowl_evidence" if outcome.tool_request is not None else None
-                    ),
-                    "tool_query_hash": (
-                        sha256_json(outcome.tool_request.query_text)
-                        if outcome.tool_request is not None
-                        else None
-                    ),
-                    "required_term_hashes": (
-                        [sha256_json(term) for term in outcome.tool_request.required_terms]
-                        if outcome.tool_request is not None
-                        else []
-                    ),
-                    "tool_result_count": response["result_count"],
-                    "assistant_response_hash": sha256_json(outcome.answer_text),
-                    **tracking,
-                }
-            )
-
-            if isinstance(session_id, str):
                 with self._lock:
-                    state = self._conversation_states_by_session_id.setdefault(
-                        session_id,
+                    state = self._conversation_states_by_conversation_id.setdefault(
+                        conversation_id,
                         _UatConversationState(history=[]),
                     )
                     state.history.extend(
@@ -423,6 +410,23 @@ class MailHumanUatService:
                     del state.history[:-_MAX_CHAT_HISTORY_MESSAGES]
                     if outcome.tool_result is not None:
                         state.latest_evidence = dict(outcome.tool_result)
+            except Exception:
+                try:
+                    model.discard_conversation(conversation_id)
+                except Exception:
+                    pass
+                try:
+                    self._event_store.append(
+                        {
+                            "event_type": "chat_error",
+                            "created_at": _timestamp(self.config.fixed_now),
+                            "query_id": query_id,
+                            "model": model.model_name,
+                        }
+                    )
+                except Exception:
+                    pass
+                raise
         return response
 
     def query(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -468,11 +472,17 @@ class MailHumanUatService:
         parent_query_id: str | None = None,
     ) -> dict[str, Any]:
         normalized_required_terms = _normalized_required_terms(required_terms)
-        session_id = tracking.get("session_id")
+        conversation_id = None
+        if (
+            preserve_session_task
+            and isinstance(tracking.get("visitor_id"), str)
+            and isinstance(tracking.get("session_id"), str)
+        ):
+            conversation_id = _conversation_safety_identifier(tracking)
         with self._lock:
             prior_task_frame = (
-                self._task_frames_by_session_id.get(session_id)
-                if preserve_session_task and isinstance(session_id, str)
+                self._task_frames_by_conversation_id.get(conversation_id)
+                if conversation_id is not None
                 else None
             )
         task_frame, changed_dimensions = _resolve_task_frame(
@@ -480,9 +490,9 @@ class MailHumanUatService:
             page_size=limit,
             prior=prior_task_frame,
         )
-        if preserve_session_task and isinstance(session_id, str):
+        if conversation_id is not None:
             with self._lock:
-                self._task_frames_by_session_id[session_id] = task_frame
+                self._task_frames_by_conversation_id[conversation_id] = task_frame
         query_id = f"uatquery_{secrets.token_hex(12)}"
         submitted_at = _timestamp(self.config.fixed_now)
         query_hash = sha256_json(query_text)
@@ -751,12 +761,10 @@ class MailHumanUatService:
         )
         return response
 
-    def _conversation_turn_lock(self, session_id: Any) -> threading.Lock:
-        if not isinstance(session_id, str):
-            return threading.Lock()
+    def _conversation_turn_lock(self, conversation_id: str) -> threading.Lock:
         with self._lock:
             return self._conversation_turn_locks.setdefault(
-                session_id,
+                conversation_id,
                 threading.Lock(),
             )
 
@@ -1073,9 +1081,10 @@ class MailHumanUatService:
             self._interaction_counts[str(action)] += 1
             self._remember_tracking(tracking)
             if action == "new_chat":
-                self._task_frames_by_session_id.pop(tracking["session_id"], None)
-                self._conversation_states_by_session_id.pop(
-                    tracking["session_id"],
+                conversation_id = _conversation_safety_identifier(tracking)
+                self._task_frames_by_conversation_id.pop(conversation_id, None)
+                self._conversation_states_by_conversation_id.pop(
+                    conversation_id,
                     None,
                 )
         response = {
@@ -1745,10 +1754,19 @@ def _matches_required_terms(
 
 
 def _conversation_safety_identifier(tracking: Mapping[str, Any]) -> str:
+    visitor_id = tracking.get("visitor_id")
+    session_id = tracking.get("session_id")
+    if (
+        not isinstance(visitor_id, str)
+        or not _VISITOR_ID_RE.fullmatch(visitor_id)
+        or not isinstance(session_id, str)
+        or not _SESSION_ID_RE.fullmatch(session_id)
+    ):
+        raise ContractValidationError("anonymous UAT tracking ids are invalid")
     digest = sha256_json(
         {
-            "visitor_id": tracking.get("visitor_id", "anonymous"),
-            "session_id": tracking.get("session_id", "anonymous"),
+            "visitor_id": visitor_id,
+            "session_id": session_id,
         }
     ).removeprefix("sha256:")
     return f"formowl_uat_{digest[:48]}"
