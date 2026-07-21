@@ -1,0 +1,22 @@
+# Tracked non-secret template; copy it to operator-controlled state outside the
+# repository. No production hostname is asserted here. The Compose public-tls
+# service receives these values from the ignored operator environment.
+{
+	email {$FORMOWL_ACME_EMAIL}
+	admin off
+}
+
+{$FORMOWL_PUBLIC_HOST} {
+	encode zstd gzip
+
+	# No path rewrite: every public route, including exact /mcp, is preserved.
+	# Host-network Caddy reaches FormOwl only through its host-loopback publish.
+	reverse_proxy 127.0.0.1:{$FORMOWL_CONNECTED_PUBLISH_PORT} {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}
+
+# Do not add PostgreSQL, object-store, worker, Docker, parser, or other backend
+# listeners. This file exposes only the single canonical FormOwl public origin.

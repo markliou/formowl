@@ -13,6 +13,7 @@ ExtractorRun
 Observation
 SemanticMetadata
 CandidateAtom
+CandidateRelation
 CandidateMention
 CandidateFrame
 CandidateBusinessObject
@@ -44,7 +45,9 @@ ExtractorRunStore
 JobStore
 ```
 
-The purpose of this layer is to make multimedia resources searchable, citeable, reviewable, and reusable by downstream graph and wiki systems.
+The purpose of this layer is to make heterogeneous resources searchable,
+citeable, reviewable, and reusable by downstream knowledge governance,
+effective-view, projection, and action-proposal workflows.
 
 FormOwl does not intend to train neural networks. The goal is an extractor-adapter pipeline that can use existing parsers, OCR engines, ASR tools, vision models, and LLM-based structured extraction tools when needed. Neural-network-based tools may be used as replaceable external extractors, but they are not FormOwl's core source of truth.
 
@@ -1081,16 +1084,21 @@ Downstream conversion should follow this path:
 ```text
 Observation
 -> SemanticMetadata
--> CandidateMention / CandidateFrame / CandidateBusinessObject / CandidateAtom / CandidateGraph
+-> CandidateMention / CandidateBusinessObject
+-> CandidateAtom / CandidateRelation / CandidateFrame
 -> GranularityPolicyEngine
 -> EntityResolver
 -> RelationResolver
 -> CanonicalGraphCommit
--> UserKnowledgeGraph projection
--> Wiki projection
+-> UserKnowledgeGraphRevision / EffectiveGraphView
+-> governed projection or reviewed action proposal
 ```
 
-Do not collapse resource extraction, graph governance, and wiki generation into a single pipeline. Resource Extraction creates evidence-like intermediate artifacts. It does not decide canonical truth, directly generate final wiki pages, or directly mutate the canonical knowledge graph.
+Do not collapse resource extraction, graph governance, effective-view assembly,
+and projection into a single pipeline. Resource Extraction creates
+evidence-like intermediate artifacts. It does not decide canonical truth,
+directly generate final outputs, or directly mutate the canonical knowledge
+graph.
 
 The canonical graph must never reference raw storage paths directly. Graph evidence should reference stable FormOwl identifiers such as:
 

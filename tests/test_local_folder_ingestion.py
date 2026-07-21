@@ -162,7 +162,16 @@ class LocalFolderIngestionTests(unittest.TestCase):
         )
 
         self.assertEqual(result.items[0].observation_count, 2)
-        observations = context.observation_store.list()
+        job = JobStore(context.temp_dir).get(result.items[0].ingestion_job_id)
+        self.assertIsNotNone(job)
+        self.assertEqual(len(job.observation_ids), 2)
+        observation_store = ObservationStore(context.temp_dir)
+        observations = []
+        for observation_id in job.observation_ids:
+            observation = observation_store.get(observation_id)
+            if observation is None:
+                self.fail(f"missing persisted observation: {observation_id}")
+            observations.append(observation)
         self.assertEqual(
             [observation.text for observation in observations],
             [
@@ -170,9 +179,10 @@ class LocalFolderIngestionTests(unittest.TestCase):
                 "Use observations before graph governance.",
             ],
         )
-        self.assertEqual(
-            observations[0].payload["source_ref"]["source_system"], "local_folder_inbox"
-        )
+        asset = context.asset_store.get(job.asset_id)
+        self.assertIsNotNone(asset)
+        for observation in observations:
+            self.assertEqual(observation.payload["source_ref"], asset.source_ref)
 
     def test_local_folder_public_output_redacts_local_path(self) -> None:
         context = _LocalFolderContext.create("local-folder-public-redaction")

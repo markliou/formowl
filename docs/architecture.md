@@ -2,7 +2,8 @@
 
 <!-- Future agents: continue building the system architecture documentation in this file. Do not create another architecture document unless SPEC.md is updated first. -->
 
-FormOwl uses a container-first architecture and a graph-governed knowledge pipeline.
+FormOwl uses a container-first architecture and one generalized,
+graph-governed evidence-to-knowledge methodology.
 
 The canonical development, test, and deployment environment is a container. Host-installed runtimes are optional conveniences, not required assumptions.
 
@@ -37,7 +38,7 @@ The user-facing architecture should minimize interface switching. ChatGPT remain
 flowchart LR
   user["User / Browser"]
   chatgpt["ChatGPT / LLM Host"]
-  mcp_host["MCP Host / Connector"]
+  mcp_host["MCP Host / ChatGPT App"]
   gateway["FormOwl MCP Gateway\nTarget governed entrypoint"]
 
   user --> chatgpt
@@ -153,22 +154,37 @@ sequenceDiagram
 
 Raw bytes may live on multiple internal storage backends, including Synology volumes, NAS shares, S3-compatible object storage, MinIO, or controlled ingress folders. Any file that participates in extraction, graph construction, search, or wiki projection must first be registered in the central FormOwl asset catalog. The knowledge graph references stable FormOwl identifiers, not raw storage paths.
 
-## Target Knowledge Pipeline
+## Canonical Knowledge Method
 
 ```text
-Raw Resources
-  -> Resource Extraction Layer
-  -> Observation Store
-  -> Candidate Graph
-  -> Governed Canonical Graph
-  -> User Knowledge Graph
-  -> Wiki Projection Layer
-  -> WikiRevision
+Any Source
+  -> Asset / EvidenceSnapshot
+  -> Observation
+  -> Candidate Knowledge
+       - Business Object
+       - Property / Relation / State / Event Assertion
+       - Coordination Frame
+  -> Governance
+  -> Governed Canonical Knowledge Graph
+  -> User / Task Effective Graph View
+  -> Cited Projection or Reviewed Action Proposal
 ```
 
-Raw resources include project system records, wiki pages, ChatGPT conversations, markdown, PDFs, office documents, images, audio, video, screenshots, and other captured files.
+Sources include project and finance system records, wiki pages, ChatGPT
+conversations, mail, markdown, PDFs, office documents, images, audio, video,
+screenshots, sensors, and other governed captures.
 
-The pipeline rule is strict: raw resources do not directly become final wiki pages. They first become observations and semantic metadata, then candidate graph objects, then governed canonical graph state, then user-specific graph views, and only then projected wiki revisions.
+The pipeline rule is strict: sources do not directly become canonical knowledge
+or final business output. They first become citeable observations and candidate
+knowledge, then pass governance before canonical commit. Permission-aware user
+or task views are assembled without rewriting canonical state, and projections
+such as answers, reports, dashboards, wiki revisions, or action proposals are
+derived from those views.
+
+Source formats are adapters, not ontologies. A mail archive, spreadsheet,
+finance transaction, meeting transcript, image, and project issue may require
+different extraction adapters while still producing the same business-object
+and assertion families.
 
 ## Governance Layer
 
@@ -185,14 +201,20 @@ RelationResolutionPolicy
 LifecyclePolicy
 UserGraphAssemblyPolicy
 WikiProjectionPolicy
+RetrievalPolicy
+RetentionPolicy
 ```
 
 The current contract layer includes versioned policy records for extraction,
 atom granularity, entity resolution, relation resolution, lifecycle, and wiki
-projection. Ontology policy and user graph assembly policy remain separate
-future slices so type governance and user graph assembly stay decoupled.
+projection, plus implemented user graph assembly contracts. Scoped ontology
+governance remains represented separately through type definitions, aliases,
+mappings, alignment candidates, and ontology revisions so type governance and
+user graph assembly stay decoupled.
 
-External extractors and LLM graph tools may create observations, candidate atoms, candidate relations, or external graph imports. They must not directly mutate canonical graph state.
+External extractors and LLM graph tools may create observations, candidate
+business objects, atoms, relations, frames, or external graph imports. They
+must not directly mutate canonical graph or type state.
 
 ## Store Boundaries
 
@@ -220,9 +242,19 @@ Workers should process registered assets by `asset_id` and `object_uri`. Large f
 
 ## Identity and Collaborative Graphs
 
-For the internal closed beta, FormOwl may use a manual trusted internal identity mode: a user selects their FormOwl identity at MCP session start, and the selected identity becomes the `actor_user_id` for tool calls and audit records. This is a temporary identity facade, not a production authentication model.
+The sole connected human identity path for the internal closed beta is the
+public HTTPS FormOwl `/mcp` resource through FormOwl OAuth 2.1, PKCE S256, and
+Google OIDC. Google authenticates the human, while FormOwl remains the
+authority for users, invitations, memberships, OAuth clients and token
+sessions, workspaces, grants, revocation, and audit. Google tokens are never
+accepted as FormOwl MCP bearer tokens.
 
-Stable `user_id`, `workspace_id`, asset ownership, access requests, grants, and audit logs must exist from the beginning so the authentication provider can later be replaced by company SSO, OIDC, SAML, or another provider without replacing authorization and provenance.
+Every protected tool call reloads current PostgreSQL authorization state and
+builds a fresh gateway-controlled `ActorContext`. Caller-supplied actor,
+workspace, session, membership, and grant fields cannot replace that authority.
+Manual trusted actor selection, JSON-line commands, the hand-built JSON-RPC
+runner, and stdio identity variables are test/local compatibility surfaces
+only, not connected deployment modes.
 
 Cross-user graph collaboration should use permissioned overlays and grants. Another user's private graph must not be silently merged into the requester graph. Shared answers, graph snippets, evidence snippets, and raw asset access should each have explicit scope, provenance, and audit records.
 

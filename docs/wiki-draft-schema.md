@@ -2,7 +2,10 @@
 
 <!-- Future agents: continue building wiki draft schema documentation in this file. Do not create another wiki draft schema document unless SPEC.md is updated first. -->
 
-Wiki drafts and published wiki pages are versioned knowledge views derived from raw data, observations, candidate graph review, canonical graph state, user graph revisions, and manual edits.
+Wiki drafts and published wiki pages are one governed projection type derived
+from evidence, observations, reviewed canonical graph state, permission-aware
+effective views, and manual edits. They are not the universal endpoint of the
+FormOwl methodology.
 
 The wiki workflow must be usable by non-technical users. Normal authors should work through natural-language and review-oriented actions such as save draft, submit for review, compare changes, approve, publish, refresh from sources, and restore. Git, database rows, object storage paths, hashes, and external wiki revision IDs are backend details.
 
@@ -15,7 +18,9 @@ The wiki workflow must be usable by non-technical users. Normal authors should w
 5. Restoring a page must create a new revision; it must not delete history.
 6. Git may be used as a backend or audit mirror, but it must not be the required user-facing workflow.
 7. Wiki revisions are output artifacts; they are not the user's full knowledge graph.
-8. Raw resources should not directly generate final wiki pages; graph-aware wiki drafts should come from a `WikiProjectionSpec` applied to a context package or user graph revision.
+8. Sources should not directly generate final wiki pages; graph-aware wiki
+   drafts should come from a `WikiProjectionSpec` applied to governed evidence
+   and an authorized graph or effective view.
 9. Graph-aware wiki drafts should preserve links to canonical atom and user graph revisions when available.
 
 ## WikiProjectionSpec Boundary
@@ -61,7 +66,9 @@ overwriting a reviewed page.
 
 ## User Graph Boundary
 
-The full model is defined in `SPEC.md` under `Multimodal Knowledge Graph and Wiki Projection Model`.
+The canonical model is defined by `SPEC.md` under `Generalized
+Evidence-to-Knowledge Methodology`, `Knowledge and Graph Governance`, and
+`Projection and WikiRevision`.
 
 Wiki drafts may be generated from a canonical atom graph or a user's graph. That does not make the wiki draft itself the graph. A `WikiRevision` remains a governed markdown or wiki artifact with provenance, review state, and publishing metadata.
 

@@ -6,24 +6,34 @@ FormOwl workflows must be natural-language-first and usable by non-technical pro
 
 Technical systems such as Git, object storage, schema validation, source hashes, and external wiki revision APIs may support the workflow, but they must not be required concepts in the normal user interface.
 
-The preferred user experience is a single conversational task surface. Users should stay in ChatGPT or an embedded FormOwl task surface whenever possible. If Phase 0 requires a separate upload page, that page is a narrow continuation of the current task, not a backend console, storage browser, or generic file manager.
+The preferred user experience is a single conversational task surface. Users
+should stay in ChatGPT or an embedded FormOwl task surface whenever possible.
+If a deployment requires a separate upload page, that page is a narrow
+continuation of the current task, not a backend console, storage browser, or
+generic file manager.
 
 Hiding backend operations is both a usability rule and a safety rule. The fewer backend controls exposed to the user, the less likely the system is to receive unstable paths, wrong storage choices, mismatched parser settings, accidental permission leaks, or unaudited source files.
 
 Engineering workflows should also preserve readability. Python is the first debugging layer for MCP behavior, hashing helpers, diff helpers, validation glue, and service orchestration.
 
-The target workflow is pipeline-first:
+The target workflow follows one source- and domain-neutral method:
 
 ```text
-Raw resource
+Any source
+  -> Asset / EvidenceSnapshot
   -> Observation
-  -> Candidate graph
-  -> Governed canonical graph
-  -> User knowledge graph
-  -> Wiki projection
+  -> Candidate business objects and assertions
+  -> Governance
+  -> Governed canonical knowledge graph
+  -> User / task effective graph view
+  -> Cited projection or reviewed action proposal
 ```
 
 Users should experience this as task-oriented review work, not as manual graph maintenance.
+
+Wiki drafting is one workflow over this method. Procurement, finance, project,
+operations, and future domains use the same stages and differ only in source
+adapters, scoped domain packs, evaluation evidence, and output projections.
 
 ## Minimal Local Ingestion Workflow
 
@@ -52,20 +62,82 @@ This path is intentionally narrow:
 - It does not create semantic metadata, candidate atoms, canonical graph records, user graph revisions, or wiki revisions.
 - Failed local extractor runs leave the ingestion job in `failed` status with an error and without observation records.
 
-## Phase 0 Identity and Audit Helpers
+## Connected Sign-In and ActorContext Journey
 
-The current Phase 0 implementation includes `ManualTrustedInternalAuthProvider`
-for trusted internal tests. It selects a pre-seeded active `User`, creates a
-`SessionIdentity`, and returns actor context with workspace memberships, active
-grants, and pending access requests. This provider is explicitly not production
-authentication and does not validate SSO, OIDC, passwords, cookies, or external
-identity assertions.
+For a connected closed-beta user, FormOwl sign-in is a normal account-linking
+journey rather than an identity-selection form:
 
-File-backed audit logging records reviewable `AuditLog` records for actor
-selection, asset registration, ingestion job creation, evidence snapshot fetches,
-permission denials, and upload session creation. User-facing gateway flows should
-pass actor, session, workspace, target, status, and timestamp fields so these
-events remain traceable.
+```text
+An owner or authorized operator creates a time-limited FormOwl invitation
+  -> the user chooses Connect in ChatGPT
+  -> ChatGPT follows the FormOwl OAuth challenge for the exact public HTTPS /mcp resource
+  -> FormOwl validates the predefined client, exact callback/resource, and PKCE S256
+  -> FormOwl sends the user to Google OIDC
+  -> Google returns a verified issuer, subject, and email to FormOwl
+  -> FormOwl matches the invitation and binds (issuer, subject) to a FormOwl user
+  -> FormOwl issues its own fixed-3600-second, resource-bound access token
+  -> ChatGPT calls whoami and governed tools through /mcp
+```
+
+The predefined client ID is a stable non-secret value selected and recorded by
+the deployment operator before discovery. ChatGPT app management must use that
+same value if its current predefined-client UI supports entry or selection; if
+it does not, the live flow stops as an external blocker. ChatGPT supplies and
+displays only the exact production callback
+`https://chatgpt.com/connector/oauth/{callback_id}`. The ID must never be
+invented or described as generated/displayed by ChatGPT. The current
+closed-beta flow remains a predefined-client design; it does not claim a CIMD
+migration or DCR fallback.
+
+Google tokens are never used as FormOwl MCP bearer tokens. On every protected
+tool call, the gateway reloads the token session, user, external identity,
+client authorization, current workspace membership, and active grants from
+PostgreSQL, then creates a fresh `ActorContext`. A tool argument cannot select
+or replace the actor, workspace, session, membership, or grant.
+
+The first owner starts from an operator-authorized bootstrap invitation for an
+otherwise empty workspace; no placeholder user is created. After that owner
+completes a real Google login, the owner may invite a second user. The second
+user follows the same Google-backed flow and receives only the invited role and
+workspace.
+
+Failure and recovery behavior is intentionally visible and safe:
+
+```text
+expired, missing, or email-mismatched invitation -> no user, membership, code, or token is created
+disabled user or external identity -> protected calls are denied
+revoked client authorization or token session -> the existing token is denied immediately
+removed workspace membership -> a newly resolved ActorContext cannot use that workspace
+expired token after trusted UTC is strictly later than expires_at plus the fixed 30-second skew -> the user must reconnect through the full FormOwl and Google flow
+successful relink -> a new token session is created; the revoked or expired session stays unusable
+```
+
+Allowed and denied decisions are audited with user or unauthenticated actor,
+external identity, OAuth client, token session, request, tool call, workspace
+when proven, target, reason code, and timestamp. Raw bearer tokens,
+authorization codes, PKCE verifiers, Google tokens, and secrets never enter
+audit records or public errors.
+
+`ManualTrustedInternalAuthProvider`, JSON-line commands, the hand-built
+JSON-RPC runner, and stdio identity environment variables remain test/local
+compatibility tools only. They are not connected sign-in or ChatGPT
+configuration paths.
+
+## Issue Ownership and Completion Boundary
+
+Issue #20 owns the Google-backed FormOwl OAuth bridge and the fresh
+gateway-controlled `ActorContext` used by connected tools. Repository tests do
+not replace the required fresh PostgreSQL, restart-persistence, first-owner,
+second-user, revocation/relink, signing-key rotation, remote MCP Inspector, and
+real ChatGPT plus Google journeys. Issue #20 remains open until those external
+gates and the configured reviewer gate are accepted; this workflow makes no
+production-readiness claim.
+
+Issue #41 separately owns generic Asset tenant and owner binding, byte storage,
+occurrence lineage, upload commit/rollback, lifecycle, retention, purge, and
+cross-scope authorization. Issue #21 consumes that generic Asset boundary for
+mail evidence. Neither issue #41 nor issue #21 defines an alternate connected
+identity flow, manual actor-selection path, or ChatGPT transport.
 
 ## Guided Upload and Source Preparation Flow
 
@@ -74,7 +146,7 @@ FormOwl users normally interact with the system through ChatGPT and the FormOwl 
 All user-initiated uploads must begin with an `UploadSession`. The session captures intent before file transfer begins:
 
 ```text
-selected user
+authenticated actor
 owner scope
 workspace scope
 project scope
@@ -109,7 +181,7 @@ The upload card should show:
 
 ```text
 upload session ID
-current user
+authenticated actor
 owner scope
 workspace / project / customer scope
 asset type
@@ -158,7 +230,7 @@ UploadSession
   -> server-side incremental parser worker
   -> MailEvidenceBundle
   -> PostgreSQL normalized mail evidence
-  -> governed MCP / JSON-RPC evidence query
+  -> governed MCP evidence query
 ```
 
 The raw PST is an import carrier, not permanent default evidence storage. After
@@ -178,29 +250,31 @@ UploadSession-bound import helper: an existing mail `UploadSession` is validated
 before side effects, the staged archive is registered as an `Asset`, an
 `IngestionJob` runs through `FixtureMailArchiveExtractor`, a server-side
 `MailEvidenceBundle` with `upload_session_id` is written through the PostgreSQL
-mail evidence store contract, and a store-backed JSON-RPC `query_mail_evidence`
-owner query is verified. This is still not a real PST parser, upload UI /
+mail evidence store contract, and a store-backed local JSON-RPC compatibility
+`query_mail_evidence` owner query is verified. This is still not a real PST parser, upload UI /
 iframe, live PostgreSQL readiness, production worker leasing, KG write, wiki
 projection, or production readiness claim.
 
-The current ChatGPT-facing checkpoint can return a session-bound mail upload
-task card through `open_upload_session`. The card uses a
+The current governed `open_upload_session` handler can return a session-bound
+mail upload task card. The card uses a
 `formowl_upload_session:<upload_id>` public locator, attaches mail archive
 source-preparation guidance, accepts PST/OST/MSG/EML/MBOX profiles, and creates
 an audited `UploadSession` without exposing storage backends, parser controls,
-worker queues, raw paths, SQL-like values, or object-store internals. This is
-only the task/session entrypoint for a later upload surface; it is not the real
-iframe implementation, real mail parser, live PostgreSQL readiness, production
-worker leasing, ChatGPT smoke completion, or production readiness claim.
+worker queues, raw paths, SQL-like values, or object-store internals. The
+connected runtime may expose this handler only after OAuth and fresh
+`ActorContext` resolution. This is only the task/session entrypoint for a later
+upload surface; it is not the real iframe implementation, real mail parser,
+live PostgreSQL readiness, production worker leasing, ChatGPT smoke completion,
+or production readiness claim.
 
-The configured runtime command for the ChatGPT MCP path is
-`formowl-semantic-mcp-jsonrpc`. The current command preflight launches that
-console command as a subprocess, performs JSON-RPC `initialize`, `tools/list`,
-and `tools/call open_upload_session`, verifies the returned upload task card,
-and checks that the task-card upload id and locator resolve to the persisted
-`UploadSession`. This still only opens the governed upload task and does not
-perform actual ChatGPT connection, file transfer, upload iframe handling, or
-mail parsing.
+The local compatibility command for this handler is
+`formowl-semantic-mcp-jsonrpc`. Its preflight launches the command as a
+subprocess, performs JSON-RPC `initialize`, `tools/list`, and
+`tools/call open_upload_session`, verifies the returned upload task card, and
+checks that the task-card upload id and locator resolve to the persisted
+`UploadSession`. This tests the handler contract only. It is not the formal
+ChatGPT connection, does not use FormOwl OAuth or Google OIDC, and does not
+perform file transfer, upload iframe handling, or mail parsing.
 
 The current backend upload-intake checkpoint adds
 `formowl_mail.receive_mail_archive_upload()`. A trusted server upload surface
@@ -233,8 +307,8 @@ not an actual ChatGPT connected upload, production iframe, real mail parser,
 live PostgreSQL deployment, production worker leasing, KG write, wiki
 projection, or production readiness claim.
 
-The current MCP-command-to-local-HTTP smoke connects those two surfaces without
-claiming production integration. It launches the configured
+The current MCP-command-to-local-HTTP compatibility smoke connects those two
+local surfaces without claiming production integration. It launches the
 `formowl-semantic-mcp-jsonrpc` command, opens a mail upload task through
 JSON-RPC `open_upload_session`, resolves the persisted `UploadSession`, starts
 the local HTTP upload surface with the same trusted session identity and
@@ -251,7 +325,7 @@ and production readiness remain open.
 
 The current local upload-to-import-and-query smoke extends that contract one
 step closer to the Phase 1 evidence path. It opens a mail upload task through
-the configured MCP command, uploads a synthetic JSON-backed mail fixture through
+the local compatibility command, uploads a synthetic JSON-backed mail fixture through
 the local HTTP surface using the same `UploadSession`, runs
 `run_upload_session_mail_import()` against the asset already bound by the upload
 surface, writes normalized mail evidence through the PostgreSQL adapter
@@ -263,34 +337,24 @@ connected upload, production iframe readiness, real PST/OST/MSG/EML/MBOX
 parsing, live PostgreSQL deployment, production worker leasing, KG write, wiki
 projection, and production readiness remain open.
 
-The current ChatGPT connection preflight is the next narrow bridge before a
-manual ChatGPT test. It wraps the configured
-`formowl-semantic-mcp-jsonrpc` command smoke, builds a bounded MCP attach
-package shape, and publishes only hashes, statuses, and counts for the required
-environment names, required tools, expected JSON-RPC sequence, task-card shape,
-and session shape. It rejects package variants that include concrete
-environment values, concrete upload locators, raw command paths, or an actual
-ChatGPT-connected upload claim. This lets an operator configure ChatGPT with
-the stdio command and local session context values while keeping storage,
-parser, worker, and backend details out of the public preflight report.
-Actual ChatGPT-connected upload, production iframe readiness, real parser
-readiness, live PostgreSQL deployment, production worker leasing, KG write,
-wiki projection, and production readiness remain open until separately tested.
+The historical connection preflight packages that local command as a bounded
+stdio compatibility attachment. It publishes only hashes, statuses, and counts
+for required environment names, tools, JSON-RPC sequence, task-card shape, and
+session shape, while rejecting concrete values, locators, raw command paths,
+and connected-flow claims. It must not be used to configure the formal
+connected service, which requires public HTTPS `/mcp`, FormOwl OAuth, Google
+OIDC, and server-resolved `ActorContext`.
 
-The current ChatGPT result intake checkpoint is the return path for that manual
-test. After an operator connects ChatGPT to the MCP server and calls
-`open_upload_session`, `scripts/mail_upload_chatgpt_result_intake.py` validates
-a bounded result packet containing only hashes, statuses, counts, expected
-sequence binding, tool availability, task-card shape hashes, and operator
-attestation. The intake rejects environment values, concrete upload locators,
-mail payload fields, raw command paths, static contract hash tampering, and
-claims that a file upload or production path has already been proven. This is
-operator-supplied result-packet validation only; it is not direct ChatGPT
-control by Codex, file transfer proof, production iframe readiness, real parser
-readiness, live PostgreSQL readiness, or #21 completion.
+The matching historical result-intake helper validates a bounded
+operator-supplied compatibility packet after `open_upload_session`. It rejects
+environment values, concrete upload locators, mail payload fields, raw command
+paths, static-contract hash tampering, and claims that file transfer or a
+connected production-shaped path has been proven. This is regression evidence
+for the compatibility facade only; it is not live ChatGPT, OAuth, file-transfer,
+production iframe, real parser, live PostgreSQL, or #21 completion evidence.
 
-The scoped #21 local Phase 1 Mail Evidence Reading proof is now complete for
-synthetic evidence and ChatGPT testing readiness. The governed MCP / JSON-RPC
+The scoped #21 local Phase 1 Mail Evidence Reading proof is complete for
+synthetic evidence and local compatibility testing. The governed JSON-RPC
 surface supports `query_mail_evidence` and `answer_mail_case_progress` over
 normalized `MailEvidenceBundle` records, with owner/denied/forged-grant/
 trusted-grant and bundle-id probes in the ChatGPT-free smoke. Case-progress
@@ -302,22 +366,22 @@ file transfer, production iframe readiness, real PST/OST/MSG/EML/MBOX parser
 readiness, live PostgreSQL deployment readiness, production worker leasing,
 KG write, wiki projection, or production readiness.
 
-The current mail evidence ChatGPT result-intake checkpoint is the bounded
-return path for a manual fixture-backed ChatGPT MCP evidence-reading smoke.
-After an operator connects ChatGPT to the MCP server and calls
-`query_mail_evidence` plus `answer_mail_case_progress` for owner and denied
-fixture paths, `scripts/mail_evidence_chatgpt_result_intake.py` validates a
+The historical mail-evidence result-intake checkpoint is the bounded return
+path for a manual fixture-backed local compatibility smoke. After the
+compatibility client calls `query_mail_evidence` plus
+`answer_mail_case_progress` for owner and denied fixture paths,
+`scripts/mail_evidence_chatgpt_result_intake.py` validates a
 result packet containing only hashes, statuses, counts, fixture-smoke contract
 binding, owner citation counts, denied redaction counts, and operator
-attestation. The intake rejects raw ChatGPT transcripts, raw tool payloads,
+attestation. The intake rejects raw transcripts, raw tool payloads,
 mail body/snippet/text fields, concrete mail identifiers, upload locators,
 environment values, paths, SQL, parser/storage/worker internals, bool counts,
 duplicate response hashes, static-contract tampering, permission-bypass
 claims, KG/wiki claims, and production overclaims. This is operator-supplied
-result-packet validation only; it is not direct Codex-controlled ChatGPT
-verification, cryptographic proof of a ChatGPT session, raw file transfer, raw
-mail access, production iframe readiness, real parser readiness, live
-PostgreSQL readiness, or production readiness.
+compatibility evidence only; it is not a live ChatGPT or OAuth test,
+cryptographic session proof, raw file transfer, raw mail access, production
+iframe readiness, real parser readiness, live PostgreSQL readiness, or
+production readiness.
 
 The current real PST parser checkpoint proves only a sampled parser path for
 the operator-provided `tests/pst-exm/archive.pst` fixture. The dev container
@@ -335,7 +399,7 @@ operator-provided PST fixture
   -> ObservationStore
   -> MailEvidenceBundle
   -> PostgreSQLMailEvidenceStore contract
-  -> JSON-RPC query_mail_evidence owner and denied probes
+  -> local JSON-RPC compatibility query_mail_evidence owner and denied probes
 ```
 
 The public report from `scripts/mail_real_pst_smoke.py` contains only hashes,
@@ -357,14 +421,26 @@ sequenceDiagram
   actor User
   participant ChatGPT as "ChatGPT / LLM Host"
   participant Gateway as "FormOwl MCP Gateway"
+  participant Google as "Google OIDC"
   participant UploadSurface as "Embedded upload surface or portal"
   participant Router as "Storage Routing Policy"
   participant AssetStore as "AssetStore"
   participant ObjectStore as "ObjectStore"
   participant JobStore as "JobStore"
 
+  User->>ChatGPT: Connect FormOwl
+  ChatGPT->>Gateway: Request exact HTTPS /mcp resource
+  Gateway-->>ChatGPT: OAuth protected-resource challenge
+  ChatGPT->>Gateway: Authorize with exact callback/resource and PKCE S256
+  Gateway->>Google: Start Google OIDC login
+  Google-->>Gateway: Verified issuer, subject, and email
+  Gateway-->>ChatGPT: FormOwl authorization code and resource-bound token
+  ChatGPT->>Gateway: whoami
+  Gateway->>Gateway: Reload current state and build fresh ActorContext
+  Gateway-->>ChatGPT: Authenticated user and current workspace
   User->>ChatGPT: I want to upload source material
-  ChatGPT->>Gateway: create_upload_session(intent and scope)
+  ChatGPT->>Gateway: open_upload_session(intent and scope)
+  Gateway->>Gateway: Build a fresh ActorContext for this tool call
   Gateway-->>ChatGPT: Upload task card with inline action or session-bound link
   ChatGPT-->>User: Show upload task and preparation guidance
   User->>UploadSurface: Upload prepared file for this UploadSession
@@ -389,7 +465,10 @@ MCP Gateway -> FormOwl backend: create capture record, store session dump, regis
 ChatGPT: shows a capture task card and processing status
 ```
 
-The shortcut may avoid a visible upload page because the source artifact is the current ChatGPT session. It must still record selected user, workspace or project scope, source account metadata, visibility, capture method, storage locator, asset registration, ingestion job, and audit event.
+The shortcut may avoid a visible upload page because the source artifact is the
+current ChatGPT session. It must still record the authenticated actor, current
+workspace or project scope, source account metadata, visibility, capture
+method, storage locator, asset registration, ingestion job, and audit event.
 
 The current `capture_current_chatgpt_session()` helper follows that path by
 rendering the conversation into a source artifact, copying it through the
@@ -401,7 +480,7 @@ The capture task card should show:
 
 ```text
 capture ID
-selected user
+authenticated actor
 workspace / project / customer scope
 visibility scope
 source account status

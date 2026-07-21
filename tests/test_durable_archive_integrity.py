@@ -9,21 +9,31 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE_ROOT = ROOT / "docs" / "archive"
-SNAPSHOT_ROOT = ARCHIVE_ROOT / "2026-07-11"
+SNAPSHOT_FILE_COUNTS = {
+    "2026-07-11": 4,
+    "2026-07-16": 1,
+}
+HISTORICAL_BOARD_SNAPSHOT_ROOT = ARCHIVE_ROOT / "2026-07-11"
 
 
 class DurableArchiveIntegrityTests(unittest.TestCase):
     def test_manifest_matches_every_lossless_snapshot(self) -> None:
-        manifest = json.loads((SNAPSHOT_ROOT / "manifest.json").read_text(encoding="utf-8"))
+        for archive_date, expected_file_count in SNAPSHOT_FILE_COUNTS.items():
+            snapshot_root = ARCHIVE_ROOT / archive_date
+            manifest = json.loads((snapshot_root / "manifest.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(manifest["archive_date"], "2026-07-11")
-        self.assertEqual(len(manifest["files"]), 4)
-        for item in manifest["files"]:
-            archive_path = ROOT / item["archive"]
-            payload = archive_path.read_bytes()
-            self.assertEqual(len(payload), item["bytes"], archive_path)
-            self.assertEqual(len(payload.decode("utf-8").splitlines()), item["lines"])
-            self.assertEqual(hashlib.sha256(payload).hexdigest(), item["sha256"])
+            self.assertEqual(manifest["archive_date"], archive_date)
+            self.assertEqual(len(manifest["files"]), expected_file_count)
+            for item in manifest["files"]:
+                archive_path = ROOT / item["archive"]
+                self.assertEqual(archive_path.parent, snapshot_root)
+                payload = archive_path.read_bytes()
+                self.assertEqual(len(payload), item["bytes"], archive_path)
+                self.assertEqual(
+                    len(payload.decode("utf-8").splitlines()),
+                    item["lines"],
+                )
+                self.assertEqual(hashlib.sha256(payload).hexdigest(), item["sha256"])
 
     def test_archive_index_links_and_startup_paths_exist(self) -> None:
         archive_index = (ARCHIVE_ROOT / "README.md").read_text(encoding="utf-8")
@@ -65,12 +75,17 @@ class DurableArchiveIntegrityTests(unittest.TestCase):
             )
 
     def test_archived_board_preserves_historical_checklist_states(self) -> None:
-        archived = (SNAPSHOT_ROOT / "implementation-task-breakdown.md").read_text(encoding="utf-8")
+        archived = (HISTORICAL_BOARD_SNAPSHOT_ROOT / "implementation-task-breakdown.md").read_text(
+            encoding="utf-8"
+        )
         active = (ROOT / "docs" / "implementation-task-breakdown.md").read_text(encoding="utf-8")
 
         self.assertEqual(len(re.findall(r"^\s*- \[x\]", archived, re.MULTILINE)), 147)
         self.assertEqual(len(re.findall(r"^\s*- \[ \]", archived, re.MULTILINE)), 1)
-        self.assertEqual(len(re.findall(r"^\s*- \[ \]", active, re.MULTILINE)), 1)
+        archived_unchecked = set(re.findall(r"^\s*- \[ \] (.+)$", archived, re.MULTILINE))
+        active_unchecked = set(re.findall(r"^\s*- \[ \] (.+)$", active, re.MULTILINE))
+        self.assertGreaterEqual(len(active_unchecked), len(archived_unchecked))
+        self.assertTrue(archived_unchecked.issubset(active_unchecked))
 
 
 if __name__ == "__main__":

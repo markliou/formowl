@@ -43,6 +43,13 @@ current authority state. The stricter current state is blocked, and no broad
 completion claim is supported until the four remaining gates have accepted
 canonical packets and all authority reports are synchronized and passing.
 
+`SPEC.md` is now rewritten around one generalized evidence-to-knowledge
+methodology rather than mail, procurement, or wiki as the product center.
+Source formats are adapters, departments use scoped domain packs, and
+cross-domain acceptance requires at least one materially different non-mail
+transfer domain. This authority change does not itself satisfy any of the four
+blocked real-evidence gates.
+
 ## Blockers
 
 - The broad KG real-evidence objective remains unchecked on the active board.
@@ -57,4 +64,6 @@ canonical packets and all authority reports are synchronized and passing.
 
 Resume the single unchecked KG real-evidence board item from its archived proof
 requirements by collecting or selecting accepted evidence for the four blocked
-gates. Keep candidate-before-canonical and no-raw-path boundaries intact.
+gates. Apply the methodology-first SPEC and include a materially different
+second domain rather than treating procurement/mail as generality proof. Keep
+candidate-before-canonical and no-raw-path boundaries intact.
