@@ -147,6 +147,9 @@ _UPLOAD_OPEN_SOURCES = {"composer", "landing", "no_result"}
 _UPLOAD_CLOSE_SOURCES = {"button", "backdrop", "iframe_cancel"}
 _UPLOAD_VALIDATION_REASONS = {"file_count", "file_type", "file_size", "total_size"}
 _UPLOAD_SIZE_BUCKETS = {"under_5mb", "5_to_25mb", "25_to_60mb", "60_to_500mb"}
+_TYPED_NUMERIC_IDENTIFIER_RE = re.compile(
+    r"(?<![A-Za-z0-9])[A-Za-z]{2,5}[\s#:_-]*([0-9]{8,})(?![0-9])"
+)
 _BUSINESS_ALIASES = (
     (
         ("量產", "打件", "生產排程", "投產"),
@@ -160,8 +163,8 @@ _BUSINESS_ALIASES = (
     ),
     (
         ("交期", "到料", "到貨", "交貨"),
-        ("delivery", "ETA", "due"),
-        ("交期", "到料", "到貨", "交貨", "delivery", "ETA"),
+        ("delivery", "ETA", "ETD", "due"),
+        ("交期", "到料", "到貨", "交貨", "delivery", "ETA", "ETD"),
     ),
 )
 _EXACT_BUSINESS_FILTERS = ("文顥",)
@@ -1750,7 +1753,14 @@ def _matches_required_terms(
     source_text: str,
     required_terms: Sequence[str],
 ) -> bool:
-    return bool(source_text) and all(term in source_text for term in required_terms)
+    return bool(source_text) and all(
+        term in source_text
+        or (
+            (numeric_alias := _typed_numeric_identifier_alias(term)) is not None
+            and numeric_alias in source_text
+        )
+        for term in required_terms
+    )
 
 
 def _conversation_safety_identifier(tracking: Mapping[str, Any]) -> str:
@@ -1783,8 +1793,27 @@ def _expand_business_query(query_text: str) -> tuple[str, tuple[tuple[str, ...],
     for term in _EXACT_BUSINESS_FILTERS:
         if term.casefold() in lowered:
             filters.append((term,))
+    for numeric_alias in _typed_numeric_identifier_aliases(query_text):
+        if numeric_alias not in expansions:
+            expansions.append(numeric_alias)
     expanded = " ".join([query_text, *expansions]).strip()
     return expanded, tuple(filters)
+
+
+def _typed_numeric_identifier_aliases(value: str) -> tuple[str, ...]:
+    normalized = unicodedata.normalize("NFKC", value)
+    aliases: list[str] = []
+    for match in _TYPED_NUMERIC_IDENTIFIER_RE.finditer(normalized):
+        alias = match.group(1)
+        if alias not in aliases:
+            aliases.append(alias)
+    return tuple(aliases)
+
+
+def _typed_numeric_identifier_alias(value: str) -> str | None:
+    normalized = unicodedata.normalize("NFKC", value).strip()
+    match = _TYPED_NUMERIC_IDENTIFIER_RE.fullmatch(normalized)
+    return match.group(1) if match is not None else None
 
 
 def _matches_filter_groups(rendered: str, groups: tuple[tuple[str, ...], ...]) -> bool:

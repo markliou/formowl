@@ -342,6 +342,63 @@ class MailHumanUatHttpTests(unittest.TestCase):
             json.dumps(chat_results[1]["required_term_hashes"]),
         )
 
+    def test_chat_matches_typed_identifier_to_numeric_source_and_etd(self) -> None:
+        bundle = _bundle()
+        bundle = replace(
+            bundle,
+            body_segments=[
+                replace(
+                    segment,
+                    text=(
+                        "Purchase order 470002002 | Item 1 | " "Part 20.QCS64G901 | ETD 2026-07-13"
+                    ),
+                )
+                if segment.email_message_id == "emailmessage_pullin"
+                else segment
+                for segment in bundle.body_segments
+            ],
+        )
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "找到該採購單的交期來源。",
+                    "tool_request": UatEvidenceToolRequest(
+                        query_text="PO470002002 交期",
+                        required_terms=("PO470002002",),
+                        sort="relevance",
+                        limit=20,
+                    ),
+                },
+            ]
+        )
+        service = MailHumanUatService(
+            MailHumanUatHttpConfig(
+                bundle=bundle,
+                state_dir=_paths.fresh_test_dir("mail-human-uat-typed-numeric-identifier"),
+                conversation_model=model,
+                fixed_now=NOW,
+            )
+        )
+
+        result = service.chat(
+            {
+                "query_text": "我要 PO470002002 的交期",
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "source": "composer",
+            }
+        )
+
+        self.assertEqual(result["orchestration"]["action"], "call_formowl_tool")
+        self.assertEqual(result["total_result_count"], 1)
+        self.assertEqual(result["results"][0]["subject"], "Supplier pull-in request")
+        self.assertIn("470002002", result["results"][0]["snippet"])
+        self.assertIn("ETD 2026-07-13", result["results"][0]["snippet"])
+        self.assertNotIn("business_filter_no_exact_match", result["warnings"])
+        self.assertNotIn("required_terms_no_exact_match", result["warnings"])
+
     def test_chat_clarification_and_new_chat_do_not_reuse_prior_evidence(self) -> None:
         model = _ScriptedConversationModel(
             [
