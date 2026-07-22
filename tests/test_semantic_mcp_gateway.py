@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+import gc
+import inspect
 import unittest
+from unittest.mock import patch
+import warnings
 
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError
@@ -10,6 +15,7 @@ from formowl_gateway import (
     safe_workflow_error_envelope,
     validate_public_gateway_payload,
 )
+from formowl_gateway.semantic import _safe_handler_envelope
 
 
 class SemanticMcpGatewayTests(unittest.TestCase):
@@ -261,6 +267,559 @@ class SemanticMcpGatewayTests(unittest.TestCase):
                     "query_text": "delivery risk",
                 },
             )
+
+    def test_handler_payload_snapshot_reads_stateful_containers_once_before_mail_validation(
+        self,
+    ) -> None:
+        injected_coroutines: list[object] = []
+        coroutine_execution_started: list[bool] = []
+        raw_marker = "/tmp/raw-stateful-handler-second-read-secret"
+
+        async def second_read_coroutine() -> dict[str, str]:
+            coroutine_execution_started.append(True)
+            return {"raw_path": raw_marker}
+
+        class StatefulMapping(Mapping[str, object]):
+            def __init__(self, safe_items: list[tuple[str, object]]) -> None:
+                self.safe_items = tuple(safe_items)
+                self.read_operations: list[str] = []
+                self.active_items = dict(self.safe_items)
+
+            def _begin_read(self, operation: str) -> tuple[tuple[str, object], ...]:
+                self.read_operations.append(operation)
+                if len(self.read_operations) == 1:
+                    return self.safe_items
+                injected = second_read_coroutine()
+                injected_coroutines.append(injected)
+                return (*self.safe_items, ("second_read_injection", injected))
+
+            def items(self):
+                return self._begin_read("items")
+
+            def __iter__(self):
+                self.active_items = dict(self._begin_read("__iter__"))
+                return iter(self.active_items)
+
+            def __getitem__(self, key: str) -> object:
+                return self.active_items[key]
+
+            def __len__(self) -> int:
+                return len(self.safe_items)
+
+        class StatefulList(list[object]):
+            def __init__(self, values: list[object]) -> None:
+                super().__init__(values)
+                self.read_count = 0
+
+            def __iter__(self):
+                self.read_count += 1
+                if self.read_count > 1:
+                    injected = second_read_coroutine()
+                    injected_coroutines.append(injected)
+                    return iter([injected])
+                return super().__iter__()
+
+        class StatefulTuple(tuple[object, ...]):
+            def __new__(cls, values: tuple[object, ...]):
+                return super().__new__(cls, values)
+
+            def __init__(self, values: tuple[object, ...]) -> None:
+                del values
+                self.read_count = 0
+
+            def __iter__(self):
+                self.read_count += 1
+                if self.read_count > 1:
+                    injected = second_read_coroutine()
+                    injected_coroutines.append(injected)
+                    return iter([injected])
+                return super().__iter__()
+
+        claim_boundary = StatefulMapping(
+            [
+                ("supports_mail_case_progress_answer_claim", True),
+                ("supports_actual_chatgpt_connected_upload_claim", False),
+                ("supports_upload_ui_claim", False),
+                ("supports_production_iframe_readiness_claim", False),
+                ("supports_real_pst_parser_claim", False),
+                ("supports_live_postgresql_readiness_claim", False),
+                ("supports_production_worker_leasing_claim", False),
+                ("supports_kg_write_claim", False),
+                ("supports_wiki_projection_claim", False),
+                ("supports_production_ready_claim", False),
+            ]
+        )
+        nested_tuple = StatefulTuple(("safe-tuple-value",))
+        nested_list = StatefulList(["safe-list-value", nested_tuple])
+        handler_payload = StatefulMapping(
+            [
+                ("status", "ok"),
+                ("claim_boundary", claim_boundary),
+                ("nested", nested_list),
+            ]
+        )
+        gateway = SemanticMcpGateway(mail_case_progress_handler=lambda _arguments: handler_payload)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = gateway.dispatch_tool(
+                "answer_mail_case_progress",
+                {
+                    "workspace_id": "workspace_main",
+                    "requester_user_id": "user_yifan",
+                    "case_id": "case_launch",
+                    "mail_import_session_id": "mailimport_001",
+                },
+            )
+            gc.collect()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIs(type(result["data"]), dict)
+        self.assertIs(type(result["data"]["claim_boundary"]), dict)
+        self.assertEqual(
+            result["data"]["nested"],
+            ["safe-list-value", ["safe-tuple-value"]],
+        )
+        self.assertEqual(handler_payload.read_operations, ["items"])
+        self.assertEqual(claim_boundary.read_operations, ["items"])
+        self.assertEqual(nested_list.read_count, 1)
+        self.assertEqual(nested_tuple.read_count, 1)
+        self.assertEqual(injected_coroutines, [])
+        self.assertEqual(coroutine_execution_started, [])
+        self.assertEqual(caught, [])
+        self.assertEqual(len(gateway.tool_call_logs), 1)
+        self.assertEqual(gateway.tool_call_logs[0].status, "ok")
+        rendered_state = repr(
+            {
+                "result": result,
+                "warnings": [str(item.message) for item in caught],
+                "tool_logs": [item.to_dict() for item in gateway.tool_call_logs],
+            }
+        )
+        self.assertNotIn("StatefulMapping", rendered_state)
+        self.assertNotIn("second_read_coroutine", rendered_state)
+        self.assertNotIn(raw_marker, rendered_state)
+
+        valid_string_key_payload = _safe_handler_envelope(
+            result_type="probe",
+            handler_payload={"status": "ok", "nested": {"1": "string"}},
+            status_from_payload=True,
+        )
+        self.assertEqual(
+            valid_string_key_payload["data"]["nested"],
+            {"1": "string"},
+        )
+
+        collision_markers = (
+            "raw-integer-key-collision-secret",
+            "raw-string-key-collision-secret",
+        )
+        with self.assertRaises(ContractValidationError) as raised:
+            _safe_handler_envelope(
+                result_type="probe",
+                handler_payload={
+                    "status": "ok",
+                    "nested": {
+                        1: collision_markers[0],
+                        "1": collision_markers[1],
+                    },
+                },
+                status_from_payload=True,
+            )
+        self.assertEqual(
+            str(raised.exception),
+            "semantic handler returned an invalid payload",
+        )
+        for marker in collision_markers:
+            self.assertNotIn(marker, str(raised.exception))
+
+    def test_handler_payload_snapshot_wraps_hostile_iteration_and_closes_yielded_coroutines(
+        self,
+    ) -> None:
+        returned_coroutines: list[object] = []
+        coroutine_execution_started: list[bool] = []
+        raw_marker = "/tmp/raw-hostile-handler-iteration-secret"
+
+        async def yielded_coroutine() -> dict[str, str]:
+            coroutine_execution_started.append(True)
+            return {"raw_path": raw_marker}
+
+        class HostileMapping(Mapping[str, object]):
+            def items(self):
+                returned_coroutine = yielded_coroutine()
+                returned_coroutines.append(returned_coroutine)
+                yield ("status", "ok")
+                yield ("nested", [returned_coroutine])
+                raise RuntimeError(f"{HostileMapping.__name__} leaked {raw_marker}")
+
+            def __iter__(self):
+                raise AssertionError("hostile mapping fallback read")
+
+            def __getitem__(self, key: str) -> object:
+                raise KeyError(key)
+
+            def __len__(self) -> int:
+                return 2
+
+        gateway = SemanticMcpGateway(upload_session_handler=lambda _arguments: HostileMapping())
+
+        with (
+            warnings.catch_warnings(record=True) as caught,
+            patch("formowl_gateway.semantic._envelope") as payload_envelope,
+            patch("formowl_gateway.semantic.sha256_json") as payload_hasher,
+        ):
+            warnings.simplefilter("always")
+            with self.assertRaises(ContractValidationError) as raised:
+                gateway.dispatch_tool(
+                    "open_upload_session",
+                    {
+                        "workspace_id": "workspace_main",
+                        "requester_user_id": "user_yifan",
+                    },
+                )
+            payload_envelope.assert_not_called()
+            payload_hasher.assert_not_called()
+            self.assertEqual(len(returned_coroutines), 1)
+            returned_coroutine = returned_coroutines[0]
+            self.assertIsNone(returned_coroutine.cr_frame)
+            self.assertEqual(
+                inspect.getcoroutinestate(returned_coroutine),
+                inspect.CORO_CLOSED,
+            )
+            gc.collect()
+
+        self.assertEqual(
+            str(raised.exception),
+            "semantic handler returned an invalid payload",
+        )
+        self.assertEqual(coroutine_execution_started, [])
+        self.assertEqual(caught, [])
+        self.assertEqual(gateway.tool_call_logs, [])
+        rendered_state = repr(
+            {
+                "error": str(raised.exception),
+                "warnings": [str(item.message) for item in caught],
+                "tool_logs": [item.to_dict() for item in gateway.tool_call_logs],
+            }
+        )
+        self.assertNotIn("HostileMapping", rendered_state)
+        self.assertNotIn("yielded_coroutine", rendered_state)
+        self.assertNotIn(raw_marker, rendered_state)
+
+    def test_mail_case_progress_sync_handler_coroutine_is_closed_before_claim_validation(
+        self,
+    ) -> None:
+        synchronous_effects: list[dict[str, object]] = []
+        coroutine_execution_started: list[bool] = []
+        returned_coroutines: list[object] = []
+        raw_marker = "/tmp/raw-mail-handler-coroutine-secret"
+
+        async def mail_handler_coroutine() -> dict[str, object]:
+            coroutine_execution_started.append(True)
+            return {
+                "status": "ok",
+                "raw_path": raw_marker,
+            }
+
+        def sync_handler(arguments: dict[str, object]) -> object:
+            synchronous_effects.append(dict(arguments))
+            returned_coroutine = mail_handler_coroutine()
+            returned_coroutines.append(returned_coroutine)
+            return returned_coroutine
+
+        gateway = SemanticMcpGateway(mail_case_progress_handler=sync_handler)
+        arguments = {
+            "workspace_id": "workspace_main",
+            "requester_user_id": "user_yifan",
+            "case_id": "case_launch",
+            "mail_import_session_id": "mailimport_001",
+        }
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with self.assertRaises(ContractValidationError) as raised:
+                gateway.dispatch_tool("answer_mail_case_progress", arguments)
+            self.assertEqual(len(returned_coroutines), 1)
+            returned_coroutine = returned_coroutines[0]
+            self.assertIsNone(returned_coroutine.cr_frame)
+            returned_coroutines.clear()
+            del returned_coroutine
+            gc.collect()
+
+        self.assertEqual(
+            str(raised.exception),
+            "semantic handler returned an invalid payload",
+        )
+        self.assertEqual(synchronous_effects, [arguments])
+        self.assertEqual(coroutine_execution_started, [])
+        self.assertEqual(caught, [])
+        self.assertEqual(gateway.tool_call_logs, [])
+        rendered_state = repr(
+            {
+                "error": str(raised.exception),
+                "warnings": [str(item.message) for item in caught],
+                "tool_logs": [item.to_dict() for item in gateway.tool_call_logs],
+            }
+        )
+        self.assertNotIn("mail_handler_coroutine", rendered_state)
+        self.assertNotIn(raw_marker, rendered_state)
+
+    def test_mail_case_progress_nested_coroutine_is_closed_before_claim_validation(
+        self,
+    ) -> None:
+        synchronous_effects: list[dict[str, object]] = []
+        coroutine_execution_started: list[bool] = []
+        returned_coroutines: list[object] = []
+        raw_marker = "/tmp/raw-mail-handler-nested-coroutine-secret"
+
+        async def nested_mail_handler_coroutine() -> dict[str, object]:
+            coroutine_execution_started.append(True)
+            return {
+                "status": "ok",
+                "raw_path": raw_marker,
+            }
+
+        def sync_handler(arguments: dict[str, object]) -> dict[str, object]:
+            synchronous_effects.append(dict(arguments))
+            returned_coroutine = nested_mail_handler_coroutine()
+            returned_coroutines.append(returned_coroutine)
+            return {
+                "status": "ok",
+                "claim_boundary": None,
+                "nested": {
+                    "items": (
+                        "safe",
+                        [returned_coroutine],
+                    )
+                },
+            }
+
+        gateway = SemanticMcpGateway(mail_case_progress_handler=sync_handler)
+        arguments = {
+            "workspace_id": "workspace_main",
+            "requester_user_id": "user_yifan",
+            "case_id": "case_launch",
+            "mail_import_session_id": "mailimport_001",
+        }
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with self.assertRaises(ContractValidationError) as raised:
+                gateway.dispatch_tool("answer_mail_case_progress", arguments)
+            self.assertEqual(len(returned_coroutines), 1)
+            returned_coroutine = returned_coroutines[0]
+            self.assertIsNone(returned_coroutine.cr_frame)
+            returned_coroutines.clear()
+            del returned_coroutine
+            gc.collect()
+
+        self.assertEqual(
+            str(raised.exception),
+            "semantic handler returned an invalid payload",
+        )
+        self.assertEqual(synchronous_effects, [arguments])
+        self.assertEqual(coroutine_execution_started, [])
+        self.assertEqual(caught, [])
+        self.assertEqual(gateway.tool_call_logs, [])
+        rendered_state = repr(
+            {
+                "error": str(raised.exception),
+                "warnings": [str(item.message) for item in caught],
+                "tool_logs": [item.to_dict() for item in gateway.tool_call_logs],
+            }
+        )
+        self.assertNotIn("nested_mail_handler_coroutine", rendered_state)
+        self.assertNotIn(raw_marker, rendered_state)
+
+    def test_nested_custom_and_started_awaitables_are_rejected_without_lifecycle_mutation(
+        self,
+    ) -> None:
+        class TrackedCustomAwaitable:
+            def __init__(self, raw_marker: str) -> None:
+                self.raw_marker = raw_marker
+                self.close_calls = 0
+
+            def __await__(self):
+                if False:
+                    yield None
+                return self.raw_marker
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        class PauseOnce:
+            def __await__(self):
+                yield None
+
+        coroutine_started: list[bool] = []
+        coroutine_finalized: list[bool] = []
+        custom_raw_marker = "/tmp/raw-custom-nested-awaitable-secret"
+        started_raw_marker = "/tmp/raw-started-nested-coroutine-secret"
+        custom_awaitable = TrackedCustomAwaitable(custom_raw_marker)
+
+        async def started_nested_coroutine() -> dict[str, str]:
+            coroutine_started.append(True)
+            try:
+                await PauseOnce()
+                return {"raw_path": started_raw_marker}
+            finally:
+                coroutine_finalized.append(True)
+
+        started_coroutine = started_nested_coroutine()
+        started_coroutine.send(None)
+        self.assertEqual(
+            inspect.getcoroutinestate(started_coroutine),
+            inspect.CORO_SUSPENDED,
+        )
+
+        gateway = SemanticMcpGateway(
+            upload_session_handler=lambda _arguments: {
+                "status": "ok",
+                "nested": (
+                    ["safe", custom_awaitable],
+                    {"started": started_coroutine},
+                ),
+            }
+        )
+
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                with self.assertRaises(ContractValidationError) as raised:
+                    gateway.dispatch_tool(
+                        "open_upload_session",
+                        {
+                            "session_id": "session_direct",
+                            "workspace_id": "workspace_main",
+                            "requester_user_id": "user_yifan",
+                        },
+                    )
+                self.assertEqual(
+                    inspect.getcoroutinestate(started_coroutine),
+                    inspect.CORO_SUSPENDED,
+                )
+                self.assertEqual(custom_awaitable.close_calls, 0)
+                self.assertEqual(coroutine_finalized, [])
+        finally:
+            started_coroutine.close()
+            gc.collect()
+
+        self.assertEqual(
+            str(raised.exception),
+            "semantic handler returned an invalid payload",
+        )
+        self.assertEqual(coroutine_started, [True])
+        self.assertEqual(coroutine_finalized, [True])
+        self.assertEqual(custom_awaitable.close_calls, 0)
+        self.assertEqual(caught, [])
+        self.assertEqual(gateway.tool_call_logs, [])
+        rendered_state = repr(
+            {
+                "error": str(raised.exception),
+                "warnings": [str(item.message) for item in caught],
+                "tool_logs": [item.to_dict() for item in gateway.tool_call_logs],
+            }
+        )
+        self.assertNotIn("TrackedCustomAwaitable", rendered_state)
+        self.assertNotIn("started_nested_coroutine", rendered_state)
+        self.assertNotIn(custom_raw_marker, rendered_state)
+        self.assertNotIn(started_raw_marker, rendered_state)
+
+    def test_recursive_handler_payload_guard_rejects_cycles_and_closes_every_created_coroutine(
+        self,
+    ) -> None:
+        coroutine_execution_started: list[str] = []
+        raw_markers = {
+            "key": "/tmp/raw-coroutine-mapping-key-secret",
+            "set": "/tmp/raw-coroutine-set-member-secret",
+            "frozenset": "/tmp/raw-coroutine-frozenset-member-secret",
+        }
+
+        async def coroutine_mapping_key() -> dict[str, str]:
+            coroutine_execution_started.append("key")
+            return {"raw_path": raw_markers["key"]}
+
+        async def coroutine_set_member() -> dict[str, str]:
+            coroutine_execution_started.append("set")
+            return {"raw_path": raw_markers["set"]}
+
+        async def coroutine_frozenset_member() -> dict[str, str]:
+            coroutine_execution_started.append("frozenset")
+            return {"raw_path": raw_markers["frozenset"]}
+
+        mapping_key = coroutine_mapping_key()
+        set_member = coroutine_set_member()
+        frozenset_member = coroutine_frozenset_member()
+        returned_coroutines = [mapping_key, set_member, frozenset_member]
+        self.assertEqual(len({id(item) for item in returned_coroutines}), 3)
+        for returned_coroutine in returned_coroutines:
+            self.assertEqual(
+                inspect.getcoroutinestate(returned_coroutine),
+                inspect.CORO_CREATED,
+            )
+        handler_payload: dict[object, object] = {
+            "status": "ok",
+            "claim_boundary": None,
+        }
+        handler_payload["cycle"] = handler_payload
+        handler_payload[mapping_key] = {
+            "set_nesting": {set_member},
+            "frozenset_nesting": frozenset({frozenset_member}),
+        }
+        gateway = SemanticMcpGateway(mail_case_progress_handler=lambda _arguments: handler_payload)
+
+        with (
+            warnings.catch_warnings(record=True) as caught,
+            patch(
+                "formowl_gateway.semantic._validate_mail_case_progress_handler_payload"
+            ) as payload_validator,
+            patch("formowl_gateway.semantic._envelope") as payload_envelope,
+            patch("formowl_gateway.semantic.sha256_json") as payload_hasher,
+        ):
+            warnings.simplefilter("always")
+            with self.assertRaises(ContractValidationError) as raised:
+                gateway.dispatch_tool(
+                    "answer_mail_case_progress",
+                    {
+                        "workspace_id": "workspace_main",
+                        "requester_user_id": "user_yifan",
+                        "case_id": "case_launch",
+                        "mail_import_session_id": "mailimport_001",
+                    },
+                )
+            payload_validator.assert_not_called()
+            payload_envelope.assert_not_called()
+            payload_hasher.assert_not_called()
+            for returned_coroutine in returned_coroutines:
+                self.assertIsNone(returned_coroutine.cr_frame)
+                self.assertEqual(
+                    inspect.getcoroutinestate(returned_coroutine),
+                    inspect.CORO_CLOSED,
+                )
+            gc.collect()
+
+        self.assertEqual(
+            str(raised.exception),
+            "semantic handler returned an invalid payload",
+        )
+        self.assertEqual(coroutine_execution_started, [])
+        self.assertEqual(caught, [])
+        self.assertEqual(gateway.tool_call_logs, [])
+        rendered_state = repr(
+            {
+                "error": str(raised.exception),
+                "warnings": [str(item.message) for item in caught],
+                "tool_logs": [item.to_dict() for item in gateway.tool_call_logs],
+            }
+        )
+        for function_name in (
+            "coroutine_mapping_key",
+            "coroutine_set_member",
+            "coroutine_frozenset_member",
+        ):
+            self.assertNotIn(function_name, rendered_state)
+        for raw_marker in raw_markers.values():
+            self.assertNotIn(raw_marker, rendered_state)
 
 
 class SemanticGatewayStaticContractTests(unittest.TestCase):

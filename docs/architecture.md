@@ -220,9 +220,22 @@ Workers should process registered assets by `asset_id` and `object_uri`. Large f
 
 ## Identity and Collaborative Graphs
 
-For the internal closed beta, FormOwl may use a manual trusted internal identity mode: a user selects their FormOwl identity at MCP session start, and the selected identity becomes the `actor_user_id` for tool calls and audit records. This is a temporary identity facade, not a production authentication model.
+The sole connected human identity path for the internal closed beta is the
+public HTTPS FormOwl `/mcp` resource through FormOwl OAuth 2.1, PKCE S256, and
+Google OIDC. Google authenticates the human, while FormOwl remains the
+authority for users, invitations, memberships, OAuth clients and token
+sessions, workspaces, grants, revocation, and audit. Google tokens are never
+accepted as FormOwl MCP bearer tokens.
 
-Stable `user_id`, `workspace_id`, asset ownership, access requests, grants, and audit logs must exist from the beginning so the authentication provider can later be replaced by company SSO, OIDC, SAML, or another provider without replacing authorization and provenance.
+The connected runtime uses the official MCP SDK's stateless Streamable HTTP
+transport on exact `/mcp`. Every protected tool call reloads current
+PostgreSQL authorization state and builds a fresh gateway-controlled
+`ActorContext`. Caller-supplied actor, workspace, session, membership, and
+grant fields cannot replace that authority.
+
+Manual trusted actor selection, JSON-line commands, the hand-built JSON-RPC
+runner, and stdio identity variables are test/local compatibility surfaces
+only, not connected deployment modes.
 
 Cross-user graph collaboration should use permissioned overlays and grants. Another user's private graph must not be silently merged into the requester graph. Shared answers, graph snippets, evidence snippets, and raw asset access should each have explicit scope, provenance, and audit records.
 

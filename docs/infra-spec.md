@@ -32,6 +32,7 @@ review records
 graph lifecycle history
 wiki citations
 MCP and ChatGPT interaction audit
+MCP and ChatGPT interaction audit
 ```
 
 ## Internal Deployment Assumptions
@@ -46,7 +47,9 @@ Synology NAS may provide internal file storage behind the firewall
 public S3 is not required for Phase 0
 PostgreSQL must not use ordinary NAS or NFS storage for PGDATA
 ChatGPT must not directly reach NAS, PostgreSQL, MinIO, worker scratch paths, or raw storage endpoints
-the only ChatGPT-facing service should be a governed FormOwl MCP Gateway
+the only ChatGPT-facing service is the governed FormOwl MCP Gateway through one public HTTPS origin
+OAuth metadata, authorization routes, JWKS, and exact /mcp share that origin
+the connected service is loopback-published behind operator-controlled TLS termination
 ```
 
 ## User Surface and Backend Control Plane
@@ -62,11 +65,13 @@ The infrastructure should provide an S3-like object abstraction, but it does not
 FormOwl v1 should use:
 
 ```text
+TLS reverse proxy or ingress
+Connected FormOwl MCP Gateway and OAuth bridge
 PostgreSQL + pgvector
 S3-compatible object storage
 StorageBackend registry
 Worker services
-Project MCP and Wiki MCP services
+Project MCP and Wiki MCP compatibility services where still required internally
 Container-first runtime
 ```
 
@@ -91,13 +96,73 @@ Production deployment should use explicit images, pinned dependencies, externali
 ## Logical Services
 
 ```text
-LLM host or UI
-  -> Project MCP / Wiki MCP / future graph orchestration MCP tools
-  -> FormOwl backend services
-  -> PostgreSQL + pgvector
-  -> S3-compatible object store
-  -> worker services
+ChatGPT or another approved OAuth client
+  -> public TLS reverse proxy / ingress
+  -> connected FormOwl MCP Gateway on one canonical HTTPS origin
+       -> OAuth protected-resource and authorization-server metadata
+       -> FormOwl authorization, Google callback, token, and JWKS routes
+       -> exact /mcp Streamable HTTP resource
+       -> health and readiness routes
+       -> PostgreSQL OAuth identity, authorization, permission, and audit state
+       -> FormOwl backend services
+            -> S3-compatible object store
+            -> worker services
+
+Internal-only compatibility and regression paths
+  -> Project MCP JSON-line service
+  -> Wiki MCP JSON-line service
+  -> hand-built semantic JSON-RPC / stdio runner
 ```
+
+Project MCP, Wiki MCP, JSON-line, hand-built JSON-RPC, and stdio are not
+alternate connected identity or ChatGPT attachment paths.
+
+### Connected MCP and OAuth Edge
+
+The connected service exposes one canonical origin and these same-origin
+routes:
+
+```text
+/.well-known/oauth-protected-resource
+/.well-known/oauth-authorization-server
+/.well-known/jwks.json
+/oauth/authorize
+/oauth/google/callback
+/oauth/token
+/mcp
+/healthz
+/readyz
+```
+
+The configured issuer is the canonical HTTPS origin without a trailing slash.
+The MCP resource must be exactly `{issuer}/mcp`, the Google callback must be
+exactly `{issuer}/oauth/google/callback`, and the production ChatGPT callback
+must be exactly `https://chatgpt.com/connector/oauth/{callback_id}` with one
+non-empty RFC-unreserved callback-id segment. The fixed lowercase origin,
+absence of userinfo and port, single path segment, and absence of percent
+encoding, query, fragment, and wildcard syntax are validated before runtime
+composition. The only exception is the exact reserved discovery-only sentinel
+`https://invalid.example.invalid/formowl-discovery-only`; no other origin or
+`.invalid` value is accepted. HTTP is forbidden outside explicit loopback-only
+tests.
+
+Compose publishes the connected container only on `127.0.0.1`; the operator
+must terminate TLS in a reverse proxy or ingress and forward the routes above
+without changing their public origin. PostgreSQL, object storage, Project/Wiki
+compatibility services, workers, and the internal container port remain
+unreachable from ChatGPT. The runtime does not infer OAuth authority from
+caller-supplied forwarding headers; exact public URLs come from validated
+configuration.
+
+`/healthz` reports whether the process and MCP runtime are running. `/readyz`
+also checks PostgreSQL connectivity and schema, exact OAuth configuration, the
+active signing key, Google OIDC metadata/JWKS, and required upload-store
+directories. Both endpoints return no-store responses. Production OAuth and
+protected traffic must not begin until `/readyz` is ready. The reserved
+sentinel is a bounded exception for public MCP discovery only: preflight exits
+non-zero with `status: discovery_only`, `/readyz` remains 503, and Compose uses
+`/healthz` for container health while `initialize` and `tools/list` remain
+available.
 
 ### PostgreSQL
 
@@ -120,6 +185,13 @@ wiki revision metadata
 permission scopes
 MCP tool-call audit
 rebuild job state
+FormOwl users and workspace memberships
+Google external identity bindings by issuer and subject
+OAuth invitations and first-owner bootstrap state
+predefined client authorizations and granted scopes
+OAuth authorization transactions and one-time authorization codes
+resource-bound OAuth token sessions, expiry, and revocation state
+OAuth authentication and authorization audit lineage
 ```
 
 Recommended extensions:
@@ -314,15 +386,26 @@ ChatGPT-facing MCP access must be routed through a FormOwl MCP Gateway or an equ
 MCP Gateway responsibilities:
 
 ```text
-enforce session identity
-enforce workspace, grant, and permission checks
+challenge unauthenticated HTTP requests through FormOwl OAuth metadata
+validate FormOwl bearer tokens for the exact MCP resource
+reload token-session, user, external identity, client authorization, membership, grant, and revocation state on every protected call
+construct a fresh gateway-controlled ActorContext
+reject caller-supplied user, workspace, session, membership, reviewer, and grant authority
+enforce current workspace, grant, and permission checks
 return minimal snippets by default
 redact when required
 create and resolve access requests
-log every tool call
+log every authentication, authorization, and tool-call decision with safe correlation fields
 never expose raw NAS paths
 never allow arbitrary file reads
 ```
+
+The only connected upstream human identity provider for the current closed beta
+is Google OIDC through the FormOwl OAuth 2.1 bridge. Google access and ID tokens
+are upstream identity evidence only; they are never accepted as FormOwl MCP
+bearer tokens. `ManualTrustedInternalAuthProvider`, caller-controlled identity
+environment variables, JSON-line, hand-built JSON-RPC, and stdio are limited to
+tests and local compatibility and must not be enabled on the connected service.
 
 ## Storage Boundaries
 
@@ -962,18 +1045,55 @@ Permission scopes must be recorded on source assets, observations, candidate gra
 
 ChatGPT and external clients must not receive direct database credentials.
 
-Phase 0 internal beta may use manual trusted identity selection, but authorization and audit models must still exist from the beginning. Minimum identity and collaboration records:
+The connected closed beta uses one identity path:
+
+```text
+public HTTPS /mcp
+  -> FormOwl OAuth challenge and authorization
+  -> exact callback/resource plus PKCE S256 validation
+  -> Google OIDC issuer, subject, and verified email
+  -> FormOwl invitation and external-identity mapping
+  -> signed, short-lived, resource-bound FormOwl access token
+  -> current PostgreSQL authorization state
+  -> fresh ActorContext
+```
+
+Minimum connected identity and collaboration records:
 
 ```text
 User
 SessionIdentity
 WorkspaceMember
+ExternalIdentity
+OAuthInvitation
+OAuthOwnerBootstrap
+OAuthClientAuthorization
+OAuthTransaction
+OAuthAuthorizationCode
+OAuthTokenSession
+ActorContext
 AccessRequest
 Grant
 AuditLog
 ```
 
-For Phase 0, users may manually select their FormOwl identity at session start. The selected identity becomes `actor_user_id` for MCP calls. This is not production authentication, and it must sit behind an `AuthProvider` interface so SSO, OIDC, SAML, or external tenant auth can replace it later.
+The gateway, not the caller, chooses the current user and workspace from the
+validated token session and current memberships. Disabled users or external
+identities, revoked client authorizations or token sessions, expired tokens,
+removed memberships, and invalid grants must fail closed. Revocation takes
+effect on the next protected call because the gateway rebuilds `ActorContext`
+instead of trusting stale client state. Reconnection after revocation or expiry
+must traverse the complete FormOwl and Google flow and create a new token
+session; it must not reactivate the old one.
+
+The first owner is created only through an authorized bootstrap invitation for
+an empty workspace and a real verified Google login. Bootstrap does not create
+a placeholder user. Later users enter through owner-created invitations and
+receive only the invited workspace role.
+
+Manual trusted actor selection remains behind `AuthProvider` only for tests and
+local compatibility. It is not a connected deployment mode and must not be
+described as an SSO fallback.
 
 Raw data access should be scoped, not all-or-nothing. Grant scopes should support:
 
@@ -991,17 +1111,32 @@ project_scoped_access
 Every MCP tool call should record:
 
 ```text
-actor
-workspace
+actor_type
+actor_user_id or actor_service_id according to actor_type
+external_identity_id when authenticated
+oauth_client_id
+oauth_token_session_id
+request_id
+tool_call_id
+current workspace when proven
 tool name
-input parameters
+safe argument hash or allowlisted non-sensitive parameters
 evidence accessed
 output citations
 permission scope
 grant id when applicable
 timestamp
 result status
+machine-safe reason code
 ```
+
+OAuth authorization, invitation/bootstrap, identity mapping, code exchange,
+token issue, token revocation, unauthenticated challenge, denied tool call, and
+relink events must use the same correlation model. Audit and application logs
+must never contain bearer tokens, token JWT ids in plaintext, authorization
+codes, PKCE verifiers or challenges beyond one-way bindings, Google tokens,
+client secrets, encryption keys, private keys, database credentials, raw
+request bodies, raw email content, filesystem/object-store paths, or SQL.
 
 Every governed graph commit should record:
 
@@ -1059,22 +1194,112 @@ Backups must preserve enough data to recover reviewed wiki revisions, canonical 
 
 ## Configuration
 
-Common deployment configuration should include:
+### Connected Runtime Configuration
+
+The connected runtime accepts these non-secret deployment values:
+
+```text
+FORMOWL_AUTH_MODE=oauth_google
+FORMOWL_OAUTH_ISSUER
+FORMOWL_MCP_RESOURCE
+FORMOWL_CHATGPT_CLIENT_ID
+FORMOWL_CHATGPT_REDIRECT_URI
+FORMOWL_GOOGLE_CLIENT_ID
+FORMOWL_GOOGLE_REDIRECT_URI
+FORMOWL_OWNER_BOOTSTRAP_OPERATOR_SERVICE_ID
+FORMOWL_DATA_DIR
+FORMOWL_UPLOAD_SESSION_LIFETIME_SECONDS
+FORMOWL_CONNECTED_HOST
+FORMOWL_CONNECTED_PORT
+FORMOWL_LOG_LEVEL
+```
+
+The issuer is one canonical HTTPS origin without a trailing slash. The
+resource must equal `{issuer}/mcp`; the Google callback must equal
+`{issuer}/oauth/google/callback`; the production ChatGPT callback must use the
+exact `https://chatgpt.com/connector/oauth/{callback_id}` shape; and the
+connected scope is `formowl.use`. The callback id is one non-empty
+RFC-unreserved segment. The only accepted placeholder is the exact reserved
+discovery sentinel, which cannot be used for OAuth or operator state changes.
+The predefined ChatGPT client ID is a stable non-secret value selected and
+recorded by the deployment operator before discovery. ChatGPT app management
+must use that same value if its current predefined-client UI supports entry or
+selection; otherwise the live flow stops as an external blocker. ChatGPT
+supplies and displays only the production callback. The ID must never be
+invented or described as generated/displayed by ChatGPT. This deployment
+retains the predefined-client design and does not claim a CIMD migration or DCR
+fallback. Production access tokens use an exact fixed lifetime of 3600 seconds
+and an exact fixed validation clock skew of 30 seconds; neither is an operator
+setting for evidence acceleration.
+
+Secret values are loaded only from operator-mounted files named by:
+
+```text
+FORMOWL_DATABASE_DSN_FILE
+FORMOWL_GOOGLE_CLIENT_SECRET_FILE
+FORMOWL_OAUTH_STATE_ENCRYPTION_KEY_FILE
+FORMOWL_OAUTH_SIGNING_KEY_SET_FILE
+```
+
+The Compose defaults map those to:
+
+```text
+/run/secrets/formowl_database_dsn
+/run/secrets/formowl_google_client_secret
+/run/secrets/formowl_state_encryption_key
+/run/secrets/formowl_signing_key_set
+```
+
+The signing-key manifest points to mounted private-key files. It must contain
+exactly one active key; every inactive key requires a timezone-aware
+`verify_until`; active keys must not have one; key ids and key files must be
+unique. Secret files must be non-empty, bounded, operator-readable only, and
+absent from Git.
+
+The connected runtime fails startup if any manual identity variable is set:
+
+```text
+FORMOWL_MCP_SESSION_ID
+FORMOWL_MCP_ACTOR_USER_ID
+FORMOWL_MCP_WORKSPACE_ID
+```
+
+It also rejects plaintext secret variables such as `FORMOWL_DATABASE_DSN`,
+`FORMOWL_GOOGLE_CLIENT_SECRET`, `FORMOWL_OAUTH_STATE_ENCRYPTION_KEY`, and
+signing private-key or key-set values. Secret values must not be passed on the
+CLI. `FORMOWL_OAUTH_ALLOW_LOOPBACK_HTTP=1` is an explicit test-only exception
+and is forbidden for the connected closed-beta deployment.
+
+Inside the container, `FORMOWL_CONNECTED_HOST=0.0.0.0` is acceptable because
+Compose publishes the port only on host loopback. The TLS proxy is the only
+public listener. `FORMOWL_DATA_DIR` must be an absolute writable mounted volume
+even though the runtime container root filesystem is read-only.
+
+### Storage and Worker Configuration
+
+Non-secret storage and worker deployment configuration may include:
 
 ```text
 FORMOWL_DATA_DIR
-FORMOWL_DATABASE_URL
 FORMOWL_OBJECT_STORE_ENDPOINT
 FORMOWL_OBJECT_STORE_BUCKET
 FORMOWL_OBJECT_STORE_REGION
-FORMOWL_OBJECT_STORE_ACCESS_KEY_ID
-FORMOWL_OBJECT_STORE_SECRET_ACCESS_KEY
 FORMOWL_WORKSPACE_ID
 FORMOWL_LOG_LEVEL
 FORMOWL_EXTRACTOR_WORKER_CONCURRENCY
 ```
 
-The current file-backed `FORMOWL_DATA_DIR` behavior is acceptable for early MCP prototypes. Team deployments should move source-of-truth metadata to PostgreSQL and raw or large payloads to object storage.
+Object-store credentials must come from an operator secret provider or mounted
+secret file rather than registry JSON, tracked configuration, public
+environment dumps, or MCP arguments.
+
+The current file-backed `FORMOWL_DATA_DIR` behavior remains a compatibility
+boundary for early ingestion and upload-session stores. The connected OAuth
+identity, membership, client authorization, authorization-code, token-session,
+revocation, and OAuth audit authority is PostgreSQL. Generic Asset storage and
+authorization governance remains outside this Issue #20 infrastructure slice;
+file-backed compatibility state must not be treated as connected production
+identity authority.
 
 The current PostgreSQL ingestion-store adapter slice provides database-backed
 create/get/list surfaces for validated `Asset`, `IngestionJob`, `ExtractorRun`,
@@ -1116,16 +1341,114 @@ FORMOWL_STORAGE_BACKENDS_JSON
 is intended for stable deployment metadata such as backend id, type, display
 name, workspace scope, internal endpoint, bucket name, region, and worker
 routing hints. It must not contain secret keys, passwords, tokens, credentials,
-or access keys. Secret material such as
-`FORMOWL_OBJECT_STORE_SECRET_ACCESS_KEY` stays outside the registry and should
-be consumed only by the eventual object-store adapter or deployment secret
-provider.
+or access keys. Secret material stays outside the registry and is consumed only
+by the object-store adapter's deployment secret provider.
 
 Non-local descriptors such as `minio` or `s3_compatible` must provide an
 explicit `storage_backend_id` so adapter implementation details can change
 without changing asset contract ids. Until a concrete object-store adapter is
 configured, these descriptors are registry metadata only; object bytes still
 flow through the existing local object-store implementation.
+
+## Migration, Bootstrap, and Restart Ordering
+
+### Deployment Secret Bootstrap and Operator Directory
+
+Secret bootstrap runs from the built runtime image against an
+operator-owned directory with no generated target, initializer lock/staging
+entry, recovery/quarantine entry, or Google client secret. A tracked
+`README.md` may already be present. Bootstrap must not run through
+`connected-mcp` or
+`connected-migrate` Compose services because those services require the
+generated secret mounts before their entrypoint can start. The canonical
+bootstrap shape is the direct `formowl-runtime:local init-secrets` container
+command documented in `deploy/connected/secrets/README.md` and
+`docs/closed-beta-runbook.md`. It creates six generated files, never creates a
+Google client-secret placeholder, and supports only whole-set recovery before
+any generated value has been consumed.
+
+After a real Google login creates a FormOwl user, controlled deployment-shell
+operators use the installed `lookup-user`, `list-users`,
+`lookup-token-session`, and `list-token-sessions` commands to obtain stable IDs
+for invitation and revocation workflows. These commands are not MCP tools.
+`operator_service_id` is an audit attribution identifier, not a password or a
+remote authorization credential; authority comes from controlled access to the
+deployment shell, Docker daemon, Compose configuration, database secret, and
+mounted files.
+
+Operator directory output is limited to stable FormOwl user, workspace, role,
+status, token-session, issue/expiry, and count fields. It must omit email,
+display name, Google subject, bearer or JTI material, scope/resource values,
+raw paths, SQL, and backend details. Every allowed or denied lookup/list
+operation commits a service-attributed audit in the same database transaction.
+An operator-id mismatch is audited as `external_unauthenticated`; an audit
+failure returns no directory result.
+
+The connected deployment order is mandatory:
+
+```text
+PostgreSQL healthy
+  -> formowl-connected-mcp migrate
+  -> formowl-connected-mcp preflight
+  -> operator-authorized bootstrap-owner for an empty workspace
+  -> formowl-connected-mcp serve behind TLS
+  -> real invited Google login
+  -> later owner-authorized invite-user operations
+```
+
+`connected-migrate` must finish successfully before `connected-mcp` starts.
+Migrations must be recorded in the schema-migration ledger with version,
+filename, content hash, statement count, runner version, and applied time.
+Schema constraints and indexes for users, memberships, grants, audit,
+identities, invitations, owner bootstrap, client authorizations, transactions,
+authorization codes, and token sessions are part of readiness. A partial or
+failed migration must not be treated as ready.
+
+Preflight checks the live database and exact schema, OAuth configuration,
+signing key, Google OIDC metadata/JWKS, and writable upload/audit directories.
+Serving after a normal failed preflight is forbidden. The one exception is the
+reserved sentinel: a fully operational discovery runtime may serve public
+`initialize` and `tools/list` while preflight exits non-zero as
+`discovery_only`, `/readyz` returns 503, and protected tools return only the
+OAuth challenge. Discovery mode blocks bootstrap, invitation, OAuth state,
+operator mutation, revocation, and associated denial-audit writes before the
+repository or delegate is reached. Bootstrap is idempotent only after an exact
+production callback is configured, the runtime is restarted, and preflight is
+ready; it still requires the same empty workspace, invited email, operator
+authority, and idempotency key. Conflicts fail closed and create no placeholder
+user.
+
+Restart must preserve PostgreSQL and FormOwl data volumes. After restart,
+`/readyz` must pass before traffic resumes, and linked identities,
+memberships, client authorizations, token-session/revocation state,
+invitations, upload-session state, and audit lineage must remain coherent.
+Because the gateway reloads current state for every tool call, a removed
+membership, disabled identity, or revoked session must take effect immediately
+after restart as well as before it.
+
+## Signing-Key Rotation
+
+FormOwl signing-key rotation uses an overlap window:
+
+```text
+new private key mounted as a secret
+  -> new key becomes the sole active signing key
+  -> previous key remains verification-only with verify_until
+  -> preflight validates the manifest and public JWKS
+  -> connected service restarts
+  -> new tokens use the new key while valid old tokens verify during overlap
+  -> previous key is removed only after verify_until and all old token lifetimes expire
+```
+
+The overlap deadline must exceed the maximum remaining fixed 3600-second
+access-token lifetime, fixed 30-second clock skew, and deployment propagation
+window. Operators must verify the JWKS
+contains both keys during overlap, issue and use a new token after restart, and
+confirm an unexpired old token behaves according to policy. After the grace
+window, remove the old manifest entry and secret mount, rerun preflight,
+restart, and verify JWKS no longer publishes it. Never reuse a key id, publish
+private key material, keep multiple active keys, or remove the prior key before
+its verification window closes.
 
 ## Observability
 
@@ -1143,7 +1466,48 @@ database migration history
 service health checks
 ```
 
-Logs should preserve correlation identifiers across MCP calls, backend jobs, extractor runs, graph commits, and wiki projection jobs.
+Logs should preserve correlation identifiers across OAuth authorization,
+Google callback, code exchange, token session, MCP HTTP request, MCP tool call,
+backend job, extractor run, graph commit, evidence access, and wiki projection.
+The minimum connected correlation set is:
+
+```text
+actor_type
+actor_user_id or actor_service_id when applicable
+external_identity_id when authenticated
+oauth_client_id
+oauth_token_session_id
+request_id
+tool_call_id
+workspace_id when proven
+action or tool name
+target type and stable target id
+grant id when applicable
+status
+reason_code
+timestamp
+```
+
+Unauthenticated denials use `actor_type=external_unauthenticated` and must not
+invent a user or workspace. Logs and public errors use machine-safe reason
+codes and hashes/allowlisted metadata only. They must not contain bearer tokens,
+authorization codes, PKCE verifiers, Google tokens, client secrets, state
+encryption keys, signing private keys, database credentials, raw request or
+mail bodies, local/object-store paths, SQL, tracebacks with secret/path detail,
+or full third-party responses.
+
+## Issue #20 Evidence Boundary
+
+Issue #20 owns the connected Google-backed OAuth bridge, PostgreSQL identity
+and token-session authority, and fresh gateway-controlled `ActorContext`. The
+repository implementation does not itself prove a public HTTPS deployment,
+fresh-database and restart journey, signing-key rotation, remote MCP Inspector,
+or real ChatGPT plus Google flow. Those external gates and the configured
+reviewer gate remain required; no issue #20 closure or production-readiness
+claim is made here.
+
+Generic Asset governance and source-specific consumers do not create an
+alternate OAuth authority, storage plane, or connected transport.
 
 ## Deferred Infrastructure
 
@@ -1178,4 +1542,14 @@ The infrastructure satisfies this specification when:
 10. Backups can restore source evidence, graph history, wiki revision lineage, and audit records.
 11. Infrastructure state fields separate byte availability, data lifecycle, processing progress, review outcome, projection freshness, and service health.
 12. Canonical graph lifecycle changes are represented as events and mappings, not destructive overwrites.
+13. One canonical public HTTPS origin serves OAuth metadata, authorization, JWKS, health/readiness, and the exact /mcp resource behind TLS termination.
+14. Connected startup requires oauth_google, exact callback/resource binding, PKCE S256, file-mounted secrets, one active signing key, a migrated PostgreSQL schema, and a passing preflight.
+15. Google tokens are never accepted as FormOwl MCP bearer tokens; signed FormOwl tokens are short-lived, resource-bound, and backed by current PostgreSQL token sessions.
+16. Every protected tool call rebuilds ActorContext from current user, external identity, client authorization, workspace membership, grant, expiry, and revocation state.
+17. Caller-supplied identity/session/workspace/grant fields and connected manual-identity environment variables fail closed.
+18. First-owner bootstrap creates no fake user, later users enter through invitations, and restart preserves identity, membership, revocation, upload-session, and audit state.
+19. Signing-key rotation keeps exactly one active key, retains prior verification keys through a declared overlap, and updates JWKS without exposing private material.
+20. OAuth and MCP audit records preserve safe correlation lineage while excluding tokens, secrets, private payloads, paths, SQL, and backend internals.
+21. Manual trusted, JSON-line, hand-built JSON-RPC, and stdio paths remain test/local compatibility only and are never advertised as connected ChatGPT infrastructure.
+22. Issue #20 identity infrastructure remains separate from generic Asset governance and downstream source-specific evidence consumers.
 ```

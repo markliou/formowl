@@ -665,6 +665,24 @@ must use HTTPS except for explicit loopback-only tests. It must reject
 caller-controlled user, workspace, session, grant, storage, parser, and worker
 identity fields.
 
+The predefined client ID is one stable non-secret value selected and recorded
+by the deployment operator before discovery. ChatGPT app management must use
+that exact value if its current predefined-client UI supports entry or
+selection; if it does not, the live flow stops as an external blocker. ChatGPT
+supplies and displays only the exact production callback
+`https://chatgpt.com/connector/oauth/{callback_id}`. Operators must not invent
+the client ID, claim that ChatGPT generated or displayed it, or silently
+substitute another registration model.
+
+Production FormOwl access tokens use a fixed 3600-second lifetime and a fixed
+30-second validation clock skew. Expiry evidence must wait until trusted UTC is
+strictly later than `expires_at + 30 seconds`.
+
+The connected service uses the official MCP SDK's stateless Streamable HTTP
+transport on exact `/mcp`. OAuth protected-resource metadata,
+authorization-server metadata, JWKS, authorization routes, and `/mcp` must
+agree on the same canonical public HTTPS origin.
+
 On each protected tool call, the MCP Gateway verifies the FormOwl token, reloads
 the token session and current authorization state from PostgreSQL, and builds a
 fresh `ActorContext`. `ActorContext` carries the FormOwl user, external identity,
@@ -3479,9 +3497,11 @@ The connected identity implementation is repository-complete only when:
 The public MCP resource is exactly the canonical HTTPS /mcp URL.
 OAuth protected-resource and authorization-server metadata agree on that origin.
 The predefined ChatGPT client uses PKCE S256 and exact callback/resource binding.
+The operator-recorded predefined client ID is stable across discovery and final OAuth.
+The exact callback is the value displayed by ChatGPT; lack of predefined-client UI support is an external blocker.
 Google OIDC issuer and subject map through a valid FormOwl invitation.
 Google tokens are never accepted as FormOwl MCP bearer tokens.
-FormOwl access tokens are signed, short-lived, resource-bound, and backed by server-side token sessions.
+FormOwl access tokens are signed, resource-bound, fixed at 3600 seconds, validated with a fixed 30-second skew, and backed by server-side token sessions.
 Every protected tool call resolves a fresh ActorContext from current PostgreSQL state.
 Caller-supplied identity, workspace, session, and grant fields are rejected or overwritten by gateway authority.
 whoami reports only the authenticated FormOwl user and current workspace.
@@ -3493,6 +3513,14 @@ Repository-complete does not mean issue #20 is closed. Fresh PostgreSQL,
 restart persistence, first-owner and second-user journeys, signing-key rotation,
 real MCP Inspector, real ChatGPT plus Google, documentation alignment, and the
 configured reviewer gate must all have accepted external evidence first.
+
+The current repository implements the Google-backed FormOwl OAuth bridge,
+PostgreSQL-backed OAuth and audit state, fixed token lifetime/skew, exact
+stateless Streamable HTTP `/mcp`, operator and migration flows, and fresh
+gateway-controlled `ActorContext` resolution. This is repository-side
+implementation status only. Issue #20 remains open until the seven documented
+external evidence layers, including reviewer and independent completion audit
+layers, are accepted.
 
 The target pipeline is usable when:
 
@@ -3641,7 +3669,6 @@ Manual trusted identity, JSON-line, hand-built JSON-RPC, and stdio remain
 test/local compatibility surfaces only.
 ```
 
-Issue #20 establishes identity and `ActorContext`; it does not complete issue
-#41's generic Asset tenant, ownership, byte-storage, lifecycle, retention, or
-authorization boundary. Issue #21 remains a downstream governed mail-evidence
-consumer of that generic Asset boundary.
+Issue #20 establishes connected identity and fresh gateway-controlled
+`ActorContext`. Generic Asset governance and downstream source-specific
+consumers remain outside this issue's completion claim.

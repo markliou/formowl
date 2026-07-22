@@ -8,7 +8,15 @@ version = "0.1.0"
 description = "Source-preserving knowledge management MCP servers."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "Authlib>=1.6,<2",
+  "cryptography>=44,<47",
+  "httpx>=0.28,<1",
+  "mcp==1.28.1",
+  "psycopg[binary]>=3.2,<4",
+  "starlette>=0.37,<1",
+  "uvicorn>=0.34,<1"
+]
 
 [project.optional-dependencies]
 dev = [
@@ -28,6 +36,9 @@ mail-experiments = [
 ]
 
 [project.scripts]
+formowl-container-entrypoint = "formowl_gateway.container_entrypoint:main"
+formowl-connected-mcp = "formowl_gateway.runtime:main"
+formowl-issue20-evidence = "formowl_evidence.issue20_packet:main"
 formowl-kg-eval = "formowl_kg_eval.cli:main"
 formowl-semantic-mcp-jsonrpc = "formowl_gateway.cli:main"
 formowl-project-mcp-jsonline-compat = "formowl_project_mcp.server:main"
@@ -35,6 +46,9 @@ formowl-wiki-mcp-jsonline-compat = "formowl_wiki_mcp.server:main"
 
 [tool.setuptools.packages.find]
 where = ["python"]
+
+[tool.setuptools.package-data]
+"formowl_graph.storage" = ["migrations/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

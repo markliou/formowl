@@ -4,16 +4,22 @@
 
 MCP is an orchestration boundary, not the core data processing engine.
 
-The Semantic MCP Gateway is the current ChatGPT-facing service. Project MCP
-and Wiki MCP remain compatibility services for their bounded project-context
-and wiki-draft workflows. Heavy extraction, graph resolution, indexing, and
-storage work runs in FormOwl backend services.
+The connected FormOwl MCP Gateway is the only formal ChatGPT-facing service. It
+exposes OAuth metadata and authorization routes plus the exact protected
+Streamable HTTP resource `/mcp` on one canonical public HTTPS origin. Project
+MCP, Wiki MCP, the hand-built semantic JSON-RPC runner, JSON-line commands, and
+stdio remain compatibility services for bounded local tests and workflows.
 
-For ChatGPT-facing deployments, MCP should expose semantic and governed operations, not infrastructure. The public or tunnel-exposed service is a FormOwl MCP Gateway. Synology NAS, PostgreSQL, MinIO or other object storage, worker services, raw file paths, and scratch directories remain internal-only.
+For ChatGPT-facing deployments, MCP exposes semantic and governed operations,
+not infrastructure. Synology NAS, PostgreSQL, MinIO or other object storage,
+worker services, raw file paths, and scratch directories remain internal-only.
 
 ## Single Task Surface Rule
 
-ChatGPT-facing MCP tools should keep users in one task-oriented surface. The preferred surface is the ChatGPT conversation with structured task cards, inline actions, or embedded FormOwl widgets. If a separate page is required in Phase 0, it must be a narrow session-bound continuation of the current MCP task.
+ChatGPT-facing MCP tools should keep users in one task-oriented surface. The
+preferred surface is the ChatGPT conversation with structured task cards,
+inline actions, or embedded FormOwl widgets. If a separate page is required,
+it must be a narrow session-bound continuation of the current MCP task.
 
 MCP tools should hide backend operation choices from normal users. They should not ask users to select storage backends, buckets, NAS paths, parser paths, worker queues, extractor implementations, database records, or job internals. The gateway and backend policies choose those details and record the decision for audit.
 
@@ -22,21 +28,32 @@ This boundary improves security and stability by reducing unvalidated inputs, ac
 ## Current Services
 
 ```text
-LLM host
-  -> Semantic MCP Gateway for governed upload, evidence, graph, access, and projection workflows
-  -> Project MCP compatibility service for project execution context
-  -> Wiki MCP compatibility service for wiki draft, revision, snapshot, and publish proposals
-  -> formowl-contract for portable exchange objects
+ChatGPT or another approved OAuth client
+  -> public HTTPS FormOwl origin
+  -> connected MCP Gateway
+       -> /.well-known/oauth-protected-resource
+       -> /.well-known/oauth-authorization-server
+       -> /oauth/authorize
+       -> /oauth/google/callback
+       -> /oauth/token
+       -> exact /mcp protected resource
+       -> identity, upload, evidence, graph, access, and projection workflows
+       -> internal Project MCP and Wiki MCP compatibility services where configured
+       -> formowl-contract for portable exchange objects
 ```
 
 Project MCP must not generate wiki pages. Wiki MCP must not depend on project-system internals.
 
 ## Current Public Semantic Tools
 
-`python/formowl_gateway/semantic.py` is the source of truth for the public tool
-schema. The current tools are:
+`python/formowl_gateway/remote.py` is the source of truth for connected MCP
+descriptors and OAuth security metadata. `python/formowl_gateway/semantic.py`
+defines the governed semantic schemas used by configured handlers. `whoami` is
+always required; other connected tools are exposed only when their handlers are
+configured. The current connected tool set is:
 
 ```text
+whoami
 open_upload_session
 create_ingestion_job
 list_observations
@@ -62,8 +79,6 @@ they can support an answer.
 The following capabilities remain planned and must not be described as current:
 
 ```text
-select_actor
-whoami
 capture_current_chatgpt_session
 get_upload_session
 complete_upload_session
@@ -82,6 +97,10 @@ approve_access_request
 deny_access_request
 revoke_grant
 ```
+
+`select_actor` is not planned for the connected service. It belongs only to
+the manual-trusted test/local compatibility facade. A connected client must not
+select or submit a FormOwl user, workspace, session, membership, or grant.
 
 Internal `upload_asset_reference` flows must not bypass `UploadSession` intent
 capture for normal user uploads. They are reserved for controlled imports,
@@ -118,6 +137,10 @@ give source preparation instructions that are detached from an UploadSession
 
 The upload surface is a controlled FormOwl surface. It may receive bytes from the user, but storage routing, object placement, asset registration, parser selection, ingestion job creation, and graph integration remain backend responsibilities.
 
+Authentication of `open_upload_session` establishes who requested the task; it
+does not complete generic Asset authorization or storage governance. Those
+generic boundaries remain outside this Issue #20 connected-identity slice.
+
 ## ChatGPT Session Capture Shortcut Boundary
 
 ChatGPT-facing MCP tools may provide a one-step "save this conversation" action for frequent use. This action is modeled as a capture shortcut over the same governed ingestion pipeline.
@@ -144,17 +167,69 @@ skip source account and actor attribution
 skip asset registration, permission scope, or audit
 ```
 
-## Phase 0 Identity Boundary
+## Connected OAuth and ActorContext Boundary
 
-For the internal closed beta, FormOwl may use manual trusted identity selection. At MCP session start, the human selects a FormOwl user identity:
+The only formal human identity flow for the connected closed beta is:
 
 ```text
-select_actor(display_name_or_user_id)
+public HTTPS /mcp
+  -> HTTP WWW-Authenticate points to FormOwl protected-resource metadata
+  -> FormOwl OAuth 2.1 authorize request for the predefined ChatGPT app client
+  -> exact callback, exact resource, and PKCE S256 validation
+  -> Google OIDC authorization and callback
+  -> verified Google (issuer, subject) mapped through a FormOwl invitation
+  -> FormOwl authorization code and resource-bound FormOwl access token
+  -> current PostgreSQL token-session, user, identity, client, membership, grant, and revocation checks
+  -> fresh gateway-controlled ActorContext
+  -> protected MCP tool
 ```
 
-The MCP Gateway returns the selected user, workspace memberships, active grants, and pending requests assigned to that user. The selected identity becomes `actor_user_id` for subsequent MCP calls and audit logs.
+Google access and ID tokens are upstream identity evidence only; they are never
+accepted as FormOwl MCP bearer tokens. FormOwl remains the authority for users,
+workspace memberships, client authorization, scopes, token sessions,
+revocation, grants, and audit.
 
-This is not production authentication. It is acceptable only for trusted internal users on the company or lab network, and it must sit behind an `AuthProvider` interface so company SSO, OIDC, SAML, or another provider can replace it later.
+Every connected tool descriptor must publish OAuth `securitySchemes`, an
+`outputSchema`, and safety annotations. An HTTP authentication denial must
+return `WWW-Authenticate`; a protected tool authorization denial must include
+`_meta["mcp/www_authenticate"]`. Denials and allowed decisions must be audited
+with request, tool-call, user or unauthenticated actor, external identity,
+OAuth client, token session, workspace where proven, and a machine-safe reason.
+Raw bearer tokens, authorization codes, PKCE verifiers, Google tokens, and
+secrets must never enter audit records or public errors.
+
+The exact reserved callback
+`https://invalid.example.invalid/formowl-discovery-only` selects a separate
+public-discovery mode; it is not a second authentication mode. In that mode the
+gateway ignores bearer credentials, permits only `initialize` and
+`tools/list`, and returns the standard OAuth challenge for every protected
+tool. It does not validate old tokens and does not write HTTP-denial or MCP
+authorization audit records, because no identity or authorization decision is
+allowed. OAuth authorization, Google callback completion, code exchange,
+bootstrap, invitations, operator mutations, and revocation are blocked before
+stateful delegates. `/readyz` remains 503 and CLI preflight exits non-zero with
+`status: discovery_only`; only after configuring an exact production
+`https://chatgpt.com/connector/oauth/{callback_id}`, restarting, and reaching
+ready may FormOwl create identity state or run protected tools.
+
+The predefined client ID is a stable non-secret value selected and recorded by
+the deployment operator before discovery. ChatGPT app management must use that
+same value if its current predefined-client UI supports entry or selection; if
+it does not, the live flow stops as an external blocker. ChatGPT supplies and
+displays only the exact production callback. FormOwl must never invent the ID
+or claim ChatGPT generated/displayed it. This boundary retains one predefined
+app client and does not claim a CIMD migration or DCR fallback.
+
+The gateway constructs `ActorContext` from current server-side state on every
+protected call. It rejects or overwrites caller-controlled identity, workspace,
+session, reviewer, and grant fields before a semantic handler runs. `whoami`
+returns the authenticated FormOwl user and current workspace; it is not an
+identity-selection tool.
+
+`ManualTrustedInternalAuthProvider`, JSON-line, hand-built JSON-RPC, and stdio
+session environment variables are test/local compatibility surfaces only. The
+connected runtime requires `FORMOWL_AUTH_MODE=oauth_google` and rejects manual
+identity environment variables.
 
 ## Collaborative Graph Access
 
@@ -163,7 +238,7 @@ The effective graph for a request may include:
 ```text
 user-owned graph
 workspace graph
-graph fragments currently granted to the selected user
+graph fragments currently granted to the authenticated actor
 ```
 
 If User A asks about User B's private data and no grant exists, the MCP Gateway must not leak B's content. It should return an access-required response and create an explicit request when asked:
@@ -185,7 +260,10 @@ formowl://evidence/{evidence_id}
 formowl://message/{message_id}
 ```
 
-The MCP Gateway and Retrieval Gateway must check selected user identity, grant validity, scope match, expiration, access count, workspace membership, and audit policy before returning a redacted snippet, rendered preview, controlled stream, metadata, or permission denial.
+The MCP Gateway and Retrieval Gateway must check the authenticated actor, grant
+validity, scope match, expiration, access count, current workspace membership,
+and audit policy before returning a redacted snippet, rendered preview,
+controlled stream, metadata, or permission denial.
 
 Entity matching, access overlay, and canonical merge must remain separate MCP-level workflows:
 
@@ -231,4 +309,22 @@ run_parser_on_path(path)
 query_postgres_raw(sql)
 ```
 
-Every governance-relevant operation should be audited, including actor selection, shared graph queries, access request creation, approval, denial, grant creation, grant revocation, evidence fetch, raw asset fetch, ingestion job submission, and graph commit requests.
+Every governance-relevant operation should be audited, including OAuth
+authorization, identity mapping, invitation/bootstrap, token issue and
+revocation, MCP authentication and authorization decisions, shared graph
+queries, access request creation, approval, denial, grant creation, grant
+revocation, evidence fetch, raw asset fetch, ingestion job submission, and
+graph commit requests. Manual actor selection is audited only inside the
+test/local compatibility facade.
+
+## Issue #20 Evidence Boundary
+
+Issue #20 owns the connected Google-backed OAuth bridge and fresh
+gateway-controlled `ActorContext`. Its repository implementation does not by
+itself prove a public HTTPS deployment, fresh-database and restart journey,
+signing-key rotation, MCP Inspector interoperability, or a real ChatGPT plus
+Google login. Those external gates remain required before issue #20 can close;
+this document makes no production-readiness claim.
+
+Generic Asset governance and downstream source-specific consumers do not
+create an alternate identity, storage, or connected MCP authority.

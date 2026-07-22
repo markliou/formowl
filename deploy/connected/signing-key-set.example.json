@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "keys": [
+    {
+      "kid": "formowl-current-key",
+      "private_key_file": "/run/secrets/formowl_signing_key_current",
+      "active": true
+    }
+  ]
+}

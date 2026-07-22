@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from unittest.mock import patch
 
 import _paths  # noqa: F401
 from formowl_auth import FileAuditLogStore
@@ -94,6 +95,51 @@ class RetrievalGatewayTests(unittest.TestCase):
             [log.action for log in FileAuditLogStore(temp_dir).list()],
             ["retrieval_succeeded", "retrieval_succeeded"],
         )
+        self.assertEqual(
+            [log.timestamp for log in FileAuditLogStore(temp_dir).list()],
+            [NOW, NOW],
+        )
+
+        default_now = "2026-07-22T03:04:05+00:00"
+        later_default_now = "2026-07-22T03:04:06+00:00"
+        unrelated_audit_now = "2026-07-22T03:04:06+00:00"
+        default_temp_dir = _paths.fresh_test_dir("retrieval-gateway-default-now")
+        default_gateway = _gateway_with_records(default_temp_dir)
+        with (
+            patch("formowl_retrieval.gateway.now_iso", return_value=default_now),
+            patch("formowl_auth.audit.now_iso", return_value=unrelated_audit_now),
+        ):
+            default_gateway.query_effective_graph(
+                query_embedding=[1.0, 0.0],
+                query_text="summarize project",
+                requester_user_id="user_yifan",
+                workspace_id="workspace_main",
+                session_id="session_001",
+                grants=[],
+                mode="evidence_snippet",
+            )
+        later_temp_dir = _paths.fresh_test_dir("retrieval-gateway-later-default-now")
+        later_gateway = _gateway_with_records(later_temp_dir)
+        with (
+            patch("formowl_retrieval.gateway.now_iso", return_value=later_default_now),
+            patch("formowl_auth.audit.now_iso", return_value=default_now),
+        ):
+            later_gateway.query_effective_graph(
+                query_embedding=[1.0, 0.0],
+                query_text="summarize project",
+                requester_user_id="user_yifan",
+                workspace_id="workspace_main",
+                session_id="session_001",
+                grants=[],
+                mode="evidence_snippet",
+            )
+        default_audit = FileAuditLogStore(default_temp_dir).list()[0]
+        later_audit = FileAuditLogStore(later_temp_dir).list()[0]
+        self.assertEqual(
+            [default_audit.timestamp, later_audit.timestamp],
+            [default_now, later_default_now],
+        )
+        self.assertNotEqual(default_audit.audit_log_id, later_audit.audit_log_id)
         audit_on_denial_and_success = True
         self.assertTrue(audit_on_denial_and_success)
 

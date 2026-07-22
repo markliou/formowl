@@ -12,6 +12,7 @@ from .records import (
 from .postgres import (
     CanonicalCommitProposal,
     PostgreSQLConnectionConfig,
+    PostgreSQLMigrationResult,
     PostgreSQLMigrationRunner,
     PostgreSQLMetadataRepository,
     PostgreSQLUnitOfWork,
@@ -36,6 +37,7 @@ __all__ = [
     "CanonicalGraphStore",
     "CanonicalCommitProposal",
     "PostgreSQLConnectionConfig",
+    "PostgreSQLMigrationResult",
     "PostgreSQLMigrationRunner",
     "PostgreSQLMetadataRepository",
     "PostgreSQLUnitOfWork",

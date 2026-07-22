@@ -185,3 +185,39 @@ Lifecycle label: `active`.
   dev-container verification passed 730 tests, full Ruff check, 331-file format
   check, and `git diff --check`. Production/API, evaluator/privacy, and
   shell/safety reviewers returned 3/3 `RELEASE_DECISION: AGREE`.
+
+## 2026-07-22 — Issue #20 scope cleanup handoff
+
+- Repository authority before the external campaign is
+  689/689/689 changed/manifested/onboarded functions,
+  508/508/508/508 requested/resolved/run/pass tests across 1,388 evidence
+  pairs, direct trace 689/689 with missing 0 and blockers `[]`, pending 0,
+  binding mismatches 0, and `test_id_count` 1,521.
+- The current source includes the retrieval audit timestamp fix and semantic
+  mapping-key collision fix. Scope cleanup preserves all Issue #20 OAuth,
+  exact `/mcp`, fresh `ActorContext`, operator, migration, evidence, audit, and
+  test behavior while removing unrelated methodology, KG, local-folder, and
+  archive churn from this PR.
+- All seven external layers remain `not_supplied`: `live_postgresql`,
+  `operator_cli_postgresql`, `production_container_lifecycle`, `mcp_inspector`,
+  `live_chatgpt_google`, `reviewer_gate`, and `completion_audit`.
+  Issue #20 remains open and unchecked; no production-readiness,
+  methodology-readiness, or KG completion claim is supported.
+- Post-cleanup canonical local authority and direct trace are recorded by the
+  single `Implement Google-backed OAuth and ActorContext` commit on branch
+  `agent/issue-20-google-oauth-actor-context`, based on
+  `342e588aa6162ccbdd14a257bfc09e58e7a619ad`; tracked Issue #20 manifests and
+  verification docs retain the exact evidence counts.
+- Next: run the governed external campaign with the operator-recorded predefined client ID and ChatGPT-displayed callback.
+
+## 2026-07-22 — Issue #20 final publication evidence
+
+- Final publication evidence for branch
+  `agent/issue-20-google-oauth-actor-context`, based on
+  `342e588aa6162ccbdd14a257bfc09e58e7a619ad`, is 689/689/689
+  changed/manifested/onboarded, 509/509/509/509 requested/resolved/run/pass
+  across 1,390 checked evidence pairs, direct trace 689/689 with missing 0,
+  `test_id_count` 1,521, and zero blockers. The prior scope-cleanup handoff
+  remains an intentionally historical checkpoint; all seven external layers
+  remain `not_supplied`, Issue #20 remains open and unchecked, and no
+  production-, methodology-, or KG-readiness claim is supported.

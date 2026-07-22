@@ -42,6 +42,14 @@ archival is preserved at
 - Pre-feature structural cleanup is complete: repeated evaluator validation,
   HTTP smoke orchestration, PostgreSQL smoke lifecycle, mail payload
   validation, and atomic JSON persistence now use shared implementations.
+- Issue #20 local repository authority is 689/689/689
+  changed/manifested/onboarded functions, 509/509/509/509
+  requested/resolved/run/pass tests across 1,390 checked evidence pairs, and
+  direct trace 689/689 with missing 0 and blockers `[]`. Pending is 0,
+  binding mismatches are 0, and `test_id_count` is 1,521.
+- All seven Issue #20 external layers remain `not_supplied`; repository
+  authority does not establish external completion, methodology readiness, KG
+  completion, or production readiness.
 
 ## Current Unchecked Work
 
@@ -56,6 +64,26 @@ archival is preserved at
     canonical dev-container checks and the required reviewer gate must pass.
   - Full historical requirements and checkpoint evidence:
     `docs/archive/2026-07-11/implementation-task-breakdown.md`.
+
+- [ ] Implement issue #20 Google-backed ChatGPT MCP OAuth identity mapping and
+  gateway-controlled `ActorContext`.
+  - Repository authority: 689/689/689 changed/manifested/onboarded,
+    509/509/509/509 requested/resolved/run/pass, 1,390 checked evidence pairs,
+    trace 689/689, pending 0, binding mismatches 0, blockers `[]`, and
+    `test_id_count` 1,521.
+  - External state: `live_postgresql`, `operator_cli_postgresql`,
+    `production_container_lifecycle`, `mcp_inspector`,
+    `live_chatgpt_google`, `reviewer_gate`, and `completion_audit` remain
+    `not_supplied`.
+  - Current state: Issue #20 remains unchecked and open. The repository
+    implements Google-backed FormOwl OAuth, exact stateless Streamable HTTP
+    `/mcp`, operator/migration flows, and fresh gateway-controlled
+    `ActorContext`; no external-completion or production-readiness claim is
+    supported.
+  - Next action: freeze the post-cleanup source, regenerate local authority,
+    then run the seven governed external layers with the operator-recorded
+    predefined client ID and ChatGPT-displayed callback. Stop if the current
+    ChatGPT app UI cannot use that same predefined ID.
 
 ## Recent Completions
 

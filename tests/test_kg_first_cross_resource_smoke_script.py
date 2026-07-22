@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import _paths  # noqa: F401
 
@@ -89,8 +90,16 @@ class KgFirstCrossResourceSmokeScriptTests(unittest.TestCase):
         self.assertIn("invalid_fallback_seed_asset_lineage", validation["errors"])
 
     def test_fixture_and_semantic_hashes_are_stable_across_repeated_builds(self) -> None:
-        first = smoke.build_report()
-        second = smoke.build_report()
+        with patch(
+            "formowl_auth.audit.now_iso",
+            return_value="2026-07-22T00:00:00+00:00",
+        ):
+            first = smoke.build_report()
+        with patch(
+            "formowl_auth.audit.now_iso",
+            return_value="2026-07-22T00:00:01+00:00",
+        ):
+            second = smoke.build_report()
 
         self.assertEqual(first["fixture_hash"], second["fixture_hash"])
         self.assertEqual(first["semantic_hash"], second["semantic_hash"])

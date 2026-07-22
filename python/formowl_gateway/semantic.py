@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
+import math
 import re
 from typing import Any, Callable, Mapping
 
@@ -254,6 +256,7 @@ _MAIL_CASE_PROGRESS_CLAIM_KEYS = {
 _MAIL_CASE_PROGRESS_FORBIDDEN_TRUE_CLAIMS = _MAIL_CASE_PROGRESS_CLAIM_KEYS - {
     "supports_mail_case_progress_answer_claim"
 }
+_INVALID_HANDLER_PAYLOAD_ERROR = "semantic handler returned an invalid payload"
 
 
 @dataclass(frozen=True)
@@ -433,12 +436,11 @@ class SemanticMcpGateway:
     def _answer_mail_case_progress(self, input_data: dict[str, Any]) -> dict[str, Any]:
         if self.mail_case_progress_handler is None:
             return _handler_not_configured("answer_mail_case_progress")
-        handler_payload = self.mail_case_progress_handler(input_data)
-        _validate_mail_case_progress_handler_payload(handler_payload)
         return _safe_handler_envelope(
             result_type="mail_case_progress_answer",
-            handler_payload=handler_payload,
+            handler_payload=self.mail_case_progress_handler(input_data),
             status_from_payload=True,
+            payload_validator=_validate_mail_case_progress_handler_payload,
         )
 
     def _request_graph_access(self, input_data: dict[str, Any]) -> dict[str, Any]:
@@ -594,14 +596,140 @@ def _validate_mail_case_progress_handler_payload(payload: dict[str, Any]) -> Non
 def _safe_handler_envelope(
     *,
     result_type: str,
-    handler_payload: dict[str, Any],
+    handler_payload: Any,
     status_from_payload: bool = False,
+    payload_validator: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    invalid_value = object()
+    root_cell: list[Any] = [invalid_value]
+    pending_values: list[tuple[Any, ...]] = [("visit", handler_payload, root_cell)]
+    active_container_ids: set[int] = set()
+    completed_container_ids: set[int] = set()
+    detached_containers: dict[int, Any] = {}
+    source_containers: dict[int, Any] = {}
+    invalid_payload = False
+    while pending_values:
+        operation, *operation_values = pending_values.pop()
+        if operation == "leave":
+            container_id = operation_values[0]
+            active_container_ids.discard(container_id)
+            completed_container_ids.add(container_id)
+            continue
+        if operation == "append":
+            detached_sequence, item_cell = operation_values
+            if item_cell[0] is invalid_value:
+                invalid_payload = True
+            else:
+                detached_sequence.append(item_cell[0])
+            continue
+        if operation == "mapping_entry":
+            detached_mapping, entry_cell = operation_values
+            detached_entry = entry_cell[0]
+            if (
+                detached_entry is invalid_value
+                or not isinstance(detached_entry, list)
+                or len(detached_entry) != 2
+            ):
+                invalid_payload = True
+                continue
+            detached_key, detached_value = detached_entry
+            if type(detached_key) is not str:
+                invalid_payload = True
+                continue
+            try:
+                detached_mapping[detached_key] = detached_value
+            except Exception:
+                invalid_payload = True
+            continue
+
+        value, destination_cell = operation_values
+        try:
+            if inspect.isawaitable(value):
+                invalid_payload = True
+                destination_cell[0] = invalid_value
+                if (
+                    inspect.iscoroutine(value)
+                    and inspect.getcoroutinestate(value) == inspect.CORO_CREATED
+                ):
+                    try:
+                        value.close()
+                    except Exception:
+                        pass
+                continue
+            if not isinstance(value, (Mapping, list, tuple, set, frozenset)):
+                # Reject values that the connected transport cannot encode as
+                # strict JSON before a semantic success log can be recorded.
+                if type(value) is float and not math.isfinite(value):
+                    invalid_payload = True
+                    destination_cell[0] = invalid_value
+                elif type(value) in {str, int, float, bool, type(None)}:
+                    destination_cell[0] = value
+                else:
+                    invalid_payload = True
+                    destination_cell[0] = invalid_value
+                continue
+
+            container_id = id(value)
+            if container_id in active_container_ids:
+                invalid_payload = True
+                destination_cell[0] = invalid_value
+                continue
+            if container_id in completed_container_ids:
+                destination_cell[0] = detached_containers[container_id]
+                continue
+
+            detached_container: dict[Any, Any] | list[Any]
+            if isinstance(value, Mapping):
+                detached_container = {}
+            else:
+                detached_container = []
+                if isinstance(value, (set, frozenset)):
+                    invalid_payload = True
+            detached_containers[container_id] = detached_container
+            source_containers[container_id] = value
+            destination_cell[0] = detached_container
+            active_container_ids.add(container_id)
+            yielded_values: list[Any] = []
+            try:
+                source_values = value.items() if isinstance(value, Mapping) else value
+                if inspect.isawaitable(source_values):
+                    source_cell: list[Any] = [invalid_value]
+                    invalid_payload = True
+                    pending_values.append(("leave", container_id))
+                    pending_values.append(("visit", source_values, source_cell))
+                    continue
+                source_iterator = iter(source_values)
+                while True:
+                    try:
+                        yielded_values.append(next(source_iterator))
+                    except StopIteration:
+                        break
+            except Exception:
+                invalid_payload = True
+
+            pending_values.append(("leave", container_id))
+            for yielded_value in reversed(yielded_values):
+                item_cell: list[Any] = [invalid_value]
+                if isinstance(value, Mapping):
+                    pending_values.append(("mapping_entry", detached_container, item_cell))
+                else:
+                    pending_values.append(("append", detached_container, item_cell))
+                pending_values.append(("visit", yielded_value, item_cell))
+        except Exception:
+            invalid_payload = True
+            destination_cell[0] = invalid_value
+
+    if invalid_payload or root_cell[0] is invalid_value or not isinstance(root_cell[0], dict):
+        raise ContractValidationError(_INVALID_HANDLER_PAYLOAD_ERROR)
+
+    payload = root_cell[0]
+    if payload_validator is not None:
+        payload_validator(payload)
     status = "ok"
     if status_from_payload:
-        payload_status = handler_payload.get("status")
+        payload_status = payload.get("status")
         status = payload_status if isinstance(payload_status, str) else "ok"
-    envelope = _envelope(result_type=result_type, status=status, data=handler_payload)
+    envelope = _envelope(result_type=result_type, status=status, data=payload)
     validate_public_gateway_payload(envelope)
     return envelope
 

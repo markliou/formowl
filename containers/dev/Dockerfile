@@ -18,7 +18,14 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list; \
     fi \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl git pst-utils \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        docker-buildx \
+        docker-cli \
+        docker-compose \
+        git \
+        pst-utils \
     && case "${TARGETARCH:-amd64}" in \
         amd64) gitleaks_arch="x64" ;; \
         arm64) gitleaks_arch="arm64" ;; \
@@ -29,11 +36,10 @@ RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
     && chmod +x /usr/local/bin/gitleaks \
     && rm -rf /var/lib/apt/lists/* /tmp/gitleaks.tar.gz
 
-RUN python -m pip install --no-cache-dir \
-    "coverage[toml]>=7.6" \
-    "jieba>=0.42.1,<0.43" \
-    "pre-commit>=4.0" \
-    "ruff==0.8.6" \
-    "sentencepiece>=0.2,<0.3"
+COPY pyproject.toml README.md ./
+COPY python ./python
+
+RUN python -m pip install --no-cache-dir "setuptools>=68" wheel \
+    && python -m pip install --no-cache-dir --no-build-isolation ".[dev]"
 
 CMD ["bash"]

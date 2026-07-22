@@ -240,6 +240,7 @@ class RetrievalGateway:
                 target_id=workspace_id,
                 workspace_id=workspace_id,
                 session_id=session_id,
+                timestamp=resolved_now,
                 status="permission_denied",
                 metadata={"reason": "raw_asset_mode_requires_explicit_grant"},
             )
@@ -365,6 +366,7 @@ class RetrievalGateway:
                 target_id=workspace_id,
                 workspace_id=workspace_id,
                 session_id=session_id,
+                timestamp=resolved_now,
                 status="permission_denied",
                 metadata={"reason": "raw_asset_scope_not_authorized"},
             )
@@ -391,6 +393,7 @@ class RetrievalGateway:
             target_id=workspace_id,
             workspace_id=workspace_id,
             session_id=session_id,
+            timestamp=resolved_now,
             status="ok",
             metadata={
                 "mode": mode,
@@ -545,6 +548,7 @@ class RetrievalGateway:
         target_id: str,
         workspace_id: str,
         session_id: str,
+        timestamp: str,
         status: str,
         metadata: dict[str, Any],
     ) -> AuditLog | None:
@@ -558,6 +562,7 @@ class RetrievalGateway:
             target_id=target_id,
             session_id=session_id,
             workspace_id=workspace_id,
+            timestamp=timestamp,
             status=status,
             metadata=metadata,
         )

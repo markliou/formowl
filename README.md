@@ -2,7 +2,9 @@
 
 <!-- Future agents: read AGENTS.md first, then use docs/implementation-task-breakdown.md as the shared checklist. Continue building from the SPEC.md Suggested Repository Layout section and do not create parallel replacement files unless the specification is updated first. -->
 
-formowl is a source-preserving, graph-governed knowledge management system. Its target architecture turns multimodal resources, project execution data, conversations, and wiki/documentation systems into governed knowledge views.
+formowl is a source-preserving, graph-governed knowledge management system. Its
+target architecture turns multimodal resources, project execution data,
+conversations, and wiki/documentation systems into governed knowledge views.
 
 Target pipeline:
 
@@ -16,18 +18,36 @@ Raw Resources
   -> Wiki Projection / WikiRevision
 ```
 
-The current repository starts with two decoupled MCP servers:
+The formal ChatGPT-facing entrypoint is the connected FormOwl MCP Gateway:
 
-- Project MCP
-- Wiki MCP
+```text
+public HTTPS /mcp
+  -> FormOwl OAuth 2.1 with PKCE S256 and exact callback/resource binding
+  -> Google OIDC
+  -> FormOwl (issuer, subject) identity mapping
+  -> resource-bound FormOwl access token
+  -> fresh gateway-controlled ActorContext
+  -> whoami and governed semantic tools
+```
 
-Project MCP retrieves project execution context from systems such as OpenProject.
+The repository also retains two decoupled MCP compatibility services:
 
-Wiki MCP generates and manages markdown/wiki knowledge artifacts.
+- Project MCP retrieves project execution context from systems such as
+  OpenProject.
+- Wiki MCP generates and manages markdown/wiki knowledge artifacts.
 
-Both MCPs interoperate through `formowl_contract`. They are the first concrete entrypoints for source retrieval, evidence preservation, draft generation, and revision governance; they are not the full product boundary.
+Their JSON-line and hand-built JSON-RPC/stdio entrypoints are for tests and
+local compatibility; they are not alternate ChatGPT identity or connection
+paths.
 
-Future pipeline layers add asset ingestion, observation extraction, candidate graph review, canonical graph commits, user graph assembly policies, and projection-spec-driven wiki generation.
+All of these components interoperate through `formowl_contract`. They are
+concrete entrypoints for source retrieval, evidence preservation, draft
+generation, revision governance, and connected identity; they are not the full
+product boundary.
+
+Future pipeline layers add asset ingestion, observation extraction, candidate
+graph review, canonical graph commits, user graph assembly policies, and
+projection-spec-driven wiki generation.
 
 FormOwl is container-first. Development, testing, and deployment should run from Dockerfile-managed containers so the project does not depend on host-installed runtimes.
 
@@ -38,9 +58,19 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 ## Current Implementation
 
 - Python contract models for source references, permission scopes, evidence snapshots, context packages, wiki revisions, and MCP result envelopes.
-- Phase 0 identity, access request, grant, audit log, and upload session contract models.
-- Manual trusted internal actor selection for Phase 0 tests; this is not production authentication.
-- File-backed audit logs for actor selection, asset registration, ingestion job creation, evidence fetches, permission denials, and upload session creation.
+- Connected `formowl-connected-mcp` runtime using the official MCP SDK's
+  stateless Streamable HTTP transport on exact `/mcp`, with OAuth metadata,
+  authorization, Google callback, token, and readiness routes on one origin.
+- Google-backed FormOwl OAuth 2.1 identity mapping, invitation and first-owner
+  bootstrap, resource-bound FormOwl access tokens, revocation, PostgreSQL OAuth
+  state/audit persistence, gateway-controlled `ActorContext`, and `whoami`.
+- Identity, access request, grant, audit log, and upload session contract models.
+- Manual trusted internal actor selection and file-backed actor-selection audit
+  for tests/local compatibility only; connected mode requires
+  `FORMOWL_AUTH_MODE=oauth_google` and rejects caller-supplied identity/session/
+  workspace environment values.
+- File-backed compatibility audit logs for asset registration, ingestion job
+  creation, evidence fetches, permission denials, and upload session creation.
 - Controlled `upload_asset_reference` imports for trusted backend references that still create asset, permission, and audit records.
 - ChatGPT session capture helper that turns the current conversation into a registered asset and ingestion job.
 - Trusted local data resource inbox scanning for internal deployments. Stable
@@ -74,20 +104,23 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   UploadSession-bound server-side mail import through normal Asset /
   IngestionJob / FixtureMailArchiveExtractor records, build a
   `MailEvidenceBundle` with `upload_session_id`, write it through the
-  PostgreSQL mail evidence store contract, and verify a store-backed JSON-RPC
-  `query_mail_evidence` owner path. This is still synthetic/internal evidence:
+  PostgreSQL mail evidence store contract, and verify a store-backed local
+  JSON-RPC compatibility `query_mail_evidence` owner path. This is still
+  synthetic/internal evidence:
   it does not claim real PST parsing, upload UI / iframe readiness, live
   PostgreSQL readiness, production worker leasing, KG writes, wiki projection,
   or production readiness.
-- The current #21 ChatGPT-facing upload entrypoint can return a session-bound
-  mail archive upload task card through `open_upload_session`, attach guided
+- The current #21 governed `open_upload_session` handler can return a
+  session-bound mail archive upload task card, attach guided
   PST/OST/MSG/EML/MBOX source-preparation guidance, and create an audited
   `UploadSession` while rejecting user-supplied storage backends, parser
   controls, worker queues, raw paths, SQL-like values, and unsupported owner or
-  visibility scopes. This is still only a task-card/session-entrypoint slice:
-  it does not implement the real upload iframe, real mail parser, live
-  PostgreSQL readiness, production worker leasing, or ChatGPT smoke completion.
-- The semantic JSON-RPC runtime entrypoint for that task-card path is
+  visibility scopes. The connected runtime may expose this handler after OAuth;
+  the JSON-RPC command tests it only through local compatibility. This is still
+  only a task-card/session-entrypoint slice: it does not implement the real
+  upload iframe, real mail parser, live PostgreSQL readiness, production worker
+  leasing, or ChatGPT smoke completion.
+- The local semantic JSON-RPC compatibility entrypoint for that task-card path is
   `formowl-semantic-mcp-jsonrpc`. It wires `open_upload_session` to the mail
   upload session handler. The current command preflight launches that console
   command, performs `initialize`, `tools/list`, and
@@ -117,8 +150,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   connected upload, production iframe readiness, real mail parser readiness,
   live PostgreSQL readiness, production worker leasing, KG writes, wiki
   projection, or production readiness.
-- The current #21 MCP-command-to-local-HTTP upload smoke connects the
-  documented `formowl-semantic-mcp-jsonrpc` command path to the local HTTP
+- The current #21 MCP-command-to-local-HTTP upload smoke connects the local
+  compatibility `formowl-semantic-mcp-jsonrpc` command path to the local HTTP
   upload-surface harness. It opens a mail `UploadSession` through JSON-RPC
   `open_upload_session`, serves the matching local HTTP form, posts synthetic
   multipart PST bytes to the same session, verifies the resulting
@@ -132,7 +165,7 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   production readiness claim.
 - The current #21 local upload-to-import-and-query smoke extends that path
   with server-side synthetic mail import and store-backed evidence query. It
-  opens a mail `UploadSession` through the configured MCP command, posts a
+  opens a mail `UploadSession` through the local compatibility command, posts a
   session-bound multipart upload to the local HTTP surface, runs
   `run_upload_session_mail_import()` against the bound `asset_id`, writes
   normalized mail evidence through the PostgreSQL adapter contract, verifies
@@ -142,19 +175,19 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   not claim actual ChatGPT connected upload, production iframe readiness, real
   PST/OST/MSG/EML/MBOX parsing, live PostgreSQL deployment, production worker
   leasing, KG write, wiki projection, or production readiness.
-- The current #21 ChatGPT connection preflight packages the configured
-  `formowl-semantic-mcp-jsonrpc` command path into a bounded manual ChatGPT
-  MCP attach contract. It reuses the command smoke, validates a hash-only
+- The historical #21 local-compatibility connection preflight packages
+  `formowl-semantic-mcp-jsonrpc` into a bounded manual stdio attach contract. It
+  reuses the command smoke, validates a hash-only
   connection package shape, records the required environment-name count,
   required tool count, expected JSON-RPC sequence, and task-card/session shape
   hashes, and rejects package probes that include environment values, concrete
   upload locators, raw command paths, or ChatGPT overclaims. This is only a
-  connection-readiness package for the next manual ChatGPT test; it does not
+  compatibility package; it is not the formal connected ChatGPT path and does not
   claim actual ChatGPT connected upload, production iframe readiness, real
   parser readiness, live PostgreSQL deployment, production worker leasing, KG
   write, wiki projection, or production readiness.
-- The current #21 ChatGPT result intake checkpoint validates a bounded
-  operator-supplied result packet after a manual ChatGPT MCP session calls
+- The #21 compatibility result-intake checkpoint validates a bounded
+  operator-supplied result packet after a manual compatibility session calls
   `open_upload_session`. The packet records only hashes, statuses, counts,
   expected sequence binding, tool availability, task-card shape, and operator
   attestation; it rejects environment values, upload locators, mail payload
@@ -163,8 +196,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   control ChatGPT, does not claim file transfer, and does not claim production
   readiness.
 - The scoped #21 local Phase 1 Mail Evidence Reading proof is complete for
-  synthetic evidence and ChatGPT testing readiness. The governed MCP / JSON-RPC
-  surface now supports both `query_mail_evidence` and
+  synthetic evidence and local compatibility testing readiness. The governed
+  local JSON-RPC compatibility surface supports both `query_mail_evidence` and
   `answer_mail_case_progress` over normalized `MailEvidenceBundle` data,
   including owner/denied/forged-grant/trusted-grant and bundle-id probes,
   citation-preserving case-progress answers, hash-only transcripts, and
@@ -173,8 +206,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   PST/OST/MSG/EML/MBOX parser readiness, live PostgreSQL deployment readiness,
   production worker leasing, KG writes, wiki projection, or production
   readiness.
-- The current #21 mail evidence ChatGPT result-intake checkpoint validates a
-  bounded operator-supplied result packet after a manual ChatGPT MCP session
+- The historical #21 local-compatibility mail-evidence result intake validates a
+  bounded operator-supplied result packet after a manual compatibility session
   calls fixture-backed `query_mail_evidence` and `answer_mail_case_progress`.
   The packet records only hashes, statuses, counts, smoke-contract binding,
   owner/denied result shapes, positive owner citation counts, denied redaction
@@ -192,7 +225,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   operator-provided `tests/pst-exm/archive.pst` fixture. The smoke runs the
   sampled real PST through UploadSession, Asset/ObjectStore, IngestionJob,
   ExtractorRun, mail observations, `MailEvidenceBundle`,
-  `PostgreSQLMailEvidenceStore`, and JSON-RPC `query_mail_evidence`
+  `PostgreSQLMailEvidenceStore`, and local JSON-RPC compatibility
+  `query_mail_evidence`
   owner/denied probes. Public output is hash/status/count only, and the
   fixture directory is ignored so the 3GB PST is never added to Git or Docker
   build context. The current retention decision is `retained_by_policy` under
@@ -381,8 +415,8 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
   boundary evidence only; it does not claim production readiness, enterprise
   entity-resolution quality, completed adjudication, raw asset access, or
   canonical graph commits.
-- A closed-beta readiness smoke harness can compose the current trusted
-  internal path through Project/Wiki JSON-RPC, storage backend configuration,
+- An offline closed-beta compatibility smoke harness can compose the trusted
+  internal Project/Wiki JSON-RPC regression path, storage backend configuration,
   worker ingestion, observation-to-wiki draft bridging, governed retrieval, and
   the packaged KG-eval facade. It is synthetic closed-beta gate evidence only;
   it does not claim production readiness, live database readiness, automatic
@@ -461,8 +495,11 @@ Core helper functionality is exposed through the pure-Python `formowl_core` API.
 - `docs/kg-bert-runtime.md` - optional BERT/SentenceTransformer KG
   candidate-generation runtimes, CPU/GPU Dockerfiles, benchmark manifest, model
   profiles, and artifact rules.
-- `docs/closed-beta-runbook.md` - trusted internal closed-beta smoke command,
-  pass criteria, and explicit exclusions.
+- `docs/closed-beta-runbook.md` - connected OAuth/MCP operator journey,
+  live-evidence gates, compatibility smoke, and explicit exclusions.
+- `docs/issue20-oauth-evidence-runbook.md` - hash-only external OAuth/MCP
+  evidence packet, operator CLI input, whole-journey fields, and the explicit
+  independent-completion-audit boundary.
 - `docs/local-data-resource-inbox.md` - trusted local folder ingress behavior,
   stability policy, idempotency, and public report boundary.
 - `docs/openproject-adapter.md` - OpenProject adapter mapping.
@@ -475,6 +512,156 @@ Build the dev container image:
 ```sh
 docker build -f containers/dev/Dockerfile -t formowl-dev:local .
 ```
+
+### Connected OAuth/MCP operator sequence
+
+The production-shaped repository entrypoint is `formowl-connected-mcp`. Start
+from a clean clone by building the runtime image and generating the six local
+FormOwl/PostgreSQL secrets:
+
+```sh
+docker build -f containers/runtime/Dockerfile -t formowl-runtime:local .
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/deploy/connected/secrets:/secrets" \
+  formowl-runtime:local init-secrets --output-dir /secrets
+```
+
+This creates a single-active-key manifest plus an unused
+`signing-previous.pem` standby mount slot. It does not create the Google OAuth
+client secret and it does not prove preflight readiness. Import the real Google
+client secret separately as a mode-`0400` file. The tracked non-secret
+`deploy/connected/compose.env.example` is the field/template contract; the
+operator copies it to the real ignored, mode-`0600`
+`.formowl/issue20/compose.env`; the containerized operator helper validates and
+rewrites that same operator file, which every Compose command receives through
+`--env-file`. Before discovery, the operator uses the containerized helper to
+derive or validate and record one stable non-secret predefined client ID; this
+requires no host Python. ChatGPT Apps management must use that same ID if its
+current predefined-client UI supports entry or selection. If it does not, stop
+and record an external live blocker. ChatGPT supplies and displays only the
+production callback; never invent the ID or claim ChatGPT generated/displayed
+it, and do not claim migration to a different client-registration model. Full
+creation commands, file meanings, safe interrupted-initialization recovery,
+and the no-placeholder rule are in `docs/closed-beta-runbook.md` and
+`deploy/connected/secrets/README.md`. Do not put secret values on the command
+line, in environment variables, tracked files, screenshots, logs, evidence
+packets, or ChatGPT messages.
+
+`deploy/connected/Caddyfile.example` is the concrete TLS reverse-proxy sample.
+It keeps FormOwl published only on `127.0.0.1:8000`; Compose publishes no
+PostgreSQL port. The exact discovery-only start/check/stop/finalize commands,
+standalone Caddy command, final Compose TLS profile, and official public-only
+MCP Inspector flow are in `docs/closed-beta-runbook.md`. Launch Inspector from
+the operator workstation and connect it to the public HTTPS `/mcp` endpoint:
+
+```sh
+npx @modelcontextprotocol/inspector@latest
+```
+
+Production accepts only
+`https://chatgpt.com/connector/oauth/{callback_id}` with one non-empty
+RFC-unreserved callback-id segment. The sole placeholder is
+`https://invalid.example.invalid/formowl-discovery-only`, used only when public
+`initialize`/`tools/list` discovery is required to reveal the real callback.
+This sentinel state is the literal `discovery_only` boundary. In sentinel mode,
+`/readyz` returns 503, protected tools only challenge without audit, and
+bootstrap/OAuth/operator mutations are blocked. Stop and remove the discovery
+containers, replace the sentinel with the exact callback, restart the final
+configuration, and only then start PostgreSQL, migrate, run normal preflight,
+bootstrap, or OAuth.
+
+```sh
+COMPOSE_ENV=.formowl/issue20/compose.env
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  up -d postgres
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  run --rm connected-migrate
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  run --rm connected-mcp preflight
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  run --rm connected-mcp bootstrap-owner \
+  --workspace-id <workspace-id> \
+  --email <invited-owner-email> \
+  --expires-at <RFC3339-expiry> \
+  --idempotency-key <operator-generated-idempotency-key> \
+  --operator-service-id <authorized-operator-service-id>
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  up -d connected-mcp
+```
+
+After the first real Google login creates the invited owner, an authorized
+deployment shell can obtain stable IDs without temporary SQL:
+
+```sh
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  run --rm connected-mcp lookup-user \
+  --email <owner-email> \
+  --workspace-id <workspace-id> \
+  --operator-service-id <authorized-operator-service-id>
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  run --rm connected-mcp list-users \
+  --workspace-id <workspace-id> \
+  --operator-service-id <authorized-operator-service-id>
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  run --rm connected-mcp lookup-token-session \
+  --user-id <user-id> \
+  --workspace-id <workspace-id> \
+  --operator-service-id <authorized-operator-service-id>
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  run --rm connected-mcp list-token-sessions \
+  --user-id <user-id> \
+  --workspace-id <workspace-id> \
+  --operator-service-id <authorized-operator-service-id>
+```
+
+Use the returned owner `user_id` for an operator-authorized invitation:
+
+```sh
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  run --rm connected-mcp invite-user \
+  --workspace-id <workspace-id> \
+  --email <invited-user-email> \
+  --role member \
+  --invited-by-user-id <owner-user-id> \
+  --operator-service-id <authorized-operator-service-id> \
+  --expires-at <RFC3339-expiry>
+```
+
+Membership removal and restore are explicit operator commands, not MCP tools:
+
+```sh
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  run --rm connected-mcp remove-workspace-member \
+  --user-id <user-id> \
+  --workspace-id <workspace-id> \
+  --operator-service-id <authorized-operator-service-id>
+docker compose --env-file "$COMPOSE_ENV" --file compose.yaml \
+  run --rm connected-mcp restore-workspace-member \
+  --user-id <user-id> \
+  --workspace-id <workspace-id> \
+  --operator-service-id <authorized-operator-service-id>
+```
+
+Removal preserves membership history and revokes every unrevoked token session
+for that user/workspace. Restore never reactivates those sessions; the user must
+complete the Google-backed FormOwl OAuth flow again. Use a returned active
+`token_session_id` for `revoke-token-session`. Lookup/list results omit email,
+display name, bearer/JTI material, scopes, provider subject, raw paths, SQL, and
+backend details. Allow and deny decisions are audited; an audit write failure
+returns no result or membership mutation.
+
+`operator_service_id` is an attribution identifier, not a password or remote
+authorization credential. These commands are not MCP tools. Their actual
+security boundary is access to the controlled deployment shell, Docker daemon,
+Compose configuration, and mounted secret files. The full migrate, bootstrap,
+lookup, invite, restart, revocation, signing-key rotation, MCP Inspector, and
+live ChatGPT/Google sequence is in `docs/closed-beta-runbook.md`. Those external
+journeys are not yet accepted completion evidence, so issue #20 remains open
+and no production-readiness claim is made.
+
+Issue #20 establishes connected identity and fresh `ActorContext` only.
+Generic Asset governance and source-specific ingestion remain outside this PR's
+completion scope.
 
 Run tests inside the dev container:
 
@@ -566,8 +753,8 @@ does not claim actual ChatGPT connected upload, production iframe readiness,
 real PST/OST/MSG/EML/MBOX parsing, live PostgreSQL deployment readiness,
 production worker leasing, KG writes, wiki projection, or production readiness.
 
-The current configured semantic JSON-RPC command for ChatGPT-facing mail upload
-task-card testing is:
+The local semantic JSON-RPC compatibility command for #21 mail upload task-card
+testing is:
 
 ```sh
 FORMOWL_DATA_DIR=.formowl/data formowl-semantic-mcp-jsonrpc
@@ -575,7 +762,9 @@ FORMOWL_DATA_DIR=.formowl/data formowl-semantic-mcp-jsonrpc
 
 Set `FORMOWL_MCP_SESSION_ID`, `FORMOWL_MCP_ACTOR_USER_ID`, and
 `FORMOWL_MCP_WORKSPACE_ID` to bind the trusted internal session context for a
-local smoke. Unsafe secret-like values are rejected to safe defaults.
+local smoke. Unsafe secret-like values are rejected to safe defaults. These
+variables are forbidden by the connected runtime and must never be used to
+configure the formal ChatGPT connection.
 
 Run the #21 mail upload MCP command preflight:
 
@@ -733,23 +922,24 @@ contract usage and a revision hash, but it does not claim completed ontology
 governance, canonical type writes, canonical KG writes, raw access, wiki
 projection, business answer generation, or production readiness.
 
-Run the #21 ChatGPT MCP connection preflight package:
+Run the historical #21 local-compatibility stdio attachment preflight package:
 
 ```sh
 python scripts/mail_upload_chatgpt_connection_preflight.py --output /tmp/formowl-mail-upload-chatgpt-connection-preflight.json
 ```
 
-This preflight proves the command path can be packaged for manual ChatGPT MCP
-configuration without exposing environment values, local paths, upload
+This preflight proves the local compatibility command can be packaged without
+exposing environment values, local paths, upload
 locators, parser controls, storage controls, or backend internals in its public
-report. The manual ChatGPT MCP server configuration should use the stdio command
+report. A bounded local compatibility test may use the stdio command
 `formowl-semantic-mcp-jsonrpc` and operator-supplied local values for
 `FORMOWL_DATA_DIR`, `FORMOWL_MCP_SESSION_ID`,
 `FORMOWL_MCP_ACTOR_USER_ID`, `FORMOWL_MCP_WORKSPACE_ID`, and
-`FORMOWL_MAIL_UPLOAD_EXPIRES_AT`. The next live ChatGPT test must still prove
-the actual ChatGPT-connected session separately.
+`FORMOWL_MAIL_UPLOAD_EXPIRES_AT`. This is not the formal connected path. The
+live test must use the public HTTPS `/mcp` resource, FormOwl OAuth, and Google
+OIDC as specified in `docs/closed-beta-runbook.md`.
 
-Run the #21 ChatGPT MCP result packet intake after a manual ChatGPT MCP test:
+Run the historical #21 result-packet intake after a manual local-compatibility test:
 
 ```sh
 python scripts/mail_upload_chatgpt_result_intake.py --input /tmp/formowl-chatgpt-result-packet.json --output /tmp/formowl-mail-upload-chatgpt-result-intake.json
@@ -763,8 +953,8 @@ locators, and mail payloads were excluded. Do not paste raw ChatGPT transcripts,
 PST contents, upload session IDs, local paths, or environment values into the
 packet.
 
-Run the #21 mail evidence ChatGPT result packet intake after a manual
-fixture-backed ChatGPT MCP evidence-reading smoke:
+Run the historical #21 mail-evidence result-packet intake after a manual
+fixture-backed local-compatibility evidence-reading smoke:
 
 ```sh
 python scripts/mail_evidence_chatgpt_result_intake.py --input /tmp/formowl-mail-evidence-chatgpt-result-packet.json --output /tmp/formowl-mail-evidence-chatgpt-result-intake.json
@@ -844,6 +1034,11 @@ Packaged console scripts use explicit compatibility names:
 `formowl-wiki-mcp-jsonline-compat`. The FormOwl gateway package provides the
 JSON-RPC compatibility wrapper for existing MCP server objects and semantic
 gateway tools; Project/Wiki behavior is preserved through transport tests.
+
+`formowl-semantic-mcp-jsonrpc` is likewise a hand-built local compatibility
+runner. None of these commands is an approved connected ChatGPT authentication
+or identity-selection path; connected clients use the public HTTPS `/mcp`
+resource and FormOwl OAuth 2.1.
 
 Project MCP compatibility example:
 

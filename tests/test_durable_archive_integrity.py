@@ -67,10 +67,21 @@ class DurableArchiveIntegrityTests(unittest.TestCase):
     def test_archived_board_preserves_historical_checklist_states(self) -> None:
         archived = (SNAPSHOT_ROOT / "implementation-task-breakdown.md").read_text(encoding="utf-8")
         active = (ROOT / "docs" / "implementation-task-breakdown.md").read_text(encoding="utf-8")
+        archived_unchecked = re.findall(r"^\s*- \[ \] (.+)$", archived, re.MULTILINE)
+        active_unchecked = re.findall(r"^\s*- \[ \] (.+)$", active, re.MULTILINE)
 
         self.assertEqual(len(re.findall(r"^\s*- \[x\]", archived, re.MULTILINE)), 147)
-        self.assertEqual(len(re.findall(r"^\s*- \[ \]", archived, re.MULTILINE)), 1)
-        self.assertEqual(len(re.findall(r"^\s*- \[ \]", active, re.MULTILINE)), 1)
+        self.assertEqual(
+            archived_unchecked,
+            ["Complete the full KG real-evidence objective across sessions."],
+        )
+        self.assertEqual(
+            active_unchecked,
+            [
+                *archived_unchecked,
+                "Implement issue #20 Google-backed ChatGPT MCP OAuth identity mapping and",
+            ],
+        )
 
 
 if __name__ == "__main__":
