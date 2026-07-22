@@ -24250,8 +24250,8 @@
         "source_path": "python/formowl_gateway/semantic.py",
         "change_kind": "modified",
         "base_ast_sha256": "sha256:3e02ead57fadb77a5d77f2f829619dce21b9cc19b1f0c73cb9e230c82cca3107",
-        "current_ast_sha256": "sha256:219d029317e883115f82c0231cc3defb218dbdb91f86924f39cc41bb9d4b3fd5",
-        "diff_sha256": "sha256:2ab87e34ce6a274a4bd4d0ac77c64f32e0338e3f4c445800e90800e0f4ca9b29"
+        "current_ast_sha256": "sha256:871e6dff237008d1ab158b549cc50a14786fc0d72fe5808dfc95ec8c5f1c30a4",
+        "diff_sha256": "sha256:03d9a99c9a82b4389b88e6c70771c70a97ab1a33ea8e7ed469d6ba5906625c0b"
       },
       "categories": {
         "success": {

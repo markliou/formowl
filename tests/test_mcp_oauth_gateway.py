@@ -1689,25 +1689,54 @@ class RemoteMcpHttpTests(unittest.TestCase):
             "requester_user_id": "user_beta",
         }
 
-        for case_index, (label, non_finite_value) in enumerate(
+        invalid_payloads = (
             (
-                ("nan", float("nan")),
-                ("positive_infinity", float("inf")),
-                ("negative_infinity", float("-inf")),
+                "nan",
+                lambda raw_marker: {
+                    "status": "ok",
+                    "value": float("nan"),
+                    "marker": raw_marker,
+                },
             ),
+            (
+                "positive_infinity",
+                lambda raw_marker: {
+                    "status": "ok",
+                    "value": float("inf"),
+                    "marker": raw_marker,
+                },
+            ),
+            (
+                "negative_infinity",
+                lambda raw_marker: {
+                    "status": "ok",
+                    "value": float("-inf"),
+                    "marker": raw_marker,
+                },
+            ),
+            (
+                "mapping_key_collision",
+                lambda raw_marker: {
+                    "status": "ok",
+                    "value": {
+                        1: f"{raw_marker}-integer",
+                        "1": f"{raw_marker}-string",
+                    },
+                },
+            ),
+        )
+
+        for case_index, (label, payload_factory) in enumerate(
+            invalid_payloads,
             start=1,
         ):
             with self.subTest(label=label):
-                raw_marker = f"raw-non-finite-handler-marker-{label}"
+                raw_marker = f"raw-invalid-handler-marker-{label}"
                 handler_calls: list[dict[str, Any]] = []
 
                 def configured_handler(arguments: dict[str, Any]) -> dict[str, Any]:
                     handler_calls.append(dict(arguments))
-                    return {
-                        "status": "ok",
-                        "value": non_finite_value,
-                        "marker": raw_marker,
-                    }
+                    return payload_factory(raw_marker)
 
                 bridge = _FakeBridge(self.config, self.google_client)
                 semantic_gateway = SemanticMcpGateway(upload_session_handler=configured_handler)
@@ -1791,6 +1820,7 @@ class RemoteMcpHttpTests(unittest.TestCase):
             return {
                 "status": "ok",
                 "value": 1.25,
+                "nested": {"1": "string"},
             }
 
         bridge = _FakeBridge(self.config, self.google_client)
@@ -1848,6 +1878,7 @@ class RemoteMcpHttpTests(unittest.TestCase):
         structured_content = result["structuredContent"]
         self.assertEqual(structured_content["status"], "ok")
         self.assertEqual(structured_content["data"]["value"], 1.25)
+        self.assertEqual(structured_content["data"]["nested"], {"1": "string"})
         canonical_text = json.dumps(
             structured_content,
             allow_nan=False,

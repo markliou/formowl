@@ -633,7 +633,7 @@ def _safe_handler_envelope(
                 invalid_payload = True
                 continue
             detached_key, detached_value = detached_entry
-            if type(detached_key) not in {str, int, float, bool, type(None)}:
+            if type(detached_key) is not str:
                 invalid_payload = True
                 continue
             try:

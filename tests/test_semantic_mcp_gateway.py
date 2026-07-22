@@ -15,6 +15,7 @@ from formowl_gateway import (
     safe_workflow_error_envelope,
     validate_public_gateway_payload,
 )
+from formowl_gateway.semantic import _safe_handler_envelope
 
 
 class SemanticMcpGatewayTests(unittest.TestCase):
@@ -398,6 +399,39 @@ class SemanticMcpGatewayTests(unittest.TestCase):
         self.assertNotIn("StatefulMapping", rendered_state)
         self.assertNotIn("second_read_coroutine", rendered_state)
         self.assertNotIn(raw_marker, rendered_state)
+
+        valid_string_key_payload = _safe_handler_envelope(
+            result_type="probe",
+            handler_payload={"status": "ok", "nested": {"1": "string"}},
+            status_from_payload=True,
+        )
+        self.assertEqual(
+            valid_string_key_payload["data"]["nested"],
+            {"1": "string"},
+        )
+
+        collision_markers = (
+            "raw-integer-key-collision-secret",
+            "raw-string-key-collision-secret",
+        )
+        with self.assertRaises(ContractValidationError) as raised:
+            _safe_handler_envelope(
+                result_type="probe",
+                handler_payload={
+                    "status": "ok",
+                    "nested": {
+                        1: collision_markers[0],
+                        "1": collision_markers[1],
+                    },
+                },
+                status_from_payload=True,
+            )
+        self.assertEqual(
+            str(raised.exception),
+            "semantic handler returned an invalid payload",
+        )
+        for marker in collision_markers:
+            self.assertNotIn(marker, str(raised.exception))
 
     def test_handler_payload_snapshot_wraps_hostile_iteration_and_closes_yielded_coroutines(
         self,
