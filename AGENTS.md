@@ -18,8 +18,15 @@ order:
 For any work that interprets KG, ontology, mail, retrieval, or evaluation
 results, also read the following before making a comparative claim:
 
-10. `experiments/kg_ontology_v2_coordination/claim_map.json`
-11. The README and result artifact for every experiment being compared.
+10. `experiments/kg_ontology_v2_coordination/CURRENT_RESULTS.md`
+11. `experiments/kg_ontology_v2_coordination/claim_map.json`
+12. The README and exact result artifact for every experiment being compared.
+
+`CURRENT_RESULTS.md` is the reporting-priority authority for weekly reports,
+status summaries, and method recommendations. Historical artifacts remain valid
+for their exact experiment tuple, but must not be promoted as the current
+headline. In particular, the procurement full-PST 11/100 to 19/100 aggregate is
+a historical diagnostic only; it is not the current KG or ontology breakthrough.
 
 Use `docs/implementation-task-breakdown.md` as the shared work board. Use
 `docs/agent-goals/` as the durable cross-session and cross-machine goal
@@ -78,6 +85,9 @@ unless the user explicitly assigns it here.
 
 ## Experiment Interpretation Gate
 
+- For current reporting, first determine the newest relevant tracked ablation
+  from `CURRENT_RESULTS.md`; do not begin with the easiest historical number to
+  find.
 - Treat an experiment result as the tuple `(artifact, dataset kind, arm id,
   implementation semantics, metric, claim boundary)`. Do not substitute a
   result from a different tuple.
@@ -91,14 +101,20 @@ unless the user explicitly assigns it here.
 - A later experiment does not supersede an earlier experiment merely because it
   is newer or uses a larger/private corpus. Dataset, arm implementation, output
   target, and metric must all be compared explicitly.
+- The 11/100 to 19/100 procurement aggregate is historical diagnostic evidence
+  only. Do not use it as the current weekly-report breakthrough, the current
+  method-selection result, or the starting point for a new recommendation.
 - Before saying that KG works, ontology fails, Ontology v2 lacks incremental
   value, or a real-evidence result invalidates a benchmark result, read
-  `experiments/kg_ontology_v2_coordination/claim_map.json` and cite the exact
-  artifacts supporting the statement.
-- The current bounded statement is: Ontology v2 shows clear incremental value
-  over KG-only on the fixed redacted coordination hard challenge; transfer of
-  that full coordination-frame advantage to the current operator-provided
-  full-PST pipeline remains unverified.
+  `CURRENT_RESULTS.md`, `claim_map.json`, and the exact artifacts supporting the
+  statement.
+- The current bounded statement is: the latest candidate-admission ablation
+  selects the zero-training frozen profile as the stable default with
+  43,976/50,000 total passes and 33,976/40,000 positive passes while preserving
+  all no-match and permission-denied guards. This is a candidate-admission and
+  graph-construction result, not an isolated ontology or frame-semantic claim.
+  Separately, coordination-frame v2 retains benchmark-scoped incremental value
+  on the fixed redacted hard challenge.
 
 ## Current Starting Point
 

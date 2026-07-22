@@ -1,11 +1,41 @@
 {
-  "schema_version": "formowl_kg_experiment_claim_map_v1",
-  "purpose": "Prevent agents and reviewers from conflating different datasets, arm implementations, metrics, and claim boundaries when interpreting KG and Ontology v2 experiments.",
+  "schema_version": "formowl_kg_experiment_claim_map_v2",
+  "purpose": "Prevent agents and reviewers from conflating different datasets, arm implementations, metrics, claim boundaries, and historical versus current reporting priority when interpreting KG and Ontology v2 experiments.",
+  "agent_entrypoint": "experiments/kg_ontology_v2_coordination/CURRENT_RESULTS.md",
+  "mandatory_reporting_rule": "For weekly reports, status summaries, and method recommendations, read CURRENT_RESULTS.md first and report the latest relevant ablation. Historical experiments remain valid only for their own tuple and must not be promoted as the current headline.",
   "mandatory_interpretation_rule": "An experiment result is identified by the tuple (artifact, dataset_kind, arm_id, implementation_semantics, metric, claim_boundary). Results from different tuples must not be substituted for one another.",
+  "current_method_selection": {
+    "experiment_id": "exm_no_training_candidate_admission_50000",
+    "canonical_source": "experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json",
+    "reporting_priority": "current_headline",
+    "dataset_kind": "generated_same_corpus_exm_candidate_admission_benchmark",
+    "case_count": 50000,
+    "selected_arm": "frozen_profile_candidate_admission",
+    "selected_arm_results": {
+      "passed_case_count": 43976,
+      "positive_passed_case_count": 33976,
+      "no_match_passed_case_count": 5000,
+      "permission_denied_passed_case_count": 5000,
+      "delta_vs_weak_label_mlp_passed_case_count": 607
+    },
+    "supported_claims": [
+      "Upstream candidate admission is the dominant measured improvement on this generated EXM benchmark.",
+      "The zero-training frozen profile is the current stable candidate-admission default for this benchmark.",
+      "The frozen profile preserves all measured no-match and permission-denied guards while passing 607 more cases than the weak-label MLP arm."
+    ],
+    "unsupported_claims": [
+      "The result isolates ontology, type-compatibility, or coordination-frame semantics.",
+      "Production readiness.",
+      "General parser readiness.",
+      "Business-answer quality.",
+      "Canonical graph or ontology write readiness."
+    ]
+  },
   "experiments": [
     {
       "experiment_id": "ontology_v2_redacted_hard_challenge_100",
       "canonical_source": "experiments/kg_ontology_v2_coordination/README.md",
+      "reporting_priority": "current_separate_coordination_frame_claim",
       "dataset_kind": "designed_redacted_fixed_challenge",
       "case_count": 100,
       "independent_raw_pst_parser_output": false,
@@ -86,6 +116,8 @@
     {
       "experiment_id": "procurement_full_pst_domain_hard_100",
       "canonical_source": "experiments/kg_ontology_v2_coordination/results/procurement_full_pst_domain_hard_summary_2026-07-09.json",
+      "reporting_priority": "historical_diagnostic_only",
+      "superseded_as_current_headline_by": "exm_no_training_candidate_admission_50000",
       "dataset_kind": "operator_provided_full_pst_domain_hard_aggregate",
       "case_count": 100,
       "positive_case_count": 80,
@@ -150,12 +182,15 @@
         }
       ],
       "supported_claims": [
-        "Candidate KG improves this aggregate score from 11/100 to 19/100.",
-        "The measured ontology-guided KG arm does not improve beyond candidate KG on this full-PST experiment.",
+        "Candidate KG improved this historical aggregate score from 11/100 to 19/100.",
+        "The measured ontology-guided KG arm did not improve beyond candidate KG on this historical full-PST experiment.",
         "Coordination-frame v2 and hybrid soft-gate plus v2-frame were not executed in this artifact; their real-evidence transfer remains unverified.",
-        "All measured no-match cases fail while all permission-denied cases are enforced."
+        "All measured no-match cases failed while all permission-denied cases were enforced."
       ],
       "unsupported_claims": [
+        "This is the current KG or ontology result.",
+        "This is the current weekly-report breakthrough.",
+        "The later candidate-admission ablations were not executed.",
         "Coordination-frame v2 is ineffective on real PST evidence.",
         "The ontology-guided KG arm is implementation-equivalent to the redacted challenge coordination_frame_v2 arm.",
         "The full-PST result negates or supersedes the redacted hard-challenge v2 result.",
@@ -169,11 +204,14 @@
     "A later experiment does not automatically supersede an earlier experiment when it uses a different dataset, arm implementation, output target, or metric.",
     "A no-improvement result for a type-compatibility or ontology-guided arm does not prove that an unexecuted coordination-frame arm is ineffective.",
     "A positive result on a designed redacted challenge proves only benchmark-scoped incremental value, not real-evidence transfer or production readiness.",
-    "Every report table that lists candidate_kg_fusion and ontology_guided_kg must also list coordination_frame_v2 and hybrid_soft_gate_v2_frame with an explicit measured or not-executed status."
+    "Every report table that lists candidate_kg_fusion and ontology_guided_kg must also list coordination_frame_v2 and hybrid_soft_gate_v2_frame with an explicit measured or not-executed status.",
+    "The historical procurement 11/100 to 19/100 result must not be selected as the current headline when the 50,000-case candidate-admission ablation is relevant."
   ],
   "required_agent_summary": {
-    "current_supported_statement": "Ontology v2 has demonstrated clear incremental value over KG-only on the fixed redacted coordination hard challenge. The current operator-provided full-PST ontology-guided arm ties KG-only, while coordination-frame v2 and the hybrid v2 arm were not executed in that artifact; real-evidence transfer of the full coordination-frame advantage therefore remains unverified, not negative.",
+    "current_supported_statement": "The latest candidate-admission ablation selects the zero-training frozen profile as the stable default: 43,976/50,000 total passes and 33,976/40,000 positive passes, with all no-match and permission-denied guards preserved. This is a candidate-admission and graph-construction result, not an isolated ontology or frame-semantic claim. Separately, coordination-frame v2 retains benchmark-scoped incremental value on the fixed redacted hard challenge.",
+    "historical_diagnostic_statement": "The older procurement full-PST aggregate improved from 11/100 to 19/100 with Candidate KG, while its particular ontology-guided arm tied Candidate KG. Coordination-frame v2 and hybrid soft-gate plus v2-frame were not executed in that artifact, so their real-evidence transfer remains unverified rather than negative. This is historical diagnostic evidence and not the current method headline.",
     "forbidden_unqualified_statements": [
+      "The current result is 11/100 to 19/100.",
       "Knowledge graph works but ontology does not.",
       "Ontology v2 has not shown incremental value.",
       "The full-PST experiment proves Ontology v2 is ineffective.",

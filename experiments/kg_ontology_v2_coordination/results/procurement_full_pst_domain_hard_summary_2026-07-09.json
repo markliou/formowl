@@ -8,6 +8,10 @@
     "measurement_rows_changed": false,
     "original_measurements_preserved": true
   },
+  "reporting_status": "historical_diagnostic_only",
+  "current_results_entrypoint": "experiments/kg_ontology_v2_coordination/CURRENT_RESULTS.md",
+  "superseded_as_current_headline_by": "experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json",
+  "agent_warning": "Do not use this 11/100 to 19/100 aggregate as the current KG or ontology headline, weekly-report breakthrough, or method recommendation. It is retained only as historical retrieval diagnostic evidence for this exact artifact tuple. Read CURRENT_RESULTS.md and claim_map.json before reporting.",
   "source_fixture": {
     "description": "operator-provided procurement full-PST real-case fixture",
     "raw_content_included": false,
@@ -171,10 +175,12 @@
     "best_factorial_arm_used_zero_ontology_operators": true,
     "coordination_frame_v2_real_evidence_transfer_status": "unverified_not_measured",
     "hybrid_soft_gate_v2_frame_real_evidence_transfer_status": "unverified_not_measured",
-    "summary": "Candidate KG structure improved the procurement real-case score from 11/100 to 19/100. The measured type/relation-oriented ontology_guided_kg and ordered factorial arms did not improve beyond candidate KG. Coordination-frame Ontology v2 and the hybrid soft-gate plus v2-frame path were not executed in this artifact, so their real-evidence transfer remains unverified rather than negative."
+    "summary": "Historical diagnostic only: Candidate KG structure improved this procurement real-case score from 11/100 to 19/100. The measured type/relation-oriented ontology_guided_kg and ordered factorial arms did not improve beyond candidate KG. Coordination-frame Ontology v2 and the hybrid soft-gate plus v2-frame path were not executed in this artifact, so their real-evidence transfer remains unverified rather than negative. This is not the current method-selection result."
   },
   "claim_boundary": {
-    "supports_operator_provided_full_pst_domain_hard_measurement": true,
+    "supports_historical_operator_provided_full_pst_domain_hard_measurement": true,
+    "supports_current_method_headline": false,
+    "supports_current_weekly_report_breakthrough": false,
     "supports_candidate_kg_incremental_value_on_this_artifact": true,
     "supports_measured_ontology_guided_arm_incremental_value": false,
     "supports_coordination_frame_v2_real_evidence_effectiveness_claim": false,
