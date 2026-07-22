@@ -619,7 +619,9 @@ def _run_domain_hard_case_eval_inner(work_dir: Path, *, pst_fixture: Path) -> di
     extraction_config = {
         "timeout_seconds": 3600,
         "body_segment_max_chars": 4000,
-        "max_body_segments_per_message": 3,
+        "max_body_segments_per_message": None,
+        "max_attachment_text_bytes": 5 * 1024 * 1024,
+        "preserve_private_body_text": True,
         "parser_workers": max(1, min(os.cpu_count() or 1, 8)),
     }
     import_started = time.monotonic()
@@ -712,24 +714,36 @@ def _build_report_for_bundle(
     bundle_read_elapsed_ms: int,
     staging_leftover_count: int = 0,
     scratch_leftover_count: int = 0,
+    fixed_cases: Sequence[_DomainCase] | None = None,
+    fixed_private_manifest_hash: str | None = None,
 ) -> dict[str, Any]:
     manifest_started = time.monotonic()
-    cases = _generate_domain_case_manifest(
-        bundle,
-        archive_sha256=archive_sha256,
-        parser_version=parser_version,
+    cases = (
+        list(fixed_cases)
+        if fixed_cases is not None
+        else _generate_domain_case_manifest(
+            bundle,
+            archive_sha256=archive_sha256,
+            parser_version=parser_version,
+        )
     )
     manifest_elapsed_ms = int((time.monotonic() - manifest_started) * 1000)
     private_manifest_path = work_dir / "artifacts" / PRIVATE_MANIFEST_NAME
-    private_manifest_started = time.monotonic()
-    private_manifest_hash = _write_private_manifest(
-        private_manifest_path,
-        bundle=bundle,
-        cases=cases,
-        archive_sha256=archive_sha256,
-        parser_version=parser_version,
-    )
-    private_manifest_elapsed_ms = int((time.monotonic() - private_manifest_started) * 1000)
+    if fixed_cases is None:
+        private_manifest_started = time.monotonic()
+        private_manifest_hash = _write_private_manifest(
+            private_manifest_path,
+            bundle=bundle,
+            cases=cases,
+            archive_sha256=archive_sha256,
+            parser_version=parser_version,
+        )
+        private_manifest_elapsed_ms = int((time.monotonic() - private_manifest_started) * 1000)
+    else:
+        if not private_manifest_path.is_file() or not fixed_private_manifest_hash:
+            raise RuntimeError("fixed private manifest is unavailable")
+        private_manifest_hash = fixed_private_manifest_hash
+        private_manifest_elapsed_ms = 0
 
     scoring_started = time.monotonic()
     scores, query_runner_setup_elapsed_ms, case_query_loop_elapsed_ms = _score_domain_cases(

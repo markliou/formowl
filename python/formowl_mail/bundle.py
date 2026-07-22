@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from formowl_contract import (
     ContractValidationError,
@@ -148,6 +148,12 @@ class EmailMessage:
     body_hash: str | None = None
     thread_id: str | None = None
     fingerprint_policy: str = "formowl_mail_fingerprint_v1"
+    source_body_char_count: int | None = None
+    stored_body_char_count: int | None = None
+    body_segment_count: int | None = None
+    body_evidence_state: str = "unknown"
+    body_redacted_segment_count: int = 0
+    unresolved_attachment_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return _public_payload(self, "email_message")
@@ -170,6 +176,12 @@ class EmailMessage:
             thread_id=_optional_str(item, "thread_id"),
             fingerprint_policy=_optional_str(item, "fingerprint_policy")
             or "formowl_mail_fingerprint_v1",
+            source_body_char_count=_optional_int(item, "source_body_char_count"),
+            stored_body_char_count=_optional_int(item, "stored_body_char_count"),
+            body_segment_count=_optional_int(item, "body_segment_count"),
+            body_evidence_state=_optional_str(item, "body_evidence_state") or "unknown",
+            body_redacted_segment_count=_optional_int(item, "body_redacted_segment_count") or 0,
+            unresolved_attachment_count=_optional_int(item, "unresolved_attachment_count") or 0,
         )
         message.to_dict()
         return message
@@ -219,21 +231,40 @@ class EmailBodySegment:
     text: str
     body_segment_hash: str
     body_segment_index: int | None = None
+    segment_source_type: str = "message_body"
+    attachment_id: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+    body_segment_count: int | None = None
+    source_body_char_count: int | None = None
+    stored_body_char_count: int | None = None
+    body_evidence_state: str = "unknown"
+    content_publicly_unsafe: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return _public_payload(self, "email_body_segment")
+        return _private_payload(self)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "EmailBodySegment":
-        item = _require_dict(value, "email_body_segment")
+        item = _require_private_dict(value, "email_body_segment")
+        _assert_private_body_segment_envelope_safe(item)
         segment = cls(
             email_body_segment_id=_required_str(item, "email_body_segment_id"),
             email_message_id=_required_str(item, "email_message_id"),
             message_occurrence_id=_required_str(item, "message_occurrence_id"),
             source_observation_id=_required_str(item, "source_observation_id"),
-            text=_required_str(item, "text"),
+            text=_required_private_str(item, "text"),
             body_segment_hash=_required_str(item, "body_segment_hash"),
             body_segment_index=_optional_int(item, "body_segment_index"),
+            segment_source_type=_optional_str(item, "segment_source_type") or "message_body",
+            attachment_id=_optional_str(item, "attachment_id"),
+            char_start=_optional_int(item, "char_start"),
+            char_end=_optional_int(item, "char_end"),
+            body_segment_count=_optional_int(item, "body_segment_count"),
+            source_body_char_count=_optional_int(item, "source_body_char_count"),
+            stored_body_char_count=_optional_int(item, "stored_body_char_count"),
+            body_evidence_state=_optional_str(item, "body_evidence_state") or "unknown",
+            content_publicly_unsafe=_optional_bool(item, "content_publicly_unsafe") or False,
         )
         segment.to_dict()
         return segment
@@ -431,11 +462,12 @@ class MailEvidenceBundle:
     created_at: str = field(default_factory=now_iso)
 
     def to_dict(self) -> dict[str, Any]:
-        return _public_payload(self, "mail_evidence_bundle")
+        return _private_payload(self)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "MailEvidenceBundle":
-        item = _require_dict(value, "mail_evidence_bundle")
+        item = _require_private_dict(value, "mail_evidence_bundle")
+        _assert_private_mail_bundle_envelope_safe(item)
         bundle = cls(
             mail_evidence_bundle_id=_required_str(item, "mail_evidence_bundle_id"),
             producer_type=_required_choice(item, "producer_type", _PRODUCER_TYPES),
@@ -506,7 +538,7 @@ def build_mail_evidence_bundle(
         raise ContractValidationError("server_side_parser mail import requires upload_session_id")
     observation_payloads = [observation.to_dict() for observation in observations]
     for observation_payload in observation_payloads:
-        assert_public_payload_safe(observation_payload, "mail_evidence_bundle.observation")
+        _assert_private_observation_envelope_safe(observation_payload)
     normalized = [Observation.from_dict(observation) for observation in observation_payloads]
     mail_observations = [
         observation for observation in normalized if observation.modality == "mail"
@@ -782,6 +814,12 @@ def _messages_and_occurrences(
                 "thread_id": payload.get("thread_id"),
                 "fingerprint_policy": payload.get("fingerprint_policy")
                 or "formowl_mail_fingerprint_v1",
+                "source_body_char_count": payload.get("source_body_char_count"),
+                "stored_body_char_count": payload.get("stored_body_char_count"),
+                "body_segment_count": payload.get("body_segment_count"),
+                "body_evidence_state": payload.get("body_evidence_state") or "unknown",
+                "body_redacted_segment_count": payload.get("body_redacted_segment_count") or 0,
+                "unresolved_attachment_count": payload.get("unresolved_attachment_count") or 0,
             },
         )
         record["source_observation_ids"].append(observation.observation_id)
@@ -833,7 +871,10 @@ def _body_segments(
 ) -> list[EmailBodySegment]:
     segments: dict[str, EmailBodySegment] = {}
     for observation in observations:
-        if observation.observation_type != "email_body_segment":
+        if observation.observation_type not in {
+            "email_body_segment",
+            "email_attachment_text_segment",
+        }:
             continue
         email_message_id = _email_message_id_for_observation(
             observation,
@@ -841,11 +882,24 @@ def _body_segments(
             message_ids_by_occurrence_id,
         )
         message_occurrence_id = _observation_location(observation, "message_occurrence_id")
-        text = safe_public_string(observation.text or "", "email_body_segment.text")
+        text = _private_observation_text(observation)
+        payload = observation.payload or {}
+        segment_source_type = (
+            "attachment_text"
+            if observation.observation_type == "email_attachment_text_segment"
+            else "message_body"
+        )
+        segment_index = (
+            observation.location.get("attachment_text_segment_index")
+            if segment_source_type == "attachment_text"
+            else observation.location.get("body_segment_index")
+        )
         body_segment_hash = sha256_json(
             {
                 "email_message_id": email_message_id,
-                "body_segment_index": observation.location.get("body_segment_index"),
+                "segment_source_type": segment_source_type,
+                "attachment_id": observation.location.get("attachment_id"),
+                "body_segment_index": segment_index,
                 "text": text,
             }
         )
@@ -867,11 +921,32 @@ def _body_segments(
                     "source_observation_id": observation.observation_id,
                     "text": text,
                     "body_segment_hash": body_segment_hash,
-                    "body_segment_index": observation.location.get("body_segment_index"),
+                    "body_segment_index": segment_index,
+                    "segment_source_type": segment_source_type,
+                    "attachment_id": observation.location.get("attachment_id"),
+                    "char_start": observation.location.get("char_start"),
+                    "char_end": observation.location.get("char_end"),
+                    "body_segment_count": payload.get("body_segment_count")
+                    or payload.get("attachment_text_segment_count"),
+                    "source_body_char_count": payload.get("source_body_char_count"),
+                    "stored_body_char_count": payload.get("stored_body_char_count"),
+                    "body_evidence_state": payload.get("body_evidence_state")
+                    or payload.get("text_extraction_state")
+                    or "unknown",
+                    "content_publicly_unsafe": payload.get("content_publicly_unsafe") is True,
                 }
             ),
         )
-    return sorted(segments.values(), key=lambda item: item.email_body_segment_id)
+    return sorted(
+        segments.values(),
+        key=lambda item: (
+            item.email_message_id,
+            item.segment_source_type,
+            item.attachment_id or "",
+            item.body_segment_index or 0,
+            item.email_body_segment_id,
+        ),
+    )
 
 
 def _attachments(
@@ -1023,9 +1098,50 @@ def _safe_payload_str(payload: dict[str, Any], field_name: str) -> str | None:
     return safe_public_string(value, field_name)
 
 
+def _private_observation_text(observation: Observation) -> str:
+    value = observation.text
+    if not isinstance(value, str) or not value:
+        raise ContractValidationError("email evidence segment text must be a non-empty string")
+    return value
+
+
+def _assert_private_observation_envelope_safe(value: Mapping[str, Any]) -> None:
+    safe_view = dict(value)
+    if safe_view.get("observation_type") in {
+        "email_body_segment",
+        "email_attachment_text_segment",
+    }:
+        safe_view["text"] = "[governed_private_mail_text]"
+    assert_public_payload_safe(safe_view, "mail_evidence_bundle.observation_envelope")
+
+
+def _assert_private_body_segment_envelope_safe(value: Mapping[str, Any]) -> None:
+    safe_view = dict(value)
+    safe_view["text"] = "[governed_private_mail_text]"
+    assert_public_payload_safe(safe_view, "email_body_segment.private_envelope")
+
+
+def _assert_private_mail_bundle_envelope_safe(value: Mapping[str, Any]) -> None:
+    safe_view = dict(value)
+    body_segments = value.get("body_segments")
+    safe_view["body_segments"] = []
+    assert_public_payload_safe(safe_view, "mail_evidence_bundle.private_envelope")
+    if isinstance(body_segments, list):
+        for segment in body_segments:
+            if isinstance(segment, Mapping):
+                _assert_private_body_segment_envelope_safe(segment)
+
+
 def _public_payload(value: Any, context: str) -> dict[str, Any]:
     payload = to_plain(value)
     assert_public_payload_safe(payload, context)
+    return payload
+
+
+def _private_payload(value: Any) -> dict[str, Any]:
+    payload = to_plain(value)
+    if not isinstance(payload, dict):
+        raise ContractValidationError("private mail evidence payload must be an object")
     return payload
 
 
@@ -1036,11 +1152,24 @@ def _require_dict(value: Any, context: str) -> dict[str, Any]:
     return value
 
 
+def _require_private_dict(value: Any, context: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ContractValidationError(f"{context} must be an object")
+    return value
+
+
 def _required_str(value: dict[str, Any], field_name: str) -> str:
     item = value.get(field_name)
     if not isinstance(item, str) or not item:
         raise ContractValidationError(f"{field_name} must be a non-empty string")
     return safe_public_string(item, field_name)
+
+
+def _required_private_str(value: dict[str, Any], field_name: str) -> str:
+    item = value.get(field_name)
+    if not isinstance(item, str) or not item:
+        raise ContractValidationError(f"{field_name} must be a non-empty string")
+    return item
 
 
 def _optional_str(value: dict[str, Any], field_name: str) -> str | None:
@@ -1068,6 +1197,15 @@ def _optional_int(value: dict[str, Any], field_name: str) -> int | None:
         return None
     if not isinstance(item, int) or isinstance(item, bool):
         raise ContractValidationError(f"{field_name} must be an integer")
+    return item
+
+
+def _optional_bool(value: dict[str, Any], field_name: str) -> bool | None:
+    item = value.get(field_name)
+    if item is None:
+        return None
+    if not isinstance(item, bool):
+        raise ContractValidationError(f"{field_name} must be a boolean")
     return item
 
 

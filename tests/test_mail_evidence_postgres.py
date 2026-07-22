@@ -214,6 +214,40 @@ class PostgreSQLMailEvidenceStoreTests(unittest.TestCase):
         self.assertNotIn("mail_import_session ", str(granted_content))
         self.assertNotIn("audit approval", str(granted_gateway.leak_transcript()))
 
+    def test_private_body_round_trips_but_public_query_remains_redacted(self) -> None:
+        bundle = _mail_bundle(_paths.fresh_test_dir("mail-evidence-postgres-private-body"))
+        payload = bundle.to_dict()
+        private_text = "Review C:\\private\\archive.pst and SELECT * FROM mailbox_messages"
+        payload["body_segments"][0]["text"] = private_text
+        private_bundle = MailEvidenceBundle.from_dict(payload)
+        connection = _RecordingMailConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+
+        store.upsert_bundle(private_bundle)
+        stored = store.get_bundle(
+            mail_import_session_id=private_bundle.mail_import_session.mail_import_session_id,
+        )
+
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertIn(private_text, [segment.text for segment in stored.body_segments])
+        result = build_postgre_sql_mail_evidence_query_handler(store, now=NOW)(
+            {
+                "query_text": "Review mailbox",
+                "requester_user_id": "user_yifan",
+                "workspace_id": "workspace_formowl",
+                "session_id": "session_private_roundtrip",
+                "mail_import_session_id": (
+                    private_bundle.mail_import_session.mail_import_session_id
+                ),
+            }
+        )
+        rendered = json.dumps(result, sort_keys=True)
+        self.assertNotIn(private_text, rendered)
+        self.assertNotIn("C:\\private", rendered)
+        self.assertNotIn("SELECT * FROM", rendered)
+        self.assertIn("unsafe_mail_evidence_content_redacted", result["warnings"])
+
     def test_invalid_bundle_and_unsafe_lookup_fail_before_database_side_effects(self) -> None:
         bundle = _mail_bundle(_paths.fresh_test_dir("mail-evidence-postgres-invalid"))
         payload = bundle.to_dict()

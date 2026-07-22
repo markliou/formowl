@@ -363,6 +363,92 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
         )
         self.assertEqual(missed, [])
 
+    def test_mail_evidence_query_anchors_candidates_to_protected_identifier(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-query-identifier-anchor")
+        bundle = _mail_bundle(temp_dir, _mail_archive_identifier_competition())
+        gateway = MailEvidenceQueryGateway([bundle])
+
+        matched = gateway.query_mail_evidence(
+            query_text="有03.80503G301的COO或產地嗎",
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            session_id="session_identifier_anchor",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            limit=3,
+            now=NOW,
+        ).to_dict()
+        missing = gateway.query_mail_evidence(
+            query_text="有03.99999Z999的COO或產地嗎",
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            session_id="session_missing_identifier_anchor",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            limit=3,
+            now=NOW,
+        ).to_dict()
+
+        self.assertEqual(matched["status"], "ok")
+        self.assertEqual(len(matched["evidence_snippets"]), 1)
+        self.assertIn("03.80503G301", matched["evidence_snippets"][0]["snippet"])
+        self.assertIn(
+            "03.80503g301",
+            matched["evidence_snippets"][0]["matched_terms"],
+        )
+        self.assertNotIn("generic COO", str(matched["evidence_snippets"]))
+        self.assertEqual(missing["status"], "ok")
+        self.assertEqual(missing["evidence_snippets"], [])
+        self.assertEqual(missing["citations"], [])
+        self.assertIn("no_visible_mail_evidence_matched", missing["warnings"])
+
+    def test_mail_evidence_read_expands_identifier_hit_to_complete_message(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-read-complete-message")
+        archive = _mail_archive()
+        archive["messages"][0]["body_segments"] = [
+            "03.80503G301 shipment status",
+            "COO origin is Taiwan",
+        ]
+        archive["messages"][0]["body_hash"] = "sha256:body-cross-segment"
+        bundle = _mail_bundle(temp_dir, archive)
+        gateway = MailEvidenceQueryGateway([bundle])
+
+        query = gateway.query_mail_evidence(
+            query_text="03.80503G301 COO origin",
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            session_id="session_cross_segment_query",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            limit=10,
+            now=NOW,
+        ).to_dict()
+        self.assertEqual(query["status"], "ok")
+        self.assertEqual(len(query["evidence_snippets"]), 1)
+        self.assertIn("03.80503G301", query["evidence_snippets"][0]["snippet"])
+
+        read = gateway.read_mail_evidence(
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            session_id="session_cross_segment_read",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            email_message_ids=[query["evidence_snippets"][0]["email_message_id"]],
+            now=NOW,
+        ).to_dict()
+        self.assertEqual(read["status"], "ok")
+        self.assertEqual(
+            {segment["source_observation_id"] for segment in read["evidence_segments"]},
+            {segment.source_observation_id for segment in bundle.body_segments},
+        )
+
+        denied = gateway.read_mail_evidence(
+            requester_user_id="user_other",
+            workspace_id="workspace_formowl",
+            session_id="session_cross_segment_denied",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            email_message_ids=[query["evidence_snippets"][0]["email_message_id"]],
+            now=NOW,
+        ).to_dict()
+        self.assertEqual(denied["status"], "permission_denied")
+        self.assertEqual(denied["evidence_segments"], [])
+
     def test_mail_evidence_query_redacts_unsafe_spans_without_failing_whole_query(
         self,
     ) -> None:
@@ -1278,6 +1364,40 @@ def _mail_archive_no_markers() -> dict:
     archive["messages"][0]["body"] = "Launch reviewed but no structured marker lines"
     archive["messages"][0]["body_hash"] = "sha256:body-launch-no-markers"
     return archive
+
+
+def _mail_archive_identifier_competition() -> dict:
+    messages = [
+        {
+            "message_id": f"<generic-coo-{index}@example.test>",
+            "thread_id": f"thread_generic_coo_{index}",
+            "folder_path_hash": "sha256:folder-inbox",
+            "subject": f"Generic COO review {index}",
+            "sender": "generic@example.test",
+            "sent_at": NOW,
+            "body": "generic COO 產地 origin information for another item",
+            "body_hash": f"sha256:body-generic-coo-{index}",
+        }
+        for index in range(5)
+    ]
+    messages.append(
+        {
+            "message_id": "<target-origin@example.test>",
+            "thread_id": "thread_target_origin",
+            "folder_path_hash": "sha256:folder-inbox",
+            "subject": "Manufacturing-site confirmation",
+            "sender": "target@example.test",
+            "sent_at": NOW,
+            "body": "03.80503G301 manufacturing site is Taiwan",
+            "body_hash": "sha256:body-target-origin",
+        }
+    )
+    return {
+        "archive_id": "archive_identifier_competition",
+        "mailbox_id": "mailbox_yifan",
+        "folders": [{"folder_path_hash": "sha256:folder-inbox", "label": "Inbox"}],
+        "messages": messages,
+    }
 
 
 def _mail_session_grant(

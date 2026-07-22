@@ -65,6 +65,16 @@ class _ParsedAttachment:
     mime_type: str | None = None
     content_hash: str | None = None
     size_bytes: int | None = None
+    extracted_text_segments: list[str] = field(default_factory=list)
+    text_extraction_state: str = "not_text"
+
+
+@dataclass(frozen=True)
+class _ParsedBodySegment:
+    text: str
+    char_start: int
+    char_end: int
+    content_publicly_unsafe: bool = False
 
 
 @dataclass(frozen=True)
@@ -77,8 +87,13 @@ class _ParsedMessage:
     sender: str
     sent_at: str
     headers: dict[str, str]
-    body_segments: list[str]
+    body_segments: list[_ParsedBodySegment]
     body_hash: str
+    source_body_char_count: int
+    stored_body_char_count: int
+    body_evidence_state: str
+    body_redacted_segment_count: int
+    unresolved_attachment_count: int
     attachments: list[_ParsedAttachment]
     references: list[str] = field(default_factory=list)
     in_reply_to: str | None = None
@@ -90,8 +105,10 @@ class _PstParserConfig:
     timeout_seconds: int
     max_message_file_bytes: int
     body_segment_max_chars: int
-    max_body_segments_per_message: int
+    max_body_segments_per_message: int | None
     max_attachment_hash_bytes: int
+    max_attachment_text_bytes: int
+    preserve_private_body_text: bool
     include_deleted_items: bool
     parser_workers: int
 
@@ -108,7 +125,7 @@ class PstMailArchiveExtractor:
     def __init__(
         self,
         *,
-        version: str = "0.1.0",
+        version: str = "0.2.0",
         parser_command: str = "readpst",
         runner: _ParserRunner | None = None,
         scratch_parent: str | Path | None = None,
@@ -240,13 +257,21 @@ def _parser_config(config: Mapping[str, Any]) -> _PstParserConfig:
             config.get("body_segment_max_chars", 4000),
             "body_segment_max_chars",
         ),
-        max_body_segments_per_message=_positive_int(
-            config.get("max_body_segments_per_message", 3),
+        max_body_segments_per_message=_optional_positive_int(
+            config.get("max_body_segments_per_message"),
             "max_body_segments_per_message",
         ),
         max_attachment_hash_bytes=_positive_int(
             config.get("max_attachment_hash_bytes", 5 * 1024 * 1024),
             "max_attachment_hash_bytes",
+        ),
+        max_attachment_text_bytes=_positive_int(
+            config.get("max_attachment_text_bytes", 5 * 1024 * 1024),
+            "max_attachment_text_bytes",
+        ),
+        preserve_private_body_text=_bool_config(
+            config.get("preserve_private_body_text", True),
+            "preserve_private_body_text",
         ),
         include_deleted_items=_bool_config(
             config.get("include_deleted_items", False),
@@ -411,28 +436,48 @@ def _parsed_message_from_email(
     sent_at = _safe_date(message.get("date") or "")
     raw_body = _plain_body(message)
     body_hash = sha256_json(raw_body)
-    body_segments = _safe_body_segments(
+    body_segments, body_evidence_state, body_redacted_segment_count = _safe_body_segments(
         raw_body,
         max_chars=config.body_segment_max_chars,
         max_segments=config.max_body_segments_per_message,
+        preserve_private_text=config.preserve_private_body_text,
         warnings=warnings,
     )
-    message_id = _message_id(message, fallback_parts=(folder_path_hash, message_index, body_hash))
+    normalized_subject = _normalize_subject(subject)
+    message_id = _message_id(
+        message,
+        fallback_parts=(
+            folder_path_hash,
+            normalized_subject,
+            sender,
+            sent_at,
+            body_hash,
+        ),
+    )
     headers = _safe_headers(message, warnings=warnings)
     references = _safe_header_tokens(message.get("references") or "", "references")
     in_reply_to = _safe_optional_header(message.get("in-reply-to"), "in_reply_to")
     attachments = _attachments(message, config=config, warnings=warnings)
+    unresolved_attachment_count = sum(
+        attachment.text_extraction_state in {"unsupported", "failed", "too_large"}
+        for attachment in attachments
+    )
     return _ParsedMessage(
         folder_path_hash=folder_path_hash,
         folder_label=folder_label,
         message_id=message_id,
         subject=subject,
-        normalized_subject=_normalize_subject(subject),
+        normalized_subject=normalized_subject,
         sender=sender,
         sent_at=sent_at,
         headers=headers,
         body_segments=body_segments,
         body_hash=body_hash,
+        source_body_char_count=len(raw_body),
+        stored_body_char_count=sum(len(segment.text) for segment in body_segments),
+        body_evidence_state=body_evidence_state,
+        body_redacted_segment_count=body_redacted_segment_count,
+        unresolved_attachment_count=unresolved_attachment_count,
         attachments=attachments,
         references=references,
         in_reply_to=in_reply_to,
@@ -557,45 +602,54 @@ def _safe_body_segments(
     text: str,
     *,
     max_chars: int,
-    max_segments: int,
+    max_segments: int | None,
+    preserve_private_text: bool,
     warnings: list[str],
-) -> list[str]:
-    segments: list[str] = []
-    for paragraph in _body_paragraphs(text):
-        if len(segments) >= max_segments:
+) -> tuple[list[_ParsedBodySegment], str, int]:
+    segments: list[_ParsedBodySegment] = []
+    redacted_segment_count = 0
+    for start in range(0, len(text), max_chars):
+        if max_segments is not None and len(segments) >= max_segments:
             warnings.append("pst_parser_body_segment_limit_reached")
-            break
-        for chunk in _chunks(paragraph, max_chars):
-            if len(segments) >= max_segments:
-                warnings.append("pst_parser_body_segment_limit_reached")
-                break
-            segments.append(_safe_body_segment(chunk, warnings=warnings))
-    return segments
+            return segments, "truncated", redacted_segment_count
+        chunk = text[start : start + max_chars]
+        safe_text, publicly_unsafe = _safe_body_segment(
+            chunk,
+            preserve_private_text=preserve_private_text,
+            warnings=warnings,
+        )
+        if publicly_unsafe and not preserve_private_text:
+            redacted_segment_count += 1
+        segments.append(
+            _ParsedBodySegment(
+                text=safe_text,
+                char_start=start,
+                char_end=start + len(chunk),
+                content_publicly_unsafe=publicly_unsafe,
+            )
+        )
+    if not text:
+        return [], "complete", 0
+    if redacted_segment_count:
+        return segments, "redacted", redacted_segment_count
+    return segments, "complete", 0
 
 
-def _body_paragraphs(text: str) -> list[str]:
-    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-    paragraphs = [item.strip() for item in re.split(r"\n\s*\n", normalized) if item.strip()]
-    if paragraphs:
-        return paragraphs
-    single = normalized.strip()
-    return [single] if single else []
-
-
-def _chunks(value: str, size: int) -> Iterable[str]:
-    for start in range(0, len(value), size):
-        chunk = value[start : start + size].strip()
-        if chunk:
-            yield chunk
-
-
-def _safe_body_segment(value: str, *, warnings: list[str]) -> str:
+def _safe_body_segment(
+    value: str,
+    *,
+    preserve_private_text: bool,
+    warnings: list[str],
+) -> tuple[str, bool]:
     try:
         assert_no_public_raw_references(value, "pst_mail_body_segment")
     except Exception:
+        if preserve_private_text:
+            warnings.append("pst_parser_body_segment_contains_publicly_unsafe_text")
+            return value, True
         warnings.append("pst_parser_body_segment_redacted")
-        return f"redacted_mail_body_segment {sha256_json(value)}"
-    return value
+        return f"redacted_mail_body_segment {sha256_json(value)}", True
+    return value, False
 
 
 def _attachments(
@@ -631,6 +685,14 @@ def _attachments(
                 "attachment_index": attachment_index,
             },
         )
+        extracted_text_segments, text_extraction_state = _attachment_text_segments(
+            payload,
+            mime_type=part.get_content_type(),
+            max_bytes=config.max_attachment_text_bytes,
+            body_segment_max_chars=config.body_segment_max_chars,
+            preserve_private_text=config.preserve_private_body_text,
+            warnings=warnings,
+        )
         attachments.append(
             _ParsedAttachment(
                 attachment_id=attachment_id,
@@ -638,9 +700,52 @@ def _attachments(
                 mime_type=_safe_mail_text(part.get_content_type(), "attachment_mime_type"),
                 content_hash=content_hash,
                 size_bytes=size_bytes,
+                extracted_text_segments=extracted_text_segments,
+                text_extraction_state=text_extraction_state,
             )
         )
     return attachments
+
+
+def _attachment_text_segments(
+    payload: bytes | str | None,
+    *,
+    mime_type: str,
+    max_bytes: int,
+    body_segment_max_chars: int,
+    preserve_private_text: bool,
+    warnings: list[str],
+) -> tuple[list[str], str]:
+    normalized_mime_type = str(mime_type or "").lower()
+    supported = normalized_mime_type.startswith("text/") or normalized_mime_type in {
+        "application/json",
+        "application/xml",
+        "application/xhtml+xml",
+        "message/rfc822",
+    }
+    if not supported:
+        return [], "unsupported"
+    if payload is None:
+        return [], "failed"
+    raw = payload.encode("utf-8") if isinstance(payload, str) else payload
+    if len(raw) > max_bytes:
+        warnings.append("pst_parser_attachment_text_limit_reached")
+        return [], "too_large"
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="replace")
+        warnings.append("pst_parser_attachment_text_decode_replaced")
+    if not text:
+        return [], "complete"
+    parsed, state, _ = _safe_body_segments(
+        text,
+        max_chars=body_segment_max_chars,
+        max_segments=None,
+        preserve_private_text=preserve_private_text,
+        warnings=warnings,
+    )
+    return [segment.text for segment in parsed], state
 
 
 def _mail_observations_from_messages(
@@ -742,8 +847,17 @@ def _iter_mail_observations(
             "payload": payload,
         }
 
+    duplicate_ordinals: dict[tuple[str, str, str], int] = {}
     for message_index, message in enumerate(messages, start=1):
         thread_id = _thread_id(message)
+        message_fingerprint = _message_fingerprint(message)
+        occurrence_key = (
+            message.folder_path_hash,
+            message.message_id,
+            message_fingerprint,
+        )
+        duplicate_ordinal = duplicate_ordinals.get(occurrence_key, 0) + 1
+        duplicate_ordinals[occurrence_key] = duplicate_ordinal
         occurrence_id = stable_resource_contract_id(
             "mailocc",
             "PstMessageOccurrence",
@@ -752,21 +866,9 @@ def _iter_mail_observations(
                 "mailbox_id": mailbox_id,
                 "folder_path_hash": message.folder_path_hash,
                 "message_id": message.message_id,
-                "message_index": message_index,
+                "message_fingerprint": message_fingerprint,
+                "duplicate_ordinal": duplicate_ordinal,
             },
-        )
-        attachment_hashes = sorted(
-            attachment.content_hash for attachment in message.attachments if attachment.content_hash
-        )
-        message_fingerprint = sha256_json(
-            {
-                "message_id": message.message_id,
-                "normalized_subject": message.normalized_subject,
-                "sender": message.sender,
-                "sent_at": message.sent_at,
-                "body_hash": message.body_hash,
-                "attachment_hashes": attachment_hashes,
-            }
         )
         base_location = {
             "archive_id": archive_id,
@@ -785,12 +887,20 @@ def _iter_mail_observations(
                 "mailbox_id": mailbox_id,
                 "message_id": message.message_id,
                 "message_occurrence_id": occurrence_id,
+                "message_occurrence_identity_policy": ("formowl_pst_message_occurrence_content_v2"),
+                "duplicate_ordinal": duplicate_ordinal,
                 "thread_id": thread_id,
                 "subject": message.subject,
                 "normalized_subject": message.normalized_subject,
                 "sender": message.sender,
                 "sent_at": message.sent_at,
                 "body_hash": message.body_hash,
+                "source_body_char_count": message.source_body_char_count,
+                "stored_body_char_count": message.stored_body_char_count,
+                "body_segment_count": len(message.body_segments),
+                "body_evidence_state": message.body_evidence_state,
+                "body_redacted_segment_count": message.body_redacted_segment_count,
+                "unresolved_attachment_count": message.unresolved_attachment_count,
                 "message_fingerprint": message_fingerprint,
                 "fingerprint_policy": "formowl_mail_fingerprint_v1",
             },
@@ -812,6 +922,10 @@ def _iter_mail_observations(
                     "mailbox_id": mailbox_id,
                     "message_id": message.message_id,
                     "message_occurrence_id": occurrence_id,
+                    "message_occurrence_identity_policy": (
+                        "formowl_pst_message_occurrence_content_v2"
+                    ),
+                    "duplicate_ordinal": duplicate_ordinal,
                     "thread_id": thread_id,
                     "header_name": header_name,
                     "header_value": header_value,
@@ -820,18 +934,29 @@ def _iter_mail_observations(
         for segment_index, body_segment in enumerate(message.body_segments, start=1):
             yield {
                 "observation_type": "email_body_segment",
-                "text": body_segment,
+                "text": body_segment.text,
                 "location": {
                     **base_location,
                     "body_segment_index": segment_index,
+                    "char_start": body_segment.char_start,
+                    "char_end": body_segment.char_end,
                 },
                 "payload": {
                     "archive_id": archive_id,
                     "mailbox_id": mailbox_id,
                     "message_id": message.message_id,
                     "message_occurrence_id": occurrence_id,
+                    "message_occurrence_identity_policy": (
+                        "formowl_pst_message_occurrence_content_v2"
+                    ),
+                    "duplicate_ordinal": duplicate_ordinal,
                     "thread_id": thread_id,
                     "body_segment_index": segment_index,
+                    "body_segment_count": len(message.body_segments),
+                    "source_body_char_count": message.source_body_char_count,
+                    "stored_body_char_count": message.stored_body_char_count,
+                    "body_evidence_state": message.body_evidence_state,
+                    "content_publicly_unsafe": body_segment.content_publicly_unsafe,
                     "message_fingerprint": message_fingerprint,
                 },
             }
@@ -849,15 +974,68 @@ def _iter_mail_observations(
                     "mailbox_id": mailbox_id,
                     "message_id": message.message_id,
                     "message_occurrence_id": occurrence_id,
+                    "message_occurrence_identity_policy": (
+                        "formowl_pst_message_occurrence_content_v2"
+                    ),
+                    "duplicate_ordinal": duplicate_ordinal,
                     "thread_id": thread_id,
                     "attachment_id": attachment.attachment_id,
                     "filename": attachment.filename,
                     "mime_type": attachment.mime_type,
                     "content_hash": attachment.content_hash,
                     "size_bytes": attachment.size_bytes,
+                    "text_extraction_state": attachment.text_extraction_state,
+                    "extracted_text_segment_count": len(attachment.extracted_text_segments),
                     "message_fingerprint": message_fingerprint,
                 },
             }
+            for attachment_text_index, attachment_text in enumerate(
+                attachment.extracted_text_segments,
+                start=1,
+            ):
+                yield {
+                    "observation_type": "email_attachment_text_segment",
+                    "text": attachment_text,
+                    "location": {
+                        **base_location,
+                        "attachment_index": attachment_index,
+                        "attachment_id": attachment.attachment_id,
+                        "attachment_text_segment_index": attachment_text_index,
+                    },
+                    "payload": {
+                        "archive_id": archive_id,
+                        "mailbox_id": mailbox_id,
+                        "message_id": message.message_id,
+                        "message_occurrence_id": occurrence_id,
+                        "message_occurrence_identity_policy": (
+                            "formowl_pst_message_occurrence_content_v2"
+                        ),
+                        "duplicate_ordinal": duplicate_ordinal,
+                        "thread_id": thread_id,
+                        "attachment_id": attachment.attachment_id,
+                        "attachment_index": attachment_index,
+                        "attachment_text_segment_index": attachment_text_index,
+                        "attachment_text_segment_count": len(attachment.extracted_text_segments),
+                        "text_extraction_state": attachment.text_extraction_state,
+                        "message_fingerprint": message_fingerprint,
+                    },
+                }
+
+
+def _message_fingerprint(message: _ParsedMessage) -> str:
+    attachment_hashes = sorted(
+        attachment.content_hash for attachment in message.attachments if attachment.content_hash
+    )
+    return sha256_json(
+        {
+            "message_id": message.message_id,
+            "normalized_subject": message.normalized_subject,
+            "sender": message.sender,
+            "sent_at": message.sent_at,
+            "body_hash": message.body_hash,
+            "attachment_hashes": attachment_hashes,
+        }
+    )
 
 
 def _thread_payloads(

@@ -383,7 +383,9 @@ def _run_full_pst_100_case_eval_inner(
     extraction_config = {
         "timeout_seconds": 3600,
         "body_segment_max_chars": 4000,
-        "max_body_segments_per_message": 3,
+        "max_body_segments_per_message": None,
+        "max_attachment_text_bytes": 5 * 1024 * 1024,
+        "preserve_private_body_text": True,
         "parser_workers": max(1, min(os.cpu_count() or 1, 8)),
     }
     import_started = time.monotonic()

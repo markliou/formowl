@@ -6,7 +6,7 @@ from typing import Any, Callable, Protocol, Sequence
 from formowl_contract import ContractValidationError, Grant, sha256_json, to_plain
 from formowl_graph.storage import SQLStatement
 
-from ._guards import assert_public_payload_safe, safe_public_string
+from ._guards import safe_public_string
 from .bundle import (
     EmailAttachment,
     EmailAttachmentOccurrence,
@@ -125,14 +125,13 @@ class PostgreSQLMailEvidenceStore:
             ),
             "email_message_occurrence_id",
         )
-        body_segments = _sort_records(
+        body_segments = _sort_body_segments(
             _query_import_rows(
                 self.connection,
                 table_name="email_body_segment",
                 mail_import_session_id=import_session_id,
                 factory=EmailBodySegment.from_dict,
             ),
-            "email_body_segment_id",
         )
         attachment_occurrences = _sort_records(
             _query_import_rows(
@@ -617,6 +616,19 @@ def _sort_records(records: Sequence[Any], id_field: str) -> list[Any]:
     return sorted(records, key=lambda item: str(item.to_dict()[id_field]))
 
 
+def _sort_body_segments(records: Sequence[EmailBodySegment]) -> list[EmailBodySegment]:
+    return sorted(
+        records,
+        key=lambda item: (
+            item.email_message_id,
+            item.segment_source_type,
+            item.attachment_id or "",
+            item.body_segment_index or 0,
+            item.email_body_segment_id,
+        ),
+    )
+
+
 def _messages_for_import(
     logical_messages: Sequence[EmailMessage],
     message_occurrences: Sequence[EmailMessageOccurrence],
@@ -681,7 +693,6 @@ def _validate_bundle(bundle: MailEvidenceBundle | dict[str, Any]) -> MailEvidenc
         payload = to_plain(bundle)
     else:
         raise ContractValidationError("mail evidence store requires a bundle")
-    assert_public_payload_safe(payload, "postgres_mail_evidence_bundle")
     return MailEvidenceBundle.from_dict(payload)
 
 
@@ -689,7 +700,6 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
     payload = row.get("payload")
     if not isinstance(payload, dict):
         raise ContractValidationError("mail evidence row payload must be an object")
-    assert_public_payload_safe(payload, "postgres_mail_evidence_row")
     return payload
 
 
