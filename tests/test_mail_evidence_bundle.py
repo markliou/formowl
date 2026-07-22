@@ -436,7 +436,7 @@ class MailEvidenceBundleTests(unittest.TestCase):
         with self.assertRaises(ContractValidationError):
             build_mail_evidence_bundle(orphan_attachment, **base_kwargs)
 
-    def test_raw_backend_values_are_rejected_without_graph_or_wiki_side_effects(self) -> None:
+    def test_private_body_is_preserved_but_unsafe_envelope_values_are_rejected(self) -> None:
         temp_dir = _paths.fresh_test_dir("mail-evidence-bundle-raw-reject")
         stored = _run_mail_fixture(temp_dir, _duplicate_mail_archive())
         before_failure_snapshot = _tree_snapshot(temp_dir)
@@ -454,16 +454,19 @@ class MailEvidenceBundleTests(unittest.TestCase):
         )
         observations[body_index] = unsafe
 
-        with self.assertRaises(ContractValidationError):
-            build_mail_evidence_bundle(
-                observations,
-                workspace_id="workspace_formowl",
-                owner_user_id="user_yifan",
-                source_asset_id=stored.extractor_run.asset_id,
-                archive_sha256="sha256:archive-launch",
-                upload_session_id="upload_session_mail_001",
-                created_at="2026-07-05T10:00:00+00:00",
-            )
+        private_bundle = build_mail_evidence_bundle(
+            observations,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            source_asset_id=stored.extractor_run.asset_id,
+            archive_sha256="sha256:archive-launch",
+            upload_session_id="upload_session_mail_001",
+            created_at="2026-07-05T10:00:00+00:00",
+        )
+        self.assertIn(
+            "Investigate object://mail/raw/private-archive",
+            [segment.text for segment in private_bundle.body_segments],
+        )
         self.assertEqual(_tree_snapshot(temp_dir), before_failure_snapshot)
         with self.assertRaises(ContractValidationError):
             build_mail_evidence_bundle(
@@ -485,16 +488,19 @@ class MailEvidenceBundleTests(unittest.TestCase):
                 "text": "SELECT * FROM mailbox_messages",
             }
         )
-        with self.assertRaises(ContractValidationError):
-            build_mail_evidence_bundle(
-                sql_observations,
-                workspace_id="workspace_formowl",
-                owner_user_id="user_yifan",
-                source_asset_id=stored.extractor_run.asset_id,
-                archive_sha256="sha256:archive-launch",
-                upload_session_id="upload_session_mail_001",
-                created_at="2026-07-05T10:00:00+00:00",
-            )
+        sql_bundle = build_mail_evidence_bundle(
+            sql_observations,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            source_asset_id=stored.extractor_run.asset_id,
+            archive_sha256="sha256:archive-launch",
+            upload_session_id="upload_session_mail_001",
+            created_at="2026-07-05T10:00:00+00:00",
+        )
+        self.assertIn(
+            "SELECT * FROM mailbox_messages",
+            [segment.text for segment in sql_bundle.body_segments],
+        )
         self.assertEqual(_tree_snapshot(temp_dir), before_failure_snapshot)
 
         with self.assertRaises(ContractValidationError):
@@ -523,6 +529,10 @@ class MailEvidenceBundleTests(unittest.TestCase):
         unsafe_payload["messages"][0]["api_key"] = "not-public"
         with self.assertRaises(ContractValidationError):
             MailEvidenceBundle.from_dict(unsafe_payload)
+        unsafe_segment_payload = copy.deepcopy(bundle.to_dict())
+        unsafe_segment_payload["body_segments"][0]["api_key"] = "not-public"
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_dict(unsafe_segment_payload)
         self.assertEqual(_tree_snapshot(temp_dir), before_failure_snapshot)
 
         self.assertFalse((temp_dir / "mail").exists())

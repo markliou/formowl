@@ -18,6 +18,9 @@ JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID = (
 
 _MODEL_PATH_ENV = "FORMOWL_MAIL_SENTENCEPIECE_MODEL"
 _MODEL_SHA256_ENV = "FORMOWL_MAIL_SENTENCEPIECE_MODEL_SHA256"
+_TOKENIZER_MODE_ENV = "FORMOWL_MAIL_TOKENIZER_MODE"
+_FROZEN_MODE = "jieba_sentencepiece_frozen"
+_LEGACY_ASCII_TEST_MODE = "legacy_ascii_test"
 _MAX_MODEL_BYTES = 16 * 1024 * 1024
 _ASCII_IDENTIFIER_SEPARATOR = re.compile(r"[^a-zA-Z0-9_@.-]+")
 _ASCII_TOKEN = re.compile(r"[a-zA-Z0-9_@.-]+")
@@ -71,21 +74,28 @@ def ascii_identifier_regex_tokens(value: str) -> set[str]:
 def configured_mail_tokenizer_id() -> str:
     """Return the tokenizer profile actually configured for this process."""
 
+    mode = _configured_tokenizer_mode()
+    if mode == _LEGACY_ASCII_TEST_MODE:
+        return ASCII_IDENTIFIER_REGEX_TOKENIZER_ID
     model_path = os.environ.get(_MODEL_PATH_ENV)
     model_sha256 = os.environ.get(_MODEL_SHA256_ENV)
-    if model_path is None and model_sha256 is None:
-        return ASCII_IDENTIFIER_REGEX_TOKENIZER_ID
     _configured_sentencepiece_processor(model_path, model_sha256)
     _jieba_module()
     return JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID
 
 
 def configured_mail_candidate_admission_tokens(value: str) -> set[str]:
-    """Tokenize with the configured profile, retaining the legacy fallback."""
+    """Tokenize with the required profile or an explicit legacy-test override."""
 
     if configured_mail_tokenizer_id() == ASCII_IDENTIFIER_REGEX_TOKENIZER_ID:
         return ascii_identifier_regex_tokens(value)
     return jieba_sentencepiece_frozen_profile_candidate_admission_tokens(value)
+
+
+def validate_configured_mail_tokenizer() -> str:
+    """Fail closed unless the selected tokenizer profile is fully usable."""
+
+    return configured_mail_tokenizer_id()
 
 
 def jieba_sentencepiece_frozen_profile_candidate_admission_tokens(
@@ -141,6 +151,16 @@ def _admitted_cjk_tokens(value: str) -> set[str]:
                 continue
             admitted.add(bigram)
     return admitted
+
+
+def _configured_tokenizer_mode() -> str:
+    raw_mode = os.environ.get(_TOKENIZER_MODE_ENV, _FROZEN_MODE)
+    if not isinstance(raw_mode, str):
+        raise RuntimeError("mail tokenizer mode is invalid")
+    mode = raw_mode.strip()
+    if mode not in {_FROZEN_MODE, _LEGACY_ASCII_TEST_MODE}:
+        raise RuntimeError("mail tokenizer mode is invalid")
+    return mode
 
 
 @lru_cache(maxsize=1)
@@ -212,4 +232,5 @@ __all__ = [
     "configured_mail_candidate_admission_tokens",
     "configured_mail_tokenizer_id",
     "jieba_sentencepiece_frozen_profile_candidate_admission_tokens",
+    "validate_configured_mail_tokenizer",
 ]

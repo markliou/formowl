@@ -185,3 +185,26 @@ Lifecycle label: `active`.
   dev-container verification passed 730 tests, full Ruff check, 331-file format
   check, and `git diff --check`. Production/API, evaluator/privacy, and
   shell/safety reviewers returned 3/3 `RELEASE_DECISION: AGREE`.
+
+## 2026-07-22 — Hybrid v2 complete-evidence POC
+
+- Continued on isolated branch `poc/kg-v2-complete-evidence-20260722`; no v3,
+  PR, question regeneration, or main-worktree mutation was introduced.
+- Runtime tokenization defaults fail-closed to frozen Jieba + SentencePiece.
+  Complete mail bodies, offsets, text attachments, PostgreSQL private-body
+  round trips, content-based PST occurrence identity, source completeness,
+  identifier-anchored retrieval, and separate evidence read are implemented.
+- The original private PST 100-case manifest is hash locked. Exact mapping
+  improved from 113/138 historical observations to 128/138. The remaining 10
+  affect 11 cases; one duplicate exact-content case is intentionally unresolved,
+  while the others have no exact content-equivalent new observation.
+- The full fixed 100 remains blocked rather than silently replacing evidence.
+  The final full-bundle canary rerun has zero applicable blockers: long-tail
+  1/1, search-then-read cross-segment 2/2, text attachment 1/1, COO item query
+  2/2, and negative-claim fail-closed all pass. Cross-message remains not
+  applicable until frozen-manifest mapping is complete.
+- Canonical focused dev-container checks pass tokenizer 5/5, PST extractor 9/9,
+  bundle 10/10, PostgreSQL 7/7, gateway 24/24, lock 2/2, and rebuild 14/14.
+  Targeted Ruff check passes. This is diagnostic POC evidence only; methodology
+  readiness, formal quality UAT, KG-versus-ontology comparison, and issue
+  closure remain blocked.

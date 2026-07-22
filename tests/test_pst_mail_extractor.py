@@ -25,7 +25,7 @@ from formowl_ingestion.storage import (
     ObservationStore,
     StorageBackendRegistry,
 )
-from formowl_mail import build_mail_evidence_bundle
+from formowl_mail import MailEvidenceQueryGateway, build_mail_evidence_bundle
 
 
 NOW = "2026-07-06T10:00:00+00:00"
@@ -124,6 +124,22 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
         )
         self.assertEqual(len(bundle.messages), 1)
         self.assertEqual(len(bundle.message_occurrences), 2)
+
+    def test_message_identity_is_stable_when_export_order_changes(self) -> None:
+        first_message = _rfc822_message(message_id="", body="Stable fallback message alpha")
+        second_message = _rfc822_message(message_id="", body="Stable fallback message beta")
+
+        first = _extract_message_identities(
+            "pst-extractor-stable-order-first",
+            [first_message, second_message],
+        )
+        second = _extract_message_identities(
+            "pst-extractor-stable-order-second",
+            [second_message, first_message],
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 2)
 
     def test_readpst_command_contract_and_timeout_are_forwarded(self) -> None:
         context = _PstExtractionContext.create("pst-extractor-command-contract")
@@ -284,7 +300,7 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
                 self.assertEqual(runner.calls, 0)
                 self.assertEqual(context.observation_store.list(), [])
 
-    def test_sanitizes_exported_mail_values_without_leaking_unsafe_strings(self) -> None:
+    def test_preserves_private_body_and_redacts_only_public_query_output(self) -> None:
         context = _PstExtractionContext.create("pst-extractor-sanitizes")
         unsafe_body = "Review path C:\\private\\archive.pst before approval."
         unsafe_attachment = "C:\\private\\attachment.pdf"
@@ -310,19 +326,146 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
             completed_at=NOW,
         )
 
-        rendered = json.dumps(
-            {
-                "run": result.extractor_run.to_dict(),
-                "observations": [observation.to_dict() for observation in result.observations],
-            },
+        private_rendered = json.dumps(
+            [observation.to_dict() for observation in result.observations],
             sort_keys=True,
         )
-        self.assertIn("pst_parser_body_segment_redacted", result.extractor_run.warnings)
-        self.assertIn("redacted_mail_body_segment", rendered)
-        self.assertIn("redacted_filename_", rendered)
-        self.assertNotIn(unsafe_body, rendered)
-        self.assertNotIn(unsafe_attachment, rendered)
-        self.assertNotIn("C:\\private", rendered)
+        self.assertIn(
+            "pst_parser_body_segment_contains_publicly_unsafe_text",
+            result.extractor_run.warnings,
+        )
+        private_body_segments = [
+            observation.text
+            for observation in result.observations
+            if observation.observation_type == "email_body_segment"
+        ]
+        self.assertIn(unsafe_body, private_body_segments)
+        self.assertIn("redacted_filename_", private_rendered)
+        self.assertNotIn(unsafe_attachment, private_rendered)
+
+        bundle = build_mail_evidence_bundle(
+            result.observations,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_owner",
+            source_asset_id=context.asset.asset_id,
+            archive_sha256=context.asset.content_hash,
+            upload_session_id="upload_real_pst_unit",
+            parser_name="pst_mail_archive_extractor",
+            parser_version="0.1.0",
+            created_at=NOW,
+            started_at=NOW,
+            completed_at=NOW,
+            parse_warnings=result.extractor_run.warnings,
+        )
+        self.assertIn(unsafe_body, [segment.text for segment in bundle.body_segments])
+
+        public_result = MailEvidenceQueryGateway([bundle]).query_mail_evidence(
+            query_text="Review approval",
+            requester_user_id="user_owner",
+            workspace_id="workspace_formowl",
+            session_id="session_unit",
+            mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
+            limit=5,
+        )
+        public_rendered = json.dumps(public_result.to_dict(), sort_keys=True)
+        self.assertNotIn(unsafe_body, public_rendered)
+        self.assertNotIn("C:\\private", public_rendered)
+        self.assertIn("unsafe_mail_evidence_content_redacted", public_result.warnings)
+
+    def test_body_segments_are_complete_and_attachment_text_is_searchable(self) -> None:
+        context = _PstExtractionContext.create("pst-extractor-complete-segments")
+        body = "A" * 9001
+        adapter = context.adapter_with_runner(_runner_with_messages([_rfc822_message(body=body)]))
+
+        result = run_extractor(
+            asset=context.asset,
+            object_store=context.object_store,
+            extractor_run_store=context.run_store,
+            observation_store=context.observation_store,
+            adapter=adapter,
+            config={"body_segment_max_chars": 4000},
+            started_at=NOW,
+            completed_at=NOW,
+        )
+
+        message = next(
+            observation
+            for observation in result.observations
+            if observation.observation_type == "email_message"
+        )
+        segments = [
+            observation
+            for observation in result.observations
+            if observation.observation_type == "email_body_segment"
+        ]
+        attachment_segments = [
+            observation
+            for observation in result.observations
+            if observation.observation_type == "email_attachment_text_segment"
+        ]
+        self.assertEqual([len(segment.text or "") for segment in segments], [4000, 4000, 1001])
+        self.assertEqual("".join(segment.text or "" for segment in segments), body)
+        self.assertEqual(message.payload["source_body_char_count"], 9001)
+        self.assertEqual(message.payload["stored_body_char_count"], 9001)
+        self.assertEqual(message.payload["body_segment_count"], 3)
+        self.assertEqual(message.payload["body_evidence_state"], "complete")
+        self.assertEqual(len(attachment_segments), 1)
+        self.assertIn("attachment body", attachment_segments[0].text or "")
+
+        bundle = build_mail_evidence_bundle(
+            result.observations,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_owner",
+            source_asset_id=context.asset.asset_id,
+            archive_sha256=context.asset.content_hash,
+            upload_session_id="upload_real_pst_unit",
+            parser_name="pst_mail_archive_extractor",
+            parser_version="0.1.0",
+            created_at=NOW,
+            started_at=NOW,
+            completed_at=NOW,
+            parse_warnings=result.extractor_run.warnings,
+        )
+        gateway = MailEvidenceQueryGateway([bundle])
+        search = gateway.query_mail_evidence(
+            query_text="attachment",
+            requester_user_id="user_owner",
+            workspace_id="workspace_formowl",
+            session_id="session_unit",
+            mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
+            limit=5,
+        )
+        self.assertEqual(search.answerability_state, "evidence_found_complete")
+        read = gateway.read_mail_evidence(
+            requester_user_id="user_owner",
+            workspace_id="workspace_formowl",
+            session_id="session_unit",
+            mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
+            email_message_ids=[bundle.messages[0].email_message_id],
+        )
+        self.assertEqual(read.status, "ok")
+        self.assertEqual(read.evidence_completeness, "complete")
+        self.assertEqual(len(read.evidence_segments), 4)
+        self.assertEqual(
+            [
+                segment["body_segment_index"]
+                for segment in read.evidence_segments
+                if segment["segment_source_type"] == "message_body"
+            ],
+            [1, 2, 3],
+        )
+        limited_read = gateway.read_mail_evidence(
+            requester_user_id="user_owner",
+            workspace_id="workspace_formowl",
+            session_id="session_unit",
+            mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
+            email_message_ids=[bundle.messages[0].email_message_id],
+            limit=2,
+        )
+        self.assertEqual(limited_read.status, "partial")
+        self.assertEqual(limited_read.evidence_completeness, "incomplete")
+        self.assertEqual(limited_read.answerability_state, "read_limit_reached")
+        self.assertIn("mail_evidence_read_limit_reached", limited_read.warnings)
 
 
 class _PstExtractionContext:
@@ -435,6 +578,30 @@ def _runner_with_raw_files(files: list[bytes]):
         return _ParserCommandResult(0)
 
     return runner
+
+
+def _extract_message_identities(
+    case_name: str, messages: list[bytes]
+) -> dict[str, tuple[str, str]]:
+    context = _PstExtractionContext.create(case_name)
+    result = run_extractor(
+        asset=context.asset,
+        object_store=context.object_store,
+        extractor_run_store=context.run_store,
+        observation_store=context.observation_store,
+        adapter=context.adapter_with_runner(_runner_with_messages(messages)),
+        config={"max_messages": 25},
+        started_at=NOW,
+        completed_at=NOW,
+    )
+    return {
+        str(observation.payload["body_hash"]): (
+            str(observation.payload["message_id"]),
+            str(observation.payload["message_occurrence_id"]),
+        )
+        for observation in result.observations
+        if observation.observation_type == "email_message"
+    }
 
 
 def _rfc822_message(

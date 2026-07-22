@@ -60,7 +60,9 @@ from .upload_http import (
 from .query import (
     MailEvidenceQueryGateway,
     MailEvidenceQueryResult,
+    MailEvidenceReadResult,
     build_mail_evidence_query_handler,
+    build_mail_evidence_read_handler,
 )
 from .postgres import (
     PostgreSQLMailEvidenceConnection,
@@ -98,6 +100,7 @@ __all__ = [
     "MailEvidencePackStore",
     "MailEvidenceQueryGateway",
     "MailEvidenceQueryResult",
+    "MailEvidenceReadResult",
     "MailEvidenceRecord",
     "MailFolderOccurrence",
     "MailImportSession",
@@ -118,6 +121,7 @@ __all__ = [
     "build_mail_evidence_bundle",
     "build_mail_evidence_pack",
     "build_mail_evidence_query_handler",
+    "build_mail_evidence_read_handler",
     "build_mail_preflight_readiness_review",
     "build_mail_upload_http_surface_handler",
     "build_mail_upload_session_handler",

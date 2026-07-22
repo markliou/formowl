@@ -7,6 +7,7 @@ from .tokenization import (
     configured_mail_candidate_admission_tokens,
     configured_mail_tokenizer_id,
     jieba_sentencepiece_frozen_profile_candidate_admission_tokens,
+    validate_configured_mail_tokenizer,
 )
 
 __all__ = [
@@ -20,5 +21,6 @@ __all__ = [
     "read_json_object",
     "sha256_prefixed",
     "sha256_prefixed_id",
+    "validate_configured_mail_tokenizer",
     "write_json_atomic",
 ]

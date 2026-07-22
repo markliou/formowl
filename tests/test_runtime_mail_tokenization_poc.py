@@ -22,24 +22,41 @@ from formowl_core.tokenization import (
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH_ENV = "FORMOWL_MAIL_SENTENCEPIECE_MODEL"
 MODEL_SHA256_ENV = "FORMOWL_MAIL_SENTENCEPIECE_MODEL_SHA256"
+TOKENIZER_MODE_ENV = "FORMOWL_MAIL_TOKENIZER_MODE"
+FROZEN_MODE = "jieba_sentencepiece_frozen"
+LEGACY_ASCII_TEST_MODE = "legacy_ascii_test"
 
 
 class RuntimeMailTokenizationPocTests(unittest.TestCase):
-    def test_unconfigured_runtime_keeps_explicit_ascii_fallback(self) -> None:
+    def test_unconfigured_runtime_requires_frozen_profile(self) -> None:
         with patch.dict(
             os.environ,
             {
                 MODEL_PATH_ENV: "",
                 MODEL_SHA256_ENV: "",
+                TOKENIZER_MODE_ENV: FROZEN_MODE,
             },
             clear=False,
         ):
             os.environ.pop(MODEL_PATH_ENV, None)
             os.environ.pop(MODEL_SHA256_ENV, None)
-            self.assertEqual(
-                configured_mail_tokenizer_id(),
-                ASCII_IDENTIFIER_REGEX_TOKENIZER_ID,
-            )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "^frozen tokenizer profile is unavailable$",
+            ):
+                configured_mail_tokenizer_id()
+
+    def test_ascii_tokenizer_requires_explicit_legacy_test_mode(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                TOKENIZER_MODE_ENV: LEGACY_ASCII_TEST_MODE,
+            },
+            clear=False,
+        ):
+            os.environ.pop(MODEL_PATH_ENV, None)
+            os.environ.pop(MODEL_SHA256_ENV, None)
+            self.assertEqual(configured_mail_tokenizer_id(), ASCII_IDENTIFIER_REGEX_TOKENIZER_ID)
             self.assertEqual(
                 ascii_identifier_regex_tokens("我要 PO470002002 的交期，料號是 03.80503G301"),
                 {"po470002002", "03.80503g301"},
@@ -50,6 +67,7 @@ class RuntimeMailTokenizationPocTests(unittest.TestCase):
             os.environ,
             {
                 MODEL_PATH_ENV: "/tmp/not-used.model",
+                TOKENIZER_MODE_ENV: FROZEN_MODE,
             },
             clear=False,
         ):
@@ -83,6 +101,7 @@ class RuntimeMailTokenizationPocTests(unittest.TestCase):
             model_path, model_sha256 = _train_safe_sentencepiece_model(Path(temp_dir))
             environment = {
                 **os.environ,
+                TOKENIZER_MODE_ENV: FROZEN_MODE,
                 MODEL_PATH_ENV: str(model_path),
                 MODEL_SHA256_ENV: model_sha256,
                 "PYTHONPATH": str(ROOT / "python"),
@@ -93,13 +112,19 @@ class RuntimeMailTokenizationPocTests(unittest.TestCase):
                     "-c",
                     (
                         "import json\n"
+                        "import sys\n"
+                        "from pathlib import Path\n"
                         "from formowl_mail import evidence, query\n"
+                        "sys.path.insert(0, str(Path.cwd() / 'scripts'))\n"
+                        "import mail_full_pst_domain_hard_kg_fusion_eval as kg_eval\n"
                         "value = 'PO470002002 的交期與 03.80503G301 的產地'\n"
                         "print(json.dumps({\n"
                         "  'query_id': query.MAIL_TOKENIZER_ID,\n"
                         "  'evidence_id': evidence.MAIL_TOKENIZER_ID,\n"
+                        "  'kg_id': kg_eval.MAIL_TOKENIZER_ID,\n"
                         "  'query_tokens': sorted(query._tokenize(value)),\n"
                         "  'evidence_tokens': sorted(evidence._tokenize(value)),\n"
+                        "  'kg_tokens': sorted(kg_eval._tokenize(value)),\n"
                         "}, ensure_ascii=False))\n"
                     ),
                 ],
@@ -116,7 +141,9 @@ class RuntimeMailTokenizationPocTests(unittest.TestCase):
             JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
         )
         self.assertEqual(payload["evidence_id"], payload["query_id"])
+        self.assertEqual(payload["kg_id"], payload["query_id"])
         self.assertEqual(payload["query_tokens"], payload["evidence_tokens"])
+        self.assertEqual(payload["kg_tokens"], payload["query_tokens"])
         self.assertTrue(
             {
                 "po470002002",
@@ -132,6 +159,7 @@ class _frozen_profile_environment:
         self._patcher = patch.dict(
             os.environ,
             {
+                TOKENIZER_MODE_ENV: FROZEN_MODE,
                 MODEL_PATH_ENV: str(model_path),
                 MODEL_SHA256_ENV: model_sha256,
             },

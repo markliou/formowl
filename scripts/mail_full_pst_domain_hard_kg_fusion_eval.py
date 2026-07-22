@@ -39,6 +39,10 @@ for import_path in (PYTHON_ROOT, SCRIPT_ROOT):
 
 import mail_full_pst_domain_hard_case_eval as hard_eval  # noqa: E402
 from formowl_contract import sha256_json  # noqa: E402
+from formowl_core.tokenization import (  # noqa: E402
+    configured_mail_candidate_admission_tokens,
+    configured_mail_tokenizer_id,
+)
 from formowl_evaluator.report_validation import (  # noqa: E402
     mapping_dict_or_empty as _dict_or_empty,
     public_outputs_are_safe,
@@ -57,6 +61,7 @@ RUN_OPT_IN_ENV = "FORMOWL_RUN_FULL_PST_DOMAIN_HARD_KG_FUSION_EVAL"
 CASE_COUNT = 100
 MAX_TOKEN_DF = 48
 MAX_COMPONENT_EVIDENCE_PER_CASE = 10
+MAIL_TOKENIZER_ID = configured_mail_tokenizer_id()
 
 _STOPWORDS = {
     "a",
@@ -1266,12 +1271,11 @@ def _int_or_zero(value: Any) -> int:
 
 
 def _tokenize(value: str) -> set[str]:
-    tokens = {
+    return {
         token
-        for token in re.split(r"[^a-zA-Z0-9_@.-]+", value.lower())
-        if len(token) >= 3 and token not in _STOPWORDS
+        for token in configured_mail_candidate_admission_tokens(value)
+        if token not in _STOPWORDS
     }
-    return tokens
 
 
 def main(argv: list[str] | None = None) -> int:
