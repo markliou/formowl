@@ -11,11 +11,16 @@ from formowl_contract import (
     sha256_json,
     to_plain,
 )
+from formowl_core import (
+    configured_mail_candidate_admission_tokens,
+    configured_mail_tokenizer_id,
+)
 
 from ._access import grant_expired, matching_bundles, normalize_grants
 from ._guards import assert_public_payload_safe, safe_public_string
 from .bundle import MailEvidenceBundle
 
+MAIL_TOKENIZER_ID = configured_mail_tokenizer_id()
 _MAIL_EVIDENCE_PERMISSIONS = {"read", "evidence_snippet", "mail_evidence_read"}
 _SEMANTIC_GATEWAY_TEXT_REDACTIONS = (
     re.compile(r"\bwith\s+.+\s+as\s*\(", re.IGNORECASE),
@@ -381,7 +386,7 @@ def _validate_query_inputs(
 
 
 def _tokenize(value: str) -> set[str]:
-    return {token for token in re.split(r"[^a-zA-Z0-9_@.-]+", value.lower()) if token}
+    return configured_mail_candidate_admission_tokens(value)
 
 
 __all__ = [

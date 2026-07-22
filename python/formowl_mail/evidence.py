@@ -12,10 +12,16 @@ from formowl_contract import (
     stable_resource_contract_id,
     to_plain,
 )
-from formowl_core import read_json_object, write_json_atomic
+from formowl_core import (
+    configured_mail_candidate_admission_tokens,
+    configured_mail_tokenizer_id,
+    read_json_object,
+    write_json_atomic,
+)
 
 from ._guards import assert_public_payload_safe, safe_public_string
 
+MAIL_TOKENIZER_ID = configured_mail_tokenizer_id()
 _SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
@@ -348,7 +354,7 @@ def _query_terms(record: MailEvidenceRecord) -> list[str]:
 
 
 def _tokenize(value: str) -> set[str]:
-    return {token for token in re.split(r"[^a-zA-Z0-9_@.-]+", value.lower()) if token}
+    return configured_mail_candidate_admission_tokens(value)
 
 
 def _required_location(observation: Observation, field_name: str) -> str:
