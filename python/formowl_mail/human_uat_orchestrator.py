@@ -29,6 +29,7 @@ _MAX_MODEL_EVIDENCE_ITEMS = 30
 _MAX_MODEL_EVIDENCE_CHARS = 1_200
 _MAX_CODEX_THREADS = 256
 _MAX_CODEX_AUTH_CACHE_BYTES = 64 * 1024
+_EVIDENCE_FALLBACK_REASON = "codex_answer_generation_failed_after_evidence"
 _CODEX_RUNTIME_MARKER = "formowl-uat-codex-runtime-v2.json"
 _CODEX_LOGIN_METHODS = frozenset({"api", "chatgpt"})
 _CODEX_SYSTEM_SKILL_NAMES = (
@@ -251,6 +252,7 @@ class UatConversationOutcome:
     model_name: str
     tool_request: UatEvidenceToolRequest | None = None
     tool_result: Mapping[str, Any] | None = None
+    fallback_reason: str | None = None
 
     def __post_init__(self) -> None:
         if self.response_kind not in _RESPONSE_KINDS:
@@ -267,6 +269,12 @@ class UatConversationOutcome:
             raise ContractValidationError("UAT model name is invalid")
         if (self.tool_request is None) != (self.tool_result is None):
             raise ContractValidationError("UAT tool request and result must be paired")
+        if self.fallback_reason not in {None, _EVIDENCE_FALLBACK_REASON}:
+            raise ContractValidationError("UAT fallback reason is invalid")
+
+
+class _CodexToolExecutionError(RuntimeError):
+    """Tool protocol and execution failures remain fail-closed."""
 
 
 class UatConversationModel(Protocol):
@@ -770,7 +778,7 @@ class CodexAppServerStdioTransport:
                 if self._fatal_error:
                     raise RuntimeError("Codex app-server stopped unexpectedly")
                 if context.tool_error is not None:
-                    raise RuntimeError(context.tool_error)
+                    raise _CodexToolExecutionError(context.tool_error)
                 completion = context.completion
                 if not isinstance(completion, Mapping):
                     raise RuntimeError("Codex app-server turn did not complete")
@@ -1295,15 +1303,32 @@ class CodexAppServerConversationModel:
                         },
                         tool_handler=handle_tool,
                     )
-                except Exception:
+                except _CodexToolExecutionError:
                     self._discard_thread(safety_identifier, thread.thread_id)
                     raise
+                except Exception as exc:
+                    self._discard_thread(safety_identifier, thread.thread_id)
+                    if _can_fallback_after_turn_error(exc):
+                        fallback = _evidence_fallback_outcome(
+                            evidence_records,
+                            model_name=f"codex:{thread.model_name}",
+                        )
+                        if fallback is not None:
+                            return fallback
+                    raise
+                if len(turn.tool_invocations) != len(evidence_records):
+                    self._discard_thread(safety_identifier, thread.thread_id)
+                    raise RuntimeError("Codex tool execution record is inconsistent")
                 try:
-                    if len(turn.tool_invocations) != len(evidence_records):
-                        raise RuntimeError("Codex tool execution record is inconsistent")
                     decision = _parse_decision(turn.final_message)
                 except Exception:
                     self._discard_thread(safety_identifier, thread.thread_id)
+                    fallback = _evidence_fallback_outcome(
+                        evidence_records,
+                        model_name=f"codex:{thread.model_name}",
+                    )
+                    if fallback is not None:
+                        return fallback
                     raise
                 tool_request = evidence_records[0][0] if evidence_records else None
                 tool_result = evidence_records[0][1] if evidence_records else None
@@ -1692,10 +1717,7 @@ def _parse_tool_request(arguments: Mapping[str, Any]) -> UatEvidenceToolRequest:
 def _parse_decision(final_message: str) -> dict[str, str]:
     if not isinstance(final_message, str) or not final_message.strip():
         raise RuntimeError("Codex returned no UAT answer")
-    try:
-        payload = json.loads(final_message)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Codex returned an invalid UAT answer") from exc
+    payload = _parse_decision_payload(final_message)
     if not isinstance(payload, dict) or set(payload) != {
         "response_kind",
         "answer_text",
@@ -1713,6 +1735,94 @@ def _parse_decision(final_message: str) -> dict[str, str]:
         "answer_text": outcome.answer_text,
         "display_format": outcome.display_format,
     }
+
+
+def _parse_decision_payload(final_message: str) -> Any:
+    rendered = final_message.strip()
+    candidates = [rendered]
+    if rendered.startswith("```") and rendered.endswith("```"):
+        lines = rendered.splitlines()
+        if len(lines) >= 3:
+            candidates.append("\n".join(lines[1:-1]).strip())
+    first_brace = rendered.find("{")
+    last_brace = rendered.rfind("}")
+    if first_brace >= 0 and last_brace > first_brace:
+        candidates.append(rendered[first_brace : last_brace + 1])
+    for candidate in candidates:
+        if candidate.casefold().startswith("json\n"):
+            candidate = candidate[5:].lstrip()
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    raise RuntimeError("Codex returned an invalid UAT answer")
+
+
+def _evidence_fallback_outcome(
+    evidence_records: Sequence[tuple[UatEvidenceToolRequest, dict[str, Any]]],
+    *,
+    model_name: str,
+) -> UatConversationOutcome | None:
+    if len(evidence_records) != 1:
+        return None
+    request, result = evidence_records[0]
+    results = result.get("results")
+    displayed_default = len(results) if isinstance(results, list) else 0
+    displayed_count = _safe_result_count(
+        result.get("displayed_result_count"),
+        default=displayed_default,
+    )
+    total_count = _safe_result_count(
+        result.get("total_result_count"),
+        default=displayed_count,
+    )
+    status = result.get("status")
+    if status == "permission_denied":
+        answer_text = "目前無法調閱這些來源。"
+    elif status == "not_found":
+        answer_text = "目前沒有找到可調閱的來源。"
+    elif total_count == 0:
+        answer_text = "目前沒有找到符合條件的來源。"
+    elif total_count == displayed_count:
+        answer_text = f"已找到 {total_count} 筆符合條件的來源，以下依相關性列出內容。"
+    else:
+        answer_text = (
+            f"已找到 {total_count} 筆符合條件的來源，目前先顯示 "
+            f"{displayed_count} 筆，以下依相關性列出內容。"
+        )
+    projection = result.get("projection")
+    display_format = (
+        projection.get("output_format") if isinstance(projection, Mapping) else "narrative"
+    )
+    if display_format not in _DISPLAY_FORMATS:
+        display_format = "narrative"
+    return UatConversationOutcome(
+        response_kind="answer",
+        answer_text=answer_text,
+        display_format=display_format,
+        model_name=model_name,
+        tool_request=request,
+        tool_result=result,
+        fallback_reason=_EVIDENCE_FALLBACK_REASON,
+    )
+
+
+def _can_fallback_after_turn_error(exc: Exception) -> bool:
+    return isinstance(exc, RuntimeError) and str(exc) in {
+        "Codex app-server turn timed out",
+        "Codex app-server stopped unexpectedly",
+        "Codex app-server turn did not complete",
+        "Codex app-server completion is invalid",
+        "Codex app-server completion turn mismatch",
+        "Codex app-server turn failed",
+        "Codex app-server completion has no answer",
+    }
+
+
+def _safe_result_count(value: Any, *, default: int) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return max(default, 0)
 
 
 def _final_agent_message(

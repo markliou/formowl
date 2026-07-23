@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import re
+import sys
+from statistics import median
+from time import perf_counter
+import unicodedata
 from unittest.mock import patch
 import unittest
 
@@ -32,6 +37,10 @@ from formowl_mail import (
 )
 
 NOW = "2026-07-05T10:00:00+00:00"
+
+
+def _raise_parallel_tokenization_failure(*_args, **_kwargs):
+    raise RuntimeError("simulated parallel tokenization failure")
 
 
 class MailEvidenceMcpGatewayTests(unittest.TestCase):
@@ -524,10 +533,644 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
                     mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
                     now=NOW,
                 ).to_dict()
+            gateway.execute_mail_evidence_query(
+                query_text="audit approval",
+                required_terms=("audit approval",),
+                requester_user_id="user_yifan",
+                workspace_id="workspace_formowl",
+                session_id="session_index_cache_required",
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+                now=NOW,
+            )
         finally:
             mail_query._build_snippet_index = original
 
         self.assertEqual(build_count, 1)
+
+    @unittest.skipUnless(sys.platform == "linux", "fork index parity is Linux-only")
+    def test_parallel_snippet_index_is_exactly_equal_to_single_process_index(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-parallel-index-parity")
+        bundle = _mail_bundle(temp_dir, _mail_archive_required_term_oracle())
+
+        single_process = mail_query._build_snippet_index(bundle)
+        multiprocess = mail_query._build_snippet_index(bundle, worker_count=2)
+
+        self.assertEqual(multiprocess, single_process)
+        self.assertEqual(mail_query._PARALLEL_INDEX_BUNDLE, None)
+        self.assertEqual(mail_query._PARALLEL_INDEX_MESSAGES_BY_ID, None)
+
+    @unittest.skipUnless(sys.platform == "linux", "fork query parity is Linux-only")
+    def test_parallel_gateway_preserves_required_term_results_and_citations(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-parallel-query-parity")
+        bundle = _mail_bundle(temp_dir, _mail_archive_required_term_oracle())
+        single_process = MailEvidenceQueryGateway([bundle])
+        multiprocess = MailEvidenceQueryGateway([bundle], index_worker_count=2)
+        query = {
+            "query_text": "Program ORBIT",
+            "required_terms": ("Alex Rivera", "DOC-2026-ABC9"),
+            "requester_user_id": "user_yifan",
+            "workspace_id": "workspace_formowl",
+            "session_id": "session_parallel_query_parity",
+            "mail_import_session_id": bundle.mail_import_session.mail_import_session_id,
+            "limit": len(bundle.messages),
+            "now": NOW,
+            "collapse_source_items": True,
+        }
+
+        expected = single_process.execute_mail_evidence_query(**query)
+        actual = multiprocess.execute_mail_evidence_query(**query)
+
+        self.assertEqual(multiprocess.index_build_mode, "multiprocess")
+        self.assertEqual(multiprocess.index_worker_count, 2)
+        self.assertEqual(actual.result.to_dict(), expected.result.to_dict())
+        self.assertEqual(
+            actual.verified_source_item_keys,
+            expected.verified_source_item_keys,
+        )
+        self.assertTrue(actual.result.evidence_snippets[0]["supporting_evidence"])
+        self.assertEqual(
+            actual.result.citations,
+            expected.result.citations,
+        )
+
+    def test_parallel_gateway_falls_back_when_fork_is_unavailable(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-parallel-no-fork")
+        bundle = _mail_bundle(temp_dir, _mail_archive_required_term_oracle())
+
+        with patch.object(
+            mail_query.multiprocessing,
+            "get_context",
+            side_effect=ValueError("fork is unavailable"),
+        ):
+            gateway = MailEvidenceQueryGateway([bundle], index_worker_count=2)
+
+        self.assertEqual(gateway.index_build_mode, "single_process")
+        self.assertEqual(gateway.index_worker_count, 1)
+        self.assertEqual(
+            gateway._snippet_index_by_bundle_id[bundle.mail_evidence_bundle_id],
+            mail_query._build_snippet_index(bundle),
+        )
+
+    def test_parallel_gateway_falls_back_outside_safe_fork_boundary(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-parallel-thread-guard")
+        bundle = _mail_bundle(temp_dir, _mail_archive_required_term_oracle())
+        cases = (
+            {
+                "name": "non_main_thread",
+                "current_thread": object(),
+                "main_thread": object(),
+                "active_count": 1,
+            },
+            {
+                "name": "other_threads_active",
+                "current_thread": None,
+                "main_thread": None,
+                "active_count": 2,
+            },
+        )
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                current_thread = case["current_thread"] or object()
+                main_thread = case["main_thread"] or current_thread
+                with (
+                    patch.object(
+                        mail_query.threading,
+                        "current_thread",
+                        return_value=current_thread,
+                    ),
+                    patch.object(
+                        mail_query.threading,
+                        "main_thread",
+                        return_value=main_thread,
+                    ),
+                    patch.object(
+                        mail_query.threading,
+                        "active_count",
+                        return_value=case["active_count"],
+                    ),
+                    patch.object(mail_query.multiprocessing, "get_context") as get_context,
+                ):
+                    gateway = MailEvidenceQueryGateway(
+                        [bundle],
+                        index_worker_count=2,
+                    )
+
+                self.assertEqual(gateway.index_build_mode, "single_process")
+                self.assertEqual(gateway.index_worker_count, 1)
+                get_context.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "linux", "fork failure path is Linux-only")
+    def test_parallel_worker_failure_does_not_publish_partial_gateway(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-parallel-worker-failure")
+        bundle = _mail_bundle(temp_dir, _mail_archive_required_term_oracle())
+        gateway = None
+
+        with (
+            patch.object(
+                mail_query,
+                "_tokenize_segment",
+                _raise_parallel_tokenization_failure,
+            ),
+            patch.object(
+                mail_query,
+                "_immutable_posting_map",
+                wraps=mail_query._immutable_posting_map,
+            ) as freeze_postings,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "simulated parallel tokenization failure",
+            ):
+                gateway = MailEvidenceQueryGateway([bundle], index_worker_count=2)
+
+        self.assertIsNone(gateway)
+        freeze_postings.assert_not_called()
+        self.assertEqual(mail_query._PARALLEL_INDEX_BUNDLE, None)
+        self.assertEqual(mail_query._PARALLEL_INDEX_MESSAGES_BY_ID, None)
+
+    def test_required_terms_match_exhaustive_source_oracle_across_domains(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-required-term-source-oracle")
+        bundle = _mail_bundle(temp_dir, _mail_archive_required_term_oracle())
+        gateway = MailEvidenceQueryGateway([bundle])
+        required_terms = ("Alex Rivera", "PART-AX9-004", "DOC-2026-ABC9")
+
+        execution = gateway.execute_mail_evidence_query(
+            query_text="Alex Rivera PART-AX9-004 DOC-2026-ABC9 ORBIT",
+            required_terms=required_terms,
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            session_id="session_required_term_oracle",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            limit=len(bundle.messages),
+            now=NOW,
+            collapse_source_items=True,
+        )
+        result = execution.result.to_dict()
+        oracle_source_ids, oracle_observation_ids = _exhaustive_required_term_oracle(
+            bundle,
+            required_terms,
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+        )
+        result_source_ids = {snippet["email_message_id"] for snippet in result["evidence_snippets"]}
+
+        # The oracle scans every complete logical source item directly.  It
+        # intentionally does not call the production tokenizer, postings, or
+        # source-assembly helpers.
+        self.assertEqual(execution.verified_source_item_ids, oracle_source_ids)
+        self.assertEqual(result_source_ids, oracle_source_ids)
+        self.assertEqual(len(result["evidence_snippets"]), len(oracle_source_ids))
+        self.assertEqual(len(result["citations"]), len(oracle_source_ids))
+        self.assertEqual(
+            {citation["email_message_id"] for citation in result["citations"]},
+            oracle_source_ids,
+        )
+        self.assertEqual(
+            {citation["source_observation_id"] for citation in result["citations"]},
+            {snippet["source_observation_id"] for snippet in result["evidence_snippets"]},
+        )
+        for citation in result["citations"]:
+            self.assertIn(
+                citation["source_observation_id"],
+                oracle_observation_ids[citation["email_message_id"]],
+            )
+        self.assertEqual(
+            set(execution.timings_ms),
+            {"posting_retrieval", "exact_verification", "ranking"},
+        )
+        self.assertTrue(all(value >= 0.0 for value in execution.timings_ms.values()))
+
+    def test_required_terms_preserve_generic_typed_numeric_equivalence(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-required-term-typed-numeric")
+        bundle = _mail_bundle(temp_dir, _mail_archive_required_term_oracle())
+        gateway = MailEvidenceQueryGateway([bundle])
+
+        execution = gateway.execute_mail_evidence_query(
+            query_text="470002002 change record",
+            required_terms=("TYPE470002002",),
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            session_id="session_required_typed_numeric",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            limit=len(bundle.messages),
+            now=NOW,
+            collapse_source_items=True,
+        )
+        result = execution.result.to_dict()
+
+        self.assertEqual(len(execution.verified_source_item_ids or ()), 1)
+        self.assertEqual(len(result["evidence_snippets"]), 1)
+        self.assertIn("470002002", result["evidence_snippets"][0]["snippet"])
+        self.assertEqual(
+            result["citations"][0]["email_message_id"],
+            result["evidence_snippets"][0]["email_message_id"],
+        )
+
+    def test_required_term_oracle_matches_source_counts_and_permissions(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-required-term-permission-oracle")
+        bundle = _mail_bundle(temp_dir, _mail_archive_required_term_oracle())
+        gateway = MailEvidenceQueryGateway([bundle])
+        required_terms = ("Alex Rivera", "PART-AX9-004", "DOC-2026-ABC9")
+        query_text = "Alex Rivera PART-AX9-004 DOC-2026-ABC9"
+
+        cases = (
+            ("owner", "user_yifan", (), "ok"),
+            ("denied", "user_other", (), "permission_denied"),
+            (
+                "granted",
+                "user_other",
+                (_mail_session_grant(bundle, grantee_user_id="user_other"),),
+                "ok",
+            ),
+        )
+        for case_name, requester_user_id, grants, expected_status in cases:
+            with self.subTest(case_name=case_name):
+                execution = gateway.execute_mail_evidence_query(
+                    query_text=query_text,
+                    required_terms=required_terms,
+                    requester_user_id=requester_user_id,
+                    workspace_id="workspace_formowl",
+                    session_id=f"session_required_oracle_{case_name}",
+                    mail_import_session_id=(bundle.mail_import_session.mail_import_session_id),
+                    grants=grants,
+                    limit=10,
+                    now=NOW,
+                    collapse_source_items=True,
+                )
+                result = execution.result.to_dict()
+                oracle_source_ids, oracle_observation_ids = _exhaustive_required_term_oracle(
+                    bundle,
+                    required_terms,
+                    requester_user_id=requester_user_id,
+                    workspace_id="workspace_formowl",
+                    grants=grants,
+                )
+                result_source_ids = {
+                    snippet["email_message_id"] for snippet in result["evidence_snippets"]
+                }
+
+                self.assertEqual(result["status"], expected_status)
+                self.assertEqual(execution.verified_source_item_ids, oracle_source_ids)
+                self.assertEqual(
+                    len(result["evidence_snippets"]),
+                    len(oracle_source_ids),
+                )
+                self.assertEqual(
+                    len(result["citations"]),
+                    len(oracle_source_ids),
+                )
+                self.assertEqual(result_source_ids, oracle_source_ids)
+                if expected_status == "permission_denied":
+                    self.assertEqual(result["evidence_snippets"], [])
+                    self.assertEqual(result["citations"], [])
+                    self.assertEqual(
+                        result["redaction_counts"]["hidden_messages"],
+                        len(bundle.messages),
+                    )
+                    self.assertEqual(
+                        execution.timings_ms,
+                        {
+                            "posting_retrieval": 0.0,
+                            "exact_verification": 0.0,
+                            "ranking": 0.0,
+                        },
+                    )
+                else:
+                    for citation in result["citations"]:
+                        self.assertIn(
+                            citation["source_observation_id"],
+                            oracle_observation_ids[citation["email_message_id"]],
+                        )
+
+    def test_required_term_postings_do_not_touch_noncandidate_snippets(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-required-term-poison-pruning")
+        bundle = _mail_bundle(temp_dir, _mail_archive_required_term_oracle())
+        gateway = MailEvidenceQueryGateway([bundle])
+        base_index = mail_query._build_snippet_index(bundle)
+        target = next(
+            snippet
+            for snippet in base_index.snippets
+            if "doc-2026-abc9" in snippet.searchable_tokens and "alex" in snippet.searchable_tokens
+        )
+
+        class PoisonSnippet:
+            @property
+            def source_item_id(self):
+                raise AssertionError("noncandidate source should not be inspected")
+
+            @property
+            def searchable_tokens(self):
+                raise AssertionError("noncandidate snippet should not be verified")
+
+            @property
+            def payload(self):
+                raise AssertionError("noncandidate snippet should not be materialized")
+
+        source_item_id = target.source_item_id
+        gateway._snippet_index_by_bundle_id[bundle.mail_evidence_bundle_id] = (
+            mail_query._MailSnippetIndex(
+                snippets=(target, PoisonSnippet()),
+                snippet_indexes_by_token={token: (0,) for token in target.searchable_tokens},
+                source_item_ids_by_token={
+                    token: frozenset({source_item_id}) for token in target.searchable_tokens
+                },
+                snippet_indexes_by_source_item_id={
+                    source_item_id: (0,),
+                    "emailmessage_poison": (1,),
+                },
+                subject_by_source_item_id={
+                    source_item_id: str(target.payload.get("subject", "")),
+                    "emailmessage_poison": "Poison source",
+                },
+            )
+        )
+
+        execution = gateway.execute_mail_evidence_query(
+            query_text="DOC-2026-ABC9 Alex Rivera",
+            required_terms=("Alex Rivera", "DOC-2026-ABC9"),
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            session_id="session_required_poison",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            limit=10,
+            now=NOW,
+            collapse_source_items=True,
+        )
+
+        self.assertEqual(execution.verified_source_item_ids, frozenset({source_item_id}))
+        self.assertEqual(len(execution.result.evidence_snippets), 1)
+
+    def test_required_term_query_collapses_repeated_chain_before_materialization(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-required-term-chain-collapse")
+        bundle = _mail_bundle(temp_dir, _mail_archive_repeated_chain())
+        gateway = MailEvidenceQueryGateway([bundle])
+
+        with patch(
+            "formowl_mail.query._safe_snippet",
+            wraps=mail_query._safe_snippet,
+        ) as safe_snippet:
+            execution = gateway.execute_mail_evidence_query(
+                query_text="Alex Rivera DOC-2026-ABC9",
+                required_terms=("Alex Rivera", "DOC-2026-ABC9"),
+                requester_user_id="user_yifan",
+                workspace_id="workspace_formowl",
+                session_id="session_required_chain",
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+                limit=len(bundle.messages),
+                now=NOW,
+                collapse_source_items=True,
+            )
+
+        self.assertEqual(len(execution.result.evidence_snippets), 1)
+        self.assertEqual(len(execution.result.citations), 1)
+        self.assertEqual(safe_snippet.call_count, 1)
+
+    def test_required_term_latency_stays_bounded_on_synthetic_large_corpus(self) -> None:
+        required_terms = ("Alex Rivera", "PART-AX9-004", "DOC-2026-ABC9")
+        query_text = "Alex Rivera PART-AX9-004 DOC-2026-ABC9"
+
+        small_bundle = _mail_bundle(
+            _paths.fresh_test_dir("mail-required-term-latency-small"),
+            _mail_archive_latency_corpus(16, noise_repetitions=16),
+        )
+        large_bundle = _mail_bundle(
+            _paths.fresh_test_dir("mail-required-term-latency-large"),
+            _mail_archive_latency_corpus(2048, noise_repetitions=128),
+        )
+        small_gateway = MailEvidenceQueryGateway([small_bundle])
+        large_gateway = MailEvidenceQueryGateway([large_bundle])
+
+        small_ms = _median_required_term_query_ms(
+            small_gateway,
+            small_bundle,
+            query_text=query_text,
+            required_terms=required_terms,
+        )
+        large_ms = _median_required_term_query_ms(
+            large_gateway,
+            large_bundle,
+            query_text=query_text,
+            required_terms=required_terms,
+        )
+
+        # This is a deterministic synthetic regression guard only.  It is not
+        # a claim about private PST performance or a promise such as "under
+        # ten seconds"; the large query should not reconstruct every source's
+        # text after the index has already been built.
+        self.assertLess(
+            large_ms,
+            max(25.0, small_ms * 20.0),
+            f"synthetic query scaled from {small_ms:.3f}ms to {large_ms:.3f}ms",
+        )
+
+    def test_required_term_permission_denial_precedes_posting_lookup(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-required-term-permission")
+        bundle = _mail_bundle(temp_dir, _mail_archive_required_term_oracle())
+        gateway = MailEvidenceQueryGateway([bundle])
+
+        with patch(
+            "formowl_mail.query._resolve_verified_required_source_item_ids",
+            side_effect=AssertionError("permission denial must precede postings"),
+        ):
+            execution = gateway.execute_mail_evidence_query(
+                query_text="Alex Rivera DOC-2026-ABC9",
+                required_terms=("Alex Rivera", "DOC-2026-ABC9"),
+                requester_user_id="user_other",
+                workspace_id="workspace_formowl",
+                session_id="session_required_denied",
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+                limit=10,
+                now=NOW,
+                collapse_source_items=True,
+            )
+
+        result = execution.result.to_dict()
+        self.assertEqual(result["status"], "permission_denied")
+        self.assertEqual(result["evidence_snippets"], [])
+        self.assertEqual(result["citations"], [])
+        self.assertEqual(execution.verified_source_item_ids, frozenset())
+        self.assertEqual(
+            execution.timings_ms,
+            {
+                "posting_retrieval": 0.0,
+                "exact_verification": 0.0,
+                "ranking": 0.0,
+            },
+        )
+
+    def test_required_terms_namespace_source_identity_across_bundles(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-required-term-bundle-collision")
+        shared_message_id = "<shared-message@example.test>"
+        bundle_a = _mail_bundle(
+            temp_dir / "bundle-a",
+            {
+                "archive_id": "archive_bundle_a",
+                "mailbox_id": "mailbox_yifan",
+                "folders": [{"folder_path_hash": "sha256:folder-inbox", "label": "Inbox"}],
+                "messages": [
+                    {
+                        "message_id": shared_message_id,
+                        "thread_id": "thread_bundle_a",
+                        "folder_path_hash": "sha256:folder-inbox",
+                        "subject": "Alpha source",
+                        "sender": "alpha@example.test",
+                        "sent_at": NOW,
+                        "body": "ALPHA only",
+                        "body_hash": "sha256:body-bundle-a",
+                    }
+                ],
+            },
+        )
+        bundle_b = _mail_bundle(
+            temp_dir / "bundle-b",
+            {
+                "archive_id": "archive_bundle_b",
+                "mailbox_id": "mailbox_yifan",
+                "folders": [{"folder_path_hash": "sha256:folder-inbox", "label": "Inbox"}],
+                "messages": [
+                    {
+                        "message_id": shared_message_id,
+                        "thread_id": "thread_bundle_b",
+                        "folder_path_hash": "sha256:folder-inbox",
+                        "subject": "Common source",
+                        "sender": "common@example.test",
+                        "sent_at": NOW,
+                        "body": "COMMON only",
+                        "body_hash": "sha256:body-bundle-b",
+                    }
+                ],
+            },
+        )
+        normalized_message_id = bundle_a.messages[0].email_message_id
+        bundle_b = replace(
+            bundle_b,
+            mail_import_session=bundle_a.mail_import_session,
+            messages=[replace(bundle_b.messages[0], email_message_id=normalized_message_id)],
+            body_segments=[
+                replace(segment, email_message_id=normalized_message_id)
+                for segment in bundle_b.body_segments
+            ],
+        )
+        gateway = MailEvidenceQueryGateway([bundle_a, bundle_b])
+
+        execution = gateway.execute_mail_evidence_query(
+            query_text="COMMON",
+            required_terms=("ALPHA",),
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            session_id="session_required_term_bundle_collision",
+            mail_import_session_id=bundle_a.mail_import_session.mail_import_session_id,
+            limit=10,
+            now=NOW,
+            collapse_source_items=True,
+        )
+
+        expected_source_key = (
+            bundle_a.mail_evidence_bundle_id,
+            bundle_a.mail_import_session.mail_import_session_id,
+            normalized_message_id,
+        )
+        self.assertEqual(execution.verified_source_item_keys, frozenset({expected_source_key}))
+        self.assertEqual(
+            execution.verified_source_item_ids,
+            frozenset({normalized_message_id}),
+        )
+        self.assertEqual(execution.result.evidence_snippets, [])
+        self.assertEqual(execution.result.citations, [])
+        self.assertEqual(
+            mail_query._build_snippet_index(bundle_a).source_item_ids_by_token["alpha"],
+            frozenset({expected_source_key}),
+        )
+        self.assertEqual(
+            mail_query._build_snippet_index(bundle_b).source_item_ids_by_token["common"],
+            frozenset(
+                {
+                    (
+                        bundle_b.mail_evidence_bundle_id,
+                        bundle_a.mail_import_session.mail_import_session_id,
+                        normalized_message_id,
+                    )
+                }
+            ),
+        )
+
+    def test_required_terms_materialize_minimal_supporting_observations(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-required-term-supporting-evidence")
+        bundle = _mail_bundle(
+            temp_dir,
+            {
+                "archive_id": "archive_required_support",
+                "mailbox_id": "mailbox_yifan",
+                "folders": [{"folder_path_hash": "sha256:folder-inbox", "label": "Inbox"}],
+                "messages": [
+                    {
+                        "message_id": "<required-support@example.test>",
+                        "thread_id": "thread_required_support",
+                        "folder_path_hash": "sha256:folder-inbox",
+                        "subject": "Program evidence review",
+                        "sender": "program@example.test",
+                        "sent_at": NOW,
+                        "body_segments": [
+                            "Program ORBIT is ready for the evidence review.",
+                            "Alex Rivera is the accountable reviewer.",
+                            "The approved record is DOC-2026-ABC9.",
+                            "UNRELATED-SEGMENT must not be materialized.",
+                        ],
+                        "body_hash": "sha256:body-required-support",
+                    }
+                ],
+            },
+        )
+        gateway = MailEvidenceQueryGateway([bundle])
+        observations_by_text = {
+            segment.text: segment.source_observation_id for segment in bundle.body_segments
+        }
+
+        execution = gateway.execute_mail_evidence_query(
+            query_text="ORBIT",
+            required_terms=("Alex Rivera", "DOC-2026-ABC9"),
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            session_id="session_required_support",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            limit=10,
+            now=NOW,
+            collapse_source_items=True,
+        )
+        result = execution.result.to_dict()
+
+        self.assertEqual(len(result["evidence_snippets"]), 1)
+        primary = result["evidence_snippets"][0]
+        self.assertIn("Program ORBIT", primary["snippet"])
+        self.assertEqual(
+            result["citations"][0]["source_observation_id"],
+            primary["source_observation_id"],
+        )
+        supporting_evidence = primary["supporting_evidence"]
+        self.assertEqual(
+            {item["source_observation_id"] for item in supporting_evidence},
+            {
+                observations_by_text["Alex Rivera is the accountable reviewer."],
+                observations_by_text["The approved record is DOC-2026-ABC9."],
+            },
+        )
+        self.assertEqual(
+            {term for item in supporting_evidence for term in item["matched_required_terms"]},
+            {"Alex Rivera", "DOC-2026-ABC9"},
+        )
+        self.assertEqual(
+            {item["citation"]["source_observation_id"] for item in supporting_evidence},
+            {item["source_observation_id"] for item in supporting_evidence},
+        )
+        self.assertNotIn("UNRELATED-SEGMENT", str(result))
 
     def test_mail_evidence_query_rejects_raw_or_missing_inputs_without_content(self) -> None:
         temp_dir = _paths.fresh_test_dir("mail-evidence-query-input-guards")
@@ -1394,6 +2037,246 @@ def _mail_archive_identifier_competition() -> dict:
     )
     return {
         "archive_id": "archive_identifier_competition",
+        "mailbox_id": "mailbox_yifan",
+        "folders": [{"folder_path_hash": "sha256:folder-inbox", "label": "Inbox"}],
+        "messages": messages,
+    }
+
+
+def _mail_archive_required_term_oracle() -> dict:
+    messages = [
+        {
+            "message_id": "<orbit-target@example.test>",
+            "thread_id": "thread_orbit_target",
+            "folder_path_hash": "sha256:folder-inbox",
+            "subject": "Alex Rivera quarterly review",
+            "sender": "program@example.test",
+            "sent_at": NOW,
+            "body_segments": [
+                "Program ORBIT readiness summary for part PART-AX9-004",
+                "Document DOC-2026-ABC9 was approved.",
+            ],
+            "body_hash": "sha256:body-orbit-target",
+        },
+        {
+            "message_id": "<orbit-wrong-document@example.test>",
+            "thread_id": "thread_orbit_wrong_document",
+            "folder_path_hash": "sha256:folder-inbox",
+            "subject": "Alex Rivera weekly review",
+            "sender": "program@example.test",
+            "sent_at": NOW,
+            "body_segments": [
+                "Program ORBIT readiness summary for part PART-AX9-004",
+                "Document DOC-2026-XYZ8 remains under review.",
+            ],
+            "body_hash": "sha256:body-orbit-wrong-document",
+        },
+        {
+            "message_id": "<document-only@example.test>",
+            "thread_id": "thread_document_only",
+            "folder_path_hash": "sha256:folder-inbox",
+            "subject": "Document control notice",
+            "sender": "records@example.test",
+            "sent_at": NOW,
+            "body": "DOC-2026-ABC9 is archived without a named reviewer.",
+            "body_hash": "sha256:body-document-only",
+        },
+        {
+            "message_id": "<other-person@example.test>",
+            "thread_id": "thread_other_person",
+            "folder_path_hash": "sha256:folder-inbox",
+            "subject": "Avery Stone quarterly review",
+            "sender": "program@example.test",
+            "sent_at": NOW,
+            "body": ("Program ORBIT uses part PART-AX9-004 and document " "DOC-2026-ABC9."),
+            "body_hash": "sha256:body-other-person",
+        },
+        {
+            "message_id": "<numeric-record@example.test>",
+            "thread_id": "thread_numeric_record",
+            "folder_path_hash": "sha256:folder-inbox",
+            "subject": "Generic change record",
+            "sender": "records@example.test",
+            "sent_at": NOW,
+            "body": "Numeric record 470002002 is ready for review.",
+            "body_hash": "sha256:body-numeric-record",
+        },
+    ]
+    return {
+        "archive_id": "archive_required_term_oracle",
+        "mailbox_id": "mailbox_yifan",
+        "folders": [{"folder_path_hash": "sha256:folder-inbox", "label": "Inbox"}],
+        "messages": messages,
+    }
+
+
+def _mail_archive_repeated_chain() -> dict:
+    repeated_segments = [
+        "Quoted chain: Alex Rivera references DOC-2026-ABC9 for Program ORBIT.",
+        ("-----Original Message----- Alex Rivera references " "DOC-2026-ABC9 for Program ORBIT."),
+    ] * 20
+    return {
+        "archive_id": "archive_repeated_chain",
+        "mailbox_id": "mailbox_yifan",
+        "folders": [{"folder_path_hash": "sha256:folder-inbox", "label": "Inbox"}],
+        "messages": [
+            {
+                "message_id": "<repeated-chain@example.test>",
+                "thread_id": "thread_repeated_chain",
+                "folder_path_hash": "sha256:folder-inbox",
+                "subject": "Alex Rivera chain summary",
+                "sender": "program@example.test",
+                "sent_at": NOW,
+                "body_segments": repeated_segments,
+                "body_hash": "sha256:body-repeated-chain",
+            }
+        ],
+    }
+
+
+def _exhaustive_required_term_oracle(
+    bundle,
+    required_terms: tuple[str, ...],
+    *,
+    requester_user_id: str,
+    workspace_id: str,
+    grants=(),
+) -> tuple[frozenset[str], dict[str, frozenset[str]]]:
+    typed_numeric = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{2,5}[\s#:_-]*([0-9]{8,})(?![0-9])")
+    actor = bundle.mail_import_session
+    has_access = actor.workspace_id == workspace_id and (
+        requester_user_id == actor.owner_user_id
+        or any(
+            grant.owner_user_id == actor.owner_user_id
+            and grant.grantee_user_id == requester_user_id
+            and grant.permission in {"read", "evidence_snippet", "mail_evidence_read"}
+            and not grant.revoked_at
+            and grant.scope_type == "mail_import_session"
+            and grant.scope_id == actor.mail_import_session_id
+            and grant.expires_at > NOW
+            for grant in grants
+        )
+    )
+    if not has_access:
+        return frozenset(), {}
+
+    segments_by_message_id: dict[str, list[str]] = {}
+    observations_by_message_id: dict[str, set[str]] = {}
+    for segment in bundle.body_segments:
+        segments_by_message_id.setdefault(segment.email_message_id, []).append(segment.text)
+        observations_by_message_id.setdefault(segment.email_message_id, set()).add(
+            segment.source_observation_id
+        )
+    matches: set[str] = set()
+    matched_observations: dict[str, frozenset[str]] = {}
+    for message in bundle.messages:
+        source_text = unicodedata.normalize(
+            "NFKC",
+            "\n".join(
+                [
+                    message.subject or "",
+                    *segments_by_message_id.get(message.email_message_id, ()),
+                ]
+            ),
+        ).casefold()
+        all_terms_match = True
+        for required_term in required_terms:
+            normalized = (
+                unicodedata.normalize(
+                    "NFKC",
+                    required_term,
+                )
+                .casefold()
+                .strip()
+            )
+            numeric_match = typed_numeric.fullmatch(normalized)
+            alternatives = (
+                (normalized, numeric_match.group(1)) if numeric_match is not None else (normalized,)
+            )
+            if not any(alternative in source_text for alternative in alternatives):
+                all_terms_match = False
+                break
+        if all_terms_match:
+            matches.add(message.email_message_id)
+            matched_observations[message.email_message_id] = frozenset(
+                observations_by_message_id.get(message.email_message_id, set())
+            )
+    return frozenset(matches), matched_observations
+
+
+def _median_required_term_query_ms(
+    gateway: MailEvidenceQueryGateway,
+    bundle,
+    *,
+    query_text: str,
+    required_terms: tuple[str, ...],
+) -> float:
+    query_kwargs = {
+        "query_text": query_text,
+        "required_terms": required_terms,
+        "requester_user_id": "user_yifan",
+        "workspace_id": "workspace_formowl",
+        "session_id": "session_required_term_latency",
+        "mail_import_session_id": bundle.mail_import_session.mail_import_session_id,
+        "limit": 2,
+        "now": NOW,
+        "collapse_source_items": True,
+    }
+    expected_target_id = next(
+        message.email_message_id
+        for message in bundle.messages
+        if message.subject == "Alex Rivera evidence review"
+    )
+    for _ in range(2):
+        gateway.execute_mail_evidence_query(**query_kwargs)
+    samples: list[float] = []
+    for _ in range(5):
+        started = perf_counter()
+        execution = gateway.execute_mail_evidence_query(**query_kwargs)
+        samples.append((perf_counter() - started) * 1000.0)
+        if execution.verified_source_item_ids != frozenset({expected_target_id}):
+            raise AssertionError("latency corpus did not preserve its single target")
+        if len(execution.result.evidence_snippets) != 1:
+            raise AssertionError("latency corpus returned an unexpected source count")
+    return float(median(samples))
+
+
+def _mail_archive_latency_corpus(
+    noise_source_count: int,
+    *,
+    noise_repetitions: int,
+) -> dict:
+    noise = "unrelated corpus context " * noise_repetitions
+    messages = [
+        {
+            "message_id": f"<latency-noise-{index}@example.test>",
+            "thread_id": f"thread_latency_noise_{index}",
+            "folder_path_hash": "sha256:folder-inbox",
+            "subject": f"Unrelated source {index}",
+            "sender": "noise@example.test",
+            "sent_at": NOW,
+            "body": f"{noise} noise-source-{index}",
+            "body_hash": f"sha256:body-latency-noise-{index}",
+        }
+        for index in range(noise_source_count)
+    ]
+    messages.append(
+        {
+            "message_id": "<latency-target@example.test>",
+            "thread_id": "thread_latency_target",
+            "folder_path_hash": "sha256:folder-inbox",
+            "subject": "Alex Rivera evidence review",
+            "sender": "program@example.test",
+            "sent_at": NOW,
+            "body_segments": [
+                "PART-AX9-004 is the selected part for Program ORBIT.",
+                "DOC-2026-ABC9 was approved by Alex Rivera.",
+            ],
+            "body_hash": "sha256:body-latency-target",
+        }
+    )
+    return {
+        "archive_id": f"archive_latency_{noise_source_count}",
         "mailbox_id": "mailbox_yifan",
         "folders": [{"folder_path_hash": "sha256:folder-inbox", "label": "Inbox"}],
         "messages": messages,

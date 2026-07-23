@@ -83,6 +83,21 @@ and its reviewer gate remain separate.
 
 ## Blockers
 
+Issue #49's earlier intermittent Codex full-chat blocker is resolved in the
+current POC deployment. Three fresh anonymous July 23, 2026 sessions returned
+HTTP 200 three out of three with 87 total / 10 displayed sources, exhaustive
+coverage, 10 primary citations, one FormOwl call, and no fallback or
+`chat_failure` event. The formerly failing `03.80503G301` COO/origin prompt
+also returned HTTP 200 with the target identifier present. The same
+28,036-message cold start now uses four tokenizer workers plus deterministic
+parent merge and improved from 2368.108 seconds to 859.372 seconds, a 2.76x
+speedup with 17.38GiB sampled peak memory and no OOM. Focused UAT-image checks
+pass gateway 38/38, orchestrator 20/20, HTTP 43/43, targeted Ruff, and the
+isolated Node 20 UI smoke. Keep Issue #49 unchecked until the final post-change
+reviewer gate agrees. Methodology authority remains valid-but-blocked; this
+establishes no methodology-quality UAT, KG-vs-ontology result, general
+production readiness, or general latency claim.
+
 The bounded Task Answering slice passed 895 canonical dev-container tests,
 full Ruff, 345-file format check, and `git diff --check`. The required
 3-reviewer gate remains before completion.
@@ -137,7 +152,9 @@ authorization must be an actual boolean; string values fail closed.
 
 ## Next Action
 
-Complete the separate Task Answering reviewer gate before marking its work-board
-item complete. Then return to waiting for operator-supplied or public
-reproducible response packets for the four broad real-evidence gates. Do not
-reinterpret a passing repository-only harness as broad KG objective completion.
+Run the final post-change Issue #49 reviewer gate over the multiprocessing,
+fallback, tests, and live evidence before marking the board item complete. The
+separate Task Answering reviewer gate and four broad real-evidence gates remain
+independent. Keep methodology authority valid-but-blocked and do not
+reinterpret Issue #49 as methodology-quality UAT, a KG-vs-ontology result,
+general production readiness, or general latency.

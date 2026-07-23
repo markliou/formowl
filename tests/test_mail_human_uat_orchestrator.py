@@ -116,6 +116,8 @@ class _RecordingCodexTransport:
                     result=dict(result),
                 )
             )
+        if step.get("raise_after_tools"):
+            raise RuntimeError(str(step["raise_after_tools"]))
         if step.get("drop_invocations"):
             invocations = []
         return CodexAppServerTurn(
@@ -438,6 +440,95 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         self.assertEqual(outcome.answer_text, "來源證據已整理完成。")
         self.assertEqual(outcome.display_format, "table")
         self.assertEqual(outcome.tool_result, evidence_result)
+
+    def test_successful_evidence_survives_codex_answer_generation_failures(self) -> None:
+        tool_call = {
+            "tool_name": "search_formowl_evidence",
+            "arguments": {
+                "query_text": "source-neutral evidence question",
+                "required_terms": ["DOC-42"],
+                "sort": "relevance",
+                "limit": 10,
+            },
+        }
+        evidence_result = {
+            "status": "ok",
+            "total_result_count": 87,
+            "displayed_result_count": 10,
+            "projection": {"output_format": "narrative"},
+            "results": [{"snippet": "bounded evidence"} for _ in range(10)],
+        }
+        for step in (
+            {
+                "tool_calls": [tool_call],
+                "final_message": "not-json",
+            },
+            {
+                "tool_calls": [tool_call],
+                "final_message": json.dumps(
+                    {
+                        "response_kind": ["answer"],
+                        "answer_text": "invalid structured answer",
+                        "display_format": "narrative",
+                    }
+                ),
+            },
+            {
+                "tool_calls": [tool_call],
+                "raise_after_tools": "Codex app-server turn failed",
+                "final_message": _decision(),
+            },
+        ):
+            with self.subTest(step=step):
+                transport = _RecordingCodexTransport([step])
+                with tempfile.TemporaryDirectory() as workspace:
+                    model = CodexAppServerConversationModel(
+                        transport,
+                        workspace_dir=workspace,
+                    )
+                    outcome = model.respond(
+                        history=(),
+                        user_text="查 DOC-42",
+                        latest_evidence=None,
+                        safety_identifier="session-fallback",
+                        evidence_tool=lambda request: evidence_result,
+                    )
+
+                self.assertEqual(
+                    outcome.answer_text,
+                    "已找到 87 筆符合條件的來源，目前先顯示 10 筆，以下依相關性列出內容。",
+                )
+                self.assertEqual(outcome.response_kind, "answer")
+                self.assertEqual(outcome.display_format, "narrative")
+                self.assertEqual(outcome.tool_result, evidence_result)
+                self.assertIsNotNone(outcome.fallback_reason)
+                self.assertEqual(transport.deleted_threads, ["thread_1"])
+
+    def test_codex_answer_accepts_json_code_fence(self) -> None:
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "final_message": (
+                        "```json\n" + _decision(answer_text="格式仍可解析") + "\n```"
+                    ),
+                }
+            ]
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            outcome = model.respond(
+                history=(),
+                user_text="一般問題",
+                latest_evidence=None,
+                safety_identifier="session-fenced-json",
+                evidence_tool=lambda request: {},
+            )
+
+        self.assertEqual(outcome.answer_text, "格式仍可解析")
+        self.assertIsNone(outcome.fallback_reason)
 
     def test_same_safety_identifier_reuses_thread_and_new_identifier_does_not(self) -> None:
         transport = _RecordingCodexTransport(

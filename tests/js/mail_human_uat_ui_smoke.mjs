@@ -384,7 +384,10 @@ async function runChatSmoke() {
           subject: "次要主旨",
           sent_at: "2026-07-20T08:00:00+00:00",
           source_kind: "preloaded",
-          citation: { citation_id: "mailcitation_table" },
+          citation: {
+            citation_id: "mailcitation_table",
+            source_observation_id: "obs_table_internal",
+          },
         },
         {
           snippet: "第二筆來源內容",
@@ -406,8 +409,13 @@ async function runChatSmoke() {
   assert.match(textTree(tableHolder), /共找到 12 筆/u);
   assert.match(textTree(tableHolder), /目前顯示 2 筆/u);
   assert.equal(tagTree(tableHolder, "table").length, 1);
-  assert.equal(tagTree(tableHolder, "th")[0].textContent, "內容");
+  assert.equal(tagTree(tableHolder, "th")[0].textContent, "順序");
+  assert.equal(tagTree(tableHolder, "td")[0].textContent, "1");
   assert.doesNotMatch(textTree(tableHolder), /寄件者|收件者/u);
+  assert.doesNotMatch(
+    textTree(tableHolder),
+    /mailcitation_table|obs_table_internal/u,
+  );
 
   const narrativeHolder = new FakeElement("div");
   context.renderAssistantResult(
@@ -422,7 +430,10 @@ async function runChatSmoke() {
           subject: "主旨後出現",
           sent_at: "2026-07-20T08:00:00+00:00",
           source_kind: "preloaded",
-          citation: null,
+          citation: {
+            citation_id: "mailcitation_narrative",
+            source_observation_id: "obs_narrative_internal",
+          },
         },
       ],
       notice: "內容優先",
@@ -436,8 +447,12 @@ async function runChatSmoke() {
   );
   const evidenceCard = tagTree(narrativeHolder, "article")[0];
   assert.equal(evidenceCard.children[0].tagName, "p");
-  assert.equal(evidenceCard.children[0].textContent, "內容先出現");
+  assert.match(textTree(evidenceCard.children[0]), /1 內容先出現/u);
   assert.equal(evidenceCard.children[1].tagName, "h3");
+  assert.doesNotMatch(
+    textTree(narrativeHolder),
+    /mailcitation_narrative|obs_narrative_internal/u,
+  );
 
   requests.length = 0;
   await elements.get("sidebar-toggle").dispatch("click");

@@ -73,6 +73,57 @@ archival is preserved at
 
 ## Current Unchecked Work
 
+- [ ] Complete Issue #49: source-neutral tokenizer replay and full-chat UAT
+  evidence.
+  - The July 23, 2026 answer-fallback correction removed the observed
+    intermittent full-chat failure. Three fresh anonymous sessions through the
+    deployed LAN page returned HTTP 200 three out of three, each with 87 total
+    sources, 10 displayed sources, 10 primary citations, exhaustive
+    `all_matching` coverage, and one FormOwl tool call. No fallback or
+    `chat_failure` event was recorded.
+  - The three full-chat runs completed in 10.281-11.178 seconds. FormOwl
+    orchestration took 1.447 seconds on the first post-start query and
+    0.670/0.684 seconds on the next two. The formerly failing
+    `03.80503G301` COO/origin prompt also returned HTTP 200 with the identifier
+    present, 17 total sources, 10 displayed sources, and 10 primary citations.
+  - The same 28,036-message cold start now uses four Linux `fork` workers for
+    tokenization and a deterministic parent merge. Cold readiness improved from
+    2368.108 seconds to 859.372 seconds: 2.76x faster and 63.71% less elapsed
+    time. The indexed build itself reported 541146.486ms; sampled parallel CPU
+    averaged 409% and peaked at 501%, peak memory was 17.38GiB, steady ready
+    memory was approximately 16.5GiB, and no OOM occurred.
+  - Exact single-process/multiprocess index parity, required-term result and
+    citation parity, fork-unavailable fallback, thread-safety fallback,
+    worker-failure fail-closed behavior, injected-gateway bundle binding, and
+    health metrics are covered by focused tests.
+  - The source-neutral implementation indexes once and queries many times.
+    Bundle/source identity collision and missing required-term supporting
+    citations were fixed and re-reviewed.
+    Private post-index retrieval took 664.132ms and 662.973ms, both below the
+    bounded 10-second target, with zero index rebuilds.
+  - The exhaustive oracle's 87 sources exactly matched verified and gateway
+    identifiers plus citation hash. Permission denial occurred before
+    retrieval, and supporting evidence was complete.
+  - The explicitly approved OpenAI Codex sidecar chat on July 23, 2026 returned
+    HTTP 200 in 10093.685ms, below the bounded 30-second target, invoked FormOwl
+    once, and reported 87 total sources, 10 displayed sources, and 10 citations.
+    It preserved the exact required-term individual hash match, included every
+    timing field, and did not reach the 120-second timeout.
+  - `all_matching` direct runtime coverage was total/returned 87, displayed 10,
+    `is_exhaustive=true`, `coverage.has_more=false`, and
+    `projection.has_more=true`. Chat deterministically copied the original tool
+    coverage unchanged; Faraday's re-review agreed that this is proof.
+  - Hume (high), Noether (medium), and Faraday (max) each returned
+    `RELEASE_DECISION: AGREE` with no blockers after the correctness fixes.
+  - Focused UAT-image verification passes gateway 38/38, orchestrator 20/20,
+    HTTP 43/43, targeted Ruff check/format, and the isolated Node 20 UI smoke.
+    `git diff --check` passes. Keep this item unchecked until the final
+    post-change reviewer gate agrees; do not reuse the earlier reviewer gate as
+    proof for the new multiprocessing and fallback changes.
+  - Methodology authority remains valid-but-blocked. This POC evidence does not
+    establish methodology-quality UAT, a KG-vs-ontology result, general
+    production readiness, or a general latency claim.
+
 - [x] Complete GitHub issue #44: add a source-neutral UAT conversation
   orchestrator that treats FormOwl as governed MCP-style tools.
   - Isolated branch/worktree: `uat/issue-44-orchestrator` at

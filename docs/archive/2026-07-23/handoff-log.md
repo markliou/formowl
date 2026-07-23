@@ -13,6 +13,87 @@ Lifecycle label: `active`.
 - Never split a dated entry, discard content, or rewrite archive history.
 - Append only concise cross-agent facts, blockers, verification, and next action.
 
+## 2026-07-10
+
+- Issue #33 Work Package A completed on `issue-33-work-package-a` from merged
+  Ontology v2 PR #31. The EXM evaluator now uses candidate-admission arm names,
+  declares KG/type/frame stage boundaries, uses development/evaluation labels
+  instead of same-corpus holdout language, excludes permission-denied
+  auto-passes from primary retrieval accuracy, and emits eight closed-schema
+  report sections. Reviewer fixes removed unsupported private-row recomputation
+  and ontology/frame-semantic claims, bound frame/type/evidence/topology fields
+  to exact derived values, and reject coherent permission-case reclassification
+  that changes the configured evaluation mix. Canonical dev-container
+  verification passes: focused evaluator tests 29 OK, full unittest 638 OK,
+  full Ruff check passed, 303 files pass format-check, and `git diff --check`
+  passed. The 3/3 read-only gate passed with explicit `RELEASE_DECISION: AGREE`
+  from `Dalton` (engineering), `Kepler` (governance/safety), and `Faraday`
+  (research method); no blocking findings remain.
+
+- No-training candidate-admission ablation completed for the accepted active
+  goal. The EXM/PST 50,000-case evaluator compared regex, raw
+  `jieba + SentencePiece`, frequency-rule admission, frozen-profile admission,
+  and the prior weak-label MLP admission policy in
+  one run over the same generated benchmark shape. Safe tracked aggregate:
+  `experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json`.
+  Result: regex admission 10,000/50,000; raw `jieba + SentencePiece`
+  admission 18,176/50,000 with 0/5,000 no-match guards; frequency-rule
+  admission 33,277/50,000 with all guards passing; frozen-profile admission
+  43,976/50,000 with 33,976/40,000 positive cases,
+  5,000/5,000 no-match guards, and 5,000/5,000 denied guards; weak-label MLP
+  weak-label MLP admission 43,369/50,000 with 33,369/40,000 positives and all
+  guards passing. Current method judgment: the bundled candidate-admission and
+  graph-construction policy is effective on this generated benchmark, but this
+  does not establish a type-compatibility or frame-semantic effect. The self-trained MLP is not
+  justified as the stable default because the zero-training frozen profile is
+  +607 passed cases better in this run. Engineering reviewer `Meitner` blocked
+  once because the frozen profile model hash did not include the actual
+  scoring coefficients; the blocker was fixed by data-binding
+  `_FROZEN_PROFILE_SCORE_RULES` into both scoring and `model_hash`, then
+  rerunning the 50,000-case evaluation. Verification after the fix:
+  dev-container focused lexical ontology tests 21 OK, full 50,000-case
+  evaluation completed, saved public report validation blockers=[], full
+  unittest 630 OK, Ruff check/format-check passed, KG acceptance
+  `passed_with_explicit_limits`, tracked summary JSON parse passed, and
+  `git diff --check` passed. Reviewer gate passed 3/3: `Meitner`
+  engineering agreed after the hash-binding fix, `Singer` governance/safety
+  agreed, and `Gibbs` research method agreed. BGE-M3 through FlagEmbedding is
+  documented as the preferred future optional true frozen neural adapter, but
+  it was not executed in this default-dev-container slice. Claim remains
+  candidate-only and excludes raw mail content, query payloads, private rows or
+  paths, canonical graph/type/user-graph/wiki mutation, BGE execution evidence,
+  parser readiness, business answer generation, and production readiness.
+
+# 2026-07-10 — KG Research Agent — issue #36 release gate passed
+
+- Completed the evidence-grounded MAY ChatGPT × FormOwl MCP evaluation with
+  100 unique reviewer-grounded evidence cases and 50,000 rendered interaction
+  variants. Production v4 and the standalone source-rebuild validator both
+  passed with `blockers=[]`.
+- The evaluator now binds closed `tools/list` schemas, recursively rejects
+  caller-controlled identity/session/grant keys, separates expected outcomes
+  from actual MCP semantics, executes same-session response-derived follow-ups,
+  and validates private replay roots against an external trust anchor.
+- Structured-answer gold and prediction use methodologically independent
+  lifecycle/action/deadline/dependency extraction. Answerable false negatives
+  score case/thread scope as an applicable zero, and standalone validation
+  rebuilds grounded rows from the private manifest, trusted replay, and evidence
+  bundle so coherent rehashing cannot pass.
+- Safe results: governed mail retrieval 11/100, candidate KG 19/100, ontology
+  KG 19/100; 326 retrieval-only factorial arms produced zero better than
+  KG-only, two equal, and 324 worse. The replay exposed 10 expected no-match
+  false positives while enforcing all 10 expected permission denials.
+- Response-conditioned trajectory accounting records 60,000 tool calls per
+  FormOwl arm. Non-triggered correction/refinement/permission conditions do not
+  add a second call, turn, or simulated cost.
+- Canonical final verification passed 713 dev-container tests, full Ruff check,
+  316-file format check, and `git diff --check`. Reviewer gate passed 3/3 with
+  explicit `RELEASE_DECISION: AGREE` from the product-usefulness,
+  evidence/citation, and engineering/governance reviewers.
+- Claim boundary remains deterministic offline replay/usefulness evaluation:
+  no live ChatGPT execution, production-readiness claim, autonomous business
+  judgment, raw-mail MCP access, or canonical KG/type/user-graph/wiki writes.
+
 ## 2026-07-11
 
 - Completed a user-requested whole-repository maintenance review across
@@ -217,70 +298,3 @@ Lifecycle label: `active`.
 ## 2026-07-21 — Active isolated methodology and UAT orchestration work
 - `goal/task-answering-methodology` separates TaskFrame, all-matching coverage, source-item assembly, answerability, and content-first projection across source shapes; 895 canonical tests and full Ruff/format pass, with the 3-reviewer gate remaining.
 - User-assigned issue #44 is complete on `uat/issue-44-orchestrator`: `/api/chat` reaches pinned `codex-cli 0.144.6` app-server threads through a private Unix socket and a narrow JSONL/WebSocket bridge; Codex decides whether to call the single FormOwl evidence tool. The explicitly authorized server ChatGPT auth cache is copied once into isolated state; serving mounts no developer Codex home or auth input. Real protocol tracing required final agent output from `item/completed` because `turn/completed.itemsView` is `notLoaded`; persistent threads make deletion real. Verification passed 951 canonical tests, full Ruff/275-file format, Node 20 UI smoke, runtime attestation, image build, and `git diff --check`; Plato, Volta, and Mencius had already agreed 3/3. The deployed `8088` live gate passed with zero FormOwl calls for a greeting and exactly one `search_formowl_evidence` call returning six governed items for the 文顥/pull-in request; the test thread was deleted.
-## 2026-07-23 — Issue #49 tokenizer replay completed
-
-- Issue #49 is complete. The source-neutral implementation indexes once and
-  queries many times. Bundle/source identity collision and missing required-term
-  supporting citations were fixed and re-reviewed. Private post-index retrieval
-  took 664.132ms and 662.973ms, both below 10 seconds, with zero rebuilds.
-- The exhaustive oracle's 87 sources exactly matched verified and gateway
-  identifiers plus citation hash. Permission denial occurred before retrieval,
-  and supporting evidence was complete.
-- The explicitly approved OpenAI Codex sidecar chat on July 23, 2026 returned
-  HTTP 200 in 10093.685ms, below 30 seconds, invoked FormOwl once, and reported
-  87 total sources, 10 displayed sources, and 10 citations. It preserved the
-  exact required-term individual hash match, included all timing fields, and
-  did not reach the 120-second timeout.
-- Direct `all_matching` coverage was total/returned 87, displayed 10,
-  `is_exhaustive=true`, `coverage.has_more=false`, and
-  `projection.has_more=true`. Chat deterministically copied the original tool
-  coverage unchanged; Faraday's re-review agreed that this is proof.
-- Hume (high), Noether (medium), and Faraday (max) each returned
-  `RELEASE_DECISION: AGREE` with no blockers after the correctness fixes.
-  Canonical focused gateway (33) and UAT (41) tests passed. The full canonical
-  suite reached 990 tests with one pre-existing out-of-scope tokenizer
-  subprocess error because the evaluator lacks `MAIL_TOKENIZER_ID` /
-  `_tokenize`. Ruff, format, and `git diff --check` passed.
-- Cold index readiness was approximately 2,059,592.613ms with no SLA.
-  Methodology authority remains valid-but-blocked; this is not
-  methodology-quality UAT, a KG-vs-ontology result, general production
-  readiness, or a general latency claim.
-- Next action returns to the separate Task Answering reviewer gate and the four
-  broad real-evidence blockers.
-
-## 2026-07-23 — Issue #49 completion correction
-
-- Independent verification reran the focused canonical gateway and UAT modules:
-  33/33 and 41/41 passed, with targeted Ruff and diff checks passing.
-- Three fresh anonymous live sessions replayed the same private UAT prompt. The
-  full-chat HTTP outcomes were 500, 200, and 500. Every FormOwl retrieval
-  completed first with the expected 87 total / 10 displayed sources and about
-  674-685ms FormOwl orchestration, confirming the index-once/query-many slice.
-- The successful chat completed in 14.106 seconds with exhaustive
-  `all_matching` coverage, 10 unique primary citations, and three supporting
-  citations. The two failures happened after successful retrieval and returned
-  generic `request_failed`; the Codex answer/response stage is therefore still
-  intermittent.
-- Issue #49 is restored to unchecked. Do not call the full-chat slice complete
-  until repeated fresh-session live replay succeeds reliably. Methodology
-  authority remains valid-but-blocked.
-
-## 2026-07-23 — Issue #49 multiprocessing deployment and stable replay
-
-- The isolated UAT branch now parallelizes frozen Jieba + SentencePiece index
-  tokenization with four Linux `fork` workers and deterministic parent merge.
-  Exact index/result/citation parity, safe fallback, and worker fail-closed
-  tests pass.
-- Same-corpus cold readiness improved from 2368.108s to 859.372s, a 2.76x
-  speedup and 63.71% reduction. Index build was 541146.486ms; sampled CPU
-  averaged 409% during parallel work, peak memory was 17.38GiB, and no OOM
-  occurred.
-- The LAN UAT at `192.168.71.211:8080` now runs only the new four-worker
-  upstream. Three fresh PO prompt sessions returned HTTP 200 three out of three
-  with 87 total / 10 displayed sources and exhaustive coverage. The
-  `03.80503G301` COO/origin prompt also returned HTTP 200 with the identifier
-  present.
-- Focused UAT-image proof passes gateway 38/38, orchestrator 20/20, HTTP 43/43,
-  targeted Ruff/format, Node 20 UI smoke, and diff-check. Issue #49 remains
-  unchecked pending its final post-change reviewer gate. Methodology authority
-  remains valid-but-blocked.

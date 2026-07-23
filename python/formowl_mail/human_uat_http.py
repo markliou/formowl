@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import secrets
 import threading
+from time import perf_counter
 from typing import Any, Mapping, Sequence
 import unicodedata
 from urllib.parse import urlparse
@@ -40,7 +41,10 @@ from .human_uat_orchestrator import (
     UatConversationOutcome,
     UatEvidenceToolRequest,
 )
-from .query import MailEvidenceQueryGateway, _redact_mail_public_text
+from .query import (
+    MailEvidenceQueryGateway,
+    typed_numeric_identifier_aliases as _typed_numeric_identifier_aliases,
+)
 
 _MAX_REQUEST_BYTES = 32 * 1024
 _MAX_UPLOAD_REQUEST_BYTES = 520 * 1024 * 1024
@@ -147,10 +151,7 @@ _UPLOAD_OPEN_SOURCES = {"composer", "landing", "no_result"}
 _UPLOAD_CLOSE_SOURCES = {"button", "backdrop", "iframe_cancel"}
 _UPLOAD_VALIDATION_REASONS = {"file_count", "file_type", "file_size", "total_size"}
 _UPLOAD_SIZE_BUCKETS = {"under_5mb", "5_to_25mb", "25_to_60mb", "60_to_500mb"}
-_TYPED_NUMERIC_IDENTIFIER_RE = re.compile(
-    r"(?<![A-Za-z0-9])[A-Za-z]{2,5}[\s#:_-]*([0-9]{8,})(?![0-9])"
-)
-_BUSINESS_ALIASES = (
+_LEGACY_QUERY_ALIASES = (
     (
         ("量產", "打件", "生產排程", "投產"),
         ("SMT", "production", "schedule"),
@@ -167,7 +168,7 @@ _BUSINESS_ALIASES = (
         ("交期", "到料", "到貨", "交貨", "delivery", "ETA", "ETD"),
     ),
 )
-_EXACT_BUSINESS_FILTERS = ("文顥",)
+_LEGACY_EXACT_QUERY_FILTERS = ("文顥",)
 
 
 @dataclass(frozen=True)
@@ -193,7 +194,12 @@ class _UatConversationState:
 class MailHumanUatService:
     """Shared human UAT facade over the governed mail evidence query gateway."""
 
-    def __init__(self, config: MailHumanUatHttpConfig) -> None:
+    def __init__(
+        self,
+        config: MailHumanUatHttpConfig,
+        *,
+        base_gateway: MailEvidenceQueryGateway | None = None,
+    ) -> None:
         if (
             not isinstance(config.max_request_bytes, int)
             or isinstance(config.max_request_bytes, bool)
@@ -216,9 +222,16 @@ class MailHumanUatService:
         safe_public_string(config.bundle.mail_evidence_bundle_id, "mail_evidence_bundle_id")
         config.bundle.mail_import_session.to_dict()
         self.config = config
-        self._base_gateway = MailEvidenceQueryGateway([config.bundle])
-        self._base_message_by_id = {
-            message.email_message_id: message for message in config.bundle.messages
+        resolved_base_gateway = base_gateway or MailEvidenceQueryGateway([config.bundle])
+        if resolved_base_gateway.mail_evidence_bundle_ids != (
+            config.bundle.mail_evidence_bundle_id,
+        ):
+            raise ContractValidationError("UAT base gateway does not match its bundle")
+        self._base_gateway = resolved_base_gateway
+        base_session_id = config.bundle.mail_import_session.mail_import_session_id
+        self._base_message_by_source_item = {
+            (base_session_id, message.email_message_id): message
+            for message in config.bundle.messages
         }
         self._event_store = _PrivateUatEventStore(
             config.state_dir,
@@ -286,6 +299,9 @@ class MailHumanUatService:
             "upload_supported": True,
             "uploaded_file_count": uploaded_file_count,
             "read_only_business_systems": True,
+            "index_build_mode": self._base_gateway.index_build_mode,
+            "index_worker_count": self._base_gateway.index_worker_count,
+            "index_build_elapsed_ms": self._base_gateway.index_build_elapsed_ms,
         }
         assert_public_payload_safe(payload, "mail_human_uat_health")
         return payload
@@ -355,7 +371,9 @@ class MailHumanUatService:
                 )
                 return result
 
+            failure_stage = "model_response"
             try:
+                chat_orchestration_started = perf_counter()
                 outcome = model.respond(
                     history=history,
                     user_text=user_text,
@@ -363,12 +381,16 @@ class MailHumanUatService:
                     safety_identifier=conversation_id,
                     evidence_tool=call_formowl_tool,
                 )
+                chat_orchestration_ms = (perf_counter() - chat_orchestration_started) * 1000.0
+                failure_stage = "response_assembly"
                 response = self._chat_response(
                     query_id=query_id,
                     user_text=user_text,
                     outcome=outcome,
                     latest_evidence=latest_evidence,
+                    chat_orchestration_ms=chat_orchestration_ms,
                 )
+                failure_stage = "result_persistence"
                 self._event_store.append(
                     {
                         "event_type": "chat_result",
@@ -392,10 +414,13 @@ class MailHumanUatService:
                         ),
                         "tool_result_count": response["result_count"],
                         "assistant_response_hash": sha256_json(outcome.answer_text),
+                        "answer_fallback_used": outcome.fallback_reason is not None,
+                        "fallback_reason": outcome.fallback_reason,
                         **tracking,
                     }
                 )
 
+                failure_stage = "conversation_state_commit"
                 with self._lock:
                     state = self._conversation_states_by_conversation_id.setdefault(
                         conversation_id,
@@ -413,7 +438,7 @@ class MailHumanUatService:
                     del state.history[:-_MAX_CHAT_HISTORY_MESSAGES]
                     if outcome.tool_result is not None:
                         state.latest_evidence = dict(outcome.tool_result)
-            except Exception:
+            except Exception as exc:
                 try:
                     model.discard_conversation(conversation_id)
                 except Exception:
@@ -425,6 +450,8 @@ class MailHumanUatService:
                             "created_at": _timestamp(self.config.fixed_now),
                             "query_id": query_id,
                             "model": model.model_name,
+                            "failure_stage": failure_stage,
+                            "failure_type": type(exc).__name__,
                         }
                     )
                 except Exception:
@@ -474,6 +501,7 @@ class MailHumanUatService:
         preserve_session_task: bool = True,
         parent_query_id: str | None = None,
     ) -> dict[str, Any]:
+        formowl_orchestration_started = perf_counter()
         normalized_required_terms = _normalized_required_terms(required_terms)
         conversation_id = None
         if (
@@ -523,16 +551,27 @@ class MailHumanUatService:
             self._query_count += 1
             self._remember_tracking(tracking)
 
-        expanded_query, filter_groups = _expand_business_query(task_frame.retrieval_query_text)
+        if normalized_required_terms:
+            # Required-term execution is source-neutral: only generic indexed
+            # identifier equivalence is added before the gateway sees the
+            # query.  The gateway owns posting intersection and exact
+            # verification; no domain alias or filter is allowed here.
+            expanded_query = _expand_index_query(task_frame.retrieval_query_text)
+            filter_groups: tuple[tuple[str, ...], ...] = ()
+        else:
+            # Preserve the older no-required-term UAT query vocabulary as a
+            # compatibility shim only.  It is deliberately unreachable from
+            # required-term execution, which remains generic and index-owned.
+            expanded_query, filter_groups = _expand_legacy_query(task_frame.retrieval_query_text)
         bundle = self.config.bundle
         actor = bundle.mail_import_session
         with self._lock:
             all_bundles = self._all_bundles
         retrieval_candidate_limit = max(
             1,
-            sum(len(candidate_bundle.body_segments) for candidate_bundle in all_bundles),
+            sum(_logical_source_count(candidate_bundle) for candidate_bundle in all_bundles),
         )
-        base_result = self._base_gateway.query_mail_evidence(
+        base_execution = self._base_gateway.execute_mail_evidence_query(
             query_text=expanded_query,
             requester_user_id=actor.owner_user_id,
             workspace_id=actor.workspace_id,
@@ -540,17 +579,20 @@ class MailHumanUatService:
             mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
             limit=retrieval_candidate_limit,
             now=self.config.fixed_now,
-        ).to_dict()
+            required_terms=normalized_required_terms,
+            snippet_filter_groups=filter_groups,
+            collapse_source_items=True,
+        )
         with self._lock:
             upload_gateway = self._upload_gateway
-            message_by_id = self._message_by_id
+            message_by_source_item = self._message_by_source_item
             uploaded_message_ids = self._uploaded_message_ids
             uploaded_bundle_ids = self._uploaded_bundle_ids
             uploaded_file_count = self._uploaded_resource_count
-        gateway_results = [base_result]
+        gateway_executions = [base_execution]
         if upload_gateway is not None:
-            gateway_results.extend(
-                upload_gateway.query_mail_evidence(
+            gateway_executions.extend(
+                upload_gateway.execute_mail_evidence_query(
                     query_text=expanded_query,
                     requester_user_id=actor.owner_user_id,
                     workspace_id=actor.workspace_id,
@@ -558,9 +600,13 @@ class MailHumanUatService:
                     mail_evidence_bundle_id=bundle_id,
                     limit=retrieval_candidate_limit,
                     now=self.config.fixed_now,
-                ).to_dict()
+                    required_terms=normalized_required_terms,
+                    snippet_filter_groups=filter_groups,
+                    collapse_source_items=True,
+                )
                 for bundle_id in uploaded_bundle_ids
             )
+        gateway_results = [execution.result.to_dict() for execution in gateway_executions]
         evidence_snippets = [
             snippet
             for gateway_result in gateway_results
@@ -572,25 +618,54 @@ class MailHumanUatService:
             for citation in gateway_result["citations"]
         ]
 
-        citations_by_observation = {
-            citation["source_observation_id"]: citation for citation in citations
+        citations_by_source = {
+            (
+                citation.get("mail_import_session_id"),
+                citation["source_observation_id"],
+            ): citation
+            for citation in citations
         }
         results: list[dict[str, Any]] = []
         for snippet in evidence_snippets:
-            rendered = " ".join(
-                value
-                for value in (snippet.get("subject"), snippet.get("snippet"))
-                if isinstance(value, str)
-            )
-            if not _matches_filter_groups(rendered, filter_groups):
-                continue
             email_message_id = str(snippet.get("email_message_id", ""))
-            message = message_by_id.get(email_message_id)
+            source_item_key = (
+                str(snippet.get("mail_import_session_id", "")),
+                email_message_id,
+            )
+            message = message_by_source_item.get(source_item_key)
             subject = str(snippet.get("subject") or "（無主旨）")
             snippet_text = str(snippet.get("snippet", ""))
             matched_terms = [
                 term for term in snippet.get("matched_terms", []) if isinstance(term, str) and term
             ]
+            supporting_evidence: list[dict[str, Any]] = []
+            for support in snippet.get("supporting_evidence", ()):
+                if not isinstance(support, Mapping):
+                    continue
+                matched_required_terms = [
+                    term
+                    for term in support.get("matched_required_terms", ())
+                    if isinstance(term, str) and term
+                ]
+                support_citation = support.get("citation")
+                if not isinstance(support_citation, Mapping):
+                    support_citation = citations_by_source.get(
+                        (
+                            support.get("mail_import_session_id"),
+                            str(support.get("source_observation_id", "")),
+                        )
+                    )
+                supporting_evidence.append(
+                    {
+                        "snippet": _context_window(
+                            str(support.get("snippet", "")),
+                            needles=tuple(matched_required_terms),
+                        ),
+                        "matched_required_terms": matched_required_terms,
+                        "citation": _public_citation(support_citation),
+                        "content_redacted": bool(support.get("content_redacted", False)),
+                    }
+                )
             result = {
                 "subject": subject,
                 "snippet": _context_window(
@@ -604,76 +679,90 @@ class MailHumanUatService:
                 "score": int(snippet.get("score", 0)),
                 "matched_terms": matched_terms,
                 "citation": _public_citation(
-                    citations_by_observation.get(str(snippet.get("source_observation_id", "")))
+                    citations_by_source.get(
+                        (
+                            snippet.get("mail_import_session_id"),
+                            str(snippet.get("source_observation_id", "")),
+                        )
+                    )
                 ),
                 "content_redacted": bool(snippet.get("content_redacted", False)),
                 "source_kind": (
                     "uploaded_uat" if email_message_id in uploaded_message_ids else "preloaded"
                 ),
-                "_source_item_id": email_message_id,
+                "_source_item_id": source_item_key,
             }
-            (
-                result["_subject_business_matches"],
-                result["_snippet_business_matches"],
-            ) = _business_match_counts(subject, snippet_text, filter_groups)
+            if supporting_evidence:
+                result["supporting_evidence"] = supporting_evidence
+                result["supporting_citations"] = [
+                    item["citation"]
+                    for item in supporting_evidence
+                    if item.get("citation") is not None
+                ]
+            if filter_groups:
+                (
+                    result["_legacy_subject_filter_matches"],
+                    result["_legacy_snippet_filter_matches"],
+                ) = _legacy_filter_match_counts(
+                    subject,
+                    snippet_text,
+                    filter_groups,
+                )
             results.append(result)
 
-        if any(gateway_result["status"] == "ok" for gateway_result in gateway_results):
-            results.extend(
-                self._exact_subject_results(
-                    query_text=task_frame.retrieval_query_text,
-                    filter_groups=filter_groups,
-                    bundles=all_bundles,
-                    uploaded_message_ids=uploaded_message_ids,
-                )
-            )
-        if normalized_required_terms:
-            source_item_ids = {
-                str(result.get("_source_item_id", ""))
-                for result in results
-                if result.get("_source_item_id")
-            }
-            source_search_text_by_id = _source_item_search_text(
-                all_bundles,
-                source_item_ids,
-            )
-            results = [
-                result
-                for result in results
-                if _matches_required_terms(
-                    source_search_text_by_id.get(
-                        str(result.get("_source_item_id", "")),
-                        "",
-                    ),
-                    normalized_required_terms,
-                )
-            ]
         results = _deduplicate_results(results)
+        ranking_started = perf_counter()
         if sort == "recent":
-            results.sort(
-                key=lambda item: (
-                    int(item["_subject_business_matches"]),
-                    _timestamp_sort_key(item.get("sent_at")),
-                    int(item["score"]),
-                    int(item["_snippet_business_matches"]),
-                ),
-                reverse=True,
-            )
+            if filter_groups:
+                results.sort(
+                    key=lambda item: (
+                        int(item.get("_legacy_subject_filter_matches", 0)),
+                        int(item.get("_legacy_snippet_filter_matches", 0)),
+                        _timestamp_sort_key(item.get("sent_at")),
+                        int(item["score"]),
+                        str(item.get("citation", {}).get("source_observation_id", "")),
+                    ),
+                    reverse=True,
+                )
+            else:
+                results.sort(
+                    key=lambda item: (
+                        _timestamp_sort_key(item.get("sent_at")),
+                        int(item["score"]),
+                        len(item.get("matched_terms", ())),
+                        str(item.get("citation", {}).get("source_observation_id", "")),
+                    ),
+                    reverse=True,
+                )
         else:
-            results.sort(
-                key=lambda item: (
-                    int(item["_subject_business_matches"]),
-                    int(item["score"]),
-                    int(item["_snippet_business_matches"]),
-                    _timestamp_sort_key(item.get("sent_at")),
-                ),
-                reverse=True,
-            )
+            if filter_groups:
+                results.sort(
+                    key=lambda item: (
+                        int(item.get("_legacy_subject_filter_matches", 0)),
+                        int(item.get("_legacy_snippet_filter_matches", 0)),
+                        int(item["score"]),
+                        len(item.get("matched_terms", ())),
+                        _timestamp_sort_key(item.get("sent_at")),
+                        str(item.get("citation", {}).get("source_observation_id", "")),
+                    ),
+                    reverse=True,
+                )
+            else:
+                results.sort(
+                    key=lambda item: (
+                        int(item["score"]),
+                        len(item.get("matched_terms", ())),
+                        _timestamp_sort_key(item.get("sent_at")),
+                        str(item.get("citation", {}).get("source_observation_id", "")),
+                    ),
+                    reverse=True,
+                )
+        uat_ranking_ms = (perf_counter() - ranking_started) * 1000.0
         total_result_count = len(results)
         displayed_results = results[:limit]
         for result in displayed_results:
-            result.pop("_subject_business_matches", None)
-            result.pop("_snippet_business_matches", None)
+            result.pop("_legacy_subject_filter_matches", None)
+            result.pop("_legacy_snippet_filter_matches", None)
             result.pop("_source_item_id", None)
 
         generated_at = _timestamp(self.config.fixed_now)
@@ -686,20 +775,50 @@ class MailHumanUatService:
             ]
             if any(result["content_redacted"] for result in results):
                 warnings.append("unsafe_mail_evidence_content_redacted")
-        if filter_groups and evidence_snippets and not displayed_results:
-            warnings.append("business_filter_no_exact_match")
-        if normalized_required_terms and evidence_snippets and not displayed_results:
+        has_visible_gateway_result = any(
+            gateway_result["status"] == "ok" for gateway_result in gateway_results
+        )
+        if normalized_required_terms and not displayed_results and has_visible_gateway_result:
             warnings.append("required_terms_no_exact_match")
+        if filter_groups and not displayed_results and has_visible_gateway_result:
+            warnings.append("business_filter_no_exact_match")
         if not displayed_results and "no_visible_mail_evidence_matched" not in warnings:
             warnings.append("no_visible_mail_evidence_matched")
         display_has_more = total_result_count > len(displayed_results)
-        answerability_status = "sufficient_evidence" if displayed_results else "target_not_found"
-        response = {
-            "status": (
-                "ok"
-                if any(gateway_result["status"] == "ok" for gateway_result in gateway_results)
-                else gateway_results[0]["status"]
+        response_status = "ok" if has_visible_gateway_result else gateway_results[0]["status"]
+        if displayed_results:
+            answerability_status = "sufficient_evidence"
+            answerability_reason_codes = ["evidence_requirement_satisfied"]
+        elif response_status == "permission_denied":
+            answerability_status = "permission_denied"
+            answerability_reason_codes = ["permission_denied"]
+        elif response_status == "not_found":
+            answerability_status = "source_not_found"
+            answerability_reason_codes = ["source_not_found"]
+        else:
+            answerability_status = "target_not_found"
+            answerability_reason_codes = ["no_matching_target"]
+        timings_ms = {
+            "posting_retrieval": round(
+                sum(execution.timings_ms["posting_retrieval"] for execution in gateway_executions),
+                3,
             ),
+            "exact_verification": round(
+                sum(execution.timings_ms["exact_verification"] for execution in gateway_executions),
+                3,
+            ),
+            "ranking": round(
+                uat_ranking_ms
+                + sum(execution.timings_ms["ranking"] for execution in gateway_executions),
+                3,
+            ),
+            "formowl_orchestration": round(
+                (perf_counter() - formowl_orchestration_started) * 1000.0,
+                3,
+            ),
+        }
+        response = {
+            "status": response_status,
             "query_id": query_id,
             "query_hash": query_hash,
             "generated_at": generated_at,
@@ -725,11 +844,7 @@ class MailHumanUatService:
             },
             "answerability": {
                 "status": answerability_status,
-                "reason_codes": (
-                    ["evidence_requirement_satisfied"]
-                    if displayed_results
-                    else ["no_matching_target"]
-                ),
+                "reason_codes": answerability_reason_codes,
             },
             "projection": {
                 "output_format": task_frame.projection.output_format,
@@ -739,6 +854,7 @@ class MailHumanUatService:
                 "page_offset": task_frame.projection.page_offset,
                 "has_more": display_has_more,
             },
+            "timings_ms": timings_ms,
             "claim_boundary": {
                 "chatgpt_bypassed": True,
                 "mail_upload_performed": False,
@@ -768,6 +884,7 @@ class MailHumanUatService:
                 "has_uploaded_result": any(
                     item["source_kind"] == "uploaded_uat" for item in displayed_results
                 ),
+                "timings_ms": timings_ms,
             }
         )
         return response
@@ -786,6 +903,7 @@ class MailHumanUatService:
         user_text: str,
         outcome: UatConversationOutcome,
         latest_evidence: Mapping[str, Any] | None,
+        chat_orchestration_ms: float,
     ) -> dict[str, Any]:
         if outcome.tool_request is not None:
             if outcome.response_kind != "answer":
@@ -811,7 +929,16 @@ class MailHumanUatService:
         projection = evidence.get("projection", {})
         projection = dict(projection) if isinstance(projection, Mapping) else {}
         if evidence:
-            projection["output_format"] = outcome.display_format
+            projection["output_format"] = (
+                _requested_projection_format(user_text)
+                or projection.get("output_format")
+                or "narrative"
+            )
+        timings_ms = dict(evidence.get("timings_ms", {}))
+        timings_ms["chat_orchestration"] = round(chat_orchestration_ms, 3)
+        warnings = list(evidence.get("warnings", []))
+        if outcome.fallback_reason is not None:
+            warnings.append("codex_answer_fallback_used")
         generated_at = _timestamp(self.config.fixed_now)
         response = {
             "status": str(evidence.get("status", "ok")),
@@ -824,17 +951,19 @@ class MailHumanUatService:
             "total_result_count": int(evidence.get("total_result_count", len(results))),
             "displayed_result_count": int(evidence.get("displayed_result_count", len(results))),
             "results": results,
-            "warnings": list(evidence.get("warnings", [])),
+            "warnings": sorted(set(warnings)),
             "notice": evidence.get("notice"),
             "task_frame": dict(evidence.get("task_frame", {})),
             "coverage": dict(evidence.get("coverage", {})),
             "answerability": dict(evidence.get("answerability", {})),
             "projection": projection,
+            "timings_ms": timings_ms,
             "orchestration": {
                 "action": action,
                 "response_kind": outcome.response_kind,
                 "model": outcome.model_name,
                 "formowl_tool_called": outcome.tool_request is not None,
+                "answer_fallback_used": outcome.fallback_reason is not None,
                 "tool_name": (
                     "search_formowl_evidence" if outcome.tool_request is not None else None
                 ),
@@ -843,100 +972,6 @@ class MailHumanUatService:
         }
         assert_public_payload_safe(response, "mail_human_uat_chat_response")
         return response
-
-    def _exact_subject_results(
-        self,
-        *,
-        query_text: str,
-        filter_groups: tuple[tuple[str, ...], ...],
-        bundles: tuple[MailEvidenceBundle, ...],
-        uploaded_message_ids: frozenset[str],
-    ) -> list[dict[str, Any]]:
-        lowered_query = query_text.casefold()
-        exact_terms = [term for term in _EXACT_BUSINESS_FILTERS if term.casefold() in lowered_query]
-        if not exact_terms:
-            return []
-        results: list[dict[str, Any]] = []
-        filter_needles = tuple(term for group in filter_groups for term in group)
-        matching_messages = []
-        segments_by_message_id: dict[str, list[Any]] = {}
-        bundle_by_message_id: dict[str, MailEvidenceBundle] = {}
-        for bundle in bundles:
-            for message in bundle.messages:
-                bundle_by_message_id[message.email_message_id] = bundle
-                if all(
-                    term.casefold() in (message.subject or "").casefold() for term in exact_terms
-                ):
-                    matching_messages.append(message)
-            for segment in bundle.body_segments:
-                segments_by_message_id.setdefault(segment.email_message_id, []).append(segment)
-        matching_messages.sort(
-            key=lambda message: _timestamp_sort_key(message.sent_at),
-            reverse=True,
-        )
-        for message in matching_messages:
-            subject = message.subject or ""
-            bundle = bundle_by_message_id[message.email_message_id]
-            for segment in segments_by_message_id.get(message.email_message_id, []):
-                rendered = f"{subject} {segment.text}"
-                if not _matches_filter_groups(rendered, filter_groups):
-                    continue
-                safe_subject, subject_redactions = _redact_mail_public_text(subject)
-                safe_snippet, snippet_redactions = _redact_mail_public_text(segment.text)
-                rendered_lowered = rendered.casefold()
-                matched_terms = sorted(
-                    {
-                        term
-                        for group in filter_groups
-                        for term in group
-                        if term.casefold() in rendered_lowered
-                    }
-                )[:12]
-                result = {
-                    "subject": safe_subject or "（無主旨）",
-                    "snippet": _context_window(
-                        safe_snippet,
-                        needles=(
-                            *matched_terms,
-                            *filter_needles,
-                            *_query_needles(query_text),
-                        ),
-                    ),
-                    "sent_at": message.sent_at,
-                    "score": len(matched_terms),
-                    "matched_terms": matched_terms,
-                    "citation": {
-                        "citation_id": "mailcitation_"
-                        + sha256_json(
-                            {
-                                "mail_import_session_id": (
-                                    bundle.mail_import_session.mail_import_session_id
-                                ),
-                                "source_observation_id": segment.source_observation_id,
-                            }
-                        )[-24:],
-                        "source_observation_id": segment.source_observation_id,
-                    },
-                    "content_redacted": bool(subject_redactions or snippet_redactions),
-                    "source_kind": (
-                        "uploaded_uat"
-                        if message.email_message_id in uploaded_message_ids
-                        else "preloaded"
-                    ),
-                    "_source_item_id": message.email_message_id,
-                }
-                (
-                    result["_subject_business_matches"],
-                    result["_snippet_business_matches"],
-                ) = _business_match_counts(
-                    safe_subject,
-                    safe_snippet,
-                    filter_groups,
-                )
-                results.append(result)
-                if len(results) >= 500:
-                    return results
-        return results
 
     def upload_mail_files(
         self,
@@ -1054,13 +1089,14 @@ class MailHumanUatService:
             if gateway is not None
             else (MailEvidenceQueryGateway(resolved_bundles) if resolved_bundles else None)
         )
-        message_by_id = dict(self._base_message_by_id)
+        message_by_source_item = dict(self._base_message_by_source_item)
         uploaded_message_ids: set[str] = set()
         for bundle in resolved_bundles:
+            session_id = bundle.mail_import_session.mail_import_session_id
             for message in bundle.messages:
-                message_by_id[message.email_message_id] = message
+                message_by_source_item[(session_id, message.email_message_id)] = message
                 uploaded_message_ids.add(message.email_message_id)
-        self._message_by_id = message_by_id
+        self._message_by_source_item = message_by_source_item
         self._uploaded_message_ids = frozenset(uploaded_message_ids)
         self._uploaded_bundle_ids = tuple(
             bundle.mail_evidence_bundle_id for bundle in resolved_bundles
@@ -1742,42 +1778,6 @@ def _normalized_required_terms(values: Sequence[str]) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-def _source_item_search_text(
-    bundles: Sequence[MailEvidenceBundle],
-    source_item_ids: set[str],
-) -> dict[str, str]:
-    if not source_item_ids:
-        return {}
-    values_by_source: dict[str, list[str]] = {}
-    for bundle in bundles:
-        for message in bundle.messages:
-            if message.email_message_id not in source_item_ids:
-                continue
-            values_by_source.setdefault(message.email_message_id, []).append(message.subject or "")
-        for segment in bundle.body_segments:
-            if segment.email_message_id not in source_item_ids:
-                continue
-            values_by_source.setdefault(segment.email_message_id, []).append(segment.text)
-    return {
-        source_id: unicodedata.normalize("NFKC", "\n".join(values)).casefold()
-        for source_id, values in values_by_source.items()
-    }
-
-
-def _matches_required_terms(
-    source_text: str,
-    required_terms: Sequence[str],
-) -> bool:
-    return bool(source_text) and all(
-        term in source_text
-        or (
-            (numeric_alias := _typed_numeric_identifier_alias(term)) is not None
-            and numeric_alias in source_text
-        )
-        for term in required_terms
-    )
-
-
 def _conversation_safety_identifier(tracking: Mapping[str, Any]) -> str:
     visitor_id = tracking.get("visitor_id")
     session_id = tracking.get("session_id")
@@ -1797,59 +1797,47 @@ def _conversation_safety_identifier(tracking: Mapping[str, Any]) -> str:
     return f"formowl_uat_{digest[:48]}"
 
 
-def _expand_business_query(query_text: str) -> tuple[str, tuple[tuple[str, ...], ...]]:
-    lowered = query_text.casefold()
+def _logical_source_count(bundle: MailEvidenceBundle) -> int:
+    """Count logical mail sources, never parser body segments."""
+
+    return len({message.email_message_id for message in bundle.messages})
+
+
+def _expand_index_query(query_text: str) -> str:
     expansions: list[str] = []
-    filters: list[tuple[str, ...]] = []
-    for triggers, aliases, result_terms in _BUSINESS_ALIASES:
-        if any(trigger.casefold() in lowered for trigger in triggers):
-            expansions.extend(aliases)
-            filters.append(result_terms)
-    for term in _EXACT_BUSINESS_FILTERS:
-        if term.casefold() in lowered:
-            filters.append((term,))
     for numeric_alias in _typed_numeric_identifier_aliases(query_text):
         if numeric_alias not in expansions:
             expansions.append(numeric_alias)
-    expanded = " ".join([query_text, *expansions]).strip()
-    return expanded, tuple(filters)
+    return " ".join([query_text, *expansions]).strip()
 
 
-def _typed_numeric_identifier_aliases(value: str) -> tuple[str, ...]:
-    normalized = unicodedata.normalize("NFKC", value)
-    aliases: list[str] = []
-    for match in _TYPED_NUMERIC_IDENTIFIER_RE.finditer(normalized):
-        alias = match.group(1)
-        if alias not in aliases:
-            aliases.append(alias)
-    return tuple(aliases)
+def _expand_legacy_query(
+    query_text: str,
+) -> tuple[str, tuple[tuple[str, ...], ...]]:
+    lowered = query_text.casefold()
+    expansions: list[str] = list(_typed_numeric_identifier_aliases(query_text))
+    filters: list[tuple[str, ...]] = []
+    for triggers, aliases, result_terms in _LEGACY_QUERY_ALIASES:
+        if any(trigger.casefold() in lowered for trigger in triggers):
+            expansions.extend(alias for alias in aliases if alias not in expansions)
+            filters.append(result_terms)
+    for term in _LEGACY_EXACT_QUERY_FILTERS:
+        if term.casefold() in lowered:
+            filters.append((term,))
+    return " ".join([query_text, *expansions]).strip(), tuple(filters)
 
 
-def _typed_numeric_identifier_alias(value: str) -> str | None:
-    normalized = unicodedata.normalize("NFKC", value).strip()
-    match = _TYPED_NUMERIC_IDENTIFIER_RE.fullmatch(normalized)
-    return match.group(1) if match is not None else None
-
-
-def _matches_filter_groups(rendered: str, groups: tuple[tuple[str, ...], ...]) -> bool:
-    lowered = rendered.casefold()
-    return all(any(term.casefold() in lowered for term in group) for group in groups)
-
-
-def _business_match_counts(
+def _legacy_filter_match_counts(
     subject: str,
     snippet: str,
     groups: tuple[tuple[str, ...], ...],
 ) -> tuple[int, int]:
     subject_lowered = subject.casefold()
     snippet_lowered = snippet.casefold()
-    subject_matches = sum(
-        any(term.casefold() in subject_lowered for term in group) for group in groups
+    return (
+        sum(any(term.casefold() in subject_lowered for term in group) for group in groups),
+        sum(any(term.casefold() in snippet_lowered for term in group) for group in groups),
     )
-    snippet_matches = sum(
-        any(term.casefold() in snippet_lowered for term in group) for group in groups
-    )
-    return subject_matches, snippet_matches
 
 
 def _query_needles(query_text: str) -> tuple[str, ...]:
@@ -2189,6 +2177,15 @@ _CHAT_UAT_HTML = """<!doctype html>
     .evidence-content {
       margin: 0 0 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere;
     }
+    .source-order {
+      display: inline-flex; min-width: 22px; height: 22px; margin-right: 8px;
+      align-items: center; justify-content: center; border-radius: 999px;
+      background: var(--soft); color: #555; font-size: 11px; font-weight: 700;
+    }
+    .supporting-content {
+      margin: 9px 0 0; padding: 9px 11px; border-left: 3px solid var(--line);
+      background: #fafafa; color: #444; font-size: 13px; white-space: pre-wrap;
+    }
     .evidence-table-wrap {
       width: 100%; margin-top: 16px; overflow-x: auto;
       border: 1px solid var(--line); border-radius: 14px; background: #fff;
@@ -2204,17 +2201,15 @@ _CHAT_UAT_HTML = """<!doctype html>
       background: #f7f7f7; color: #555; font-size: 12px; font-weight: 650;
     }
     .evidence-table td { font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
-    .evidence-table th:first-child, .evidence-table td:first-child { width: 48%; }
-    .evidence-table th:nth-child(2), .evidence-table td:nth-child(2) { width: 23%; }
-    .evidence-table th:nth-child(3), .evidence-table td:nth-child(3) { width: 17%; }
-    .evidence-table th:nth-child(4), .evidence-table td:nth-child(4) { width: 12%; }
+    .evidence-table th:first-child, .evidence-table td:first-child { width: 8%; }
+    .evidence-table th:nth-child(2), .evidence-table td:nth-child(2) { width: 50%; }
+    .evidence-table th:nth-child(3), .evidence-table td:nth-child(3) { width: 25%; }
+    .evidence-table th:nth-child(4), .evidence-table td:nth-child(4) { width: 17%; }
     .evidence-table tbody tr:last-child td { border-bottom: 0; }
-    .table-citation { color: #777; font-size: 11px; }
     .badge {
       display: inline-block; margin-left: 7px; padding: 2px 7px; border-radius: 999px;
       background: #e8f6f1; color: #08745a; font-size: 10px; font-weight: 650;
     }
-    .citation { margin-top: 9px; color: #8a8a8a; font-size: 10px; overflow-wrap: anywhere; }
     .feedback-row { display: flex; align-items: center; gap: 3px; margin-top: 12px; }
     .feedback-row span { color: var(--muted); font-size: 12px; margin-right: 4px; }
     .feedback-row button {
@@ -2703,17 +2698,28 @@ _CHAT_UAT_HTML = """<!doctype html>
         table.className = "evidence-table";
         const head = document.createElement("thead");
         const headRow = document.createElement("tr");
-        for (const label of ["內容", "主旨", "時間", "證據"]) {
+        for (const label of ["順序", "內容", "主旨", "時間"]) {
           const cell = document.createElement("th");
           cell.textContent = label;
           headRow.appendChild(cell);
         }
         head.appendChild(headRow);
         const body = document.createElement("tbody");
-        for (const item of results) {
+        for (const [index, item] of results.entries()) {
           const row = document.createElement("tr");
+          const order = document.createElement("td");
+          order.textContent = String(index + 1);
           const content = document.createElement("td");
           content.textContent = item.snippet;
+          if (Array.isArray(item.supporting_evidence)) {
+            const supportList = document.createElement("ul");
+            for (const support of item.supporting_evidence) {
+              const supportItem = document.createElement("li");
+              supportItem.textContent = `同一來源的補充內容：${support.snippet}`;
+              supportList.appendChild(supportItem);
+            }
+            content.appendChild(supportList);
+          }
           const subject = document.createElement("td");
           subject.textContent = item.subject;
           if (item.source_kind === "uploaded_uat") {
@@ -2724,10 +2730,7 @@ _CHAT_UAT_HTML = """<!doctype html>
           }
           const time = document.createElement("td");
           time.textContent = item.sent_at || "未提供";
-          const citation = document.createElement("td");
-          citation.className = "table-citation";
-          citation.textContent = item.citation ? item.citation.citation_id : "—";
-          row.append(content, subject, time, citation);
+          row.append(order, content, subject, time);
           body.appendChild(row);
         }
         table.append(head, body);
@@ -2736,12 +2739,17 @@ _CHAT_UAT_HTML = """<!doctype html>
       } else {
         const list = document.createElement("div");
         list.className = "evidence-list";
-        for (const item of results) {
+        for (const [index, item] of results.entries()) {
           const card = document.createElement("article");
           card.className = "evidence";
           const snippet = document.createElement("p");
           snippet.className = "evidence-content";
-          snippet.textContent = item.snippet;
+          const order = document.createElement("span");
+          order.className = "source-order";
+          order.textContent = String(index + 1);
+          const contentText = document.createElement("span");
+          contentText.textContent = item.snippet;
+          snippet.append(order, contentText);
           const subject = document.createElement("h3");
           subject.textContent = item.subject;
           if (item.source_kind === "uploaded_uat") {
@@ -2754,11 +2762,13 @@ _CHAT_UAT_HTML = """<!doctype html>
           meta.className = "evidence-meta";
           meta.textContent = item.sent_at ? `郵件時間：${item.sent_at}` : "郵件時間：未提供";
           card.append(snippet, subject, meta);
-          if (item.citation) {
-            const citation = document.createElement("div");
-            citation.className = "citation";
-            citation.textContent = `證據：${item.citation.citation_id} · ${item.citation.source_observation_id}`;
-            card.appendChild(citation);
+          if (Array.isArray(item.supporting_evidence)) {
+            for (const support of item.supporting_evidence) {
+              const supportText = document.createElement("p");
+              supportText.className = "supporting-content";
+              supportText.textContent = `同一來源的補充內容：${support.snippet}`;
+              card.appendChild(supportText);
+            }
           }
           list.appendChild(card);
         }

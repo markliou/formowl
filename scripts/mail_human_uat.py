@@ -25,6 +25,7 @@ from formowl_mail.human_uat_orchestrator import (  # noqa: E402
     CodexAppServerStdioTransport,
     build_codex_app_server_proxy_command,
 )
+from formowl_mail.query import MailEvidenceQueryGateway  # noqa: E402
 
 
 def main() -> int:
@@ -36,6 +37,7 @@ def main() -> int:
     parser.add_argument("--bundle-cache", type=Path, required=True)
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--codex-socket", type=Path, required=True)
+    parser.add_argument("--index-workers", type=int, default=1)
     parser.add_argument(
         "--codex-runtime-state-dir",
         type=Path,
@@ -49,10 +51,21 @@ def main() -> int:
 
     if args.port < 0 or args.port > 65535:
         parser.error("--port must be between 0 and 65535")
+    if args.index_workers < 1 or args.index_workers > 4:
+        parser.error("--index-workers must be between 1 and 4")
 
     manifest = json.loads(args.private_manifest.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         parser.error("--private-manifest must contain a JSON object")
+    bundle = load_or_rebuild_may_mail_evidence_bundle(
+        args.corpus_root,
+        manifest,
+        cache_path=args.bundle_cache,
+    )
+    base_gateway = MailEvidenceQueryGateway(
+        [bundle],
+        index_worker_count=args.index_workers,
+    )
     proxy_home = args.state_dir / "codex-proxy-home"
     proxy_workspace = args.state_dir / "codex-proxy-workspace"
     codex_runtime_workspace = args.codex_runtime_state_dir / "codex-workspace"
@@ -79,17 +92,13 @@ def main() -> int:
         reasoning_effort=reasoning_effort,
     )
     try:
-        bundle = load_or_rebuild_may_mail_evidence_bundle(
-            args.corpus_root,
-            manifest,
-            cache_path=args.bundle_cache,
-        )
         service = MailHumanUatService(
             MailHumanUatHttpConfig(
                 bundle=bundle,
                 state_dir=args.state_dir,
                 conversation_model=conversation_model,
-            )
+            ),
+            base_gateway=base_gateway,
         )
         server = create_mail_human_uat_http_server(args.host, args.port, service)
         print(
@@ -97,6 +106,9 @@ def main() -> int:
             f"host={args.host} port={server.server_address[1]} "
             f"messages={len(bundle.messages)} upload_supported=true "
             f"orchestrator_model={conversation_model.model_name} "
+            f"index_mode={base_gateway.index_build_mode} "
+            f"index_workers={base_gateway.index_worker_count} "
+            f"index_build_ms={base_gateway.index_build_elapsed_ms} "
             "conversation_engine=codex_app_server "
             "authentication_required=false shared_uat=true "
             "business_systems_read_only=true",

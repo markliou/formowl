@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import threading
 import unittest
+import unicodedata
 from unittest import mock
 
 import _paths  # noqa: F401
@@ -24,7 +25,6 @@ from formowl_mail.bundle import (
 from formowl_mail.human_uat_http import (
     MailHumanUatHttpConfig,
     MailHumanUatService,
-    _source_item_search_text,
     create_mail_human_uat_http_server,
 )
 from formowl_mail.human_uat_orchestrator import (
@@ -32,6 +32,7 @@ from formowl_mail.human_uat_orchestrator import (
     UatConversationOutcome,
     UatEvidenceToolRequest,
 )
+from formowl_mail.query import MailEvidenceQueryGateway
 
 NOW = "2026-07-18T12:00:00+00:00"
 VISITOR_ID = "uatvisitor_" + "1" * 32
@@ -87,6 +88,7 @@ class _ScriptedConversationModel:
             model_name=self.model_name,
             tool_request=tool_request,
             tool_result=tool_result,
+            fallback_reason=step.get("fallback_reason"),
         )
 
     def discard_conversation(self, safety_identifier: str) -> None:
@@ -125,7 +127,7 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertNotIn("limit: 50", html)
         self.assertNotIn('api("/api/query"', html)
         self.assertIn('className = "evidence-table"', html)
-        self.assertIn('["內容", "主旨", "時間", "證據"]', html)
+        self.assertIn('["順序", "內容", "主旨", "時間"]', html)
         self.assertNotIn('id="starter-grid"', html)
         self.assertNotIn('class="starter-card', html)
         self.assertNotIn("最近一次文顥的量產時間", html)
@@ -153,8 +155,52 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertTrue(health["upload_supported"])
         self.assertTrue(health["read_only_business_systems"])
         self.assertEqual(health["uploaded_file_count"], 0)
+        self.assertEqual(health["index_build_mode"], "single_process")
+        self.assertEqual(health["index_worker_count"], 1)
+        self.assertGreaterEqual(health["index_build_elapsed_ms"], 0.0)
         self.assertEqual(page_response.getheader("Cache-Control"), "no-store, max-age=0")
         self.assertEqual(page_response.getheader("X-Frame-Options"), "DENY")
+
+    def test_service_uses_injected_gateway_metrics_and_rejects_bundle_mismatch(
+        self,
+    ) -> None:
+        bundle = _bundle()
+        gateway = MailEvidenceQueryGateway([bundle])
+        service = MailHumanUatService(
+            MailHumanUatHttpConfig(
+                bundle=bundle,
+                state_dir=_paths.fresh_test_dir("mail-human-uat-injected-gateway"),
+                fixed_now=NOW,
+            ),
+            base_gateway=gateway,
+        )
+
+        health = service.health()
+
+        self.assertIs(service._base_gateway, gateway)
+        self.assertEqual(health["index_build_mode"], gateway.index_build_mode)
+        self.assertEqual(health["index_worker_count"], gateway.index_worker_count)
+        self.assertEqual(
+            health["index_build_elapsed_ms"],
+            gateway.index_build_elapsed_ms,
+        )
+
+        mismatched_bundle = replace(
+            bundle,
+            mail_evidence_bundle_id="mailbundle_other_uat",
+        )
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "UAT base gateway does not match its bundle",
+        ):
+            MailHumanUatService(
+                MailHumanUatHttpConfig(
+                    bundle=mismatched_bundle,
+                    state_dir=_paths.fresh_test_dir("mail-human-uat-injected-gateway-mismatch"),
+                    fixed_now=NOW,
+                ),
+                base_gateway=gateway,
+            )
 
     def test_upload_page_is_same_origin_iframe_surface(self) -> None:
         service = _service("mail-human-uat-upload-iframe")
@@ -382,19 +428,15 @@ class MailHumanUatHttpTests(unittest.TestCase):
             )
         )
 
-        with mock.patch(
-            "formowl_mail.human_uat_http._source_item_search_text",
-            wraps=_source_item_search_text,
-        ) as source_text_builder:
-            result = service.chat(
-                {
-                    "query_text": "我要 PO470002002 的交期",
-                    "visitor_id": VISITOR_ID,
-                    "session_id": SESSION_ID,
-                    "sequence": 1,
-                    "source": "composer",
-                }
-            )
+        result = service.chat(
+            {
+                "query_text": "我要 PO470002002 的交期",
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "source": "composer",
+            }
+        )
 
         self.assertEqual(result["orchestration"]["action"], "call_formowl_tool")
         self.assertEqual(result["total_result_count"], 1)
@@ -403,10 +445,316 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertIn("ETD 2026-07-13", result["results"][0]["snippet"])
         self.assertNotIn("business_filter_no_exact_match", result["warnings"])
         self.assertNotIn("required_terms_no_exact_match", result["warnings"])
-        self.assertEqual(
-            source_text_builder.call_args.args[1],
-            {"emailmessage_pullin"},
+        self.assertGreaterEqual(result["timings_ms"]["posting_retrieval"], 0.0)
+        self.assertGreaterEqual(result["timings_ms"]["exact_verification"], 0.0)
+        self.assertGreaterEqual(result["timings_ms"]["ranking"], 0.0)
+        self.assertGreaterEqual(result["timings_ms"]["formowl_orchestration"], 0.0)
+        self.assertGreaterEqual(result["timings_ms"]["chat_orchestration"], 0.0)
+
+    def test_chat_preserves_evidence_when_codex_uses_answer_fallback(self) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": ("已找到 1 筆符合條件的來源，以下依相關性列出內容。"),
+                    "display_format": "table",
+                    "fallback_reason": ("codex_answer_generation_failed_after_evidence"),
+                    "tool_request": UatEvidenceToolRequest(
+                        query_text="PO470002002 delivery",
+                        required_terms=("PO470002002",),
+                        sort="relevance",
+                        limit=10,
+                    ),
+                }
+            ]
         )
+        state_dir = _paths.fresh_test_dir("mail-human-uat-answer-fallback")
+        service = _service_with_model(state_dir, model)
+
+        result = service.chat(
+            {
+                "query_text": "查 PO470002002 的交期",
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "source": "composer",
+            }
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertGreater(result["result_count"], 0)
+        self.assertEqual(result["projection"]["output_format"], "narrative")
+        self.assertTrue(result["orchestration"]["answer_fallback_used"])
+        self.assertIn("codex_answer_fallback_used", result["warnings"])
+        events = [
+            json.loads(line)
+            for line in (state_dir / "mail-human-uat-events.private.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        chat_result = next(event for event in events if event["event_type"] == "chat_result")
+        self.assertTrue(chat_result["answer_fallback_used"])
+        self.assertEqual(
+            chat_result["fallback_reason"],
+            "codex_answer_generation_failed_after_evidence",
+        )
+
+    def test_chat_required_terms_preserve_all_matching_oracle_and_citations(
+        self,
+    ) -> None:
+        bundle = _bulk_bundle(12)
+        matching_count = 7
+        bundle = replace(
+            bundle,
+            body_segments=[
+                replace(
+                    segment,
+                    text=(
+                        f"{segment.text} Alex Rivera approved DOC-2026-ABC9."
+                        if index < matching_count
+                        else f"{segment.text} Avery Stone approved DOC-2026-XYZ8."
+                    ),
+                )
+                for index, segment in enumerate(bundle.body_segments)
+            ],
+        )
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "找到所有同時符合人名與文件識別碼的來源。",
+                    "tool_request": UatEvidenceToolRequest(
+                        query_text="BULK_MATCH_TERM Alex Rivera DOC-2026-ABC9",
+                        required_terms=("Alex Rivera", "DOC-2026-ABC9"),
+                        sort="relevance",
+                        limit=3,
+                    ),
+                },
+            ]
+        )
+        service = MailHumanUatService(
+            MailHumanUatHttpConfig(
+                bundle=bundle,
+                state_dir=_paths.fresh_test_dir("mail-human-uat-required-all-matching"),
+                conversation_model=model,
+                fixed_now=NOW,
+            )
+        )
+
+        result = service.chat(
+            {
+                "query_text": "列出 Alex Rivera 核准 DOC-2026-ABC9 的所有來源",
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "source": "composer",
+            }
+        )
+
+        expected_observation_ids = _exhaustive_uat_source_ids(
+            bundle,
+            ("Alex Rivera", "DOC-2026-ABC9"),
+        )
+        displayed_observation_ids = {
+            item["citation"]["source_observation_id"] for item in result["results"]
+        }
+        self.assertEqual(result["orchestration"]["action"], "call_formowl_tool")
+        self.assertEqual(result["total_result_count"], matching_count)
+        self.assertEqual(result["result_count"], 3)
+        self.assertEqual(len(result["results"]), 3)
+        self.assertEqual(
+            result["coverage"]["cardinality_mode"],
+            "all_matching",
+        )
+        self.assertEqual(
+            result["coverage"]["total_source_item_count"],
+            matching_count,
+        )
+        self.assertEqual(
+            result["coverage"]["returned_source_item_count"],
+            matching_count,
+        )
+        self.assertEqual(
+            result["coverage"]["displayed_source_item_count"],
+            3,
+        )
+        self.assertTrue(result["coverage"]["is_exhaustive"])
+        self.assertFalse(result["coverage"]["has_more"])
+        self.assertEqual(len(expected_observation_ids), matching_count)
+        self.assertTrue(displayed_observation_ids.issubset(expected_observation_ids))
+        self.assertEqual(len(displayed_observation_ids), 3)
+        self.assertTrue(result["projection"]["has_more"])
+        self.assertEqual(
+            len({item["citation"]["citation_id"] for item in result["results"]}),
+            3,
+        )
+        self.assertEqual(
+            set(result["timings_ms"]),
+            {
+                "posting_retrieval",
+                "exact_verification",
+                "ranking",
+                "formowl_orchestration",
+                "chat_orchestration",
+            },
+        )
+        self.assertTrue(all(value >= 0.0 for value in result["timings_ms"].values()))
+        self.assertTrue(all("DOC-2026-ABC9" in item["snippet"] for item in result["results"]))
+
+    def test_chat_required_terms_include_minimal_supporting_evidence(self) -> None:
+        base = _bundle()
+        source_observation_ids = [
+            "obs_required_query",
+            "obs_required_person",
+            "obs_required_document",
+            "obs_required_unrelated",
+        ]
+        message = replace(
+            base.messages[0],
+            email_message_id="emailmessage_required_support",
+            message_fingerprint="sha256:" + "a" * 64,
+            message_id="message_required_support",
+            source_observation_ids=source_observation_ids,
+            subject="Program evidence review",
+            sent_at="2026-07-22T08:00:00+00:00",
+        )
+        segments = [
+            EmailBodySegment(
+                email_body_segment_id=f"body_required_{index}",
+                email_message_id=message.email_message_id,
+                message_occurrence_id="occ_required_support",
+                source_observation_id=source_observation_id,
+                text=text,
+                body_segment_hash="sha256:" + f"{index + 20:064x}",
+                body_segment_index=index,
+            )
+            for index, (source_observation_id, text) in enumerate(
+                zip(
+                    source_observation_ids,
+                    (
+                        "Program ORBIT is ready for the evidence review.",
+                        "Alex Rivera is the accountable reviewer.",
+                        "The approved record is DOC-2026-ABC9.",
+                        "UNRELATED-SEGMENT must not be materialized.",
+                    ),
+                    strict=True,
+                )
+            )
+        ]
+        bundle = replace(
+            base,
+            mail_evidence_bundle_id="mailevidencebundle_required_support",
+            messages=[message],
+            body_segments=segments,
+        )
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "找到完整的必要詞支持證據。",
+                    "tool_request": UatEvidenceToolRequest(
+                        query_text="ORBIT",
+                        required_terms=("Alex Rivera", "DOC-2026-ABC9"),
+                        sort="relevance",
+                        limit=10,
+                    ),
+                },
+            ]
+        )
+        service = MailHumanUatService(
+            MailHumanUatHttpConfig(
+                bundle=bundle,
+                state_dir=_paths.fresh_test_dir("mail-human-uat-required-support"),
+                conversation_model=model,
+                fixed_now=NOW,
+            )
+        )
+
+        result = service.chat(
+            {
+                "query_text": "列出所有 ORBIT 且由 Alex Rivera 核准 DOC-2026-ABC9 的來源",
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "source": "composer",
+            }
+        )
+
+        self.assertEqual(result["total_result_count"], 1)
+        self.assertEqual(result["result_count"], 1)
+        self.assertEqual(result["coverage"]["cardinality_mode"], "all_matching")
+        primary = result["results"][0]
+        self.assertIn("Program ORBIT", primary["snippet"])
+        self.assertEqual(
+            {item["citation"]["source_observation_id"] for item in primary["supporting_evidence"]},
+            {"obs_required_person", "obs_required_document"},
+        )
+        self.assertEqual(
+            {
+                term.casefold()
+                for item in primary["supporting_evidence"]
+                for term in item["matched_required_terms"]
+            },
+            {"alex rivera", "doc-2026-abc9"},
+        )
+        self.assertEqual(
+            {item["source_observation_id"] for item in primary["supporting_citations"]},
+            {"obs_required_person", "obs_required_document"},
+        )
+        self.assertNotIn("UNRELATED-SEGMENT", str(result))
+
+    def test_chat_required_term_no_match_is_explicit_and_exhaustive(self) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "沒有找到同時符合必要詞的來源。",
+                    "tool_request": UatEvidenceToolRequest(
+                        query_text="pull-in Alex Rivera",
+                        required_terms=("Alex Rivera", "DOC-2099-MISSING"),
+                        sort="relevance",
+                        limit=50,
+                    ),
+                },
+            ]
+        )
+        service = _service_with_model(
+            _paths.fresh_test_dir("mail-human-uat-required-no-match"),
+            model,
+        )
+
+        result = service.chat(
+            {
+                "query_text": "查找不存在的必要詞組合",
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "source": "composer",
+            }
+        )
+
+        self.assertEqual(result["total_result_count"], 0)
+        self.assertEqual(result["result_count"], 0)
+        self.assertEqual(result["results"], [])
+        self.assertEqual(result["answerability"]["status"], "target_not_found")
+        self.assertEqual(result["coverage"]["total_source_item_count"], 0)
+        self.assertEqual(result["coverage"]["returned_source_item_count"], 0)
+        self.assertEqual(result["coverage"]["displayed_source_item_count"], 0)
+        self.assertTrue(result["coverage"]["is_exhaustive"])
+        self.assertFalse(result["coverage"]["has_more"])
+        self.assertFalse(result["projection"]["has_more"])
+        self.assertIn("required_terms_no_exact_match", result["warnings"])
+        self.assertEqual(
+            set(result["timings_ms"]),
+            {
+                "posting_retrieval",
+                "exact_verification",
+                "ranking",
+                "formowl_orchestration",
+                "chat_orchestration",
+            },
+        )
+        self.assertTrue(all(value >= 0.0 for value in result["timings_ms"].values()))
 
     def test_chat_clarification_and_new_chat_do_not_reuse_prior_evidence(self) -> None:
         model = _ScriptedConversationModel(
@@ -1060,7 +1408,7 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertGreater(retained[0]["sequence"], 2)
         self.assertEqual(event_path.stat().st_mode & 0o777, 0o600)
 
-    def test_chinese_business_query_expands_and_returns_cited_read_only_evidence(
+    def test_generic_identifier_query_returns_cited_read_only_evidence(
         self,
     ) -> None:
         service = _service("mail-human-uat-query")
@@ -1068,7 +1416,7 @@ class MailHumanUatHttpTests(unittest.TestCase):
             response, body = surface.request_json(
                 "/api/query",
                 {
-                    "query_text": "最近一次文顥的量產時間",
+                    "query_text": "最近一次 PO470002002 的交期",
                     "sort": "recent",
                     "limit": 5,
                 },
@@ -1078,9 +1426,9 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(payload["status"], "ok")
         self.assertGreaterEqual(payload["result_count"], 1)
-        self.assertIn("文顥", payload["results"][0]["subject"])
-        self.assertIn("SP.Z6H02G003", payload["results"][0]["snippet"])
-        self.assertEqual(payload["results"][0]["sent_at"], "2026-06-15T08:00:00+00:00")
+        self.assertEqual(payload["results"][0]["subject"], "Supplier pull-in request")
+        self.assertIn("PO470002002", payload["results"][0]["snippet"])
+        self.assertEqual(payload["results"][0]["sent_at"], "2026-06-14T08:00:00+00:00")
         self.assertTrue(payload["results"][0]["citation"]["citation_id"])
         self.assertTrue(payload["claim_boundary"]["chatgpt_bypassed"])
         self.assertTrue(payload["claim_boundary"]["read_only_mail_evidence"])
@@ -1676,7 +2024,7 @@ class MailHumanUatHttpTests(unittest.TestCase):
         service = _service_from_state_dir(state_dir)
         with mock.patch.object(
             service._base_gateway,
-            "query_mail_evidence",
+            "execute_mail_evidence_query",
             side_effect=RuntimeError("simulated retrieval failure"),
         ):
             with self.assertRaises(RuntimeError):
@@ -1952,6 +2300,37 @@ def _bulk_bundle(count: int) -> MailEvidenceBundle:
         mail_evidence_bundle_id="mailevidencebundle_bulk_uat",
         messages=messages,
         body_segments=body_segments,
+    )
+
+
+def _exhaustive_uat_source_ids(
+    bundle: MailEvidenceBundle,
+    required_terms: tuple[str, ...],
+) -> frozenset[str]:
+    """Independent bounded oracle over complete logical source text."""
+    segments_by_message_id: dict[str, list[str]] = {}
+    for segment in bundle.body_segments:
+        segments_by_message_id.setdefault(segment.email_message_id, []).append(segment.text)
+    matches: set[str] = set()
+    for message in bundle.messages:
+        source_text = unicodedata.normalize(
+            "NFKC",
+            "\n".join(
+                [
+                    message.subject or "",
+                    *segments_by_message_id.get(message.email_message_id, ()),
+                ]
+            ),
+        ).casefold()
+        if all(
+            unicodedata.normalize("NFKC", term).casefold().strip() in source_text
+            for term in required_terms
+        ):
+            matches.add(message.email_message_id)
+    return frozenset(
+        segment.source_observation_id
+        for segment in bundle.body_segments
+        if segment.email_message_id in matches
     )
 
 
