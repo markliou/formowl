@@ -528,7 +528,6 @@ class MailHumanUatService:
         actor = bundle.mail_import_session
         with self._lock:
             all_bundles = self._all_bundles
-        source_search_text_by_id = _source_item_search_text(all_bundles)
         retrieval_candidate_limit = max(
             1,
             sum(len(candidate_bundle.body_segments) for candidate_bundle in all_bundles),
@@ -629,6 +628,15 @@ class MailHumanUatService:
                 )
             )
         if normalized_required_terms:
+            source_item_ids = {
+                str(result.get("_source_item_id", ""))
+                for result in results
+                if result.get("_source_item_id")
+            }
+            source_search_text_by_id = _source_item_search_text(
+                all_bundles,
+                source_item_ids,
+            )
             results = [
                 result
                 for result in results
@@ -1736,12 +1744,19 @@ def _normalized_required_terms(values: Sequence[str]) -> tuple[str, ...]:
 
 def _source_item_search_text(
     bundles: Sequence[MailEvidenceBundle],
+    source_item_ids: set[str],
 ) -> dict[str, str]:
+    if not source_item_ids:
+        return {}
     values_by_source: dict[str, list[str]] = {}
     for bundle in bundles:
         for message in bundle.messages:
+            if message.email_message_id not in source_item_ids:
+                continue
             values_by_source.setdefault(message.email_message_id, []).append(message.subject or "")
         for segment in bundle.body_segments:
+            if segment.email_message_id not in source_item_ids:
+                continue
             values_by_source.setdefault(segment.email_message_id, []).append(segment.text)
     return {
         source_id: unicodedata.normalize("NFKC", "\n".join(values)).casefold()

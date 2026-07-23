@@ -24,6 +24,7 @@ from formowl_mail.bundle import (
 from formowl_mail.human_uat_http import (
     MailHumanUatHttpConfig,
     MailHumanUatService,
+    _source_item_search_text,
     create_mail_human_uat_http_server,
 )
 from formowl_mail.human_uat_orchestrator import (
@@ -381,15 +382,19 @@ class MailHumanUatHttpTests(unittest.TestCase):
             )
         )
 
-        result = service.chat(
-            {
-                "query_text": "我要 PO470002002 的交期",
-                "visitor_id": VISITOR_ID,
-                "session_id": SESSION_ID,
-                "sequence": 1,
-                "source": "composer",
-            }
-        )
+        with mock.patch(
+            "formowl_mail.human_uat_http._source_item_search_text",
+            wraps=_source_item_search_text,
+        ) as source_text_builder:
+            result = service.chat(
+                {
+                    "query_text": "我要 PO470002002 的交期",
+                    "visitor_id": VISITOR_ID,
+                    "session_id": SESSION_ID,
+                    "sequence": 1,
+                    "source": "composer",
+                }
+            )
 
         self.assertEqual(result["orchestration"]["action"], "call_formowl_tool")
         self.assertEqual(result["total_result_count"], 1)
@@ -398,6 +403,10 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertIn("ETD 2026-07-13", result["results"][0]["snippet"])
         self.assertNotIn("business_filter_no_exact_match", result["warnings"])
         self.assertNotIn("required_terms_no_exact_match", result["warnings"])
+        self.assertEqual(
+            source_text_builder.call_args.args[1],
+            {"emailmessage_pullin"},
+        )
 
     def test_chat_clarification_and_new_chat_do_not_reuse_prior_evidence(self) -> None:
         model = _ScriptedConversationModel(
