@@ -37,6 +37,9 @@ from .bundle import (
     _WP1_PERSISTENCE_FAMILY_FIELDS,
     _validate_wp1_persistence_state,
     _wp1_persistence_state,
+    canonical_family_for_id_field,
+    canonical_order_records,
+    canonical_table_family,
 )
 from .query import MailEvidenceQueryGateway
 
@@ -1214,23 +1217,11 @@ def _query_import_rows(
 
 
 def _sort_records(records: Sequence[Any], id_field: str) -> list[Any]:
-    return sorted(
-        records,
-        key=lambda item: str(_record_payload(item)[id_field]),
-    )
+    return canonical_order_records(canonical_family_for_id_field(id_field), records)
 
 
 def _sort_body_segments(records: Sequence[EmailBodySegment]) -> list[EmailBodySegment]:
-    return sorted(
-        records,
-        key=lambda item: (
-            item.email_message_id,
-            item.segment_source_type,
-            item.attachment_id or "",
-            item.body_segment_index or 0,
-            item.email_body_segment_id,
-        ),
-    )
+    return canonical_order_records("body_segments", records)
 
 
 def _messages_for_import(
@@ -1287,7 +1278,8 @@ def _query_rows_by_ids(
             parameters={f"{id_field}s": list(ids)},
         )
     )
-    return [factory(_payload(row)) for row in rows]
+    records = [factory(_payload(row)) for row in rows]
+    return canonical_order_records(canonical_table_family(table_name), records)
 
 
 def _validate_bundle(bundle: MailEvidenceBundle | dict[str, Any]) -> MailEvidenceBundle:

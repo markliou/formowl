@@ -1393,6 +1393,110 @@ class Issue51WP1ContractTests(unittest.TestCase):
         restored = MailEvidenceBundle.from_persistence_dict(payload)
         self.assertEqual(restored.to_persistence_dict(), payload)
 
+    def test_bundle_order_is_canonical_for_file_and_postgres_round_trips(self) -> None:
+        bundle, inventory, requirement, _ = _inventory_bundle()
+        first_item = SourceInventoryItem.create(
+            **{
+                key: value
+                for key, value in inventory.items[0].to_persistence_dict().items()
+                if key != "source_inventory_id"
+            }
+        )
+        second_item = SourceInventoryItem.create(
+            source_asset_id=inventory.source_asset_id,
+            structure_kind="message",
+            content_type="message/rfc822",
+            ordinal=1,
+            processing_state="failed",
+            raw_retention_state="retained",
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+            permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
+        )
+        inventory = SourceInventory.create(
+            source_asset_id=inventory.source_asset_id,
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+            items=(first_item, second_item),
+            created_at=inventory.created_at,
+        )
+        manifest = bundle.version_manifests[0]
+        ledger = CoverageLedger(
+            query_id=requirement.query_id,
+            claim_requirement_id=requirement.claim_requirement_id,
+            source_inventory_id=inventory.source_inventory_id,
+            relevant_inventory_item_ids=tuple(
+                item.source_inventory_item_id for item in inventory.items
+            ),
+            version_binding=CoverageVersionBinding.from_manifest(manifest),
+            complete_authorized_scope=False,
+        )
+        claim = AnswerClaim.create(
+            answer_claim_id="answer_inventory_order_wp1",
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=inventory,
+            version_manifest=manifest,
+            claim_requirement_id=requirement.claim_requirement_id,
+            coverage_ledger_id=ledger.coverage_ledger_id,
+            evidence_snapshot_ids=(),
+        )
+        bundle = replace(
+            bundle,
+            source_inventory=[inventory],
+            coverage_ledgers=[ledger],
+            answer_claims=[claim],
+        )
+        canonical_payload = bundle.to_persistence_dict()
+        permuted_payload = deepcopy(canonical_payload)
+        permuted_payload["source_inventory"][0]["items"].reverse()
+        permuted_payload["source_inventory_items"].reverse()
+        restored = MailEvidenceBundle.from_persistence_dict(permuted_payload)
+
+        self.assertEqual(restored.to_persistence_dict(), canonical_payload)
+
+        authorization = CoverageAuthorizationBinding(
+            actor_context_id="actor_order_wp1",
+            permission_revision="permission_order_wp1",
+            grant_revision="grant_order_wp1",
+        )
+        decision = StructuralPublicScopeDecision.authorize(
+            permission_scope=inventory.items[0].permission_scope,
+            authorization_binding=authorization,
+        )
+        self.assertEqual(
+            restored.to_public_dict(
+                scope_decision=decision,
+                include_answer_claims=True,
+            ),
+            bundle.to_public_dict(
+                scope_decision=decision,
+                include_answer_claims=True,
+            ),
+        )
+
+        connection = _RowsConnection(reverse_query_rows=True)
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(restored)
+        postgres_restored = store.get_bundle(
+            mail_import_session_id=restored.mail_import_session.mail_import_session_id
+        )
+        self.assertIsNotNone(postgres_restored)
+        assert postgres_restored is not None
+        self.assertEqual(postgres_restored.to_persistence_dict(), canonical_payload)
+        self.assertEqual(
+            postgres_restored.to_public_dict(
+                scope_decision=decision,
+                include_answer_claims=True,
+            ),
+            restored.to_public_dict(
+                scope_decision=decision,
+                include_answer_claims=True,
+            ),
+        )
+
     def test_postgres_rejects_legacy_and_partial_wp1_state(self) -> None:
         empty_bundle = _minimal_bundle()
         connection = _RowsConnection()
@@ -2033,10 +2137,12 @@ class _RowsConnection:
         *,
         fail_after_execute: int | None = None,
         ignore_import_scope_filter: bool = False,
+        reverse_query_rows: bool = False,
     ) -> None:
         self.rows: dict[str, dict[str, dict[str, object]]] = {}
         self.fail_after_execute = fail_after_execute
         self.ignore_import_scope_filter = ignore_import_scope_filter
+        self.reverse_query_rows = reverse_query_rows
         self.execute_count = 0
         self.snapshot: dict[str, dict[str, dict[str, object]]] | None = None
         self.queries: list[object] = []
@@ -2105,6 +2211,8 @@ class _RowsConnection:
             for row in self.rows.get(table, {}).values()
             if self.ignore_import_scope_filter or row.get("mail_import_session_id") == import_id
         ]
+        if self.reverse_query_rows:
+            result.reverse()
         return [
             {key: row[key] for key in _selected_columns(statement.sql) if key in row}
             for row in result

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, is_dataclass
+from dataclasses import dataclass, field, is_dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from formowl_contract import (
@@ -50,6 +50,45 @@ _WP1_PERSISTENCE_FAMILY_FIELDS = (
     "answer_claims",
     "version_manifests",
 )
+_CANONICAL_ORDER_ID_FIELDS = {
+    "archive_occurrences": "mail_archive_occurrence_id",
+    "folder_occurrences": "mail_folder_occurrence_id",
+    "messages": "email_message_id",
+    "message_occurrences": "email_message_occurrence_id",
+    "attachments": "email_attachment_id",
+    "attachment_occurrences": "email_attachment_occurrence_id",
+    "quoted_message_candidates": "quoted_message_candidate_id",
+    "embedded_message_relations": "embedded_message_relation_id",
+    "parse_runs": "mail_parse_run_id",
+    "parse_warnings": "mail_parse_warning_id",
+    "source_inventory": "source_inventory_id",
+    "source_inventory_items": "source_inventory_item_id",
+    "structural_observations": "structural_observation_id",
+    "claim_requirements": "claim_requirement_id",
+    "coverage_ledgers": "coverage_ledger_id",
+    "answer_claims": "answer_claim_id",
+    "version_manifests": "version_manifest_id",
+}
+_CANONICAL_TABLE_FAMILIES = {
+    "mail_archive_occurrence": "archive_occurrences",
+    "mail_folder_occurrence": "folder_occurrences",
+    "email_message": "messages",
+    "email_message_occurrence": "message_occurrences",
+    "email_body_segment": "body_segments",
+    "email_attachment": "attachments",
+    "email_attachment_occurrence": "attachment_occurrences",
+    "quoted_message_candidate": "quoted_message_candidates",
+    "embedded_message_relation": "embedded_message_relations",
+    "mail_parse_warning": "parse_warnings",
+    "mail_parse_run": "parse_runs",
+    "source_inventory": "source_inventory",
+    "source_inventory_item": "source_inventory_items",
+    "structural_observation": "structural_observations",
+    "claim_requirement": "claim_requirements",
+    "coverage_ledger": "coverage_ledgers",
+    "answer_claim": "answer_claims",
+    "version_manifest": "version_manifests",
+}
 
 
 @dataclass(frozen=True)
@@ -472,6 +511,130 @@ class MailParseWarning:
         return warning
 
 
+def canonical_order_records(
+    family: str,
+    records: Sequence[Any],
+) -> list[Any]:
+    """Return one deterministic order for a bundle record family.
+
+    The order is semantic for body segments and source-inventory items and
+    stable-ID based for the other families.  The private payload hash is only
+    a deterministic tie-breaker for malformed duplicate identities.
+    """
+
+    if family == "body_segments":
+
+        def semantic_key(record: Any) -> tuple[Any, ...]:
+            return (
+                record.email_message_id,
+                record.segment_source_type,
+                record.attachment_id or "",
+                record.body_segment_index or 0,
+                record.email_body_segment_id,
+            )
+    elif family == "source_inventory_items":
+
+        def semantic_key(record: Any) -> tuple[Any, ...]:
+            return (
+                record.source_inventory_id or "",
+                record.ordinal,
+                record.source_inventory_item_id,
+            )
+    else:
+        try:
+            id_field = _CANONICAL_ORDER_ID_FIELDS[family]
+        except KeyError as exc:
+            raise ContractValidationError(
+                f"unsupported canonical mail evidence record family: {family}"
+            ) from exc
+
+        def semantic_key(record: Any) -> tuple[Any, ...]:
+            return (str(getattr(record, id_field)),)
+
+    return sorted(
+        records,
+        key=lambda record: (*semantic_key(record), sha256_json(_private_plain(record))),
+    )
+
+
+def canonical_table_family(table_name: str) -> str:
+    try:
+        return _CANONICAL_TABLE_FAMILIES[table_name]
+    except KeyError as exc:
+        raise ContractValidationError(
+            f"unsupported canonical mail evidence table: {table_name}"
+        ) from exc
+
+
+def canonical_family_for_id_field(id_field: str) -> str:
+    for family, field_name in _CANONICAL_ORDER_ID_FIELDS.items():
+        if field_name == id_field:
+            return family
+    raise ContractValidationError(f"unsupported canonical mail evidence identifier: {id_field}")
+
+
+def _canonical_source_inventory(inventory: SourceInventory) -> SourceInventory:
+    return replace(
+        inventory,
+        items=tuple(canonical_order_records("source_inventory_items", inventory.items)),
+    )
+
+
+def _canonical_record_families(
+    *,
+    archive_occurrences: Sequence[MailArchiveOccurrence],
+    folder_occurrences: Sequence[MailFolderOccurrence],
+    messages: Sequence[EmailMessage],
+    message_occurrences: Sequence[EmailMessageOccurrence],
+    body_segments: Sequence[EmailBodySegment],
+    attachments: Sequence[EmailAttachment],
+    attachment_occurrences: Sequence[EmailAttachmentOccurrence],
+    quoted_message_candidates: Sequence[QuotedMessageCandidate],
+    embedded_message_relations: Sequence[EmbeddedMessageRelation],
+    parse_warnings: Sequence[MailParseWarning],
+    source_inventory: Sequence[SourceInventory],
+    structural_observations: Sequence[StructuralObservation],
+    claim_requirements: Sequence[ClaimRequirement],
+    coverage_ledgers: Sequence[CoverageLedger],
+    answer_claims: Sequence[AnswerClaim],
+    version_manifests: Sequence[VersionManifest],
+) -> dict[str, list[Any]]:
+    canonical_inventories = canonical_order_records(
+        "source_inventory",
+        [_canonical_source_inventory(inventory) for inventory in source_inventory],
+    )
+    return {
+        "archive_occurrences": canonical_order_records("archive_occurrences", archive_occurrences),
+        "folder_occurrences": canonical_order_records("folder_occurrences", folder_occurrences),
+        "messages": canonical_order_records("messages", messages),
+        "message_occurrences": canonical_order_records("message_occurrences", message_occurrences),
+        "body_segments": canonical_order_records("body_segments", body_segments),
+        "attachments": canonical_order_records("attachments", attachments),
+        "attachment_occurrences": canonical_order_records(
+            "attachment_occurrences", attachment_occurrences
+        ),
+        "quoted_message_candidates": canonical_order_records(
+            "quoted_message_candidates", quoted_message_candidates
+        ),
+        "embedded_message_relations": canonical_order_records(
+            "embedded_message_relations", embedded_message_relations
+        ),
+        "parse_warnings": canonical_order_records("parse_warnings", parse_warnings),
+        "source_inventory": canonical_inventories,
+        "source_inventory_items": canonical_order_records(
+            "source_inventory_items",
+            [item for inventory in canonical_inventories for item in inventory.items],
+        ),
+        "structural_observations": canonical_order_records(
+            "structural_observations", structural_observations
+        ),
+        "claim_requirements": canonical_order_records("claim_requirements", claim_requirements),
+        "coverage_ledgers": canonical_order_records("coverage_ledgers", coverage_ledgers),
+        "answer_claims": canonical_order_records("answer_claims", answer_claims),
+        "version_manifests": canonical_order_records("version_manifests", version_manifests),
+    }
+
+
 @dataclass(frozen=True)
 class MailEvidenceBundle:
     mail_evidence_bundle_id: str
@@ -555,10 +718,15 @@ class MailEvidenceBundle:
                 raise ContractValidationError(
                     "answer claim and coverage ledger claim requirements differ"
                 )
+        canonical = _canonical_bundle_records(self)
+        for field_name, records in canonical.items():
+            if field_name == "source_inventory_items":
+                continue
+            object.__setattr__(self, field_name, records)
 
     @property
     def source_inventory_items(self) -> tuple[SourceInventoryItem, ...]:
-        return tuple(item for inventory in self.source_inventory for item in inventory.items)
+        return tuple(_canonical_bundle_records(self)["source_inventory_items"])
 
     def to_dict(self) -> dict[str, Any]:
         return self.to_public_dict()
@@ -571,8 +739,11 @@ class MailEvidenceBundle:
     ) -> dict[str, Any]:
         if not isinstance(include_answer_claims, bool):
             raise ContractValidationError("include_answer_claims must be a boolean")
+        canonical = _canonical_bundle_records(self)
         has_structural_records = bool(
-            self.source_inventory or self.structural_observations or self.source_inventory_items
+            canonical["source_inventory"]
+            or canonical["structural_observations"]
+            or canonical["source_inventory_items"]
         )
         requires_scope_decision = has_structural_records or include_answer_claims
         if requires_scope_decision and not isinstance(
@@ -608,25 +779,25 @@ class MailEvidenceBundle:
             assert scope_decision is not None
             item_by_id = {
                 item.source_inventory_item_id: item
-                for inventory in self.source_inventory
+                for inventory in canonical["source_inventory"]
                 for item in inventory.items
             }
             payload["structural_evidence"] = {
                 "status": "authorized",
                 "source_inventory": [
                     inventory.to_public_dict(scope_decision=scope_decision)
-                    for inventory in self.source_inventory
+                    for inventory in canonical["source_inventory"]
                 ],
                 "source_inventory_items": [
                     item.to_public_dict(scope_decision=scope_decision)
-                    for item in self.source_inventory_items
+                    for item in canonical["source_inventory_items"]
                 ],
                 "structural_observations": [
                     observation.to_public_dict(
                         scope_decision=scope_decision,
                         source_inventory_item=item_by_id.get(observation.source_inventory_item_id),
                     )
-                    for observation in self.structural_observations
+                    for observation in canonical["structural_observations"]
                 ],
             }
         assert_public_payload_safe(payload, "mail_evidence_bundle.public")
@@ -635,8 +806,10 @@ class MailEvidenceBundle:
             if scope_decision.decision_state == "denied":
                 payload["answer_claims"] = _structural_denial()
                 return payload
-            ledger_by_id = {ledger.coverage_ledger_id: ledger for ledger in self.coverage_ledgers}
-            for claim in self.answer_claims:
+            ledger_by_id = {
+                ledger.coverage_ledger_id: ledger for ledger in canonical["coverage_ledgers"]
+            }
+            for claim in canonical["answer_claims"]:
                 ledger = ledger_by_id.get(claim.coverage_ledger_id)
                 if ledger is None:
                     raise ContractValidationError(
@@ -652,7 +825,7 @@ class MailEvidenceBundle:
             # AnswerClaim.to_dict() is the separately approved nine-field
             # wire contract.  The generic mail guard intentionally does not
             # reinterpret its approved fingerprint/index field names.
-            payload["answer_claims"] = [claim.to_dict() for claim in self.answer_claims]
+            payload["answer_claims"] = [claim.to_dict() for claim in canonical["answer_claims"]]
         return payload
 
     def to_persistence_dict(self) -> dict[str, Any]:
@@ -787,6 +960,27 @@ class MailEvidenceBundle:
         )
         bundle.to_persistence_dict()
         return bundle
+
+
+def _canonical_bundle_records(value: MailEvidenceBundle) -> dict[str, list[Any]]:
+    return _canonical_record_families(
+        archive_occurrences=value.archive_occurrences,
+        folder_occurrences=value.folder_occurrences,
+        messages=value.messages,
+        message_occurrences=value.message_occurrences,
+        body_segments=value.body_segments,
+        attachments=value.attachments,
+        attachment_occurrences=value.attachment_occurrences,
+        quoted_message_candidates=value.quoted_message_candidates,
+        embedded_message_relations=value.embedded_message_relations,
+        parse_warnings=value.parse_warnings,
+        source_inventory=value.source_inventory,
+        structural_observations=value.structural_observations,
+        claim_requirements=value.claim_requirements,
+        coverage_ledgers=value.coverage_ledgers,
+        answer_claims=value.answer_claims,
+        version_manifests=value.version_manifests,
+    )
 
 
 def build_mail_evidence_bundle(
@@ -1438,9 +1632,20 @@ def _private_payload(value: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ContractValidationError("private mail evidence payload must be an object")
     if isinstance(value, MailEvidenceBundle):
-        payload["source_inventory_items"] = [
-            item.to_persistence_dict() for item in value.source_inventory_items
-        ]
+        canonical = _canonical_bundle_records(value)
+        for field_name, records in canonical.items():
+            if field_name == "source_inventory_items":
+                payload[field_name] = [item.to_persistence_dict() for item in records]
+            elif field_name == "answer_claims":
+                payload[field_name] = [item.to_persistence_dict() for item in records]
+            elif field_name in {
+                "source_inventory",
+                "structural_observations",
+                "coverage_ledgers",
+            }:
+                payload[field_name] = [item.to_persistence_dict() for item in records]
+            else:
+                payload[field_name] = [_private_plain(item) for item in records]
         payload[_WP1_PERSISTENCE_FIELD] = _wp1_persistence_state(value)
     return payload
 

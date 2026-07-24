@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from copy import deepcopy
 from typing import Any
 
 import _paths  # noqa: F401
@@ -248,6 +249,52 @@ class PostgreSQLMailEvidenceStoreTests(unittest.TestCase):
         self.assertNotIn("SELECT * FROM", rendered)
         self.assertIn("unsafe_mail_evidence_content_redacted", result["warnings"])
 
+    def test_permuted_file_and_postgres_orders_round_trip_identically(self) -> None:
+        bundle = _mail_bundle(
+            _paths.fresh_test_dir("mail-evidence-postgres-canonical-order"),
+        )
+        canonical_payload = bundle.to_persistence_dict()
+        permuted_payload = deepcopy(canonical_payload)
+        for field_name in (
+            "archive_occurrences",
+            "folder_occurrences",
+            "messages",
+            "message_occurrences",
+            "body_segments",
+            "attachments",
+            "attachment_occurrences",
+            "quoted_message_candidates",
+            "embedded_message_relations",
+            "parse_warnings",
+        ):
+            permuted_payload[field_name].reverse()
+
+        file_restored = MailEvidenceBundle.from_persistence_dict(permuted_payload)
+        self.assertEqual(file_restored.to_persistence_dict(), canonical_payload)
+        self.assertEqual(file_restored.to_dict(), bundle.to_dict())
+        body_segment_keys = [
+            (
+                item["email_message_id"],
+                item["segment_source_type"],
+                item.get("attachment_id") or "",
+                item.get("body_segment_index") or 0,
+                item["email_body_segment_id"],
+            )
+            for item in canonical_payload["body_segments"]
+        ]
+        self.assertEqual(body_segment_keys, sorted(body_segment_keys))
+
+        connection = _RecordingMailConnection(reverse_query_rows=True)
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(file_restored)
+        postgres_restored = store.get_bundle(
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+        )
+        self.assertIsNotNone(postgres_restored)
+        assert postgres_restored is not None
+        self.assertEqual(postgres_restored.to_persistence_dict(), canonical_payload)
+        self.assertEqual(postgres_restored.to_dict(), bundle.to_dict())
+
     def test_invalid_bundle_and_unsafe_lookup_fail_before_database_side_effects(self) -> None:
         bundle = _mail_bundle(_paths.fresh_test_dir("mail-evidence-postgres-invalid"))
         payload = bundle.to_persistence_dict()
@@ -321,8 +368,14 @@ class PostgreSQLMailEvidenceStoreTests(unittest.TestCase):
 
 
 class _RecordingMailConnection:
-    def __init__(self, *, fail_after_execute: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_after_execute: int | None = None,
+        reverse_query_rows: bool = False,
+    ) -> None:
         self.fail_after_execute = fail_after_execute
+        self.reverse_query_rows = reverse_query_rows
         self.actions: list[str] = []
         self.statements: list[Any] = []
         self.rows: dict[str, dict[str, dict[str, Any]]] = {}
@@ -370,10 +423,10 @@ class _RecordingMailConnection:
                 id_field = key[:-1]
                 allowed = set(value)
                 rows = [row for row in rows if row.get(id_field) in allowed]
-        return [
-            _project_selected_columns(row, statement.sql)
-            for row in sorted(rows, key=lambda row: row["payload_hash"])
-        ]
+        ordered_rows = sorted(rows, key=lambda row: row["payload_hash"])
+        if self.reverse_query_rows:
+            ordered_rows.reverse()
+        return [_project_selected_columns(row, statement.sql) for row in ordered_rows]
 
     def begin(self) -> None:
         self.actions.append("begin")
