@@ -659,17 +659,17 @@ class MailEvidenceBundle:
     coverage_ledgers: list[CoverageLedger] = field(default_factory=list)
     answer_claims: list[AnswerClaim] = field(default_factory=list)
     version_manifests: list[VersionManifest] = field(default_factory=list)
-    _trusted_scope_authorities: Mapping[str, CoverageScopeAuthority] = field(
+    _expected_scope_authorities: Mapping[str, CoverageScopeAuthority] = field(
         default_factory=dict,
         repr=False,
         compare=False,
     )
 
     def __post_init__(self) -> None:
-        trusted_scope_authorities = dict(self._trusted_scope_authorities)
+        expected_scope_authorities = dict(self._expected_scope_authorities)
         if any(
             not isinstance(key, str) or not isinstance(authority, CoverageScopeAuthority)
-            for key, authority in trusted_scope_authorities.items()
+            for key, authority in expected_scope_authorities.items()
         ):
             raise ContractValidationError(
                 "mail bundle scope authorities must be keyed typed authorities"
@@ -739,7 +739,7 @@ class MailEvidenceBundle:
                     ),
                     None,
                 )
-                expected_scope_authority = trusted_scope_authorities.get(ledger.coverage_ledger_id)
+                expected_scope_authority = expected_scope_authorities.get(ledger.coverage_ledger_id)
                 if manifest is None or (
                     expected_scope_authority is not None
                     and not ledger.binding_valid_for_claim(
@@ -886,16 +886,20 @@ class MailEvidenceBundle:
         cls,
         value: dict[str, Any],
         *,
-        scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
+        expected_scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
     ) -> "MailEvidenceBundle":
         item = _require_private_dict(value, "mail_evidence_bundle")
         _assert_private_mail_bundle_envelope_safe(item)
-        if scope_authorities is not None and not isinstance(scope_authorities, Mapping):
-            raise ContractValidationError("mail evidence scope authorities must be a mapping")
-        trusted_scope_authorities = dict(scope_authorities or {})
+        if expected_scope_authorities is not None and not isinstance(
+            expected_scope_authorities, Mapping
+        ):
+            raise ContractValidationError(
+                "mail evidence expected scope authorities must be a mapping"
+            )
+        expected_scope_authority_map = dict(expected_scope_authorities or {})
         if any(
             not isinstance(key, str) or not isinstance(authority, CoverageScopeAuthority)
-            for key, authority in trusted_scope_authorities.items()
+            for key, authority in expected_scope_authority_map.items()
         ):
             raise ContractValidationError(
                 "mail evidence scope authorities must be keyed typed authorities"
@@ -1003,7 +1007,7 @@ class MailEvidenceBundle:
                         else None
                     ),
                     version_manifest=manifest_by_id.get(payload.get("version_manifest_id")),
-                    scope_authority=trusted_scope_authorities.get(
+                    expected_scope_authority=expected_scope_authority_map.get(
                         payload.get("coverage_ledger_id")
                     ),
                     authorization_binding=(
@@ -1014,7 +1018,7 @@ class MailEvidenceBundle:
                 ),
             ),
             version_manifests=version_manifests,
-            _trusted_scope_authorities=trusted_scope_authorities,
+            _expected_scope_authorities=expected_scope_authority_map,
         )
         _validate_wp1_persistence_state(
             wp1_persistence,
@@ -1770,7 +1774,7 @@ def _private_plain(value: Any) -> Any:
         return {
             key: _private_plain(item)
             for key, item in value.__dict__.items()
-            if item is not None and key != "_trusted_scope_authorities"
+            if item is not None and key != "_expected_scope_authorities"
         }
     if isinstance(value, Mapping):
         return {str(key): _private_plain(item) for key, item in value.items() if item is not None}

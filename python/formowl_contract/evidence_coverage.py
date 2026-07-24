@@ -61,6 +61,7 @@ ANSWER_CLAIM_STATE_VALUES = (
     "NOT_FOUND_WITHIN_COMPLETE_SCOPE",
     "INSUFFICIENT_COVERAGE",
 )
+_ANSWER_CLAIM_FACTORY_TOKEN = object()
 INDEX_FRESHNESS_VALUES = ("fresh", "stale", "mismatch", "unavailable")
 COVERAGE_FALLBACK_STATUS_VALUES = (
     "not_required",
@@ -1748,6 +1749,12 @@ class CoverageScopeAuthority:
     authorization_decisions: tuple[CoverageItemAuthorizationDecision, ...]
     relevance_decisions: tuple[CoverageItemRelevanceDecision, ...]
     authority_id: str = ""
+    _authority_provenance: str = field(
+        default="untrusted_constructor",
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         _id(self.source_inventory_id, "coverage_scope_authority.source_inventory_id")
@@ -1836,6 +1843,7 @@ class CoverageScopeAuthority:
             scope_policy,
         ):
             raise ContractValidationError("scope authority decisions do not match typed inputs")
+        object.__setattr__(authority, "_authority_provenance", "trusted")
         return authority
 
     def _identity_payload(self) -> dict[str, Any]:
@@ -1887,6 +1895,10 @@ class CoverageScopeAuthority:
     def to_dict(self) -> dict[str, Any]:
         return self.to_persistence_dict()
 
+    @property
+    def _is_trusted_for_authoritative_use(self) -> bool:
+        return self._authority_provenance == "trusted"
+
     @classmethod
     def from_persistence_dict(cls, value: Mapping[str, Any]) -> "CoverageScopeAuthority":
         item = _mapping(value, "coverage_scope_authority")
@@ -1904,7 +1916,7 @@ class CoverageScopeAuthority:
             },
             "coverage_scope_authority",
         )
-        return cls(
+        authority = cls(
             source_inventory_id=_required_str(item, "source_inventory_id"),
             claim_requirement_id=_required_str(item, "claim_requirement_id"),
             authorization_binding=CoverageAuthorizationBinding.from_dict(
@@ -1926,6 +1938,8 @@ class CoverageScopeAuthority:
             ),
             authority_id=_required_str(item, "authority_id"),
         )
+        object.__setattr__(authority, "_authority_provenance", "untrusted_persistence")
+        return authority
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "CoverageScopeAuthority":
@@ -2157,6 +2171,26 @@ class CoverageScopePartition:
 
         if not isinstance(expected_scope_authority, CoverageScopeAuthority):
             raise ContractValidationError("scope partition requires typed scope authority")
+        if not expected_scope_authority._is_trusted_for_authoritative_use:
+            return False
+        return self._validate_against_scope_authority(
+            source_inventory,
+            claim_requirement,
+            expected_manifest,
+            expected_authorization_binding,
+            expected_scope_authority,
+        )
+
+    def _validate_against_scope_authority(
+        self,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        expected_manifest: VersionManifest,
+        expected_authorization_binding: CoverageAuthorizationBinding,
+        expected_scope_authority: CoverageScopeAuthority,
+    ) -> bool:
+        """Validate against an authority, including private embedded replay data."""
+
         if self.scope_authority != expected_scope_authority:
             return False
         if not self.scope_authority.validate_for_claim(
@@ -2839,6 +2873,78 @@ class CoverageLedger:
         adds the complete-scope proof requirements.
         """
 
+        if not self._base_binding_valid_for_claim(
+            source_inventory,
+            claim_requirement,
+            expected_manifest,
+            expected_authorization_binding,
+        ):
+            return False
+        if self.scope_partition is not None:
+            if expected_authorization_binding is None or not isinstance(
+                expected_scope_authority, CoverageScopeAuthority
+            ):
+                return False
+            if not expected_scope_authority._is_trusted_for_authoritative_use:
+                return False
+            if not self.scope_partition.validate_for_claim(
+                source_inventory,
+                claim_requirement,
+                expected_manifest,
+                expected_authorization_binding,
+                expected_scope_authority,
+            ):
+                return False
+            if set(self.relevant_inventory_item_ids) - set(
+                self.scope_partition.authorized_relevant_item_ids
+            ):
+                return False
+        return True
+
+    def _binding_valid_for_incomplete_claim(
+        self,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        expected_manifest: VersionManifest,
+        expected_authorization_binding: CoverageAuthorizationBinding | None = None,
+    ) -> bool:
+        """Validate an incomplete claim without treating embedded scope as trusted.
+
+        This private path is intentionally narrower than ``binding_valid_for_claim``:
+        it checks only the typed ledger/inventory/requirement/manifest binding and
+        the internal consistency of any embedded partition.  It never accepts an
+        externally supplied authority and is only used for
+        ``INSUFFICIENT_COVERAGE`` persistence/round trips.
+        """
+
+        if not self._base_binding_valid_for_claim(
+            source_inventory,
+            claim_requirement,
+            expected_manifest,
+            expected_authorization_binding,
+        ):
+            return False
+        if self.scope_partition is None:
+            return True
+        if self.authorization_binding is None:
+            return False
+        return self.scope_partition._validate_against_scope_authority(
+            source_inventory,
+            claim_requirement,
+            expected_manifest,
+            self.authorization_binding,
+            self.scope_partition.scope_authority,
+        )
+
+    def _base_binding_valid_for_claim(
+        self,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        expected_manifest: VersionManifest,
+        expected_authorization_binding: CoverageAuthorizationBinding | None = None,
+    ) -> bool:
+        """Validate only non-authority ledger bindings for a private path."""
+
         if not isinstance(source_inventory, SourceInventory):
             raise ContractValidationError("binding validation requires SourceInventory")
         if not isinstance(claim_requirement, ClaimRequirement):
@@ -2873,26 +2979,7 @@ class CoverageLedger:
         elif expected_authorization_binding != self.authorization_binding:
             return False
         item_by_id = {item.source_inventory_item_id: item for item in source_inventory.items}
-        if set(self.relevant_inventory_item_ids) - set(item_by_id):
-            return False
-        if self.scope_partition is not None:
-            if expected_authorization_binding is None or not isinstance(
-                expected_scope_authority, CoverageScopeAuthority
-            ):
-                return False
-            if not self.scope_partition.validate_for_claim(
-                source_inventory,
-                claim_requirement,
-                expected_manifest,
-                expected_authorization_binding,
-                expected_scope_authority,
-            ):
-                return False
-            if set(self.relevant_inventory_item_ids) - set(
-                self.scope_partition.authorized_relevant_item_ids
-            ):
-                return False
-        return True
+        return not (set(self.relevant_inventory_item_ids) - set(item_by_id))
 
     def _direct_proof_records_for_claim(
         self,
@@ -3178,12 +3265,18 @@ class AnswerClaim:
         repr=False,
         compare=False,
     )
+    _untrusted_scope_authority: CoverageScopeAuthority | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     authorization_binding: CoverageAuthorizationBinding | None = field(
         default=None,
         repr=False,
         compare=False,
     )
     _wire_only: bool = field(default=False, repr=False, compare=False)
+    _factory_token: object | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self._wire_only:
@@ -3195,29 +3288,48 @@ class AnswerClaim:
                     self.source_inventory,
                     self.version_manifest,
                     self.scope_authority,
+                    self._untrusted_scope_authority,
                     self.authorization_binding,
                 )
             ):
                 raise ContractValidationError("wire-only answer claims cannot carry bindings")
         else:
-            normalized = _validated_answer_claim_binding(
-                {
-                    "claim_requirement_id": self.claim_requirement_id,
-                    "coverage_ledger_id": self.coverage_ledger_id,
-                    "source_fingerprint": self.source_fingerprint,
-                    "parser_fingerprint": self.parser_fingerprint,
-                    "tokenizer_fingerprint": self.tokenizer_fingerprint,
-                    "index_fingerprint": self.index_fingerprint,
-                    "version_manifest_id": self.version_manifest_id,
-                    "implementation_fingerprint": self.implementation_fingerprint,
-                },
-                coverage_ledger=self.coverage_ledger,
-                claim_requirement=self.claim_requirement,
-                source_inventory=self.source_inventory,
-                version_manifest=self.version_manifest,
-                scope_authority=self.scope_authority,
-                authorization_binding=self.authorization_binding,
-            )
+            if (
+                self.state != "INSUFFICIENT_COVERAGE"
+                and self._factory_token is not _ANSWER_CLAIM_FACTORY_TOKEN
+            ):
+                raise ContractValidationError(
+                    "definitive answer claims must be constructed through the validated factory"
+                )
+            binding_values = {
+                "claim_requirement_id": self.claim_requirement_id,
+                "coverage_ledger_id": self.coverage_ledger_id,
+                "source_fingerprint": self.source_fingerprint,
+                "parser_fingerprint": self.parser_fingerprint,
+                "tokenizer_fingerprint": self.tokenizer_fingerprint,
+                "index_fingerprint": self.index_fingerprint,
+                "version_manifest_id": self.version_manifest_id,
+                "implementation_fingerprint": self.implementation_fingerprint,
+            }
+            if self.state == "INSUFFICIENT_COVERAGE" and self.scope_authority is None:
+                normalized = _validated_incomplete_answer_claim_binding(
+                    binding_values,
+                    coverage_ledger=self.coverage_ledger,
+                    claim_requirement=self.claim_requirement,
+                    source_inventory=self.source_inventory,
+                    version_manifest=self.version_manifest,
+                    authorization_binding=self.authorization_binding,
+                )
+            else:
+                normalized = _validated_answer_claim_binding(
+                    binding_values,
+                    coverage_ledger=self.coverage_ledger,
+                    claim_requirement=self.claim_requirement,
+                    source_inventory=self.source_inventory,
+                    version_manifest=self.version_manifest,
+                    scope_authority=self.scope_authority,
+                    authorization_binding=self.authorization_binding,
+                )
             for field_name, value in normalized.items():
                 object.__setattr__(self, field_name, value)
         _choice(self.state, ANSWER_CLAIM_STATE_VALUES, "answer_claim.state")
@@ -3279,33 +3391,49 @@ class AnswerClaim:
         claim_requirement: ClaimRequirement | None = None,
         source_inventory: SourceInventory | None = None,
         version_manifest: VersionManifest | None = None,
+        expected_scope_authority: CoverageScopeAuthority | None = None,
         scope_authority: CoverageScopeAuthority | None = None,
         authorization_binding: CoverageAuthorizationBinding | None = None,
         **values: Any,
     ) -> "AnswerClaim":
+        if scope_authority is not None:
+            raise ContractValidationError(
+                "answer claim creation requires expected_scope_authority; "
+                "scope_authority is an internal validated binding"
+            )
         values = dict(values)
         for field_name in ("reason_codes", "evidence_snapshot_ids"):
             if field_name in values:
                 values[field_name] = tuple(values[field_name])
-        values.update(
-            _validated_answer_claim_binding(
+        if values.get("state") == "INSUFFICIENT_COVERAGE" and expected_scope_authority is None:
+            normalized = _validated_incomplete_answer_claim_binding(
                 values,
                 coverage_ledger=coverage_ledger,
                 claim_requirement=claim_requirement,
                 source_inventory=source_inventory,
                 version_manifest=version_manifest,
-                scope_authority=scope_authority,
                 authorization_binding=authorization_binding,
             )
-        )
+        else:
+            normalized = _validated_answer_claim_binding(
+                values,
+                coverage_ledger=coverage_ledger,
+                claim_requirement=claim_requirement,
+                source_inventory=source_inventory,
+                version_manifest=version_manifest,
+                scope_authority=expected_scope_authority,
+                authorization_binding=authorization_binding,
+            )
+        values.update(normalized)
         return cls(
             **values,
             coverage_ledger=coverage_ledger,
             claim_requirement=claim_requirement,
             source_inventory=source_inventory,
             version_manifest=version_manifest,
-            scope_authority=scope_authority,
+            scope_authority=expected_scope_authority,
             authorization_binding=authorization_binding,
+            _factory_token=_ANSWER_CLAIM_FACTORY_TOKEN,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -3332,24 +3460,35 @@ class AnswerClaim:
             raise ContractValidationError(
                 "wire-only answer claims cannot be persisted without validated bindings"
             )
-        _validated_answer_claim_binding(
-            {
-                "claim_requirement_id": self.claim_requirement_id,
-                "coverage_ledger_id": self.coverage_ledger_id,
-                "source_fingerprint": self.source_fingerprint,
-                "parser_fingerprint": self.parser_fingerprint,
-                "tokenizer_fingerprint": self.tokenizer_fingerprint,
-                "index_fingerprint": self.index_fingerprint,
-                "version_manifest_id": self.version_manifest_id,
-                "implementation_fingerprint": self.implementation_fingerprint,
-            },
-            coverage_ledger=self.coverage_ledger,
-            claim_requirement=self.claim_requirement,
-            source_inventory=self.source_inventory,
-            version_manifest=self.version_manifest,
-            scope_authority=self.scope_authority,
-            authorization_binding=self.authorization_binding,
-        )
+        binding_values = {
+            "claim_requirement_id": self.claim_requirement_id,
+            "coverage_ledger_id": self.coverage_ledger_id,
+            "source_fingerprint": self.source_fingerprint,
+            "parser_fingerprint": self.parser_fingerprint,
+            "tokenizer_fingerprint": self.tokenizer_fingerprint,
+            "index_fingerprint": self.index_fingerprint,
+            "version_manifest_id": self.version_manifest_id,
+            "implementation_fingerprint": self.implementation_fingerprint,
+        }
+        if self.state == "INSUFFICIENT_COVERAGE" and self.scope_authority is None:
+            _validated_incomplete_answer_claim_binding(
+                binding_values,
+                coverage_ledger=self.coverage_ledger,
+                claim_requirement=self.claim_requirement,
+                source_inventory=self.source_inventory,
+                version_manifest=self.version_manifest,
+                authorization_binding=self.authorization_binding,
+            )
+        else:
+            _validated_answer_claim_binding(
+                binding_values,
+                coverage_ledger=self.coverage_ledger,
+                claim_requirement=self.claim_requirement,
+                source_inventory=self.source_inventory,
+                version_manifest=self.version_manifest,
+                scope_authority=self.scope_authority,
+                authorization_binding=self.authorization_binding,
+            )
         payload = {
             "answer_claim_id": self.answer_claim_id,
             **self.to_dict(),
@@ -3358,7 +3497,11 @@ class AnswerClaim:
             "scope_authority": (
                 self.scope_authority.to_persistence_dict()
                 if self.scope_authority is not None
-                else None
+                else (
+                    self._untrusted_scope_authority.to_persistence_dict()
+                    if self._untrusted_scope_authority is not None
+                    else None
+                )
             ),
         }
         payload = _without_none(payload)
@@ -3391,8 +3534,8 @@ class AnswerClaim:
         claim_requirement: ClaimRequirement | None = None,
         source_inventory: SourceInventory | None = None,
         version_manifest: VersionManifest | None = None,
-        scope_authority: CoverageScopeAuthority | None = None,
         expected_scope_authority: CoverageScopeAuthority | None = None,
+        scope_authority: CoverageScopeAuthority | None = None,
         authorization_binding: CoverageAuthorizationBinding | None = None,
     ) -> "AnswerClaim":
         item = _mapping(value, "answer_claim.persistence")
@@ -3402,19 +3545,15 @@ class AnswerClaim:
             "answer_claim.persistence",
             required=_ANSWER_CLAIM_PERSISTENCE_KEYS - {"scope_authority"},
         )
-        if (
-            scope_authority is not None
-            and expected_scope_authority is not None
-            and scope_authority != expected_scope_authority
-        ):
+        if scope_authority is not None:
             raise ContractValidationError(
-                "answer claim supplied conflicting scope authority bindings"
+                "answer claim persistence requires expected_scope_authority; "
+                "scope_authority is not a trusted input"
             )
-        trusted_scope_authority = (
-            expected_scope_authority if expected_scope_authority is not None else scope_authority
-        )
+        trusted_scope_authority = expected_scope_authority
         persisted_state = _required_str(item, "state")
         persisted_scope_authority = item.get("scope_authority")
+        parsed_scope_authority = None
         if persisted_scope_authority is not None:
             parsed_scope_authority = CoverageScopeAuthority.from_persistence_dict(
                 _mapping(persisted_scope_authority, "answer_claim.scope_authority")
@@ -3433,15 +3572,25 @@ class AnswerClaim:
                 "authoritative persisted claims require an independently supplied "
                 "scope authority binding"
             )
-        normalized = _validated_answer_claim_binding(
-            item,
-            coverage_ledger=coverage_ledger,
-            claim_requirement=claim_requirement,
-            source_inventory=source_inventory,
-            version_manifest=version_manifest,
-            scope_authority=trusted_scope_authority,
-            authorization_binding=authorization_binding,
-        )
+        if persisted_state == "INSUFFICIENT_COVERAGE" and trusted_scope_authority is None:
+            normalized = _validated_incomplete_answer_claim_binding(
+                item,
+                coverage_ledger=coverage_ledger,
+                claim_requirement=claim_requirement,
+                source_inventory=source_inventory,
+                version_manifest=version_manifest,
+                authorization_binding=authorization_binding,
+            )
+        else:
+            normalized = _validated_answer_claim_binding(
+                item,
+                coverage_ledger=coverage_ledger,
+                claim_requirement=claim_requirement,
+                source_inventory=source_inventory,
+                version_manifest=version_manifest,
+                scope_authority=trusted_scope_authority,
+                authorization_binding=authorization_binding,
+            )
         return cls(
             answer_claim_id=_required_str(item, "answer_claim_id"),
             state=persisted_state,
@@ -3460,18 +3609,23 @@ class AnswerClaim:
             source_inventory=source_inventory,
             version_manifest=version_manifest,
             scope_authority=trusted_scope_authority,
+            _untrusted_scope_authority=(
+                parsed_scope_authority
+                if persisted_state == "INSUFFICIENT_COVERAGE" and trusted_scope_authority is None
+                else None
+            ),
             authorization_binding=authorization_binding,
+            _factory_token=_ANSWER_CLAIM_FACTORY_TOKEN,
         )
 
 
-def _validated_answer_claim_binding(
+def _validated_answer_claim_fields(
     values: Mapping[str, Any],
     *,
     coverage_ledger: CoverageLedger | None,
     claim_requirement: ClaimRequirement | None,
     source_inventory: SourceInventory | None,
     version_manifest: VersionManifest | None,
-    scope_authority: CoverageScopeAuthority | None,
     authorization_binding: CoverageAuthorizationBinding | None,
 ) -> dict[str, Any]:
     if not isinstance(coverage_ledger, CoverageLedger):
@@ -3482,11 +3636,6 @@ def _validated_answer_claim_binding(
         raise ContractValidationError("answer claim requires a typed SourceInventory")
     if not isinstance(version_manifest, VersionManifest):
         raise ContractValidationError("answer claim requires a typed VersionManifest")
-    if scope_authority is not None and not isinstance(
-        scope_authority,
-        CoverageScopeAuthority,
-    ):
-        raise ContractValidationError("answer claim scope authority must be typed")
     if authorization_binding is not None and not isinstance(
         authorization_binding,
         CoverageAuthorizationBinding,
@@ -3502,28 +3651,6 @@ def _validated_answer_claim_binding(
         raise ContractValidationError(
             "answer claim supplied authorization without a ledger binding"
         )
-    if coverage_ledger.scope_partition is not None:
-        if scope_authority is None and values.get("state") != "INSUFFICIENT_COVERAGE":
-            raise ContractValidationError(
-                "authoritative claims require the independent scope authority bound to coverage"
-            )
-        if (
-            scope_authority is not None
-            and scope_authority != coverage_ledger.scope_partition.scope_authority
-        ):
-            raise ContractValidationError("answer claim scope authority does not match coverage")
-    elif scope_authority is not None:
-        raise ContractValidationError(
-            "answer claim supplied scope authority without a scope partition"
-        )
-    if not coverage_ledger.binding_valid_for_claim(
-        source_inventory,
-        claim_requirement,
-        version_manifest,
-        authorization_binding,
-        scope_authority,
-    ):
-        raise ContractValidationError("answer claim coverage binding is not usable")
 
     derived = {
         "claim_requirement_id": claim_requirement.claim_requirement_id,
@@ -3539,6 +3666,75 @@ def _validated_answer_claim_binding(
         supplied_value = values.get(field_name)
         if supplied_value is not None and supplied_value != expected_value:
             raise ContractValidationError("answer claim binding fields do not match typed evidence")
+    return derived
+
+
+def _validated_answer_claim_binding(
+    values: Mapping[str, Any],
+    *,
+    coverage_ledger: CoverageLedger | None,
+    claim_requirement: ClaimRequirement | None,
+    source_inventory: SourceInventory | None,
+    version_manifest: VersionManifest | None,
+    scope_authority: CoverageScopeAuthority | None,
+    authorization_binding: CoverageAuthorizationBinding | None,
+) -> dict[str, Any]:
+    derived = _validated_answer_claim_fields(
+        values,
+        coverage_ledger=coverage_ledger,
+        claim_requirement=claim_requirement,
+        source_inventory=source_inventory,
+        version_manifest=version_manifest,
+        authorization_binding=authorization_binding,
+    )
+    if coverage_ledger is None:
+        raise ContractValidationError("answer claim requires a typed CoverageLedger")
+    if coverage_ledger.scope_partition is not None:
+        if scope_authority is None:
+            raise ContractValidationError(
+                "authoritative claims require the independent scope authority bound to coverage"
+            )
+        if scope_authority != coverage_ledger.scope_partition.scope_authority:
+            raise ContractValidationError("answer claim scope authority does not match coverage")
+    elif scope_authority is not None:
+        raise ContractValidationError(
+            "answer claim supplied scope authority without a scope partition"
+        )
+    if not coverage_ledger.binding_valid_for_claim(
+        source_inventory,
+        claim_requirement,
+        version_manifest,
+        authorization_binding,
+        scope_authority,
+    ):
+        raise ContractValidationError("answer claim coverage binding is not usable")
+    return derived
+
+
+def _validated_incomplete_answer_claim_binding(
+    values: Mapping[str, Any],
+    *,
+    coverage_ledger: CoverageLedger | None,
+    claim_requirement: ClaimRequirement | None,
+    source_inventory: SourceInventory | None,
+    version_manifest: VersionManifest | None,
+    authorization_binding: CoverageAuthorizationBinding | None,
+) -> dict[str, Any]:
+    derived = _validated_answer_claim_fields(
+        values,
+        coverage_ledger=coverage_ledger,
+        claim_requirement=claim_requirement,
+        source_inventory=source_inventory,
+        version_manifest=version_manifest,
+        authorization_binding=authorization_binding,
+    )
+    if not coverage_ledger._binding_valid_for_incomplete_claim(
+        source_inventory,
+        claim_requirement,
+        version_manifest,
+        authorization_binding,
+    ):
+        raise ContractValidationError("answer claim incomplete coverage binding is not valid")
     return derived
 
 
@@ -3561,6 +3757,8 @@ def _validate_answer_claim_state(
     if not isinstance(version_manifest, VersionManifest):
         raise ContractValidationError("answer claim state requires a typed VersionManifest")
     _choice(state, ANSWER_CLAIM_STATE_VALUES, "answer_claim.state")
+    if state == "INSUFFICIENT_COVERAGE":
+        return
     support_only = _support_only_completeness(claim_requirement)
     complete = coverage_ledger.usable_for_claim(
         source_inventory,
@@ -3569,8 +3767,6 @@ def _validate_answer_claim_state(
         authorization_binding,
         scope_authority,
     )
-    if state == "INSUFFICIENT_COVERAGE":
-        return
     if state == "FOUND":
         if complete:
             return

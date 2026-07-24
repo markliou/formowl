@@ -94,7 +94,7 @@ class PostgreSQLMailEvidenceStore:
         bundle: MailEvidenceBundle | dict[str, Any],
         *,
         transaction: PostgreSQLUnitOfWork | None = None,
-        scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
+        expected_scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
     ) -> list[SQLStatement]:
         """Persist one bundle atomically.
 
@@ -109,7 +109,7 @@ class PostgreSQLMailEvidenceStore:
             with PostgreSQLUnitOfWork(self.connection) as unit:
                 statements = self._upsert_bundle_in_transaction(
                     bundle,
-                    scope_authorities=scope_authorities,
+                    expected_scope_authorities=expected_scope_authorities,
                 )
                 unit.commit()
                 return statements
@@ -119,18 +119,18 @@ class PostgreSQLMailEvidenceStore:
             )
         return self._upsert_bundle_in_transaction(
             bundle,
-            scope_authorities=scope_authorities,
+            expected_scope_authorities=expected_scope_authorities,
         )
 
     def _upsert_bundle_in_transaction(
         self,
         bundle: MailEvidenceBundle | dict[str, Any],
         *,
-        scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
+        expected_scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
     ) -> list[SQLStatement]:
         validated = _validate_bundle(
             bundle,
-            scope_authorities=scope_authorities,
+            expected_scope_authorities=expected_scope_authorities,
         )
         statements = _statements_for_bundle(validated)
         for statement in statements:
@@ -142,7 +142,7 @@ class PostgreSQLMailEvidenceStore:
         *,
         mail_import_session_id: str | None = None,
         mail_evidence_bundle_id: str | None = None,
-        scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
+        expected_scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
     ) -> MailEvidenceBundle | None:
         if not mail_import_session_id and not mail_evidence_bundle_id:
             raise ContractValidationError(
@@ -441,8 +441,8 @@ class PostgreSQLMailEvidenceStore:
                         else None
                     ),
                     version_manifest=manifest_by_id.get(payload.get("version_manifest_id")),
-                    scope_authority=(
-                        (scope_authorities or {}).get(payload.get("coverage_ledger_id"))
+                    expected_scope_authority=(
+                        (expected_scope_authorities or {}).get(payload.get("coverage_ledger_id"))
                     ),
                     authorization_binding=(
                         ledger_by_id[payload["coverage_ledger_id"]].authorization_binding
@@ -521,7 +521,7 @@ class PostgreSQLMailEvidenceStore:
         )
         return MailEvidenceBundle.from_persistence_dict(
             bundle_payload,
-            scope_authorities=scope_authorities,
+            expected_scope_authorities=expected_scope_authorities,
         )
 
 
@@ -1340,7 +1340,7 @@ def _query_rows_by_ids(
 def _validate_bundle(
     bundle: MailEvidenceBundle | dict[str, Any],
     *,
-    scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
+    expected_scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
 ) -> MailEvidenceBundle:
     if isinstance(bundle, MailEvidenceBundle):
         payload = bundle.to_persistence_dict()
@@ -1350,7 +1350,7 @@ def _validate_bundle(
         raise ContractValidationError("mail evidence store requires a bundle")
     return MailEvidenceBundle.from_persistence_dict(
         payload,
-        scope_authorities=scope_authorities,
+        expected_scope_authorities=expected_scope_authorities,
     )
 
 

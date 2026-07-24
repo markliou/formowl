@@ -639,7 +639,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             source_inventory=source_inventory,
             version_manifest=manifest,
             authorization_binding=authorization,
-            scope_authority=scope_partition.scope_authority,
+            expected_scope_authority=scope_partition.scope_authority,
             claim_requirement_id=requirement.claim_requirement_id,
             coverage_ledger_id=ledger.coverage_ledger_id,
             evidence_snapshot_ids=("snapshot_wp1",),
@@ -698,11 +698,51 @@ class Issue51WP1ContractTests(unittest.TestCase):
             claim_requirement=requirement,
             source_inventory=source_inventory,
             version_manifest=manifest,
-            scope_authority=partition.scope_authority,
+            expected_scope_authority=partition.scope_authority,
             authorization_binding=authorization,
             evidence_snapshot_ids=(),
         )
         persisted = claim.to_persistence_dict()
+        parsed_authority = CoverageScopeAuthority.from_persistence_dict(
+            persisted["scope_authority"]
+        )
+        replayed_authority = CoverageScopeAuthority(
+            source_inventory_id=parsed_authority.source_inventory_id,
+            claim_requirement_id=parsed_authority.claim_requirement_id,
+            authorization_binding=parsed_authority.authorization_binding,
+            version_binding=parsed_authority.version_binding,
+            scope_policy=parsed_authority.scope_policy,
+            authorization_decisions=parsed_authority.authorization_decisions,
+            relevance_decisions=parsed_authority.relevance_decisions,
+            authority_id=parsed_authority.authority_id,
+        )
+        self.assertFalse(replayed_authority._is_trusted_for_authoritative_use)
+
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                state="FOUND",
+                reason_codes=("complete_scope",),
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                scope_authority=parsed_authority,
+                authorization_binding=authorization,
+                evidence_snapshot_ids=(),
+            )
+
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                state="FOUND",
+                reason_codes=("complete_scope",),
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                expected_scope_authority=replayed_authority,
+                authorization_binding=authorization,
+                evidence_snapshot_ids=(),
+            )
 
         with self.assertRaises(ContractValidationError):
             AnswerClaim.from_persistence_dict(
@@ -711,6 +751,28 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 claim_requirement=requirement,
                 source_inventory=source_inventory,
                 version_manifest=manifest,
+                authorization_binding=authorization,
+            )
+
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.from_persistence_dict(
+                persisted,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                scope_authority=parsed_authority,
+                authorization_binding=authorization,
+            )
+
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.from_persistence_dict(
+                persisted,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                expected_scope_authority=parsed_authority,
                 authorization_binding=authorization,
             )
 
@@ -740,7 +802,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 claim_requirement=requirement,
                 source_inventory=source_inventory,
                 version_manifest=manifest,
-                scope_authority=wrong_authority,
+                expected_scope_authority=wrong_authority,
                 authorization_binding=authorization,
             )
 
@@ -750,7 +812,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             claim_requirement=requirement,
             source_inventory=source_inventory,
             version_manifest=manifest,
-            scope_authority=partition.scope_authority,
+            expected_scope_authority=partition.scope_authority,
             authorization_binding=authorization,
         )
         self.assertEqual(restored.to_persistence_dict(), persisted)
@@ -762,9 +824,14 @@ class Issue51WP1ContractTests(unittest.TestCase):
         bundle_payload = bundle.to_persistence_dict()
         with self.assertRaises(ContractValidationError):
             MailEvidenceBundle.from_persistence_dict(bundle_payload)
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_persistence_dict(
+                bundle_payload,
+                expected_scope_authorities={ledger.coverage_ledger_id: parsed_authority},
+            )
         restored_bundle = MailEvidenceBundle.from_persistence_dict(
             bundle_payload,
-            scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
+            expected_scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
         )
         self.assertEqual(restored_bundle.to_persistence_dict(), bundle_payload)
 
@@ -774,16 +841,116 @@ class Issue51WP1ContractTests(unittest.TestCase):
         store = PostgreSQLMailEvidenceStore(connection)
         with self.assertRaises(ContractValidationError):
             store.upsert_bundle(bundle)
+        with self.assertRaises(ContractValidationError):
+            store.upsert_bundle(
+                bundle,
+                expected_scope_authorities={ledger.coverage_ledger_id: parsed_authority},
+            )
         store.upsert_bundle(
             bundle,
-            scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
+            expected_scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
         )
         restored_from_postgres = store.get_bundle(
             mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
-            scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
+            expected_scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
         )
         self.assertIsNotNone(restored_from_postgres)
         self.assertEqual(restored_from_postgres.to_persistence_dict(), bundle_payload)
+
+    def test_raw_answer_claim_constructor_cannot_self_certify_definitive_states(self) -> None:
+        from test_issue51_wp1_scope_partition import _complete_ledger, _fixture
+
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            partition,
+            proofs,
+        ) = _fixture()
+        ledger = _complete_ledger(
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            partition,
+            proofs,
+        )
+        for state in ("FOUND", "CONFLICT", "NOT_FOUND_WITHIN_COMPLETE_SCOPE"):
+            with self.subTest(state=state):
+                with self.assertRaises(ContractValidationError):
+                    AnswerClaim(
+                        state=state,
+                        reason_codes=("replayed_embedded_authority",),
+                        claim_requirement_id=requirement.claim_requirement_id,
+                        coverage_ledger_id=ledger.coverage_ledger_id,
+                        evidence_snapshot_ids=(),
+                        source_fingerprint=manifest.source_fingerprint,
+                        parser_fingerprint=manifest.parser_fingerprint,
+                        tokenizer_fingerprint=manifest.tokenizer_fingerprint,
+                        index_fingerprint=manifest.index_fingerprint,
+                        coverage_ledger=ledger,
+                        claim_requirement=requirement,
+                        source_inventory=source_inventory,
+                        version_manifest=manifest,
+                        scope_authority=partition.scope_authority,
+                        authorization_binding=authorization,
+                    )
+
+    def test_insufficient_persistence_preserves_embedded_authority_as_untrusted_data(self) -> None:
+        from test_issue51_wp1_scope_partition import _complete_ledger, _fixture
+
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            partition,
+            proofs,
+        ) = _fixture()
+        ledger = replace(
+            _complete_ledger(
+                source_inventory,
+                requirement,
+                manifest,
+                authorization,
+                partition,
+                proofs,
+            ),
+            complete_authorized_scope=False,
+            coverage_ledger_id="",
+        )
+        claim = AnswerClaim.create(
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            authorization_binding=authorization,
+            evidence_snapshot_ids=(),
+        )
+        persisted = claim.to_persistence_dict()
+        persisted["scope_authority"] = partition.scope_authority.to_persistence_dict()
+
+        restored = AnswerClaim.from_persistence_dict(
+            persisted,
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            authorization_binding=authorization,
+        )
+        self.assertEqual(restored.to_persistence_dict(), persisted)
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.from_persistence_dict(
+                {**persisted, "state": "FOUND"},
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                authorization_binding=authorization,
+            )
 
     def test_direct_claim_paths_require_external_scope_authority(self) -> None:
         from test_issue51_wp1_scope_partition import _complete_ledger, _fixture

@@ -346,7 +346,7 @@ class CoverageScopePartitionTests(unittest.TestCase):
             claim_requirement=requirement,
             source_inventory=inventory,
             version_manifest=manifest,
-            scope_authority=partition.scope_authority,
+            expected_scope_authority=partition.scope_authority,
             authorization_binding=authorization,
             evidence_snapshot_ids=(),
         )
