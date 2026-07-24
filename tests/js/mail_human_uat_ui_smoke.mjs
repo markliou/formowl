@@ -429,7 +429,7 @@ async function runChatSmoke() {
           citation: null,
         },
       ],
-      notice: "內容優先",
+      notice: "答案優先；來源內容可按需查看。",
       orchestration: {
         action: "render_prior_evidence",
         formowl_tool_called: false,
@@ -438,6 +438,27 @@ async function runChatSmoke() {
     },
     tableHolder,
   );
+  assert.equal(tableHolder.children[0].className, "assistant-text");
+  assert.equal(tableHolder.children[1].className, "sources-disclosure");
+  assert.match(textTree(tableHolder), /以下是來源證據的整理結果/u);
+  assert.match(textTree(tableHolder), /查看來源（2）/u);
+  assert.doesNotMatch(textTree(tableHolder), /最重要的來源內容/u);
+  assert.equal(tagTree(tableHolder, "table").length, 0);
+  assert.equal(tagTree(tableHolder, "tr").length, 0);
+  const tableDisclosure = tableHolder.children.find(
+    (child) => child.className === "sources-disclosure",
+  );
+  const tablePanel = tableHolder.children.find(
+    (child) => child.className === "sources-panel",
+  );
+  assert.ok(tableDisclosure);
+  assert.ok(tablePanel);
+  assert.equal(tableDisclosure.attributes.get("aria-expanded"), "false");
+  assert.equal(tablePanel.hidden, true);
+
+  await tableDisclosure.dispatch("click");
+  assert.equal(tableDisclosure.attributes.get("aria-expanded"), "true");
+  assert.equal(tablePanel.hidden, false);
   assert.match(textTree(tableHolder), /共找到 12 筆/u);
   assert.match(textTree(tableHolder), /目前顯示 2 筆/u);
   assert.equal(tagTree(tableHolder, "table").length, 1);
@@ -469,6 +490,13 @@ async function runChatSmoke() {
     textTree(tableHolder),
     /mailcitation_table|obs_table_internal|private\.sender@example\.com|private\.recipient@example\.com|\/srv\/formowl\/private\/mail|do-not-render/u,
   );
+  const renderedTable = tagTree(tableHolder, "table")[0];
+  await tableDisclosure.dispatch("click");
+  assert.equal(tablePanel.hidden, true);
+  await tableDisclosure.dispatch("click");
+  assert.equal(tablePanel.hidden, false);
+  assert.equal(tagTree(tableHolder, "table").length, 1);
+  assert.equal(tagTree(tableHolder, "table")[0], renderedTable);
 
   const narrativeHolder = new FakeElement("div");
   context.renderAssistantResult(
@@ -489,7 +517,7 @@ async function runChatSmoke() {
           },
         },
       ],
-      notice: "內容優先",
+      notice: "答案優先；來源內容可按需查看。",
       orchestration: {
         action: "call_formowl_tool",
         formowl_tool_called: true,
@@ -498,6 +526,16 @@ async function runChatSmoke() {
     },
     narrativeHolder,
   );
+  assert.equal(tagTree(narrativeHolder, "article").length, 0);
+  assert.equal(narrativeHolder.children[0].className, "assistant-text");
+  assert.equal(narrativeHolder.children[1].className, "sources-disclosure");
+  assert.match(textTree(narrativeHolder), /以下是來源內容/u);
+  assert.match(textTree(narrativeHolder), /查看來源（1）/u);
+  const narrativeDisclosure = narrativeHolder.children.find(
+    (child) => child.className === "sources-disclosure",
+  );
+  assert.ok(narrativeDisclosure);
+  await narrativeDisclosure.dispatch("click");
   const evidenceCard = tagTree(narrativeHolder, "article")[0];
   assert.equal(evidenceCard.children[0].tagName, "p");
   assert.match(textTree(evidenceCard.children[0]), /1 內容先出現/u);
@@ -508,6 +546,27 @@ async function runChatSmoke() {
     textTree(narrativeHolder),
     /mailcitation_narrative|obs_narrative_internal|sender@example\.com|\/private\/mail/u,
   );
+
+  const emptyResultHolder = new FakeElement("div");
+  context.renderAssistantResult(
+    {
+      query_id: "uatquery_444444444444444444444444",
+      assistant_text: "沒有找到符合條件的來源。",
+      results: [],
+      orchestration: {
+        action: "call_formowl_tool",
+        formowl_tool_called: true,
+      },
+    },
+    emptyResultHolder,
+  );
+  assert.equal(
+    emptyResultHolder.children.some(
+      (child) => child.className === "sources-disclosure",
+    ),
+    false,
+  );
+  assert.match(textTree(emptyResultHolder), /沒有找到符合條件的來源/u);
 
   requests.length = 0;
   await elements.get("sidebar-toggle").dispatch("click");

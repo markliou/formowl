@@ -833,7 +833,7 @@ class MailHumanUatService:
             "displayed_result_count": len(displayed_results),
             "results": displayed_results,
             "warnings": sorted(set(warnings)),
-            "notice": "以下先呈現來源內容；主旨與時間僅作為次要脈絡。",
+            "notice": "答案優先；來源內容可按需查看。",
             "task_frame": {
                 "task_frame_id": task_frame.task_frame_id,
                 "revision": task_frame.revision,
@@ -2185,6 +2185,17 @@ _CHAT_UAT_HTML = """<!doctype html>
     .assistant-text {
       min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
     }
+    .sources-disclosure {
+      display: inline-flex; align-items: center; gap: 6px; margin-top: 14px;
+      padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px;
+      background: #fff; color: var(--muted); font-size: 13px;
+    }
+    .sources-disclosure:hover {
+      background: var(--soft); color: var(--ink);
+    }
+    .sources-disclosure[aria-expanded="true"] { color: var(--ink); }
+    .sources-panel { margin-top: 12px; }
+    .sources-panel[hidden] { display: none; }
     .evidence-list { display: grid; gap: 10px; margin-top: 16px; }
     .evidence {
       border: 1px solid var(--line); border-radius: 14px; padding: 14px 15px;
@@ -2770,121 +2781,152 @@ _CHAT_UAT_HTML = """<!doctype html>
       const displayedCount = Number.isInteger(payload.displayed_result_count)
         ? payload.displayed_result_count
         : results.length;
-      const title = document.createElement("div");
-      title.className = "assistant-title";
-      title.textContent =
-        `共找到 ${totalCount} 筆相關來源內容，目前顯示 ${displayedCount} 筆。`;
-      holder.appendChild(title);
+      const sourceCount = results.length;
+      const sourcesToggle = document.createElement("button");
+      sourcesToggle.type = "button";
+      sourcesToggle.className = "sources-disclosure";
+      sourcesToggle.setAttribute("aria-expanded", "false");
+      sourcesToggle.textContent = `查看來源（${sourceCount}）`;
+      const sourcesPanel = document.createElement("div");
+      sourcesPanel.className = "sources-panel";
+      sourcesPanel.hidden = true;
+      let sourcesExpanded = false;
+      let sourcesRendered = false;
 
-      if (payload.notice) {
+      const renderSources = () => {
+        if (sourcesRendered) return;
+        const title = document.createElement("div");
+        title.className = "assistant-title";
+        title.textContent =
+          `共找到 ${totalCount} 筆相關來源內容，目前顯示 ${displayedCount} 筆。`;
+        sourcesPanel.appendChild(title);
+
         const explanation = document.createElement("div");
         explanation.className = "assistant-text";
-        explanation.textContent = payload.notice;
-        holder.appendChild(explanation);
-      }
+        explanation.textContent = "答案優先；來源內容可按需查看。";
+        sourcesPanel.appendChild(explanation);
 
-      if (payload.projection && payload.projection.output_format === "table") {
-        const tableWrap = document.createElement("div");
-        tableWrap.className = "evidence-table-wrap";
-        const table = document.createElement("table");
-        table.className = "evidence-table";
-        const head = document.createElement("thead");
-        const headRow = document.createElement("tr");
-        for (const label of ["順序", "內容", "主旨", "時間"]) {
-          const cell = document.createElement("th");
-          cell.setAttribute("scope", "col");
-          cell.textContent = label;
-          headRow.appendChild(cell);
-        }
-        head.appendChild(headRow);
-        const body = document.createElement("tbody");
-        for (const [index, item] of results.entries()) {
-          const row = document.createElement("tr");
-          const order = document.createElement("td");
-          order.setAttribute("data-label", "順序");
-          order.textContent = String(index + 1);
-          const content = document.createElement("td");
-          content.setAttribute("data-label", "內容");
-          content.textContent = typeof item.snippet === "string" ? item.snippet : "";
-          if (Array.isArray(item.supporting_evidence)) {
-            const supportList = document.createElement("ul");
-            supportList.className = "supporting-list";
-            for (const support of item.supporting_evidence) {
-              const supportItem = document.createElement("li");
-              const supportSnippet = support && typeof support.snippet === "string"
-                ? support.snippet
-                : "";
-              supportItem.textContent = `同一來源的補充內容：${supportSnippet}`;
-              supportList.appendChild(supportItem);
+        if (payload.projection && payload.projection.output_format === "table") {
+          const tableWrap = document.createElement("div");
+          tableWrap.className = "evidence-table-wrap";
+          const table = document.createElement("table");
+          table.className = "evidence-table";
+          const head = document.createElement("thead");
+          const headRow = document.createElement("tr");
+          for (const label of ["順序", "內容", "主旨", "時間"]) {
+            const cell = document.createElement("th");
+            cell.setAttribute("scope", "col");
+            cell.textContent = label;
+            headRow.appendChild(cell);
+          }
+          head.appendChild(headRow);
+          const body = document.createElement("tbody");
+          for (const [index, item] of results.entries()) {
+            const row = document.createElement("tr");
+            const order = document.createElement("td");
+            order.setAttribute("data-label", "順序");
+            order.textContent = String(index + 1);
+            const content = document.createElement("td");
+            content.setAttribute("data-label", "內容");
+            content.textContent = typeof item.snippet === "string" ? item.snippet : "";
+            if (Array.isArray(item.supporting_evidence)) {
+              const supportList = document.createElement("ul");
+              supportList.className = "supporting-list";
+              for (const support of item.supporting_evidence) {
+                const supportItem = document.createElement("li");
+                const supportSnippet = support && typeof support.snippet === "string"
+                  ? support.snippet
+                  : "";
+                supportItem.textContent = `同一來源的補充內容：${supportSnippet}`;
+                supportList.appendChild(supportItem);
+              }
+              content.appendChild(supportList);
             }
-            content.appendChild(supportList);
-          }
-          const subject = document.createElement("td");
-          subject.setAttribute("data-label", "主旨");
-          subject.textContent = typeof item.subject === "string" ? item.subject : "（無主旨）";
-          if (item.source_kind === "uploaded_uat") {
-            const badge = document.createElement("span");
-            badge.className = "badge";
-            badge.textContent = "測試上傳";
-            subject.appendChild(badge);
-          }
-          const time = document.createElement("td");
-          time.setAttribute("data-label", "時間");
-          time.textContent = formatEvidenceTime(item.sent_at);
-          row.append(order, content, subject, time);
-          body.appendChild(row);
-        }
-        table.append(head, body);
-        tableWrap.appendChild(table);
-        holder.appendChild(tableWrap);
-      } else {
-        const list = document.createElement("div");
-        list.className = "evidence-list";
-        for (const [index, item] of results.entries()) {
-          const card = document.createElement("article");
-          card.className = "evidence";
-          const snippet = document.createElement("p");
-          snippet.className = "evidence-content";
-          const order = document.createElement("span");
-          order.className = "source-order";
-          order.textContent = String(index + 1);
-          const contentText = document.createElement("span");
-          contentText.textContent = typeof item.snippet === "string" ? item.snippet : "";
-          snippet.append(order, contentText);
-          const subject = document.createElement("h3");
-          const subjectLabel = document.createElement("span");
-          subjectLabel.className = "metadata-label";
-          subjectLabel.textContent = "主旨：";
-          const subjectText = document.createElement("span");
-          subjectText.textContent = typeof item.subject === "string"
-            ? item.subject
-            : "（無主旨）";
-          subject.append(subjectLabel, subjectText);
-          if (item.source_kind === "uploaded_uat") {
-            const badge = document.createElement("span");
-            badge.className = "badge";
-            badge.textContent = "測試上傳";
-            subject.appendChild(badge);
-          }
-          const meta = document.createElement("div");
-          meta.className = "evidence-meta";
-          meta.textContent = `郵件時間：${formatEvidenceTime(item.sent_at)}`;
-          card.append(snippet, subject, meta);
-          if (Array.isArray(item.supporting_evidence)) {
-            for (const support of item.supporting_evidence) {
-              const supportText = document.createElement("p");
-              supportText.className = "supporting-content";
-              const supportSnippet = support && typeof support.snippet === "string"
-                ? support.snippet
-                : "";
-              supportText.textContent = `同一來源的補充內容：${supportSnippet}`;
-              card.appendChild(supportText);
+            const subject = document.createElement("td");
+            subject.setAttribute("data-label", "主旨");
+            subject.textContent =
+              typeof item.subject === "string" ? item.subject : "（無主旨）";
+            if (item.source_kind === "uploaded_uat") {
+              const badge = document.createElement("span");
+              badge.className = "badge";
+              badge.textContent = "測試上傳";
+              subject.appendChild(badge);
             }
+            const time = document.createElement("td");
+            time.setAttribute("data-label", "時間");
+            time.textContent = formatEvidenceTime(item.sent_at);
+            row.append(order, content, subject, time);
+            body.appendChild(row);
           }
-          list.appendChild(card);
+          table.append(head, body);
+          tableWrap.appendChild(table);
+          sourcesPanel.appendChild(tableWrap);
+        } else {
+          const list = document.createElement("div");
+          list.className = "evidence-list";
+          for (const [index, item] of results.entries()) {
+            const card = document.createElement("article");
+            card.className = "evidence";
+            const snippet = document.createElement("p");
+            snippet.className = "evidence-content";
+            const order = document.createElement("span");
+            order.className = "source-order";
+            order.textContent = String(index + 1);
+            const contentText = document.createElement("span");
+            contentText.textContent =
+              typeof item.snippet === "string" ? item.snippet : "";
+            snippet.append(order, contentText);
+            const subject = document.createElement("h3");
+            const subjectLabel = document.createElement("span");
+            subjectLabel.className = "metadata-label";
+            subjectLabel.textContent = "主旨：";
+            const subjectText = document.createElement("span");
+            subjectText.textContent = typeof item.subject === "string"
+              ? item.subject
+              : "（無主旨）";
+            subject.append(subjectLabel, subjectText);
+            if (item.source_kind === "uploaded_uat") {
+              const badge = document.createElement("span");
+              badge.className = "badge";
+              badge.textContent = "測試上傳";
+              subject.appendChild(badge);
+            }
+            const meta = document.createElement("div");
+            meta.className = "evidence-meta";
+            meta.textContent = `郵件時間：${formatEvidenceTime(item.sent_at)}`;
+            card.append(snippet, subject, meta);
+            if (Array.isArray(item.supporting_evidence)) {
+              for (const support of item.supporting_evidence) {
+                const supportText = document.createElement("p");
+                supportText.className = "supporting-content";
+                const supportSnippet = support && typeof support.snippet === "string"
+                  ? support.snippet
+                  : "";
+                supportText.textContent = `同一來源的補充內容：${supportSnippet}`;
+                card.appendChild(supportText);
+              }
+            }
+            list.appendChild(card);
+          }
+          sourcesPanel.appendChild(list);
         }
-        holder.appendChild(list);
-      }
+        sourcesRendered = true;
+      };
+
+      sourcesToggle.addEventListener("click", () => {
+        sourcesExpanded = !sourcesExpanded;
+        if (sourcesExpanded) {
+          renderSources();
+          sourcesPanel.hidden = false;
+          sourcesToggle.setAttribute("aria-expanded", "true");
+          sourcesToggle.textContent = `收合來源（${sourceCount}）`;
+        } else {
+          sourcesPanel.hidden = true;
+          sourcesToggle.setAttribute("aria-expanded", "false");
+          sourcesToggle.textContent = `查看來源（${sourceCount}）`;
+        }
+      });
+      holder.append(sourcesToggle, sourcesPanel);
       addFeedbackControls(holder, payload.query_id);
       scrollToLatest();
     }

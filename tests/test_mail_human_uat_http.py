@@ -128,6 +128,16 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertNotIn("limit: 50", html)
         self.assertNotIn('api("/api/query"', html)
         self.assertIn('className = "evidence-table"', html)
+        self.assertIn('className = "sources-disclosure"', html)
+        self.assertIn('className = "sources-panel"', html)
+        self.assertIn("sources-panel[hidden]", html)
+        self.assertIn("let sourcesRendered = false;", html)
+        self.assertIn("if (sourcesRendered) return;", html)
+        self.assertLess(
+            html.index("answer.textContent = payload.assistant_text;"),
+            html.index('sourcesToggle.className = "sources-disclosure";'),
+        )
+        self.assertNotIn("以下先呈現來源內容", html)
         self.assertIn('["順序", "內容", "主旨", "時間"]', html)
         self.assertIn('cell.setAttribute("scope", "col")', html)
         self.assertIn('order.setAttribute("data-label", "順序")', html)
@@ -1605,6 +1615,7 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertIn("PO470002002", payload["results"][0]["snippet"])
         self.assertEqual(payload["results"][0]["sent_at"], "2026-06-14T08:00:00+00:00")
         self.assertTrue(payload["results"][0]["citation"]["citation_id"])
+        self.assertEqual(payload["notice"], "答案優先；來源內容可按需查看。")
         self.assertTrue(payload["claim_boundary"]["chatgpt_bypassed"])
         self.assertTrue(payload["claim_boundary"]["read_only_mail_evidence"])
         self.assertFalse(payload["claim_boundary"]["project_or_wiki_write_performed"])
