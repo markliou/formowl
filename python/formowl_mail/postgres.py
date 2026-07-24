@@ -3,7 +3,18 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Protocol, Sequence
 
-from formowl_contract import ContractValidationError, Grant, sha256_json, to_plain
+from formowl_contract import (
+    AnswerClaim,
+    ClaimRequirement,
+    ContractValidationError,
+    CoverageLedger,
+    Grant,
+    SourceInventoryItem,
+    StructuralObservation,
+    VersionManifest,
+    sha256_json,
+    to_plain,
+)
 from formowl_graph.storage import SQLStatement
 
 from ._guards import safe_public_string
@@ -38,7 +49,14 @@ _TABLE_NAMES = (
     "embedded_message_relation",
     "mail_parse_run",
     "mail_parse_warning",
+    "source_inventory_item",
+    "structural_observation",
+    "claim_requirement",
+    "coverage_ledger",
+    "answer_claim",
+    "version_manifest",
 )
+_PHASE1_TABLE_NAMES = _TABLE_NAMES[:12]
 
 
 class PostgreSQLMailEvidenceConnection(Protocol):
@@ -178,6 +196,60 @@ class PostgreSQLMailEvidenceStore:
             ),
             "mail_parse_warning_id",
         )
+        source_inventory = _sort_records(
+            _query_import_rows(
+                self.connection,
+                table_name="source_inventory_item",
+                mail_import_session_id=import_session_id,
+                factory=SourceInventoryItem.from_dict,
+            ),
+            "source_inventory_item_id",
+        )
+        structural_observations = _sort_records(
+            _query_import_rows(
+                self.connection,
+                table_name="structural_observation",
+                mail_import_session_id=import_session_id,
+                factory=StructuralObservation.from_dict,
+            ),
+            "structural_observation_id",
+        )
+        claim_requirements = _sort_records(
+            _query_import_rows(
+                self.connection,
+                table_name="claim_requirement",
+                mail_import_session_id=import_session_id,
+                factory=ClaimRequirement.from_dict,
+            ),
+            "claim_requirement_id",
+        )
+        coverage_ledgers = _sort_records(
+            _query_import_rows(
+                self.connection,
+                table_name="coverage_ledger",
+                mail_import_session_id=import_session_id,
+                factory=CoverageLedger.from_dict,
+            ),
+            "coverage_ledger_id",
+        )
+        answer_claims = _sort_records(
+            _query_import_rows(
+                self.connection,
+                table_name="answer_claim",
+                mail_import_session_id=import_session_id,
+                factory=AnswerClaim.from_dict,
+            ),
+            "answer_claim_id",
+        )
+        version_manifests = _sort_records(
+            _query_import_rows(
+                self.connection,
+                table_name="version_manifest",
+                mail_import_session_id=import_session_id,
+                factory=VersionManifest.from_dict,
+            ),
+            "version_manifest_id",
+        )
         if not parse_runs:
             raise ContractValidationError("mail evidence store row set is missing mail_parse_run")
 
@@ -227,6 +299,12 @@ class PostgreSQLMailEvidenceStore:
                 "mail_parse_run": parse_runs[0].to_dict(),
                 "parse_warnings": [item.to_dict() for item in parse_warnings],
                 "created_at": _safe_row_str(session_row, "bundle_created_at"),
+                "source_inventory": [item.to_dict() for item in source_inventory],
+                "structural_observations": [item.to_dict() for item in structural_observations],
+                "claim_requirements": [item.to_dict() for item in claim_requirements],
+                "coverage_ledgers": [item.to_dict() for item in coverage_ledgers],
+                "answer_claims": [item.to_dict() for item in answer_claims],
+                "version_manifests": [item.to_dict() for item in version_manifests],
             }
         )
 
@@ -273,8 +351,22 @@ def postgre_sql_mail_evidence_store_interfaces() -> tuple[str, ...]:
     )
 
 
-def mail_evidence_postgre_sql_tables() -> tuple[str, ...]:
-    return _TABLE_NAMES
+def mail_evidence_postgre_sql_tables(
+    *,
+    include_evidence_coverage: bool = False,
+) -> tuple[str, ...]:
+    """Return the legacy table manifest, with WP1 tables opt-in.
+
+    The no-argument form remains compatible with existing Phase 1 adapters.
+    New callers that need the complete normalized mail plus coverage schema
+    pass ``include_evidence_coverage=True``.
+    """
+
+    return _TABLE_NAMES if include_evidence_coverage else _PHASE1_TABLE_NAMES
+
+
+def evidence_coverage_postgre_sql_tables() -> tuple[str, ...]:
+    return _TABLE_NAMES[12:]
 
 
 def mail_evidence_query_indexes() -> tuple[str, ...]:
@@ -292,6 +384,12 @@ def mail_evidence_query_indexes() -> tuple[str, ...]:
         "idx_embedded_message_relation_import",
         "idx_mail_parse_run_import",
         "idx_mail_parse_warning_import",
+        "idx_source_inventory_item_import",
+        "idx_structural_observation_import",
+        "idx_claim_requirement_query",
+        "idx_coverage_ledger_query",
+        "idx_answer_claim_ledger",
+        "idx_version_manifest_import",
     )
 
 
@@ -431,6 +529,81 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
             extra_parameters={"mail_parse_run_id": item.mail_parse_run_id},
         )
         for item in bundle.parse_warnings
+    )
+    statements.extend(
+        _import_scoped_statement(
+            table_name="source_inventory_item",
+            id_field="source_inventory_item_id",
+            record=item,
+            mail_import_session_id=import_session_id,
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+        )
+        for item in bundle.source_inventory
+    )
+    statements.extend(
+        _import_scoped_statement(
+            table_name="structural_observation",
+            id_field="structural_observation_id",
+            record=item,
+            mail_import_session_id=import_session_id,
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+        )
+        for item in bundle.structural_observations
+    )
+    statements.extend(
+        _import_scoped_statement(
+            table_name="claim_requirement",
+            id_field="claim_requirement_id",
+            record=item,
+            mail_import_session_id=import_session_id,
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+            extra_parameters={"query_id": item.query_id},
+        )
+        for item in bundle.claim_requirements
+    )
+    statements.extend(
+        _import_scoped_statement(
+            table_name="coverage_ledger",
+            id_field="coverage_ledger_id",
+            record=item,
+            mail_import_session_id=import_session_id,
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+            extra_parameters={
+                "query_id": item.query_id,
+                "claim_requirement_id": item.claim_requirement_id,
+            },
+        )
+        for item in bundle.coverage_ledgers
+    )
+    statements.extend(
+        _import_scoped_statement(
+            table_name="answer_claim",
+            id_field="answer_claim_id",
+            record=item,
+            mail_import_session_id=import_session_id,
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+            extra_parameters={
+                "claim_requirement_id": item.claim_requirement_id,
+                "coverage_ledger_id": item.coverage_ledger_id,
+            },
+        )
+        for item in bundle.answer_claims
+    )
+    statements.extend(
+        _import_scoped_statement(
+            table_name="version_manifest",
+            id_field="version_manifest_id",
+            record=item,
+            mail_import_session_id=import_session_id,
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+        )
+        for item in bundle.version_manifests
     )
     return statements
 
@@ -724,6 +897,7 @@ __all__ = [
     "PostgreSQLMailEvidenceConnection",
     "PostgreSQLMailEvidenceStore",
     "build_postgre_sql_mail_evidence_query_handler",
+    "evidence_coverage_postgre_sql_tables",
     "mail_evidence_postgre_sql_tables",
     "mail_evidence_query_indexes",
     "postgre_sql_mail_evidence_store_interfaces",

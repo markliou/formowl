@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass
 from typing import Any, Mapping, Sequence
 
 from formowl_contract import (
+    AnswerClaim,
+    ClaimRequirement,
     ContractValidationError,
+    CoverageLedger,
     Observation,
+    SourceInventoryItem,
+    StructuralObservation,
+    VersionManifest,
     now_iso,
     sha256_json,
     stable_resource_contract_id,
@@ -470,6 +476,12 @@ class MailEvidenceBundle:
     mail_parse_run: MailParseRun
     parse_warnings: list[MailParseWarning] = field(default_factory=list)
     created_at: str = field(default_factory=now_iso)
+    source_inventory: list[SourceInventoryItem] = field(default_factory=list)
+    structural_observations: list[StructuralObservation] = field(default_factory=list)
+    claim_requirements: list[ClaimRequirement] = field(default_factory=list)
+    coverage_ledgers: list[CoverageLedger] = field(default_factory=list)
+    answer_claims: list[AnswerClaim] = field(default_factory=list)
+    version_manifests: list[VersionManifest] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return _private_payload(self)
@@ -519,6 +531,42 @@ class MailEvidenceBundle:
                 required=False,
             ),
             created_at=_required_str(item, "created_at"),
+            source_inventory=_record_list(
+                item,
+                "source_inventory",
+                SourceInventoryItem,
+                required=False,
+            ),
+            structural_observations=_record_list(
+                item,
+                "structural_observations",
+                StructuralObservation,
+                required=False,
+            ),
+            claim_requirements=_record_list(
+                item,
+                "claim_requirements",
+                ClaimRequirement,
+                required=False,
+            ),
+            coverage_ledgers=_record_list(
+                item,
+                "coverage_ledgers",
+                CoverageLedger,
+                required=False,
+            ),
+            answer_claims=_record_list(
+                item,
+                "answer_claims",
+                AnswerClaim,
+                required=False,
+            ),
+            version_manifests=_record_list(
+                item,
+                "version_manifests",
+                VersionManifest,
+                required=False,
+            ),
         )
         bundle.to_dict()
         return bundle
@@ -1135,6 +1183,18 @@ def _assert_private_mail_bundle_envelope_safe(value: Mapping[str, Any]) -> None:
     safe_view = dict(value)
     body_segments = value.get("body_segments")
     safe_view["body_segments"] = []
+    # WP1 contract records validate their own public wire fields.  Keep the
+    # legacy mail-envelope guard focused on the phase-1 mail payload so
+    # approved ``tokenizer_*`` version fields are not mistaken for secrets.
+    for field_name in (
+        "source_inventory",
+        "structural_observations",
+        "claim_requirements",
+        "coverage_ledgers",
+        "answer_claims",
+        "version_manifests",
+    ):
+        safe_view.pop(field_name, None)
     assert_authorized_evidence_payload_safe(
         safe_view,
         "mail_evidence_bundle.private_envelope",
@@ -1152,10 +1212,22 @@ def _public_payload(value: Any, context: str) -> dict[str, Any]:
 
 
 def _private_payload(value: Any) -> dict[str, Any]:
-    payload = to_plain(value)
+    payload = _private_plain(value)
     if not isinstance(payload, dict):
         raise ContractValidationError("private mail evidence payload must be an object")
     return payload
+
+
+def _private_plain(value: Any) -> Any:
+    if is_dataclass(value):
+        return {
+            key: _private_plain(item) for key, item in value.__dict__.items() if item is not None
+        }
+    if isinstance(value, Mapping):
+        return {str(key): _private_plain(item) for key, item in value.items() if item is not None}
+    if isinstance(value, (list, tuple)):
+        return [_private_plain(item) for item in value]
+    return value
 
 
 def _require_dict(value: Any, context: str) -> dict[str, Any]:
