@@ -12,10 +12,14 @@ from formowl_contract import (
     ClaimRequirement,
     ContractValidationError,
     CoverageAuthorizationBinding,
+    CoverageItemAuthorizationDecision,
+    CoverageItemRelevanceDecision,
     CoverageLedger,
     CoverageObservationPartition,
     CoverageProofRecord,
     CoverageScopePartition,
+    CoverageScopeAuthority,
+    CoverageScopePolicyBinding,
     CoverageVersionBinding,
     DisplayPagination,
     EXCLUSION_REASON_CODE_VALUES,
@@ -47,6 +51,7 @@ from formowl_mail.postgres import (
 
 FP = "sha256:" + "a" * 64
 FP2 = "sha256:" + "b" * 64
+SCOPE_POLICY_FP = "sha256:" + "c" * 64
 _WP1_FAMILY_FIELDS_FOR_TESTS = (
     "source_inventory",
     "source_inventory_items",
@@ -570,14 +575,37 @@ class Issue51WP1ContractTests(unittest.TestCase):
             proof_kind="structural",
             structural_observation_ids=(observation.source_observation_id,),
         )
-        scope_partition = CoverageScopePartition.create(
+        scope_policy = CoverageScopePolicyBinding(
+            scope_policy_id="scope-policy-wp1",
+            scope_policy_version="1",
+            scope_policy_fingerprint=SCOPE_POLICY_FP,
+        )
+        authorization_decisions = (
+            CoverageItemAuthorizationDecision.create(
+                source_inventory_item=item,
+                authorization_binding=authorization,
+                decision_state="authorized",
+            ),
+        )
+        relevance_decisions = (
+            CoverageItemRelevanceDecision.create(
+                source_inventory_item=item,
+                claim_requirement=requirement,
+                scope_policy=scope_policy,
+                decision_state="relevant",
+            ),
+        )
+        scope_authority = CoverageScopeAuthority.create(
             source_inventory=source_inventory,
             claim_requirement=requirement,
             authorization_binding=authorization,
             version_manifest=manifest,
-            authorized_relevant_item_ids=(item.source_inventory_item_id,),
-            authorized_irrelevant_item_ids=(),
-            ineligible_item_ids=(),
+            scope_policy=scope_policy,
+            authorization_decisions=authorization_decisions,
+            relevance_decisions=relevance_decisions,
+        )
+        scope_partition = CoverageScopePartition.create(
+            scope_authority=scope_authority,
             observation_partitions=(
                 CoverageObservationPartition(
                     inventory_item_id=item.source_inventory_item_id,
@@ -611,6 +639,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             source_inventory=source_inventory,
             version_manifest=manifest,
             authorization_binding=authorization,
+            scope_authority=scope_partition.scope_authority,
             claim_requirement_id=requirement.claim_requirement_id,
             coverage_ledger_id=ledger.coverage_ledger_id,
             evidence_snapshot_ids=("snapshot_wp1",),
@@ -641,6 +670,181 @@ class Issue51WP1ContractTests(unittest.TestCase):
         self.assertTrue(ledger.claim_scope_complete)
         self.assertTrue(
             ledger.usable_for_claim(source_inventory, requirement, manifest, authorization)
+        )
+
+    def test_persisted_authoritative_claim_requires_external_scope_authority(self) -> None:
+        from test_issue51_wp1_scope_partition import _complete_ledger, _fixture
+
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            partition,
+            proofs,
+        ) = _fixture()
+        ledger = _complete_ledger(
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            partition,
+            proofs,
+        )
+        claim = AnswerClaim.create(
+            state="FOUND",
+            reason_codes=("complete_scope",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            scope_authority=partition.scope_authority,
+            authorization_binding=authorization,
+            evidence_snapshot_ids=(),
+        )
+        persisted = claim.to_persistence_dict()
+
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.from_persistence_dict(
+                persisted,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                authorization_binding=authorization,
+            )
+
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.from_persistence_dict(
+                {key: value for key, value in persisted.items() if key != "scope_authority"},
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                expected_scope_authority=partition.scope_authority,
+                authorization_binding=authorization,
+            )
+
+        wrong_authority = replace(
+            partition.scope_authority,
+            scope_policy=replace(
+                partition.scope_authority.scope_policy,
+                scope_policy_id="scope-policy-other",
+            ),
+            authority_id="",
+        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.from_persistence_dict(
+                persisted,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                scope_authority=wrong_authority,
+                authorization_binding=authorization,
+            )
+
+        restored = AnswerClaim.from_persistence_dict(
+            persisted,
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            scope_authority=partition.scope_authority,
+            authorization_binding=authorization,
+        )
+        self.assertEqual(restored.to_persistence_dict(), persisted)
+
+        from test_issue51_wp1_scope_partition import _bundle_with_ledger
+
+        bundle = _bundle_with_ledger(source_inventory, requirement, manifest, ledger)
+        bundle = replace(bundle, answer_claims=[claim])
+        bundle_payload = bundle.to_persistence_dict()
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_persistence_dict(bundle_payload)
+        restored_bundle = MailEvidenceBundle.from_persistence_dict(
+            bundle_payload,
+            scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
+        )
+        self.assertEqual(restored_bundle.to_persistence_dict(), bundle_payload)
+
+        from test_mail_evidence_postgres import _RecordingMailConnection
+
+        connection = _RecordingMailConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+        with self.assertRaises(ContractValidationError):
+            store.upsert_bundle(bundle)
+        store.upsert_bundle(
+            bundle,
+            scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
+        )
+        restored_from_postgres = store.get_bundle(
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
+        )
+        self.assertIsNotNone(restored_from_postgres)
+        self.assertEqual(restored_from_postgres.to_persistence_dict(), bundle_payload)
+
+    def test_direct_claim_paths_require_external_scope_authority(self) -> None:
+        from test_issue51_wp1_scope_partition import _complete_ledger, _fixture
+
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            partition,
+            proofs,
+        ) = _fixture()
+        ledger = replace(
+            _complete_ledger(
+                source_inventory,
+                requirement,
+                manifest,
+                authorization,
+                partition,
+                proofs,
+            ),
+            complete_authorized_scope=False,
+            coverage_ledger_id="",
+            proof_records=(
+                replace(proofs[0], populated_value_fingerprint=FP),
+                replace(proofs[1], populated_value_fingerprint=FP2),
+            ),
+        )
+        self.assertFalse(
+            ledger.has_direct_authorized_witness(
+                source_inventory,
+                requirement,
+                manifest,
+                authorization,
+            )
+        )
+        self.assertFalse(
+            ledger.has_direct_incompatible_values(
+                source_inventory,
+                requirement,
+                manifest,
+                authorization,
+            )
+        )
+        self.assertTrue(
+            ledger.has_direct_authorized_witness(
+                source_inventory,
+                requirement,
+                manifest,
+                authorization,
+                partition.scope_authority,
+            )
+        )
+        self.assertTrue(
+            ledger.has_direct_incompatible_values(
+                source_inventory,
+                requirement,
+                manifest,
+                authorization,
+                partition.scope_authority,
+            )
         )
 
     def test_display_pagination_is_presentation_only_for_ledger_and_claim_identity(self) -> None:

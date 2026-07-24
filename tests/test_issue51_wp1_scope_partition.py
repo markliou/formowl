@@ -9,10 +9,14 @@ from formowl_contract import (
     ClaimRequirement,
     ContractValidationError,
     CoverageAuthorizationBinding,
+    CoverageItemAuthorizationDecision,
+    CoverageItemRelevanceDecision,
     CoverageLedger,
     CoverageObservationPartition,
     CoverageProofRecord,
     CoverageScopePartition,
+    CoverageScopeAuthority,
+    CoverageScopePolicyBinding,
     CoverageVersionBinding,
     SourceInventory,
     SourceInventoryItem,
@@ -24,6 +28,7 @@ from formowl_mail import PostgreSQLMailEvidenceStore
 
 FP = "sha256:" + "a" * 64
 FP2 = "sha256:" + "b" * 64
+SCOPE_POLICY_FP = "sha256:" + "c" * 64
 
 
 class CoverageScopePartitionTests(unittest.TestCase):
@@ -37,39 +42,25 @@ class CoverageScopePartitionTests(unittest.TestCase):
             partition,
             proofs,
         )
-        self.assertTrue(ledger.usable_for_claim(inventory, requirement, manifest, authorization))
-
-        missing_relevant = CoverageScopePartition.create(
-            source_inventory=inventory,
-            claim_requirement=requirement,
-            authorization_binding=authorization,
-            version_manifest=manifest,
-            authorized_relevant_item_ids=(inventory.items[0].source_inventory_item_id,),
-            authorized_irrelevant_item_ids=(inventory.items[2].source_inventory_item_id,),
-            ineligible_item_ids=(inventory.items[3].source_inventory_item_id,),
-            observation_partitions=(partition.observation_partitions[0],),
-        )
-        incomplete_partition_ledger = CoverageLedger.create(
-            query_id=requirement.query_id,
-            claim_requirement_id=requirement.claim_requirement_id,
-            source_inventory_id=inventory.source_inventory_id,
-            relevant_inventory_item_ids=(inventory.items[0].source_inventory_item_id,),
-            searched_structural_observation_ids=("obs_a_struct",),
-            searched_ordinary_observation_ids=("obs_a_ordinary",),
-            authorization_binding=authorization,
-            version_binding=CoverageVersionBinding.from_manifest(manifest),
-            scope_partition=missing_relevant,
-            proof_records=(proofs[0],),
-            complete_authorized_scope=True,
-        )
-        self.assertFalse(
-            incomplete_partition_ledger.usable_for_claim(
+        self.assertTrue(
+            ledger.usable_for_claim(
                 inventory,
                 requirement,
                 manifest,
                 authorization,
+                partition.scope_authority,
             )
         )
+
+        with self.assertRaises(ContractValidationError):
+            _partition_decisions(
+                inventory,
+                requirement,
+                authorization,
+                relevant=(inventory.items[0].source_inventory_item_id,),
+                irrelevant=(inventory.items[2].source_inventory_item_id,),
+                ineligible=(inventory.items[3].source_inventory_item_id,),
+            )
 
     def test_explicit_irrelevant_and_ineligible_items_are_not_searchable(self) -> None:
         inventory, requirement, manifest, authorization, partition, proofs = _fixture()
@@ -89,7 +80,15 @@ class CoverageScopePartitionTests(unittest.TestCase):
             set(partition.ineligible_item_ids),
             {inventory.items[3].source_inventory_item_id},
         )
-        self.assertTrue(ledger.usable_for_claim(inventory, requirement, manifest, authorization))
+        self.assertTrue(
+            ledger.usable_for_claim(
+                inventory,
+                requirement,
+                manifest,
+                authorization,
+                partition.scope_authority,
+            )
+        )
 
         with self.assertRaises(ContractValidationError):
             CoverageLedger.create(
@@ -123,6 +122,7 @@ class CoverageScopePartitionTests(unittest.TestCase):
                 requirement,
                 manifest,
                 replace(authorization, grant_revision=FP2),
+                partition.scope_authority,
             )
         )
         self.assertFalse(
@@ -131,6 +131,7 @@ class CoverageScopePartitionTests(unittest.TestCase):
                 requirement,
                 replace(manifest, index_fingerprint=FP2),
                 authorization,
+                partition.scope_authority,
             )
         )
 
@@ -155,75 +156,28 @@ class CoverageScopePartitionTests(unittest.TestCase):
                 structural_observation_ids=("obs_a_struct",),
                 ordinary_observation_ids=("obs_a_struct",),
             )
+        duplicate_authorizations = (
+            partition.scope_authority.authorization_decisions[0],
+            partition.scope_authority.authorization_decisions[0],
+        )
         with self.assertRaises(ContractValidationError):
-            CoverageScopePartition(
+            CoverageScopeAuthority(
                 source_inventory_id=inventory.source_inventory_id,
                 claim_requirement_id=requirement.claim_requirement_id,
                 authorization_binding=authorization,
                 version_binding=CoverageVersionBinding.from_manifest(manifest),
-                authorized_relevant_item_ids=(
-                    inventory.items[0].source_inventory_item_id,
-                    inventory.items[0].source_inventory_item_id,
-                ),
-                authorized_irrelevant_item_ids=(),
-                ineligible_item_ids=(),
-                observation_partitions=(),
+                scope_policy=_scope_policy(),
+                authorization_decisions=duplicate_authorizations,
+                relevance_decisions=(),
             )
         with self.assertRaises(ContractValidationError):
-            CoverageScopePartition(
+            CoverageItemAuthorizationDecision(
                 source_inventory_id=inventory.source_inventory_id,
-                claim_requirement_id=requirement.claim_requirement_id,
+                inventory_item_id="item_unknown",
                 authorization_binding=authorization,
-                version_binding=CoverageVersionBinding.from_manifest(manifest),
-                authorized_relevant_item_ids=(inventory.items[0].source_inventory_item_id,),
-                authorized_irrelevant_item_ids=(inventory.items[0].source_inventory_item_id,),
-                ineligible_item_ids=(),
-                observation_partitions=(),
+                permission_scope_fingerprint=FP,
+                decision_state="authorized",
             )
-        unknown_item_partition = CoverageScopePartition.create(
-            source_inventory=inventory,
-            claim_requirement=requirement,
-            authorization_binding=authorization,
-            version_manifest=manifest,
-            authorized_relevant_item_ids=("item_unknown",),
-            authorized_irrelevant_item_ids=(inventory.items[2].source_inventory_item_id,),
-            ineligible_item_ids=(inventory.items[3].source_inventory_item_id,),
-            observation_partitions=(
-                CoverageObservationPartition(
-                    inventory_item_id="item_unknown",
-                    structural_observation_ids=("obs_a_struct",),
-                ),
-            ),
-        )
-        unknown_item_ledger = CoverageLedger.create(
-            query_id=requirement.query_id,
-            claim_requirement_id=requirement.claim_requirement_id,
-            source_inventory_id=inventory.source_inventory_id,
-            relevant_inventory_item_ids=("item_unknown",),
-            searched_structural_observation_ids=("obs_a_struct",),
-            authorization_binding=authorization,
-            version_binding=CoverageVersionBinding.from_manifest(manifest),
-            scope_partition=unknown_item_partition,
-            proof_records=(
-                CoverageProofRecord.create(
-                    source_inventory_id=inventory.source_inventory_id,
-                    claim_requirement_id=requirement.claim_requirement_id,
-                    version_manifest_id=manifest.version_manifest_id,
-                    inventory_item_id="item_unknown",
-                    proof_kind="structural",
-                    structural_observation_ids=("obs_a_struct",),
-                ),
-            ),
-            complete_authorized_scope=True,
-        )
-        self.assertFalse(
-            unknown_item_ledger.usable_for_claim(
-                inventory,
-                requirement,
-                manifest,
-                authorization,
-            )
-        )
 
     def test_observation_accounting_is_total_and_exact(self) -> None:
         inventory, requirement, manifest, authorization, partition, proofs = _fixture()
@@ -263,17 +217,14 @@ class CoverageScopePartitionTests(unittest.TestCase):
                 searched_ordinary=(),
             )
 
-        wrong_item_partition = CoverageScopePartition.create(
-            source_inventory=inventory,
-            claim_requirement=requirement,
-            authorization_binding=authorization,
-            version_manifest=manifest,
-            authorized_relevant_item_ids=(
-                inventory.items[0].source_inventory_item_id,
-                inventory.items[1].source_inventory_item_id,
-            ),
-            authorized_irrelevant_item_ids=(inventory.items[2].source_inventory_item_id,),
-            ineligible_item_ids=(inventory.items[3].source_inventory_item_id,),
+        wrong_item_partition = _partition(
+            inventory,
+            requirement,
+            authorization,
+            manifest,
+            relevant=partition.authorized_relevant_item_ids,
+            irrelevant=partition.authorized_irrelevant_item_ids,
+            ineligible=partition.ineligible_item_ids,
             observation_partitions=(
                 CoverageObservationPartition(
                     inventory_item_id=inventory.items[0].source_inventory_item_id,
@@ -307,21 +258,20 @@ class CoverageScopePartitionTests(unittest.TestCase):
                 requirement,
                 manifest,
                 authorization,
+                wrong_item_partition.scope_authority,
             )
         )
 
     def test_scope_partition_and_bundle_round_trip_are_deterministic(self) -> None:
         inventory, requirement, manifest, authorization, partition, proofs = _fixture()
-        reversed_partition = CoverageScopePartition.create(
-            source_inventory=inventory,
-            claim_requirement=requirement,
-            authorization_binding=authorization,
-            version_manifest=manifest,
-            authorized_relevant_item_ids=tuple(reversed(partition.authorized_relevant_item_ids)),
-            authorized_irrelevant_item_ids=tuple(
-                reversed(partition.authorized_irrelevant_item_ids)
-            ),
-            ineligible_item_ids=tuple(reversed(partition.ineligible_item_ids)),
+        reversed_partition = _partition(
+            inventory,
+            requirement,
+            authorization,
+            manifest,
+            relevant=tuple(reversed(partition.authorized_relevant_item_ids)),
+            irrelevant=tuple(reversed(partition.authorized_irrelevant_item_ids)),
+            ineligible=tuple(reversed(partition.ineligible_item_ids)),
             observation_partitions=tuple(
                 replace(
                     item,
@@ -396,6 +346,7 @@ class CoverageScopePartitionTests(unittest.TestCase):
             claim_requirement=requirement,
             source_inventory=inventory,
             version_manifest=manifest,
+            scope_authority=partition.scope_authority,
             authorization_binding=authorization,
             evidence_snapshot_ids=(),
         )
@@ -404,6 +355,91 @@ class CoverageScopePartitionTests(unittest.TestCase):
         self.assertNotIn("authorized_relevant_item_ids", public)
         self.assertNotIn("ineligible_item_ids", public)
         self.assertNotIn(partition.scope_partition_id, repr(public))
+
+
+def _scope_policy() -> CoverageScopePolicyBinding:
+    return CoverageScopePolicyBinding(
+        scope_policy_id="scope-policy-wp1",
+        scope_policy_version="1",
+        scope_policy_fingerprint=SCOPE_POLICY_FP,
+    )
+
+
+def _partition_decisions(
+    inventory: SourceInventory,
+    requirement: ClaimRequirement,
+    authorization: CoverageAuthorizationBinding,
+    *,
+    relevant: tuple[str, ...],
+    irrelevant: tuple[str, ...],
+    ineligible: tuple[str, ...],
+) -> tuple[
+    tuple[CoverageItemAuthorizationDecision, ...],
+    tuple[CoverageItemRelevanceDecision, ...],
+]:
+    categories = set(relevant) | set(irrelevant) | set(ineligible)
+    if categories != {item.source_inventory_item_id for item in inventory.items}:
+        raise ContractValidationError("scope fixture must partition every item")
+    ineligible_ids = set(ineligible)
+    relevant_ids = set(relevant)
+    authorizations = tuple(
+        CoverageItemAuthorizationDecision.create(
+            source_inventory_item=item,
+            authorization_binding=authorization,
+            decision_state=(
+                "ineligible" if item.source_inventory_item_id in ineligible_ids else "authorized"
+            ),
+        )
+        for item in inventory.items
+    )
+    policy = _scope_policy()
+    relevance = tuple(
+        CoverageItemRelevanceDecision.create(
+            source_inventory_item=item,
+            claim_requirement=requirement,
+            scope_policy=policy,
+            decision_state=(
+                "relevant" if item.source_inventory_item_id in relevant_ids else "irrelevant"
+            ),
+        )
+        for item in inventory.items
+        if item.source_inventory_item_id not in ineligible_ids
+    )
+    return authorizations, relevance
+
+
+def _partition(
+    inventory: SourceInventory,
+    requirement: ClaimRequirement,
+    authorization: CoverageAuthorizationBinding,
+    manifest: VersionManifest,
+    *,
+    relevant: tuple[str, ...],
+    irrelevant: tuple[str, ...],
+    ineligible: tuple[str, ...],
+    observation_partitions: tuple[CoverageObservationPartition, ...],
+) -> CoverageScopePartition:
+    authorizations, relevance = _partition_decisions(
+        inventory,
+        requirement,
+        authorization,
+        relevant=relevant,
+        irrelevant=irrelevant,
+        ineligible=ineligible,
+    )
+    authority = CoverageScopeAuthority.create(
+        source_inventory=inventory,
+        claim_requirement=requirement,
+        authorization_binding=authorization,
+        version_manifest=manifest,
+        scope_policy=_scope_policy(),
+        authorization_decisions=authorizations,
+        relevance_decisions=relevance,
+    )
+    return CoverageScopePartition.create(
+        scope_authority=authority,
+        observation_partitions=observation_partitions,
+    )
 
 
 def _manifest() -> VersionManifest:
@@ -496,17 +532,17 @@ def _fixture() -> (
         permission_revision="permission_scope_wp1",
         grant_revision="grant_scope_wp1",
     )
-    partition = CoverageScopePartition.create(
-        source_inventory=inventory,
-        claim_requirement=requirement,
-        authorization_binding=authorization,
-        version_manifest=manifest,
-        authorized_relevant_item_ids=(
+    partition = _partition(
+        inventory,
+        requirement,
+        authorization,
+        manifest,
+        relevant=(
             inventory.items[0].source_inventory_item_id,
             inventory.items[1].source_inventory_item_id,
         ),
-        authorized_irrelevant_item_ids=(inventory.items[2].source_inventory_item_id,),
-        ineligible_item_ids=(inventory.items[3].source_inventory_item_id,),
+        irrelevant=(inventory.items[2].source_inventory_item_id,),
+        ineligible=(inventory.items[3].source_inventory_item_id,),
         observation_partitions=(
             CoverageObservationPartition(
                 inventory_item_id=inventory.items[0].source_inventory_item_id,

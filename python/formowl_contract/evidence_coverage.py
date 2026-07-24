@@ -84,6 +84,8 @@ COVERAGE_PROOF_KIND_VALUES = (
     "intentionally_excluded",
     "fallback",
 )
+COVERAGE_ITEM_AUTHORIZATION_STATE_VALUES = ("authorized", "ineligible")
+COVERAGE_ITEM_RELEVANCE_STATE_VALUES = ("relevant", "irrelevant")
 CELL_STATE_VALUES = ("populated", "blank", "absent")
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -121,6 +123,7 @@ _ANSWER_CLAIM_PERSISTENCE_KEYS = _ANSWER_CLAIM_PUBLIC_KEYS | {
     "answer_claim_id",
     "version_manifest_id",
     "implementation_fingerprint",
+    "scope_authority",
 }
 
 
@@ -1407,46 +1410,605 @@ class CoverageObservationPartition:
 
 
 @dataclass(frozen=True)
-class CoverageScopePartition:
-    """A complete, independently bound authorization partition for a claim."""
+class CoverageScopePolicyBinding:
+    """Opaque, versioned proof identity supplied by the scope authority."""
+
+    scope_policy_id: str
+    scope_policy_version: str
+    scope_policy_fingerprint: str
+
+    def __post_init__(self) -> None:
+        _id(self.scope_policy_id, "coverage_scope_policy.scope_policy_id")
+        _text(self.scope_policy_version, "coverage_scope_policy.scope_policy_version")
+        _fingerprint(
+            self.scope_policy_fingerprint,
+            "coverage_scope_policy.scope_policy_fingerprint",
+        )
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        scope_policy_id: str,
+        scope_policy_version: str,
+        scope_policy_fingerprint: str,
+    ) -> "CoverageScopePolicyBinding":
+        return cls(
+            scope_policy_id=scope_policy_id,
+            scope_policy_version=scope_policy_version,
+            scope_policy_fingerprint=scope_policy_fingerprint,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = _dataclass_payload(self)
+        _assert_public_contract(payload, "coverage_scope_policy")
+        return payload
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "CoverageScopePolicyBinding":
+        item = _mapping(value, "coverage_scope_policy")
+        _require_exact_keys(
+            item,
+            {"scope_policy_id", "scope_policy_version", "scope_policy_fingerprint"},
+            "coverage_scope_policy",
+        )
+        return cls(
+            scope_policy_id=_required_str(item, "scope_policy_id"),
+            scope_policy_version=_required_str(item, "scope_policy_version"),
+            scope_policy_fingerprint=_required_str(item, "scope_policy_fingerprint"),
+        )
+
+
+@dataclass(frozen=True)
+class CoverageItemAuthorizationDecision:
+    """One typed authorization/eligibility decision for one inventory item."""
+
+    source_inventory_id: str
+    inventory_item_id: str
+    authorization_binding: CoverageAuthorizationBinding
+    permission_scope_fingerprint: str
+    decision_state: str
+    decision_id: str = ""
+
+    def __post_init__(self) -> None:
+        _id(self.source_inventory_id, "coverage_item_authorization.source_inventory_id")
+        _id(self.inventory_item_id, "coverage_item_authorization.inventory_item_id")
+        if not isinstance(self.authorization_binding, CoverageAuthorizationBinding):
+            raise ContractValidationError("coverage item authorization binding is invalid")
+        _fingerprint(
+            self.permission_scope_fingerprint,
+            "coverage_item_authorization.permission_scope_fingerprint",
+        )
+        _choice(
+            self.decision_state,
+            COVERAGE_ITEM_AUTHORIZATION_STATE_VALUES,
+            "coverage_item_authorization.decision_state",
+        )
+        expected_id = stable_resource_contract_id(
+            "coverage-item-authorization",
+            "CoverageItemAuthorizationDecision",
+            self._identity_payload(),
+        )
+        if self.decision_id:
+            _id(self.decision_id, "coverage_item_authorization.decision_id")
+            if self.decision_id != expected_id:
+                raise ContractValidationError(
+                    "coverage item authorization decision id does not match identity"
+                )
+        else:
+            object.__setattr__(self, "decision_id", expected_id)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        source_inventory_item: SourceInventoryItem,
+        authorization_binding: CoverageAuthorizationBinding,
+        decision_state: str,
+    ) -> "CoverageItemAuthorizationDecision":
+        if not isinstance(source_inventory_item, SourceInventoryItem):
+            raise ContractValidationError("item authorization requires SourceInventoryItem")
+        return cls(
+            source_inventory_id=source_inventory_item.source_inventory_id or "inventory_unbound",
+            inventory_item_id=source_inventory_item.source_inventory_item_id,
+            authorization_binding=authorization_binding,
+            permission_scope_fingerprint=sha256_json(
+                _persistence_plain(source_inventory_item.permission_scope)
+            ),
+            decision_state=decision_state,
+        )
+
+    def _identity_payload(self) -> dict[str, Any]:
+        return {
+            "source_inventory_id": self.source_inventory_id,
+            "inventory_item_id": self.inventory_item_id,
+            "authorization_binding": self.authorization_binding.to_dict(),
+            "permission_scope_fingerprint": self.permission_scope_fingerprint,
+            "decision_state": self.decision_state,
+        }
+
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return {**self._identity_payload(), "decision_id": self.decision_id}
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.to_persistence_dict()
+
+    @classmethod
+    def from_persistence_dict(
+        cls,
+        value: Mapping[str, Any],
+    ) -> "CoverageItemAuthorizationDecision":
+        item = _mapping(value, "coverage_item_authorization")
+        _require_exact_keys(
+            item,
+            {
+                "source_inventory_id",
+                "inventory_item_id",
+                "authorization_binding",
+                "permission_scope_fingerprint",
+                "decision_state",
+                "decision_id",
+            },
+            "coverage_item_authorization",
+        )
+        return cls(
+            source_inventory_id=_required_str(item, "source_inventory_id"),
+            inventory_item_id=_required_str(item, "inventory_item_id"),
+            authorization_binding=CoverageAuthorizationBinding.from_dict(
+                _required_mapping(item, "authorization_binding")
+            ),
+            permission_scope_fingerprint=_required_str(item, "permission_scope_fingerprint"),
+            decision_state=_required_str(item, "decision_state"),
+            decision_id=_required_str(item, "decision_id"),
+        )
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "CoverageItemAuthorizationDecision":
+        return cls.from_persistence_dict(value)
+
+    def validate_for_item(
+        self,
+        source_inventory: SourceInventory,
+        item: SourceInventoryItem,
+        expected_authorization_binding: CoverageAuthorizationBinding,
+    ) -> bool:
+        if not isinstance(source_inventory, SourceInventory) or not isinstance(
+            item, SourceInventoryItem
+        ):
+            raise ContractValidationError("item authorization validation requires typed inputs")
+        if not isinstance(expected_authorization_binding, CoverageAuthorizationBinding):
+            raise ContractValidationError("item authorization expected binding must be typed")
+        if (
+            item.source_inventory_id != source_inventory.source_inventory_id
+            or self.source_inventory_id != source_inventory.source_inventory_id
+            or self.inventory_item_id != item.source_inventory_item_id
+            or self.authorization_binding != expected_authorization_binding
+            or self.permission_scope_fingerprint
+            != sha256_json(_persistence_plain(item.permission_scope))
+        ):
+            return False
+        return True
+
+
+@dataclass(frozen=True)
+class CoverageItemRelevanceDecision:
+    """One typed claim-relevance decision bound to an external scope policy."""
+
+    source_inventory_id: str
+    inventory_item_id: str
+    claim_requirement_id: str
+    claim_requirement_fingerprint: str
+    scope_policy: CoverageScopePolicyBinding
+    decision_state: str
+    decision_id: str = ""
+
+    def __post_init__(self) -> None:
+        _id(self.source_inventory_id, "coverage_item_relevance.source_inventory_id")
+        _id(self.inventory_item_id, "coverage_item_relevance.inventory_item_id")
+        _id(self.claim_requirement_id, "coverage_item_relevance.claim_requirement_id")
+        _fingerprint(
+            self.claim_requirement_fingerprint,
+            "coverage_item_relevance.claim_requirement_fingerprint",
+        )
+        if not isinstance(self.scope_policy, CoverageScopePolicyBinding):
+            raise ContractValidationError("coverage item relevance policy is invalid")
+        _choice(
+            self.decision_state,
+            COVERAGE_ITEM_RELEVANCE_STATE_VALUES,
+            "coverage_item_relevance.decision_state",
+        )
+        expected_id = stable_resource_contract_id(
+            "coverage-item-relevance",
+            "CoverageItemRelevanceDecision",
+            self._identity_payload(),
+        )
+        if self.decision_id:
+            _id(self.decision_id, "coverage_item_relevance.decision_id")
+            if self.decision_id != expected_id:
+                raise ContractValidationError(
+                    "coverage item relevance decision id does not match identity"
+                )
+        else:
+            object.__setattr__(self, "decision_id", expected_id)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        source_inventory_item: SourceInventoryItem,
+        claim_requirement: ClaimRequirement,
+        scope_policy: CoverageScopePolicyBinding,
+        decision_state: str,
+    ) -> "CoverageItemRelevanceDecision":
+        if not isinstance(source_inventory_item, SourceInventoryItem):
+            raise ContractValidationError("item relevance requires SourceInventoryItem")
+        if not isinstance(claim_requirement, ClaimRequirement):
+            raise ContractValidationError("item relevance requires ClaimRequirement")
+        return cls(
+            source_inventory_id=source_inventory_item.source_inventory_id or "inventory_unbound",
+            inventory_item_id=source_inventory_item.source_inventory_item_id,
+            claim_requirement_id=claim_requirement.claim_requirement_id,
+            claim_requirement_fingerprint=sha256_json(claim_requirement.to_dict()),
+            scope_policy=scope_policy,
+            decision_state=decision_state,
+        )
+
+    def _identity_payload(self) -> dict[str, Any]:
+        return {
+            "source_inventory_id": self.source_inventory_id,
+            "inventory_item_id": self.inventory_item_id,
+            "claim_requirement_id": self.claim_requirement_id,
+            "claim_requirement_fingerprint": self.claim_requirement_fingerprint,
+            "scope_policy": self.scope_policy.to_dict(),
+            "decision_state": self.decision_state,
+        }
+
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return {**self._identity_payload(), "decision_id": self.decision_id}
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.to_persistence_dict()
+
+    @classmethod
+    def from_persistence_dict(
+        cls,
+        value: Mapping[str, Any],
+    ) -> "CoverageItemRelevanceDecision":
+        item = _mapping(value, "coverage_item_relevance")
+        _require_exact_keys(
+            item,
+            {
+                "source_inventory_id",
+                "inventory_item_id",
+                "claim_requirement_id",
+                "claim_requirement_fingerprint",
+                "scope_policy",
+                "decision_state",
+                "decision_id",
+            },
+            "coverage_item_relevance",
+        )
+        return cls(
+            source_inventory_id=_required_str(item, "source_inventory_id"),
+            inventory_item_id=_required_str(item, "inventory_item_id"),
+            claim_requirement_id=_required_str(item, "claim_requirement_id"),
+            claim_requirement_fingerprint=_required_str(
+                item,
+                "claim_requirement_fingerprint",
+            ),
+            scope_policy=CoverageScopePolicyBinding.from_dict(
+                _required_mapping(item, "scope_policy")
+            ),
+            decision_state=_required_str(item, "decision_state"),
+            decision_id=_required_str(item, "decision_id"),
+        )
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "CoverageItemRelevanceDecision":
+        return cls.from_persistence_dict(value)
+
+    def validate_for_claim(
+        self,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        expected_scope_policy: CoverageScopePolicyBinding,
+    ) -> bool:
+        if not isinstance(source_inventory, SourceInventory) or not isinstance(
+            claim_requirement, ClaimRequirement
+        ):
+            raise ContractValidationError("item relevance validation requires typed inputs")
+        if not isinstance(expected_scope_policy, CoverageScopePolicyBinding):
+            raise ContractValidationError("item relevance expected policy must be typed")
+        item = next(
+            (
+                candidate
+                for candidate in source_inventory.items
+                if candidate.source_inventory_item_id == self.inventory_item_id
+            ),
+            None,
+        )
+        return bool(
+            item is not None
+            and self.source_inventory_id == source_inventory.source_inventory_id
+            and self.claim_requirement_id == claim_requirement.claim_requirement_id
+            and self.claim_requirement_fingerprint == sha256_json(claim_requirement.to_dict())
+            and self.scope_policy == expected_scope_policy
+        )
+
+
+@dataclass(frozen=True)
+class CoverageScopeAuthority:
+    """The independently supplied typed authority from which categories derive."""
 
     source_inventory_id: str
     claim_requirement_id: str
     authorization_binding: CoverageAuthorizationBinding
     version_binding: CoverageVersionBinding
-    authorized_relevant_item_ids: tuple[str, ...]
-    authorized_irrelevant_item_ids: tuple[str, ...]
-    ineligible_item_ids: tuple[str, ...]
+    scope_policy: CoverageScopePolicyBinding
+    authorization_decisions: tuple[CoverageItemAuthorizationDecision, ...]
+    relevance_decisions: tuple[CoverageItemRelevanceDecision, ...]
+    authority_id: str = ""
+
+    def __post_init__(self) -> None:
+        _id(self.source_inventory_id, "coverage_scope_authority.source_inventory_id")
+        _id(self.claim_requirement_id, "coverage_scope_authority.claim_requirement_id")
+        if not isinstance(self.authorization_binding, CoverageAuthorizationBinding):
+            raise ContractValidationError("coverage scope authority authorization is invalid")
+        if not isinstance(self.version_binding, CoverageVersionBinding):
+            raise ContractValidationError("coverage scope authority version is invalid")
+        if not isinstance(self.scope_policy, CoverageScopePolicyBinding):
+            raise ContractValidationError("coverage scope authority policy is invalid")
+        _tuple_of(
+            self.authorization_decisions,
+            CoverageItemAuthorizationDecision,
+            "coverage_scope_authority.authorization_decisions",
+        )
+        _tuple_of(
+            self.relevance_decisions,
+            CoverageItemRelevanceDecision,
+            "coverage_scope_authority.relevance_decisions",
+        )
+        authorization_ids = [item.inventory_item_id for item in self.authorization_decisions]
+        relevance_ids = [item.inventory_item_id for item in self.relevance_decisions]
+        if len(authorization_ids) != len(set(authorization_ids)):
+            raise ContractValidationError("scope authorization decisions must be unique")
+        if len(relevance_ids) != len(set(relevance_ids)):
+            raise ContractValidationError("scope relevance decisions must be unique")
+        if set(relevance_ids) - set(authorization_ids):
+            raise ContractValidationError(
+                "scope relevance decisions require authorization decisions"
+            )
+        if any(
+            decision.decision_state != "authorized"
+            for decision in self.authorization_decisions
+            if decision.inventory_item_id in set(relevance_ids)
+        ):
+            raise ContractValidationError("ineligible items cannot have relevance decisions")
+        expected_id = stable_resource_contract_id(
+            "coverage-scope-authority",
+            "CoverageScopeAuthority",
+            self._identity_payload(),
+        )
+        if self.authority_id:
+            _id(self.authority_id, "coverage_scope_authority.authority_id")
+            if self.authority_id != expected_id:
+                raise ContractValidationError("scope authority id does not match identity")
+        else:
+            object.__setattr__(self, "authority_id", expected_id)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        authorization_binding: CoverageAuthorizationBinding,
+        version_manifest: VersionManifest,
+        scope_policy: CoverageScopePolicyBinding,
+        authorization_decisions: Sequence[CoverageItemAuthorizationDecision],
+        relevance_decisions: Sequence[CoverageItemRelevanceDecision],
+    ) -> "CoverageScopeAuthority":
+        if not all(
+            isinstance(value, expected_type)
+            for value, expected_type in (
+                (source_inventory, SourceInventory),
+                (claim_requirement, ClaimRequirement),
+                (authorization_binding, CoverageAuthorizationBinding),
+                (version_manifest, VersionManifest),
+                (scope_policy, CoverageScopePolicyBinding),
+            )
+        ):
+            raise ContractValidationError("scope authority requires typed inputs")
+        authority = cls(
+            source_inventory_id=source_inventory.source_inventory_id,
+            claim_requirement_id=claim_requirement.claim_requirement_id,
+            authorization_binding=authorization_binding,
+            version_binding=CoverageVersionBinding.from_manifest(version_manifest),
+            scope_policy=scope_policy,
+            authorization_decisions=tuple(authorization_decisions),
+            relevance_decisions=tuple(relevance_decisions),
+        )
+        if not authority.validate_for_claim(
+            source_inventory,
+            claim_requirement,
+            version_manifest,
+            authorization_binding,
+            scope_policy,
+        ):
+            raise ContractValidationError("scope authority decisions do not match typed inputs")
+        return authority
+
+    def _identity_payload(self) -> dict[str, Any]:
+        return {
+            "source_inventory_id": self.source_inventory_id,
+            "claim_requirement_id": self.claim_requirement_id,
+            "authorization_binding": self.authorization_binding.to_dict(),
+            "version_binding": self.version_binding.to_dict(),
+            "scope_policy": self.scope_policy.to_dict(),
+            "authorization_decisions": [
+                decision.to_persistence_dict() for decision in self.authorization_decisions
+            ],
+            "relevance_decisions": [
+                decision.to_persistence_dict() for decision in self.relevance_decisions
+            ],
+        }
+
+    @property
+    def authorized_relevant_item_ids(self) -> tuple[str, ...]:
+        relevant = {
+            decision.inventory_item_id
+            for decision in self.relevance_decisions
+            if decision.decision_state == "relevant"
+        }
+        return tuple(sorted(relevant))
+
+    @property
+    def authorized_irrelevant_item_ids(self) -> tuple[str, ...]:
+        irrelevant = {
+            decision.inventory_item_id
+            for decision in self.relevance_decisions
+            if decision.decision_state == "irrelevant"
+        }
+        return tuple(sorted(irrelevant))
+
+    @property
+    def ineligible_item_ids(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                decision.inventory_item_id
+                for decision in self.authorization_decisions
+                if decision.decision_state == "ineligible"
+            )
+        )
+
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return {**self._identity_payload(), "authority_id": self.authority_id}
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.to_persistence_dict()
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "CoverageScopeAuthority":
+        item = _mapping(value, "coverage_scope_authority")
+        _require_exact_keys(
+            item,
+            {
+                "source_inventory_id",
+                "claim_requirement_id",
+                "authorization_binding",
+                "version_binding",
+                "scope_policy",
+                "authorization_decisions",
+                "relevance_decisions",
+                "authority_id",
+            },
+            "coverage_scope_authority",
+        )
+        return cls(
+            source_inventory_id=_required_str(item, "source_inventory_id"),
+            claim_requirement_id=_required_str(item, "claim_requirement_id"),
+            authorization_binding=CoverageAuthorizationBinding.from_dict(
+                _required_mapping(item, "authorization_binding")
+            ),
+            version_binding=CoverageVersionBinding.from_dict(
+                _required_mapping(item, "version_binding")
+            ),
+            scope_policy=CoverageScopePolicyBinding.from_dict(
+                _required_mapping(item, "scope_policy")
+            ),
+            authorization_decisions=tuple(
+                CoverageItemAuthorizationDecision.from_persistence_dict(entry)
+                for entry in _required_list(item, "authorization_decisions")
+            ),
+            relevance_decisions=tuple(
+                CoverageItemRelevanceDecision.from_persistence_dict(entry)
+                for entry in _required_list(item, "relevance_decisions")
+            ),
+            authority_id=_required_str(item, "authority_id"),
+        )
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "CoverageScopeAuthority":
+        return cls.from_persistence_dict(value)
+
+    def validate_for_claim(
+        self,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        expected_manifest: VersionManifest,
+        expected_authorization_binding: CoverageAuthorizationBinding,
+        expected_scope_policy: CoverageScopePolicyBinding,
+    ) -> bool:
+        if not all(
+            isinstance(value, expected_type)
+            for value, expected_type in (
+                (source_inventory, SourceInventory),
+                (claim_requirement, ClaimRequirement),
+                (expected_manifest, VersionManifest),
+                (expected_authorization_binding, CoverageAuthorizationBinding),
+                (expected_scope_policy, CoverageScopePolicyBinding),
+            )
+        ):
+            raise ContractValidationError("scope authority validation requires typed inputs")
+        if (
+            self.source_inventory_id != source_inventory.source_inventory_id
+            or self.claim_requirement_id != claim_requirement.claim_requirement_id
+            or self.authorization_binding != expected_authorization_binding
+            or self.scope_policy != expected_scope_policy
+            or expected_manifest.index_freshness != "fresh"
+            or not self.version_binding.matches_manifest(expected_manifest)
+            or source_inventory.source_fingerprint != expected_manifest.source_fingerprint
+            or source_inventory.parser_fingerprint != expected_manifest.parser_fingerprint
+        ):
+            return False
+        inventory_items = {item.source_inventory_item_id: item for item in source_inventory.items}
+        if set(decision.inventory_item_id for decision in self.authorization_decisions) != set(
+            inventory_items
+        ):
+            return False
+        authorization_by_item = {
+            decision.inventory_item_id: decision for decision in self.authorization_decisions
+        }
+        for item_id, item in inventory_items.items():
+            if not authorization_by_item[item_id].validate_for_item(
+                source_inventory,
+                item,
+                expected_authorization_binding,
+            ):
+                return False
+        relevant_decision_ids = {
+            decision.inventory_item_id for decision in self.relevance_decisions
+        }
+        authorized_ids = {
+            item_id
+            for item_id, decision in authorization_by_item.items()
+            if decision.decision_state == "authorized"
+        }
+        if relevant_decision_ids - authorized_ids:
+            return False
+        if relevant_decision_ids != authorized_ids:
+            return False
+        for decision in self.relevance_decisions:
+            if not decision.validate_for_claim(
+                source_inventory,
+                claim_requirement,
+                expected_scope_policy,
+            ):
+                return False
+        return True
+
+
+@dataclass(frozen=True)
+class CoverageScopePartition:
+    """Observation accounting derived from independently supplied decisions."""
+
+    scope_authority: CoverageScopeAuthority
     observation_partitions: tuple[CoverageObservationPartition, ...]
     scope_partition_id: str = ""
 
     def __post_init__(self) -> None:
-        _id(self.source_inventory_id, "coverage_scope_partition.source_inventory_id")
-        _id(self.claim_requirement_id, "coverage_scope_partition.claim_requirement_id")
-        if not isinstance(self.authorization_binding, CoverageAuthorizationBinding):
-            raise ContractValidationError("coverage scope partition authorization is invalid")
-        if not isinstance(self.version_binding, CoverageVersionBinding):
-            raise ContractValidationError("coverage scope partition version binding is invalid")
-        for field_name in (
-            "authorized_relevant_item_ids",
-            "authorized_irrelevant_item_ids",
-            "ineligible_item_ids",
-        ):
-            values = getattr(self, field_name)
-            _tuple_of_strings(values, field_name, ids=True)
-            if len(values) != len(set(values)):
-                raise ContractValidationError(f"{field_name} must not contain duplicates")
-        category_sets = [
-            set(self.authorized_relevant_item_ids),
-            set(self.authorized_irrelevant_item_ids),
-            set(self.ineligible_item_ids),
-        ]
-        if (
-            category_sets[0] & category_sets[1]
-            or category_sets[0] & category_sets[2]
-            or category_sets[1] & category_sets[2]
-        ):
-            raise ContractValidationError("coverage scope item partitions must be disjoint")
+        if not isinstance(self.scope_authority, CoverageScopeAuthority):
+            raise ContractValidationError("coverage scope partition authority is invalid")
         _tuple_of(
             self.observation_partitions,
             CoverageObservationPartition,
@@ -1463,21 +2025,6 @@ class CoverageScopePartition:
             )
         object.__setattr__(
             self,
-            "authorized_relevant_item_ids",
-            tuple(sorted(self.authorized_relevant_item_ids)),
-        )
-        object.__setattr__(
-            self,
-            "authorized_irrelevant_item_ids",
-            tuple(sorted(self.authorized_irrelevant_item_ids)),
-        )
-        object.__setattr__(
-            self,
-            "ineligible_item_ids",
-            tuple(sorted(self.ineligible_item_ids)),
-        )
-        object.__setattr__(
-            self,
             "observation_partitions",
             tuple(sorted(self.observation_partitions, key=lambda item: item.inventory_item_id)),
         )
@@ -1486,11 +2033,10 @@ class CoverageScopePartition:
             all_observations.extend(partition.all_observation_ids)
         if len(all_observations) != len(set(all_observations)):
             raise ContractValidationError("coverage scope observation IDs must be globally unique")
-        identity = self._identity_payload()
         expected_id = stable_resource_contract_id(
             "coverage-scope",
             "CoverageScopePartition",
-            identity,
+            self._identity_payload(),
         )
         if self.scope_partition_id:
             _id(self.scope_partition_id, "scope_partition_id")
@@ -1501,55 +2047,64 @@ class CoverageScopePartition:
         else:
             object.__setattr__(self, "scope_partition_id", expected_id)
 
+    @property
+    def source_inventory_id(self) -> str:
+        return self.scope_authority.source_inventory_id
+
+    @property
+    def claim_requirement_id(self) -> str:
+        return self.scope_authority.claim_requirement_id
+
+    @property
+    def authorization_binding(self) -> CoverageAuthorizationBinding:
+        return self.scope_authority.authorization_binding
+
+    @property
+    def version_binding(self) -> CoverageVersionBinding:
+        return self.scope_authority.version_binding
+
+    @property
+    def scope_policy(self) -> CoverageScopePolicyBinding:
+        return self.scope_authority.scope_policy
+
+    @property
+    def authorized_relevant_item_ids(self) -> tuple[str, ...]:
+        return self.scope_authority.authorized_relevant_item_ids
+
+    @property
+    def authorized_irrelevant_item_ids(self) -> tuple[str, ...]:
+        return self.scope_authority.authorized_irrelevant_item_ids
+
+    @property
+    def ineligible_item_ids(self) -> tuple[str, ...]:
+        return self.scope_authority.ineligible_item_ids
+
     @classmethod
     def create(
         cls,
         *,
-        source_inventory: SourceInventory,
-        claim_requirement: ClaimRequirement,
-        authorization_binding: CoverageAuthorizationBinding,
-        version_manifest: VersionManifest,
-        authorized_relevant_item_ids: Sequence[str],
-        authorized_irrelevant_item_ids: Sequence[str],
-        ineligible_item_ids: Sequence[str],
+        scope_authority: CoverageScopeAuthority,
         observation_partitions: Sequence[CoverageObservationPartition],
     ) -> "CoverageScopePartition":
-        if not isinstance(source_inventory, SourceInventory):
-            raise ContractValidationError("scope partition requires SourceInventory")
-        if not isinstance(claim_requirement, ClaimRequirement):
-            raise ContractValidationError("scope partition requires ClaimRequirement")
-        if not isinstance(version_manifest, VersionManifest):
-            raise ContractValidationError("scope partition requires VersionManifest")
+        if not isinstance(scope_authority, CoverageScopeAuthority):
+            raise ContractValidationError(
+                "scope partition requires an already-produced typed scope authority"
+            )
         return cls(
-            source_inventory_id=source_inventory.source_inventory_id,
-            claim_requirement_id=claim_requirement.claim_requirement_id,
-            authorization_binding=authorization_binding,
-            version_binding=CoverageVersionBinding.from_manifest(version_manifest),
-            authorized_relevant_item_ids=tuple(authorized_relevant_item_ids),
-            authorized_irrelevant_item_ids=tuple(authorized_irrelevant_item_ids),
-            ineligible_item_ids=tuple(ineligible_item_ids),
+            scope_authority=scope_authority,
             observation_partitions=tuple(observation_partitions),
         )
 
     def _identity_payload(self) -> dict[str, Any]:
         return {
-            "source_inventory_id": self.source_inventory_id,
-            "claim_requirement_id": self.claim_requirement_id,
-            "authorization_binding": self.authorization_binding.to_dict(),
-            "version_binding": self.version_binding.to_dict(),
-            "authorized_relevant_item_ids": list(self.authorized_relevant_item_ids),
-            "authorized_irrelevant_item_ids": list(self.authorized_irrelevant_item_ids),
-            "ineligible_item_ids": list(self.ineligible_item_ids),
+            "scope_authority": self.scope_authority.to_persistence_dict(),
             "observation_partitions": [
                 partition.to_persistence_dict() for partition in self.observation_partitions
             ],
         }
 
     def to_persistence_dict(self) -> dict[str, Any]:
-        return {
-            **self._identity_payload(),
-            "scope_partition_id": self.scope_partition_id,
-        }
+        return {**self._identity_payload(), "scope_partition_id": self.scope_partition_id}
 
     def to_dict(self) -> dict[str, Any]:
         return self.to_persistence_dict()
@@ -1559,39 +2114,13 @@ class CoverageScopePartition:
         item = _mapping(value, "coverage_scope_partition")
         _require_exact_keys(
             item,
-            {
-                "source_inventory_id",
-                "claim_requirement_id",
-                "authorization_binding",
-                "version_binding",
-                "authorized_relevant_item_ids",
-                "authorized_irrelevant_item_ids",
-                "ineligible_item_ids",
-                "observation_partitions",
-                "scope_partition_id",
-            },
+            {"scope_authority", "observation_partitions", "scope_partition_id"},
             "coverage_scope_partition",
         )
         return cls(
-            source_inventory_id=_required_str(item, "source_inventory_id"),
-            claim_requirement_id=_required_str(item, "claim_requirement_id"),
-            authorization_binding=CoverageAuthorizationBinding.from_dict(
-                _required_mapping(item, "authorization_binding")
+            scope_authority=CoverageScopeAuthority.from_persistence_dict(
+                _required_mapping(item, "scope_authority")
             ),
-            version_binding=CoverageVersionBinding.from_dict(
-                _required_mapping(item, "version_binding")
-            ),
-            authorized_relevant_item_ids=_tuple_strings(
-                item,
-                "authorized_relevant_item_ids",
-                ids=True,
-            ),
-            authorized_irrelevant_item_ids=_tuple_strings(
-                item,
-                "authorized_irrelevant_item_ids",
-                ids=True,
-            ),
-            ineligible_item_ids=_tuple_strings(item, "ineligible_item_ids", ids=True),
             observation_partitions=tuple(
                 CoverageObservationPartition.from_persistence_dict(entry)
                 for entry in _required_list(item, "observation_partitions")
@@ -1622,43 +2151,23 @@ class CoverageScopePartition:
         claim_requirement: ClaimRequirement,
         expected_manifest: VersionManifest,
         expected_authorization_binding: CoverageAuthorizationBinding,
+        expected_scope_authority: CoverageScopeAuthority,
     ) -> bool:
-        """Validate the total partition against independently supplied typed inputs."""
+        """Validate decisions and observation accounting against typed authority."""
 
-        if not all(
-            isinstance(value, expected_type)
-            for value, expected_type in (
-                (source_inventory, SourceInventory),
-                (claim_requirement, ClaimRequirement),
-                (expected_manifest, VersionManifest),
-                (expected_authorization_binding, CoverageAuthorizationBinding),
-            )
-        ):
-            raise ContractValidationError("scope partition validation requires typed inputs")
-        if (
-            self.source_inventory_id != source_inventory.source_inventory_id
-            or self.claim_requirement_id != claim_requirement.claim_requirement_id
-            or self.authorization_binding != expected_authorization_binding
-            or not self.version_binding.matches_manifest(expected_manifest)
-            or expected_manifest.index_freshness != "fresh"
-            or source_inventory.source_fingerprint != expected_manifest.source_fingerprint
-            or source_inventory.parser_fingerprint != expected_manifest.parser_fingerprint
+        if not isinstance(expected_scope_authority, CoverageScopeAuthority):
+            raise ContractValidationError("scope partition requires typed scope authority")
+        if self.scope_authority != expected_scope_authority:
+            return False
+        if not self.scope_authority.validate_for_claim(
+            source_inventory,
+            claim_requirement,
+            expected_manifest,
+            expected_authorization_binding,
+            expected_scope_authority.scope_policy,
         ):
             return False
         inventory_items = {item.source_inventory_item_id: item for item in source_inventory.items}
-        partitioned_item_ids = (
-            set(self.authorized_relevant_item_ids)
-            | set(self.authorized_irrelevant_item_ids)
-            | set(self.ineligible_item_ids)
-        )
-        if partitioned_item_ids != set(inventory_items):
-            return False
-        if len(partitioned_item_ids) != (
-            len(self.authorized_relevant_item_ids)
-            + len(self.authorized_irrelevant_item_ids)
-            + len(self.ineligible_item_ids)
-        ):
-            return False
         observation_owner: dict[str, str] = {}
         for item in source_inventory.items:
             if len(item.source_observation_ids) != len(set(item.source_observation_ids)):
@@ -2321,6 +2830,7 @@ class CoverageLedger:
         claim_requirement: ClaimRequirement,
         expected_manifest: VersionManifest,
         expected_authorization_binding: CoverageAuthorizationBinding | None = None,
+        expected_scope_authority: CoverageScopeAuthority | None = None,
     ) -> bool:
         """Validate typed referential and version bindings without requiring completeness.
 
@@ -2366,13 +2876,16 @@ class CoverageLedger:
         if set(self.relevant_inventory_item_ids) - set(item_by_id):
             return False
         if self.scope_partition is not None:
-            if expected_authorization_binding is None:
+            if expected_authorization_binding is None or not isinstance(
+                expected_scope_authority, CoverageScopeAuthority
+            ):
                 return False
             if not self.scope_partition.validate_for_claim(
                 source_inventory,
                 claim_requirement,
                 expected_manifest,
                 expected_authorization_binding,
+                expected_scope_authority,
             ):
                 return False
             if set(self.relevant_inventory_item_ids) - set(
@@ -2387,6 +2900,7 @@ class CoverageLedger:
         claim_requirement: ClaimRequirement,
         expected_manifest: VersionManifest,
         expected_authorization_binding: CoverageAuthorizationBinding | None = None,
+        expected_scope_authority: CoverageScopeAuthority | None = None,
     ) -> tuple[CoverageProofRecord, ...]:
         """Return direct, typed proof records valid for this claim binding."""
 
@@ -2395,9 +2909,10 @@ class CoverageLedger:
             claim_requirement,
             expected_manifest,
             expected_authorization_binding,
+            expected_scope_authority,
         ):
             return ()
-        if self.authorization_binding is None:
+        if self.authorization_binding is None or self.scope_partition is None:
             return ()
         item_by_id = {item.source_inventory_item_id: item for item in source_inventory.items}
         unresolved = (
@@ -2433,16 +2948,15 @@ class CoverageLedger:
                 source_observation_ids
             ):
                 continue
-            if self.scope_partition is not None:
-                partition = self.scope_partition.observation_partition_for(
-                    item.source_inventory_item_id
-                )
-                if partition is None:
-                    continue
-                if not structural_ids.issubset(
-                    set(partition.structural_observation_ids)
-                ) or not ordinary_ids.issubset(set(partition.ordinary_observation_ids)):
-                    continue
+            partition = self.scope_partition.observation_partition_for(
+                item.source_inventory_item_id
+            )
+            if partition is None:
+                continue
+            if not structural_ids.issubset(
+                set(partition.structural_observation_ids)
+            ) or not ordinary_ids.issubset(set(partition.ordinary_observation_ids)):
+                continue
             if not structural_ids.issubset(searched_structural) or not ordinary_ids.issubset(
                 searched_ordinary
             ):
@@ -2458,6 +2972,7 @@ class CoverageLedger:
         claim_requirement: ClaimRequirement,
         expected_manifest: VersionManifest,
         expected_authorization_binding: CoverageAuthorizationBinding | None = None,
+        expected_scope_authority: CoverageScopeAuthority | None = None,
     ) -> bool:
         return bool(
             self._direct_proof_records_for_claim(
@@ -2465,6 +2980,7 @@ class CoverageLedger:
                 claim_requirement,
                 expected_manifest,
                 expected_authorization_binding,
+                expected_scope_authority,
             )
         )
 
@@ -2474,6 +2990,7 @@ class CoverageLedger:
         claim_requirement: ClaimRequirement,
         expected_manifest: VersionManifest,
         expected_authorization_binding: CoverageAuthorizationBinding | None = None,
+        expected_scope_authority: CoverageScopeAuthority | None = None,
     ) -> bool:
         """Require two distinct typed populated-value proofs for partial conflict."""
 
@@ -2488,6 +3005,7 @@ class CoverageLedger:
                 claim_requirement,
                 expected_manifest,
                 expected_authorization_binding,
+                expected_scope_authority,
             )
             if record.populated_value_fingerprint is not None
         ]
@@ -2504,6 +3022,7 @@ class CoverageLedger:
         claim_requirement: ClaimRequirement,
         expected_manifest: VersionManifest,
         expected_authorization_binding: CoverageAuthorizationBinding | None = None,
+        expected_scope_authority: CoverageScopeAuthority | None = None,
     ) -> bool:
         """Return true only after validating all typed proof inputs."""
 
@@ -2512,6 +3031,7 @@ class CoverageLedger:
             claim_requirement,
             expected_manifest,
             expected_authorization_binding,
+            expected_scope_authority,
         ):
             return False
         if not self.complete_authorized_scope:
@@ -2525,6 +3045,7 @@ class CoverageLedger:
             claim_requirement,
             expected_manifest,
             self.authorization_binding,
+            expected_scope_authority,
         ):
             return False
         if set(self.relevant_inventory_item_ids) != set(
@@ -2652,6 +3173,11 @@ class AnswerClaim:
     claim_requirement: ClaimRequirement | None = field(default=None, repr=False, compare=False)
     source_inventory: SourceInventory | None = field(default=None, repr=False, compare=False)
     version_manifest: VersionManifest | None = field(default=None, repr=False, compare=False)
+    scope_authority: CoverageScopeAuthority | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     authorization_binding: CoverageAuthorizationBinding | None = field(
         default=None,
         repr=False,
@@ -2668,6 +3194,7 @@ class AnswerClaim:
                     self.claim_requirement,
                     self.source_inventory,
                     self.version_manifest,
+                    self.scope_authority,
                     self.authorization_binding,
                 )
             ):
@@ -2688,6 +3215,7 @@ class AnswerClaim:
                 claim_requirement=self.claim_requirement,
                 source_inventory=self.source_inventory,
                 version_manifest=self.version_manifest,
+                scope_authority=self.scope_authority,
                 authorization_binding=self.authorization_binding,
             )
             for field_name, value in normalized.items():
@@ -2715,6 +3243,7 @@ class AnswerClaim:
                 coverage_ledger=self.coverage_ledger,
                 source_inventory=self.source_inventory,
                 version_manifest=self.version_manifest,
+                scope_authority=self.scope_authority,
                 authorization_binding=self.authorization_binding,
             )
         if self.answer_claim_id:
@@ -2750,6 +3279,7 @@ class AnswerClaim:
         claim_requirement: ClaimRequirement | None = None,
         source_inventory: SourceInventory | None = None,
         version_manifest: VersionManifest | None = None,
+        scope_authority: CoverageScopeAuthority | None = None,
         authorization_binding: CoverageAuthorizationBinding | None = None,
         **values: Any,
     ) -> "AnswerClaim":
@@ -2764,6 +3294,7 @@ class AnswerClaim:
                 claim_requirement=claim_requirement,
                 source_inventory=source_inventory,
                 version_manifest=version_manifest,
+                scope_authority=scope_authority,
                 authorization_binding=authorization_binding,
             )
         )
@@ -2773,6 +3304,7 @@ class AnswerClaim:
             claim_requirement=claim_requirement,
             source_inventory=source_inventory,
             version_manifest=version_manifest,
+            scope_authority=scope_authority,
             authorization_binding=authorization_binding,
         )
 
@@ -2815,6 +3347,7 @@ class AnswerClaim:
             claim_requirement=self.claim_requirement,
             source_inventory=self.source_inventory,
             version_manifest=self.version_manifest,
+            scope_authority=self.scope_authority,
             authorization_binding=self.authorization_binding,
         )
         payload = {
@@ -2822,6 +3355,11 @@ class AnswerClaim:
             **self.to_dict(),
             "version_manifest_id": self.version_manifest_id,
             "implementation_fingerprint": self.implementation_fingerprint,
+            "scope_authority": (
+                self.scope_authority.to_persistence_dict()
+                if self.scope_authority is not None
+                else None
+            ),
         }
         payload = _without_none(payload)
         _assert_public_contract(payload, "answer_claim.persistence")
@@ -2853,6 +3391,8 @@ class AnswerClaim:
         claim_requirement: ClaimRequirement | None = None,
         source_inventory: SourceInventory | None = None,
         version_manifest: VersionManifest | None = None,
+        scope_authority: CoverageScopeAuthority | None = None,
+        expected_scope_authority: CoverageScopeAuthority | None = None,
         authorization_binding: CoverageAuthorizationBinding | None = None,
     ) -> "AnswerClaim":
         item = _mapping(value, "answer_claim.persistence")
@@ -2860,19 +3400,51 @@ class AnswerClaim:
             item,
             _ANSWER_CLAIM_PERSISTENCE_KEYS,
             "answer_claim.persistence",
-            required=_ANSWER_CLAIM_PERSISTENCE_KEYS,
+            required=_ANSWER_CLAIM_PERSISTENCE_KEYS - {"scope_authority"},
         )
+        if (
+            scope_authority is not None
+            and expected_scope_authority is not None
+            and scope_authority != expected_scope_authority
+        ):
+            raise ContractValidationError(
+                "answer claim supplied conflicting scope authority bindings"
+            )
+        trusted_scope_authority = (
+            expected_scope_authority if expected_scope_authority is not None else scope_authority
+        )
+        persisted_state = _required_str(item, "state")
+        persisted_scope_authority = item.get("scope_authority")
+        if persisted_scope_authority is not None:
+            parsed_scope_authority = CoverageScopeAuthority.from_persistence_dict(
+                _mapping(persisted_scope_authority, "answer_claim.scope_authority")
+            )
+            if (
+                trusted_scope_authority is not None
+                and trusted_scope_authority != parsed_scope_authority
+            ):
+                raise ContractValidationError(
+                    "answer claim scope authority does not match persistence"
+                )
+        if persisted_state != "INSUFFICIENT_COVERAGE" and (
+            trusted_scope_authority is None or persisted_scope_authority is None
+        ):
+            raise ContractValidationError(
+                "authoritative persisted claims require an independently supplied "
+                "scope authority binding"
+            )
         normalized = _validated_answer_claim_binding(
             item,
             coverage_ledger=coverage_ledger,
             claim_requirement=claim_requirement,
             source_inventory=source_inventory,
             version_manifest=version_manifest,
+            scope_authority=trusted_scope_authority,
             authorization_binding=authorization_binding,
         )
         return cls(
             answer_claim_id=_required_str(item, "answer_claim_id"),
-            state=_required_str(item, "state"),
+            state=persisted_state,
             reason_codes=_tuple_strings(item, "reason_codes", codes=True),
             claim_requirement_id=normalized["claim_requirement_id"],
             coverage_ledger_id=normalized["coverage_ledger_id"],
@@ -2887,6 +3459,7 @@ class AnswerClaim:
             claim_requirement=claim_requirement,
             source_inventory=source_inventory,
             version_manifest=version_manifest,
+            scope_authority=trusted_scope_authority,
             authorization_binding=authorization_binding,
         )
 
@@ -2898,6 +3471,7 @@ def _validated_answer_claim_binding(
     claim_requirement: ClaimRequirement | None,
     source_inventory: SourceInventory | None,
     version_manifest: VersionManifest | None,
+    scope_authority: CoverageScopeAuthority | None,
     authorization_binding: CoverageAuthorizationBinding | None,
 ) -> dict[str, Any]:
     if not isinstance(coverage_ledger, CoverageLedger):
@@ -2908,6 +3482,11 @@ def _validated_answer_claim_binding(
         raise ContractValidationError("answer claim requires a typed SourceInventory")
     if not isinstance(version_manifest, VersionManifest):
         raise ContractValidationError("answer claim requires a typed VersionManifest")
+    if scope_authority is not None and not isinstance(
+        scope_authority,
+        CoverageScopeAuthority,
+    ):
+        raise ContractValidationError("answer claim scope authority must be typed")
     if authorization_binding is not None and not isinstance(
         authorization_binding,
         CoverageAuthorizationBinding,
@@ -2923,11 +3502,26 @@ def _validated_answer_claim_binding(
         raise ContractValidationError(
             "answer claim supplied authorization without a ledger binding"
         )
+    if coverage_ledger.scope_partition is not None:
+        if scope_authority is None and values.get("state") != "INSUFFICIENT_COVERAGE":
+            raise ContractValidationError(
+                "authoritative claims require the independent scope authority bound to coverage"
+            )
+        if (
+            scope_authority is not None
+            and scope_authority != coverage_ledger.scope_partition.scope_authority
+        ):
+            raise ContractValidationError("answer claim scope authority does not match coverage")
+    elif scope_authority is not None:
+        raise ContractValidationError(
+            "answer claim supplied scope authority without a scope partition"
+        )
     if not coverage_ledger.binding_valid_for_claim(
         source_inventory,
         claim_requirement,
         version_manifest,
         authorization_binding,
+        scope_authority,
     ):
         raise ContractValidationError("answer claim coverage binding is not usable")
 
@@ -2955,6 +3549,7 @@ def _validate_answer_claim_state(
     coverage_ledger: CoverageLedger | None,
     source_inventory: SourceInventory | None,
     version_manifest: VersionManifest | None,
+    scope_authority: CoverageScopeAuthority | None,
     authorization_binding: CoverageAuthorizationBinding | None,
 ) -> None:
     if not isinstance(claim_requirement, ClaimRequirement):
@@ -2972,6 +3567,7 @@ def _validate_answer_claim_state(
         claim_requirement,
         version_manifest,
         authorization_binding,
+        scope_authority,
     )
     if state == "INSUFFICIENT_COVERAGE":
         return
@@ -2986,6 +3582,7 @@ def _validate_answer_claim_state(
                 claim_requirement,
                 version_manifest,
                 authorization_binding,
+                scope_authority,
             )
         ):
             return
@@ -3001,6 +3598,7 @@ def _validate_answer_claim_state(
                 claim_requirement,
                 version_manifest,
                 authorization_binding,
+                scope_authority,
             )
         ):
             return
@@ -3224,7 +3822,16 @@ def _public_safety_view(value: Any) -> Any:
                 "tfp"
                 if key in {"tokenizer_fingerprint", "tokenizer_version"}
                 else "ab"
-                if key == "authorization_binding"
+                if key
+                in {
+                    "authorization_binding",
+                    "authorization_decisions",
+                    "scope_authority",
+                }
+                else "rd"
+                if key == "relevance_decisions"
+                else "sp"
+                if key == "scope_policy"
                 else key
             ): _public_safety_view(item)
             for key, item in value.items()
@@ -3488,9 +4095,13 @@ __all__ = [
     "ClaimRequirement",
     "ClaimRequirementKind",
     "COVERAGE_FALLBACK_STATUS_VALUES",
+    "COVERAGE_ITEM_AUTHORIZATION_STATE_VALUES",
+    "COVERAGE_ITEM_RELEVANCE_STATE_VALUES",
     "COVERAGE_NON_SEARCH_REASON_VALUES",
     "COVERAGE_PROOF_KIND_VALUES",
     "CoverageAuthorizationBinding",
+    "CoverageItemAuthorizationDecision",
+    "CoverageItemRelevanceDecision",
     "CoverageFallbackStatus",
     "CoverageFallbackUsage",
     "CoverageLedger",
@@ -3499,6 +4110,8 @@ __all__ = [
     "CoverageProofKind",
     "CoverageProofRecord",
     "CoverageScopePartition",
+    "CoverageScopeAuthority",
+    "CoverageScopePolicyBinding",
     "CoverageVersionBinding",
     "DisplayPagination",
     "EvidenceVersionManifest",

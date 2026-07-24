@@ -8,6 +8,7 @@ from formowl_contract import (
     ClaimRequirement,
     ContractValidationError,
     CoverageLedger,
+    CoverageScopeAuthority,
     Observation,
     SourceInventory,
     SourceInventoryItem,
@@ -658,8 +659,21 @@ class MailEvidenceBundle:
     coverage_ledgers: list[CoverageLedger] = field(default_factory=list)
     answer_claims: list[AnswerClaim] = field(default_factory=list)
     version_manifests: list[VersionManifest] = field(default_factory=list)
+    _trusted_scope_authorities: Mapping[str, CoverageScopeAuthority] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
+        trusted_scope_authorities = dict(self._trusted_scope_authorities)
+        if any(
+            not isinstance(key, str) or not isinstance(authority, CoverageScopeAuthority)
+            for key, authority in trusted_scope_authorities.items()
+        ):
+            raise ContractValidationError(
+                "mail bundle scope authorities must be keyed typed authorities"
+            )
         inventory_by_id: dict[str, SourceInventory] = {}
         item_by_id: dict[str, SourceInventoryItem] = {}
         for inventory in self.source_inventory:
@@ -725,11 +739,16 @@ class MailEvidenceBundle:
                     ),
                     None,
                 )
-                if manifest is None or not ledger.binding_valid_for_claim(
-                    inventory,
-                    requirement,
-                    manifest,
-                    ledger.authorization_binding,
+                expected_scope_authority = trusted_scope_authorities.get(ledger.coverage_ledger_id)
+                if manifest is None or (
+                    expected_scope_authority is not None
+                    and not ledger.binding_valid_for_claim(
+                        inventory,
+                        requirement,
+                        manifest,
+                        ledger.authorization_binding,
+                        expected_scope_authority,
+                    )
                 ):
                     raise ContractValidationError(
                         "coverage ledger scope partition does not match bundle evidence"
@@ -863,9 +882,24 @@ class MailEvidenceBundle:
         )
 
     @classmethod
-    def from_persistence_dict(cls, value: dict[str, Any]) -> "MailEvidenceBundle":
+    def from_persistence_dict(
+        cls,
+        value: dict[str, Any],
+        *,
+        scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
+    ) -> "MailEvidenceBundle":
         item = _require_private_dict(value, "mail_evidence_bundle")
         _assert_private_mail_bundle_envelope_safe(item)
+        if scope_authorities is not None and not isinstance(scope_authorities, Mapping):
+            raise ContractValidationError("mail evidence scope authorities must be a mapping")
+        trusted_scope_authorities = dict(scope_authorities or {})
+        if any(
+            not isinstance(key, str) or not isinstance(authority, CoverageScopeAuthority)
+            for key, authority in trusted_scope_authorities.items()
+        ):
+            raise ContractValidationError(
+                "mail evidence scope authorities must be keyed typed authorities"
+            )
         wp1_persistence = _validate_wp1_persistence_state(item.get(_WP1_PERSISTENCE_FIELD))
         for field_name in _WP1_PERSISTENCE_FAMILY_FIELDS:
             if field_name not in item:
@@ -969,6 +1003,9 @@ class MailEvidenceBundle:
                         else None
                     ),
                     version_manifest=manifest_by_id.get(payload.get("version_manifest_id")),
+                    scope_authority=trusted_scope_authorities.get(
+                        payload.get("coverage_ledger_id")
+                    ),
                     authorization_binding=(
                         ledger_by_id[payload["coverage_ledger_id"]].authorization_binding
                         if payload.get("coverage_ledger_id") in ledger_by_id
@@ -977,6 +1014,7 @@ class MailEvidenceBundle:
                 ),
             ),
             version_manifests=version_manifests,
+            _trusted_scope_authorities=trusted_scope_authorities,
         )
         _validate_wp1_persistence_state(
             wp1_persistence,
@@ -1730,7 +1768,9 @@ def _private_plain(value: Any) -> Any:
         return value.to_persistence_dict()
     if is_dataclass(value):
         return {
-            key: _private_plain(item) for key, item in value.__dict__.items() if item is not None
+            key: _private_plain(item)
+            for key, item in value.__dict__.items()
+            if item is not None and key != "_trusted_scope_authorities"
         }
     if isinstance(value, Mapping):
         return {str(key): _private_plain(item) for key, item in value.items() if item is not None}

@@ -9,11 +9,15 @@ from formowl_contract import (
     ClaimRequirement,
     ContractValidationError,
     CoverageAuthorizationBinding,
+    CoverageItemAuthorizationDecision,
+    CoverageItemRelevanceDecision,
     CoverageFallbackUsage,
     CoverageLedger,
     CoverageObservationPartition,
     CoverageProofRecord,
     CoverageScopePartition,
+    CoverageScopeAuthority,
+    CoverageScopePolicyBinding,
     CoverageVersionBinding,
     SourceInventory,
     SourceInventoryItem,
@@ -23,6 +27,7 @@ from formowl_contract import (
 
 FP = "sha256:" + "a" * 64
 FP2 = "sha256:" + "b" * 64
+SCOPE_POLICY_FP = "sha256:" + "c" * 64
 
 
 class CoverageLedgerClosedProofTests(unittest.TestCase):
@@ -168,13 +173,22 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
     def test_usable_for_claim_validates_typed_bindings_and_processing(self) -> None:
         inventory, requirement, manifest, authorization, proof = _fixture()
         ledger = _complete_ledger(inventory, requirement, manifest, authorization, proof)
-        self.assertTrue(ledger.usable_for_claim(inventory, requirement, manifest, authorization))
+        self.assertTrue(
+            ledger.usable_for_claim(
+                inventory,
+                requirement,
+                manifest,
+                authorization,
+                ledger.scope_partition.scope_authority,
+            )
+        )
         self.assertFalse(
             ledger.usable_for_claim(
                 inventory,
                 requirement,
                 replace(manifest, index_fingerprint=FP2),
                 authorization,
+                ledger.scope_partition.scope_authority,
             )
         )
         self.assertFalse(
@@ -183,6 +197,7 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
                 requirement,
                 replace(manifest, index_freshness="stale"),
                 authorization,
+                ledger.scope_partition.scope_authority,
             )
         )
         self.assertFalse(
@@ -191,6 +206,7 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
                 requirement,
                 manifest,
                 replace(authorization, grant_revision=FP2),
+                ledger.scope_partition.scope_authority,
             )
         )
         self.assertFalse(
@@ -199,12 +215,25 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
                 replace(requirement, query_id="query_other"),
                 manifest,
                 authorization,
+                ledger.scope_partition.scope_authority,
             )
         )
         with self.assertRaises(ContractValidationError):
-            ledger.usable_for_claim(object(), requirement, manifest, authorization)  # type: ignore[arg-type]
+            ledger.usable_for_claim(
+                object(),
+                requirement,
+                manifest,
+                authorization,
+                ledger.scope_partition.scope_authority,
+            )  # type: ignore[arg-type]
         with self.assertRaises(ContractValidationError):
-            ledger.usable_for_claim(inventory, requirement, object(), authorization)  # type: ignore[arg-type]
+            ledger.usable_for_claim(
+                inventory,
+                requirement,
+                object(),
+                authorization,
+                ledger.scope_partition.scope_authority,
+            )  # type: ignore[arg-type]
 
     def test_usable_for_claim_rejects_unsearched_or_mismatched_proof(self) -> None:
         inventory, requirement, manifest, authorization, proof = _fixture()
@@ -263,6 +292,7 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
                 requirement,
                 manifest,
                 authorization,
+                failed_ledger.scope_partition.scope_authority,
             )
         )
 
@@ -355,14 +385,39 @@ def _complete_ledger(
     authorization: CoverageAuthorizationBinding,
     proof: CoverageProofRecord,
 ) -> CoverageLedger:
-    scope_partition = CoverageScopePartition.create(
+    policy = CoverageScopePolicyBinding(
+        scope_policy_id="scope-policy-wp1",
+        scope_policy_version="1",
+        scope_policy_fingerprint=SCOPE_POLICY_FP,
+    )
+    authorizations = tuple(
+        CoverageItemAuthorizationDecision.create(
+            source_inventory_item=item,
+            authorization_binding=authorization,
+            decision_state="authorized",
+        )
+        for item in inventory.items
+    )
+    relevance = tuple(
+        CoverageItemRelevanceDecision.create(
+            source_inventory_item=item,
+            claim_requirement=requirement,
+            scope_policy=policy,
+            decision_state="relevant",
+        )
+        for item in inventory.items
+    )
+    authority = CoverageScopeAuthority.create(
         source_inventory=inventory,
         claim_requirement=requirement,
         authorization_binding=authorization,
         version_manifest=manifest,
-        authorized_relevant_item_ids=(inventory.items[0].source_inventory_item_id,),
-        authorized_irrelevant_item_ids=(),
-        ineligible_item_ids=(),
+        scope_policy=policy,
+        authorization_decisions=authorizations,
+        relevance_decisions=relevance,
+    )
+    scope_partition = CoverageScopePartition.create(
+        scope_authority=authority,
         observation_partitions=(
             CoverageObservationPartition(
                 inventory_item_id=inventory.items[0].source_inventory_item_id,

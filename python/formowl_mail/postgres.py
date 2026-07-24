@@ -8,6 +8,7 @@ from formowl_contract import (
     ClaimRequirement,
     ContractValidationError,
     CoverageLedger,
+    CoverageScopeAuthority,
     Grant,
     SourceInventory,
     SourceInventoryItem,
@@ -93,6 +94,7 @@ class PostgreSQLMailEvidenceStore:
         bundle: MailEvidenceBundle | dict[str, Any],
         *,
         transaction: PostgreSQLUnitOfWork | None = None,
+        scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
     ) -> list[SQLStatement]:
         """Persist one bundle atomically.
 
@@ -105,20 +107,31 @@ class PostgreSQLMailEvidenceStore:
 
         if transaction is None:
             with PostgreSQLUnitOfWork(self.connection) as unit:
-                statements = self._upsert_bundle_in_transaction(bundle)
+                statements = self._upsert_bundle_in_transaction(
+                    bundle,
+                    scope_authorities=scope_authorities,
+                )
                 unit.commit()
                 return statements
         if transaction.connection is not self.connection or not transaction.active:
             raise ContractValidationError(
                 "mail evidence upsert requires an active transaction for its connection"
             )
-        return self._upsert_bundle_in_transaction(bundle)
+        return self._upsert_bundle_in_transaction(
+            bundle,
+            scope_authorities=scope_authorities,
+        )
 
     def _upsert_bundle_in_transaction(
         self,
         bundle: MailEvidenceBundle | dict[str, Any],
+        *,
+        scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
     ) -> list[SQLStatement]:
-        validated = _validate_bundle(bundle)
+        validated = _validate_bundle(
+            bundle,
+            scope_authorities=scope_authorities,
+        )
         statements = _statements_for_bundle(validated)
         for statement in statements:
             self.connection.execute(statement)
@@ -129,6 +142,7 @@ class PostgreSQLMailEvidenceStore:
         *,
         mail_import_session_id: str | None = None,
         mail_evidence_bundle_id: str | None = None,
+        scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
     ) -> MailEvidenceBundle | None:
         if not mail_import_session_id and not mail_evidence_bundle_id:
             raise ContractValidationError(
@@ -427,6 +441,9 @@ class PostgreSQLMailEvidenceStore:
                         else None
                     ),
                     version_manifest=manifest_by_id.get(payload.get("version_manifest_id")),
+                    scope_authority=(
+                        (scope_authorities or {}).get(payload.get("coverage_ledger_id"))
+                    ),
                     authorization_binding=(
                         ledger_by_id[payload["coverage_ledger_id"]].authorization_binding
                         if payload.get("coverage_ledger_id") in ledger_by_id
@@ -502,7 +519,10 @@ class PostgreSQLMailEvidenceStore:
                 for field_name in _WP1_PERSISTENCE_FAMILY_FIELDS
             },
         )
-        return MailEvidenceBundle.from_persistence_dict(bundle_payload)
+        return MailEvidenceBundle.from_persistence_dict(
+            bundle_payload,
+            scope_authorities=scope_authorities,
+        )
 
 
 def build_postgre_sql_mail_evidence_query_handler(
@@ -1317,14 +1337,21 @@ def _query_rows_by_ids(
     return canonical_order_records(canonical_table_family(table_name), records)
 
 
-def _validate_bundle(bundle: MailEvidenceBundle | dict[str, Any]) -> MailEvidenceBundle:
+def _validate_bundle(
+    bundle: MailEvidenceBundle | dict[str, Any],
+    *,
+    scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
+) -> MailEvidenceBundle:
     if isinstance(bundle, MailEvidenceBundle):
         payload = bundle.to_persistence_dict()
     elif isinstance(bundle, dict):
         payload = to_plain(bundle)
     else:
         raise ContractValidationError("mail evidence store requires a bundle")
-    return MailEvidenceBundle.from_persistence_dict(payload)
+    return MailEvidenceBundle.from_persistence_dict(
+        payload,
+        scope_authorities=scope_authorities,
+    )
 
 
 def _payload(row: dict[str, Any]) -> dict[str, Any]:
