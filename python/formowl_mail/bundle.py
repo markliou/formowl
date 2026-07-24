@@ -585,7 +585,13 @@ class MailEvidenceBundle:
             },
             "parse_status": self.mail_parse_run.status,
         }
-        if not has_structural_records:
+        denied_scope = (
+            isinstance(scope_decision, StructuralPublicScopeDecision)
+            and scope_decision.decision_state == "denied"
+        )
+        if denied_scope:
+            payload["structural_evidence"] = _structural_denial()
+        elif not has_structural_records:
             payload["structural_evidence"] = {"status": "not_present"}
         else:
             assert scope_decision is not None
@@ -594,29 +600,24 @@ class MailEvidenceBundle:
                 for inventory in self.source_inventory
                 for item in inventory.items
             }
-            if scope_decision.decision_state == "denied":
-                payload["structural_evidence"] = _structural_denial()
-            else:
-                payload["structural_evidence"] = {
-                    "status": "authorized",
-                    "source_inventory": [
-                        inventory.to_public_dict(scope_decision=scope_decision)
-                        for inventory in self.source_inventory
-                    ],
-                    "source_inventory_items": [
-                        item.to_public_dict(scope_decision=scope_decision)
-                        for item in self.source_inventory_items
-                    ],
-                    "structural_observations": [
-                        observation.to_public_dict(
-                            scope_decision=scope_decision,
-                            source_inventory_item=item_by_id.get(
-                                observation.source_inventory_item_id
-                            ),
-                        )
-                        for observation in self.structural_observations
-                    ],
-                }
+            payload["structural_evidence"] = {
+                "status": "authorized",
+                "source_inventory": [
+                    inventory.to_public_dict(scope_decision=scope_decision)
+                    for inventory in self.source_inventory
+                ],
+                "source_inventory_items": [
+                    item.to_public_dict(scope_decision=scope_decision)
+                    for item in self.source_inventory_items
+                ],
+                "structural_observations": [
+                    observation.to_public_dict(
+                        scope_decision=scope_decision,
+                        source_inventory_item=item_by_id.get(observation.source_inventory_item_id),
+                    )
+                    for observation in self.structural_observations
+                ],
+            }
         assert_public_payload_safe(payload, "mail_evidence_bundle.public")
         if include_answer_claims:
             assert scope_decision is not None

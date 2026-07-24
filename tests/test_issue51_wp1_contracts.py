@@ -157,13 +157,42 @@ class Issue51WP1ContractTests(unittest.TestCase):
             source_inventory=[empty_inventory],
             structural_observations=[empty_observation],
         )
+        genuinely_empty_bundle = _minimal_bundle()
         self.assertEqual(
             populated_bundle.to_public_dict(scope_decision=denied)["structural_evidence"],
             empty_bundle.to_public_dict(scope_decision=denied)["structural_evidence"],
         )
         self.assertEqual(
             populated_bundle.to_public_dict(scope_decision=denied)["structural_evidence"],
-            empty_bundle.to_public_dict(scope_decision=denied)["structural_evidence"],
+            genuinely_empty_bundle.to_public_dict(scope_decision=denied)["structural_evidence"],
+        )
+        populated_claim_bundle, _, _, _ = _inventory_bundle()
+        self.assertEqual(
+            genuinely_empty_bundle.to_public_dict(
+                scope_decision=denied,
+                include_answer_claims=True,
+            ),
+            {
+                **genuinely_empty_bundle.to_public_dict(scope_decision=denied),
+                "answer_claims": {"status": "denied", "reason_code": "scope_denied"},
+            },
+        )
+        self.assertEqual(
+            populated_claim_bundle.to_public_dict(
+                scope_decision=denied,
+                include_answer_claims=True,
+            )["structural_evidence"],
+            genuinely_empty_bundle.to_public_dict(
+                scope_decision=denied,
+                include_answer_claims=True,
+            )["structural_evidence"],
+        )
+        self.assertEqual(
+            populated_claim_bundle.to_public_dict(
+                scope_decision=denied,
+                include_answer_claims=True,
+            )["answer_claims"],
+            {"status": "denied", "reason_code": "scope_denied"},
         )
 
     def test_structural_private_serialization_round_trips_exactly(self) -> None:
