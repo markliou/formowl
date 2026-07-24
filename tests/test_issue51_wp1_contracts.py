@@ -29,6 +29,7 @@ from formowl_contract import (
 from formowl_graph.storage import (
     PostgreSQLMigrationRunner,
     PostgreSQLUnitOfWork,
+    SQLStatement,
     migration_files,
 )
 from formowl_mail.bundle import (
@@ -1493,6 +1494,108 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 )
                 self.assertEqual(set(statement.parameters), insert_columns)
 
+    def test_wp1_immutable_rows_are_idempotent_and_reject_collisions(self) -> None:
+        bundle, inventory, _, _ = _inventory_bundle()
+        observation = StructuralObservation.create(
+            source_inventory_item_id=inventory.items[0].source_inventory_item_id,
+            source_asset_id=inventory.source_asset_id,
+            source_observation_id="observation_append_only_wp1",
+            structure_kind="table",
+            columns=(),
+            rows=(),
+            header_relationships=(),
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+        )
+        bundle = replace(bundle, structural_observations=[observation])
+        connection = _RowsConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+
+        statements = store.upsert_bundle(bundle)
+        first_rows = deepcopy(connection.rows)
+        store.upsert_bundle(bundle)
+        self.assertEqual(connection.rows, first_rows)
+
+        wp1_tables = (
+            "source_inventory",
+            "source_inventory_item",
+            "structural_observation",
+            "claim_requirement",
+            "coverage_ledger",
+            "answer_claim",
+            "version_manifest",
+        )
+        ddl = Path("python/formowl_graph/storage/migrations/006_evidence_coverage.sql").read_text(
+            encoding="utf-8"
+        )
+        for table_name in wp1_tables:
+            with self.subTest(table_name=table_name):
+                statement = next(
+                    statement
+                    for statement in statements
+                    if f"INSERT INTO {table_name} " in statement.sql
+                )
+                self.assertIn("payload_hash = CASE", statement.sql)
+                self.assertIn("IS NOT DISTINCT FROM EXCLUDED.payload", statement.sql)
+                self.assertIn("IS NOT DISTINCT FROM EXCLUDED.payload_hash", statement.sql)
+                self.assertIn("ELSE NULL", statement.sql)
+                self.assertNotIn("payload = EXCLUDED.payload", statement.sql)
+                id_field = statement.sql.split("(", 1)[1].split(",", 1)[0]
+                for field_name in statement.parameters:
+                    if field_name not in {id_field, "payload", "payload_hash"}:
+                        self.assertIn(
+                            f"{table_name}.{field_name} IS NOT DISTINCT FROM "
+                            f"EXCLUDED.{field_name}",
+                            statement.sql,
+                        )
+                table_ddl = ddl.split(f"CREATE TABLE IF NOT EXISTS {table_name} (", 1)[1].split(
+                    ");", 1
+                )[0]
+                self.assertIn("payload_hash text NOT NULL", table_ddl)
+
+                changed_payload = deepcopy(statement.parameters)
+                changed_payload["payload"] = {
+                    **changed_payload["payload"],
+                    "append_only_collision": table_name,
+                }
+                with self.assertRaises(ContractValidationError):
+                    connection.execute(
+                        SQLStatement(
+                            sql=statement.sql,
+                            parameters=changed_payload,
+                        )
+                    )
+                self.assertEqual(connection.rows, first_rows)
+
+                changed_hash = deepcopy(statement.parameters)
+                changed_hash["payload_hash"] = changed_hash["payload_hash"] + "-collision"
+                with self.assertRaises(ContractValidationError):
+                    connection.execute(
+                        SQLStatement(
+                            sql=statement.sql,
+                            parameters=changed_hash,
+                        )
+                    )
+                self.assertEqual(connection.rows, first_rows)
+
+                relationship_field = next(
+                    field_name
+                    for field_name in statement.parameters
+                    if field_name not in {id_field, "payload", "payload_hash"}
+                )
+                changed_relationship = deepcopy(statement.parameters)
+                changed_relationship[relationship_field] = (
+                    changed_relationship[relationship_field] + "-collision"
+                )
+                with self.assertRaises(ContractValidationError):
+                    connection.execute(
+                        SQLStatement(
+                            sql=statement.sql,
+                            parameters=changed_relationship,
+                        )
+                    )
+                self.assertEqual(connection.rows, first_rows)
+
     def test_postgres_scoped_relationship_rows_fail_closed(self) -> None:
         bundle, inventory, _, ledger = _inventory_bundle()
         observation = StructuralObservation.create(
@@ -1958,12 +2061,25 @@ class _RowsConnection:
             "mail_import_session": "mail_import_session_id",
             "source_inventory": "source_inventory_id",
             "source_inventory_item": "source_inventory_item_id",
+            "structural_observation": "structural_observation_id",
             "claim_requirement": "claim_requirement_id",
             "coverage_ledger": "coverage_ledger_id",
             "version_manifest": "version_manifest_id",
             "answer_claim": "answer_claim_id",
         }.get(table, next(iter(statement.parameters)))
-        self.rows.setdefault(table, {})[str(statement.parameters[key])] = dict(statement.parameters)
+        record_id = str(statement.parameters[key])
+        existing = self.rows.get(table, {}).get(record_id)
+        if existing is not None and "payload_hash = CASE" in sql:
+            immutable_fields = set(statement.parameters) - {"payload", "payload_hash"}
+            if any(
+                existing.get(field_name) != statement.parameters.get(field_name)
+                for field_name in immutable_fields
+            ) or existing.get("payload") != statement.parameters.get("payload"):
+                raise ContractValidationError("immutable persisted mail evidence record collision")
+            if existing.get("payload_hash") != statement.parameters.get("payload_hash"):
+                raise ContractValidationError("immutable persisted mail evidence record collision")
+            return
+        self.rows.setdefault(table, {})[record_id] = dict(statement.parameters)
 
     def query_one(self, statement: object) -> dict[str, object] | None:
         self.queries.append(statement)

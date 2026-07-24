@@ -703,6 +703,7 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
             mail_import_session_id=import_session_id,
             workspace_id=workspace_id,
             owner_user_id=owner_user_id,
+            append_only=True,
             extra_parameters={
                 "source_asset_id": inventory.source_asset_id,
                 "source_fingerprint": inventory.source_fingerprint,
@@ -719,6 +720,7 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
             mail_import_session_id=import_session_id,
             workspace_id=workspace_id,
             owner_user_id=owner_user_id,
+            append_only=True,
             extra_parameters={
                 "source_inventory_id": item.source_inventory_id,
                 "source_asset_id": item.source_asset_id,
@@ -736,6 +738,7 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
             mail_import_session_id=import_session_id,
             workspace_id=workspace_id,
             owner_user_id=owner_user_id,
+            append_only=True,
             extra_parameters={
                 "source_inventory_item_id": item.source_inventory_item_id,
                 "source_inventory_id": inventory_by_item_id[item.source_inventory_item_id][
@@ -756,6 +759,7 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
             mail_import_session_id=import_session_id,
             workspace_id=workspace_id,
             owner_user_id=owner_user_id,
+            append_only=True,
             extra_parameters={"query_id": item.query_id},
         )
         for item in bundle.claim_requirements
@@ -768,6 +772,7 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
             mail_import_session_id=import_session_id,
             workspace_id=workspace_id,
             owner_user_id=owner_user_id,
+            append_only=True,
             extra_parameters={
                 "query_id": item.query_id,
                 "claim_requirement_id": item.claim_requirement_id,
@@ -787,6 +792,7 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
             mail_import_session_id=import_session_id,
             workspace_id=workspace_id,
             owner_user_id=owner_user_id,
+            append_only=True,
             extra_parameters={
                 "claim_requirement_id": item.claim_requirement_id,
                 "coverage_ledger_id": item.coverage_ledger_id,
@@ -802,6 +808,7 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
             mail_import_session_id=import_session_id,
             workspace_id=workspace_id,
             owner_user_id=owner_user_id,
+            append_only=True,
         )
         for item in bundle.version_manifests
     )
@@ -890,6 +897,7 @@ def _import_scoped_statement(
     mail_import_session_id: str,
     workspace_id: str,
     owner_user_id: str,
+    append_only: bool = False,
     extra_parameters: dict[str, Any] | None = None,
 ) -> SQLStatement:
     _validate_table_name(table_name)
@@ -904,6 +912,32 @@ def _import_scoped_statement(
         _validate_record_id(str(value), key)
     extra_columns = "".join(f", {key}" for key in extras)
     extra_values = "".join(f", %({key})s" for key in extras)
+    immutable_columns = (
+        "mail_import_session_id",
+        "workspace_id",
+        "owner_user_id",
+        *extras,
+        "payload",
+        "payload_hash",
+    )
+    conflict_predicate = " AND ".join(
+        f"{table_name}.{column} IS NOT DISTINCT FROM EXCLUDED.{column}"
+        for column in immutable_columns
+    )
+    conflict_update = (
+        f"ON CONFLICT ({id_field}) DO UPDATE SET "
+        f"payload = {table_name}.payload, "
+        "payload_hash = CASE "
+        f"WHEN {conflict_predicate} THEN {table_name}.payload_hash "
+        "ELSE NULL END, "
+        f"updated_at = {table_name}.updated_at"
+        if append_only
+        else (
+            f"ON CONFLICT ({id_field}) DO UPDATE SET "
+            "payload = EXCLUDED.payload, payload_hash = EXCLUDED.payload_hash, "
+            "updated_at = now()"
+        )
+    )
     return SQLStatement(
         sql=(
             f"INSERT INTO {table_name} "
@@ -911,9 +945,7 @@ def _import_scoped_statement(
             f"{extra_columns}, payload, payload_hash) "
             f"VALUES (%({id_field})s, %(mail_import_session_id)s, %(workspace_id)s, "
             f"%(owner_user_id)s{extra_values}, %(payload)s::jsonb, %(payload_hash)s) "
-            f"ON CONFLICT ({id_field}) DO UPDATE SET "
-            "payload = EXCLUDED.payload, payload_hash = EXCLUDED.payload_hash, "
-            "updated_at = now()"
+            f"{conflict_update}"
         ),
         parameters={
             id_field: record_id,
