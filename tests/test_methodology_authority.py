@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -36,6 +37,7 @@ class MethodologyAuthorityTests(unittest.TestCase):
         self.assertFalse(report["tokenizer_probe"]["cjk_support"])
         self.assertTrue(report["tokenizer_probe"]["ascii_identifier_support"])
         self.assertTrue(report["tokenizer_probe"]["runtime_probe_valid"])
+        self.assertEqual(report["tokenizer_probe"]["runtime_availability"], "available")
         self.assertEqual(
             report["tokenizer_probe"]["query_tokenizer_id"],
             "ascii_identifier_regex_v1",
@@ -62,6 +64,72 @@ class MethodologyAuthorityTests(unittest.TestCase):
         for forbidden in ("/home/", "/tmp/", "/workspace/", "postgresql://", "raw_path"):
             self.assertNotIn(forbidden, rendered)
 
+    def test_bare_unavailable_profile_is_valid_but_blocked(self) -> None:
+        environment = os.environ.copy()
+        environment.pop("FORMOWL_MAIL_TOKENIZER_MODE", None)
+        environment.pop("FORMOWL_MAIL_SENTENCEPIECE_MODEL", None)
+        environment.pop("FORMOWL_MAIL_SENTENCEPIECE_MODEL_SHA256", None)
+
+        with patch.dict(os.environ, environment, clear=True):
+            result = check_methodology_authority(repository_root=ROOT)
+
+        self.assertTrue(result.authority_valid)
+        self.assertFalse(result.methodology_ready)
+        self.assertEqual(result.errors, ())
+        self.assertEqual(
+            result.tokenizer_probe.runtime_availability,
+            "unavailable_profile",
+        )
+        self.assertFalse(result.tokenizer_probe.runtime_probe_valid)
+        self.assertEqual(
+            result.tokenizer_probe.tokenizer_id,
+            "jieba_sentencepiece_frozen_profile_candidate_admission_v1",
+        )
+
+        completed = subprocess.run(
+            [sys.executable, "scripts/methodology_authority_check.py", "--check"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertTrue(report["authority_valid"])
+        self.assertFalse(report["methodology_ready"])
+        self.assertEqual(
+            report["tokenizer_probe"]["runtime_availability"],
+            "unavailable_profile",
+        )
+        entrypoint = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from formowl_mail import query",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        self.assertNotEqual(entrypoint.returncode, 0)
+        self.assertIn("frozen tokenizer profile is unavailable", entrypoint.stderr)
+
+    def test_explicit_legacy_test_mode_is_available_but_not_target_ready(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"FORMOWL_MAIL_TOKENIZER_MODE": "legacy_ascii_test"},
+            clear=False,
+        ):
+            os.environ.pop("FORMOWL_MAIL_SENTENCEPIECE_MODEL", None)
+            os.environ.pop("FORMOWL_MAIL_SENTENCEPIECE_MODEL_SHA256", None)
+            probe = probe_runtime_tokenizers(repository_root=ROOT)
+
+        self.assertEqual(probe.runtime_availability, "available")
+        self.assertTrue(probe.runtime_probe_valid)
+        self.assertEqual(probe.tokenizer_id, "ascii_identifier_regex_v1")
+        self.assertFalse(probe.cjk_support)
+
     def test_runtime_probe_detects_tokenizer_drift_instead_of_trusting_manifest(self) -> None:
         def target_like_tokenizer(value: str) -> set[str]:
             if value.startswith("PO470002002"):
@@ -78,6 +146,7 @@ class MethodologyAuthorityTests(unittest.TestCase):
         )
 
         self.assertEqual(result.tokenizer_id, "unregistered_runtime_tokenizer")
+        self.assertEqual(result.runtime_availability, "available")
         self.assertTrue(result.runtime_probe_valid)
         self.assertTrue(result.ascii_identifier_support)
         self.assertTrue(result.cjk_support)
@@ -91,9 +160,34 @@ class MethodologyAuthorityTests(unittest.TestCase):
             target.tokenizer_id,
             "jieba_sentencepiece_frozen_profile_candidate_admission_v1",
         )
+        self.assertEqual(target.runtime_availability, "available")
         self.assertTrue(target.runtime_probe_valid)
         self.assertTrue(target.ascii_identifier_support)
         self.assertTrue(target.cjk_support)
+
+    def test_configured_target_profile_is_classified_as_available(self) -> None:
+        target_tokenizer_id = "jieba_sentencepiece_frozen_profile_candidate_admission_v1"
+
+        def configured_target_tokenizer(value: str) -> set[str]:
+            if value.startswith("PO470002002"):
+                return {
+                    "po470002002",
+                    "03.80503g301",
+                    "supplier@example.test",
+                }
+            return {"查詢", "交期", "與", "產地"}
+
+        result = probe_runtime_tokenizers(
+            query_tokenize=configured_target_tokenizer,
+            evidence_tokenize=configured_target_tokenizer,
+            query_tokenizer_id=target_tokenizer_id,
+            evidence_tokenizer_id=target_tokenizer_id,
+        )
+
+        self.assertEqual(result.runtime_availability, "available")
+        self.assertTrue(result.runtime_probe_valid)
+        self.assertEqual(result.tokenizer_id, target_tokenizer_id)
+        self.assertTrue(result.cjk_support)
 
     def test_ascii_tokenizer_capability_boundary_is_explicit(self) -> None:
         self.assertEqual(

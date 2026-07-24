@@ -75,7 +75,7 @@ archival is preserved at
 
 - [ ] Align the real runtime with the active methodology authority before any further methodology-quality UAT or KG-versus-ontology claim.
   - Owner paths: issue #51 implementation, issue #52 independent acceptance, `docs/methodology-authority.json`, mail/evaluator contracts, real-source evaluation, and tests.
-  - Current state: the canonical unit-test process reports valid-but-blocked under its explicit legacy tokenizer mode; bare runtime probing fails closed when the pinned tokenizer profile is unavailable. #51 owns the implementation boundary and #52 owns independent raw-PST acceptance.
+  - Current state: the plain guard reports valid-but-blocked with an explicit unavailable-profile classification when the pinned tokenizer profile is absent; actual runtime/UAT/evaluation entrypoints remain fail-closed. The canonical unit-test process reports valid-but-blocked under its explicit legacy tokenizer mode. #51 owns the implementation boundary and #52 owns independent raw-PST acceptance.
 
 - [ ] Complete Issue #49: source-neutral tokenizer replay and full-chat UAT
   evidence.

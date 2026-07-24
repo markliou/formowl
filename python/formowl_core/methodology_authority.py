@@ -215,6 +215,9 @@ _MINIMUM_REAL_USER_CASE_COUNT = 100
 _MINIMUM_END_ANSWER_ACCURACY_PPM = 900_000
 _REQUIRED_CITATION_SUPPORT_PPM = 1_000_000
 _GATE_EXECUTABLE_VALIDATORS: dict[str, Callable[..., bool]] = {}
+_RUNTIME_AVAILABLE = "available"
+_RUNTIME_UNAVAILABLE_PROFILE = "unavailable_profile"
+_RUNTIME_INVALID = "invalid"
 
 
 @dataclass(frozen=True)
@@ -222,6 +225,7 @@ class TokenizerProbe:
     tokenizer_id: str
     query_tokenizer_id: str | None
     evidence_tokenizer_id: str | None
+    runtime_availability: str
     runtime_probe_valid: bool
     ascii_identifier_support: bool
     cjk_support: bool
@@ -233,6 +237,7 @@ class TokenizerProbe:
             "tokenizer_id": self.tokenizer_id,
             "query_tokenizer_id": self.query_tokenizer_id,
             "evidence_tokenizer_id": self.evidence_tokenizer_id,
+            "runtime_availability": self.runtime_availability,
             "runtime_probe_valid": self.runtime_probe_valid,
             "ascii_identifier_support": self.ascii_identifier_support,
             "cjk_support": self.cjk_support,
@@ -351,11 +356,22 @@ def check_methodology_authority(
     if type(declared_cjk_support) is not bool:
         errors.append("current_runtime.mail_query_cjk_supported_must_be_bool")
 
-    if not probe.runtime_probe_valid:
+    if (
+        not probe.runtime_probe_valid
+        and probe.runtime_availability != _RUNTIME_UNAVAILABLE_PROFILE
+    ):
         errors.append("runtime_tokenizer_probe_failed")
-    if current_tokenizer_id and current_tokenizer_id != probe.tokenizer_id:
+    if (
+        probe.runtime_availability != _RUNTIME_UNAVAILABLE_PROFILE
+        and current_tokenizer_id
+        and current_tokenizer_id != probe.tokenizer_id
+    ):
         errors.append("runtime_tokenizer_id_drift")
-    if type(declared_cjk_support) is bool and declared_cjk_support != probe.cjk_support:
+    if (
+        probe.runtime_availability != _RUNTIME_UNAVAILABLE_PROFILE
+        and type(declared_cjk_support) is bool
+        and declared_cjk_support != probe.cjk_support
+    ):
         errors.append("runtime_cjk_capability_drift")
     runtime_binding_hashes = _validate_pipeline_source_bindings(
         repository_root,
@@ -422,7 +438,13 @@ def check_methodology_authority(
         errors=errors,
     )
     authority_valid = not errors
-    methodology_ready = authority_valid and status == "ready" and not blocking_gate_ids
+    methodology_ready = (
+        authority_valid
+        and status == "ready"
+        and not blocking_gate_ids
+        and probe.runtime_availability == _RUNTIME_AVAILABLE
+        and probe.runtime_probe_valid
+    )
     return MethodologyAuthorityResult(
         authority_valid=authority_valid,
         methodology_ready=methodology_ready,
@@ -452,6 +474,7 @@ def probe_runtime_tokenizers(
 ) -> TokenizerProbe:
     """Classify runtime tokenizer behavior with safe ASCII and CJK canaries."""
 
+    runtime_availability = _RUNTIME_AVAILABLE
     runtime_probe_valid = True
     query_ascii: set[str] = set()
     evidence_ascii: set[str] = set()
@@ -468,8 +491,24 @@ def probe_runtime_tokenizers(
                 "package.__path__ = [str(root / 'python' / 'formowl_mail')]",
                 "package.__package__ = 'formowl_mail'",
                 "sys.modules['formowl_mail'] = package",
-                "query = importlib.import_module('formowl_mail.query')",
-                "evidence = importlib.import_module('formowl_mail.evidence')",
+                "try:",
+                "    query = importlib.import_module('formowl_mail.query')",
+                "    evidence = importlib.import_module('formowl_mail.evidence')",
+                "except RuntimeError as exc:",
+                "    if str(exc) != 'frozen tokenizer profile is unavailable':",
+                "        raise",
+                "    from formowl_core.tokenization import JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID",
+                "    print(json.dumps({",
+                "        'valid': True,",
+                "        'runtime_availability': 'unavailable_profile',",
+                "        'query_tokenizer_id': JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,",
+                "        'evidence_tokenizer_id': JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,",
+                "        'query_ascii': [],",
+                "        'evidence_ascii': [],",
+                "        'query_cjk': [],",
+                "        'evidence_cjk': [],",
+                "    }, sort_keys=True))",
+                "    raise SystemExit(0)",
                 "def capture(module, value):",
                 "    result = module._tokenize(value)",
                 "    if type(result) is not set or any(type(item) is not str for item in result):",
@@ -477,6 +516,7 @@ def probe_runtime_tokenizers(
                 "    return sorted(result)",
                 "payload = {",
                 "    'valid': True,",
+                "    'runtime_availability': 'available',",
                 "    'query_tokenizer_id': getattr(query, 'MAIL_TOKENIZER_ID', None),",
                 "    'evidence_tokenizer_id': getattr(evidence, 'MAIL_TOKENIZER_ID', None),",
                 f"    'query_ascii': capture(query, {_ASCII_PROBE!r}),",
@@ -510,6 +550,7 @@ def probe_runtime_tokenizers(
             payload = json.loads(completed.stdout)
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
             payload = {}
+            runtime_availability = _RUNTIME_INVALID
         if (
             completed is None
             or completed.returncode != 0
@@ -517,6 +558,7 @@ def probe_runtime_tokenizers(
             or set(payload)
             != {
                 "valid",
+                "runtime_availability",
                 "query_tokenizer_id",
                 "evidence_tokenizer_id",
                 "query_ascii",
@@ -526,8 +568,16 @@ def probe_runtime_tokenizers(
             }
             or payload.get("valid") is not True
         ):
+            runtime_availability = _RUNTIME_INVALID
             runtime_probe_valid = False
         else:
+            runtime_availability = payload["runtime_availability"]
+            if runtime_availability not in {
+                _RUNTIME_AVAILABLE,
+                _RUNTIME_UNAVAILABLE_PROFILE,
+            }:
+                runtime_availability = _RUNTIME_INVALID
+                runtime_probe_valid = False
             query_tokenizer_id = payload.get("query_tokenizer_id")
             evidence_tokenizer_id = payload.get("evidence_tokenizer_id")
             token_lists = (
@@ -547,7 +597,10 @@ def probe_runtime_tokenizers(
                 query_ascii, evidence_ascii, query_cjk, evidence_cjk = (
                     set(items) for items in token_lists
                 )
+            if runtime_availability == _RUNTIME_UNAVAILABLE_PROFILE:
+                runtime_probe_valid = False
     elif query_tokenize is None or evidence_tokenize is None:
+        runtime_availability = _RUNTIME_INVALID
         runtime_probe_valid = False
     else:
         try:
@@ -558,12 +611,14 @@ def probe_runtime_tokenizers(
                 evidence_tokenize(_CJK_PROBE),
             )
         except Exception:
+            runtime_availability = _RUNTIME_INVALID
             runtime_probe_valid = False
         else:
             if any(
                 type(tokens) is not set or any(type(token) is not str for token in tokens)
                 for tokens in raw_tokens
             ):
+                runtime_availability = _RUNTIME_INVALID
                 runtime_probe_valid = False
             else:
                 query_ascii, evidence_ascii, query_cjk, evidence_cjk = raw_tokens
@@ -578,7 +633,13 @@ def probe_runtime_tokenizers(
         and query_cjk == _EXPECTED_TARGET_CJK_PROBE_TOKENS
         and evidence_cjk == _EXPECTED_TARGET_CJK_PROBE_TOKENS
     )
-    if (
+    if runtime_availability == _RUNTIME_UNAVAILABLE_PROFILE:
+        tokenizer_id = (
+            query_tokenizer_id
+            if query_tokenizer_id == evidence_tokenizer_id
+            else "unregistered_runtime_tokenizer"
+        )
+    elif (
         query_tokenizer_id == evidence_tokenizer_id == "ascii_identifier_regex_v1"
         and ascii_support
         and query_cjk == evidence_cjk == set()
@@ -598,6 +659,7 @@ def probe_runtime_tokenizers(
         evidence_tokenizer_id=(
             evidence_tokenizer_id if isinstance(evidence_tokenizer_id, str) else None
         ),
+        runtime_availability=runtime_availability,
         runtime_probe_valid=runtime_probe_valid,
         ascii_identifier_support=ascii_support,
         cjk_support=cjk_support,
