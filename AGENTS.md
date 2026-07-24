@@ -6,14 +6,37 @@ interruption, read this file first. Before changing code, read these files in
 order:
 
 1. `docs/implementation-task-breakdown.md`
-2. `docs/agent-roles.md`
-3. `docs/agent-goals/README.md`
-4. The active role's goal file under `docs/agent-goals/`
-5. `docs/agent-goals/handoff-log.md`
-6. `docs/agent-goals/reviewer-gate.md`
-7. `SPEC.md`
-8. `RESOURCE_EXTRACTION_SPEC.md`
-9. `README.md`
+2. `docs/methodology-authority.json`
+3. `docs/agent-roles.md`
+4. `docs/agent-goals/README.md`
+5. The active role's goal file under `docs/agent-goals/`
+6. `docs/agent-goals/handoff-log.md`
+7. `docs/agent-goals/reviewer-gate.md`
+8. `SPEC.md`
+9. `RESOURCE_EXTRACTION_SPEC.md`
+10. `README.md`
+
+After reading the startup files, run:
+
+```sh
+python3 scripts/methodology_authority_check.py --check
+```
+
+This command validates that the machine-readable authority agrees with observed
+runtime tokenizer behavior. A valid but blocked result is the expected current
+state and must remain visible in planning and review.
+
+Before starting or reporting methodology-quality UAT, comparing KG with
+KG-plus-ontology, changing the active methodology, or marking a methodology
+slice complete, run:
+
+```sh
+python3 scripts/methodology_authority_check.py --require-ready
+```
+
+Do not continue those actions when it exits nonzero. Do not reinterpret a
+blocked gate as a warning, replace it with prose, or use historical/synthetic
+reports as evidence for a different runtime pipeline.
 
 For any work that interprets KG, ontology, mail, retrieval, or evaluation
 results, also read the following before making a comparative claim:
@@ -86,6 +109,9 @@ authorization must be an actual boolean; string values fail closed.
   whether the files above were read in the current context, read them again
   before editing.
 - Pick one unchecked task or the task explicitly assigned by the user.
+- Treat `docs/methodology-authority.json` plus the executable authority check as
+  the source of truth for methodology/runtime readiness. Prose may explain a
+  block but may not override it.
 - Treat session-local goal state as temporary. If a goal must survive a new
   session, a different computer, or a manual merge, record it in
   `docs/agent-goals/`.

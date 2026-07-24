@@ -40,6 +40,13 @@ Repository-side authority tooling is reproducible and synchronized, but broad
 completion requires accepted real or public reproducible evidence rather than
 additional synthetic fixtures or implementation-only proofs.
 
+The methodology authority guard is valid but blocked in the canonical unit-test
+process, which explicitly selects `ascii_identifier_regex_v1`. Runtime, UAT,
+and evaluation entrypoints default to the pinned Jieba plus SentencePiece
+profile and fail closed when that profile is unavailable. The target still
+requires frozen-profile candidate admission and independent real-source
+acceptance.
+
 The user explicitly assigned the cross-track temporary UAT issue #44 in an
 isolated worktree. That bounded slice now reaches a pinned Codex app-server
 sidecar through a private Unix socket and a narrow JSONL/WebSocket bridge.
