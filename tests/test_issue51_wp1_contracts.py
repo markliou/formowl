@@ -10,7 +10,10 @@ from formowl_contract import (
     AnswerClaim,
     ClaimRequirement,
     ContractValidationError,
+    CoverageAuthorizationBinding,
     CoverageLedger,
+    CoverageProofRecord,
+    CoverageVersionBinding,
     DisplayPagination,
     EXCLUSION_REASON_CODE_VALUES,
     SourceInventoryItem,
@@ -18,6 +21,7 @@ from formowl_contract import (
     StructuralColumn,
     StructuralObservation,
     StructuralRow,
+    SourceInventory,
     VersionManifest,
 )
 from formowl_graph.storage import (
@@ -53,6 +57,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             parser_fingerprint=FP2,
             permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
             location={"table_ordinal": 0, "message_ordinal": 3},
+            source_observation_ids=("observation_wp1",),
         )
         self.assertEqual(
             item.source_inventory_item_id,
@@ -108,12 +113,43 @@ class Issue51WP1ContractTests(unittest.TestCase):
             predicate="status",
             required_scope=("scope_wp1",),
         )
+        source_inventory = SourceInventory.create(
+            source_asset_id="asset_wp1",
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            items=(item,),
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        manifest = VersionManifest.create(
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            tokenizer_fingerprint=FP,
+            index_fingerprint=FP,
+            implementation_fingerprint=FP,
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        authorization = CoverageAuthorizationBinding(
+            actor_context_id="actor_wp1",
+            permission_revision="permission_wp1",
+            grant_revision="grant_wp1",
+        )
+        proof = CoverageProofRecord.create(
+            source_inventory_id=source_inventory.source_inventory_id,
+            claim_requirement_id=requirement.claim_requirement_id,
+            version_manifest_id=manifest.version_manifest_id,
+            inventory_item_id=item.source_inventory_item_id,
+            proof_kind="structural",
+            structural_observation_ids=(observation.source_observation_id,),
+        )
         ledger = CoverageLedger(
             query_id="query_wp1",
             claim_requirement_id=requirement.claim_requirement_id,
+            source_inventory_id=source_inventory.source_inventory_id,
             relevant_inventory_item_ids=(item.source_inventory_item_id,),
-            searched_observation_ids=(observation.source_observation_id,),
-            freshness_facts={"index_fresh": True},
+            searched_structural_observation_ids=(observation.source_observation_id,),
+            authorization_binding=authorization,
+            version_binding=CoverageVersionBinding.from_manifest(manifest),
+            proof_records=(proof,),
             complete_authorized_scope=True,
             display_pagination=DisplayPagination(
                 page_size=10,
@@ -151,6 +187,9 @@ class Issue51WP1ContractTests(unittest.TestCase):
         )
         self.assertIsInstance(ledger.display_pagination, DisplayPagination)
         self.assertTrue(ledger.claim_scope_complete)
+        self.assertTrue(
+            ledger.usable_for_claim(source_inventory, requirement, manifest, authorization)
+        )
 
     def test_validation_is_strict_and_public_leaks_fail_closed(self) -> None:
         with self.assertRaises(ContractValidationError):
@@ -340,9 +379,9 @@ class Issue51WP1ContractTests(unittest.TestCase):
             CoverageLedger(
                 query_id="query_wp1",
                 claim_requirement_id="requirement_wp1",
+                source_inventory_id="inventory_wp1",
                 relevant_inventory_item_ids=(),
-                searched_observation_ids=(),
-                freshness_facts={"index_fresh": False},
+                version_binding=CoverageVersionBinding.from_manifest(stale),
                 complete_authorized_scope=True,
             )
 
@@ -383,8 +422,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
         ledger = CoverageLedger(
             query_id=requirement.query_id,
             claim_requirement_id=requirement.claim_requirement_id,
+            source_inventory_id="inventory_wp1",
             relevant_inventory_item_ids=(item.source_inventory_item_id,),
-            searched_observation_ids=(),
             complete_authorized_scope=False,
         )
         manifest = VersionManifest.create(
@@ -394,6 +433,24 @@ class Issue51WP1ContractTests(unittest.TestCase):
             index_fingerprint=FP,
             implementation_fingerprint=FP,
             index_freshness="stale",
+        )
+        authorization = CoverageAuthorizationBinding(
+            actor_context_id="actor_wp1",
+            permission_revision="permission_wp1",
+            grant_revision="grant_wp1",
+        )
+        proof = CoverageProofRecord.create(
+            source_inventory_id="inventory_wp1",
+            claim_requirement_id=requirement.claim_requirement_id,
+            version_manifest_id=manifest.version_manifest_id,
+            inventory_item_id=item.source_inventory_item_id,
+            proof_kind="intentionally_excluded",
+        )
+        ledger = replace(
+            ledger,
+            authorization_binding=authorization,
+            version_binding=CoverageVersionBinding.from_manifest(manifest),
+            proof_records=(proof,),
         )
         claim = AnswerClaim.create(
             answer_claim_id="answer_claim_wp1",

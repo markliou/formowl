@@ -561,6 +561,7 @@ class MailEvidenceBundle:
                 "coverage_ledgers",
                 CoverageLedger,
                 required=False,
+                factory=CoverageLedger.from_persistence_dict,
             ),
             answer_claims=_record_list(
                 item,
@@ -1228,6 +1229,8 @@ def _private_payload(value: Any) -> dict[str, Any]:
 
 def _private_plain(value: Any) -> Any:
     if isinstance(value, AnswerClaim):
+        return value.to_persistence_dict()
+    if isinstance(value, CoverageLedger):
         return value.to_persistence_dict()
     if is_dataclass(value):
         return {

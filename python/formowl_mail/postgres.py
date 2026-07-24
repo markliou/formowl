@@ -228,7 +228,7 @@ class PostgreSQLMailEvidenceStore:
                 self.connection,
                 table_name="coverage_ledger",
                 mail_import_session_id=import_session_id,
-                factory=CoverageLedger.from_dict,
+                factory=CoverageLedger.from_persistence_dict,
             ),
             "coverage_ledger_id",
         )
