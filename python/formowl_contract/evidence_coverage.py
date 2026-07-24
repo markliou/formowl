@@ -1607,6 +1607,12 @@ class CoverageLedger:
         if not isinstance(self.fallback_usage, CoverageFallbackUsage):
             raise ContractValidationError("coverage ledger fallback usage is invalid")
         _tuple_of(self.proof_records, CoverageProofRecord, "coverage_ledger.proof_records")
+        proof_ids = [record.proof_id for record in self.proof_records]
+        if len(proof_ids) != len(set(proof_ids)):
+            raise ContractValidationError("coverage ledger proof IDs must be unique")
+        proof_semantics = [_coverage_proof_semantic_key(record) for record in self.proof_records]
+        if len(proof_semantics) != len(set(proof_semantics)):
+            raise ContractValidationError("coverage ledger proof records must be unique")
         if not isinstance(self.display_pagination, DisplayPagination):
             raise ContractValidationError("coverage ledger display_pagination is invalid")
         expected_coverage_ledger_id = stable_resource_contract_id(
@@ -1910,8 +1916,12 @@ class CoverageLedger:
     ) -> bool:
         """Require two distinct typed populated-value proofs for partial conflict."""
 
-        value_fingerprints = {
-            record.populated_value_fingerprint
+        direct_values = [
+            (
+                record.populated_value_fingerprint,
+                frozenset(record.structural_observation_ids)
+                | frozenset(record.ordinary_observation_ids),
+            )
             for record in self._direct_proof_records_for_claim(
                 source_inventory,
                 claim_requirement,
@@ -1919,8 +1929,13 @@ class CoverageLedger:
                 expected_authorization_binding,
             )
             if record.populated_value_fingerprint is not None
-        }
-        return len(value_fingerprints) >= 2
+        ]
+        return any(
+            first_fingerprint != second_fingerprint
+            and first_observations.isdisjoint(second_observations)
+            for index, (first_fingerprint, first_observations) in enumerate(direct_values)
+            for second_fingerprint, second_observations in direct_values[index + 1 :]
+        )
 
     def usable_for_claim(
         self,
@@ -2459,6 +2474,19 @@ def _inventory_item_identity_payload(item: SourceInventoryItem) -> dict[str, Any
     payload.pop("source_inventory_item_id", None)
     payload.pop("source_inventory_id", None)
     return payload
+
+
+def _coverage_proof_semantic_key(record: CoverageProofRecord) -> tuple[Any, ...]:
+    return (
+        record.source_inventory_id,
+        record.claim_requirement_id,
+        record.version_manifest_id,
+        record.inventory_item_id,
+        record.proof_kind,
+        record.structural_observation_ids,
+        record.ordinary_observation_ids,
+        record.populated_value_fingerprint,
+    )
 
 
 def _structural_denial() -> dict[str, Any]:

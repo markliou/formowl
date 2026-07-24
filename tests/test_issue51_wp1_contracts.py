@@ -1164,27 +1164,29 @@ class Issue51WP1ContractTests(unittest.TestCase):
             )
 
     def test_partial_single_value_conflict_requires_typed_populated_values(self) -> None:
-        (
-            source_inventory,
-            requirement,
-            manifest,
-            authorization,
-            ledger,
-        ) = _direct_claim_fixture(
-            kind="single_value",
-            include_conflicting_values=True,
-        )
-        claim = AnswerClaim.create(
-            state="CONFLICT",
-            reason_codes=("conflicting_evidence",),
-            coverage_ledger=ledger,
-            claim_requirement=requirement,
-            source_inventory=source_inventory,
-            version_manifest=manifest,
-            authorization_binding=authorization,
-            evidence_snapshot_ids=("snapshot_one", "snapshot_two"),
-        )
-        self.assertEqual(claim.state, "CONFLICT")
+        for kind in ("single_value", "latest_value", "current_value"):
+            with self.subTest(kind=kind):
+                (
+                    source_inventory,
+                    requirement,
+                    manifest,
+                    authorization,
+                    ledger,
+                ) = _direct_claim_fixture(
+                    kind=kind,
+                    include_conflicting_values=True,
+                )
+                claim = AnswerClaim.create(
+                    state="CONFLICT",
+                    reason_codes=("conflicting_evidence",),
+                    coverage_ledger=ledger,
+                    claim_requirement=requirement,
+                    source_inventory=source_inventory,
+                    version_manifest=manifest,
+                    authorization_binding=authorization,
+                    evidence_snapshot_ids=("snapshot_one", "snapshot_two"),
+                )
+                self.assertEqual(claim.state, "CONFLICT")
 
         (
             source_inventory,
@@ -1207,6 +1209,111 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 authorization_binding=authorization,
                 evidence_snapshot_ids=("snapshot_one", "snapshot_two"),
             )
+
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            ledger,
+        ) = _direct_claim_fixture(
+            kind="single_value",
+            include_conflicting_values=True,
+        )
+        first_proof, second_proof = ledger.proof_records
+        same_observation_proof = CoverageProofRecord.create(
+            source_inventory_id=first_proof.source_inventory_id,
+            claim_requirement_id=first_proof.claim_requirement_id,
+            version_manifest_id=first_proof.version_manifest_id,
+            inventory_item_id=first_proof.inventory_item_id,
+            proof_kind="structural",
+            structural_observation_ids=("observation_direct_wp1_a",),
+            populated_value_fingerprint=FP2,
+        )
+        same_observation_ledger = replace(
+            ledger,
+            proof_records=(first_proof, same_observation_proof),
+            coverage_ledger_id="",
+        )
+        self.assertEqual(
+            second_proof.structural_observation_ids,
+            ("observation_direct_wp1_b",),
+        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                state="CONFLICT",
+                reason_codes=("conflicting_evidence",),
+                coverage_ledger=same_observation_ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                authorization_binding=authorization,
+                evidence_snapshot_ids=("snapshot_one", "snapshot_two"),
+            )
+
+        for kind, parameters in (
+            ("all_matching", {}),
+            ("aggregation", {}),
+            ("existential_witness", {"support_only_completeness": True}),
+        ):
+            with self.subTest(disallowed_kind=kind):
+                (
+                    source_inventory,
+                    requirement,
+                    manifest,
+                    authorization,
+                    ledger,
+                ) = _direct_claim_fixture(
+                    kind=kind,
+                    parameters=parameters,
+                    include_conflicting_values=True,
+                )
+                with self.assertRaises(ContractValidationError):
+                    AnswerClaim.create(
+                        state="CONFLICT",
+                        reason_codes=("conflicting_evidence",),
+                        coverage_ledger=ledger,
+                        claim_requirement=requirement,
+                        source_inventory=source_inventory,
+                        version_manifest=manifest,
+                        authorization_binding=authorization,
+                        evidence_snapshot_ids=("snapshot_one", "snapshot_two"),
+                    )
+
+    def test_coverage_ledger_rejects_duplicate_proof_records(self) -> None:
+        source_inventory, requirement, manifest, authorization, ledger = _direct_claim_fixture(
+            kind="single_value",
+            include_direct_proof=True,
+        )
+        proof = ledger.proof_records[0]
+        duplicate_cases = (
+            ("repeated_same_object", (proof, proof)),
+            (
+                "same_proof_id",
+                (
+                    proof,
+                    replace(
+                        proof,
+                        structural_observation_ids=("observation_direct_wp1_b",),
+                    ),
+                ),
+            ),
+            (
+                "semantic_duplicate",
+                (
+                    proof,
+                    replace(proof, proof_id="proof_semantic_duplicate"),
+                ),
+            ),
+        )
+        for case_name, proof_records in duplicate_cases:
+            with self.subTest(case_name=case_name):
+                with self.assertRaises(ContractValidationError):
+                    replace(
+                        ledger,
+                        proof_records=proof_records,
+                        coverage_ledger_id="",
+                    )
 
     def test_answer_claim_rejects_invalid_typed_bindings(self) -> None:
         bundle, source_inventory, requirement, ledger = _inventory_bundle()
@@ -2348,7 +2455,10 @@ def _direct_claim_fixture(
         source_fingerprint=FP,
         parser_fingerprint=FP2,
         permission_scope={"scope_type": "asset", "scope_id": "asset_direct_wp1"},
-        source_observation_ids=("observation_direct_wp1",),
+        source_observation_ids=(
+            "observation_direct_wp1_a",
+            "observation_direct_wp1_b",
+        ),
     )
     inventory = SourceInventory.create(
         source_asset_id="asset_direct_wp1",
@@ -2386,7 +2496,7 @@ def _direct_claim_fixture(
                 version_manifest_id=manifest.version_manifest_id,
                 inventory_item_id=inventory.items[0].source_inventory_item_id,
                 proof_kind="structural",
-                structural_observation_ids=("observation_direct_wp1",),
+                structural_observation_ids=("observation_direct_wp1_a",),
                 populated_value_fingerprint=(FP if include_conflicting_values else None),
             )
         )
@@ -2398,7 +2508,7 @@ def _direct_claim_fixture(
                 version_manifest_id=manifest.version_manifest_id,
                 inventory_item_id=inventory.items[0].source_inventory_item_id,
                 proof_kind="structural",
-                structural_observation_ids=("observation_direct_wp1",),
+                structural_observation_ids=("observation_direct_wp1_b",),
                 populated_value_fingerprint=FP2,
             )
         )
@@ -2407,7 +2517,10 @@ def _direct_claim_fixture(
         claim_requirement_id=requirement.claim_requirement_id,
         source_inventory_id=inventory.source_inventory_id,
         relevant_inventory_item_ids=(inventory.items[0].source_inventory_item_id,),
-        searched_structural_observation_ids=("observation_direct_wp1",),
+        searched_structural_observation_ids=(
+            "observation_direct_wp1_a",
+            "observation_direct_wp1_b",
+        ),
         authorization_binding=authorization,
         version_binding=CoverageVersionBinding.from_manifest(manifest),
         proof_records=proof_records,
