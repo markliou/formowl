@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from formowl_contract import (
     AnswerClaim,
@@ -100,7 +100,8 @@ class PostgreSQLMailEvidenceStore:
         session_row = self.connection.query_one(
             SQLStatement(
                 sql=(
-                    "SELECT payload, mail_evidence_bundle_id, producer_type, "
+                    "SELECT payload, mail_import_session_id, workspace_id, owner_user_id, "
+                    "mail_evidence_bundle_id, producer_type, "
                     "bundle_created_at FROM mail_import_session "
                     "WHERE (%(mail_import_session_id)s IS NULL "
                     "OR mail_import_session_id = %(mail_import_session_id)s) "
@@ -118,11 +119,22 @@ class PostgreSQLMailEvidenceStore:
 
         import_session = MailImportSession.from_dict(_payload(session_row))
         import_session_id = import_session.mail_import_session_id
+        workspace_id = import_session.workspace_id
+        owner_user_id = import_session.owner_user_id
+        _validate_row_scope(
+            session_row,
+            mail_import_session_id=import_session_id,
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+        )
         archive_occurrences = _sort_records(
             _query_import_rows(
                 self.connection,
                 table_name="mail_archive_occurrence",
+                id_field="mail_archive_occurrence_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
                 factory=MailArchiveOccurrence.from_dict,
             ),
             "mail_archive_occurrence_id",
@@ -131,7 +143,10 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="mail_folder_occurrence",
+                id_field="mail_folder_occurrence_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
                 factory=MailFolderOccurrence.from_dict,
             ),
             "mail_folder_occurrence_id",
@@ -140,7 +155,10 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="email_message_occurrence",
+                id_field="email_message_occurrence_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
                 factory=EmailMessageOccurrence.from_dict,
             ),
             "email_message_occurrence_id",
@@ -149,7 +167,10 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="email_body_segment",
+                id_field="email_body_segment_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
                 factory=EmailBodySegment.from_dict,
             ),
         )
@@ -157,7 +178,10 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="email_attachment_occurrence",
+                id_field="email_attachment_occurrence_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
                 factory=EmailAttachmentOccurrence.from_dict,
             ),
             "email_attachment_occurrence_id",
@@ -166,7 +190,10 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="quoted_message_candidate",
+                id_field="quoted_message_candidate_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
                 factory=QuotedMessageCandidate.from_dict,
             ),
             "quoted_message_candidate_id",
@@ -175,7 +202,10 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="embedded_message_relation",
+                id_field="embedded_message_relation_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
                 factory=EmbeddedMessageRelation.from_dict,
             ),
             "embedded_message_relation_id",
@@ -184,7 +214,10 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="mail_parse_run",
+                id_field="mail_parse_run_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
                 factory=MailParseRun.from_dict,
             ),
             "mail_parse_run_id",
@@ -193,7 +226,10 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="mail_parse_warning",
+                id_field="mail_parse_warning_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
                 factory=MailParseWarning.from_dict,
             ),
             "mail_parse_warning_id",
@@ -202,7 +238,20 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="source_inventory",
+                id_field="source_inventory_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
+                scope_columns=(
+                    "source_asset_id",
+                    "source_fingerprint",
+                    "parser_fingerprint",
+                ),
+                row_validator=lambda row, record: _validate_source_inventory_row(
+                    row,
+                    record,
+                    import_session.source_asset_id,
+                ),
                 factory=SourceInventory.from_dict,
             ),
             "source_inventory_id",
@@ -211,7 +260,17 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="source_inventory_item",
+                id_field="source_inventory_item_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
+                scope_columns=(
+                    "source_inventory_id",
+                    "source_asset_id",
+                    "source_fingerprint",
+                    "parser_fingerprint",
+                ),
+                row_validator=_validate_source_inventory_item_row,
                 factory=SourceInventoryItem.from_dict,
             ),
             "source_inventory_item_id",
@@ -221,7 +280,22 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="structural_observation",
+                id_field="structural_observation_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
+                scope_columns=(
+                    "source_inventory_item_id",
+                    "source_inventory_id",
+                    "source_asset_id",
+                    "source_fingerprint",
+                    "parser_fingerprint",
+                ),
+                row_validator=lambda row, record: _validate_structural_observation_row(
+                    row,
+                    record,
+                    source_inventory_items,
+                ),
                 factory=StructuralObservation.from_dict,
             ),
             "structural_observation_id",
@@ -230,7 +304,10 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="claim_requirement",
+                id_field="claim_requirement_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
                 factory=ClaimRequirement.from_dict,
             ),
             "claim_requirement_id",
@@ -239,7 +316,24 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="coverage_ledger",
+                id_field="coverage_ledger_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
+                scope_columns=(
+                    "query_id",
+                    "claim_requirement_id",
+                    "source_inventory_id",
+                    "source_asset_id",
+                    "source_fingerprint",
+                    "parser_fingerprint",
+                ),
+                row_validator=lambda row, record: _validate_coverage_ledger_row(
+                    row,
+                    record,
+                    source_inventories,
+                    claim_requirements,
+                ),
                 factory=CoverageLedger.from_persistence_dict,
             ),
             "coverage_ledger_id",
@@ -248,7 +342,17 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="answer_claim",
+                id_field="answer_claim_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
+                scope_columns=("claim_requirement_id", "coverage_ledger_id"),
+                row_validator=lambda row, record: _validate_answer_claim_row(
+                    row,
+                    record,
+                    claim_requirements,
+                    coverage_ledgers,
+                ),
                 factory=AnswerClaim.from_persistence_dict,
             ),
             "answer_claim_id",
@@ -257,7 +361,10 @@ class PostgreSQLMailEvidenceStore:
             _query_import_rows(
                 self.connection,
                 table_name="version_manifest",
+                id_field="version_manifest_id",
                 mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
                 factory=VersionManifest.from_dict,
             ),
             "version_manifest_id",
@@ -411,6 +518,12 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
     workspace_id = bundle.mail_import_session.workspace_id
     owner_user_id = bundle.mail_import_session.owner_user_id
     import_session_id = bundle.mail_import_session.mail_import_session_id
+    inventory_by_id = {item.source_inventory_id: item for item in bundle.source_inventory}
+    inventory_by_item_id = {
+        child.source_inventory_item_id: (inventory, child)
+        for inventory in bundle.source_inventory
+        for child in inventory.items
+    }
     statements = [_mail_import_session_statement(bundle)]
     statements.extend(
         _import_scoped_statement(
@@ -587,6 +700,12 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
             owner_user_id=owner_user_id,
             extra_parameters={
                 "source_inventory_item_id": item.source_inventory_item_id,
+                "source_inventory_id": inventory_by_item_id[item.source_inventory_item_id][
+                    0
+                ].source_inventory_id,
+                "source_asset_id": item.source_asset_id,
+                "source_fingerprint": item.source_fingerprint,
+                "parser_fingerprint": item.parser_fingerprint,
             },
         )
         for item in bundle.structural_observations
@@ -615,6 +734,9 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
                 "query_id": item.query_id,
                 "claim_requirement_id": item.claim_requirement_id,
                 "source_inventory_id": item.source_inventory_id,
+                "source_asset_id": inventory_by_id[item.source_inventory_id].source_asset_id,
+                "source_fingerprint": inventory_by_id[item.source_inventory_id].source_fingerprint,
+                "parser_fingerprint": inventory_by_id[item.source_inventory_id].parser_fingerprint,
             },
         )
         for item in bundle.coverage_ledgers
@@ -830,26 +952,194 @@ def _validate_source_inventory_rows(
         )
 
 
+def _validate_row_scope(
+    row: dict[str, Any],
+    *,
+    mail_import_session_id: str,
+    workspace_id: str,
+    owner_user_id: str,
+) -> None:
+    expected = {
+        "mail_import_session_id": mail_import_session_id,
+        "workspace_id": workspace_id,
+        "owner_user_id": owner_user_id,
+    }
+    for field_name, expected_value in expected.items():
+        value = row.get(field_name)
+        if not isinstance(value, str) or value != expected_value:
+            raise ContractValidationError("persisted mail evidence row scope is inconsistent")
+
+
+def _validate_row_relationship(
+    row: dict[str, Any],
+    expected: Mapping[str, str],
+) -> None:
+    for field_name, expected_value in expected.items():
+        value = row.get(field_name)
+        if not isinstance(value, str) or value != expected_value:
+            raise ContractValidationError(
+                "persisted mail evidence row relationship scope is inconsistent"
+            )
+
+
+def _validate_source_inventory_row(
+    row: dict[str, Any],
+    record: SourceInventory,
+    import_session_source_asset_id: str,
+) -> None:
+    if record.source_asset_id != import_session_source_asset_id:
+        raise ContractValidationError(
+            "persisted source inventory asset does not match import session"
+        )
+    _validate_row_relationship(
+        row,
+        {
+            "source_inventory_id": record.source_inventory_id,
+            "source_asset_id": record.source_asset_id,
+            "source_fingerprint": record.source_fingerprint,
+            "parser_fingerprint": record.parser_fingerprint,
+        },
+    )
+
+
+def _validate_source_inventory_item_row(
+    row: dict[str, Any],
+    record: SourceInventoryItem,
+) -> None:
+    if record.source_inventory_id is None:
+        raise ContractValidationError("persisted inventory item is not bound to an aggregate")
+    _validate_row_relationship(
+        row,
+        {
+            "source_inventory_item_id": record.source_inventory_item_id,
+            "source_inventory_id": record.source_inventory_id,
+            "source_asset_id": record.source_asset_id,
+            "source_fingerprint": record.source_fingerprint,
+            "parser_fingerprint": record.parser_fingerprint,
+        },
+    )
+
+
+def _validate_structural_observation_row(
+    row: dict[str, Any],
+    record: StructuralObservation,
+    source_inventory_items: Sequence[SourceInventoryItem],
+) -> None:
+    item_by_id = {item.source_inventory_item_id: item for item in source_inventory_items}
+    inventory_item = item_by_id.get(record.source_inventory_item_id)
+    if inventory_item is None or inventory_item.source_inventory_id is None:
+        raise ContractValidationError(
+            "persisted structural observation references an orphan inventory item"
+        )
+    _validate_row_relationship(
+        row,
+        {
+            "source_inventory_item_id": record.source_inventory_item_id,
+            "source_inventory_id": inventory_item.source_inventory_id,
+            "source_asset_id": record.source_asset_id,
+            "source_fingerprint": record.source_fingerprint,
+            "parser_fingerprint": record.parser_fingerprint,
+        },
+    )
+
+
+def _validate_coverage_ledger_row(
+    row: dict[str, Any],
+    record: CoverageLedger,
+    source_inventories: Sequence[SourceInventory],
+    claim_requirements: Sequence[ClaimRequirement],
+) -> None:
+    inventory_by_id = {item.source_inventory_id: item for item in source_inventories}
+    requirement_by_id = {item.claim_requirement_id: item for item in claim_requirements}
+    inventory = inventory_by_id.get(record.source_inventory_id)
+    requirement = requirement_by_id.get(record.claim_requirement_id)
+    if inventory is None or requirement is None:
+        raise ContractValidationError("persisted coverage ledger references an orphan relationship")
+    _validate_row_relationship(
+        row,
+        {
+            "query_id": record.query_id,
+            "claim_requirement_id": requirement.claim_requirement_id,
+            "source_inventory_id": inventory.source_inventory_id,
+            "source_asset_id": inventory.source_asset_id,
+            "source_fingerprint": inventory.source_fingerprint,
+            "parser_fingerprint": inventory.parser_fingerprint,
+        },
+    )
+
+
+def _validate_answer_claim_row(
+    row: dict[str, Any],
+    record: AnswerClaim,
+    claim_requirements: Sequence[ClaimRequirement],
+    coverage_ledgers: Sequence[CoverageLedger],
+) -> None:
+    requirement_ids = {item.claim_requirement_id for item in claim_requirements}
+    ledger_by_id = {item.coverage_ledger_id: item for item in coverage_ledgers}
+    ledger = ledger_by_id.get(record.coverage_ledger_id)
+    if record.claim_requirement_id not in requirement_ids or ledger is None:
+        raise ContractValidationError("persisted answer claim references an orphan relationship")
+    if ledger.claim_requirement_id != record.claim_requirement_id:
+        raise ContractValidationError("persisted answer claim relationship scope is inconsistent")
+    _validate_row_relationship(
+        row,
+        {
+            "claim_requirement_id": record.claim_requirement_id,
+            "coverage_ledger_id": record.coverage_ledger_id,
+        },
+    )
+
+
 def _query_import_rows(
     connection: PostgreSQLMailEvidenceConnection,
     *,
     table_name: str,
+    id_field: str,
     mail_import_session_id: str,
+    workspace_id: str,
+    owner_user_id: str,
+    scope_columns: Sequence[str] = (),
+    row_validator: Callable[[dict[str, Any], Any], None] | None = None,
     factory: Callable[[dict[str, Any]], Any],
 ) -> list[Any]:
     _validate_table_name(table_name)
+    _validate_record_id(id_field, "id_field")
     _validate_record_id(mail_import_session_id, "mail_import_session_id")
+    _validate_record_id(workspace_id, "workspace_id")
+    _validate_record_id(owner_user_id, "owner_user_id")
+    for column_name in scope_columns:
+        if not _SAFE_RECORD_ID.fullmatch(column_name):
+            raise ContractValidationError("invalid persisted scope column")
+    selected_columns = ", ".join(
+        (id_field, "payload", "mail_import_session_id", "workspace_id", "owner_user_id")
+        + tuple(scope_columns)
+    )
     rows = connection.query_all(
         SQLStatement(
             sql=(
-                f"SELECT payload FROM {table_name} "
+                f"SELECT {selected_columns} FROM {table_name} "
                 "WHERE mail_import_session_id = %(mail_import_session_id)s "
                 "ORDER BY payload_hash"
             ),
             parameters={"mail_import_session_id": mail_import_session_id},
         )
     )
-    return [factory(_payload(row)) for row in rows]
+    records = []
+    for row in rows:
+        _validate_row_scope(
+            row,
+            mail_import_session_id=mail_import_session_id,
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+        )
+        record = factory(_payload(row))
+        record_payload = _record_payload(record)
+        if row.get(id_field) != record_payload.get(id_field):
+            raise ContractValidationError("persisted mail evidence row identifier is inconsistent")
+        if row_validator is not None:
+            row_validator(row, record)
+        records.append(record)
+    return records
 
 
 def _sort_records(records: Sequence[Any], id_field: str) -> list[Any]:

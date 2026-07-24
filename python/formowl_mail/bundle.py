@@ -494,6 +494,10 @@ class MailEvidenceBundle:
                 )
             if inventory.source_inventory_id in inventory_by_id:
                 raise ContractValidationError("mail bundle source inventories must be unique")
+            if inventory.source_asset_id != self.mail_import_session.source_asset_id:
+                raise ContractValidationError(
+                    "mail bundle source inventory asset does not match import session"
+                )
             inventory_by_id[inventory.source_inventory_id] = inventory
             for item in inventory.items:
                 if item.source_inventory_item_id in item_by_id:

@@ -399,18 +399,30 @@ class Issue51WP1ContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("CREATE TABLE IF NOT EXISTS source_inventory", ddl)
+        self.assertIn(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_mail_import_session_scope",
+            ddl,
+        )
+        self.assertIn(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_mail_import_session_asset_scope",
+            ddl,
+        )
         self.assertIn("workspace_id text NOT NULL", ddl)
         self.assertIn("owner_user_id text NOT NULL", ddl)
         self.assertIn(
-            "source_inventory_id text NOT NULL REFERENCES source_inventory(source_inventory_id)",
+            "FOREIGN KEY (\n    mail_import_session_id,\n    workspace_id,\n    owner_user_id\n  ) REFERENCES mail_import_session",
             ddl,
         )
         self.assertIn(
-            "source_inventory_item_id text NOT NULL\n    REFERENCES source_inventory_item(source_inventory_item_id)",
+            "source_inventory_id,\n    mail_import_session_id,\n    workspace_id,\n    owner_user_id,\n    source_asset_id,\n    source_fingerprint,\n    parser_fingerprint\n  ) REFERENCES source_inventory",
             ddl,
         )
         self.assertIn(
-            "FOREIGN KEY (coverage_ledger_id, claim_requirement_id)",
+            "source_inventory_item_id,\n    source_inventory_id,\n    mail_import_session_id,\n    workspace_id,\n    owner_user_id,\n    source_asset_id,\n    source_fingerprint,\n    parser_fingerprint\n  ) REFERENCES source_inventory_item",
+            ddl,
+        )
+        self.assertIn(
+            "FOREIGN KEY (\n    coverage_ledger_id,\n    claim_requirement_id,\n    mail_import_session_id,\n    workspace_id,\n    owner_user_id\n  ) REFERENCES coverage_ledger",
             ddl,
         )
         connection = _MigrationConnection()
@@ -570,6 +582,18 @@ class Issue51WP1ContractTests(unittest.TestCase):
         self.assertIsNotNone(round_trip)
         self.assertEqual(round_trip.to_dict(), payload)
         self.assertEqual(
+            _selected_columns(connection.queries[0].sql),
+            (
+                "payload",
+                "mail_import_session_id",
+                "workspace_id",
+                "owner_user_id",
+                "mail_evidence_bundle_id",
+                "producer_type",
+                "bundle_created_at",
+            ),
+        )
+        self.assertEqual(
             round_trip.source_inventory[0].items[0].exclusion_claim_scope_proof_sha256,
             FP2,
         )
@@ -626,6 +650,126 @@ class Issue51WP1ContractTests(unittest.TestCase):
             statement.parameters["source_inventory_id"],
             inventory.source_inventory_id,
         )
+
+    def test_all_scoped_wp1_insert_sql_matches_006_ddl_columns(self) -> None:
+        bundle, inventory, _, _ = _inventory_bundle()
+        observation = StructuralObservation.create(
+            source_inventory_item_id=inventory.items[0].source_inventory_item_id,
+            source_asset_id=inventory.source_asset_id,
+            source_observation_id="observation_scope_wp1",
+            structure_kind="table",
+            columns=(),
+            rows=(),
+            header_relationships=(),
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+        )
+        bundle = replace(bundle, structural_observations=[observation])
+        statements = PostgreSQLMailEvidenceStore(_RowsConnection()).upsert_bundle(bundle)
+        ddl = Path("python/formowl_graph/storage/migrations/006_evidence_coverage.sql").read_text(
+            encoding="utf-8"
+        )
+        for table_name in (
+            "source_inventory",
+            "source_inventory_item",
+            "structural_observation",
+            "claim_requirement",
+            "coverage_ledger",
+            "answer_claim",
+        ):
+            with self.subTest(table_name=table_name):
+                statement = next(
+                    statement
+                    for statement in statements
+                    if f"INSERT INTO {table_name} " in statement.sql
+                )
+                insert_columns = _insert_columns(statement.sql)
+                self.assertEqual(
+                    insert_columns,
+                    _create_table_columns(ddl, table_name) - {"updated_at"},
+                )
+                self.assertEqual(set(statement.parameters), insert_columns)
+
+    def test_postgres_scoped_relationship_rows_fail_closed(self) -> None:
+        bundle, inventory, _, ledger = _inventory_bundle()
+        observation = StructuralObservation.create(
+            source_inventory_item_id=inventory.items[0].source_inventory_item_id,
+            source_asset_id=inventory.source_asset_id,
+            source_observation_id="observation_scope_wp1",
+            structure_kind="table",
+            columns=(),
+            rows=(),
+            header_relationships=(),
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+        )
+        bundle = replace(bundle, structural_observations=[observation])
+        row_keys = (
+            ("source_inventory", inventory.source_inventory_id),
+            ("source_inventory_item", inventory.items[0].source_inventory_item_id),
+            ("structural_observation", observation.structural_observation_id),
+            ("claim_requirement", bundle.claim_requirements[0].claim_requirement_id),
+            ("coverage_ledger", ledger.coverage_ledger_id),
+            ("answer_claim", "answer_inventory_wp1"),
+        )
+        for table_name, row_key in row_keys:
+            for scope_field in (
+                "mail_import_session_id",
+                "workspace_id",
+                "owner_user_id",
+            ):
+                with self.subTest(table_name=table_name, scope_field=scope_field):
+                    connection = _RowsConnection(ignore_import_scope_filter=True)
+                    store = PostgreSQLMailEvidenceStore(connection)
+                    store.upsert_bundle(bundle)
+                    connection.rows[table_name][row_key][scope_field] = "scope_other"
+                    with self.assertRaises(ContractValidationError):
+                        store.get_bundle(
+                            mail_import_session_id=(
+                                bundle.mail_import_session.mail_import_session_id
+                            )
+                        )
+
+    def test_postgres_scoped_relationship_columns_fail_closed(self) -> None:
+        bundle, inventory, _, ledger = _inventory_bundle()
+        observation = StructuralObservation.create(
+            source_inventory_item_id=inventory.items[0].source_inventory_item_id,
+            source_asset_id=inventory.source_asset_id,
+            source_observation_id="observation_scope_wp1",
+            structure_kind="table",
+            columns=(),
+            rows=(),
+            header_relationships=(),
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+        )
+        bundle = replace(bundle, structural_observations=[observation])
+        cases = (
+            (
+                "source_inventory_item",
+                inventory.items[0].source_inventory_item_id,
+                "source_inventory_id",
+            ),
+            (
+                "structural_observation",
+                observation.structural_observation_id,
+                "source_inventory_id",
+            ),
+            ("coverage_ledger", ledger.coverage_ledger_id, "source_inventory_id"),
+            ("coverage_ledger", ledger.coverage_ledger_id, "claim_requirement_id"),
+            ("answer_claim", "answer_inventory_wp1", "coverage_ledger_id"),
+            ("answer_claim", "answer_inventory_wp1", "claim_requirement_id"),
+        )
+        for table_name, row_key, field_name in cases:
+            with self.subTest(table_name=table_name, field_name=field_name):
+                connection = _RowsConnection(ignore_import_scope_filter=True)
+                store = PostgreSQLMailEvidenceStore(connection)
+                store.upsert_bundle(bundle)
+                connection.rows[table_name][row_key][field_name] = "relationship_other"
+                with self.assertRaises(ContractValidationError):
+                    store.get_bundle(
+                        mail_import_session_id=bundle.mail_import_session.mail_import_session_id
+                    )
 
     def test_source_inventory_relational_integrity_fails_closed_in_file_payloads(self) -> None:
         bundle, inventory, requirement, ledger = _inventory_bundle()
@@ -897,11 +1041,18 @@ def _minimal_bundle() -> MailEvidenceBundle:
 
 
 class _RowsConnection:
-    def __init__(self, *, fail_after_execute: int | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_after_execute: int | None = None,
+        ignore_import_scope_filter: bool = False,
+    ) -> None:
         self.rows: dict[str, dict[str, dict[str, object]]] = {}
         self.fail_after_execute = fail_after_execute
+        self.ignore_import_scope_filter = ignore_import_scope_filter
         self.execute_count = 0
         self.snapshot: dict[str, dict[str, dict[str, object]]] | None = None
+        self.queries: list[object] = []
 
     def begin(self) -> None:
         self.snapshot = deepcopy(self.rows)
@@ -931,6 +1082,7 @@ class _RowsConnection:
         self.rows.setdefault(table, {})[str(statement.parameters[key])] = dict(statement.parameters)
 
     def query_one(self, statement: object) -> dict[str, object] | None:
+        self.queries.append(statement)
         rows = self.rows.get("mail_import_session", {})
         for row in rows.values():
             if (
@@ -940,19 +1092,23 @@ class _RowsConnection:
                 statement.parameters["mail_evidence_bundle_id"] is None
                 or row["mail_evidence_bundle_id"] == statement.parameters["mail_evidence_bundle_id"]
             ):
-                return row
+                return {key: row[key] for key in _selected_columns(statement.sql) if key in row}
         return None
 
     def query_all(self, statement: object) -> list[dict[str, object]]:
+        self.queries.append(statement)
         sql = statement.sql
         table = sql.split(" FROM ", 1)[1].split(" ", 1)[0]
         import_id = statement.parameters.get("mail_import_session_id")
         result = [
             row
             for row in self.rows.get(table, {}).values()
-            if row.get("mail_import_session_id") == import_id
+            if self.ignore_import_scope_filter or row.get("mail_import_session_id") == import_id
         ]
-        return [{"payload": row["payload"]} for row in result]
+        return [
+            {key: row[key] for key in _selected_columns(statement.sql) if key in row}
+            for row in result
+        ]
 
 
 class _MigrationConnection:
@@ -963,6 +1119,11 @@ class _MigrationConnection:
 def _insert_columns(sql: str) -> set[str]:
     columns = sql.split("(", 1)[1].split(") VALUES", 1)[0]
     return {column.strip() for column in columns.split(",")}
+
+
+def _selected_columns(sql: str) -> tuple[str, ...]:
+    columns = sql.split("SELECT ", 1)[1].split(" FROM ", 1)[0]
+    return tuple(column.strip() for column in columns.split(","))
 
 
 def _create_table_columns(ddl: str, table_name: str) -> set[str]:
