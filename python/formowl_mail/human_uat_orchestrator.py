@@ -367,6 +367,8 @@ class _ActiveTurn:
     completed_items: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     tool_invocations: list[CodexDynamicToolInvocation] = field(default_factory=list)
     call_ids: set[str] = field(default_factory=set)
+    in_flight_tool_requests: int = 0
+    exiting: bool = False
     tool_error: str | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -811,8 +813,13 @@ class CodexAppServerStdioTransport:
                 )
             finally:
                 context.turn_ready.set()
-                with self._state_lock:
-                    self._active_turns.pop(thread_id, None)
+                with context.lock:
+                    context.exiting = True
+                    can_remove_context = context.in_flight_tool_requests == 0
+                if can_remove_context:
+                    with self._state_lock:
+                        if self._active_turns.get(thread_id) is context:
+                            self._active_turns.pop(thread_id, None)
 
     def _attest_runtime(self) -> None:
         config_response = self._request(
@@ -973,9 +980,10 @@ class CodexAppServerStdioTransport:
                     self._deliver_response(message)
                     continue
                 if "id" in message and isinstance(message.get("method"), str):
+                    context = self._register_tool_request(message)
                     threading.Thread(
                         target=self._handle_server_request,
-                        args=(message,),
+                        args=(message, context),
                         name="formowl-codex-app-server-request",
                         daemon=True,
                     ).start()
@@ -1018,8 +1026,12 @@ class CodexAppServerStdioTransport:
             context = self._active_turns.get(thread_id)
         if context is None:
             return
-        context.completion = dict(params)
-        context.event.set()
+        with context.lock:
+            if context.exiting:
+                return
+            context.completion = dict(params)
+            if context.in_flight_tool_requests == 0:
+                context.event.set()
 
     def _deliver_item_completion(self, params: Any) -> None:
         if not isinstance(params, Mapping):
@@ -1038,75 +1050,168 @@ class CodexAppServerStdioTransport:
         if context is None:
             return
         with context.lock:
+            if context.exiting:
+                return
             context.completed_items.append((turn_id, dict(item)))
 
-    def _handle_server_request(self, message: Mapping[str, Any]) -> None:
-        request_id = message.get("id")
-        method = message.get("method")
+    def _register_tool_request(self, message: Mapping[str, Any]) -> _ActiveTurn | None:
+        """Reserve a dynamic-tool request before handing it to a worker thread."""
+
+        if message.get("method") != "item/tool/call":
+            return None
         params = message.get("params")
-        if method != "item/tool/call" or not isinstance(params, Mapping):
-            self._send_server_error(request_id, -32601, "Method not available")
-            return
+        if not isinstance(params, Mapping):
+            return None
         thread_id = params.get("threadId")
-        turn_id = params.get("turnId")
-        call_id = params.get("callId")
-        tool_name = params.get("tool")
-        arguments = params.get("arguments")
-        if (
-            not isinstance(thread_id, str)
-            or not thread_id
-            or not isinstance(turn_id, str)
-            or not turn_id
-            or not isinstance(call_id, str)
-            or not call_id
-            or not isinstance(tool_name, str)
-            or not tool_name
-            or not isinstance(arguments, Mapping)
-        ):
-            self._send_tool_result(request_id, success=False, payload={"error": "rejected"})
-            return
+        if not isinstance(thread_id, str) or not thread_id:
+            return None
         with self._state_lock:
             context = self._active_turns.get(thread_id)
         if context is None:
-            self._send_tool_result(request_id, success=False, payload={"error": "rejected"})
-            return
-        if not context.turn_ready.wait(min(self._timeout_seconds, 5.0)):
-            with context.lock:
-                context.tool_error = "Codex dynamic tool request arrived before turn start"
-            self._send_tool_result(request_id, success=False, payload={"error": "rejected"})
-            return
+            return None
         with context.lock:
-            if context.turn_id != turn_id:
-                context.tool_error = "Codex dynamic tool request does not match active turn"
-                protocol_error = True
-            elif call_id in context.call_ids:
-                context.tool_error = "Codex dynamic tool request was duplicated"
-                protocol_error = True
-            else:
-                context.call_ids.add(call_id)
-                protocol_error = False
-        if protocol_error:
-            self._send_tool_result(request_id, success=False, payload={"error": "rejected"})
-            return
+            if context.completion is not None or context.exiting:
+                return None
+            context.in_flight_tool_requests += 1
+        return context
+
+    def _finish_tool_request(self, context: _ActiveTurn) -> None:
+        can_remove_context = False
+        with context.lock:
+            context.in_flight_tool_requests -= 1
+            if context.in_flight_tool_requests == 0 and context.completion is not None:
+                context.event.set()
+            can_remove_context = context.exiting and context.in_flight_tool_requests == 0
+        if can_remove_context:
+            with self._state_lock:
+                if self._active_turns.get(context.thread_id) is context:
+                    self._active_turns.pop(context.thread_id, None)
+
+    def _handle_server_request(
+        self,
+        message: Mapping[str, Any],
+        registered_context: _ActiveTurn | None = None,
+    ) -> None:
+        request_id = message.get("id")
+        method = message.get("method")
+        params = message.get("params")
+        context = registered_context
+        response_sent = False
         try:
-            result = context.tool_handler(tool_name, dict(arguments))
-            if not isinstance(result, Mapping):
-                raise RuntimeError("Codex dynamic tool returned an invalid result")
-            invocation = CodexDynamicToolInvocation(
-                thread_id=thread_id,
-                turn_id=turn_id,
-                call_id=call_id,
-                tool_name=tool_name,
-                arguments=dict(arguments),
-                result=dict(result),
-            )
+            if method != "item/tool/call" or not isinstance(params, Mapping):
+                self._send_server_error(request_id, -32601, "Method not available")
+                response_sent = True
+                return
+            thread_id = params.get("threadId")
+            turn_id = params.get("turnId")
+            call_id = params.get("callId")
+            tool_name = params.get("tool")
+            arguments = params.get("arguments")
+            if (
+                not isinstance(thread_id, str)
+                or not thread_id
+                or not isinstance(turn_id, str)
+                or not turn_id
+                or not isinstance(call_id, str)
+                or not call_id
+                or not isinstance(tool_name, str)
+                or not tool_name
+                or not isinstance(arguments, Mapping)
+            ):
+                if context is not None:
+                    with context.lock:
+                        context.tool_error = "Codex dynamic tool request was malformed"
+                self._send_tool_result(
+                    request_id,
+                    success=False,
+                    payload={"error": "rejected"},
+                )
+                response_sent = True
+                return
+            if context is None:
+                with self._state_lock:
+                    context = self._active_turns.get(thread_id)
+                if context is not None:
+                    with context.lock:
+                        if context.completion is not None or context.exiting:
+                            context = None
+            if context is None:
+                self._send_tool_result(
+                    request_id,
+                    success=False,
+                    payload={"error": "rejected"},
+                )
+                response_sent = True
+                return
+            if not context.turn_ready.wait(min(self._timeout_seconds, 5.0)):
+                with context.lock:
+                    context.tool_error = "Codex dynamic tool request arrived before turn start"
+                self._send_tool_result(
+                    request_id,
+                    success=False,
+                    payload={"error": "rejected"},
+                )
+                response_sent = True
+                return
             with context.lock:
-                context.tool_invocations.append(invocation)
-            self._send_tool_result(request_id, success=True, payload=result)
+                if context.turn_id != turn_id:
+                    context.tool_error = "Codex dynamic tool request does not match active turn"
+                    protocol_error = True
+                elif call_id in context.call_ids:
+                    context.tool_error = "Codex dynamic tool request was duplicated"
+                    protocol_error = True
+                else:
+                    context.call_ids.add(call_id)
+                    protocol_error = False
+            if protocol_error:
+                self._send_tool_result(
+                    request_id,
+                    success=False,
+                    payload={"error": "rejected"},
+                )
+                response_sent = True
+                return
+            try:
+                result = context.tool_handler(tool_name, dict(arguments))
+                if not isinstance(result, Mapping):
+                    raise RuntimeError("Codex dynamic tool returned an invalid result")
+                invocation = CodexDynamicToolInvocation(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    call_id=call_id,
+                    tool_name=tool_name,
+                    arguments=dict(arguments),
+                    result=dict(result),
+                )
+                with context.lock:
+                    context.tool_invocations.append(invocation)
+                self._send_tool_result(request_id, success=True, payload=result)
+                response_sent = True
+            except Exception:
+                with context.lock:
+                    context.tool_error = "Codex FormOwl tool call failed"
+                self._send_tool_result(
+                    request_id,
+                    success=False,
+                    payload={"error": "rejected"},
+                )
+                response_sent = True
         except Exception:
-            with context.lock:
-                context.tool_error = "Codex FormOwl tool call failed"
-            self._send_tool_result(request_id, success=False, payload={"error": "rejected"})
+            if context is not None:
+                with context.lock:
+                    context.tool_error = "Codex FormOwl tool call failed"
+            if not response_sent:
+                try:
+                    self._send_tool_result(
+                        request_id,
+                        success=False,
+                        payload={"error": "rejected"},
+                    )
+                except RuntimeError:
+                    self._fail_all()
+        finally:
+            if registered_context is not None:
+                self._finish_tool_request(registered_context)
 
     def _send_tool_result(
         self,

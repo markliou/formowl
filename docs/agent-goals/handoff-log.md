@@ -13,37 +13,6 @@ Lifecycle label: `active`.
 - Never split a dated entry, discard content, or rewrite archive history.
 - Append only concise cross-agent facts, blockers, verification, and next action.
 
-## 2026-07-11
-
-- Completed a user-requested whole-repository maintenance review across
-  production Python, tests/scripts, research harnesses, containers, MCP
-  boundaries, and durable documentation. Static import analysis found no
-  orphan production module; canonical root verification passed 713 tests plus
-  Ruff check and format check.
-- Removed four unused projection acceptance markers, one unused OpenProject
-  mapper wrapper, and one unreferenced incomplete benchmark. The older Wiki
-  projection builder and forbidden-tool marker exports were reviewed but kept
-  as public compatibility surfaces. Consolidated identical Project and Wiki
-  JSONL logger implementations and identical CPU/GPU neural dependency files
-  while preserving compatibility imports and container entrypoints.
-- Deleted the obsolete MCP abstract after moving current service/tool truth into
-  `docs/mcp-boundaries.md`, and labeled ontology/mail documents by lifecycle.
-  The duplicate KG restart history remains unchanged in this patch; issue #40
-  tracks its safe archival together with the canonical durable registry.
-- The independent `.formowl/kg-eval` suite is currently not state-independent:
-  a clean archive lacks ignored result snapshots, while the operator workspace
-  contains ignored evidence that rebuilds validator output to 12/12 although
-  tracked tests/checklists and the durable goal still assert the historical
-  8/12 state. Do not report that harness as passing until issue #38 resolves the
-  state-drift and clean-clone reproducibility contract.
-- Follow-up issues: #38 for KG authority state-independent tests, #39 for MCP
-  protocol/shadow-workflow consolidation, and #40 for durable history archival.
-- Final cleanup reviewer gate passed 3/3 after compatibility and documentation
-  blockers were fixed: dead-code/evidence, runtime compatibility, and
-  docs/governance reviewers all returned `RELEASE_DECISION: AGREE`. Public Wiki
-  projection and forbidden-tool marker surfaces were retained; the authority
-  harness state-drift remains isolated to #38 and is not claimed as passing.
-
 ## 2026-07-11 — Issues #38–#40 completion update
 
 - Issue #38 now isolates blocked and completed authority fixtures, cleans up
@@ -298,3 +267,24 @@ Lifecycle label: `active`.
 - Proof: 127 focused container tests, Ruff, Node UI smoke, and live PO/COO chat
   both HTTP 200 with zero full placeholders or chat errors. Methodology
   authority remains valid-but-blocked.
+
+## 2026-07-24 — Final live human-UAT repair handoff
+
+- The live image is the human-readable + dynamic-tool-racefix +
+  mobile-clearance build; the LAN surface is ready with automatic restart.
+- Desktop uses a 1120px, content-dominant result table. Mobile uses labeled
+  stacked cards, Taipei-formatted times, safe long-text wrapping, and explicit
+  composer clearance. Independent synthetic browser UX passed with 196px
+  last-card clearance and no horizontal overflow.
+- Turn completion could previously outrun an in-flight dynamic tool. Requests
+  are now pre-registered, and completion drains accepted tools with a bounded
+  timeout. Focused verification passes HTTP 47/47, orchestrator 25/25, JS UI
+  smoke, Ruff/format, and diff checks.
+- One authorized source-backed independent pre-fix test blocked when the
+  request failed; existing non-content event evidence led to the race repair.
+  Both private-evidence sidecar authorizations are exhausted, so no post-fix
+  source-backed automated retest ran. Next action: the user's manual live
+  webpage query.
+- Methodology authority remains valid-but-blocked. This is human-UAT surface
+  engineering evidence, not methodology-quality UAT, a KG-vs-ontology
+  comparison, issue #33 closure, broad KG completion, or production readiness.

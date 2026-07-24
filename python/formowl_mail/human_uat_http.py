@@ -2352,6 +2352,13 @@ _CHAT_UAT_HTML = """<!doctype html>
       }
       .composer-dock { padding: 0 12px; }
       .conversation { width: min(100% - 26px, 768px); padding-top: 76px; }
+      body.has-conversation .conversation {
+        padding-bottom: calc(240px + env(safe-area-inset-bottom));
+      }
+      body.has-conversation .composer-dock {
+        padding: 10px 10px calc(8px + env(safe-area-inset-bottom));
+      }
+      body.has-conversation .composer-note { display: none; }
       .landing-title h1 { font-size: 24px; }
       .message.user .bubble { max-width: 86%; }
       .test-badge { display: none; }

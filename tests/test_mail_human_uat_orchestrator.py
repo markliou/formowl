@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import unittest
 from unittest import mock
 
@@ -332,6 +333,157 @@ _FAKE_APP_SERVER_TOOL_PROTOCOL_VIOLATION = textwrap.dedent(
                 turn_id="turn_stdio",
                 call_id="call_1",
             )
+    """
+)
+
+_FAKE_APP_SERVER_COMPLETION_DURING_TOOL = textwrap.dedent(
+    r"""
+    import json
+    from pathlib import Path
+    import sys
+
+    started_path = Path(sys.argv[1])
+    completion_path = Path(sys.argv[2])
+
+    def send(message):
+        print(json.dumps(message, ensure_ascii=False), flush=True)
+
+    for line in sys.stdin:
+        message = json.loads(line)
+        method = message.get("method")
+        request_id = message.get("id")
+        if method == "initialize":
+            send({"id": request_id, "result": {"serverInfo": {"name": "fake"}}})
+        elif method == "initialized":
+            continue
+        elif method == "thread/start":
+            send(
+                {
+                    "id": request_id,
+                    "result": {
+                        "thread": {"id": "thread_stdio"},
+                        "model": "gpt-test-stdio",
+                    },
+                }
+            )
+        elif method == "turn/start":
+            send({"id": request_id, "result": {"turn": {"id": "turn_stdio"}}})
+            send(
+                {
+                    "id": "server_tool_slow",
+                    "method": "item/tool/call",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turnId": "turn_stdio",
+                        "callId": "call_slow",
+                        "tool": "search_formowl_evidence",
+                        "arguments": {
+                            "query_text": "synthetic slow-tool question",
+                            "required_terms": [],
+                            "sort": "relevance",
+                            "limit": 5,
+                        },
+                    },
+                }
+            )
+            with started_path.open("rb") as marker:
+                marker.read(1)
+            send(
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turnId": "turn_stdio",
+                        "completedAtMs": 1,
+                        "item": {
+                            "id": "message_stdio",
+                            "type": "agentMessage",
+                            "text": (
+                                '{"response_kind":"answer",'
+                                '"answer_text":"slow tool complete",'
+                                '"display_format":"narrative"}'
+                            ),
+                            "phase": "final_answer",
+                        },
+                    },
+                }
+            )
+            send(
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turn": {
+                            "id": "turn_stdio",
+                            "status": "completed",
+                            "error": None,
+                            "items": [],
+                            "itemsView": "notLoaded",
+                        },
+                    },
+                }
+            )
+            with completion_path.open("wb", buffering=0) as marker:
+                marker.write(b"1")
+        elif method == "thread/delete":
+            send({"id": request_id, "result": {}})
+        elif request_id == "server_tool_slow":
+            continue
+    """
+)
+
+_FAKE_APP_SERVER_STALLED_TOOL = textwrap.dedent(
+    r"""
+    import json
+    import sys
+
+    def send(message):
+        print(json.dumps(message, ensure_ascii=False), flush=True)
+
+    for line in sys.stdin:
+        message = json.loads(line)
+        method = message.get("method")
+        request_id = message.get("id")
+        if method == "initialize":
+            send({"id": request_id, "result": {"serverInfo": {"name": "fake"}}})
+        elif method == "initialized":
+            continue
+        elif method == "thread/start":
+            send(
+                {
+                    "id": request_id,
+                    "result": {
+                        "thread": {"id": "thread_stdio"},
+                        "model": "gpt-test-stdio",
+                    },
+                }
+            )
+        elif method == "turn/start":
+            send({"id": request_id, "result": {"turn": {"id": "turn_stdio"}}})
+            send(
+                {
+                    "id": "server_tool_stalled",
+                    "method": "item/tool/call",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turnId": "turn_stdio",
+                        "callId": "call_stalled",
+                        "tool": "search_formowl_evidence",
+                        "arguments": {
+                            "query_text": "synthetic stalled-tool question",
+                            "required_terms": [],
+                            "sort": "relevance",
+                            "limit": 5,
+                        },
+                    },
+                }
+            )
+        elif method == "turn/interrupt":
+            send({"id": request_id, "result": {}})
+        elif method == "thread/delete":
+            send({"id": request_id, "result": {}})
+        elif request_id == "server_tool_stalled":
+            continue
     """
 )
 
@@ -1018,6 +1170,222 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
                     finally:
                         transport.close()
                 self.assertEqual(len(tool_calls), expected_tool_calls)
+
+    def test_stdio_transport_waits_for_slow_tool_before_turn_returns(self) -> None:
+        class _ObservingTransport(CodexAppServerStdioTransport):
+            def __init__(self, *args, **kwargs):
+                self.completion_delivered = threading.Event()
+                self.allow_completion = threading.Event()
+                self.tool_response_sent = threading.Event()
+                super().__init__(*args, **kwargs)
+
+            def _deliver_turn_completion(self, params):
+                super()._deliver_turn_completion(params)
+                self.completion_delivered.set()
+                if not self.allow_completion.wait(5):
+                    raise RuntimeError("test completion observer timed out")
+
+            def _send_tool_result(self, *args, **kwargs):
+                super()._send_tool_result(*args, **kwargs)
+                self.tool_response_sent.set()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            started_fifo = root / "tool-started.fifo"
+            completion_fifo = root / "completion-sent.fifo"
+            os.mkfifo(started_fifo)
+            os.mkfifo(completion_fifo)
+            completion_sent = threading.Event()
+
+            def observe_completion_send():
+                with completion_fifo.open("rb") as marker:
+                    marker.read(1)
+                completion_sent.set()
+
+            completion_watcher = threading.Thread(
+                target=observe_completion_send,
+                name="test-completion-sent-watcher",
+                daemon=True,
+            )
+            completion_watcher.start()
+            transport = _ObservingTransport(
+                command=(
+                    sys.executable,
+                    "-u",
+                    "-c",
+                    _FAKE_APP_SERVER_COMPLETION_DURING_TOOL,
+                    str(started_fifo),
+                    str(completion_fifo),
+                ),
+                cwd=root / "workspace",
+                codex_home=root / "codex-home",
+                timeout_seconds=5,
+                environment={"PATH": os.environ.get("PATH", "")},
+                attest_runtime=False,
+            )
+            release_tool = threading.Event()
+            tool_started = threading.Event()
+            run_done = threading.Event()
+            run_state = {}
+
+            def tool_handler(tool_name, arguments):
+                self.assertEqual(tool_name, "search_formowl_evidence")
+                self.assertEqual(arguments["query_text"], "synthetic slow-tool question")
+                tool_started.set()
+                with started_fifo.open("wb", buffering=0) as marker:
+                    marker.write(b"1")
+                if not release_tool.wait(5):
+                    raise RuntimeError("test tool release timed out")
+                return {
+                    "status": "ok",
+                    "total_result_count": 1,
+                    "displayed_result_count": 1,
+                    "results": [{"snippet": "synthetic bounded evidence"}],
+                }
+
+            thread = transport.start_thread(
+                model=None,
+                cwd=root / "workspace",
+                base_instructions="base",
+                developer_instructions="developer",
+                dynamic_tools=(),
+            )
+
+            def run_turn():
+                try:
+                    run_state["turn"] = transport.run_turn(
+                        thread_id=thread.thread_id,
+                        user_text="synthetic slow-tool turn",
+                        additional_context={},
+                        output_schema={
+                            "type": "object",
+                            "additionalProperties": False,
+                        },
+                        reasoning_effort="low",
+                        client_metadata={"surface": "test"},
+                        tool_handler=tool_handler,
+                    )
+                except BaseException as exc:
+                    run_state["error"] = exc
+                finally:
+                    run_done.set()
+
+            runner = threading.Thread(target=run_turn, name="test-run-turn")
+            runner.start()
+            try:
+                self.assertTrue(tool_started.wait(2))
+                self.assertTrue(completion_sent.wait(2))
+                self.assertTrue(transport.completion_delivered.wait(2))
+                self.assertFalse(
+                    run_done.wait(0.2),
+                    "turn/completed returned the turn while the tool was still running",
+                )
+                transport.allow_completion.set()
+                release_tool.set()
+                self.assertTrue(run_done.wait(2))
+                runner.join(2)
+                self.assertNotIn("error", run_state)
+                turn = run_state["turn"]
+                self.assertEqual(turn.final_message, _decision(answer_text="slow tool complete"))
+                self.assertEqual(len(turn.tool_invocations), 1)
+                self.assertEqual(
+                    turn.tool_invocations[0].result["results"][0]["snippet"],
+                    "synthetic bounded evidence",
+                )
+                self.assertTrue(transport.tool_response_sent.is_set())
+            finally:
+                transport.allow_completion.set()
+                release_tool.set()
+                runner.join(7)
+                transport.close()
+                completion_watcher.join(1)
+
+    def test_stdio_transport_stalled_tool_times_out_without_reader_deadlock(self) -> None:
+        class _ObservingTransport(CodexAppServerStdioTransport):
+            def __init__(self, *args, **kwargs):
+                self.tool_request_finished = threading.Event()
+                super().__init__(*args, **kwargs)
+
+            def _finish_tool_request(self, context):
+                super()._finish_tool_request(context)
+                self.tool_request_finished.set()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            transport = _ObservingTransport(
+                command=(
+                    sys.executable,
+                    "-u",
+                    "-c",
+                    _FAKE_APP_SERVER_STALLED_TOOL,
+                ),
+                cwd=root / "workspace",
+                codex_home=root / "codex-home",
+                timeout_seconds=0.2,
+                environment={"PATH": os.environ.get("PATH", "")},
+                attest_runtime=False,
+            )
+            release_tool = threading.Event()
+            tool_started = threading.Event()
+            run_done = threading.Event()
+            run_state = {}
+
+            def tool_handler(tool_name, arguments):
+                self.assertEqual(tool_name, "search_formowl_evidence")
+                self.assertEqual(arguments["query_text"], "synthetic stalled-tool question")
+                tool_started.set()
+                if not release_tool.wait(5):
+                    raise RuntimeError("test tool release timed out")
+                return {"status": "ok", "results": []}
+
+            thread = transport.start_thread(
+                model=None,
+                cwd=root / "workspace",
+                base_instructions="base",
+                developer_instructions="developer",
+                dynamic_tools=(),
+            )
+
+            def run_turn():
+                try:
+                    run_state["turn"] = transport.run_turn(
+                        thread_id=thread.thread_id,
+                        user_text="synthetic stalled-tool turn",
+                        additional_context={},
+                        output_schema={
+                            "type": "object",
+                            "additionalProperties": False,
+                        },
+                        reasoning_effort="low",
+                        client_metadata={"surface": "test"},
+                        tool_handler=tool_handler,
+                    )
+                except BaseException as exc:
+                    run_state["error"] = exc
+                finally:
+                    run_done.set()
+
+            runner = threading.Thread(target=run_turn, name="test-stalled-run-turn")
+            runner.start()
+            try:
+                self.assertTrue(tool_started.wait(2))
+                self.assertTrue(
+                    run_done.wait(2),
+                    "stalled dynamic tool caused an unbounded turn wait",
+                )
+                self.assertNotIn("turn", run_state)
+                self.assertIn("error", run_state)
+                self.assertIsInstance(run_state["error"], RuntimeError)
+                self.assertIn("timed out", str(run_state["error"]))
+                with transport._state_lock:
+                    self.assertIn(thread.thread_id, transport._active_turns)
+            finally:
+                release_tool.set()
+                self.assertTrue(transport.tool_request_finished.wait(2))
+                runner.join(7)
+                with transport._state_lock:
+                    self.assertNotIn(thread.thread_id, transport._active_turns)
+                transport.close()
 
     def test_codex_command_disables_non_formowl_capabilities(self) -> None:
         command = build_hardened_codex_app_server_command("codex")

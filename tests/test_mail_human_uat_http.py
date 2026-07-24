@@ -195,6 +195,26 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertIn("clip: rect(0, 0, 0, 0)", html)
         self.assertIn("overflow: visible", html)
         self.assertNotIn("overflow-x: auto", html)
+        mobile_css = html.split("@media (max-width: 800px)", 1)[1].split(
+            "@media (max-width: 720px)",
+            1,
+        )[0]
+        self.assertIn(
+            "padding-bottom: calc(240px + env(safe-area-inset-bottom));",
+            mobile_css,
+        )
+        self.assertIn(
+            "padding: 10px 10px calc(8px + env(safe-area-inset-bottom));",
+            mobile_css,
+        )
+        self.assertIn(
+            "body.has-conversation .composer-note { display: none; }",
+            mobile_css,
+        )
+        self.assertIn(
+            '<div class="composer-note">測試期間會記錄已送出的問題與按鈕操作',
+            html,
+        )
 
     def test_service_uses_injected_gateway_metrics_and_rejects_bundle_mismatch(
         self,

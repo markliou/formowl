@@ -121,14 +121,18 @@ class FakeFormData {
   }
 }
 
-function extractScript(constantName) {
+function extractHtml(constantName) {
   const marker = `${constantName} = """`;
   const start = source.indexOf(marker);
   assert.notEqual(start, -1, `${constantName} must exist`);
   const htmlStart = start + marker.length;
   const htmlEnd = source.indexOf('\n"""', htmlStart);
   assert.notEqual(htmlEnd, -1, `${constantName} must terminate`);
-  const html = source.slice(htmlStart, htmlEnd);
+  return source.slice(htmlStart, htmlEnd);
+}
+
+function extractScript(constantName) {
+  const html = extractHtml(constantName);
   const match = html.match(/<script>([\s\S]*?)<\/script>/u);
   assert.ok(match, `${constantName} must contain an inline script`);
   return match[1];
@@ -230,6 +234,24 @@ async function settle() {
 }
 
 async function runChatSmoke() {
+  const chatHtml = extractHtml("_CHAT_UAT_HTML");
+  const mobileCss = chatHtml.split("@media (max-width: 800px)", 2)[1].split(
+    "@media (max-width: 720px)",
+    1,
+  )[0];
+  assert.match(
+    chatHtml,
+    /<div class="composer-note">測試期間會記錄已送出的問題與按鈕操作/u,
+  );
+  assert.match(
+    mobileCss,
+    /padding-bottom: calc\(240px \+ env\(safe-area-inset-bottom\)\);/u,
+  );
+  assert.match(
+    mobileCss,
+    /body\.has-conversation \.composer-note \{ display: none; \}/u,
+  );
+
   const { document, elements } = makeDocument([
     "conversation",
     "upload-modal",
@@ -314,6 +336,7 @@ async function runChatSmoke() {
   vm.runInContext(extractScript("_CHAT_UAT_HTML"), context);
   await settle();
   requests.length = 0;
+  assert.equal(document.body.classList.contains("has-conversation"), false);
 
   await elements.get("open-upload").dispatch("click");
   assert.equal(elements.get("upload-modal").classList.contains("hidden"), false);

@@ -83,33 +83,27 @@ and its reviewer gate remain separate.
 
 ## Blockers
 
-Issue #49's earlier intermittent Codex full-chat blocker is resolved in the
-current POC deployment. Three fresh anonymous July 23, 2026 sessions returned
-HTTP 200 three out of three with 87 total / 10 displayed sources, exhaustive
-coverage, 10 primary citations, one FormOwl call, and no fallback or
-`chat_failure` event. The formerly failing `03.80503G301` COO/origin prompt
-also returned HTTP 200 with the target identifier present. The same
-28,036-message cold start now uses four tokenizer workers plus deterministic
-parent merge and improved from 2368.108 seconds to 859.372 seconds, a 2.76x
-speedup with 17.38GiB sampled peak memory and no OOM. Focused UAT-image checks
-pass gateway 38/38, orchestrator 20/20, HTTP 43/43, targeted Ruff, and the
-isolated Node 20 UI smoke. Keep Issue #49 unchecked until the final post-change
-reviewer gate agrees. Methodology authority remains valid-but-blocked; this
-establishes no methodology-quality UAT, KG-vs-ontology result, general
-production readiness, or general latency claim.
+As of July 24, 2026, the final live human-UAT image is the current
+human-readable + dynamic-tool-racefix + mobile-clearance build. The LAN surface
+is ready with automatic restart. Desktop results use a 1120px,
+content-dominant table; mobile uses labeled stacked cards. Taipei times are
+human-readable, long content wraps, and the independent synthetic browser check
+passed with 196px last-card clearance and no horizontal overflow.
 
-GitHub issue #50 is complete in the isolated UAT worktree. Authorization was
-already succeeding; the defect was that authorized mail body fields were still
-sent through the generic public control/metadata redactor. The dedicated
-evidence boundary now preserves ordinary body text and locally redacts only
-high-confidence credentials and implementation details, while denied access
-still returns no content. Live PO verification also exposed that the Codex
-engine needed a second refinement query after one successful broad result, so
-one turn now permits at most three bounded FormOwl calls and projects the latest
-governed refinement. The July 24 LAN replay returned HTTP 200 for PO delivery
-and COO/origin, with 87 and 17 exhaustive source items, readable snippets, zero
-full-body placeholders, and no chat errors. This remains a POC display/safety
-result under the valid-but-blocked methodology authority.
+The backend race occurred when turn completion outran an in-flight dynamic
+tool. Requests are now pre-registered, and completion drains accepted tools
+with a bounded timeout. Focused proof passes HTTP 47/47, orchestrator 25/25,
+the JS UI smoke, Ruff/format, and diff checks.
+
+One authorized source-backed independent test before the race fix blocked
+because the request failed; existing non-content event evidence led to the
+repair. Both private-evidence sidecar authorizations are exhausted, so no
+post-fix source-backed automated retest was performed. The next evidence action
+is the user's manual live webpage query. Methodology authority remains
+valid-but-blocked: this is human-UAT surface engineering evidence, not
+methodology-quality UAT, a KG-vs-ontology comparison, issue #33 closure, or
+production readiness. The broad KG real-evidence objective remains blocked and
+incomplete.
 
 The bounded Task Answering slice passed 895 canonical dev-container tests,
 full Ruff, 345-file format check, and `git diff --check`. The required
@@ -165,10 +159,8 @@ authorization must be an actual boolean; string values fail closed.
 
 ## Next Action
 
-Run the final post-change Issue #49 reviewer gate over the multiprocessing,
-fallback, bounded multi-tool behavior, tests, and live evidence before marking
-that separate board item complete. The Task Answering reviewer gate and four
-broad real-evidence gates remain independent. Keep methodology authority
-valid-but-blocked and do not reinterpret issues #49 or #50 as
-methodology-quality UAT, a KG-vs-ontology result, general production readiness,
-or general latency.
+The user should run the next manual query on the live webpage. Keep the Task
+Answering reviewer gate and four broad real-evidence gates independent, retain
+the valid-but-blocked methodology authority, and make no methodology-quality,
+comparative, issue #33 completion, or production-readiness claim from this
+human-UAT repair.
