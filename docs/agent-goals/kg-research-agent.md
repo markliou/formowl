@@ -38,6 +38,18 @@ Gate 0 is the clean integration branch `issue/51-integration-baseline` at
 ordered, disjoint work packages and must not use the dirty repository root as
 evidence.
 
+Default Candidate Evidence Retrieval remains the only default retrieval
+method: it counts a logical source item, uses capped additive ontology
+reranking, and keeps regex-only, hard-pruning, and other alternatives
+ablation-only through `retrieve_ablation`. The index-owned
+`CandidateEvidenceTextPolicyRuntime` accepts query text only and binds the
+runtime id, tokenizer implementation hash, and frozen profile; a free-form hash
+is rejected. Context/time admissibility and `CandidateEvidenceAccessBinding`
+filtering precede tokenization. Raw query text may express only control intent;
+retrieval anchors come from runtime-produced tokens. All four access
+collections are immutable `frozenset` values, and cross-context permission is
+an actual boolean.
+
 ## Status
 
 `active`
@@ -74,6 +86,8 @@ evidence.
 ## Blockers
 
 - `scripts/methodology_authority_check.py --check` is valid but blocked.
+  The methodology authority guard observes current runtime
+  `ascii_identifier_regex_v1`, not the frozen target.
   Authority fingerprint is
   `sha256:c8e3fc5ec13d690f33d27797942a3b9b090319d4be8f269c77bccd646d787177`;
   Gate-0 execution fingerprint is

@@ -76,8 +76,10 @@ archival is preserved at
 
 ## Current Unchecked Work
 
-- [ ] Implement issue #51's source-neutral raw-inventory, structural-observation,
-  coverage-ledger, bounded-fallback, and four-state answer-claim pipeline.
+- [ ] Align the real runtime with the active methodology authority before any
+  further methodology-quality UAT or KG-versus-ontology claim; implement issue
+  #51's source-neutral raw-inventory, structural-observation, coverage-ledger,
+  bounded-fallback, and four-state answer-claim pipeline.
   - Owner paths: `formowl_contract`, canonical PST extraction, mail
     bundle/PostgreSQL persistence, existing retrieval gateways, Task Answering,
     MCP/JSON-RPC/UAT convergence, generalized fixtures, and durable docs.
