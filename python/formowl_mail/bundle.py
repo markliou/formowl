@@ -484,10 +484,17 @@ class MailEvidenceBundle:
     version_manifests: list[VersionManifest] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        return self.to_persistence_dict()
+
+    def to_persistence_dict(self) -> dict[str, Any]:
         return _private_payload(self)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "MailEvidenceBundle":
+        return cls.from_persistence_dict(value)
+
+    @classmethod
+    def from_persistence_dict(cls, value: dict[str, Any]) -> "MailEvidenceBundle":
         item = _require_private_dict(value, "mail_evidence_bundle")
         _assert_private_mail_bundle_envelope_safe(item)
         bundle = cls(
@@ -560,6 +567,7 @@ class MailEvidenceBundle:
                 "answer_claims",
                 AnswerClaim,
                 required=False,
+                factory=AnswerClaim.from_persistence_dict,
             ),
             version_manifests=_record_list(
                 item,
@@ -1219,6 +1227,8 @@ def _private_payload(value: Any) -> dict[str, Any]:
 
 
 def _private_plain(value: Any) -> Any:
+    if isinstance(value, AnswerClaim):
+        return value.to_persistence_dict()
     if is_dataclass(value):
         return {
             key: _private_plain(item) for key, item in value.__dict__.items() if item is not None
@@ -1336,6 +1346,7 @@ def _record_list(
     record_type: Any,
     *,
     required: bool = True,
+    factory: Any | None = None,
 ) -> list[Any]:
     if field_name not in value:
         if required:
@@ -1344,7 +1355,8 @@ def _record_list(
     items = value[field_name]
     if not isinstance(items, list):
         raise ContractValidationError(f"{field_name} must be a list")
-    return [record_type.from_dict(item) for item in items]
+    parser = factory or record_type.from_dict
+    return [parser(item) for item in items]
 
 
 def _from_required_fields(

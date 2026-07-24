@@ -202,6 +202,54 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 index_fingerprint=FP,
             )
 
+    def test_answer_claim_has_one_exact_public_wire_and_separate_private_wire(self) -> None:
+        claim = AnswerClaim.create(
+            answer_claim_id="answer_claim_wp1",
+            state="FOUND",
+            reason_codes=("direct_evidence",),
+            claim_requirement_id="requirement_wp1",
+            coverage_ledger_id="coverage_wp1",
+            evidence_snapshot_ids=("snapshot_wp1",),
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            tokenizer_fingerprint=FP,
+            index_fingerprint=FP2,
+            version_manifest_id="version_wp1",
+            implementation_fingerprint=FP,
+        )
+        expected_keys = {
+            "state",
+            "reason_codes",
+            "claim_requirement_id",
+            "coverage_ledger_id",
+            "evidence_snapshot_ids",
+            "source_fingerprint",
+            "parser_fingerprint",
+            "tokenizer_fingerprint",
+            "index_fingerprint",
+        }
+        public = claim.to_dict()
+        self.assertEqual(set(public), expected_keys)
+        self.assertNotIn("answer_claim_id", public)
+        self.assertNotIn("version_manifest_id", public)
+        self.assertNotIn("implementation_fingerprint", public)
+        self.assertEqual(AnswerClaim.from_dict(public).to_dict(), public)
+
+        private = claim.to_persistence_dict()
+        self.assertIn("answer_claim_id", private)
+        self.assertIn("version_manifest_id", private)
+        self.assertIn("implementation_fingerprint", private)
+        self.assertEqual(
+            AnswerClaim.from_persistence_dict(private).to_persistence_dict(),
+            private,
+        )
+        for extra_key in ("answer_claim_id", "answer_claim_state", "state_2"):
+            invalid = dict(public)
+            invalid[extra_key] = "CONFLICT"
+            with self.subTest(extra_key=extra_key):
+                with self.assertRaises(ContractValidationError):
+                    AnswerClaim.from_dict(invalid)
+
     def test_stale_and_mismatched_fingerprints_are_representable_but_unusable(self) -> None:
         fresh = VersionManifest.create(
             source_fingerprint=FP,
@@ -273,11 +321,26 @@ class Issue51WP1ContractTests(unittest.TestCase):
             implementation_fingerprint=FP,
             index_freshness="stale",
         )
+        claim = AnswerClaim.create(
+            answer_claim_id="answer_claim_wp1",
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("stale_index",),
+            claim_requirement_id=requirement.claim_requirement_id,
+            coverage_ledger_id=ledger.coverage_ledger_id,
+            evidence_snapshot_ids=(),
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            tokenizer_fingerprint=FP,
+            index_fingerprint=FP,
+            version_manifest_id=manifest.version_manifest_id,
+            implementation_fingerprint=FP2,
+        )
         populated = replace(
             bundle,
             source_inventory=[item],
             claim_requirements=[requirement],
             coverage_ledgers=[ledger],
+            answer_claims=[claim],
             version_manifests=[manifest],
         )
         payload = populated.to_dict()
@@ -426,6 +489,7 @@ class _RowsConnection:
             "claim_requirement": "claim_requirement_id",
             "coverage_ledger": "coverage_ledger_id",
             "version_manifest": "version_manifest_id",
+            "answer_claim": "answer_claim_id",
         }.get(table, next(iter(statement.parameters)))
         self.rows.setdefault(table, {})[str(statement.parameters[key])] = dict(statement.parameters)
 

@@ -73,6 +73,24 @@ _FORBIDDEN_PUBLIC_KEYS = {
     "sql",
     "storage_locator",
 }
+_ANSWER_CLAIM_PUBLIC_KEYS = frozenset(
+    {
+        "state",
+        "reason_codes",
+        "claim_requirement_id",
+        "coverage_ledger_id",
+        "evidence_snapshot_ids",
+        "source_fingerprint",
+        "parser_fingerprint",
+        "tokenizer_fingerprint",
+        "index_fingerprint",
+    }
+)
+_ANSWER_CLAIM_PERSISTENCE_KEYS = _ANSWER_CLAIM_PUBLIC_KEYS | {
+    "answer_claim_id",
+    "version_manifest_id",
+    "implementation_fingerprint",
+}
 
 
 class ProcessingState(str, Enum):
@@ -1001,11 +1019,14 @@ class AnswerClaim:
         for field_name in ("reason_codes", "evidence_snapshot_ids"):
             if field_name in values:
                 values[field_name] = list(values[field_name])
+        if {"answer_claim_id", "version_manifest_id", "implementation_fingerprint"}.intersection(
+            values
+        ):
+            return cls.from_persistence_dict(values)
         return cls.from_dict(values)
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
-            "answer_claim_id": self.answer_claim_id,
             "state": self.state,
             "reason_codes": list(self.reason_codes),
             "claim_requirement_id": self.claim_requirement_id,
@@ -1015,18 +1036,48 @@ class AnswerClaim:
             "parser_fingerprint": self.parser_fingerprint,
             "tokenizer_fingerprint": self.tokenizer_fingerprint,
             "index_fingerprint": self.index_fingerprint,
+        }
+        _assert_public_contract(payload, "answer_claim")
+        return payload
+
+    def to_persistence_dict(self) -> dict[str, Any]:
+        payload = {
+            "answer_claim_id": self.answer_claim_id,
+            **self.to_dict(),
             "version_manifest_id": self.version_manifest_id,
             "implementation_fingerprint": self.implementation_fingerprint,
         }
         payload = _without_none(payload)
-        _assert_public_contract(payload, "answer_claim")
+        _assert_public_contract(payload, "answer_claim.persistence")
         return payload
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "AnswerClaim":
         item = _mapping(value, "answer_claim")
+        _require_exact_keys(item, _ANSWER_CLAIM_PUBLIC_KEYS, "answer_claim")
         return cls(
-            answer_claim_id=_optional_str(item, "answer_claim_id") or "",
+            state=_required_str(item, "state"),
+            reason_codes=_tuple_strings(item, "reason_codes", codes=True),
+            claim_requirement_id=_required_str(item, "claim_requirement_id"),
+            coverage_ledger_id=_required_str(item, "coverage_ledger_id"),
+            evidence_snapshot_ids=_tuple_strings(item, "evidence_snapshot_ids", ids=True),
+            source_fingerprint=_required_str(item, "source_fingerprint"),
+            parser_fingerprint=_required_str(item, "parser_fingerprint"),
+            tokenizer_fingerprint=_required_str(item, "tokenizer_fingerprint"),
+            index_fingerprint=_required_str(item, "index_fingerprint"),
+        )
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "AnswerClaim":
+        item = _mapping(value, "answer_claim.persistence")
+        _require_exact_keys(
+            item,
+            _ANSWER_CLAIM_PERSISTENCE_KEYS,
+            "answer_claim.persistence",
+            required={"answer_claim_id"} | _ANSWER_CLAIM_PUBLIC_KEYS,
+        )
+        return cls(
+            answer_claim_id=_required_str(item, "answer_claim_id"),
             state=_required_str(item, "state"),
             reason_codes=_tuple_strings(item, "reason_codes", codes=True),
             claim_requirement_id=_required_str(item, "claim_requirement_id"),
@@ -1142,6 +1193,26 @@ def _mapping(value: Any, context: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ContractValidationError(f"{context} must be an object")
     return value
+
+
+def _require_exact_keys(
+    value: Mapping[str, Any],
+    allowed: set[str] | frozenset[str],
+    context: str,
+    *,
+    required: set[str] | frozenset[str] | None = None,
+) -> None:
+    required_keys = allowed if required is None else required
+    unknown = set(value) - set(allowed)
+    missing = set(required_keys) - set(value)
+    if unknown:
+        raise ContractValidationError(
+            f"{context} contains unknown fields: {', '.join(sorted(unknown))}"
+        )
+    if missing:
+        raise ContractValidationError(
+            f"{context} is missing required fields: {', '.join(sorted(missing))}"
+        )
 
 
 def _required_mapping(value: Mapping[str, Any], field_name: str) -> Mapping[str, Any]:

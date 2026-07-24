@@ -237,7 +237,7 @@ class PostgreSQLMailEvidenceStore:
                 self.connection,
                 table_name="answer_claim",
                 mail_import_session_id=import_session_id,
-                factory=AnswerClaim.from_dict,
+                factory=AnswerClaim.from_persistence_dict,
             ),
             "answer_claim_id",
         )
@@ -303,7 +303,7 @@ class PostgreSQLMailEvidenceStore:
                 "structural_observations": [item.to_dict() for item in structural_observations],
                 "claim_requirements": [item.to_dict() for item in claim_requirements],
                 "coverage_ledgers": [item.to_dict() for item in coverage_ledgers],
-                "answer_claims": [item.to_dict() for item in answer_claims],
+                "answer_claims": [item.to_persistence_dict() for item in answer_claims],
                 "version_manifests": [item.to_dict() for item in version_manifests],
             }
         )
@@ -692,7 +692,7 @@ def _import_scoped_statement(
     extra_parameters: dict[str, Any] | None = None,
 ) -> SQLStatement:
     _validate_table_name(table_name)
-    payload = record.to_dict()
+    payload = _record_payload(record)
     record_id = str(payload[id_field])
     _validate_record_id(record_id, id_field)
     _validate_record_id(mail_import_session_id, "mail_import_session_id")
@@ -763,6 +763,17 @@ def _logical_statement(
     )
 
 
+def _record_payload(record: Any) -> dict[str, Any]:
+    serializer = getattr(record, "to_persistence_dict", None)
+    if callable(serializer):
+        payload = serializer()
+    else:
+        payload = record.to_dict()
+    if not isinstance(payload, dict):
+        raise ContractValidationError("persisted mail evidence record must serialize to an object")
+    return payload
+
+
 def _query_import_rows(
     connection: PostgreSQLMailEvidenceConnection,
     *,
@@ -786,7 +797,10 @@ def _query_import_rows(
 
 
 def _sort_records(records: Sequence[Any], id_field: str) -> list[Any]:
-    return sorted(records, key=lambda item: str(item.to_dict()[id_field]))
+    return sorted(
+        records,
+        key=lambda item: str(_record_payload(item)[id_field]),
+    )
 
 
 def _sort_body_segments(records: Sequence[EmailBodySegment]) -> list[EmailBodySegment]:
