@@ -9,6 +9,7 @@ from formowl_contract import (
     ContractValidationError,
     CoverageLedger,
     Grant,
+    SourceInventory,
     SourceInventoryItem,
     StructuralObservation,
     VersionManifest,
@@ -49,6 +50,7 @@ _TABLE_NAMES = (
     "embedded_message_relation",
     "mail_parse_run",
     "mail_parse_warning",
+    "source_inventory",
     "source_inventory_item",
     "structural_observation",
     "claim_requirement",
@@ -196,7 +198,16 @@ class PostgreSQLMailEvidenceStore:
             ),
             "mail_parse_warning_id",
         )
-        source_inventory = _sort_records(
+        source_inventories = _sort_records(
+            _query_import_rows(
+                self.connection,
+                table_name="source_inventory",
+                mail_import_session_id=import_session_id,
+                factory=SourceInventory.from_dict,
+            ),
+            "source_inventory_id",
+        )
+        source_inventory_items = _sort_records(
             _query_import_rows(
                 self.connection,
                 table_name="source_inventory_item",
@@ -205,6 +216,7 @@ class PostgreSQLMailEvidenceStore:
             ),
             "source_inventory_item_id",
         )
+        _validate_source_inventory_rows(source_inventories, source_inventory_items)
         structural_observations = _sort_records(
             _query_import_rows(
                 self.connection,
@@ -299,7 +311,8 @@ class PostgreSQLMailEvidenceStore:
                 "mail_parse_run": parse_runs[0].to_dict(),
                 "parse_warnings": [item.to_dict() for item in parse_warnings],
                 "created_at": _safe_row_str(session_row, "bundle_created_at"),
-                "source_inventory": [item.to_dict() for item in source_inventory],
+                "source_inventory": [item.to_dict() for item in source_inventories],
+                "source_inventory_items": [item.to_dict() for item in source_inventory_items],
                 "structural_observations": [item.to_dict() for item in structural_observations],
                 "claim_requirements": [item.to_dict() for item in claim_requirements],
                 "coverage_ledgers": [item.to_dict() for item in coverage_ledgers],
@@ -384,6 +397,7 @@ def mail_evidence_query_indexes() -> tuple[str, ...]:
         "idx_embedded_message_relation_import",
         "idx_mail_parse_run_import",
         "idx_mail_parse_warning_import",
+        "idx_source_inventory_import",
         "idx_source_inventory_item_import",
         "idx_structural_observation_import",
         "idx_claim_requirement_query",
@@ -532,14 +546,36 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
     )
     statements.extend(
         _import_scoped_statement(
+            table_name="source_inventory",
+            id_field="source_inventory_id",
+            record=inventory,
+            mail_import_session_id=import_session_id,
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+            extra_parameters={
+                "source_asset_id": inventory.source_asset_id,
+                "source_fingerprint": inventory.source_fingerprint,
+                "parser_fingerprint": inventory.parser_fingerprint,
+            },
+        )
+        for inventory in bundle.source_inventory
+    )
+    statements.extend(
+        _import_scoped_statement(
             table_name="source_inventory_item",
             id_field="source_inventory_item_id",
             record=item,
             mail_import_session_id=import_session_id,
             workspace_id=workspace_id,
             owner_user_id=owner_user_id,
+            extra_parameters={
+                "source_inventory_id": item.source_inventory_id,
+                "source_asset_id": item.source_asset_id,
+                "source_fingerprint": item.source_fingerprint,
+                "parser_fingerprint": item.parser_fingerprint,
+            },
         )
-        for item in bundle.source_inventory
+        for item in bundle.source_inventory_items
     )
     statements.extend(
         _import_scoped_statement(
@@ -549,6 +585,9 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
             mail_import_session_id=import_session_id,
             workspace_id=workspace_id,
             owner_user_id=owner_user_id,
+            extra_parameters={
+                "source_inventory_item_id": item.source_inventory_item_id,
+            },
         )
         for item in bundle.structural_observations
     )
@@ -575,6 +614,7 @@ def _statements_for_bundle(bundle: MailEvidenceBundle) -> list[SQLStatement]:
             extra_parameters={
                 "query_id": item.query_id,
                 "claim_requirement_id": item.claim_requirement_id,
+                "source_inventory_id": item.source_inventory_id,
             },
         )
         for item in bundle.coverage_ledgers
@@ -772,6 +812,22 @@ def _record_payload(record: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ContractValidationError("persisted mail evidence record must serialize to an object")
     return payload
+
+
+def _validate_source_inventory_rows(
+    inventories: Sequence[SourceInventory],
+    items: Sequence[SourceInventoryItem],
+) -> None:
+    expected = {
+        item.source_inventory_item_id: item.to_dict()
+        for inventory in inventories
+        for item in inventory.items
+    }
+    actual = {item.source_inventory_item_id: item.to_dict() for item in items}
+    if len(actual) != len(items) or actual != expected:
+        raise ContractValidationError(
+            "postgres source inventory child rows do not match persisted aggregates"
+        )
 
 
 def _query_import_rows(

@@ -323,6 +323,7 @@ def _fixture() -> (
         items=(item,),
         created_at="2026-07-24T00:00:00+00:00",
     )
+    item = inventory.items[0]
     requirement = ClaimRequirement.create(
         query_id="query_wp1",
         kind="single_value",

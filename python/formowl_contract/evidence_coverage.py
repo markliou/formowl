@@ -317,6 +317,7 @@ class SourceInventoryItem:
     source_fingerprint: str
     parser_fingerprint: str
     permission_scope: Mapping[str, Any]
+    source_inventory_id: str | None = None
     exclusion_policy_version_id: str | None = None
     exclusion_authorized_actor_id: str | None = None
     exclusion_reason_code: str | None = None
@@ -337,6 +338,7 @@ class SourceInventoryItem:
         _fingerprint(self.source_fingerprint, "source_fingerprint")
         _fingerprint(self.parser_fingerprint, "parser_fingerprint")
         _safe_mapping(self.permission_scope, "source_inventory_item.permission_scope")
+        _optional_id(self.source_inventory_id, "source_inventory_id")
         _validate_exclusion_proof(self)
         _optional_id(self.parent_inventory_item_id, "parent_inventory_item_id")
         _safe_mapping(self.location, "source_inventory_item.location")
@@ -387,6 +389,7 @@ class SourceInventoryItem:
             source_fingerprint=_required_str(item, "source_fingerprint"),
             parser_fingerprint=_required_str(item, "parser_fingerprint"),
             permission_scope=_required_mapping(item, "permission_scope"),
+            source_inventory_id=_optional_str(item, "source_inventory_id"),
             exclusion_policy_version_id=_optional_str(item, "exclusion_policy_version_id"),
             exclusion_authorized_actor_id=_optional_str(item, "exclusion_authorized_actor_id"),
             exclusion_reason_code=_optional_str(item, "exclusion_reason_code"),
@@ -416,8 +419,24 @@ class SourceInventory:
         _fingerprint(self.parser_fingerprint, "parser_fingerprint")
         _tuple_of(self.items, SourceInventoryItem, "source_inventory.items")
         _text(self.created_at, "source_inventory.created_at")
-        if any(item.source_asset_id != self.source_asset_id for item in self.items):
-            raise ContractValidationError("source inventory items must share source_asset_id")
+        item_ids = [item.source_inventory_item_id for item in self.items]
+        if len(item_ids) != len(set(item_ids)):
+            raise ContractValidationError("source inventory items must have unique ids")
+        for item in self.items:
+            if item.source_inventory_id != self.source_inventory_id:
+                raise ContractValidationError(
+                    "source inventory items must belong to source_inventory_id"
+                )
+            if item.source_asset_id != self.source_asset_id:
+                raise ContractValidationError("source inventory items must share source_asset_id")
+            if item.source_fingerprint != self.source_fingerprint:
+                raise ContractValidationError(
+                    "source inventory items must share source_fingerprint"
+                )
+            if item.parser_fingerprint != self.parser_fingerprint:
+                raise ContractValidationError(
+                    "source inventory items must share parser_fingerprint"
+                )
 
     @classmethod
     def create(
@@ -430,21 +449,48 @@ class SourceInventory:
         created_at: str | None = None,
     ) -> "SourceInventory":
         item_values = tuple(items)
+        for item in item_values:
+            if not isinstance(item, SourceInventoryItem):
+                raise ContractValidationError("source inventory items must be SourceInventoryItem")
+            if item.source_asset_id != source_asset_id:
+                raise ContractValidationError(
+                    "source inventory item asset does not match aggregate"
+                )
+            if item.source_fingerprint != source_fingerprint:
+                raise ContractValidationError(
+                    "source inventory item source fingerprint does not match aggregate"
+                )
+            if item.parser_fingerprint != parser_fingerprint:
+                raise ContractValidationError(
+                    "source inventory item parser fingerprint does not match aggregate"
+                )
+        inventory_body = {
+            "source_asset_id": source_asset_id,
+            "source_fingerprint": source_fingerprint,
+            "parser_fingerprint": parser_fingerprint,
+            "items": [_inventory_item_identity_payload(item) for item in item_values],
+        }
+        source_inventory_id = stable_resource_contract_id(
+            "inventoryset",
+            "SourceInventory",
+            inventory_body,
+        )
+        bound_items = []
+        for item in item_values:
+            if item.source_inventory_id not in (None, source_inventory_id):
+                raise ContractValidationError(
+                    "source inventory item points at a different aggregate"
+                )
+            item_values_for_binding = item.to_dict()
+            item_values_for_binding.pop("source_inventory_item_id", None)
+            item_values_for_binding["source_inventory_id"] = source_inventory_id
+            bound_items.append(SourceInventoryItem.create(**item_values_for_binding))
         return cls(
-            source_inventory_id=stable_resource_contract_id(
-                "inventoryset",
-                "SourceInventory",
-                {
-                    "source_asset_id": source_asset_id,
-                    "source_fingerprint": source_fingerprint,
-                    "parser_fingerprint": parser_fingerprint,
-                    "items": [item.to_dict() for item in item_values],
-                },
-            ),
+            source_inventory_id=source_inventory_id,
             source_asset_id=source_asset_id,
             source_fingerprint=source_fingerprint,
             parser_fingerprint=parser_fingerprint,
-            items=item_values,
+            items=tuple(bound_items),
             created_at=created_at or now_iso(),
         )
 
@@ -1721,6 +1767,13 @@ def _dataclass_payload(value: Any) -> dict[str, Any]:
     payload = _public_plain(value)
     if not isinstance(payload, dict):
         raise ContractValidationError("contract payload must be an object")
+    return payload
+
+
+def _inventory_item_identity_payload(item: SourceInventoryItem) -> dict[str, Any]:
+    payload = item.to_dict()
+    payload.pop("source_inventory_item_id", None)
+    payload.pop("source_inventory_id", None)
     return payload
 
 

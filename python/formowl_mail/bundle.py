@@ -9,6 +9,7 @@ from formowl_contract import (
     ContractValidationError,
     CoverageLedger,
     Observation,
+    SourceInventory,
     SourceInventoryItem,
     StructuralObservation,
     VersionManifest,
@@ -476,12 +477,72 @@ class MailEvidenceBundle:
     mail_parse_run: MailParseRun
     parse_warnings: list[MailParseWarning] = field(default_factory=list)
     created_at: str = field(default_factory=now_iso)
-    source_inventory: list[SourceInventoryItem] = field(default_factory=list)
+    source_inventory: list[SourceInventory] = field(default_factory=list)
     structural_observations: list[StructuralObservation] = field(default_factory=list)
     claim_requirements: list[ClaimRequirement] = field(default_factory=list)
     coverage_ledgers: list[CoverageLedger] = field(default_factory=list)
     answer_claims: list[AnswerClaim] = field(default_factory=list)
     version_manifests: list[VersionManifest] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        inventory_by_id: dict[str, SourceInventory] = {}
+        item_by_id: dict[str, SourceInventoryItem] = {}
+        for inventory in self.source_inventory:
+            if not isinstance(inventory, SourceInventory):
+                raise ContractValidationError(
+                    "mail bundle source_inventory must contain aggregates"
+                )
+            if inventory.source_inventory_id in inventory_by_id:
+                raise ContractValidationError("mail bundle source inventories must be unique")
+            inventory_by_id[inventory.source_inventory_id] = inventory
+            for item in inventory.items:
+                if item.source_inventory_item_id in item_by_id:
+                    raise ContractValidationError("mail bundle inventory item ids must be unique")
+                item_by_id[item.source_inventory_item_id] = item
+
+        requirement_ids = {item.claim_requirement_id for item in self.claim_requirements}
+        ledger_by_id = {item.coverage_ledger_id: item for item in self.coverage_ledgers}
+        if len(ledger_by_id) != len(self.coverage_ledgers):
+            raise ContractValidationError("mail bundle coverage ledger ids must be unique")
+        for observation in self.structural_observations:
+            item = item_by_id.get(observation.source_inventory_item_id)
+            if item is None:
+                raise ContractValidationError(
+                    "structural observation references an orphan inventory item"
+                )
+            if (
+                observation.source_asset_id != item.source_asset_id
+                or observation.source_fingerprint != item.source_fingerprint
+                or observation.parser_fingerprint != item.parser_fingerprint
+            ):
+                raise ContractValidationError(
+                    "structural observation inventory relationships are inconsistent"
+                )
+        for ledger in self.coverage_ledgers:
+            inventory = inventory_by_id.get(ledger.source_inventory_id)
+            if inventory is None:
+                raise ContractValidationError("coverage ledger references an orphan inventory")
+            inventory_item_ids = {item.source_inventory_item_id for item in inventory.items}
+            if not set(ledger.relevant_inventory_item_ids).issubset(inventory_item_ids):
+                raise ContractValidationError(
+                    "coverage ledger references inventory items outside its aggregate"
+                )
+            if ledger.claim_requirement_id not in requirement_ids:
+                raise ContractValidationError(
+                    "coverage ledger references an orphan claim requirement"
+                )
+        for claim in self.answer_claims:
+            ledger = ledger_by_id.get(claim.coverage_ledger_id)
+            if ledger is None:
+                raise ContractValidationError("answer claim references an orphan coverage ledger")
+            if claim.claim_requirement_id != ledger.claim_requirement_id:
+                raise ContractValidationError(
+                    "answer claim and coverage ledger claim requirements differ"
+                )
+
+    @property
+    def source_inventory_items(self) -> tuple[SourceInventoryItem, ...]:
+        return tuple(item for inventory in self.source_inventory for item in inventory.items)
 
     def to_dict(self) -> dict[str, Any]:
         return self.to_persistence_dict()
@@ -497,6 +558,19 @@ class MailEvidenceBundle:
     def from_persistence_dict(cls, value: dict[str, Any]) -> "MailEvidenceBundle":
         item = _require_private_dict(value, "mail_evidence_bundle")
         _assert_private_mail_bundle_envelope_safe(item)
+        source_inventories = _record_list(
+            item,
+            "source_inventory",
+            SourceInventory,
+            required=False,
+        )
+        source_inventory_items = _record_list(
+            item,
+            "source_inventory_items",
+            SourceInventoryItem,
+            required=False,
+        )
+        _validate_source_inventory_item_projection(source_inventories, source_inventory_items)
         bundle = cls(
             mail_evidence_bundle_id=_required_str(item, "mail_evidence_bundle_id"),
             producer_type=_required_choice(item, "producer_type", _PRODUCER_TYPES),
@@ -538,12 +612,7 @@ class MailEvidenceBundle:
                 required=False,
             ),
             created_at=_required_str(item, "created_at"),
-            source_inventory=_record_list(
-                item,
-                "source_inventory",
-                SourceInventoryItem,
-                required=False,
-            ),
+            source_inventory=source_inventories,
             structural_observations=_record_list(
                 item,
                 "structural_observations",
@@ -1197,6 +1266,7 @@ def _assert_private_mail_bundle_envelope_safe(value: Mapping[str, Any]) -> None:
     # approved ``tokenizer_*`` version fields are not mistaken for secrets.
     for field_name in (
         "source_inventory",
+        "source_inventory_items",
         "structural_observations",
         "claim_requirements",
         "coverage_ledgers",
@@ -1224,6 +1294,10 @@ def _private_payload(value: Any) -> dict[str, Any]:
     payload = _private_plain(value)
     if not isinstance(payload, dict):
         raise ContractValidationError("private mail evidence payload must be an object")
+    if isinstance(value, MailEvidenceBundle):
+        payload["source_inventory_items"] = [
+            item.to_dict() for item in value.source_inventory_items
+        ]
     return payload
 
 
@@ -1360,6 +1434,22 @@ def _record_list(
         raise ContractValidationError(f"{field_name} must be a list")
     parser = factory or record_type.from_dict
     return [parser(item) for item in items]
+
+
+def _validate_source_inventory_item_projection(
+    inventories: Sequence[SourceInventory],
+    projected_items: Sequence[SourceInventoryItem],
+) -> None:
+    expected = {
+        item.source_inventory_item_id: item.to_dict()
+        for inventory in inventories
+        for item in inventory.items
+    }
+    actual = {item.source_inventory_item_id: item.to_dict() for item in projected_items}
+    if len(actual) != len(projected_items) or actual != expected:
+        raise ContractValidationError(
+            "mail bundle source inventory child projection does not match aggregates"
+        )
 
 
 def _from_required_fields(

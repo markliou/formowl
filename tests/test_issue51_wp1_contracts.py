@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from copy import deepcopy
+from pathlib import Path
 import unittest
 
 import _paths  # noqa: F401
@@ -119,6 +120,11 @@ class Issue51WP1ContractTests(unittest.TestCase):
             parser_fingerprint=FP2,
             items=(item,),
             created_at="2026-07-24T00:00:00+00:00",
+        )
+        item = source_inventory.items[0]
+        observation = replace(
+            observation,
+            source_inventory_item_id=item.source_inventory_item_id,
         )
         manifest = VersionManifest.create(
             source_fingerprint=FP,
@@ -389,6 +395,24 @@ class Issue51WP1ContractTests(unittest.TestCase):
         manifest = migration_files()
         self.assertEqual(manifest[-1].filename, "006_evidence_coverage.sql")
         self.assertGreaterEqual(manifest[-1].statement_count, 12)
+        ddl = Path("python/formowl_graph/storage/migrations/006_evidence_coverage.sql").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("CREATE TABLE IF NOT EXISTS source_inventory", ddl)
+        self.assertIn("workspace_id text NOT NULL", ddl)
+        self.assertIn("owner_user_id text NOT NULL", ddl)
+        self.assertIn(
+            "source_inventory_id text NOT NULL REFERENCES source_inventory(source_inventory_id)",
+            ddl,
+        )
+        self.assertIn(
+            "source_inventory_item_id text NOT NULL\n    REFERENCES source_inventory_item(source_inventory_item_id)",
+            ddl,
+        )
+        self.assertIn(
+            "FOREIGN KEY (coverage_ledger_id, claim_requirement_id)",
+            ddl,
+        )
         connection = _MigrationConnection()
         first = PostgreSQLMigrationRunner(connection).migration_replay()
         second = PostgreSQLMigrationRunner(connection).migration_replay()
@@ -414,6 +438,14 @@ class Issue51WP1ContractTests(unittest.TestCase):
             exclusion_reason_code="outside_claim_scope",
             exclusion_claim_scope_proof_sha256=FP2,
         )
+        inventory = SourceInventory.create(
+            source_asset_id="asset_wp1",
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            items=(item,),
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        item = inventory.items[0]
         requirement = ClaimRequirement.create(
             query_id="query_wp1",
             kind="existential_witness",
@@ -422,7 +454,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
         ledger = CoverageLedger(
             query_id=requirement.query_id,
             claim_requirement_id=requirement.claim_requirement_id,
-            source_inventory_id="inventory_wp1",
+            source_inventory_id=inventory.source_inventory_id,
             relevant_inventory_item_ids=(item.source_inventory_item_id,),
             complete_authorized_scope=False,
         )
@@ -440,7 +472,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             grant_revision="grant_wp1",
         )
         proof = CoverageProofRecord.create(
-            source_inventory_id="inventory_wp1",
+            source_inventory_id=inventory.source_inventory_id,
             claim_requirement_id=requirement.claim_requirement_id,
             version_manifest_id=manifest.version_manifest_id,
             inventory_item_id=item.source_inventory_item_id,
@@ -468,7 +500,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
         )
         populated = replace(
             bundle,
-            source_inventory=[item],
+            source_inventory=[inventory],
             claim_requirements=[requirement],
             coverage_ledgers=[ledger],
             answer_claims=[claim],
@@ -483,6 +515,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
         statements = store.upsert_bundle(restored)
         self.assertTrue(
             {
+                "source_inventory",
                 "source_inventory_item",
                 "claim_requirement",
                 "coverage_ledger",
@@ -494,18 +527,56 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 }
             )
         )
+        source_inventory_statement = next(
+            statement
+            for statement in statements
+            if "INSERT INTO source_inventory " in statement.sql
+        )
+        self.assertIn(
+            "(source_inventory_id, mail_import_session_id, workspace_id, owner_user_id, "
+            "source_asset_id, source_fingerprint, parser_fingerprint",
+            source_inventory_statement.sql,
+        )
+        self.assertEqual(
+            source_inventory_statement.parameters["workspace_id"],
+            restored.mail_import_session.workspace_id,
+        )
+        self.assertEqual(
+            source_inventory_statement.parameters["owner_user_id"],
+            restored.mail_import_session.owner_user_id,
+        )
+        source_inventory_item_statement = next(
+            statement
+            for statement in statements
+            if "INSERT INTO source_inventory_item " in statement.sql
+        )
+        self.assertIn(
+            "(source_inventory_item_id, mail_import_session_id, workspace_id, owner_user_id, "
+            "source_inventory_id, source_asset_id, source_fingerprint, parser_fingerprint",
+            source_inventory_item_statement.sql,
+        )
+        coverage_statement = next(
+            statement for statement in statements if "INSERT INTO coverage_ledger " in statement.sql
+        )
+        self.assertIn("source_inventory_id", coverage_statement.sql)
+        answer_claim_statement = next(
+            statement for statement in statements if "INSERT INTO answer_claim " in statement.sql
+        )
+        self.assertIn("claim_requirement_id", answer_claim_statement.sql)
+        self.assertIn("coverage_ledger_id", answer_claim_statement.sql)
         round_trip = store.get_bundle(
             mail_import_session_id=restored.mail_import_session.mail_import_session_id
         )
         self.assertIsNotNone(round_trip)
         self.assertEqual(round_trip.to_dict(), payload)
         self.assertEqual(
-            round_trip.source_inventory[0].exclusion_claim_scope_proof_sha256,
+            round_trip.source_inventory[0].items[0].exclusion_claim_scope_proof_sha256,
             FP2,
         )
         self.assertEqual(
             set(evidence_coverage_postgre_sql_tables()),
             {
+                "source_inventory",
                 "source_inventory_item",
                 "structural_observation",
                 "claim_requirement",
@@ -514,6 +585,148 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 "version_manifest",
             },
         )
+
+    def test_source_inventory_insert_sql_matches_006_ddl_columns(self) -> None:
+        bundle, inventory, _, _ = _inventory_bundle()
+        statements = PostgreSQLMailEvidenceStore(_RowsConnection()).upsert_bundle(bundle)
+        statement = next(
+            statement
+            for statement in statements
+            if "INSERT INTO source_inventory " in statement.sql
+        )
+
+        insert_columns = _insert_columns(statement.sql)
+        ddl = Path("python/formowl_graph/storage/migrations/006_evidence_coverage.sql").read_text(
+            encoding="utf-8"
+        )
+        ddl_columns = _create_table_columns(ddl, "source_inventory")
+        self.assertEqual(
+            insert_columns,
+            ddl_columns - {"updated_at"},
+        )
+        self.assertEqual(
+            set(statement.parameters),
+            insert_columns,
+        )
+        self.assertEqual(
+            {
+                "source_inventory_id",
+                "mail_import_session_id",
+                "source_asset_id",
+                "source_fingerprint",
+                "parser_fingerprint",
+                "workspace_id",
+                "owner_user_id",
+                "payload",
+                "payload_hash",
+            },
+            insert_columns,
+        )
+        self.assertEqual(
+            statement.parameters["source_inventory_id"],
+            inventory.source_inventory_id,
+        )
+
+    def test_source_inventory_relational_integrity_fails_closed_in_file_payloads(self) -> None:
+        bundle, inventory, requirement, ledger = _inventory_bundle()
+        payload = bundle.to_dict()
+
+        mismatched_inventory = deepcopy(payload)
+        mismatched_inventory["source_inventory"][0]["items"][0]["source_inventory_id"] = (
+            "inventory_other"
+        )
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_dict(mismatched_inventory)
+
+        mismatched_asset = deepcopy(payload)
+        mismatched_asset["source_inventory"][0]["items"][0]["source_asset_id"] = "asset_other"
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_dict(mismatched_asset)
+
+        orphan_projection = deepcopy(payload)
+        orphan_projection["source_inventory_items"].append(
+            {
+                **orphan_projection["source_inventory_items"][0],
+                "source_inventory_item_id": "orphan_item_wp1",
+            }
+        )
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_dict(orphan_projection)
+
+        orphan_ledger = deepcopy(payload)
+        orphan_ledger["coverage_ledgers"][0]["source_inventory_id"] = "inventory_other"
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_dict(orphan_ledger)
+
+        mismatched_ledger_claim = deepcopy(payload)
+        mismatched_ledger_claim["coverage_ledgers"][0]["claim_requirement_id"] = "requirement_other"
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_dict(mismatched_ledger_claim)
+
+        orphan_claim = deepcopy(payload)
+        orphan_claim["answer_claims"][0]["coverage_ledger_id"] = "coverage_other"
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_dict(orphan_claim)
+
+        mismatched_claim = deepcopy(payload)
+        mismatched_claim["answer_claims"][0]["claim_requirement_id"] = "requirement_other"
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_dict(mismatched_claim)
+
+        self.assertEqual(
+            ledger.source_inventory_id,
+            inventory.source_inventory_id,
+        )
+        self.assertEqual(
+            ledger.claim_requirement_id,
+            requirement.claim_requirement_id,
+        )
+
+    def test_postgres_inventory_foreign_relationships_fail_closed_on_read(self) -> None:
+        bundle, inventory, _, ledger = _inventory_bundle()
+        connection = _RowsConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(bundle)
+
+        del connection.rows["source_inventory"][inventory.source_inventory_id]
+        with self.assertRaises(ContractValidationError):
+            store.get_bundle(
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id
+            )
+
+        connection = _RowsConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(bundle)
+        child_row = connection.rows["source_inventory_item"][
+            inventory.items[0].source_inventory_item_id
+        ]
+        child_row["payload"]["source_asset_id"] = "asset_other"
+        with self.assertRaises(ContractValidationError):
+            store.get_bundle(
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id
+            )
+
+        connection = _RowsConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(bundle)
+        connection.rows["coverage_ledger"][ledger.coverage_ledger_id]["payload"][
+            "source_inventory_id"
+        ] = "inventory_other"
+        with self.assertRaises(ContractValidationError):
+            store.get_bundle(
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id
+            )
+
+        connection = _RowsConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(bundle)
+        connection.rows["answer_claim"]["answer_inventory_wp1"]["payload"][
+            "claim_requirement_id"
+        ] = "requirement_other"
+        with self.assertRaises(ContractValidationError):
+            store.get_bundle(
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id
+            )
 
     def test_malformed_wp1_row_fails_before_return(self) -> None:
         bundle = _minimal_bundle()
@@ -544,7 +757,14 @@ class Issue51WP1ContractTests(unittest.TestCase):
             parser_fingerprint=FP2,
             permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
         )
-        bundle = replace(bundle, source_inventory=[item])
+        inventory = SourceInventory.create(
+            source_asset_id="asset_wp1",
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            items=(item,),
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        bundle = replace(bundle, source_inventory=[inventory])
         connection = _RowsConnection(fail_after_execute=2)
         with self.assertRaises(RuntimeError):
             with PostgreSQLUnitOfWork(connection) as unit:
@@ -569,6 +789,69 @@ def _excluded_item(*, proof: str = FP) -> SourceInventoryItem:
         exclusion_reason_code="outside_claim_scope",
         exclusion_claim_scope_proof_sha256=proof,
     )
+
+
+def _inventory_bundle() -> (
+    tuple[
+        MailEvidenceBundle,
+        SourceInventory,
+        ClaimRequirement,
+        CoverageLedger,
+    ]
+):
+    bundle = _minimal_bundle()
+    item = SourceInventoryItem.create(
+        source_asset_id="asset_wp1",
+        structure_kind="message",
+        content_type="message/rfc822",
+        ordinal=0,
+        processing_state="parsed",
+        raw_retention_state="retained",
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
+        source_observation_ids=(),
+    )
+    inventory = SourceInventory.create(
+        source_asset_id="asset_wp1",
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        items=(item,),
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    requirement = ClaimRequirement.create(
+        query_id="query_inventory_wp1",
+        kind="single_value",
+        target="ticket",
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    ledger = CoverageLedger(
+        query_id=requirement.query_id,
+        claim_requirement_id=requirement.claim_requirement_id,
+        source_inventory_id=inventory.source_inventory_id,
+        relevant_inventory_item_ids=(inventory.items[0].source_inventory_item_id,),
+        complete_authorized_scope=False,
+    )
+    claim = AnswerClaim.create(
+        answer_claim_id="answer_inventory_wp1",
+        state="INSUFFICIENT_COVERAGE",
+        reason_codes=("incomplete_scope",),
+        claim_requirement_id=requirement.claim_requirement_id,
+        coverage_ledger_id=ledger.coverage_ledger_id,
+        evidence_snapshot_ids=(),
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        tokenizer_fingerprint=FP,
+        index_fingerprint=FP,
+    )
+    populated = replace(
+        bundle,
+        source_inventory=[inventory],
+        claim_requirements=[requirement],
+        coverage_ledgers=[ledger],
+        answer_claims=[claim],
+    )
+    return populated, inventory, requirement, ledger
 
 
 def _minimal_bundle() -> MailEvidenceBundle:
@@ -638,6 +921,7 @@ class _RowsConnection:
         table = sql.split("INSERT INTO ", 1)[1].split(" ", 1)[0]
         key = {
             "mail_import_session": "mail_import_session_id",
+            "source_inventory": "source_inventory_id",
             "source_inventory_item": "source_inventory_item_id",
             "claim_requirement": "claim_requirement_id",
             "coverage_ledger": "coverage_ledger_id",
@@ -674,3 +958,27 @@ class _RowsConnection:
 class _MigrationConnection:
     def execute(self, _statement: object) -> None:
         return None
+
+
+def _insert_columns(sql: str) -> set[str]:
+    columns = sql.split("(", 1)[1].split(") VALUES", 1)[0]
+    return {column.strip() for column in columns.split(",")}
+
+
+def _create_table_columns(ddl: str, table_name: str) -> set[str]:
+    block = ddl.split(f"CREATE TABLE IF NOT EXISTS {table_name} (", 1)[1].split(");", 1)[0]
+    columns = set()
+    in_constraint = False
+    for line in block.splitlines():
+        stripped = line.strip().rstrip(",")
+        if not stripped:
+            continue
+        if stripped.startswith(("UNIQUE", "FOREIGN KEY", "CONSTRAINT")):
+            in_constraint = True
+            continue
+        if in_constraint:
+            if stripped == ")":
+                in_constraint = False
+            continue
+        columns.add(stripped.split(None, 1)[0])
+    return columns
