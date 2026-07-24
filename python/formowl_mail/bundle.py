@@ -39,6 +39,17 @@ _RETENTION_DECISIONS = _RETENTION_POLICIES | {
     "retained_by_policy",
 }
 _PRODUCER_TYPES = {"server_side_parser", "local_companion_parser", "fixture_parser"}
+_WP1_PERSISTENCE_FIELD = "wp1_persistence"
+_WP1_PERSISTENCE_SCHEMA = "formowl_mail_evidence_wp1_v1"
+_WP1_PERSISTENCE_FAMILY_FIELDS = (
+    "source_inventory",
+    "source_inventory_items",
+    "structural_observations",
+    "claim_requirements",
+    "coverage_ledgers",
+    "answer_claims",
+    "version_manifests",
+)
 
 
 @dataclass(frozen=True)
@@ -658,18 +669,20 @@ class MailEvidenceBundle:
     def from_persistence_dict(cls, value: dict[str, Any]) -> "MailEvidenceBundle":
         item = _require_private_dict(value, "mail_evidence_bundle")
         _assert_private_mail_bundle_envelope_safe(item)
+        wp1_persistence = _validate_wp1_persistence_state(item.get(_WP1_PERSISTENCE_FIELD))
+        for field_name in _WP1_PERSISTENCE_FAMILY_FIELDS:
+            if field_name not in item:
+                raise ContractValidationError(f"{field_name} is required for WP1 persistence")
         source_inventories = _record_list(
             item,
             "source_inventory",
             SourceInventory,
-            required=False,
             factory=SourceInventory.from_persistence_dict,
         )
         source_inventory_items = _record_list(
             item,
             "source_inventory_items",
             SourceInventoryItem,
-            required=False,
             factory=SourceInventoryItem.from_persistence_dict,
         )
         _validate_source_inventory_item_projection(source_inventories, source_inventory_items)
@@ -677,20 +690,17 @@ class MailEvidenceBundle:
             item,
             "claim_requirements",
             ClaimRequirement,
-            required=False,
         )
         coverage_ledgers = _record_list(
             item,
             "coverage_ledgers",
             CoverageLedger,
-            required=False,
             factory=CoverageLedger.from_persistence_dict,
         )
         version_manifests = _record_list(
             item,
             "version_manifests",
             VersionManifest,
-            required=False,
         )
         inventory_by_id = {record.source_inventory_id: record for record in source_inventories}
         requirement_by_id = {record.claim_requirement_id: record for record in claim_requirements}
@@ -742,7 +752,6 @@ class MailEvidenceBundle:
                 item,
                 "structural_observations",
                 StructuralObservation,
-                required=False,
                 factory=StructuralObservation.from_persistence_dict,
             ),
             claim_requirements=claim_requirements,
@@ -751,7 +760,6 @@ class MailEvidenceBundle:
                 item,
                 "answer_claims",
                 AnswerClaim,
-                required=False,
                 factory=lambda payload: AnswerClaim.from_persistence_dict(
                     payload,
                     coverage_ledger=ledger_by_id.get(payload.get("coverage_ledger_id")),
@@ -772,6 +780,10 @@ class MailEvidenceBundle:
                 ),
             ),
             version_manifests=version_manifests,
+        )
+        _validate_wp1_persistence_state(
+            wp1_persistence,
+            expected_counts=_wp1_family_counts(bundle),
         )
         bundle.to_persistence_dict()
         return bundle
@@ -1429,7 +1441,51 @@ def _private_payload(value: Any) -> dict[str, Any]:
         payload["source_inventory_items"] = [
             item.to_persistence_dict() for item in value.source_inventory_items
         ]
+        payload[_WP1_PERSISTENCE_FIELD] = _wp1_persistence_state(value)
     return payload
+
+
+def _wp1_family_counts(value: MailEvidenceBundle) -> dict[str, int]:
+    return {
+        field_name: len(getattr(value, field_name)) for field_name in _WP1_PERSISTENCE_FAMILY_FIELDS
+    }
+
+
+def _wp1_persistence_state(value: MailEvidenceBundle) -> dict[str, Any]:
+    return {
+        "schema": _WP1_PERSISTENCE_SCHEMA,
+        "family_counts": _wp1_family_counts(value),
+    }
+
+
+def _validate_wp1_persistence_state(
+    value: Any,
+    *,
+    expected_counts: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ContractValidationError("WP1 persistence marker is required")
+    if set(value) != {"schema", "family_counts"}:
+        raise ContractValidationError("WP1 persistence marker has an invalid shape")
+    if value.get("schema") != _WP1_PERSISTENCE_SCHEMA:
+        raise ContractValidationError("WP1 persistence marker is unsupported")
+    family_counts = value.get("family_counts")
+    if not isinstance(family_counts, Mapping) or set(family_counts) != set(
+        _WP1_PERSISTENCE_FAMILY_FIELDS
+    ):
+        raise ContractValidationError("WP1 persistence family counts are incomplete")
+    normalized_counts: dict[str, int] = {}
+    for field_name in _WP1_PERSISTENCE_FAMILY_FIELDS:
+        count = family_counts[field_name]
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise ContractValidationError("WP1 persistence family counts are invalid")
+        normalized_counts[field_name] = count
+    if expected_counts is not None and normalized_counts != dict(expected_counts):
+        raise ContractValidationError("WP1 persistence family counts are inconsistent")
+    return {
+        "schema": _WP1_PERSISTENCE_SCHEMA,
+        "family_counts": normalized_counts,
+    }
 
 
 def _private_plain(value: Any) -> Any:

@@ -33,6 +33,10 @@ from .bundle import (
     MailParseRun,
     MailParseWarning,
     QuotedMessageCandidate,
+    _WP1_PERSISTENCE_FIELD,
+    _WP1_PERSISTENCE_FAMILY_FIELDS,
+    _validate_wp1_persistence_state,
+    _wp1_persistence_state,
 )
 from .query import MailEvidenceQueryGateway
 
@@ -117,7 +121,11 @@ class PostgreSQLMailEvidenceStore:
         if session_row is None:
             return None
 
-        import_session = MailImportSession.from_dict(_payload(session_row))
+        session_payload = _payload(session_row)
+        wp1_persistence = _validate_wp1_persistence_state(
+            session_payload.get(_WP1_PERSISTENCE_FIELD)
+        )
+        import_session = MailImportSession.from_dict(session_payload)
         import_session_id = import_session.mail_import_session_id
         workspace_id = import_session.workspace_id
         owner_user_id = import_session.owner_user_id
@@ -417,41 +425,46 @@ class PostgreSQLMailEvidenceStore:
         )
         messages = _messages_for_import(logical_messages, message_occurrences)
 
-        return MailEvidenceBundle.from_persistence_dict(
-            {
-                "mail_evidence_bundle_id": _safe_row_str(
-                    session_row,
-                    "mail_evidence_bundle_id",
-                ),
-                "producer_type": _safe_row_str(session_row, "producer_type"),
-                "mail_import_session": import_session.to_dict(),
-                "archive_occurrences": [item.to_dict() for item in archive_occurrences],
-                "folder_occurrences": [item.to_dict() for item in folder_occurrences],
-                "messages": [item.to_dict() for item in messages],
-                "message_occurrences": [item.to_dict() for item in message_occurrences],
-                "body_segments": [item.to_dict() for item in body_segments],
-                "attachments": [item.to_dict() for item in attachments],
-                "attachment_occurrences": [item.to_dict() for item in attachment_occurrences],
-                "quoted_message_candidates": [item.to_dict() for item in quoted_message_candidates],
-                "embedded_message_relations": [
-                    item.to_dict() for item in embedded_message_relations
-                ],
-                "mail_parse_run": parse_runs[0].to_dict(),
-                "parse_warnings": [item.to_dict() for item in parse_warnings],
-                "created_at": _safe_row_str(session_row, "bundle_created_at"),
-                "source_inventory": [item.to_persistence_dict() for item in source_inventories],
-                "source_inventory_items": [
-                    item.to_persistence_dict() for item in source_inventory_items
-                ],
-                "structural_observations": [
-                    item.to_persistence_dict() for item in structural_observations
-                ],
-                "claim_requirements": [item.to_dict() for item in claim_requirements],
-                "coverage_ledgers": [item.to_dict() for item in coverage_ledgers],
-                "answer_claims": [item.to_persistence_dict() for item in answer_claims],
-                "version_manifests": [item.to_dict() for item in version_manifests],
-            }
+        bundle_payload = {
+            "mail_evidence_bundle_id": _safe_row_str(
+                session_row,
+                "mail_evidence_bundle_id",
+            ),
+            "producer_type": _safe_row_str(session_row, "producer_type"),
+            "mail_import_session": import_session.to_dict(),
+            "archive_occurrences": [item.to_dict() for item in archive_occurrences],
+            "folder_occurrences": [item.to_dict() for item in folder_occurrences],
+            "messages": [item.to_dict() for item in messages],
+            "message_occurrences": [item.to_dict() for item in message_occurrences],
+            "body_segments": [item.to_dict() for item in body_segments],
+            "attachments": [item.to_dict() for item in attachments],
+            "attachment_occurrences": [item.to_dict() for item in attachment_occurrences],
+            "quoted_message_candidates": [item.to_dict() for item in quoted_message_candidates],
+            "embedded_message_relations": [item.to_dict() for item in embedded_message_relations],
+            "mail_parse_run": parse_runs[0].to_dict(),
+            "parse_warnings": [item.to_dict() for item in parse_warnings],
+            "created_at": _safe_row_str(session_row, "bundle_created_at"),
+            "source_inventory": [item.to_persistence_dict() for item in source_inventories],
+            "source_inventory_items": [
+                item.to_persistence_dict() for item in source_inventory_items
+            ],
+            "structural_observations": [
+                item.to_persistence_dict() for item in structural_observations
+            ],
+            "claim_requirements": [item.to_dict() for item in claim_requirements],
+            "coverage_ledgers": [item.to_dict() for item in coverage_ledgers],
+            "answer_claims": [item.to_persistence_dict() for item in answer_claims],
+            "version_manifests": [item.to_dict() for item in version_manifests],
+            _WP1_PERSISTENCE_FIELD: wp1_persistence,
+        }
+        _validate_wp1_persistence_state(
+            wp1_persistence,
+            expected_counts={
+                field_name: len(bundle_payload[field_name])
+                for field_name in _WP1_PERSISTENCE_FAMILY_FIELDS
+            },
         )
+        return MailEvidenceBundle.from_persistence_dict(bundle_payload)
 
 
 def build_postgre_sql_mail_evidence_query_handler(
@@ -817,6 +830,7 @@ def _validate_query_before_store_read(
 
 def _mail_import_session_statement(bundle: MailEvidenceBundle) -> SQLStatement:
     payload = bundle.mail_import_session.to_dict()
+    payload[_WP1_PERSISTENCE_FIELD] = _wp1_persistence_state(bundle)
     record_id = bundle.mail_import_session.mail_import_session_id
     _validate_record_id(record_id, "mail_import_session_id")
     _validate_record_id(bundle.mail_evidence_bundle_id, "mail_evidence_bundle_id")

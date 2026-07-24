@@ -44,6 +44,15 @@ from formowl_mail.postgres import (
 
 FP = "sha256:" + "a" * 64
 FP2 = "sha256:" + "b" * 64
+_WP1_FAMILY_FIELDS_FOR_TESTS = (
+    "source_inventory",
+    "source_inventory_items",
+    "structural_observations",
+    "claim_requirements",
+    "coverage_ledgers",
+    "answer_claims",
+    "version_manifests",
+)
 
 
 class Issue51WP1ContractTests(unittest.TestCase):
@@ -1351,6 +1360,58 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 "version_manifest",
             },
         )
+
+    def test_private_bundle_requires_explicit_wp1_state_marker_and_families(self) -> None:
+        payload = _minimal_bundle().to_persistence_dict()
+        self.assertEqual(
+            payload["wp1_persistence"]["family_counts"],
+            {
+                "source_inventory": 0,
+                "source_inventory_items": 0,
+                "structural_observations": 0,
+                "claim_requirements": 0,
+                "coverage_ledgers": 0,
+                "answer_claims": 0,
+                "version_manifests": 0,
+            },
+        )
+        for field_name in ("wp1_persistence", *_WP1_FAMILY_FIELDS_FOR_TESTS):
+            with self.subTest(field_name=field_name):
+                malformed = deepcopy(payload)
+                malformed.pop(field_name)
+                with self.assertRaises(ContractValidationError):
+                    MailEvidenceBundle.from_persistence_dict(malformed)
+
+        malformed_marker = deepcopy(payload)
+        malformed_marker["wp1_persistence"]["family_counts"]["coverage_ledgers"] = 1
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_persistence_dict(malformed_marker)
+
+    def test_genuinely_empty_private_bundle_round_trips_with_wp1_marker(self) -> None:
+        payload = _minimal_bundle().to_persistence_dict()
+        restored = MailEvidenceBundle.from_persistence_dict(payload)
+        self.assertEqual(restored.to_persistence_dict(), payload)
+
+    def test_postgres_rejects_legacy_and_partial_wp1_state(self) -> None:
+        empty_bundle = _minimal_bundle()
+        connection = _RowsConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(empty_bundle)
+        session_id = empty_bundle.mail_import_session.mail_import_session_id
+        session_payload = connection.rows["mail_import_session"][session_id]["payload"]
+        session_payload.pop("wp1_persistence")
+        with self.assertRaises(ContractValidationError):
+            store.get_bundle(mail_import_session_id=session_id)
+        self.assertEqual(len(connection.queries), 1)
+
+        populated_bundle, _, _, _ = _inventory_bundle()
+        connection = _RowsConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(populated_bundle)
+        session_id = populated_bundle.mail_import_session.mail_import_session_id
+        del connection.rows["version_manifest"]
+        with self.assertRaises(ContractValidationError):
+            store.get_bundle(mail_import_session_id=session_id)
 
     def test_source_inventory_insert_sql_matches_006_ddl_columns(self) -> None:
         bundle, inventory, _, _ = _inventory_bundle()
