@@ -98,6 +98,19 @@ reviewer gate agrees. Methodology authority remains valid-but-blocked; this
 establishes no methodology-quality UAT, KG-vs-ontology result, general
 production readiness, or general latency claim.
 
+GitHub issue #50 is complete in the isolated UAT worktree. Authorization was
+already succeeding; the defect was that authorized mail body fields were still
+sent through the generic public control/metadata redactor. The dedicated
+evidence boundary now preserves ordinary body text and locally redacts only
+high-confidence credentials and implementation details, while denied access
+still returns no content. Live PO verification also exposed that the Codex
+engine needed a second refinement query after one successful broad result, so
+one turn now permits at most three bounded FormOwl calls and projects the latest
+governed refinement. The July 24 LAN replay returned HTTP 200 for PO delivery
+and COO/origin, with 87 and 17 exhaustive source items, readable snippets, zero
+full-body placeholders, and no chat errors. This remains a POC display/safety
+result under the valid-but-blocked methodology authority.
+
 The bounded Task Answering slice passed 895 canonical dev-container tests,
 full Ruff, 345-file format check, and `git diff --check`. The required
 3-reviewer gate remains before completion.
@@ -153,8 +166,9 @@ authorization must be an actual boolean; string values fail closed.
 ## Next Action
 
 Run the final post-change Issue #49 reviewer gate over the multiprocessing,
-fallback, tests, and live evidence before marking the board item complete. The
-separate Task Answering reviewer gate and four broad real-evidence gates remain
-independent. Keep methodology authority valid-but-blocked and do not
-reinterpret Issue #49 as methodology-quality UAT, a KG-vs-ontology result,
-general production readiness, or general latency.
+fallback, bounded multi-tool behavior, tests, and live evidence before marking
+that separate board item complete. The Task Answering reviewer gate and four
+broad real-evidence gates remain independent. Keep methodology authority
+valid-but-blocked and do not reinterpret issues #49 or #50 as
+methodology-quality UAT, a KG-vs-ontology result, general production readiness,
+or general latency.

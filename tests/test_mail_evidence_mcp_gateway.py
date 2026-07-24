@@ -28,6 +28,7 @@ from formowl_ingestion.storage import (
     StorageBackendRegistry,
 )
 import formowl_mail.query as mail_query
+from formowl_mail._guards import assert_authorized_evidence_payload_safe
 from formowl_mail import (
     MailCaseProgressGateway,
     MailEvidenceQueryGateway,
@@ -505,6 +506,156 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
         self.assertNotIn("select * from", rendered)
         self.assertNotIn("copy supplier_private from", rendered)
         self.assertNotIn("with supplier_private as", rendered)
+
+    def test_authorized_mail_evidence_preserves_ordinary_body_urls_and_user_paths(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-authorized-body")
+        bundle = _mail_bundle(temp_dir)
+        ordinary_text = (
+            "PO470002002 delivery remains 2026/07/24. "
+            "Review https://supplier.example.com/docs/PO470002002 and "
+            "/Users/may/Documents/PO plan.pdf or "
+            "C:\\Users\\May\\Documents\\PO plan.pdf. "
+            "Status path is pull-in/ETA/COO."
+        )
+        ordinary_subject = "PO470002002 plan / COO at https://supplier.example.com/portal"
+        bundle = replace(
+            bundle,
+            messages=[replace(bundle.messages[0], subject=ordinary_subject)],
+            body_segments=[replace(bundle.body_segments[0], text=ordinary_text)],
+        )
+        bundle = type(bundle).from_dict(bundle.to_dict())
+        gateway = MailEvidenceQueryGateway([bundle])
+
+        query = gateway.query_mail_evidence(
+            query_text="PO470002002 delivery",
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            session_id="session_authorized_body",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            now=NOW,
+        ).to_dict()
+
+        self.assertEqual(query["status"], "ok")
+        self.assertEqual(query["evidence_snippets"][0]["subject"], ordinary_subject)
+        self.assertEqual(query["evidence_snippets"][0]["snippet"], ordinary_text)
+        self.assertNotIn("content_redacted", query["evidence_snippets"][0])
+        self.assertEqual(query["redaction_counts"]["unsafe_snippets"], 0)
+        self.assertNotIn("unsafe_mail_evidence_content_redacted", query["warnings"])
+
+        read = gateway.read_mail_evidence(
+            requester_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            session_id="session_authorized_body_read",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            email_message_ids=[bundle.messages[0].email_message_id],
+            now=NOW,
+        ).to_dict()
+        self.assertEqual(read["status"], "ok")
+        self.assertEqual(read["evidence_segments"][0]["snippet"], ordinary_text)
+
+        denied = gateway.query_mail_evidence(
+            query_text="PO470002002 delivery",
+            requester_user_id="user_other",
+            workspace_id="workspace_formowl",
+            session_id="session_authorized_body_denied",
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+            now=NOW,
+        ).to_dict()
+        self.assertEqual(denied["status"], "permission_denied")
+        self.assertEqual(denied["evidence_snippets"], [])
+        self.assertNotIn("supplier.example.com", str(denied))
+
+    def test_authorized_mail_evidence_redacts_only_sensitive_local_spans(
+        self,
+    ) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-local-redaction")
+        bundle = _mail_bundle(temp_dir)
+        sensitive_text = (
+            "Audit approval is delayed, but ordinary context remains. "
+            "api_key=super-secret and Bearer abcdefgh1234567890. "
+            "Authorization: Bearer second-secret-token. "
+            "Authorization: Basic dXNlcjpwYXNz. "
+            'password="quoted credential value". '
+            "Internal refs are formowl://storage/private/item and "
+            "s3://private-bucket/mail.eml. "
+            "SELECT * FROM private_table. "
+            "Normal link https://supplier.example.com/status stays visible.\n"
+            "Traceback (most recent call last):\n"
+            '  File "/workspace/formowl/app.py", line 8, in run\n'
+            "ValueError: private failure\n\n"
+            "After diagnostics, delivery remains 2026/07/24."
+        )
+        bundle = replace(
+            bundle,
+            body_segments=[replace(bundle.body_segments[0], text=sensitive_text)],
+        )
+
+        result = (
+            MailEvidenceQueryGateway([bundle])
+            .query_mail_evidence(
+                query_text="audit approval delayed",
+                requester_user_id="user_yifan",
+                workspace_id="workspace_formowl",
+                session_id="session_local_redaction",
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+                now=NOW,
+            )
+            .to_dict()
+        )
+
+        snippet = result["evidence_snippets"][0]
+        self.assertTrue(snippet["content_redacted"])
+        self.assertIn("ordinary context remains", snippet["snippet"])
+        self.assertIn(
+            "Normal link https://supplier.example.com/status stays visible.",
+            snippet["snippet"],
+        )
+        self.assertIn("After diagnostics, delivery remains 2026/07/24.", snippet["snippet"])
+        self.assertIn("[redacted_credential]", snippet["snippet"])
+        self.assertIn("[redacted_internal_locator]", snippet["snippet"])
+        self.assertIn("[redacted_sql]", snippet["snippet"])
+        self.assertIn("[redacted_traceback]", snippet["snippet"])
+        self.assertNotEqual(snippet["snippet"], "[redacted_mail_evidence]")
+        rendered = str(result)
+        self.assertNotIn("super-secret", rendered)
+        self.assertNotIn("abcdefgh1234567890", rendered)
+        self.assertNotIn("second-secret-token", rendered)
+        self.assertNotIn("dXNlcjpwYXNz", rendered)
+        self.assertNotIn("quoted credential value", rendered)
+        self.assertNotIn("formowl://storage", rendered)
+        self.assertNotIn("s3://private-bucket", rendered)
+        self.assertNotIn("SELECT * FROM", rendered)
+        self.assertNotIn("/workspace/formowl", rendered)
+
+    def test_authorized_evidence_policy_keeps_non_evidence_metadata_strict(
+        self,
+    ) -> None:
+        assert_authorized_evidence_payload_safe(
+            {
+                "subject": "Governed formowl://asset/asset_001 evidence",
+                "snippet": (
+                    "Readable https://supplier.example.com source at "
+                    "/Users/may/Documents/plan.pdf"
+                ),
+                "status": "ok",
+            }
+        )
+        with self.assertRaises(ContractValidationError):
+            assert_authorized_evidence_payload_safe(
+                {
+                    "snippet": "Readable authorized evidence",
+                    "debug_location": "/srv/formowl/private/result.json",
+                }
+            )
+        with self.assertRaises(ContractValidationError):
+            assert_authorized_evidence_payload_safe(
+                {
+                    "snippet": "Readable authorized evidence",
+                    "password": "must-not-become-public",
+                }
+            )
 
     def test_mail_evidence_query_gateway_builds_index_once_per_bundle(self) -> None:
         temp_dir = _paths.fresh_test_dir("mail-evidence-query-index-cache")

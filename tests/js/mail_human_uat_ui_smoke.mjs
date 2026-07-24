@@ -296,8 +296,10 @@ async function runChatSmoke() {
   };
   const context = vm.createContext({
     Array,
+    Date,
     Error,
     FormData: FakeFormData,
+    Intl,
     JSON,
     Math,
     Number,
@@ -380,14 +382,21 @@ async function runChatSmoke() {
       displayed_result_count: 2,
       results: [
         {
-          snippet: "最重要的來源內容",
-          subject: "次要主旨",
+          snippet: "最重要的來源內容，含有很長的中文與 EnglishIdentifierWithoutSpaces_1234567890",
+          subject: "次要主旨與VeryLongEnglishSubjectIdentifier_ABCDEFGHIJKLMN",
           sent_at: "2026-07-20T08:00:00+00:00",
           source_kind: "preloaded",
+          sender: "private.sender@example.com",
+          recipient: "private.recipient@example.com",
+          backend_path: "/srv/formowl/private/mail",
+          private_metadata: "do-not-render",
           citation: {
             citation_id: "mailcitation_table",
             source_observation_id: "obs_table_internal",
           },
+          supporting_evidence: [
+            { snippet: "同一來源的補充證據內容" },
+          ],
         },
         {
           snippet: "第二筆來源內容",
@@ -410,11 +419,32 @@ async function runChatSmoke() {
   assert.match(textTree(tableHolder), /目前顯示 2 筆/u);
   assert.equal(tagTree(tableHolder, "table").length, 1);
   assert.equal(tagTree(tableHolder, "th")[0].textContent, "順序");
-  assert.equal(tagTree(tableHolder, "td")[0].textContent, "1");
+  assert.deepEqual(
+    tagTree(tableHolder, "th").map((cell) => cell.attributes.get("scope")),
+    ["col", "col", "col", "col"],
+  );
+  const tableCells = tagTree(tableHolder, "td");
+  assert.deepEqual(
+    tableCells.slice(0, 4).map((cell) => cell.attributes.get("data-label")),
+    ["順序", "內容", "主旨", "時間"],
+  );
+  assert.equal(tableCells[0].textContent, "1");
+  assert.equal(tableCells[3].textContent, "2026/7/20 16:00");
+  assert.equal(tableCells[7].textContent, "時間未提供");
+  assert.match(
+    textTree(tableHolder),
+    /最重要的來源內容，含有很長的中文與 EnglishIdentifierWithoutSpaces_1234567890/u,
+  );
+  assert.match(textTree(tableHolder), /同一來源的補充證據內容/u);
+  assert.equal(context.formatEvidenceTime(null), "時間未提供");
+  assert.equal(
+    context.formatEvidenceTime("not-a-real-timestamp"),
+    "時間格式無法判讀",
+  );
   assert.doesNotMatch(textTree(tableHolder), /寄件者|收件者/u);
   assert.doesNotMatch(
     textTree(tableHolder),
-    /mailcitation_table|obs_table_internal/u,
+    /mailcitation_table|obs_table_internal|private\.sender@example\.com|private\.recipient@example\.com|\/srv\/formowl\/private\/mail|do-not-render/u,
   );
 
   const narrativeHolder = new FakeElement("div");
@@ -449,9 +479,11 @@ async function runChatSmoke() {
   assert.equal(evidenceCard.children[0].tagName, "p");
   assert.match(textTree(evidenceCard.children[0]), /1 內容先出現/u);
   assert.equal(evidenceCard.children[1].tagName, "h3");
+  assert.match(textTree(evidenceCard.children[1]), /主旨：\s+主旨後出現/u);
+  assert.match(textTree(narrativeHolder), /郵件時間：2026\/7\/20 16:00/u);
   assert.doesNotMatch(
     textTree(narrativeHolder),
-    /mailcitation_narrative|obs_narrative_internal/u,
+    /mailcitation_narrative|obs_narrative_internal|sender@example\.com|\/private\/mail/u,
   );
 
   requests.length = 0;

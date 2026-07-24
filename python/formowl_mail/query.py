@@ -13,7 +13,6 @@ import unicodedata
 from formowl_contract import (
     ContractValidationError,
     Grant,
-    redact_public_raw_references,
     sha256_json,
     to_plain,
 )
@@ -23,16 +22,16 @@ from formowl_core import (
 )
 
 from ._access import grant_expired, matching_bundles, normalize_grants
-from ._guards import assert_public_payload_safe, safe_public_string
+from ._guards import (
+    assert_authorized_evidence_payload_safe,
+    assert_public_payload_safe,
+    redact_authorized_evidence_text,
+    safe_public_string,
+)
 from .bundle import MailEvidenceBundle
 
 MAIL_TOKENIZER_ID = configured_mail_tokenizer_id()
 _MAIL_EVIDENCE_PERMISSIONS = {"read", "evidence_snippet", "mail_evidence_read"}
-_SEMANTIC_GATEWAY_TEXT_REDACTIONS = (
-    re.compile(r"\bwith\s+.+\s+as\s*\(", re.IGNORECASE),
-    re.compile(r"\bcopy\s+.+\s+from\b", re.IGNORECASE),
-    re.compile(r"\bTraceback \(most recent call last\):", re.IGNORECASE),
-)
 _PROTECTED_IDENTIFIER_TOKEN = re.compile(r"(?=.{5,}\Z)(?=.*\d)[a-z0-9_@.-]+\Z")
 _TYPED_NUMERIC_IDENTIFIER_RE = re.compile(
     r"(?<![A-Za-z0-9])[A-Za-z]{2,5}[\s#:_-]*([0-9]{8,})(?![0-9])"
@@ -60,7 +59,10 @@ class MailEvidenceQueryResult:
 
     def to_dict(self) -> dict[str, Any]:
         payload = to_plain(self)
-        assert_public_payload_safe(payload, "mail_evidence_query_result")
+        assert_authorized_evidence_payload_safe(
+            payload,
+            "mail_evidence_query_result",
+        )
         return payload
 
 
@@ -76,7 +78,10 @@ class MailEvidenceReadResult:
 
     def to_dict(self) -> dict[str, Any]:
         payload = to_plain(self)
-        assert_public_payload_safe(payload, "mail_evidence_read_result")
+        assert_authorized_evidence_payload_safe(
+            payload,
+            "mail_evidence_read_result",
+        )
         return payload
 
 
@@ -748,7 +753,7 @@ def _assemble_required_term_supporting_evidence(
                 support,
                 mail_evidence_bundle_id=bundle_id,
             )
-            assert_public_payload_safe(
+            assert_authorized_evidence_payload_safe(
                 support,
                 "mail_evidence_required_term_support",
             )
@@ -1446,16 +1451,12 @@ def _safe_snippet(payload: dict[str, Any]) -> dict[str, Any]:
         redaction_count += field_redaction_count
     if redaction_count:
         cleaned["content_redacted"] = True
-    assert_public_payload_safe(cleaned, "mail_evidence_snippet")
+    assert_authorized_evidence_payload_safe(cleaned, "mail_evidence_snippet")
     return cleaned
 
 
 def _redact_mail_public_text(value: str) -> tuple[str, int]:
-    redacted, count = redact_public_raw_references(value)
-    for pattern in _SEMANTIC_GATEWAY_TEXT_REDACTIONS:
-        redacted, replacement_count = pattern.subn("[redacted_mail_evidence]", redacted)
-        count += replacement_count
-    return redacted, count
+    return redact_authorized_evidence_text(value)
 
 
 def _citation_for_snippet(

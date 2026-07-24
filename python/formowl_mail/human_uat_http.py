@@ -25,7 +25,12 @@ from formowl_graph import (
     revise_task_frame,
 )
 
-from ._guards import assert_public_payload_safe, safe_public_string
+from ._guards import (
+    assert_authorized_evidence_payload_safe,
+    assert_public_payload_safe,
+    redact_authorized_evidence_text,
+    safe_public_string,
+)
 from .bundle import MailEvidenceBundle
 from .human_uat_upload import (
     PrivateUatMailUploadStore,
@@ -866,7 +871,10 @@ class MailHumanUatService:
                 "production_ready": False,
             },
         }
-        assert_public_payload_safe(response, "mail_human_uat_query_response")
+        assert_authorized_evidence_payload_safe(
+            response,
+            "mail_human_uat_query_response",
+        )
         self._event_store.append(
             {
                 "event_type": "query_result",
@@ -939,13 +947,18 @@ class MailHumanUatService:
         warnings = list(evidence.get("warnings", []))
         if outcome.fallback_reason is not None:
             warnings.append("codex_answer_fallback_used")
+        assistant_text, assistant_redaction_count = redact_authorized_evidence_text(
+            outcome.answer_text
+        )
+        if assistant_redaction_count:
+            warnings.append("unsafe_mail_evidence_content_redacted")
         generated_at = _timestamp(self.config.fixed_now)
         response = {
             "status": str(evidence.get("status", "ok")),
             "query_id": query_id,
             "query_hash": sha256_json(user_text),
             "generated_at": generated_at,
-            "assistant_text": outcome.answer_text,
+            "assistant_text": assistant_text,
             "sort": evidence.get("sort"),
             "result_count": len(results),
             "total_result_count": int(evidence.get("total_result_count", len(results))),
@@ -970,7 +983,10 @@ class MailHumanUatService:
             },
             "claim_boundary": dict(evidence.get("claim_boundary", {})),
         }
-        assert_public_payload_safe(response, "mail_human_uat_chat_response")
+        assert_authorized_evidence_payload_safe(
+            response,
+            "mail_human_uat_chat_response",
+        )
         return response
 
     def upload_mail_files(
@@ -2146,7 +2162,7 @@ _CHAT_UAT_HTML = """<!doctype html>
       display: grid; place-items: center; font-size: 12px; font-weight: 700;
     }
     .conversation {
-      display: none; width: min(768px, calc(100% - 40px)); margin: 0 auto;
+      display: none; width: min(1120px, calc(100% - 48px)); margin: 0 auto;
       padding: 88px 0 190px;
     }
     body.has-conversation .conversation { display: block; }
@@ -2166,16 +2182,25 @@ _CHAT_UAT_HTML = """<!doctype html>
       background: var(--soft); white-space: pre-wrap;
     }
     .assistant-title { margin-bottom: 7px; font-weight: 650; }
-    .assistant-text { white-space: pre-wrap; }
+    .assistant-text {
+      min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+    }
     .evidence-list { display: grid; gap: 10px; margin-top: 16px; }
     .evidence {
       border: 1px solid var(--line); border-radius: 14px; padding: 14px 15px;
       background: #fff;
     }
-    .evidence h3 { margin: 0; font-size: 14px; line-height: 1.5; }
-    .evidence-meta { margin: 5px 0 8px; color: var(--muted); font-size: 12px; }
+    .evidence h3 {
+      margin: 0; font-size: 14px; line-height: 1.5;
+      overflow-wrap: anywhere; word-break: break-word;
+    }
+    .evidence-meta {
+      margin: 5px 0 8px; color: var(--muted); font-size: 12px;
+      overflow-wrap: anywhere; word-break: break-word;
+    }
     .evidence-content {
-      margin: 0 0 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere;
+      margin: 0 0 12px; line-height: 1.65; white-space: pre-wrap;
+      overflow-wrap: anywhere; word-break: break-word;
     }
     .source-order {
       display: inline-flex; min-width: 22px; height: 22px; margin-right: 8px;
@@ -2185,27 +2210,37 @@ _CHAT_UAT_HTML = """<!doctype html>
     .supporting-content {
       margin: 9px 0 0; padding: 9px 11px; border-left: 3px solid var(--line);
       background: #fafafa; color: #444; font-size: 13px; white-space: pre-wrap;
+      overflow-wrap: anywhere; word-break: break-word;
     }
     .evidence-table-wrap {
-      width: 100%; margin-top: 16px; overflow-x: auto;
+      width: 100%; margin-top: 16px; overflow: visible;
       border: 1px solid var(--line); border-radius: 14px; background: #fff;
     }
     .evidence-table {
-      width: 100%; min-width: 720px; border-collapse: collapse; table-layout: fixed;
+      width: 100%; min-width: 0; border-collapse: collapse; table-layout: fixed;
     }
     .evidence-table th, .evidence-table td {
       padding: 11px 12px; border-bottom: 1px solid var(--line);
-      text-align: left; vertical-align: top; overflow-wrap: anywhere;
+      text-align: left; vertical-align: top; overflow-wrap: anywhere; word-break: break-word;
     }
     .evidence-table th {
       background: #f7f7f7; color: #555; font-size: 12px; font-weight: 650;
     }
-    .evidence-table td { font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
-    .evidence-table th:first-child, .evidence-table td:first-child { width: 8%; }
-    .evidence-table th:nth-child(2), .evidence-table td:nth-child(2) { width: 50%; }
-    .evidence-table th:nth-child(3), .evidence-table td:nth-child(3) { width: 25%; }
-    .evidence-table th:nth-child(4), .evidence-table td:nth-child(4) { width: 17%; }
+    .evidence-table td {
+      font-size: 13px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere;
+    }
+    .evidence-table td::before { display: none; }
+    .evidence-table th:first-child, .evidence-table td:first-child { width: 7%; }
+    .evidence-table th:nth-child(2), .evidence-table td:nth-child(2) { width: 55%; }
+    .evidence-table th:nth-child(3), .evidence-table td:nth-child(3) { width: 23%; }
+    .evidence-table th:nth-child(4), .evidence-table td:nth-child(4) { width: 15%; }
     .evidence-table tbody tr:last-child td { border-bottom: 0; }
+    .supporting-list {
+      margin: 10px 0 0; padding: 9px 11px 9px 27px; border-left: 3px solid #c9d8d3;
+      background: #fafafa; color: #444; overflow-wrap: anywhere; word-break: break-word;
+    }
+    .supporting-list li + li { margin-top: 6px; }
+    .metadata-label { color: var(--muted); font-size: 12px; font-weight: 650; }
     .badge {
       display: inline-block; margin-left: 7px; padding: 2px 7px; border-radius: 999px;
       background: #e8f6f1; color: #08745a; font-size: 10px; font-weight: 650;
@@ -2320,6 +2355,36 @@ _CHAT_UAT_HTML = """<!doctype html>
       .landing-title h1 { font-size: 24px; }
       .message.user .bubble { max-width: 86%; }
       .test-badge { display: none; }
+    }
+    @media (max-width: 720px) {
+      .conversation { width: min(100% - 20px, 768px); }
+      .evidence-table-wrap {
+        border: 0; background: transparent;
+      }
+      .evidence-table {
+        display: block; table-layout: auto;
+      }
+      .evidence-table thead {
+        position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+        overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+      }
+      .evidence-table tbody { display: grid; gap: 12px; }
+      .evidence-table tr {
+        display: block; border: 1px solid var(--line); border-radius: 14px;
+        background: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, .04);
+      }
+      .evidence-table td,
+      .evidence-table th {
+        display: block; width: 100% !important; border-bottom: 1px solid var(--line);
+      }
+      .evidence-table td {
+        padding: 11px 12px; white-space: pre-wrap;
+      }
+      .evidence-table td::before {
+        content: attr(data-label); display: block; margin-bottom: 4px;
+        color: var(--muted); font-size: 11px; font-weight: 700; line-height: 1.4;
+      }
+      .evidence-table td:last-child { border-bottom: 0; }
     }
   </style>
 </head>
@@ -2642,6 +2707,26 @@ _CHAT_UAT_HTML = """<!doctype html>
       parent.appendChild(row);
     }
 
+    function formatEvidenceTime(value) {
+      if (value === null || value === undefined || value === "") return "時間未提供";
+      if (typeof value !== "string" || !value.trim()) return "時間格式無法判讀";
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) return "時間格式無法判讀";
+      try {
+        return new Intl.DateTimeFormat("zh-TW", {
+          year: "numeric",
+          month: "numeric",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+          timeZone: "Asia/Taipei",
+        }).format(parsed).replace(/[\u2000-\u200b\u202f\u205f\u3000]/giu, " ");
+      } catch (_) {
+        return "時間格式無法判讀";
+      }
+    }
+
     function renderAssistantResult(payload, holder) {
       holder.replaceChildren();
       const results = Array.isArray(payload.results) ? payload.results : [];
@@ -2700,6 +2785,7 @@ _CHAT_UAT_HTML = """<!doctype html>
         const headRow = document.createElement("tr");
         for (const label of ["順序", "內容", "主旨", "時間"]) {
           const cell = document.createElement("th");
+          cell.setAttribute("scope", "col");
           cell.textContent = label;
           headRow.appendChild(cell);
         }
@@ -2708,20 +2794,27 @@ _CHAT_UAT_HTML = """<!doctype html>
         for (const [index, item] of results.entries()) {
           const row = document.createElement("tr");
           const order = document.createElement("td");
+          order.setAttribute("data-label", "順序");
           order.textContent = String(index + 1);
           const content = document.createElement("td");
-          content.textContent = item.snippet;
+          content.setAttribute("data-label", "內容");
+          content.textContent = typeof item.snippet === "string" ? item.snippet : "";
           if (Array.isArray(item.supporting_evidence)) {
             const supportList = document.createElement("ul");
+            supportList.className = "supporting-list";
             for (const support of item.supporting_evidence) {
               const supportItem = document.createElement("li");
-              supportItem.textContent = `同一來源的補充內容：${support.snippet}`;
+              const supportSnippet = support && typeof support.snippet === "string"
+                ? support.snippet
+                : "";
+              supportItem.textContent = `同一來源的補充內容：${supportSnippet}`;
               supportList.appendChild(supportItem);
             }
             content.appendChild(supportList);
           }
           const subject = document.createElement("td");
-          subject.textContent = item.subject;
+          subject.setAttribute("data-label", "主旨");
+          subject.textContent = typeof item.subject === "string" ? item.subject : "（無主旨）";
           if (item.source_kind === "uploaded_uat") {
             const badge = document.createElement("span");
             badge.className = "badge";
@@ -2729,7 +2822,8 @@ _CHAT_UAT_HTML = """<!doctype html>
             subject.appendChild(badge);
           }
           const time = document.createElement("td");
-          time.textContent = item.sent_at || "未提供";
+          time.setAttribute("data-label", "時間");
+          time.textContent = formatEvidenceTime(item.sent_at);
           row.append(order, content, subject, time);
           body.appendChild(row);
         }
@@ -2748,10 +2842,17 @@ _CHAT_UAT_HTML = """<!doctype html>
           order.className = "source-order";
           order.textContent = String(index + 1);
           const contentText = document.createElement("span");
-          contentText.textContent = item.snippet;
+          contentText.textContent = typeof item.snippet === "string" ? item.snippet : "";
           snippet.append(order, contentText);
           const subject = document.createElement("h3");
-          subject.textContent = item.subject;
+          const subjectLabel = document.createElement("span");
+          subjectLabel.className = "metadata-label";
+          subjectLabel.textContent = "主旨：";
+          const subjectText = document.createElement("span");
+          subjectText.textContent = typeof item.subject === "string"
+            ? item.subject
+            : "（無主旨）";
+          subject.append(subjectLabel, subjectText);
           if (item.source_kind === "uploaded_uat") {
             const badge = document.createElement("span");
             badge.className = "badge";
@@ -2760,13 +2861,16 @@ _CHAT_UAT_HTML = """<!doctype html>
           }
           const meta = document.createElement("div");
           meta.className = "evidence-meta";
-          meta.textContent = item.sent_at ? `郵件時間：${item.sent_at}` : "郵件時間：未提供";
+          meta.textContent = `郵件時間：${formatEvidenceTime(item.sent_at)}`;
           card.append(snippet, subject, meta);
           if (Array.isArray(item.supporting_evidence)) {
             for (const support of item.supporting_evidence) {
               const supportText = document.createElement("p");
               supportText.className = "supporting-content";
-              supportText.textContent = `同一來源的補充內容：${support.snippet}`;
+              const supportSnippet = support && typeof support.snippet === "string"
+                ? support.snippet
+                : "";
+              supportText.textContent = `同一來源的補充內容：${supportSnippet}`;
               card.appendChild(supportText);
             }
           }

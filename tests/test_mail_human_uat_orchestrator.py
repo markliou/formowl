@@ -611,30 +611,6 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
                     {
                         "tool_name": "search_formowl_evidence",
                         "arguments": {
-                            "query_text": "first",
-                            "required_terms": [],
-                            "sort": "relevance",
-                            "limit": 10,
-                        },
-                    },
-                    {
-                        "tool_name": "search_formowl_evidence",
-                        "arguments": {
-                            "query_text": "second",
-                            "required_terms": [],
-                            "sort": "relevance",
-                            "limit": 10,
-                        },
-                    },
-                ],
-                "final_message": _decision(),
-                "expected_evidence_calls": 1,
-            },
-            {
-                "tool_calls": [
-                    {
-                        "tool_name": "search_formowl_evidence",
-                        "arguments": {
                             "query_text": "valid",
                             "required_terms": [],
                             "sort": "relevance",
@@ -669,6 +645,142 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
                     step["expected_evidence_calls"],
                 )
                 self.assertEqual(transport.deleted_threads, ["thread_1"])
+
+    def test_multiple_tool_calls_are_bounded_and_latest_refinement_is_projected(
+        self,
+    ) -> None:
+        first_call = {
+            "tool_name": "search_formowl_evidence",
+            "arguments": {
+                "query_text": "ID-42 delivery",
+                "required_terms": ["ID-42"],
+                "sort": "relevance",
+                "limit": 30,
+            },
+        }
+        refined_call = {
+            "tool_name": "search_formowl_evidence",
+            "arguments": {
+                "query_text": "ID-42 confirmed delivery date",
+                "required_terms": ["ID-42"],
+                "sort": "recent",
+                "limit": 30,
+            },
+        }
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "tool_calls": [first_call, refined_call],
+                    "final_message": _decision(answer_text="已依較精確的證據回答。"),
+                }
+            ]
+        )
+        evidence_calls = []
+
+        def evidence_tool(request):
+            evidence_calls.append(request)
+            marker = "refined" if request.sort == "recent" else "broad"
+            return {
+                "status": "ok",
+                "results": [{"snippet": marker}],
+            }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            outcome = model.respond(
+                history=(),
+                user_text="查 ID-42 的確認交期",
+                latest_evidence=None,
+                safety_identifier="session-multiple-tools",
+                evidence_tool=evidence_tool,
+            )
+
+        self.assertEqual(len(evidence_calls), 2)
+        self.assertEqual(outcome.tool_request.query_text, "ID-42 confirmed delivery date")
+        self.assertEqual(outcome.tool_result["results"][0]["snippet"], "refined")
+        self.assertEqual(len(transport.turn_calls), 1)
+        self.assertEqual(transport.deleted_threads, [])
+
+    def test_identical_refinement_reuses_result_without_requerying_backend(self) -> None:
+        tool_call = {
+            "tool_name": "search_formowl_evidence",
+            "arguments": {
+                "query_text": "ID-42 delivery",
+                "required_terms": ["ID-42"],
+                "sort": "relevance",
+                "limit": 30,
+            },
+        }
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "tool_calls": [tool_call, tool_call],
+                    "final_message": _decision(answer_text="完成。"),
+                }
+            ]
+        )
+        evidence_calls = []
+        evidence_result = {
+            "status": "ok",
+            "results": [{"snippet": "bounded evidence"}],
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            outcome = model.respond(
+                history=(),
+                user_text="查 ID-42",
+                latest_evidence=None,
+                safety_identifier="session-duplicate-tool",
+                evidence_tool=lambda request: (evidence_calls.append(request) or evidence_result),
+            )
+
+        self.assertEqual(len(evidence_calls), 1)
+        self.assertEqual(outcome.tool_result, evidence_result)
+        self.assertEqual(len(transport.turn_calls), 1)
+
+    def test_more_than_three_tool_calls_fail_closed(self) -> None:
+        tool_calls = [
+            {
+                "tool_name": "search_formowl_evidence",
+                "arguments": {
+                    "query_text": f"refinement {index}",
+                    "required_terms": [],
+                    "sort": "relevance",
+                    "limit": 10,
+                },
+            }
+            for index in range(4)
+        ]
+        transport = _RecordingCodexTransport(
+            [{"tool_calls": tool_calls, "final_message": _decision()}]
+        )
+        evidence_calls = []
+
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            with self.assertRaisesRegex(RuntimeError, "too many UAT tools"):
+                model.respond(
+                    history=(),
+                    user_text="test",
+                    latest_evidence=None,
+                    safety_identifier="session-too-many-tools",
+                    evidence_tool=lambda request: (
+                        evidence_calls.append(request) or {"status": "ok"}
+                    ),
+                )
+
+        self.assertEqual(len(evidence_calls), 3)
+        self.assertEqual(transport.deleted_threads, ["thread_1"])
 
     def test_invalid_final_message_discards_thread(self) -> None:
         transport = _RecordingCodexTransport([{"final_message": "not-json"}])

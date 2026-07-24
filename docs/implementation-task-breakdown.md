@@ -191,6 +191,27 @@ archival is preserved at
 
 ## Recent Completions
 
+- [x] Complete GitHub issue #50: keep authorized mail evidence readable without
+  weakening denied-path or implementation-detail protections.
+  - Authorized `subject`, `snippet`, `text`, and assistant evidence now use a
+    dedicated evidence boundary. Ordinary HTTPS links, dates, slash prose, and
+    user document paths remain readable; credentials, authorization headers,
+    FormOwl/backend locators, scratch paths, SQL, and tracebacks are redacted
+    only at the matching span. Generic control/metadata fields remain strict,
+    and denied users still receive no mail content.
+  - Live verification exposed a separate one-call conversation constraint:
+    the PO prompt needed a second materially different refinement after its
+    first successful retrieval. Codex may now make at most three bounded
+    FormOwl calls per turn, identical requests reuse the prior result, and the
+    latest governed refinement drives the displayed evidence.
+  - Proof: 127 focused dev-container tests, targeted Ruff check/format, Node 20
+    UI smoke, and `git diff --check` pass. The July 24, 2026 LAN replay returned
+    HTTP 200 for both PO-delivery and COO/origin chat, with 87 and 17 exhaustive
+    source items, zero full-body placeholders, zero local redaction markers,
+    and no chat errors. The PO turn used two bounded tool queries; COO used one.
+  - Methodology authority remains valid-but-blocked. This display/safety POC
+    does not establish methodology-quality UAT, a KG-vs-ontology result, or
+    production readiness.
 - [x] General Candidate Assertion, Domain Pack, and Issue #16
   temporal-evidential POC completed.
   Procurement mail-shaped and finance ERP/application fixtures use the same
@@ -218,9 +239,9 @@ archival is preserved at
   the exact 11-test hardness/harness onboarding command, 884 full canonical
   dev-container tests, full Ruff/264-file format checks, `git diff --check`,
   and 3/3 agreement from Herschel, Popper, and Boole.
-- [x] Remaining backbone storage, worker, folder-ingestion, and readiness-smoke
-  slices completed with their historical verification evidence archived.
-- [x] Completed-slice test hardening and required reviewer gates completed.
+- [x] Remaining backbone storage, worker, folder-ingestion, readiness-smoke,
+  completed-slice test hardening, and required reviewer-gate history is
+  complete and archived.
 
 ## Issues #38-#40 Maintenance Completion
 

@@ -12,7 +12,12 @@ from formowl_contract import (
     to_plain,
 )
 
-from ._guards import assert_public_payload_safe, safe_public_string
+from ._guards import (
+    assert_authorized_evidence_payload_safe,
+    assert_authorized_evidence_text_safe,
+    assert_public_payload_safe,
+    safe_public_string,
+)
 
 _RETENTION_POLICIES = {
     "delete_after_successful_extract",
@@ -156,11 +161,13 @@ class EmailMessage:
     unresolved_attachment_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
-        return _public_payload(self, "email_message")
+        payload = to_plain(self)
+        assert_authorized_evidence_payload_safe(payload, "email_message")
+        return payload
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "EmailMessage":
-        item = _require_dict(value, "email_message")
+        item = _require_authorized_evidence_dict(value, "email_message")
         message = cls(
             email_message_id=_required_str(item, "email_message_id"),
             message_fingerprint=_required_str(item, "message_fingerprint"),
@@ -168,9 +175,12 @@ class EmailMessage:
             archive_id=_required_str(item, "archive_id"),
             mailbox_id=_required_str(item, "mailbox_id"),
             source_observation_ids=_str_list(item.get("source_observation_ids")),
-            subject=_optional_str(item, "subject"),
-            normalized_subject=_optional_str(item, "normalized_subject"),
-            sender=_optional_str(item, "sender"),
+            subject=_optional_authorized_evidence_str(item, "subject"),
+            normalized_subject=_optional_authorized_evidence_str(
+                item,
+                "normalized_subject",
+            ),
+            sender=_optional_authorized_evidence_str(item, "sender"),
             sent_at=_optional_str(item, "sent_at"),
             body_hash=_optional_str(item, "body_hash"),
             thread_id=_optional_str(item, "thread_id"),
@@ -1125,7 +1135,10 @@ def _assert_private_mail_bundle_envelope_safe(value: Mapping[str, Any]) -> None:
     safe_view = dict(value)
     body_segments = value.get("body_segments")
     safe_view["body_segments"] = []
-    assert_public_payload_safe(safe_view, "mail_evidence_bundle.private_envelope")
+    assert_authorized_evidence_payload_safe(
+        safe_view,
+        "mail_evidence_bundle.private_envelope",
+    )
     if isinstance(body_segments, list):
         for segment in body_segments:
             if isinstance(segment, Mapping):
@@ -1149,6 +1162,16 @@ def _require_dict(value: Any, context: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ContractValidationError(f"{context} must be an object")
     assert_public_payload_safe(value, context)
+    return value
+
+
+def _require_authorized_evidence_dict(
+    value: Any,
+    context: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ContractValidationError(f"{context} must be an object")
+    assert_authorized_evidence_payload_safe(value, context)
     return value
 
 
@@ -1178,6 +1201,17 @@ def _optional_str(value: dict[str, Any], field_name: str) -> str | None:
         return None
     text = safe_public_string(item, field_name)
     return text or None
+
+
+def _optional_authorized_evidence_str(
+    value: dict[str, Any],
+    field_name: str,
+) -> str | None:
+    item = value.get(field_name)
+    if item is None:
+        return None
+    assert_authorized_evidence_text_safe(item, field_name)
+    return item or None
 
 
 def _required_choice(

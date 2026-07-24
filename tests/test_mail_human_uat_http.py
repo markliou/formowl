@@ -32,6 +32,7 @@ from formowl_mail.human_uat_orchestrator import (
     UatConversationOutcome,
     UatEvidenceToolRequest,
 )
+from formowl_mail.human_uat_upload import UatUploadedResourcePart
 from formowl_mail.query import MailEvidenceQueryGateway
 
 NOW = "2026-07-18T12:00:00+00:00"
@@ -128,6 +129,18 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertNotIn('api("/api/query"', html)
         self.assertIn('className = "evidence-table"', html)
         self.assertIn('["順序", "內容", "主旨", "時間"]', html)
+        self.assertIn('cell.setAttribute("scope", "col")', html)
+        self.assertIn('order.setAttribute("data-label", "順序")', html)
+        self.assertIn('content.setAttribute("data-label", "內容")', html)
+        self.assertIn('subject.setAttribute("data-label", "主旨")', html)
+        self.assertIn('time.setAttribute("data-label", "時間")', html)
+        self.assertIn("formatEvidenceTime", html)
+        self.assertIn('timeZone: "Asia/Taipei"', html)
+        self.assertIn("時間未提供", html)
+        self.assertIn("時間格式無法判讀", html)
+        self.assertIn("supporting-list", html)
+        self.assertIn("overflow-wrap: anywhere; word-break: break-word;", html)
+        self.assertNotIn("min-width: 720px", html)
         self.assertNotIn('id="starter-grid"', html)
         self.assertNotIn('class="starter-card', html)
         self.assertNotIn("最近一次文顥的量產時間", html)
@@ -140,6 +153,10 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertNotIn("user_may", html)
         self.assertNotIn("workspace_formowl", html)
         self.assertNotIn("/tmp/", html)
+        self.assertNotIn("citation_id", html)
+        self.assertNotIn("source_observation_id", html)
+        self.assertNotIn("backend_path", html)
+        self.assertNotIn("private_metadata", html)
         self.assertTrue(health["chatgpt_bypassed"])
         self.assertFalse(health["authentication_required"])
         self.assertTrue(health["shared_uat"])
@@ -160,6 +177,24 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertGreaterEqual(health["index_build_elapsed_ms"], 0.0)
         self.assertEqual(page_response.getheader("Cache-Control"), "no-store, max-age=0")
         self.assertEqual(page_response.getheader("X-Frame-Options"), "DENY")
+
+    def test_page_result_projection_has_responsive_readability_contract(self) -> None:
+        service = _service("mail-human-uat-responsive-contract")
+        with _RunningSurface(service) as surface:
+            response, body = surface.request("GET", "/")
+
+        html = body.decode("utf-8")
+        self.assertEqual(response.status, 200)
+        self.assertIn("width: min(1120px, calc(100% - 48px));", html)
+        self.assertIn("table-layout: fixed;", html)
+        self.assertIn(".evidence-table td::before", html)
+        self.assertIn("content: attr(data-label)", html)
+        self.assertIn("@media (max-width: 720px)", html)
+        self.assertIn(".evidence-table tbody { display: grid; gap: 12px; }", html)
+        self.assertIn("display: block; border: 1px solid var(--line)", html)
+        self.assertIn("clip: rect(0, 0, 0, 0)", html)
+        self.assertIn("overflow: visible", html)
+        self.assertNotIn("overflow-x: auto", html)
 
     def test_service_uses_injected_gateway_metrics_and_rejects_bundle_mismatch(
         self,
@@ -853,6 +888,126 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertEqual(payload["assistant_text"], "這一題不需要調閱來源。")
         self.assertEqual(payload["orchestration"]["action"], "answer_without_tool")
         self.assertEqual(feedback_response.status, 200)
+
+    def test_uat_query_serializes_authorized_body_without_generic_redaction(
+        self,
+    ) -> None:
+        bundle = _bundle()
+        ordinary_text = (
+            "PO470002002 delivery remains 2026/07/24. "
+            "See https://supplier.example.com/docs/PO470002002 and "
+            "/Users/may/Documents/PO plan.pdf. "
+            "Status path is pull-in/ETA/COO."
+        )
+        ordinary_subject = "PO470002002 / COO at https://supplier.example.com/portal"
+        bundle = replace(
+            bundle,
+            messages=[
+                bundle.messages[0],
+                replace(bundle.messages[1], subject=ordinary_subject),
+                bundle.messages[2],
+            ],
+            body_segments=[
+                bundle.body_segments[0],
+                replace(bundle.body_segments[1], text=ordinary_text),
+                bundle.body_segments[2],
+            ],
+        )
+        service = MailHumanUatService(
+            MailHumanUatHttpConfig(
+                bundle=bundle,
+                state_dir=_paths.fresh_test_dir("mail-human-uat-authorized-body"),
+                fixed_now=NOW,
+            )
+        )
+
+        payload = service.query(
+            {
+                "query_text": "PO470002002 delivery",
+                "limit": 5,
+            }
+        )
+
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["results"][0]["subject"], ordinary_subject)
+        self.assertEqual(payload["results"][0]["snippet"], ordinary_text)
+        self.assertFalse(payload["results"][0]["content_redacted"])
+        self.assertNotIn("unsafe_mail_evidence_content_redacted", payload["warnings"])
+
+    def test_uploaded_authorized_mail_preserves_body_after_restart(self) -> None:
+        state_dir = _paths.fresh_test_dir("mail-human-uat-upload-authorized-body")
+        body = (
+            "UPLOADMARK delivery 2026/07/24 "
+            "https://supplier.example.com/docs "
+            "/Users/may/Documents/plan.pdf."
+        )
+        subject = "UPLOADMARK https://supplier.example.com/portal"
+        service = _service_from_state_dir(state_dir)
+
+        receipt = service.upload_mail_files(
+            [
+                UatUploadedResourcePart(
+                    filename="ordinary.eml",
+                    content=_eml(subject=subject, body=body),
+                )
+            ]
+        )
+        restarted = _service_from_state_dir(state_dir)
+        payload = restarted.query(
+            {
+                "query_text": "UPLOADMARK delivery",
+                "limit": 5,
+            }
+        )
+
+        self.assertEqual(receipt["accepted_file_count"], 1)
+        self.assertEqual(payload["results"][0]["subject"], subject)
+        self.assertEqual(payload["results"][0]["snippet"], body)
+        self.assertFalse(payload["results"][0]["content_redacted"])
+
+    def test_uat_chat_locally_redacts_sensitive_answer_spans_only(self) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": (
+                        "Readable answer at https://supplier.example.com/status "
+                        "for /Users/may/Documents/PO plan.pdf. "
+                        "api_key=super-secret; formowl://storage/private/item; "
+                        "SELECT * FROM private_table. "
+                        "Delivery remains 2026/07/24."
+                    ),
+                }
+            ]
+        )
+        service = _service_with_model(
+            _paths.fresh_test_dir("mail-human-uat-chat-local-redaction"),
+            model,
+        )
+
+        payload = service.chat(
+            {
+                "query_text": "請整理目前狀況",
+                "visitor_id": VISITOR_ID,
+                "session_id": SESSION_ID,
+                "sequence": 1,
+                "source": "composer",
+            }
+        )
+
+        self.assertIn(
+            "Readable answer at https://supplier.example.com/status",
+            payload["assistant_text"],
+        )
+        self.assertIn("/Users/may/Documents/PO plan.pdf", payload["assistant_text"])
+        self.assertIn("Delivery remains 2026/07/24.", payload["assistant_text"])
+        self.assertIn("[redacted_credential]", payload["assistant_text"])
+        self.assertIn("[redacted_internal_locator]", payload["assistant_text"])
+        self.assertIn("[redacted_sql]", payload["assistant_text"])
+        self.assertNotIn("super-secret", payload["assistant_text"])
+        self.assertNotIn("formowl://storage", payload["assistant_text"])
+        self.assertNotIn("SELECT * FROM", payload["assistant_text"])
+        self.assertIn("unsafe_mail_evidence_content_redacted", payload["warnings"])
 
     def test_chat_requires_tracking_to_isolate_persistent_codex_threads(self) -> None:
         model = _ScriptedConversationModel(

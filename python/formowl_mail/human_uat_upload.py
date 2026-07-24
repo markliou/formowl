@@ -26,7 +26,7 @@ from formowl_contract import (
 from formowl_ingestion.extraction import ExtractionInput
 from formowl_ingestion.extractors.mail import PstMailArchiveExtractor
 
-from ._guards import assert_public_payload_safe
+from ._guards import assert_authorized_evidence_payload_safe
 from .bundle import (
     EmailBodySegment,
     EmailMessage as MailEvidenceMessage,
@@ -413,7 +413,10 @@ def _parse_uat_uploaded_pst(
         retention_policy="retain_30_days",
         parse_warnings=result.warnings,
     )
-    assert_public_payload_safe(bundle.to_dict(), "mail_human_uat_uploaded_pst_bundle")
+    assert_authorized_evidence_payload_safe(
+        bundle.to_dict(),
+        "mail_human_uat_uploaded_pst_bundle",
+    )
     return ParsedUatResourceUpload(
         content_hash=content_hash,
         source_format="pst",
@@ -518,7 +521,10 @@ def _parsed_document_upload(
         parse_warnings=[],
         created_at=created_at,
     )
-    assert_public_payload_safe(bundle.to_dict(), "mail_human_uat_uploaded_reference_bundle")
+    assert_authorized_evidence_payload_safe(
+        bundle.to_dict(),
+        "mail_human_uat_uploaded_reference_bundle",
+    )
     return ParsedUatResourceUpload(
         content_hash=content_hash,
         source_format=source_format,
@@ -644,7 +650,10 @@ def parse_uat_uploaded_eml(
         parse_warnings=[],
         created_at=resolved_created_at,
     )
-    assert_public_payload_safe(bundle.to_dict(), "mail_human_uat_uploaded_bundle")
+    assert_authorized_evidence_payload_safe(
+        bundle.to_dict(),
+        "mail_human_uat_uploaded_bundle",
+    )
     return ParsedUatMailUpload(
         content_hash=content_hash,
         bundle=bundle,

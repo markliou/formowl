@@ -302,7 +302,7 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
 
     def test_preserves_private_body_and_redacts_only_public_query_output(self) -> None:
         context = _PstExtractionContext.create("pst-extractor-sanitizes")
-        unsafe_body = "Review path C:\\private\\archive.pst before approval."
+        unsafe_body = "Review scratch path C:\\tmp\\archive.pst before approval."
         unsafe_attachment = "C:\\private\\attachment.pdf"
         adapter = context.adapter_with_runner(
             _runner_with_messages(
@@ -369,7 +369,7 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
         )
         public_rendered = json.dumps(public_result.to_dict(), sort_keys=True)
         self.assertNotIn(unsafe_body, public_rendered)
-        self.assertNotIn("C:\\private", public_rendered)
+        self.assertNotIn("C:\\tmp", public_rendered)
         self.assertIn("unsafe_mail_evidence_content_redacted", public_result.warnings)
 
     def test_body_segments_are_complete_and_attachment_text_is_searchable(self) -> None:

@@ -217,7 +217,7 @@ class PostgreSQLMailEvidenceStoreTests(unittest.TestCase):
     def test_private_body_round_trips_but_public_query_remains_redacted(self) -> None:
         bundle = _mail_bundle(_paths.fresh_test_dir("mail-evidence-postgres-private-body"))
         payload = bundle.to_dict()
-        private_text = "Review C:\\private\\archive.pst and SELECT * FROM mailbox_messages"
+        private_text = "Review C:\\tmp\\archive.pst and SELECT * FROM mailbox_messages"
         payload["body_segments"][0]["text"] = private_text
         private_bundle = MailEvidenceBundle.from_dict(payload)
         connection = _RecordingMailConnection()
@@ -244,7 +244,7 @@ class PostgreSQLMailEvidenceStoreTests(unittest.TestCase):
         )
         rendered = json.dumps(result, sort_keys=True)
         self.assertNotIn(private_text, rendered)
-        self.assertNotIn("C:\\private", rendered)
+        self.assertNotIn("C:\\tmp", rendered)
         self.assertNotIn("SELECT * FROM", rendered)
         self.assertIn("unsafe_mail_evidence_content_redacted", result["warnings"])
 

@@ -284,3 +284,17 @@ Lifecycle label: `active`.
   targeted Ruff/format, Node 20 UI smoke, and diff-check. Issue #49 remains
   unchecked pending its final post-change reviewer gate. Methodology authority
   remains valid-but-blocked.
+
+## 2026-07-24 — Issue #50 authorized evidence rendering
+
+- Authorization was already passing; generic public-payload redaction was
+  incorrectly applied again to authorized body fields and could replace an
+  entire message with `[redacted_mail_evidence]`.
+- A dedicated evidence policy now preserves ordinary mail content and locally
+  redacts only credentials and implementation details. Denied paths remain
+  empty and control/metadata payloads remain strict.
+- Codex turns now permit at most three bounded FormOwl refinements because live
+  PO evidence required two calls; identical calls reuse the first result.
+- Proof: 127 focused container tests, Ruff, Node UI smoke, and live PO/COO chat
+  both HTTP 200 with zero full placeholders or chat errors. Methodology
+  authority remains valid-but-blocked.
