@@ -170,13 +170,25 @@ class CoverageScopePartitionTests(unittest.TestCase):
                 authorization_decisions=duplicate_authorizations,
                 relevance_decisions=(),
             )
+        unknown_item_decision = CoverageItemAuthorizationDecision(
+            source_inventory_id=inventory.source_inventory_id,
+            inventory_item_id="item_unknown",
+            authorization_binding=authorization,
+            permission_scope_fingerprint=FP,
+            decision_state="authorized",
+        )
         with self.assertRaises(ContractValidationError):
-            CoverageItemAuthorizationDecision(
-                source_inventory_id=inventory.source_inventory_id,
-                inventory_item_id="item_unknown",
+            CoverageScopeAuthority.create(
+                source_inventory=inventory,
+                claim_requirement=requirement,
                 authorization_binding=authorization,
-                permission_scope_fingerprint=FP,
-                decision_state="authorized",
+                version_manifest=manifest,
+                scope_policy=_scope_policy(),
+                authorization_decisions=(
+                    unknown_item_decision,
+                    *partition.scope_authority.authorization_decisions[1:],
+                ),
+                relevance_decisions=partition.scope_authority.relevance_decisions,
             )
 
     def test_observation_accounting_is_total_and_exact(self) -> None:

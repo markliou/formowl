@@ -669,7 +669,13 @@ class Issue51WP1ContractTests(unittest.TestCase):
         self.assertIsInstance(ledger.display_pagination, DisplayPagination)
         self.assertTrue(ledger.claim_scope_complete)
         self.assertTrue(
-            ledger.usable_for_claim(source_inventory, requirement, manifest, authorization)
+            ledger.usable_for_claim(
+                source_inventory,
+                requirement,
+                manifest,
+                authorization,
+                scope_partition.scope_authority,
+            )
         )
 
     def test_persisted_authoritative_claim_requires_external_scope_authority(self) -> None:
@@ -856,6 +862,11 @@ class Issue51WP1ContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(restored_from_postgres)
         self.assertEqual(restored_from_postgres.to_persistence_dict(), bundle_payload)
+        with self.assertRaises(ContractValidationError):
+            store.get_bundle(
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+                expected_scope_authorities={ledger.coverage_ledger_id: parsed_authority},
+            )
 
     def test_raw_answer_claim_constructor_cannot_self_certify_definitive_states(self) -> None:
         from test_issue51_wp1_scope_partition import _complete_ledger, _fixture
@@ -1467,6 +1478,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
             manifest,
             authorization,
             ledger,
+            scope_authority,
+            scope_partition,
         ) = _direct_claim_fixture(
             kind="existential_witness",
             parameters={"support_only_completeness": True},
@@ -1479,6 +1492,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             source_inventory=source_inventory,
             version_manifest=manifest,
             authorization_binding=authorization,
+            expected_scope_authority=scope_authority,
             evidence_snapshot_ids=("snapshot_witness",),
         )
         self.assertEqual(claim.state, "FOUND")
@@ -1491,6 +1505,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
                     manifest,
                     authorization,
                     ledger,
+                    scope_authority,
+                    scope_partition,
                 ) = _direct_claim_fixture(
                     kind="existential_witness",
                     parameters=parameters,
@@ -1504,6 +1520,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
                         source_inventory=source_inventory,
                         version_manifest=manifest,
                         authorization_binding=authorization,
+                        expected_scope_authority=scope_authority,
                         evidence_snapshot_ids=("snapshot_witness",),
                     )
 
@@ -1513,6 +1530,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
             manifest,
             authorization,
             ledger,
+            scope_authority,
+            scope_partition,
         ) = _direct_claim_fixture(
             kind="existential_witness",
             parameters={"support_only_completeness": "true"},
@@ -1526,6 +1545,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 source_inventory=source_inventory,
                 version_manifest=manifest,
                 authorization_binding=authorization,
+                expected_scope_authority=scope_authority,
                 evidence_snapshot_ids=("snapshot_witness",),
             )
 
@@ -1535,6 +1555,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
             manifest,
             authorization,
             ledger,
+            scope_authority,
+            scope_partition,
         ) = _direct_claim_fixture(
             kind="existential_witness",
             parameters={"support_only_completeness": True},
@@ -1549,6 +1571,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 source_inventory=source_inventory,
                 version_manifest=manifest,
                 authorization_binding=authorization,
+                expected_scope_authority=scope_authority,
                 evidence_snapshot_ids=("snapshot_witness",),
             )
 
@@ -1561,6 +1584,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
                     manifest,
                     authorization,
                     ledger,
+                    scope_authority,
+                    scope_partition,
                 ) = _direct_claim_fixture(
                     kind=kind,
                     include_conflicting_values=True,
@@ -1573,6 +1598,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
                     source_inventory=source_inventory,
                     version_manifest=manifest,
                     authorization_binding=authorization,
+                    expected_scope_authority=scope_authority,
                     evidence_snapshot_ids=("snapshot_one", "snapshot_two"),
                 )
                 self.assertEqual(claim.state, "CONFLICT")
@@ -1583,6 +1609,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
             manifest,
             authorization,
             ledger,
+            scope_authority,
+            scope_partition,
         ) = _direct_claim_fixture(
             kind="single_value",
             include_direct_proof=True,
@@ -1596,6 +1624,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 source_inventory=source_inventory,
                 version_manifest=manifest,
                 authorization_binding=authorization,
+                expected_scope_authority=scope_authority,
                 evidence_snapshot_ids=("snapshot_one", "snapshot_two"),
             )
 
@@ -1605,6 +1634,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
             manifest,
             authorization,
             ledger,
+            scope_authority,
+            scope_partition,
         ) = _direct_claim_fixture(
             kind="single_value",
             include_conflicting_values=True,
@@ -1637,6 +1668,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 source_inventory=source_inventory,
                 version_manifest=manifest,
                 authorization_binding=authorization,
+                expected_scope_authority=scope_authority,
                 evidence_snapshot_ids=("snapshot_one", "snapshot_two"),
             )
 
@@ -1652,6 +1684,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
                     manifest,
                     authorization,
                     ledger,
+                    scope_authority,
+                    scope_partition,
                 ) = _direct_claim_fixture(
                     kind=kind,
                     parameters=parameters,
@@ -1666,11 +1700,20 @@ class Issue51WP1ContractTests(unittest.TestCase):
                         source_inventory=source_inventory,
                         version_manifest=manifest,
                         authorization_binding=authorization,
+                        expected_scope_authority=scope_authority,
                         evidence_snapshot_ids=("snapshot_one", "snapshot_two"),
                     )
 
     def test_coverage_ledger_rejects_duplicate_proof_records(self) -> None:
-        source_inventory, requirement, manifest, authorization, ledger = _direct_claim_fixture(
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            ledger,
+            scope_authority,
+            scope_partition,
+        ) = _direct_claim_fixture(
             kind="single_value",
             include_direct_proof=True,
         )
@@ -2891,6 +2934,8 @@ def _direct_claim_fixture(
     VersionManifest,
     CoverageAuthorizationBinding,
     CoverageLedger,
+    CoverageScopeAuthority,
+    CoverageScopePartition,
 ]:
     item = SourceInventoryItem.create(
         source_asset_id="asset_direct_wp1",
@@ -2934,6 +2979,43 @@ def _direct_claim_fixture(
         permission_revision="permission_direct_wp1",
         grant_revision="grant_direct_wp1",
     )
+    scope_policy = CoverageScopePolicyBinding(
+        scope_policy_id="scope-policy-direct-wp1",
+        scope_policy_version="1",
+        scope_policy_fingerprint=SCOPE_POLICY_FP,
+    )
+    authorization_decision = CoverageItemAuthorizationDecision.create(
+        source_inventory_item=inventory.items[0],
+        authorization_binding=authorization,
+        decision_state="authorized",
+    )
+    relevance_decision = CoverageItemRelevanceDecision.create(
+        source_inventory_item=inventory.items[0],
+        claim_requirement=requirement,
+        scope_policy=scope_policy,
+        decision_state="relevant",
+    )
+    scope_authority = CoverageScopeAuthority.create(
+        source_inventory=inventory,
+        claim_requirement=requirement,
+        authorization_binding=authorization,
+        version_manifest=manifest,
+        scope_policy=scope_policy,
+        authorization_decisions=(authorization_decision,),
+        relevance_decisions=(relevance_decision,),
+    )
+    scope_partition = CoverageScopePartition.create(
+        scope_authority=scope_authority,
+        observation_partitions=(
+            CoverageObservationPartition(
+                inventory_item_id=inventory.items[0].source_inventory_item_id,
+                structural_observation_ids=(
+                    "observation_direct_wp1_a",
+                    "observation_direct_wp1_b",
+                ),
+            ),
+        ),
+    )
     proof_records: list[CoverageProofRecord] = []
     if include_direct_proof:
         proof_records.append(
@@ -2970,10 +3052,19 @@ def _direct_claim_fixture(
         ),
         authorization_binding=authorization,
         version_binding=CoverageVersionBinding.from_manifest(manifest),
+        scope_partition=scope_partition,
         proof_records=proof_records,
         complete_authorized_scope=False,
     )
-    return inventory, requirement, manifest, authorization, ledger
+    return (
+        inventory,
+        requirement,
+        manifest,
+        authorization,
+        ledger,
+        scope_authority,
+        scope_partition,
+    )
 
 
 def _minimal_bundle() -> MailEvidenceBundle:
