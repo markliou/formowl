@@ -251,6 +251,18 @@ async function runChatSmoke() {
     mobileCss,
     /body\.has-conversation \.composer-note \{ display: none; \}/u,
   );
+  assert.match(
+    chatHtml,
+    /body\.has-conversation\.sources-reading \.composer-dock \{\s+position: static;/u,
+  );
+  assert.match(
+    chatHtml,
+    /body\.has-conversation\.sources-reading \.topbar \{\s+position: static;/u,
+  );
+  assert.match(
+    mobileCss,
+    /body\.has-conversation\.sources-reading \.conversation \{\s+padding-top: 20px; padding-bottom: 28px;/u,
+  );
 
   const { document, elements } = makeDocument([
     "conversation",
@@ -454,11 +466,22 @@ async function runChatSmoke() {
   assert.ok(tableDisclosure);
   assert.ok(tablePanel);
   assert.equal(tableDisclosure.attributes.get("aria-expanded"), "false");
+  assert.equal(
+    tableDisclosure.attributes.get("aria-controls"),
+    tablePanel.id,
+  );
+  assert.equal(tablePanel.attributes.get("role"), "region");
+  assert.equal(
+    tablePanel.attributes.get("aria-labelledby"),
+    tableDisclosure.id,
+  );
   assert.equal(tablePanel.hidden, true);
+  assert.equal(document.body.classList.contains("sources-reading"), false);
 
   await tableDisclosure.dispatch("click");
   assert.equal(tableDisclosure.attributes.get("aria-expanded"), "true");
   assert.equal(tablePanel.hidden, false);
+  assert.equal(document.body.classList.contains("sources-reading"), true);
   assert.match(textTree(tableHolder), /共找到 12 筆/u);
   assert.match(textTree(tableHolder), /目前顯示 2 筆/u);
   assert.equal(tagTree(tableHolder, "table").length, 1);
@@ -493,8 +516,10 @@ async function runChatSmoke() {
   const renderedTable = tagTree(tableHolder, "table")[0];
   await tableDisclosure.dispatch("click");
   assert.equal(tablePanel.hidden, true);
+  assert.equal(document.body.classList.contains("sources-reading"), false);
   await tableDisclosure.dispatch("click");
   assert.equal(tablePanel.hidden, false);
+  assert.equal(document.body.classList.contains("sources-reading"), true);
   assert.equal(tagTree(tableHolder, "table").length, 1);
   assert.equal(tagTree(tableHolder, "table")[0], renderedTable);
 
@@ -536,6 +561,7 @@ async function runChatSmoke() {
   );
   assert.ok(narrativeDisclosure);
   await narrativeDisclosure.dispatch("click");
+  assert.equal(document.body.classList.contains("sources-reading"), true);
   const evidenceCard = tagTree(narrativeHolder, "article")[0];
   assert.equal(evidenceCard.children[0].tagName, "p");
   assert.match(textTree(evidenceCard.children[0]), /1 內容先出現/u);
@@ -546,6 +572,10 @@ async function runChatSmoke() {
     textTree(narrativeHolder),
     /mailcitation_narrative|obs_narrative_internal|sender@example\.com|\/private\/mail/u,
   );
+  await tableDisclosure.dispatch("click");
+  assert.equal(document.body.classList.contains("sources-reading"), true);
+  await narrativeDisclosure.dispatch("click");
+  assert.equal(document.body.classList.contains("sources-reading"), false);
 
   const emptyResultHolder = new FakeElement("div");
   context.renderAssistantResult(
@@ -607,6 +637,7 @@ async function runChatSmoke() {
   assert.match(brandHomeSessionId, /^uatsession_[0-9a-f]{32}$/u);
   assert.notEqual(brandHomeSessionId, initialSessionId);
   assert.equal(document.body.classList.contains("has-conversation"), false);
+  assert.equal(document.body.classList.contains("sources-reading"), false);
   assert.equal(elements.get("current-chat-title").textContent, "新對話");
 
   requests.length = 0;

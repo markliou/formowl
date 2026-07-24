@@ -133,6 +133,11 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertIn("sources-panel[hidden]", html)
         self.assertIn("let sourcesRendered = false;", html)
         self.assertIn("if (sourcesRendered) return;", html)
+        self.assertIn("let expandedSourcePanelCount = 0;", html)
+        self.assertIn('body.classList.toggle("sources-reading"', html)
+        self.assertIn('sourcesToggle.setAttribute("aria-controls"', html)
+        self.assertIn('sourcesPanel.setAttribute("role", "region")', html)
+        self.assertIn('sourcesPanel.setAttribute("aria-labelledby"', html)
         self.assertLess(
             html.index("answer.textContent = payload.assistant_text;"),
             html.index('sourcesToggle.className = "sources-disclosure";'),
@@ -205,6 +210,27 @@ class MailHumanUatHttpTests(unittest.TestCase):
         self.assertIn("clip: rect(0, 0, 0, 0)", html)
         self.assertIn("overflow: visible", html)
         self.assertNotIn("overflow-x: auto", html)
+        self.assertIn(
+            "body.has-conversation.sources-reading .composer-dock",
+            html,
+        )
+        self.assertIn(
+            "body.has-conversation.sources-reading .topbar",
+            html,
+        )
+        self.assertIn(
+            "position: static; left: auto; right: auto; top: auto; z-index: auto;",
+            html,
+        )
+        self.assertIn("backdrop-filter: none;", html)
+        self.assertIn(
+            "position: static; left: auto; right: auto; top: auto; bottom: auto;",
+            html,
+        )
+        self.assertIn(
+            "padding-top: 32px; padding-bottom: 30px;",
+            html,
+        )
         mobile_css = html.split("@media (max-width: 800px)", 1)[1].split(
             "@media (max-width: 720px)",
             1,
@@ -219,6 +245,15 @@ class MailHumanUatHttpTests(unittest.TestCase):
         )
         self.assertIn(
             "body.has-conversation .composer-note { display: none; }",
+            mobile_css,
+        )
+        self.assertIn(
+            "body.has-conversation.sources-reading .conversation",
+            mobile_css,
+        )
+        self.assertIn("padding-top: 20px; padding-bottom: 28px;", mobile_css)
+        self.assertIn(
+            "body.has-conversation.sources-reading .composer-dock",
             mobile_css,
         )
         self.assertIn(

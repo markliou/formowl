@@ -2310,6 +2310,17 @@ _CHAT_UAT_HTML = """<!doctype html>
       top: auto; bottom: 0; transform: none; padding: 18px 20px 12px;
       background: linear-gradient(transparent, rgba(255,255,255,.96) 24%, #fff 54%);
     }
+    body.has-conversation.sources-reading .topbar {
+      position: static; left: auto; right: auto; top: auto; z-index: auto;
+      backdrop-filter: none;
+    }
+    body.has-conversation.sources-reading .conversation {
+      padding-top: 32px; padding-bottom: 30px;
+    }
+    body.has-conversation.sources-reading .composer-dock {
+      position: static; left: auto; right: auto; top: auto; bottom: auto; z-index: auto;
+      transform: none; padding: 0 20px 24px; background: #fff;
+    }
     body.has-conversation .landing-title { display: none; }
     body.has-conversation .prompt-box { box-shadow: 0 2px 14px rgba(0,0,0,.08); }
     .modal {
@@ -2368,6 +2379,12 @@ _CHAT_UAT_HTML = """<!doctype html>
       }
       body.has-conversation .composer-dock {
         padding: 10px 10px calc(8px + env(safe-area-inset-bottom));
+      }
+      body.has-conversation.sources-reading .conversation {
+        padding-top: 20px; padding-bottom: 28px;
+      }
+      body.has-conversation.sources-reading .composer-dock {
+        padding: 0 10px calc(12px + env(safe-area-inset-bottom));
       }
       body.has-conversation .composer-note { display: none; }
       .landing-title h1 { font-size: 24px; }
@@ -2569,6 +2586,21 @@ _CHAT_UAT_HTML = """<!doctype html>
       "formowl_uat_session_id",
       "uatsession_"
     );
+    let expandedSourcePanelCount = 0;
+    let sourceDisclosureSequence = 0;
+
+    function updateSourceReadingMode(isExpanded) {
+      expandedSourcePanelCount = Math.max(
+        0,
+        expandedSourcePanelCount + (isExpanded ? 1 : -1)
+      );
+      body.classList.toggle("sources-reading", expandedSourcePanelCount > 0);
+    }
+
+    function resetSourceReadingMode() {
+      expandedSourcePanelCount = 0;
+      body.classList.remove("sources-reading");
+    }
 
     function rotateSessionId() {
       const created = randomTrackingId("uatsession_");
@@ -2782,13 +2814,21 @@ _CHAT_UAT_HTML = """<!doctype html>
         ? payload.displayed_result_count
         : results.length;
       const sourceCount = results.length;
+      sourceDisclosureSequence += 1;
+      const sourcesToggleId = `sources-disclosure-${sourceDisclosureSequence}`;
+      const sourcesPanelId = `sources-panel-${sourceDisclosureSequence}`;
       const sourcesToggle = document.createElement("button");
       sourcesToggle.type = "button";
       sourcesToggle.className = "sources-disclosure";
+      sourcesToggle.id = sourcesToggleId;
       sourcesToggle.setAttribute("aria-expanded", "false");
+      sourcesToggle.setAttribute("aria-controls", sourcesPanelId);
       sourcesToggle.textContent = `查看來源（${sourceCount}）`;
       const sourcesPanel = document.createElement("div");
       sourcesPanel.className = "sources-panel";
+      sourcesPanel.id = sourcesPanelId;
+      sourcesPanel.setAttribute("role", "region");
+      sourcesPanel.setAttribute("aria-labelledby", sourcesToggleId);
       sourcesPanel.hidden = true;
       let sourcesExpanded = false;
       let sourcesRendered = false;
@@ -2920,10 +2960,12 @@ _CHAT_UAT_HTML = """<!doctype html>
           sourcesPanel.hidden = false;
           sourcesToggle.setAttribute("aria-expanded", "true");
           sourcesToggle.textContent = `收合來源（${sourceCount}）`;
+          updateSourceReadingMode(true);
         } else {
           sourcesPanel.hidden = true;
           sourcesToggle.setAttribute("aria-expanded", "false");
           sourcesToggle.textContent = `查看來源（${sourceCount}）`;
+          updateSourceReadingMode(false);
         }
       });
       holder.append(sourcesToggle, sourcesPanel);
@@ -2999,6 +3041,7 @@ _CHAT_UAT_HTML = """<!doctype html>
       conversation.replaceChildren();
       conversationStarted = false;
       body.classList.remove("has-conversation");
+      resetSourceReadingMode();
       closeMobileSidebar();
       byId("current-chat-title").textContent = "新對話";
       byId("chat-input").focus();
@@ -3012,6 +3055,7 @@ _CHAT_UAT_HTML = """<!doctype html>
         conversation.replaceChildren();
         conversationStarted = false;
         body.classList.remove("has-conversation");
+        resetSourceReadingMode();
         byId("current-chat-title").textContent = "新對話";
         byId("chat-input").focus();
       }
