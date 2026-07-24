@@ -69,6 +69,14 @@ COVERAGE_FALLBACK_STATUS_VALUES = (
     "failed",
     "cancelled",
 )
+COVERAGE_NON_SEARCH_REASON_VALUES = (
+    "not_searched",
+    "not_authorized",
+    "redacted",
+    "failed",
+    "unsupported",
+    "intentionally_excluded",
+)
 COVERAGE_PROOF_KIND_VALUES = (
     "structural",
     "ordinary",
@@ -159,6 +167,15 @@ class CoverageFallbackStatus(str, Enum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class CoverageNonSearchReason(str, Enum):
+    NOT_SEARCHED = "not_searched"
+    NOT_AUTHORIZED = "not_authorized"
+    REDACTED = "redacted"
+    FAILED = "failed"
+    UNSUPPORTED = "unsupported"
+    INTENTIONALLY_EXCLUDED = "intentionally_excluded"
 
 
 class CoverageProofKind(str, Enum):
@@ -1273,6 +1290,404 @@ class CoverageVersionBinding:
 
 
 @dataclass(frozen=True)
+class CoverageObservationPartition:
+    """The typed observation universe for one authorized-relevant item."""
+
+    inventory_item_id: str
+    structural_observation_ids: tuple[str, ...] = ()
+    ordinary_observation_ids: tuple[str, ...] = ()
+    non_search_observation_ids: tuple[str, ...] = ()
+    non_search_reason_code: str | None = None
+
+    def __post_init__(self) -> None:
+        _id(self.inventory_item_id, "coverage_observation_partition.inventory_item_id")
+        for field_name in (
+            "structural_observation_ids",
+            "ordinary_observation_ids",
+            "non_search_observation_ids",
+        ):
+            values = getattr(self, field_name)
+            _tuple_of_strings(values, field_name, ids=True)
+            if len(values) != len(set(values)):
+                raise ContractValidationError(f"{field_name} must not contain duplicates")
+        structural = set(self.structural_observation_ids)
+        ordinary = set(self.ordinary_observation_ids)
+        non_search = set(self.non_search_observation_ids)
+        if structural & ordinary or structural & non_search or ordinary & non_search:
+            raise ContractValidationError(
+                "coverage observation partition categories must be disjoint"
+            )
+        if non_search:
+            if self.non_search_reason_code is None:
+                raise ContractValidationError(
+                    "non-search observations require a closed disposition reason"
+                )
+            _choice(
+                self.non_search_reason_code,
+                COVERAGE_NON_SEARCH_REASON_VALUES,
+                "coverage_observation_partition.non_search_reason_code",
+            )
+        elif self.non_search_reason_code is not None:
+            raise ContractValidationError(
+                "non-search disposition is only valid with non-search observations"
+            )
+        object.__setattr__(
+            self,
+            "structural_observation_ids",
+            tuple(sorted(self.structural_observation_ids)),
+        )
+        object.__setattr__(
+            self,
+            "ordinary_observation_ids",
+            tuple(sorted(self.ordinary_observation_ids)),
+        )
+        object.__setattr__(
+            self,
+            "non_search_observation_ids",
+            tuple(sorted(self.non_search_observation_ids)),
+        )
+
+    @property
+    def all_observation_ids(self) -> frozenset[str]:
+        return frozenset(
+            self.structural_observation_ids
+            + self.ordinary_observation_ids
+            + self.non_search_observation_ids
+        )
+
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return _without_none(_persistence_dataclass_payload(self))
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.to_persistence_dict()
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "CoverageObservationPartition":
+        item = _mapping(value, "coverage_observation_partition")
+        _require_exact_keys(
+            item,
+            {
+                "inventory_item_id",
+                "structural_observation_ids",
+                "ordinary_observation_ids",
+                "non_search_observation_ids",
+                "non_search_reason_code",
+            },
+            "coverage_observation_partition",
+            required={
+                "inventory_item_id",
+                "structural_observation_ids",
+                "ordinary_observation_ids",
+                "non_search_observation_ids",
+            },
+        )
+        return cls(
+            inventory_item_id=_required_str(item, "inventory_item_id"),
+            structural_observation_ids=_tuple_strings(
+                item,
+                "structural_observation_ids",
+                ids=True,
+            ),
+            ordinary_observation_ids=_tuple_strings(
+                item,
+                "ordinary_observation_ids",
+                ids=True,
+            ),
+            non_search_observation_ids=_tuple_strings(
+                item,
+                "non_search_observation_ids",
+                ids=True,
+            ),
+            non_search_reason_code=_optional_str(item, "non_search_reason_code"),
+        )
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "CoverageObservationPartition":
+        return cls.from_persistence_dict(value)
+
+
+@dataclass(frozen=True)
+class CoverageScopePartition:
+    """A complete, independently bound authorization partition for a claim."""
+
+    source_inventory_id: str
+    claim_requirement_id: str
+    authorization_binding: CoverageAuthorizationBinding
+    version_binding: CoverageVersionBinding
+    authorized_relevant_item_ids: tuple[str, ...]
+    authorized_irrelevant_item_ids: tuple[str, ...]
+    ineligible_item_ids: tuple[str, ...]
+    observation_partitions: tuple[CoverageObservationPartition, ...]
+    scope_partition_id: str = ""
+
+    def __post_init__(self) -> None:
+        _id(self.source_inventory_id, "coverage_scope_partition.source_inventory_id")
+        _id(self.claim_requirement_id, "coverage_scope_partition.claim_requirement_id")
+        if not isinstance(self.authorization_binding, CoverageAuthorizationBinding):
+            raise ContractValidationError("coverage scope partition authorization is invalid")
+        if not isinstance(self.version_binding, CoverageVersionBinding):
+            raise ContractValidationError("coverage scope partition version binding is invalid")
+        for field_name in (
+            "authorized_relevant_item_ids",
+            "authorized_irrelevant_item_ids",
+            "ineligible_item_ids",
+        ):
+            values = getattr(self, field_name)
+            _tuple_of_strings(values, field_name, ids=True)
+            if len(values) != len(set(values)):
+                raise ContractValidationError(f"{field_name} must not contain duplicates")
+        category_sets = [
+            set(self.authorized_relevant_item_ids),
+            set(self.authorized_irrelevant_item_ids),
+            set(self.ineligible_item_ids),
+        ]
+        if (
+            category_sets[0] & category_sets[1]
+            or category_sets[0] & category_sets[2]
+            or category_sets[1] & category_sets[2]
+        ):
+            raise ContractValidationError("coverage scope item partitions must be disjoint")
+        _tuple_of(
+            self.observation_partitions,
+            CoverageObservationPartition,
+            "coverage_scope_partition.observation_partitions",
+        )
+        observation_item_ids = [
+            partition.inventory_item_id for partition in self.observation_partitions
+        ]
+        if len(observation_item_ids) != len(set(observation_item_ids)):
+            raise ContractValidationError("coverage observation partitions must be unique")
+        if set(observation_item_ids) - set(self.authorized_relevant_item_ids):
+            raise ContractValidationError(
+                "observation partitions must belong to authorized-relevant items"
+            )
+        object.__setattr__(
+            self,
+            "authorized_relevant_item_ids",
+            tuple(sorted(self.authorized_relevant_item_ids)),
+        )
+        object.__setattr__(
+            self,
+            "authorized_irrelevant_item_ids",
+            tuple(sorted(self.authorized_irrelevant_item_ids)),
+        )
+        object.__setattr__(
+            self,
+            "ineligible_item_ids",
+            tuple(sorted(self.ineligible_item_ids)),
+        )
+        object.__setattr__(
+            self,
+            "observation_partitions",
+            tuple(sorted(self.observation_partitions, key=lambda item: item.inventory_item_id)),
+        )
+        all_observations: list[str] = []
+        for partition in self.observation_partitions:
+            all_observations.extend(partition.all_observation_ids)
+        if len(all_observations) != len(set(all_observations)):
+            raise ContractValidationError("coverage scope observation IDs must be globally unique")
+        identity = self._identity_payload()
+        expected_id = stable_resource_contract_id(
+            "coverage-scope",
+            "CoverageScopePartition",
+            identity,
+        )
+        if self.scope_partition_id:
+            _id(self.scope_partition_id, "scope_partition_id")
+            if self.scope_partition_id != expected_id:
+                raise ContractValidationError(
+                    "coverage scope partition id does not match its canonical identity"
+                )
+        else:
+            object.__setattr__(self, "scope_partition_id", expected_id)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        authorization_binding: CoverageAuthorizationBinding,
+        version_manifest: VersionManifest,
+        authorized_relevant_item_ids: Sequence[str],
+        authorized_irrelevant_item_ids: Sequence[str],
+        ineligible_item_ids: Sequence[str],
+        observation_partitions: Sequence[CoverageObservationPartition],
+    ) -> "CoverageScopePartition":
+        if not isinstance(source_inventory, SourceInventory):
+            raise ContractValidationError("scope partition requires SourceInventory")
+        if not isinstance(claim_requirement, ClaimRequirement):
+            raise ContractValidationError("scope partition requires ClaimRequirement")
+        if not isinstance(version_manifest, VersionManifest):
+            raise ContractValidationError("scope partition requires VersionManifest")
+        return cls(
+            source_inventory_id=source_inventory.source_inventory_id,
+            claim_requirement_id=claim_requirement.claim_requirement_id,
+            authorization_binding=authorization_binding,
+            version_binding=CoverageVersionBinding.from_manifest(version_manifest),
+            authorized_relevant_item_ids=tuple(authorized_relevant_item_ids),
+            authorized_irrelevant_item_ids=tuple(authorized_irrelevant_item_ids),
+            ineligible_item_ids=tuple(ineligible_item_ids),
+            observation_partitions=tuple(observation_partitions),
+        )
+
+    def _identity_payload(self) -> dict[str, Any]:
+        return {
+            "source_inventory_id": self.source_inventory_id,
+            "claim_requirement_id": self.claim_requirement_id,
+            "authorization_binding": self.authorization_binding.to_dict(),
+            "version_binding": self.version_binding.to_dict(),
+            "authorized_relevant_item_ids": list(self.authorized_relevant_item_ids),
+            "authorized_irrelevant_item_ids": list(self.authorized_irrelevant_item_ids),
+            "ineligible_item_ids": list(self.ineligible_item_ids),
+            "observation_partitions": [
+                partition.to_persistence_dict() for partition in self.observation_partitions
+            ],
+        }
+
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return {
+            **self._identity_payload(),
+            "scope_partition_id": self.scope_partition_id,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.to_persistence_dict()
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "CoverageScopePartition":
+        item = _mapping(value, "coverage_scope_partition")
+        _require_exact_keys(
+            item,
+            {
+                "source_inventory_id",
+                "claim_requirement_id",
+                "authorization_binding",
+                "version_binding",
+                "authorized_relevant_item_ids",
+                "authorized_irrelevant_item_ids",
+                "ineligible_item_ids",
+                "observation_partitions",
+                "scope_partition_id",
+            },
+            "coverage_scope_partition",
+        )
+        return cls(
+            source_inventory_id=_required_str(item, "source_inventory_id"),
+            claim_requirement_id=_required_str(item, "claim_requirement_id"),
+            authorization_binding=CoverageAuthorizationBinding.from_dict(
+                _required_mapping(item, "authorization_binding")
+            ),
+            version_binding=CoverageVersionBinding.from_dict(
+                _required_mapping(item, "version_binding")
+            ),
+            authorized_relevant_item_ids=_tuple_strings(
+                item,
+                "authorized_relevant_item_ids",
+                ids=True,
+            ),
+            authorized_irrelevant_item_ids=_tuple_strings(
+                item,
+                "authorized_irrelevant_item_ids",
+                ids=True,
+            ),
+            ineligible_item_ids=_tuple_strings(item, "ineligible_item_ids", ids=True),
+            observation_partitions=tuple(
+                CoverageObservationPartition.from_persistence_dict(entry)
+                for entry in _required_list(item, "observation_partitions")
+            ),
+            scope_partition_id=_required_str(item, "scope_partition_id"),
+        )
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "CoverageScopePartition":
+        return cls.from_persistence_dict(value)
+
+    def observation_partition_for(
+        self,
+        inventory_item_id: str,
+    ) -> CoverageObservationPartition | None:
+        return next(
+            (
+                partition
+                for partition in self.observation_partitions
+                if partition.inventory_item_id == inventory_item_id
+            ),
+            None,
+        )
+
+    def validate_for_claim(
+        self,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        expected_manifest: VersionManifest,
+        expected_authorization_binding: CoverageAuthorizationBinding,
+    ) -> bool:
+        """Validate the total partition against independently supplied typed inputs."""
+
+        if not all(
+            isinstance(value, expected_type)
+            for value, expected_type in (
+                (source_inventory, SourceInventory),
+                (claim_requirement, ClaimRequirement),
+                (expected_manifest, VersionManifest),
+                (expected_authorization_binding, CoverageAuthorizationBinding),
+            )
+        ):
+            raise ContractValidationError("scope partition validation requires typed inputs")
+        if (
+            self.source_inventory_id != source_inventory.source_inventory_id
+            or self.claim_requirement_id != claim_requirement.claim_requirement_id
+            or self.authorization_binding != expected_authorization_binding
+            or not self.version_binding.matches_manifest(expected_manifest)
+            or expected_manifest.index_freshness != "fresh"
+            or source_inventory.source_fingerprint != expected_manifest.source_fingerprint
+            or source_inventory.parser_fingerprint != expected_manifest.parser_fingerprint
+        ):
+            return False
+        inventory_items = {item.source_inventory_item_id: item for item in source_inventory.items}
+        partitioned_item_ids = (
+            set(self.authorized_relevant_item_ids)
+            | set(self.authorized_irrelevant_item_ids)
+            | set(self.ineligible_item_ids)
+        )
+        if partitioned_item_ids != set(inventory_items):
+            return False
+        if len(partitioned_item_ids) != (
+            len(self.authorized_relevant_item_ids)
+            + len(self.authorized_irrelevant_item_ids)
+            + len(self.ineligible_item_ids)
+        ):
+            return False
+        observation_owner: dict[str, str] = {}
+        for item in source_inventory.items:
+            if len(item.source_observation_ids) != len(set(item.source_observation_ids)):
+                return False
+            for observation_id in item.source_observation_ids:
+                if observation_id in observation_owner:
+                    return False
+                observation_owner[observation_id] = item.source_inventory_item_id
+        observation_partitions_by_item = {
+            partition.inventory_item_id: partition for partition in self.observation_partitions
+        }
+        if set(observation_partitions_by_item) != set(self.authorized_relevant_item_ids):
+            return False
+        seen_partition_observations: set[str] = set()
+        for item_id in self.authorized_relevant_item_ids:
+            item = inventory_items[item_id]
+            partition = observation_partitions_by_item[item_id]
+            if partition.all_observation_ids != frozenset(item.source_observation_ids):
+                return False
+            for observation_id in partition.all_observation_ids:
+                if observation_owner.get(observation_id) != item_id:
+                    return False
+                if observation_id in seen_partition_observations:
+                    return False
+                seen_partition_observations.add(observation_id)
+        return True
+
+
+@dataclass(frozen=True)
 class CoverageFallbackUsage:
     """Closed fallback outcome with bounded, strictly typed resource usage."""
 
@@ -1411,6 +1826,10 @@ class CoverageProofRecord:
             )
         if len(self.ordinary_observation_ids) != len(set(self.ordinary_observation_ids)):
             raise ContractValidationError("coverage proof ordinary observation IDs must be unique")
+        if set(self.structural_observation_ids) & set(self.ordinary_observation_ids):
+            raise ContractValidationError(
+                "coverage proof structural and ordinary observations must be disjoint"
+            )
         _optional_fingerprint(
             self.populated_value_fingerprint,
             "coverage_proof.populated_value_fingerprint",
@@ -1529,6 +1948,7 @@ class CoverageLedger:
     redacted_inventory_item_ids: tuple[str, ...] = ()
     authorization_binding: CoverageAuthorizationBinding | None = None
     version_binding: CoverageVersionBinding | None = None
+    scope_partition: CoverageScopePartition | None = None
     fallback_usage: CoverageFallbackUsage = field(default_factory=CoverageFallbackUsage)
     proof_records: tuple[CoverageProofRecord, ...] = ()
     complete_authorized_scope: bool = False
@@ -1553,6 +1973,7 @@ class CoverageLedger:
         redacted_inventory_item_ids: Sequence[str] = (),
         authorization_binding: CoverageAuthorizationBinding | None = None,
         version_binding: CoverageVersionBinding | None = None,
+        scope_partition: CoverageScopePartition | None = None,
         fallback_usage: CoverageFallbackUsage | None = None,
         proof_records: Sequence[CoverageProofRecord] = (),
         complete_authorized_scope: bool = False,
@@ -1571,6 +1992,7 @@ class CoverageLedger:
             redacted_inventory_item_ids=tuple(redacted_inventory_item_ids),
             authorization_binding=authorization_binding,
             version_binding=version_binding,
+            scope_partition=scope_partition,
             fallback_usage=fallback_usage or CoverageFallbackUsage(),
             proof_records=tuple(proof_records),
             complete_authorized_scope=complete_authorized_scope,
@@ -1610,6 +2032,51 @@ class CoverageLedger:
             self.version_binding is None or isinstance(self.version_binding, CoverageVersionBinding)
         ):
             raise ContractValidationError("coverage ledger version binding is invalid")
+        if not (
+            self.scope_partition is None or isinstance(self.scope_partition, CoverageScopePartition)
+        ):
+            raise ContractValidationError("coverage ledger scope partition is invalid")
+        if self.scope_partition is not None:
+            if set(self.searched_structural_observation_ids) & set(
+                self.searched_ordinary_observation_ids
+            ):
+                raise ContractValidationError(
+                    "coverage ledger searched observation categories must be disjoint"
+                )
+            if (
+                self.scope_partition.source_inventory_id != self.source_inventory_id
+                or self.scope_partition.claim_requirement_id != self.claim_requirement_id
+            ):
+                raise ContractValidationError(
+                    "coverage ledger scope partition does not bind the ledger"
+                )
+            if self.authorization_binding != self.scope_partition.authorization_binding:
+                raise ContractValidationError(
+                    "coverage ledger authorization does not match scope partition"
+                )
+            if self.version_binding != self.scope_partition.version_binding:
+                raise ContractValidationError(
+                    "coverage ledger version does not match scope partition"
+                )
+            if set(self.relevant_inventory_item_ids) - set(
+                self.scope_partition.authorized_relevant_item_ids
+            ):
+                raise ContractValidationError(
+                    "coverage ledger relevant items must be authorized-relevant"
+                )
+            partition_observation_ids = {
+                observation_id
+                for partition in self.scope_partition.observation_partitions
+                for observation_id in partition.all_observation_ids
+            }
+            if set(self.searched_structural_observation_ids) - partition_observation_ids:
+                raise ContractValidationError(
+                    "coverage ledger searched structural observations are outside the partition"
+                )
+            if set(self.searched_ordinary_observation_ids) - partition_observation_ids:
+                raise ContractValidationError(
+                    "coverage ledger searched ordinary observations are outside the partition"
+                )
         if not isinstance(self.fallback_usage, CoverageFallbackUsage):
             raise ContractValidationError("coverage ledger fallback usage is invalid")
         _tuple_of(self.proof_records, CoverageProofRecord, "coverage_ledger.proof_records")
@@ -1644,6 +2111,10 @@ class CoverageLedger:
             raise ContractValidationError(
                 "complete coverage requires a fresh version manifest binding"
             )
+        if self.scope_partition is None:
+            raise ContractValidationError(
+                "complete coverage requires an independently bound scope partition"
+            )
         if not self.relevant_inventory_item_ids:
             raise ContractValidationError("complete coverage requires a non-empty relevant scope")
         if not self.proof_records:
@@ -1668,6 +2139,37 @@ class CoverageLedger:
             raise ContractValidationError(
                 "complete coverage proof set must cover exactly the relevant inventory"
             )
+        if set(self.relevant_inventory_item_ids) != set(
+            self.scope_partition.authorized_relevant_item_ids
+        ):
+            raise ContractValidationError(
+                "complete coverage relevant scope must equal the authorized-relevant partition"
+            )
+        if any(
+            partition.non_search_observation_ids
+            for partition in self.scope_partition.observation_partitions
+        ):
+            raise ContractValidationError(
+                "complete coverage cannot contain non-search observation dispositions"
+            )
+        expected_structural = {
+            observation_id
+            for partition in self.scope_partition.observation_partitions
+            for observation_id in partition.structural_observation_ids
+        }
+        expected_ordinary = {
+            observation_id
+            for partition in self.scope_partition.observation_partitions
+            for observation_id in partition.ordinary_observation_ids
+        }
+        if set(self.searched_structural_observation_ids) != expected_structural:
+            raise ContractValidationError(
+                "complete coverage must search every partitioned structural observation"
+            )
+        if set(self.searched_ordinary_observation_ids) != expected_ordinary:
+            raise ContractValidationError(
+                "complete coverage must search every partitioned ordinary observation"
+            )
         for record in self.proof_records:
             if (
                 record.source_inventory_id != self.source_inventory_id
@@ -1676,6 +2178,21 @@ class CoverageLedger:
             ):
                 raise ContractValidationError(
                     "complete coverage proof records must bind the ledger scope and manifest"
+                )
+            partition = self.scope_partition.observation_partition_for(record.inventory_item_id)
+            if partition is None:
+                raise ContractValidationError(
+                    "complete coverage proof record lacks an observation partition"
+                )
+            if set(record.structural_observation_ids) != set(
+                partition.structural_observation_ids
+            ) or set(record.ordinary_observation_ids) != set(partition.ordinary_observation_ids):
+                raise ContractValidationError(
+                    "complete coverage proof records must cover their item observation partition"
+                )
+            if partition.non_search_observation_ids:
+                raise ContractValidationError(
+                    "complete coverage proof cannot omit partitioned observations"
                 )
 
     def _identity_payload(self) -> dict[str, Any]:
@@ -1694,6 +2211,11 @@ class CoverageLedger:
                 self.authorization_binding.to_dict() if self.authorization_binding else None
             ),
             "version_binding": self.version_binding.to_dict() if self.version_binding else None,
+            "scope_partition": (
+                self.scope_partition.to_persistence_dict()
+                if self.scope_partition is not None
+                else None
+            ),
             "fallback_usage": self.fallback_usage.to_dict(),
             "proof_records": [record.to_dict() for record in self.proof_records],
             "complete_authorized_scope": self.complete_authorized_scope,
@@ -1729,6 +2251,7 @@ class CoverageLedger:
                 "redacted_inventory_item_ids",
                 "authorization_binding",
                 "version_binding",
+                "scope_partition",
                 "fallback_usage",
                 "proof_records",
                 "complete_authorized_scope",
@@ -1739,6 +2262,7 @@ class CoverageLedger:
         )
         authorization_value = item["authorization_binding"]
         version_value = item["version_binding"]
+        scope_partition_value = item.get("scope_partition")
         return cls(
             query_id=_required_str(item, "query_id"),
             claim_requirement_id=_required_str(item, "claim_requirement_id"),
@@ -1765,6 +2289,13 @@ class CoverageLedger:
                 None
                 if version_value is None
                 else CoverageVersionBinding.from_dict(_mapping(version_value, "version_binding"))
+            ),
+            scope_partition=(
+                None
+                if scope_partition_value is None
+                else CoverageScopePartition.from_persistence_dict(
+                    _mapping(scope_partition_value, "scope_partition")
+                )
             ),
             fallback_usage=CoverageFallbackUsage.from_dict(
                 _mapping(item["fallback_usage"], "fallback_usage")
@@ -1834,6 +2365,20 @@ class CoverageLedger:
         item_by_id = {item.source_inventory_item_id: item for item in source_inventory.items}
         if set(self.relevant_inventory_item_ids) - set(item_by_id):
             return False
+        if self.scope_partition is not None:
+            if expected_authorization_binding is None:
+                return False
+            if not self.scope_partition.validate_for_claim(
+                source_inventory,
+                claim_requirement,
+                expected_manifest,
+                expected_authorization_binding,
+            ):
+                return False
+            if set(self.relevant_inventory_item_ids) - set(
+                self.scope_partition.authorized_relevant_item_ids
+            ):
+                return False
         return True
 
     def _direct_proof_records_for_claim(
@@ -1888,6 +2433,16 @@ class CoverageLedger:
                 source_observation_ids
             ):
                 continue
+            if self.scope_partition is not None:
+                partition = self.scope_partition.observation_partition_for(
+                    item.source_inventory_item_id
+                )
+                if partition is None:
+                    continue
+                if not structural_ids.issubset(
+                    set(partition.structural_observation_ids)
+                ) or not ordinary_ids.issubset(set(partition.ordinary_observation_ids)):
+                    continue
             if not structural_ids.issubset(searched_structural) or not ordinary_ids.issubset(
                 searched_ordinary
             ):
@@ -1963,6 +2518,24 @@ class CoverageLedger:
             return False
         if self.authorization_binding is None or self.version_binding is None:
             return False
+        if self.scope_partition is None:
+            return False
+        if not self.scope_partition.validate_for_claim(
+            source_inventory,
+            claim_requirement,
+            expected_manifest,
+            self.authorization_binding,
+        ):
+            return False
+        if set(self.relevant_inventory_item_ids) != set(
+            self.scope_partition.authorized_relevant_item_ids
+        ):
+            return False
+        if any(
+            partition.non_search_observation_ids
+            for partition in self.scope_partition.observation_partitions
+        ):
+            return False
         item_by_id = {item.source_inventory_item_id: item for item in source_inventory.items}
         if set(self.searched_structural_observation_ids) & set(
             self.searched_ordinary_observation_ids
@@ -1976,7 +2549,21 @@ class CoverageLedger:
             for item_id in self.relevant_inventory_item_ids
             for observation_id in item_by_id[item_id].source_observation_ids
         }
-        if not searched_observation_ids.issubset(relevant_observation_ids):
+        partition_structural_ids = {
+            observation_id
+            for partition in self.scope_partition.observation_partitions
+            for observation_id in partition.structural_observation_ids
+        }
+        partition_ordinary_ids = {
+            observation_id
+            for partition in self.scope_partition.observation_partitions
+            for observation_id in partition.ordinary_observation_ids
+        }
+        if (
+            set(self.searched_structural_observation_ids) != partition_structural_ids
+            or set(self.searched_ordinary_observation_ids) != partition_ordinary_ids
+            or searched_observation_ids != relevant_observation_ids
+        ):
             return False
         proof_by_item = {record.inventory_item_id: record for record in self.proof_records}
         if set(proof_by_item) != set(self.relevant_inventory_item_ids):
@@ -2008,6 +2595,13 @@ class CoverageLedger:
             if not set(record.ordinary_observation_ids).issubset(
                 set(self.searched_ordinary_observation_ids)
             ):
+                return False
+            partition = self.scope_partition.observation_partition_for(record.inventory_item_id)
+            if partition is None:
+                return False
+            if set(record.structural_observation_ids) != set(
+                partition.structural_observation_ids
+            ) or set(record.ordinary_observation_ids) != set(partition.ordinary_observation_ids):
                 return False
             if (
                 record.proof_kind == "intentionally_excluded"
@@ -2894,13 +3488,17 @@ __all__ = [
     "ClaimRequirement",
     "ClaimRequirementKind",
     "COVERAGE_FALLBACK_STATUS_VALUES",
+    "COVERAGE_NON_SEARCH_REASON_VALUES",
     "COVERAGE_PROOF_KIND_VALUES",
     "CoverageAuthorizationBinding",
     "CoverageFallbackStatus",
     "CoverageFallbackUsage",
     "CoverageLedger",
+    "CoverageNonSearchReason",
+    "CoverageObservationPartition",
     "CoverageProofKind",
     "CoverageProofRecord",
+    "CoverageScopePartition",
     "CoverageVersionBinding",
     "DisplayPagination",
     "EvidenceVersionManifest",

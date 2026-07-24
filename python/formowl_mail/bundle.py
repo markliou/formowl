@@ -680,6 +680,7 @@ class MailEvidenceBundle:
                 item_by_id[item.source_inventory_item_id] = item
 
         requirement_ids = {item.claim_requirement_id for item in self.claim_requirements}
+        requirement_by_id = {item.claim_requirement_id: item for item in self.claim_requirements}
         ledger_by_id = {item.coverage_ledger_id: item for item in self.coverage_ledgers}
         if len(ledger_by_id) != len(self.coverage_ledgers):
             raise ContractValidationError("mail bundle coverage ledger ids must be unique")
@@ -710,6 +711,29 @@ class MailEvidenceBundle:
                 raise ContractValidationError(
                     "coverage ledger references an orphan claim requirement"
                 )
+            requirement = requirement_by_id[ledger.claim_requirement_id]
+            if ledger.scope_partition is not None:
+                if ledger.version_binding is None:
+                    raise ContractValidationError(
+                        "coverage ledger scope partition requires a version binding"
+                    )
+                manifest = next(
+                    (
+                        item
+                        for item in self.version_manifests
+                        if item.version_manifest_id == ledger.version_binding.version_manifest_id
+                    ),
+                    None,
+                )
+                if manifest is None or not ledger.binding_valid_for_claim(
+                    inventory,
+                    requirement,
+                    manifest,
+                    ledger.authorization_binding,
+                ):
+                    raise ContractValidationError(
+                        "coverage ledger scope partition does not match bundle evidence"
+                    )
         for claim in self.answer_claims:
             ledger = ledger_by_id.get(claim.coverage_ledger_id)
             if ledger is None:

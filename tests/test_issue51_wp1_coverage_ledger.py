@@ -11,7 +11,9 @@ from formowl_contract import (
     CoverageAuthorizationBinding,
     CoverageFallbackUsage,
     CoverageLedger,
+    CoverageObservationPartition,
     CoverageProofRecord,
+    CoverageScopePartition,
     CoverageVersionBinding,
     SourceInventory,
     SourceInventoryItem,
@@ -230,15 +232,14 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
             changed = replace(proof, inventory_item_id="item_other")
             _complete_ledger(inventory, requirement, manifest, authorization, changed)
         changed = replace(proof, structural_observation_ids=("observation_other",))
-        self.assertFalse(
+        with self.assertRaises(ContractValidationError):
             _complete_ledger(
                 inventory,
                 requirement,
                 manifest,
                 authorization,
                 changed,
-            ).usable_for_claim(inventory, requirement, manifest, authorization)
-        )
+            )
 
         item = replace(inventory.items[0], processing_state="failed")
         failed_inventory = SourceInventory(
@@ -354,6 +355,21 @@ def _complete_ledger(
     authorization: CoverageAuthorizationBinding,
     proof: CoverageProofRecord,
 ) -> CoverageLedger:
+    scope_partition = CoverageScopePartition.create(
+        source_inventory=inventory,
+        claim_requirement=requirement,
+        authorization_binding=authorization,
+        version_manifest=manifest,
+        authorized_relevant_item_ids=(inventory.items[0].source_inventory_item_id,),
+        authorized_irrelevant_item_ids=(),
+        ineligible_item_ids=(),
+        observation_partitions=(
+            CoverageObservationPartition(
+                inventory_item_id=inventory.items[0].source_inventory_item_id,
+                structural_observation_ids=("observation_wp1",),
+            ),
+        ),
+    )
     return CoverageLedger.create(
         query_id=requirement.query_id,
         claim_requirement_id=requirement.claim_requirement_id,
@@ -362,6 +378,7 @@ def _complete_ledger(
         searched_structural_observation_ids=("observation_wp1",),
         authorization_binding=authorization,
         version_binding=CoverageVersionBinding.from_manifest(manifest),
+        scope_partition=scope_partition,
         proof_records=(proof,),
         complete_authorized_scope=True,
     )

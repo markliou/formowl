@@ -13,7 +13,9 @@ from formowl_contract import (
     ContractValidationError,
     CoverageAuthorizationBinding,
     CoverageLedger,
+    CoverageObservationPartition,
     CoverageProofRecord,
+    CoverageScopePartition,
     CoverageVersionBinding,
     DisplayPagination,
     EXCLUSION_REASON_CODE_VALUES,
@@ -568,6 +570,21 @@ class Issue51WP1ContractTests(unittest.TestCase):
             proof_kind="structural",
             structural_observation_ids=(observation.source_observation_id,),
         )
+        scope_partition = CoverageScopePartition.create(
+            source_inventory=source_inventory,
+            claim_requirement=requirement,
+            authorization_binding=authorization,
+            version_manifest=manifest,
+            authorized_relevant_item_ids=(item.source_inventory_item_id,),
+            authorized_irrelevant_item_ids=(),
+            ineligible_item_ids=(),
+            observation_partitions=(
+                CoverageObservationPartition(
+                    inventory_item_id=item.source_inventory_item_id,
+                    structural_observation_ids=(observation.source_observation_id,),
+                ),
+            ),
+        )
         ledger = CoverageLedger(
             query_id="query_wp1",
             claim_requirement_id=requirement.claim_requirement_id,
@@ -576,6 +593,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             searched_structural_observation_ids=(observation.source_observation_id,),
             authorization_binding=authorization,
             version_binding=CoverageVersionBinding.from_manifest(manifest),
+            scope_partition=scope_partition,
             proof_records=(proof,),
             complete_authorized_scope=True,
             display_pagination=DisplayPagination(
