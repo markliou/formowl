@@ -158,9 +158,13 @@ class PostgreSQLUnitOfWork:
     def __init__(self, connection: PostgreSQLConnection) -> None:
         self.connection = connection
         self.committed = False
+        self._active = False
 
     def __enter__(self) -> "PostgreSQLUnitOfWork":
+        if self._active:
+            raise ContractValidationError("PostgreSQLUnitOfWork cannot be entered twice")
         self.connection.begin()
+        self._active = True
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
@@ -168,10 +172,19 @@ class PostgreSQLUnitOfWork:
             self.connection.commit()
         else:
             self.connection.rollback()
+        self._active = False
         return False
 
     def commit(self) -> None:
+        if not self._active:
+            raise ContractValidationError("PostgreSQLUnitOfWork.commit requires an active scope")
         self.committed = True
+
+    @property
+    def active(self) -> bool:
+        """Whether this unit of work currently owns an open transaction."""
+
+        return self._active
 
 
 class PostgreSQLMigrationRunner:

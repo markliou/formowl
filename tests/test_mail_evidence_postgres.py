@@ -3,14 +3,22 @@ from __future__ import annotations
 import json
 import unittest
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 import _paths  # noqa: F401
 from formowl_contract import (
+    AnswerClaim,
+    ClaimRequirement,
     ContractValidationError,
+    CoverageLedger,
+    CoverageVersionBinding,
     Grant,
     PermissionScope,
+    SourceInventory,
+    SourceInventoryItem,
     SourceRef,
+    VersionManifest,
     sha256_json,
 )
 from formowl_gateway import SemanticGatewaySession, SemanticMcpGateway, SemanticMcpJsonRpcGateway
@@ -29,6 +37,8 @@ from formowl_mail import (
     EmailMessage,
     EmbeddedMessageRelation,
     MailEvidenceBundle,
+    MailImportSession,
+    MailParseRun,
     MailParseWarning,
     PostgreSQLMailEvidenceStore,
     QuotedMessageCandidate,
@@ -303,13 +313,13 @@ class PostgreSQLMailEvidenceStoreTests(unittest.TestCase):
 
         with self.assertRaises(ContractValidationError):
             PostgreSQLMailEvidenceStore(connection).upsert_bundle(payload)
-        self.assertEqual(connection.actions, [])
+        self.assertEqual(connection.actions, ["begin", "rollback"])
 
         with self.assertRaises(ContractValidationError):
             PostgreSQLMailEvidenceStore(connection).get_bundle(
                 mail_import_session_id="../mail_escape",
             )
-        self.assertEqual(connection.actions, [])
+        self.assertEqual(connection.actions, ["begin", "rollback"])
 
     def test_store_backed_handler_validates_public_query_before_store_read(self) -> None:
         bundle = _mail_bundle(_paths.fresh_test_dir("mail-evidence-postgres-preflight"))
@@ -351,20 +361,130 @@ class PostgreSQLMailEvidenceStoreTests(unittest.TestCase):
         connection = _RecordingMailConnection(fail_after_execute=2)
 
         with self.assertRaises(RuntimeError):
-            with PostgreSQLUnitOfWork(connection):
-                PostgreSQLMailEvidenceStore(connection).upsert_bundle(bundle)
+            with PostgreSQLUnitOfWork(connection) as unit:
+                PostgreSQLMailEvidenceStore(connection).upsert_bundle(
+                    bundle,
+                    transaction=unit,
+                )
 
         self.assertEqual(connection.actions, ["begin", "execute", "execute", "rollback"])
         self.assertEqual(connection.rows, {})
 
         successful_connection = _RecordingMailConnection()
         with PostgreSQLUnitOfWork(successful_connection) as unit:
-            PostgreSQLMailEvidenceStore(successful_connection).upsert_bundle(bundle)
+            PostgreSQLMailEvidenceStore(successful_connection).upsert_bundle(
+                bundle,
+                transaction=unit,
+            )
             unit.commit()
 
         self.assertEqual(successful_connection.actions[0], "begin")
         self.assertEqual(successful_connection.actions[-1], "commit")
+        self.assertEqual(successful_connection.actions.count("begin"), 1)
+        self.assertEqual(successful_connection.actions.count("commit"), 1)
         self.assertIn("mail_import_session", successful_connection.rows)
+
+    def test_upsert_bundle_requires_an_active_matching_outer_transaction(self) -> None:
+        bundle = _empty_mail_bundle()
+        connection = _RecordingMailConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+
+        with self.assertRaises(ContractValidationError):
+            store.upsert_bundle(bundle, transaction=PostgreSQLUnitOfWork(connection))
+        self.assertEqual(connection.actions, [])
+
+        other_connection = _RecordingMailConnection()
+        with PostgreSQLUnitOfWork(other_connection) as unit:
+            with self.assertRaises(ContractValidationError):
+                store.upsert_bundle(bundle, transaction=unit)
+
+        self.assertEqual(connection.actions, [])
+        self.assertEqual(other_connection.actions, ["begin", "rollback"])
+
+    def test_direct_upsert_owns_atomic_transaction_at_every_statement_position(self) -> None:
+        bundles = (
+            _empty_mail_bundle(),
+            _populated_wp1_bundle(
+                _mail_bundle(
+                    _paths.fresh_test_dir("mail-evidence-postgres-direct-wp1"),
+                    include_optional_rows=False,
+                )
+            ),
+            _mail_bundle(
+                _paths.fresh_test_dir("mail-evidence-postgres-direct-phase1"),
+            ),
+        )
+
+        for bundle in bundles:
+            with self.subTest(bundle_id=bundle.mail_evidence_bundle_id):
+                baseline_connection = _RecordingMailConnection()
+                baseline_statements = PostgreSQLMailEvidenceStore(
+                    baseline_connection
+                ).upsert_bundle(bundle)
+                self.assertEqual(baseline_connection.actions.count("begin"), 1)
+                self.assertEqual(baseline_connection.actions.count("commit"), 1)
+                self.assertEqual(baseline_connection.actions.count("rollback"), 0)
+                self.assertEqual(
+                    len(baseline_connection.statements),
+                    len(baseline_statements),
+                )
+                self.assertGreater(len(baseline_statements), 0)
+
+                for statement_position in range(1, len(baseline_statements) + 1):
+                    connection = _RecordingMailConnection(fail_after_execute=statement_position)
+                    with self.assertRaises(RuntimeError):
+                        PostgreSQLMailEvidenceStore(connection).upsert_bundle(bundle)
+
+                    self.assertEqual(connection.rows, {})
+                    self.assertEqual(
+                        connection.actions,
+                        ["begin"] + ["execute"] * statement_position + ["rollback"],
+                    )
+                    self.assertNotIn("commit", connection.actions)
+
+    def test_direct_upsert_empty_bundle_has_one_commit_and_idempotent_retry(self) -> None:
+        bundle = _empty_mail_bundle()
+        connection = _RecordingMailConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+
+        first_statements = store.upsert_bundle(bundle)
+        first_rows = deepcopy(connection.rows)
+        second_statements = store.upsert_bundle(bundle)
+
+        self.assertEqual(first_statements, second_statements)
+        self.assertEqual(connection.rows, first_rows)
+        self.assertEqual(connection.actions.count("begin"), 2)
+        self.assertEqual(connection.actions.count("commit"), 2)
+        self.assertEqual(connection.actions.count("rollback"), 0)
+        self.assertEqual(
+            connection.actions,
+            ["begin"]
+            + ["execute"] * len(first_statements)
+            + ["commit"]
+            + ["begin"]
+            + ["execute"] * len(second_statements)
+            + ["commit"],
+        )
+
+    def test_direct_upsert_populated_retry_commits_once_per_attempt(self) -> None:
+        bundle = _populated_wp1_bundle(
+            _mail_bundle(
+                _paths.fresh_test_dir("mail-evidence-postgres-direct-retry"),
+                include_optional_rows=False,
+            )
+        )
+        connection = _RecordingMailConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+
+        first_statements = store.upsert_bundle(bundle)
+        first_rows = deepcopy(connection.rows)
+        second_statements = store.upsert_bundle(bundle)
+
+        self.assertEqual(first_statements, second_statements)
+        self.assertEqual(connection.rows, first_rows)
+        self.assertEqual(connection.actions.count("begin"), 2)
+        self.assertEqual(connection.actions.count("commit"), 2)
+        self.assertEqual(connection.actions.count("rollback"), 0)
 
 
 class _RecordingMailConnection:
@@ -386,17 +506,22 @@ class _RecordingMailConnection:
         self.actions.append("execute")
         self.statements.append(statement)
         self.executed_count += 1
-        if self.fail_after_execute is not None and self.executed_count >= self.fail_after_execute:
-            raise RuntimeError("simulated mail evidence write failure")
         table_name = statement.sql.split("INSERT INTO ", 1)[1].split(" ", 1)[0]
         record_id = _statement_record_id(table_name, statement.parameters)
         if "DO NOTHING" in statement.sql and record_id in self.rows.get(table_name, {}):
+            if (
+                self.fail_after_execute is not None
+                and self.executed_count >= self.fail_after_execute
+            ):
+                raise RuntimeError("simulated mail evidence write failure")
             return
         self.rows.setdefault(table_name, {})[record_id] = {
             **statement.parameters,
             "payload": statement.parameters["payload"],
             "payload_hash": statement.parameters["payload_hash"],
         }
+        if self.fail_after_execute is not None and self.executed_count >= self.fail_after_execute:
+            raise RuntimeError("simulated mail evidence write failure")
 
     def query_one(self, statement: Any) -> dict[str, Any] | None:
         self.actions.append("query_one")
@@ -463,6 +588,13 @@ def _statement_record_id(table_name: str, parameters: dict[str, Any]) -> str:
         "embedded_message_relation": "embedded_message_relation_id",
         "mail_parse_run": "mail_parse_run_id",
         "mail_parse_warning": "mail_parse_warning_id",
+        "source_inventory": "source_inventory_id",
+        "source_inventory_item": "source_inventory_item_id",
+        "structural_observation": "structural_observation_id",
+        "claim_requirement": "claim_requirement_id",
+        "coverage_ledger": "coverage_ledger_id",
+        "answer_claim": "answer_claim_id",
+        "version_manifest": "version_manifest_id",
     }
     return str(parameters[id_fields[table_name]])
 
@@ -497,6 +629,115 @@ def _mail_bundle(
     if not include_optional_rows:
         return bundle
     return _with_optional_phase1_rows(bundle)
+
+
+def _empty_mail_bundle() -> MailEvidenceBundle:
+    session = MailImportSession(
+        mail_import_session_id="mailimport_empty_wp1",
+        workspace_id="workspace_wp1",
+        owner_user_id="owner_wp1",
+        source_asset_id="asset_empty_wp1",
+        archive_sha256="sha256:" + "a" * 64,
+        retention_policy="retain_7_days",
+        raw_archive_retention_decision="retained_by_policy",
+        created_at=NOW,
+        upload_session_id="upload_empty_wp1",
+    )
+    parse_run = MailParseRun(
+        mail_parse_run_id="mailparse_empty_wp1",
+        mail_import_session_id=session.mail_import_session_id,
+        extractor_run_id="run_empty_wp1",
+        parser_name="parser_wp1",
+        parser_version="1",
+        input_hash=session.archive_sha256,
+        config_hash="sha256:" + "b" * 64,
+        status="succeeded",
+        started_at=NOW,
+        completed_at=NOW,
+    )
+    return MailEvidenceBundle(
+        mail_evidence_bundle_id="bundle_empty_wp1",
+        producer_type="fixture_parser",
+        mail_import_session=session,
+        archive_occurrences=[],
+        folder_occurrences=[],
+        messages=[],
+        message_occurrences=[],
+        body_segments=[],
+        attachments=[],
+        attachment_occurrences=[],
+        quoted_message_candidates=[],
+        embedded_message_relations=[],
+        mail_parse_run=parse_run,
+        created_at=NOW,
+    )
+
+
+def _populated_wp1_bundle(bundle: MailEvidenceBundle) -> MailEvidenceBundle:
+    source_asset_id = bundle.mail_import_session.source_asset_id
+    source_fingerprint = "sha256:" + "c" * 64
+    parser_fingerprint = "sha256:" + "d" * 64
+    inventory_item = SourceInventoryItem.create(
+        source_asset_id=source_asset_id,
+        structure_kind="message",
+        content_type="message/rfc822",
+        ordinal=0,
+        processing_state="parsed",
+        raw_retention_state="retained",
+        source_fingerprint=source_fingerprint,
+        parser_fingerprint=parser_fingerprint,
+        permission_scope={"scope_type": "asset", "scope_id": source_asset_id},
+        source_observation_ids=(),
+    )
+    inventory = SourceInventory.create(
+        source_asset_id=source_asset_id,
+        source_fingerprint=source_fingerprint,
+        parser_fingerprint=parser_fingerprint,
+        items=(inventory_item,),
+        created_at=NOW,
+    )
+    requirement = ClaimRequirement.create(
+        query_id="query_direct_wp1",
+        kind="single_value",
+        target="ticket",
+        created_at=NOW,
+    )
+    manifest = VersionManifest.create(
+        source_fingerprint=source_fingerprint,
+        parser_fingerprint=parser_fingerprint,
+        tokenizer_fingerprint=source_fingerprint,
+        index_fingerprint=source_fingerprint,
+        implementation_fingerprint=source_fingerprint,
+        created_at=NOW,
+    )
+    ledger = CoverageLedger(
+        query_id=requirement.query_id,
+        claim_requirement_id=requirement.claim_requirement_id,
+        source_inventory_id=inventory.source_inventory_id,
+        relevant_inventory_item_ids=(inventory.items[0].source_inventory_item_id,),
+        version_binding=CoverageVersionBinding.from_manifest(manifest),
+        complete_authorized_scope=False,
+    )
+    claim = AnswerClaim.create(
+        answer_claim_id="answer_direct_wp1",
+        state="INSUFFICIENT_COVERAGE",
+        reason_codes=("incomplete_scope",),
+        coverage_ledger=ledger,
+        claim_requirement=requirement,
+        source_inventory=inventory,
+        version_manifest=manifest,
+        claim_requirement_id=requirement.claim_requirement_id,
+        coverage_ledger_id=ledger.coverage_ledger_id,
+        evidence_snapshot_ids=(),
+    )
+    return replace(
+        bundle,
+        source_inventory=[inventory],
+        claim_requirements=[requirement],
+        coverage_ledgers=[ledger],
+        answer_claims=[claim],
+        version_manifests=[manifest],
+    )
 
 
 def _run_mail_fixture(temp_dir, archive: dict):

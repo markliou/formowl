@@ -1922,7 +1922,10 @@ class Issue51WP1ContractTests(unittest.TestCase):
         connection = _RowsConnection(fail_after_execute=2)
         with self.assertRaises(RuntimeError):
             with PostgreSQLUnitOfWork(connection) as unit:
-                PostgreSQLMailEvidenceStore(connection).upsert_bundle(bundle)
+                PostgreSQLMailEvidenceStore(connection).upsert_bundle(
+                    bundle,
+                    transaction=unit,
+                )
                 unit.commit()
         self.assertEqual(connection.rows, {})
 

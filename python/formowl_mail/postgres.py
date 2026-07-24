@@ -16,7 +16,7 @@ from formowl_contract import (
     sha256_json,
     to_plain,
 )
-from formowl_graph.storage import SQLStatement
+from formowl_graph.storage.postgres import PostgreSQLUnitOfWork, SQLStatement
 
 from ._guards import safe_public_string
 from .bundle import (
@@ -75,6 +75,12 @@ class PostgreSQLMailEvidenceConnection(Protocol):
 
     def query_all(self, statement: SQLStatement) -> list[dict[str, Any]]: ...
 
+    def begin(self) -> None: ...
+
+    def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
+
 
 class PostgreSQLMailEvidenceStore:
     """Internal PostgreSQL adapter for normalized Phase 1 mail evidence rows."""
@@ -82,7 +88,36 @@ class PostgreSQLMailEvidenceStore:
     def __init__(self, connection: PostgreSQLMailEvidenceConnection) -> None:
         self.connection = connection
 
-    def upsert_bundle(self, bundle: MailEvidenceBundle | dict[str, Any]) -> list[SQLStatement]:
+    def upsert_bundle(
+        self,
+        bundle: MailEvidenceBundle | dict[str, Any],
+        *,
+        transaction: PostgreSQLUnitOfWork | None = None,
+    ) -> list[SQLStatement]:
+        """Persist one bundle atomically.
+
+        When ``transaction`` is omitted, this method owns exactly one
+        transaction and commits only after every statement succeeds.  An
+        active unit of work for this same connection may be supplied when a
+        caller must keep the write and a verification read in one outer
+        transaction; that caller retains commit/rollback ownership.
+        """
+
+        if transaction is None:
+            with PostgreSQLUnitOfWork(self.connection) as unit:
+                statements = self._upsert_bundle_in_transaction(bundle)
+                unit.commit()
+                return statements
+        if transaction.connection is not self.connection or not transaction.active:
+            raise ContractValidationError(
+                "mail evidence upsert requires an active transaction for its connection"
+            )
+        return self._upsert_bundle_in_transaction(bundle)
+
+    def _upsert_bundle_in_transaction(
+        self,
+        bundle: MailEvidenceBundle | dict[str, Any],
+    ) -> list[SQLStatement]:
         validated = _validate_bundle(bundle)
         statements = _statements_for_bundle(validated)
         for statement in statements:
