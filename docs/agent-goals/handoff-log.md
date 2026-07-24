@@ -288,3 +288,10 @@ Lifecycle label: `active`.
 - Methodology authority remains valid-but-blocked. This is human-UAT surface
   engineering evidence, not methodology-quality UAT, a KG-vs-ontology
   comparison, issue #33 closure, broad KG completion, or production readiness.
+
+## 2026-07-24 — Issue #51 execution contract approved
+
+- Gate 0 is clean at `79bc129`; `--check` is valid-but-blocked and `--require-ready` exits 1.
+- Three read-only reviewers agreed on the source-neutral WP1-WP6 contract posted as issue #51 comment `5070970116`.
+- Issue #53 is a hard reviewed lifecycle prerequisite before WP5; issue #52 remains the sole independent raw-PST oracle gate.
+- Next: push the integration baseline, then delegate only the contract's disjoint packages; never claim methodology-quality UAT while authority is blocked.

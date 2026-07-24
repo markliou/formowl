@@ -70,12 +70,32 @@ archival is preserved at
   Access uses a real `CandidateEvidenceAccessBinding` with four immutable
   `frozenset` collections of exact nonblank strings, and cross-context
   comparison authorization must be an actual boolean.
+- Issue #51 Gate 0 is complete on clean integration commit `79bc129`: the
+  authority guard is valid-but-blocked, the exact baseline suites pass, and the
+  three-reviewer execution contract is posted as GitHub comment `5070970116`.
 
 ## Current Unchecked Work
 
-- [ ] Align the real runtime with the active methodology authority before any further methodology-quality UAT or KG-versus-ontology claim.
-  - Owner paths: issue #51 implementation, issue #52 independent acceptance, `docs/methodology-authority.json`, mail/evaluator contracts, real-source evaluation, and tests.
-  - Current state: the plain guard reports valid-but-blocked with an explicit unavailable-profile classification when the pinned tokenizer profile is absent; actual runtime/UAT/evaluation entrypoints remain fail-closed. The canonical unit-test process reports valid-but-blocked under its explicit legacy tokenizer mode. #51 owns the implementation boundary and #52 owns independent raw-PST acceptance.
+- [ ] Implement issue #51's source-neutral raw-inventory, structural-observation,
+  coverage-ledger, bounded-fallback, and four-state answer-claim pipeline.
+  - Owner paths: `formowl_contract`, canonical PST extraction, mail
+    bundle/PostgreSQL persistence, existing retrieval gateways, Task Answering,
+    MCP/JSON-RPC/UAT convergence, generalized fixtures, and durable docs.
+  - Contract authority: GitHub issue #51 comment `5070970116`; implementation
+    branches from clean commit `79bc129` and preserves the valid-but-blocked
+    methodology guard. OAuth migration `005` is reserved; #51 begins at `006+`.
+  - Ordered gates: WP1 contracts/persistence; WP2 independent raw-oracle
+    inventory parity; WP3 indexed retrieval/fallback; WP4 central claim
+    enforcement; reviewed issue #53 lifecycle prerequisite; WP5 one canonical
+    runtime/UAT path; WP6 manifest, parity, restart, revocation, budgets, full
+    container verification, and three read-only reviewers.
+  - The sole UAT PST bridge is
+    `formowl_mail.import_workflow.run_upload_session_mail_import`; no alternate
+    UAT Asset, parser, bundle, index, coverage, claim, or hidden task truth.
+  - Keep unchecked until code, tests, docs, canonical container evidence, and
+    reviewers agree. Completion means only **ready for issue #52 independent
+    evidence**, never methodology-quality UAT or launch readiness while
+    `scripts/methodology_authority_check.py --require-ready` is nonzero.
 
 - [ ] Complete Issue #49: source-neutral tokenizer replay and full-chat UAT
   evidence.

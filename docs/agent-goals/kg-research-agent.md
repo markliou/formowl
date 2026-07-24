@@ -15,46 +15,28 @@ Durable role definition: `../agent-roles.md`.
 
 ## Current Objective
 
-Complete the bounded source-neutral Task Answering methodology slice while
-preserving the separate broad FormOwl KG real-evidence objective across
-sessions.
+Implement GitHub issue #51 as one source-neutral, end-to-end evidence
+completeness repair rather than a sequence of private-query patches.
 
-The active bounded slice separates:
+The governed path is:
 
 ```text
-TaskFrame revision
--> EvidenceRequirement
--> Candidate evidence retrieval
--> permission-filtered source-item field assembly
--> EvidenceCoverage
--> AnswerabilityDecision
--> content-first AnswerProjection
+Raw Asset
+  -> SourceInventory
+  -> StructuralObservation
+  -> persisted normalized evidence and versioned index
+  -> query-scoped CoverageLedger
+  -> bounded fallback
+  -> TaskAnsweringEngine-owned AnswerClaimState
+  -> MCP / JSON-RPC / UAT projection
+  -> durable task lifecycle
 ```
 
-It must generalize across mail, documents, tables, application events, and
-future source shapes. It must not introduce procurement-specific aliases,
-source-specific query methods, UI-defined evidence completeness, canonical
-writes, or external actions.
-
-Repository-side authority tooling is reproducible and synchronized, but broad
-completion requires accepted real or public reproducible evidence rather than
-additional synthetic fixtures or implementation-only proofs.
-
-The methodology authority guard is valid but blocked for both the bare
-unconfigured runtime and the canonical unit-test process. The bare guard
-classifies the unavailable pinned Jieba plus SentencePiece profile explicitly;
-runtime, UAT, and evaluation entrypoints still fail closed when that profile is
-unavailable. The explicit unit-test mode remains
-`ascii_identifier_regex_v1`, and the target still requires frozen-profile
-candidate admission and independent real-source acceptance.
-
-The user explicitly assigned the cross-track temporary UAT issue #44 in an
-isolated worktree. That bounded slice now reaches a pinned Codex app-server
-sidecar through a private Unix socket and a narrow JSONL/WebSocket bridge.
-Codex is the conversation engine above one FormOwl MCP-style evidence tool
-without changing canonical graph, ontology, user-graph, wiki, or
-external-system write authority. The source-neutral Task Answering objective
-and its reviewer gate remain separate.
+The reviewed execution contract is GitHub issue #51 comment `5070970116`.
+Gate 0 is the clean integration branch `issue/51-integration-baseline` at
+`79bc129081597f8733317e587243c7db3e2ff816`. Implementation must use its
+ordered, disjoint work packages and must not use the dirty repository root as
+evidence.
 
 ## Status
 
@@ -62,113 +44,54 @@ and its reviewer gate remain separate.
 
 ## Acceptance Criteria
 
-- TaskFrame follow-ups preserve prior anchors, hard constraints, retrieval
-  semantics, and evidence requirements unless the new utterance revises them.
-- Retrieval reports total and returned logical-source counts plus explicit
-  exhaustive/has-more state; all-matching does not use corpus size as a fake
-  exact count.
-- Evidence assembly can recover content from admissible observations inside a
-  selected logical source item even when another observation matched search.
-- Projection defaults to content and keeps sender, recipient, headers,
-  filenames, and other metadata secondary unless explicitly requested.
-- Answerability distinguishes permission denial, missing target, absent
-  property, partial evidence, conflict, and sufficiency.
-- Mail, PDF/TXT, XLSX/table, and application-event tests use the same contracts.
-- Canonical dev-container verification, relevant docs, and the required
-  reviewer gate pass before the board item is marked complete.
-
-- Canonical authority reports agree on 12 passed gates, zero failed gates, zero
-  remaining gates, and a complete objective audit.
-- Each broad gate is backed by an accepted canonical evidence packet rather than
-  a template, preview, candidate-only packet, or local ignored artifact.
-- Total acceptance, objective audit, preflight, work orders, progress, and the
-  tracked checklist all describe the same passing authority state.
-- Canonical dev-container verification, relevant research checks, full Ruff,
-  `git diff --check`, durable docs, and the required reviewer gate pass.
-- Claims remain bounded: broad acceptance does not imply raw asset access,
-  autonomous business judgment, canonical graph/type writes, or unrestricted
-  production readiness.
+- One shared contract module owns `SourceInventory`, structural observations,
+  claim requirements, `CoverageLedger`, and the four answer-claim states.
+- The canonical PST adapter inventories every raw structure and preserves
+  table topology, blank/populated distinctions, version/quote depth, MIME
+  alternatives, attachments, failures, and explicit exclusions.
+- File and PostgreSQL persistence round-trip deterministically; migration
+  numbering does not collide with OAuth `005_oauth_identity.sql`.
+- Existing indexed candidate intersection searches structured evidence,
+  enforces authorization before vocabulary/candidates/counting, rejects stale
+  fingerprints, and uses only bounded fallback.
+- `TaskAnsweringEngine` alone constructs, validates, enforces, and serializes
+  claims. MCP, JSON-RPC, UAT HTTP, and the conversation orchestrator may not
+  infer a second claim state.
+- `human_uat_upload._parse_uat_uploaded_pst` delegates only to
+  `run_upload_session_mail_import`; UAT does not fabricate a parallel Asset,
+  parser, bundle, index, coverage model, or answer service.
+- Issue #53 lands first as a dedicated reviewed lifecycle commit with the exact
+  API/path/ancestry gate in the contract, then WP5 integrates it.
+- UAT-L1 through UAT-L10, generalized structural/metamorphic cases,
+  file/PostgreSQL/cold-warm-rebuilt parity, restart, refresh, revocation, and
+  numeric budget behavior pass in the canonical dev container.
+- Full unit tests, Ruff check/format, migration replay, diff checks, and three
+  independent read-only reviewers agree.
+- The board stays unchecked until all implementation proof exists. #51 can
+  claim only “ready for #52,” not independent acceptance, methodology
+  readiness, comparative superiority, or launch readiness.
 
 ## Blockers
 
-As of July 24, 2026, the final live human-UAT image is the current
-human-readable + dynamic-tool-racefix + mobile-clearance build. The LAN surface
-is ready with automatic restart. Desktop results use a 1120px,
-content-dominant table; mobile uses labeled stacked cards. Taipei times are
-human-readable, long content wraps, and the independent synthetic browser check
-passed with 196px last-card clearance and no horizontal overflow.
-
-The backend race occurred when turn completion outran an in-flight dynamic
-tool. Requests are now pre-registered, and completion drains accepted tools
-with a bounded timeout. Focused proof passes HTTP 47/47, orchestrator 25/25,
-the JS UI smoke, Ruff/format, and diff checks.
-
-One authorized source-backed independent test before the race fix blocked
-because the request failed; existing non-content event evidence led to the
-repair. Both private-evidence sidecar authorizations are exhausted, so no
-post-fix source-backed automated retest was performed. The next evidence action
-is the user's manual live webpage query. Methodology authority remains
-valid-but-blocked: this is human-UAT surface engineering evidence, not
-methodology-quality UAT, a KG-vs-ontology comparison, issue #33 closure, or
-production readiness. The broad KG real-evidence objective remains blocked and
-incomplete.
-
-The bounded Task Answering slice passed 895 canonical dev-container tests,
-full Ruff, 345-file format check, and `git diff --check`. The required
-3-reviewer gate remains before completion.
-
-Issue #44 passed 951 canonical dev-container tests, full Ruff, 275-file format
-check, the Node 20 UI smoke, a dedicated non-root UAT image build with pinned
-`codex-cli 0.144.6`, real direct and Unix-socket app-server attestation, a
-non-root three-container init/serve/client smoke, and `git diff --check`.
-Authentication is provisioned in a one-shot container. The current deployment
-is explicitly authorized to copy the server's existing Codex ChatGPT auth
-cache into isolated sidecar state; the serving sidecar does not mount the
-developer's Codex home, authentication input, repository, corpus, evidence
-cache, or UAT state.
-Full disabled-feature attestation and failed-turn thread rollback closed the
-final reviewer blockers; Plato, Volta, and Mencius returned 3/3
-`RELEASE_DECISION: AGREE`. The authenticated deployed `8088` live gate also
-passed: a greeting used no FormOwl tool, while the source-backed 文顥/pull-in
-request invoked the single evidence tool exactly once and returned governed
-evidence. The test thread was deleted after verification.
-
-Four real-evidence gates still lack accepted canonical evidence:
-
-- `fair_external_baseline_comparison`
-- `annotation_adjudication_protocol`
-- `multimodal_semantic_validation`
-- `production_adapter_paths`
-
-The completed Candidate Assertion, Domain Pack, Issue #16
-temporal-evidential POC, and 93/100 source-neutral Candidate evidence retrieval
-iteration are bounded candidate-layer implementation slices. They add no
-canonical writes and do not satisfy or weaken these four broad evidence gates.
-
-Default Candidate Evidence Retrieval remains the mandatory base for any future
-response packet or evaluation harness: stable logical source item counting,
-access/time/context filtering before planning, no lexical transitive closure,
-and capped additive ontology reranking. Regex-only, parser-chunk,
-component-union, and ontology hard-pruning behavior is ablation-only.
-The index-owned `CandidateEvidenceTextPolicyRuntime` binds the actual query
-tokenizer to the structured Unicode-NFKC/protected-ASCII/Jieba/corpus-bound
-SentencePiece/frozen-profile policy and exact SHA-256 hashes. The binding also
-pins the runtime id and tokenizer implementation hash; runtime code mismatch
-fails closed. Default callers provide query text only and cannot supply raw
-tokens or a free-form hash. Access and explicit context/time admissibility
-precede tokenization; experiments use `retrieve_ablation`.
-Raw query text may identify control intent, evidence count, and chronology
-syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
-terms must come from runtime-produced tokens or a named `retrieve_ablation`
-extension; regex-parsed raw terms must never be added back. Access uses a real
-`CandidateEvidenceAccessBinding` whose four eligibility collections are
-`frozenset` values of exact nonblank strings. Cross-context comparison
-authorization must be an actual boolean; string values fail closed.
+- `scripts/methodology_authority_check.py --check` is valid but blocked.
+  Authority fingerprint is
+  `sha256:c8e3fc5ec13d690f33d27797942a3b9b090319d4be8f269c77bccd646d787177`;
+  Gate-0 execution fingerprint is
+  `sha256:4a19889a41e2c00757ec888c148aa02bfa9e534c6334176c1f73d27a8de51ddb`.
+- `--require-ready` exits nonzero. No methodology-quality UAT,
+  KG-versus-ontology claim, methodology completion, or launch-readiness claim
+  is permitted.
+- Issue #53 is open and its dedicated prerequisite commit does not yet exist.
+  WP5 cannot start until the exact seam is implemented, reviewed, and recorded.
+- Issue #52 remains the sole independent raw-PST oracle acceptance authority.
+  #51 implementation and its agents cannot self-certify it.
+- The broad KG real-evidence objective remains separately blocked; #51 does not
+  close or weaken its remaining evidence gates.
 
 ## Next Action
 
-The user should run the next manual query on the live webpage. Keep the Task
-Answering reviewer gate and four broad real-evidence gates independent, retain
-the valid-but-blocked methodology authority, and make no methodology-quality,
-comparative, issue #33 completion, or production-readiness claim from this
-human-UAT repair.
+Commit and push the clean Gate-0/documentation baseline, then delegate the
+contract's disjoint implementation packages only to the three assigned
+GPT-5.6-luna/high agents. Freeze and review each upstream interface before its
+consumer starts; implement #53 before WP5; keep all acceptance and methodology
+claims fail-closed.
