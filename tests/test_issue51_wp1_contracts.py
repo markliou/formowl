@@ -202,6 +202,105 @@ class Issue51WP1ContractTests(unittest.TestCase):
             ledger.usable_for_claim(source_inventory, requirement, manifest, authorization)
         )
 
+    def test_display_pagination_is_presentation_only_for_ledger_and_claim_identity(self) -> None:
+        bundle, source_inventory, requirement, ledger = _inventory_bundle()
+        manifest = bundle.version_manifests[0]
+        pagination_variants = (
+            DisplayPagination(page_size=10, page_number=1, displayed_count=0, has_more=False),
+            DisplayPagination(page_size=1, page_number=2, displayed_count=0, has_more=False),
+            DisplayPagination(page_size=1, page_number=1, displayed_count=1, has_more=False),
+            DisplayPagination(page_size=1, page_number=1, displayed_count=0, has_more=True),
+        )
+        baseline_claim = AnswerClaim.create(
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            evidence_snapshot_ids=(),
+        )
+
+        for pagination in pagination_variants:
+            with self.subTest(pagination=pagination):
+                variant = replace(ledger, display_pagination=pagination)
+                claim = AnswerClaim.create(
+                    state="INSUFFICIENT_COVERAGE",
+                    reason_codes=("incomplete_scope",),
+                    coverage_ledger=variant,
+                    claim_requirement=requirement,
+                    source_inventory=source_inventory,
+                    version_manifest=manifest,
+                    evidence_snapshot_ids=(),
+                )
+                self.assertEqual(variant.coverage_ledger_id, ledger.coverage_ledger_id)
+                self.assertEqual(variant.claim_scope_complete, ledger.claim_scope_complete)
+                self.assertEqual(claim.answer_claim_id, baseline_claim.answer_claim_id)
+                self.assertEqual(claim.to_dict(), baseline_claim.to_dict())
+
+                payload = replace(
+                    bundle,
+                    coverage_ledgers=[variant],
+                    answer_claims=[claim],
+                ).to_dict()
+                restored = MailEvidenceBundle.from_dict(payload)
+                self.assertEqual(restored.coverage_ledgers[0].display_pagination, pagination)
+                self.assertEqual(
+                    restored.coverage_ledgers[0].coverage_ledger_id,
+                    ledger.coverage_ledger_id,
+                )
+                self.assertEqual(
+                    restored.answer_claims[0].answer_claim_id,
+                    baseline_claim.answer_claim_id,
+                )
+                self.assertEqual(restored.answer_claims[0].to_dict(), baseline_claim.to_dict())
+
+                connection = _RowsConnection()
+                store = PostgreSQLMailEvidenceStore(connection)
+                store.upsert_bundle(restored)
+                postgres_restored = store.get_bundle(
+                    mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+                )
+                assert postgres_restored is not None
+                self.assertEqual(
+                    postgres_restored.coverage_ledgers[0].display_pagination,
+                    pagination,
+                )
+                self.assertEqual(
+                    postgres_restored.coverage_ledgers[0].coverage_ledger_id,
+                    ledger.coverage_ledger_id,
+                )
+                self.assertEqual(
+                    postgres_restored.answer_claims[0].answer_claim_id,
+                    baseline_claim.answer_claim_id,
+                )
+                self.assertEqual(
+                    postgres_restored.answer_claims[0].to_dict(),
+                    baseline_claim.to_dict(),
+                )
+
+        semantic_variant = replace(
+            ledger,
+            searched_ordinary_observation_ids=("ordinary_observation_wp1",),
+            coverage_ledger_id="",
+        )
+        self.assertNotEqual(semantic_variant.coverage_ledger_id, ledger.coverage_ledger_id)
+        semantic_claim = AnswerClaim.create(
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=semantic_variant,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            evidence_snapshot_ids=(),
+        )
+        self.assertNotEqual(semantic_claim.answer_claim_id, baseline_claim.answer_claim_id)
+
+        invalid_payload = replace(ledger, display_pagination=pagination_variants[-1]).to_dict()
+        invalid_payload["coverage_ledger_id"] = "coverage_tampered"
+        with self.assertRaises(ContractValidationError):
+            CoverageLedger.from_dict(invalid_payload)
+
     def test_validation_is_strict_and_public_leaks_fail_closed(self) -> None:
         with self.assertRaises(ContractValidationError):
             SourceInventoryItem.create(
@@ -506,6 +605,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             version_binding=CoverageVersionBinding.from_manifest(
                 replace(manifest, index_fingerprint=FP2)
             ),
+            coverage_ledger_id="",
         )
         with self.assertRaises(ContractValidationError):
             AnswerClaim.create(
@@ -559,7 +659,11 @@ class Issue51WP1ContractTests(unittest.TestCase):
             permission_revision="permission_wp1",
             grant_revision="grant_wp1",
         )
-        authorized_ledger = replace(ledger, authorization_binding=authorization)
+        authorized_ledger = replace(
+            ledger,
+            authorization_binding=authorization,
+            coverage_ledger_id="",
+        )
         wrong_authorization = replace(
             authorization,
             grant_revision="grant_other",
@@ -712,6 +816,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             authorization_binding=authorization,
             version_binding=CoverageVersionBinding.from_manifest(manifest),
             proof_records=(proof,),
+            coverage_ledger_id="",
         )
         claim = AnswerClaim.create(
             answer_claim_id="answer_claim_wp1",

@@ -1311,18 +1311,19 @@ class CoverageLedger:
         _tuple_of(self.proof_records, CoverageProofRecord, "coverage_ledger.proof_records")
         if not isinstance(self.display_pagination, DisplayPagination):
             raise ContractValidationError("coverage ledger display_pagination is invalid")
+        expected_coverage_ledger_id = stable_resource_contract_id(
+            "coverage",
+            "CoverageLedger",
+            self._identity_payload(),
+        )
         if self.coverage_ledger_id:
             _id(self.coverage_ledger_id, "coverage_ledger_id")
+            if self.coverage_ledger_id != expected_coverage_ledger_id:
+                raise ContractValidationError(
+                    "coverage ledger id does not match semantic coverage identity"
+                )
         else:
-            object.__setattr__(
-                self,
-                "coverage_ledger_id",
-                stable_resource_contract_id(
-                    "coverage",
-                    "CoverageLedger",
-                    self._identity_payload(),
-                ),
-            )
+            object.__setattr__(self, "coverage_ledger_id", expected_coverage_ledger_id)
         if self.complete_authorized_scope:
             self._assert_complete_proof_shape()
 
@@ -1386,12 +1387,12 @@ class CoverageLedger:
             "fallback_usage": self.fallback_usage.to_dict(),
             "proof_records": [record.to_dict() for record in self.proof_records],
             "complete_authorized_scope": self.complete_authorized_scope,
-            "display_pagination": self.display_pagination.to_dict(),
         }
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
             **self._identity_payload(),
+            "display_pagination": self.display_pagination.to_dict(),
             "coverage_ledger_id": self.coverage_ledger_id,
         }
         _assert_public_contract(payload, "coverage_ledger")
