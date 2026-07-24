@@ -617,10 +617,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
             ledger.to_dict(),
             CoverageLedger.from_dict(ledger.to_dict()).to_dict(),
         )
-        self.assertEqual(
-            claim.to_dict(),
-            AnswerClaim.from_dict(claim.to_dict()).to_dict(),
-        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.from_dict(claim.to_dict()).to_dict()
         self.assertIsInstance(ledger.display_pagination, DisplayPagination)
         self.assertTrue(ledger.claim_scope_complete)
         self.assertTrue(
@@ -851,8 +849,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
         manifest = bundle.version_manifests[0]
         claim = AnswerClaim.create(
             answer_claim_id="answer_claim_wp1",
-            state="FOUND",
-            reason_codes=("direct_evidence",),
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
             coverage_ledger=ledger,
             claim_requirement=requirement,
             source_inventory=source_inventory,
@@ -884,6 +882,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
         self.assertNotIn("version_manifest_id", public)
         self.assertNotIn("implementation_fingerprint", public)
         self.assertEqual(AnswerClaim.from_dict(public).to_dict(), public)
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.from_dict(public).to_persistence_dict()
 
         private = claim.to_persistence_dict()
         self.assertIn("answer_claim_id", private)
@@ -922,8 +922,6 @@ class Issue51WP1ContractTests(unittest.TestCase):
                         source_inventory=source_inventory,
                         version_manifest=manifest,
                     )
-        with self.assertRaises(ContractValidationError):
-            AnswerClaim.from_dict(public).to_persistence_dict()
         for extra_key in ("answer_claim_id", "answer_claim_state", "state_2"):
             invalid = dict(public)
             invalid[extra_key] = "CONFLICT"
@@ -959,10 +957,9 @@ class Issue51WP1ContractTests(unittest.TestCase):
             "FOUND",
             "CONFLICT",
             "NOT_FOUND_WITHIN_COMPLETE_SCOPE",
-            "INSUFFICIENT_COVERAGE",
         ):
             with self.subTest(state=state):
-                self.assertEqual(
+                with self.assertRaises(ContractValidationError):
                     AnswerClaim.create(
                         state=state,
                         reason_codes=("wp1_binding_valid",),
@@ -971,9 +968,245 @@ class Issue51WP1ContractTests(unittest.TestCase):
                         source_inventory=source_inventory,
                         version_manifest=manifest,
                         evidence_snapshot_ids=(),
-                    ).state,
-                    state,
+                    )
+        self.assertEqual(claim.state, "INSUFFICIENT_COVERAGE")
+
+        invalid_private = dict(private)
+        invalid_private["state"] = "FOUND"
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.from_persistence_dict(
+                invalid_private,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+            )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim(
+                state="FOUND",
+                reason_codes=("wp1_binding_valid",),
+                claim_requirement_id=requirement.claim_requirement_id,
+                coverage_ledger_id=ledger.coverage_ledger_id,
+                evidence_snapshot_ids=(),
+                source_fingerprint=manifest.source_fingerprint,
+                parser_fingerprint=manifest.parser_fingerprint,
+                tokenizer_fingerprint=manifest.tokenizer_fingerprint,
+                index_fingerprint=manifest.index_fingerprint,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+            )
+
+    def test_answer_claim_state_matrix_and_typed_exception_paths(self) -> None:
+        state_kinds = (
+            "single_value",
+            "latest_value",
+            "current_value",
+            "all_matching",
+            "aggregation",
+            "existential_witness",
+        )
+        for kind in state_kinds:
+            with self.subTest(kind=kind):
+                _, source_inventory, _, ledger = _inventory_bundle()
+                requirement = ClaimRequirement.create(
+                    query_id=f"query_matrix_{kind}",
+                    kind=kind,
+                    target="ticket",
+                    parameters=(
+                        {"support_only_completeness": False}
+                        if kind == "existential_witness"
+                        else {}
+                    ),
+                    created_at="2026-07-24T00:00:00+00:00",
                 )
+                ledger = replace(
+                    ledger,
+                    query_id=requirement.query_id,
+                    claim_requirement_id=requirement.claim_requirement_id,
+                    coverage_ledger_id="",
+                )
+                manifest = _inventory_bundle()[0].version_manifests[0]
+                with self.assertRaises(ContractValidationError):
+                    AnswerClaim.create(
+                        state="FOUND",
+                        reason_codes=("matrix",),
+                        coverage_ledger=ledger,
+                        claim_requirement=requirement,
+                        source_inventory=source_inventory,
+                        version_manifest=manifest,
+                        evidence_snapshot_ids=(),
+                    )
+                with self.assertRaises(ContractValidationError):
+                    AnswerClaim.create(
+                        state="NOT_FOUND_WITHIN_COMPLETE_SCOPE",
+                        reason_codes=("matrix",),
+                        coverage_ledger=ledger,
+                        claim_requirement=requirement,
+                        source_inventory=source_inventory,
+                        version_manifest=manifest,
+                        evidence_snapshot_ids=(),
+                    )
+                with self.assertRaises(ContractValidationError):
+                    AnswerClaim.create(
+                        state="CONFLICT",
+                        reason_codes=("matrix",),
+                        coverage_ledger=ledger,
+                        claim_requirement=requirement,
+                        source_inventory=source_inventory,
+                        version_manifest=manifest,
+                        evidence_snapshot_ids=(),
+                    )
+                self.assertEqual(
+                    AnswerClaim.create(
+                        state="INSUFFICIENT_COVERAGE",
+                        reason_codes=("matrix",),
+                        coverage_ledger=ledger,
+                        claim_requirement=requirement,
+                        source_inventory=source_inventory,
+                        version_manifest=manifest,
+                        evidence_snapshot_ids=(),
+                    ).state,
+                    "INSUFFICIENT_COVERAGE",
+                )
+
+    def test_existential_support_only_requires_boolean_and_direct_witness(self) -> None:
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            ledger,
+        ) = _direct_claim_fixture(
+            kind="existential_witness",
+            parameters={"support_only_completeness": True},
+        )
+        claim = AnswerClaim.create(
+            state="FOUND",
+            reason_codes=("direct_witness",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            authorization_binding=authorization,
+            evidence_snapshot_ids=("snapshot_witness",),
+        )
+        self.assertEqual(claim.state, "FOUND")
+
+        for parameters in ({}, {"support_only_completeness": False}):
+            with self.subTest(parameters=parameters):
+                (
+                    source_inventory,
+                    requirement,
+                    manifest,
+                    authorization,
+                    ledger,
+                ) = _direct_claim_fixture(
+                    kind="existential_witness",
+                    parameters=parameters,
+                )
+                with self.assertRaises(ContractValidationError):
+                    AnswerClaim.create(
+                        state="FOUND",
+                        reason_codes=("direct_witness",),
+                        coverage_ledger=ledger,
+                        claim_requirement=requirement,
+                        source_inventory=source_inventory,
+                        version_manifest=manifest,
+                        authorization_binding=authorization,
+                        evidence_snapshot_ids=("snapshot_witness",),
+                    )
+
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            ledger,
+        ) = _direct_claim_fixture(
+            kind="existential_witness",
+            parameters={"support_only_completeness": "true"},
+        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                state="FOUND",
+                reason_codes=("direct_witness",),
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                authorization_binding=authorization,
+                evidence_snapshot_ids=("snapshot_witness",),
+            )
+
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            ledger,
+        ) = _direct_claim_fixture(
+            kind="existential_witness",
+            parameters={"support_only_completeness": True},
+            include_direct_proof=False,
+        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                state="FOUND",
+                reason_codes=("direct_witness",),
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                authorization_binding=authorization,
+                evidence_snapshot_ids=("snapshot_witness",),
+            )
+
+    def test_partial_single_value_conflict_requires_typed_populated_values(self) -> None:
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            ledger,
+        ) = _direct_claim_fixture(
+            kind="single_value",
+            include_conflicting_values=True,
+        )
+        claim = AnswerClaim.create(
+            state="CONFLICT",
+            reason_codes=("conflicting_evidence",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            authorization_binding=authorization,
+            evidence_snapshot_ids=("snapshot_one", "snapshot_two"),
+        )
+        self.assertEqual(claim.state, "CONFLICT")
+
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            ledger,
+        ) = _direct_claim_fixture(
+            kind="single_value",
+            include_direct_proof=True,
+        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                state="CONFLICT",
+                reason_codes=("conflicting_evidence",),
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                authorization_binding=authorization,
+                evidence_snapshot_ids=("snapshot_one", "snapshot_two"),
+            )
 
     def test_answer_claim_rejects_invalid_typed_bindings(self) -> None:
         bundle, source_inventory, requirement, ledger = _inventory_bundle()
@@ -2090,6 +2323,97 @@ def _inventory_bundle() -> (
         version_manifests=[manifest],
     )
     return populated, inventory, requirement, ledger
+
+
+def _direct_claim_fixture(
+    *,
+    kind: str,
+    parameters: dict[str, object] | None = None,
+    include_direct_proof: bool = True,
+    include_conflicting_values: bool = False,
+) -> tuple[
+    SourceInventory,
+    ClaimRequirement,
+    VersionManifest,
+    CoverageAuthorizationBinding,
+    CoverageLedger,
+]:
+    item = SourceInventoryItem.create(
+        source_asset_id="asset_direct_wp1",
+        structure_kind="message",
+        content_type="message/rfc822",
+        ordinal=0,
+        processing_state="parsed",
+        raw_retention_state="retained",
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        permission_scope={"scope_type": "asset", "scope_id": "asset_direct_wp1"},
+        source_observation_ids=("observation_direct_wp1",),
+    )
+    inventory = SourceInventory.create(
+        source_asset_id="asset_direct_wp1",
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        items=(item,),
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    requirement = ClaimRequirement.create(
+        query_id=f"query_direct_{kind}",
+        kind=kind,
+        target="ticket",
+        parameters=parameters or {},
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    manifest = VersionManifest.create(
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        tokenizer_fingerprint=FP,
+        index_fingerprint=FP,
+        implementation_fingerprint=FP,
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    authorization = CoverageAuthorizationBinding(
+        actor_context_id="actor_direct_wp1",
+        permission_revision="permission_direct_wp1",
+        grant_revision="grant_direct_wp1",
+    )
+    proof_records: list[CoverageProofRecord] = []
+    if include_direct_proof:
+        proof_records.append(
+            CoverageProofRecord.create(
+                source_inventory_id=inventory.source_inventory_id,
+                claim_requirement_id=requirement.claim_requirement_id,
+                version_manifest_id=manifest.version_manifest_id,
+                inventory_item_id=inventory.items[0].source_inventory_item_id,
+                proof_kind="structural",
+                structural_observation_ids=("observation_direct_wp1",),
+                populated_value_fingerprint=(FP if include_conflicting_values else None),
+            )
+        )
+    if include_conflicting_values:
+        proof_records.append(
+            CoverageProofRecord.create(
+                source_inventory_id=inventory.source_inventory_id,
+                claim_requirement_id=requirement.claim_requirement_id,
+                version_manifest_id=manifest.version_manifest_id,
+                inventory_item_id=inventory.items[0].source_inventory_item_id,
+                proof_kind="structural",
+                structural_observation_ids=("observation_direct_wp1",),
+                populated_value_fingerprint=FP2,
+            )
+        )
+    ledger = CoverageLedger.create(
+        query_id=requirement.query_id,
+        claim_requirement_id=requirement.claim_requirement_id,
+        source_inventory_id=inventory.source_inventory_id,
+        relevant_inventory_item_ids=(inventory.items[0].source_inventory_item_id,),
+        searched_structural_observation_ids=("observation_direct_wp1",),
+        authorization_binding=authorization,
+        version_binding=CoverageVersionBinding.from_manifest(manifest),
+        proof_records=proof_records,
+        complete_authorized_scope=False,
+    )
+    return inventory, requirement, manifest, authorization, ledger
 
 
 def _minimal_bundle() -> MailEvidenceBundle:

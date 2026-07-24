@@ -1383,6 +1383,7 @@ class CoverageProofRecord:
     proof_kind: str
     structural_observation_ids: tuple[str, ...] = ()
     ordinary_observation_ids: tuple[str, ...] = ()
+    populated_value_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -1404,6 +1405,10 @@ class CoverageProofRecord:
             "coverage_proof.ordinary_observation_ids",
             ids=True,
         )
+        _optional_fingerprint(
+            self.populated_value_fingerprint,
+            "coverage_proof.populated_value_fingerprint",
+        )
         if self.proof_kind == "structural" and not self.structural_observation_ids:
             raise ContractValidationError("structural proof requires structural observations")
         if self.proof_kind == "structural" and self.ordinary_observation_ids:
@@ -1422,6 +1427,16 @@ class CoverageProofRecord:
             raise ContractValidationError(
                 f"{self.proof_kind} proof must not carry observation identifiers"
             )
+        if self.proof_kind in {"intentionally_excluded", "fallback"} and (
+            self.populated_value_fingerprint is not None
+        ):
+            raise ContractValidationError(
+                f"{self.proof_kind} proof must not carry a populated value"
+            )
+        if self.populated_value_fingerprint is not None and not (
+            self.structural_observation_ids or self.ordinary_observation_ids
+        ):
+            raise ContractValidationError("populated value proof requires direct observations")
         object.__setattr__(
             self,
             "structural_observation_ids",
@@ -1467,8 +1482,19 @@ class CoverageProofRecord:
                 "proof_kind",
                 "structural_observation_ids",
                 "ordinary_observation_ids",
+                "populated_value_fingerprint",
             },
             "coverage_proof",
+            required={
+                "proof_id",
+                "source_inventory_id",
+                "claim_requirement_id",
+                "version_manifest_id",
+                "inventory_item_id",
+                "proof_kind",
+                "structural_observation_ids",
+                "ordinary_observation_ids",
+            },
         )
         return cls(
             proof_id=_required_str(item, "proof_id"),
@@ -1479,6 +1505,7 @@ class CoverageProofRecord:
             proof_kind=_required_str(item, "proof_kind"),
             structural_observation_ids=_tuple_strings(item, "structural_observation_ids"),
             ordinary_observation_ids=_tuple_strings(item, "ordinary_observation_ids"),
+            populated_value_fingerprint=_optional_str(item, "populated_value_fingerprint"),
         )
 
 
@@ -1797,6 +1824,104 @@ class CoverageLedger:
             return False
         return True
 
+    def _direct_proof_records_for_claim(
+        self,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        expected_manifest: VersionManifest,
+        expected_authorization_binding: CoverageAuthorizationBinding | None = None,
+    ) -> tuple[CoverageProofRecord, ...]:
+        """Return direct, typed proof records valid for this claim binding."""
+
+        if not self.binding_valid_for_claim(
+            source_inventory,
+            claim_requirement,
+            expected_manifest,
+            expected_authorization_binding,
+        ):
+            return ()
+        if self.authorization_binding is None:
+            return ()
+        item_by_id = {item.source_inventory_item_id: item for item in source_inventory.items}
+        unresolved = (
+            set(self.omitted_inventory_item_ids)
+            | set(self.failed_inventory_item_ids)
+            | set(self.unsupported_inventory_item_ids)
+            | set(self.redacted_inventory_item_ids)
+        )
+        searched_structural = set(self.searched_structural_observation_ids)
+        searched_ordinary = set(self.searched_ordinary_observation_ids)
+        direct_records: list[CoverageProofRecord] = []
+        for record in self.proof_records:
+            if record.proof_kind not in {"structural", "ordinary", "combined"}:
+                continue
+            item = item_by_id.get(record.inventory_item_id)
+            if (
+                item is None
+                or item.source_inventory_item_id not in self.relevant_inventory_item_ids
+            ):
+                continue
+            if item.source_inventory_item_id in unresolved or item.processing_state != "parsed":
+                continue
+            if (
+                record.source_inventory_id != self.source_inventory_id
+                or record.claim_requirement_id != self.claim_requirement_id
+                or record.version_manifest_id != expected_manifest.version_manifest_id
+            ):
+                continue
+            source_observation_ids = set(item.source_observation_ids)
+            structural_ids = set(record.structural_observation_ids)
+            ordinary_ids = set(record.ordinary_observation_ids)
+            if not structural_ids.issubset(source_observation_ids) or not ordinary_ids.issubset(
+                source_observation_ids
+            ):
+                continue
+            if not structural_ids.issubset(searched_structural) or not ordinary_ids.issubset(
+                searched_ordinary
+            ):
+                continue
+            if not structural_ids and not ordinary_ids:
+                continue
+            direct_records.append(record)
+        return tuple(direct_records)
+
+    def has_direct_authorized_witness(
+        self,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        expected_manifest: VersionManifest,
+        expected_authorization_binding: CoverageAuthorizationBinding | None = None,
+    ) -> bool:
+        return bool(
+            self._direct_proof_records_for_claim(
+                source_inventory,
+                claim_requirement,
+                expected_manifest,
+                expected_authorization_binding,
+            )
+        )
+
+    def has_direct_incompatible_values(
+        self,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        expected_manifest: VersionManifest,
+        expected_authorization_binding: CoverageAuthorizationBinding | None = None,
+    ) -> bool:
+        """Require two distinct typed populated-value proofs for partial conflict."""
+
+        value_fingerprints = {
+            record.populated_value_fingerprint
+            for record in self._direct_proof_records_for_claim(
+                source_inventory,
+                claim_requirement,
+                expected_manifest,
+                expected_authorization_binding,
+            )
+            if record.populated_value_fingerprint is not None
+        }
+        return len(value_fingerprints) >= 2
+
     def usable_for_claim(
         self,
         source_inventory: SourceInventory,
@@ -1968,6 +2093,15 @@ class AnswerClaim:
             self.implementation_fingerprint,
             "implementation_fingerprint",
         )
+        if not self._wire_only:
+            _validate_answer_claim_state(
+                state=self.state,
+                claim_requirement=self.claim_requirement,
+                coverage_ledger=self.coverage_ledger,
+                source_inventory=self.source_inventory,
+                version_manifest=self.version_manifest,
+                authorization_binding=self.authorization_binding,
+            )
         if self.answer_claim_id:
             _id(self.answer_claim_id, "answer_claim_id")
         else:
@@ -2028,6 +2162,10 @@ class AnswerClaim:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        if self._wire_only and self.state != "INSUFFICIENT_COVERAGE":
+            raise ContractValidationError(
+                "wire-only answer claims cannot emit authoritative success states"
+            )
         payload = {
             "state": self.state,
             "reason_codes": list(self.reason_codes),
@@ -2193,6 +2331,80 @@ def _validated_answer_claim_binding(
         if supplied_value is not None and supplied_value != expected_value:
             raise ContractValidationError("answer claim binding fields do not match typed evidence")
     return derived
+
+
+def _validate_answer_claim_state(
+    *,
+    state: str,
+    claim_requirement: ClaimRequirement | None,
+    coverage_ledger: CoverageLedger | None,
+    source_inventory: SourceInventory | None,
+    version_manifest: VersionManifest | None,
+    authorization_binding: CoverageAuthorizationBinding | None,
+) -> None:
+    if not isinstance(claim_requirement, ClaimRequirement):
+        raise ContractValidationError("answer claim state requires a typed ClaimRequirement")
+    if not isinstance(coverage_ledger, CoverageLedger):
+        raise ContractValidationError("answer claim state requires a typed CoverageLedger")
+    if not isinstance(source_inventory, SourceInventory):
+        raise ContractValidationError("answer claim state requires a typed SourceInventory")
+    if not isinstance(version_manifest, VersionManifest):
+        raise ContractValidationError("answer claim state requires a typed VersionManifest")
+    _choice(state, ANSWER_CLAIM_STATE_VALUES, "answer_claim.state")
+    support_only = _support_only_completeness(claim_requirement)
+    complete = coverage_ledger.usable_for_claim(
+        source_inventory,
+        claim_requirement,
+        version_manifest,
+        authorization_binding,
+    )
+    if state == "INSUFFICIENT_COVERAGE":
+        return
+    if state == "FOUND":
+        if complete:
+            return
+        if (
+            claim_requirement.kind == "existential_witness"
+            and support_only
+            and coverage_ledger.has_direct_authorized_witness(
+                source_inventory,
+                claim_requirement,
+                version_manifest,
+                authorization_binding,
+            )
+        ):
+            return
+        raise ContractValidationError(
+            "answer claim FOUND requires complete claim proof or an authorized existential witness"
+        )
+    if state == "CONFLICT":
+        if complete:
+            return
+        if claim_requirement.kind in {"single_value", "latest_value", "current_value"} and (
+            coverage_ledger.has_direct_incompatible_values(
+                source_inventory,
+                claim_requirement,
+                version_manifest,
+                authorization_binding,
+            )
+        ):
+            return
+        raise ContractValidationError(
+            "answer claim CONFLICT requires complete proof or typed direct incompatible values"
+        )
+    if not complete:
+        raise ContractValidationError(
+            "answer claim NOT_FOUND_WITHIN_COMPLETE_SCOPE requires complete claim proof"
+        )
+
+
+def _support_only_completeness(requirement: ClaimRequirement) -> bool:
+    if "support_only_completeness" not in requirement.parameters:
+        return False
+    return _strict_bool(
+        requirement.parameters["support_only_completeness"],
+        "claim_requirement.parameters.support_only_completeness",
+    )
 
 
 def fingerprint_manifest(
