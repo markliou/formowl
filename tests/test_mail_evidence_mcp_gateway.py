@@ -525,7 +525,7 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
             messages=[replace(bundle.messages[0], subject=ordinary_subject)],
             body_segments=[replace(bundle.body_segments[0], text=ordinary_text)],
         )
-        bundle = type(bundle).from_dict(bundle.to_dict())
+        bundle = type(bundle).from_persistence_dict(bundle.to_persistence_dict())
         gateway = MailEvidenceQueryGateway([bundle])
 
         query = gateway.query_mail_evidence(

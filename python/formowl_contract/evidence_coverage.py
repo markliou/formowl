@@ -21,6 +21,7 @@ from typing import Any, Mapping, Sequence
 from .primitives import (
     ContractValidationError,
     now_iso,
+    sha256_json,
     stable_resource_contract_id,
 )
 from .public_safety import assert_no_public_raw_references
@@ -229,13 +230,37 @@ class StructuralCell:
         if self.cell_state != "populated" and self.value is not None:
             raise ContractValidationError("blank or absent structural cell must not carry a value")
 
-    def to_dict(self) -> dict[str, Any]:
-        payload = _dataclass_payload(self)
-        _assert_public_contract(payload, "structural_cell")
-        return payload
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return _persistence_dataclass_payload(self)
+
+    def to_public_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+    ) -> dict[str, Any]:
+        decision = _require_structural_scope_decision(scope_decision)
+        if decision.decision_state == "denied":
+            return _structural_denial()
+        return _structural_public_summary(
+            decision,
+            "structural_cell",
+            {"cell_state": self.cell_state},
+            self.to_persistence_dict(),
+        )
+
+    def to_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+    ) -> dict[str, Any]:
+        return self.to_public_dict(scope_decision=scope_decision)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "StructuralCell":
+        return cls.from_persistence_dict(value)
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "StructuralCell":
         item = _mapping(value, "structural_cell")
         return cls(
             cell_state=_required_str(item, "cell_state"),
@@ -259,13 +284,37 @@ class StructuralColumn:
         _optional_text(self.original_header, "structural_column.original_header")
         _optional_text(self.normalized_header, "structural_column.normalized_header")
 
-    def to_dict(self) -> dict[str, Any]:
-        payload = _dataclass_payload(self)
-        _assert_public_contract(payload, "structural_column")
-        return payload
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return _persistence_dataclass_payload(self)
+
+    def to_public_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+    ) -> dict[str, Any]:
+        decision = _require_structural_scope_decision(scope_decision)
+        if decision.decision_state == "denied":
+            return _structural_denial()
+        return _structural_public_summary(
+            decision,
+            "structural_column",
+            {},
+            self.to_persistence_dict(),
+        )
+
+    def to_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+    ) -> dict[str, Any]:
+        return self.to_public_dict(scope_decision=scope_decision)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "StructuralColumn":
+        return cls.from_persistence_dict(value)
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "StructuralColumn":
         item = _mapping(value, "structural_column")
         return cls(
             column_ordinal=_required_int(item, "column_ordinal"),
@@ -286,20 +335,46 @@ class StructuralRow:
         if ordinals != sorted(set(ordinals)):
             raise ContractValidationError("structural row cell ordinals must be ordered and unique")
 
-    def to_dict(self) -> dict[str, Any]:
-        payload = {
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return {
             "row_ordinal": self.row_ordinal,
-            "cells": [cell.to_dict() for cell in self.cells],
+            "cells": [cell.to_persistence_dict() for cell in self.cells],
         }
-        _assert_public_contract(payload, "structural_row")
-        return payload
+
+    def to_public_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+    ) -> dict[str, Any]:
+        decision = _require_structural_scope_decision(scope_decision)
+        if decision.decision_state == "denied":
+            return _structural_denial()
+        return _structural_public_summary(
+            decision,
+            "structural_row",
+            {},
+            self.to_persistence_dict(),
+        )
+
+    def to_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+    ) -> dict[str, Any]:
+        return self.to_public_dict(scope_decision=scope_decision)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "StructuralRow":
+        return cls.from_persistence_dict(value)
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "StructuralRow":
         item = _mapping(value, "structural_row")
         return cls(
             row_ordinal=_required_int(item, "row_ordinal"),
-            cells=tuple(StructuralCell.from_dict(cell) for cell in _required_list(item, "cells")),
+            cells=tuple(
+                StructuralCell.from_persistence_dict(cell) for cell in _required_list(item, "cells")
+            ),
         )
 
 
@@ -368,15 +443,43 @@ class SourceInventoryItem:
                 {key: values[key] for key in sorted(values) if key != "source_inventory_item_id"},
             ),
         )
-        return cls.from_dict(values)
+        return cls.from_persistence_dict(values)
 
-    def to_dict(self) -> dict[str, Any]:
-        payload = _dataclass_payload(self)
-        _assert_public_contract(payload, "source_inventory_item")
-        return payload
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return _persistence_dataclass_payload(self)
+
+    def to_public_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+    ) -> dict[str, Any]:
+        decision = _require_structural_scope_decision(scope_decision)
+        if decision.decision_state == "denied":
+            return _structural_denial()
+        decision.assert_matches_permission_scope(self.permission_scope)
+        return _structural_public_summary(
+            decision,
+            "source_inventory_item",
+            {
+                "structure_kind": self.structure_kind,
+                "processing_state": self.processing_state,
+            },
+            self.to_persistence_dict(),
+        )
+
+    def to_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+    ) -> dict[str, Any]:
+        return self.to_public_dict(scope_decision=scope_decision)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "SourceInventoryItem":
+        return cls.from_persistence_dict(value)
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "SourceInventoryItem":
         item = _mapping(value, "source_inventory_item")
         return cls(
             source_inventory_item_id=_required_str(item, "source_inventory_item_id"),
@@ -481,7 +584,7 @@ class SourceInventory:
                 raise ContractValidationError(
                     "source inventory item points at a different aggregate"
                 )
-            item_values_for_binding = item.to_dict()
+            item_values_for_binding = item.to_persistence_dict()
             item_values_for_binding.pop("source_inventory_item_id", None)
             item_values_for_binding["source_inventory_id"] = source_inventory_id
             bound_items.append(SourceInventoryItem.create(**item_values_for_binding))
@@ -494,20 +597,50 @@ class SourceInventory:
             created_at=created_at or now_iso(),
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        payload = {
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return {
             "source_inventory_id": self.source_inventory_id,
             "source_asset_id": self.source_asset_id,
             "source_fingerprint": self.source_fingerprint,
             "parser_fingerprint": self.parser_fingerprint,
-            "items": [item.to_dict() for item in self.items],
+            "items": [item.to_persistence_dict() for item in self.items],
             "created_at": self.created_at,
         }
-        _assert_public_contract(payload, "source_inventory")
-        return payload
+
+    def to_public_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+    ) -> dict[str, Any]:
+        decision = _require_structural_scope_decision(scope_decision)
+        if decision.decision_state == "denied":
+            return _structural_denial()
+        if not self.items:
+            raise ContractValidationError(
+                "public source inventory serialization requires a scoped inventory item"
+            )
+        for item in self.items:
+            decision.assert_matches_permission_scope(item.permission_scope)
+        return _structural_public_summary(
+            decision,
+            "source_inventory",
+            {"structure_kind": "inventory"},
+            self.to_persistence_dict(),
+        )
+
+    def to_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+    ) -> dict[str, Any]:
+        return self.to_public_dict(scope_decision=scope_decision)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "SourceInventory":
+        return cls.from_persistence_dict(value)
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "SourceInventory":
         item = _mapping(value, "source_inventory")
         return cls(
             source_inventory_id=_required_str(item, "source_inventory_id"),
@@ -515,7 +648,8 @@ class SourceInventory:
             source_fingerprint=_required_str(item, "source_fingerprint"),
             parser_fingerprint=_required_str(item, "parser_fingerprint"),
             items=tuple(
-                SourceInventoryItem.from_dict(entry) for entry in _required_list(item, "items")
+                SourceInventoryItem.from_persistence_dict(entry)
+                for entry in _required_list(item, "items")
             ),
             created_at=_required_str(item, "created_at"),
         )
@@ -598,11 +732,11 @@ class StructuralObservation:
             if field_name in values:
                 values[field_name] = list(values[field_name])
         values["columns"] = [
-            item.to_dict() if isinstance(item, StructuralColumn) else item
+            item.to_persistence_dict() if isinstance(item, StructuralColumn) else item
             for item in values.get("columns", [])
         ]
         values["rows"] = [
-            item.to_dict() if isinstance(item, StructuralRow) else item
+            item.to_persistence_dict() if isinstance(item, StructuralRow) else item
             for item in values.get("rows", [])
         ]
         values["header_relationships"] = [
@@ -616,19 +750,19 @@ class StructuralObservation:
                 {key: values[key] for key in sorted(values) if key != "structural_observation_id"},
             ),
         )
-        return cls.from_dict(values)
+        return cls.from_persistence_dict(values)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_persistence_dict(self) -> dict[str, Any]:
         payload = {
             "structural_observation_id": self.structural_observation_id,
             "source_inventory_item_id": self.source_inventory_item_id,
             "source_asset_id": self.source_asset_id,
             "source_observation_id": self.source_observation_id,
             "structure_kind": self.structure_kind,
-            "columns": [column.to_dict() for column in self.columns],
-            "rows": [row.to_dict() for row in self.rows],
+            "columns": [column.to_persistence_dict() for column in self.columns],
+            "rows": [row.to_persistence_dict() for row in self.rows],
             "header_relationships": [
-                _public_plain(dict(item)) for item in self.header_relationships
+                _persistence_plain(dict(item)) for item in self.header_relationships
             ],
             "source_fingerprint": self.source_fingerprint,
             "parser_fingerprint": self.parser_fingerprint,
@@ -645,11 +779,55 @@ class StructuralObservation:
             "version_lineage": list(self.version_lineage),
         }
         payload = _without_none(payload)
-        _assert_public_contract(payload, "structural_observation")
         return payload
+
+    def to_public_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+        source_inventory_item: SourceInventoryItem | None = None,
+    ) -> dict[str, Any]:
+        decision = _require_structural_scope_decision(scope_decision)
+        if decision.decision_state == "denied":
+            return _structural_denial()
+        if not isinstance(source_inventory_item, SourceInventoryItem):
+            raise ContractValidationError(
+                "public structural observation serialization requires its inventory item"
+            )
+        if (
+            source_inventory_item.source_inventory_item_id != self.source_inventory_item_id
+            or source_inventory_item.source_asset_id != self.source_asset_id
+            or source_inventory_item.source_fingerprint != self.source_fingerprint
+            or source_inventory_item.parser_fingerprint != self.parser_fingerprint
+        ):
+            raise ContractValidationError(
+                "structural observation public scope item relationship is inconsistent"
+            )
+        decision.assert_matches_permission_scope(source_inventory_item.permission_scope)
+        return _structural_public_summary(
+            decision,
+            "structural_observation",
+            {"structure_kind": self.structure_kind},
+            self.to_persistence_dict(),
+        )
+
+    def to_dict(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+        source_inventory_item: SourceInventoryItem | None = None,
+    ) -> dict[str, Any]:
+        return self.to_public_dict(
+            scope_decision=scope_decision,
+            source_inventory_item=source_inventory_item,
+        )
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "StructuralObservation":
+        return cls.from_persistence_dict(value)
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "StructuralObservation":
         item = _mapping(value, "structural_observation")
         return cls(
             structural_observation_id=_required_str(item, "structural_observation_id"),
@@ -658,9 +836,12 @@ class StructuralObservation:
             source_observation_id=_required_str(item, "source_observation_id"),
             structure_kind=_required_str(item, "structure_kind"),
             columns=tuple(
-                StructuralColumn.from_dict(entry) for entry in _required_list(item, "columns")
+                StructuralColumn.from_persistence_dict(entry)
+                for entry in _required_list(item, "columns")
             ),
-            rows=tuple(StructuralRow.from_dict(entry) for entry in _required_list(item, "rows")),
+            rows=tuple(
+                StructuralRow.from_persistence_dict(entry) for entry in _required_list(item, "rows")
+            ),
             header_relationships=tuple(
                 _mapping(entry, "header_relationship")
                 for entry in _required_list(item, "header_relationships")
@@ -920,6 +1101,96 @@ class CoverageAuthorizationBinding:
             permission_revision=_required_str(item, "permission_revision"),
             grant_revision=_required_str(item, "grant_revision"),
         )
+
+
+@dataclass(frozen=True)
+class StructuralPublicScopeDecision:
+    """Typed authorization result for structural public projections.
+
+    The decision is intentionally not a boolean.  Its opaque scope
+    fingerprint binds the complete private permission scope to the exact
+    actor/permission/grant revision tuple that produced the decision.  A
+    caller can therefore not turn a record into public data by passing an
+    untyped ``visible=True`` flag.
+    """
+
+    decision_state: str
+    authorization_binding: CoverageAuthorizationBinding
+    permission_scope_fingerprint: str
+
+    def __post_init__(self) -> None:
+        _choice(
+            self.decision_state,
+            ("authorized", "denied"),
+            "structural_public_scope_decision.decision_state",
+        )
+        if not isinstance(self.authorization_binding, CoverageAuthorizationBinding):
+            raise ContractValidationError(
+                "structural public scope decision authorization must be typed"
+            )
+        _fingerprint(
+            self.permission_scope_fingerprint,
+            "structural_public_scope_decision.permission_scope_fingerprint",
+        )
+
+    @classmethod
+    def authorize(
+        cls,
+        *,
+        permission_scope: Mapping[str, Any],
+        authorization_binding: CoverageAuthorizationBinding,
+    ) -> "StructuralPublicScopeDecision":
+        if not isinstance(authorization_binding, CoverageAuthorizationBinding):
+            raise ContractValidationError(
+                "structural public scope decision authorization must be typed"
+            )
+        _safe_mapping(permission_scope, "structural_public_scope_decision.permission_scope")
+        return cls(
+            decision_state="authorized",
+            authorization_binding=authorization_binding,
+            permission_scope_fingerprint=sha256_json(
+                {
+                    "permission_scope": _persistence_plain(permission_scope),
+                    "authorization_binding": authorization_binding.to_dict(),
+                }
+            ),
+        )
+
+    @classmethod
+    def deny(
+        cls,
+        *,
+        authorization_binding: CoverageAuthorizationBinding,
+    ) -> "StructuralPublicScopeDecision":
+        if not isinstance(authorization_binding, CoverageAuthorizationBinding):
+            raise ContractValidationError(
+                "structural public scope decision authorization must be typed"
+            )
+        return cls(
+            decision_state="denied",
+            authorization_binding=authorization_binding,
+            permission_scope_fingerprint=sha256_json(
+                {
+                    "decision_state": "denied",
+                    "authorization_binding": authorization_binding.to_dict(),
+                }
+            ),
+        )
+
+    def assert_matches_permission_scope(self, permission_scope: Mapping[str, Any]) -> None:
+        if self.decision_state != "authorized":
+            raise ContractValidationError("structural public scope decision is denied")
+        _safe_mapping(permission_scope, "structural_public_scope_decision.permission_scope")
+        expected = sha256_json(
+            {
+                "permission_scope": _persistence_plain(permission_scope),
+                "authorization_binding": self.authorization_binding.to_dict(),
+            }
+        )
+        if expected != self.permission_scope_fingerprint:
+            raise ContractValidationError(
+                "structural public scope decision actor or permission revision does not match"
+            )
 
 
 @dataclass(frozen=True)
@@ -1963,10 +2234,55 @@ def _dataclass_payload(value: Any) -> dict[str, Any]:
     return payload
 
 
+def _persistence_dataclass_payload(value: Any) -> dict[str, Any]:
+    if not is_dataclass(value):
+        raise ContractValidationError("contract persistence payload requires a record")
+    return {
+        key: _persistence_plain(item) for key, item in value.__dict__.items() if item is not None
+    }
+
+
 def _inventory_item_identity_payload(item: SourceInventoryItem) -> dict[str, Any]:
-    payload = item.to_dict()
+    payload = item.to_persistence_dict()
     payload.pop("source_inventory_item_id", None)
     payload.pop("source_inventory_id", None)
+    return payload
+
+
+def _structural_denial() -> dict[str, Any]:
+    """One existence/cardinality-neutral denial shape for all structures."""
+
+    return {"status": "denied", "reason_code": "scope_denied"}
+
+
+def _require_structural_scope_decision(
+    value: Any,
+) -> StructuralPublicScopeDecision:
+    if not isinstance(value, StructuralPublicScopeDecision):
+        raise ContractValidationError(
+            "structural public serialization requires a typed scope decision"
+        )
+    return value
+
+
+def _structural_public_summary(
+    decision: StructuralPublicScopeDecision,
+    record_type: str,
+    summary: Mapping[str, Any],
+    private_payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    if decision.decision_state != "authorized":
+        return _structural_denial()
+    payload = {
+        "status": "authorized",
+        "record_type": record_type,
+        "summary": dict(summary),
+        "governed_reference": (
+            f"governed:{record_type}:"
+            f"{sha256_json({'record_type': record_type, 'payload': _persistence_plain(private_payload), 'scope': decision.permission_scope_fingerprint})[7:]}"
+        ),
+    }
+    _assert_public_contract(payload, f"{record_type}.public")
     return payload
 
 
@@ -2009,6 +2325,34 @@ def _public_plain(value: Any) -> Any:
         return {str(key): _public_plain(item) for key, item in value.items() if item is not None}
     if isinstance(value, (list, tuple)):
         return [_public_plain(item) for item in value]
+    return value
+
+
+def _persistence_plain(value: Any) -> Any:
+    if isinstance(value, StructuralCell):
+        return value.to_persistence_dict()
+    if isinstance(value, StructuralColumn):
+        return value.to_persistence_dict()
+    if isinstance(value, StructuralRow):
+        return value.to_persistence_dict()
+    if isinstance(value, SourceInventoryItem):
+        return value.to_persistence_dict()
+    if isinstance(value, SourceInventory):
+        return value.to_persistence_dict()
+    if isinstance(value, StructuralObservation):
+        return value.to_persistence_dict()
+    if is_dataclass(value):
+        return {
+            key: _persistence_plain(item)
+            for key, item in value.__dict__.items()
+            if item is not None
+        }
+    if isinstance(value, Mapping):
+        return {
+            str(key): _persistence_plain(item) for key, item in value.items() if item is not None
+        }
+    if isinstance(value, (list, tuple)):
+        return [_persistence_plain(item) for item in value]
     return value
 
 
@@ -2328,6 +2672,7 @@ __all__ = [
     "StructuralCell",
     "StructuralColumn",
     "StructuralObservation",
+    "StructuralPublicScopeDecision",
     "StructuralRow",
     "VersionManifest",
     "fingerprint_manifest",

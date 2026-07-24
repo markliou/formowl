@@ -21,6 +21,7 @@ from formowl_contract import (
     StructuralCell,
     StructuralColumn,
     StructuralObservation,
+    StructuralPublicScopeDecision,
     StructuralRow,
     SourceInventory,
     VersionManifest,
@@ -46,6 +47,387 @@ FP2 = "sha256:" + "b" * 64
 
 
 class Issue51WP1ContractTests(unittest.TestCase):
+    def test_structural_public_serialization_is_typed_and_leak_free(self) -> None:
+        item, inventory, observation, authorization = _public_structural_fixture()
+        decision = StructuralPublicScopeDecision.authorize(
+            permission_scope=item.permission_scope,
+            authorization_binding=authorization,
+        )
+
+        item_public = item.to_dict(scope_decision=decision)
+        inventory_public = inventory.to_dict(scope_decision=decision)
+        observation_public = observation.to_dict(
+            scope_decision=decision,
+            source_inventory_item=item,
+        )
+        for payload in (item_public, inventory_public, observation_public):
+            serialized = repr(payload)
+            self.assertEqual(payload["status"], "authorized")
+            self.assertIn("governed_reference", payload)
+            self.assertNotIn("private/table.pst", serialized)
+            self.assertNotIn("Open", serialized)
+            self.assertNotIn("open", serialized)
+            self.assertNotIn(item.source_inventory_item_id, serialized)
+            self.assertNotIn(inventory.source_inventory_id, serialized)
+            self.assertNotIn(observation.structural_observation_id, serialized)
+            self.assertNotIn(FP, serialized)
+            self.assertNotIn(FP2, serialized)
+            self.assertNotIn("permission_scope", serialized)
+            self.assertNotIn("header_path", serialized)
+            self.assertNotIn("row_ordinal", serialized)
+            self.assertNotIn("column_ordinal", serialized)
+
+        with self.assertRaises(ContractValidationError):
+            item.to_dict()
+        with self.assertRaises(ContractValidationError):
+            item.to_dict(scope_decision=object())
+        with self.assertRaises(ContractValidationError):
+            item.to_dict(
+                scope_decision=replace(
+                    decision,
+                    authorization_binding=replace(
+                        authorization,
+                        actor_context_id="actor_other",
+                    ),
+                )
+            )
+        with self.assertRaises(ContractValidationError):
+            item.to_dict(
+                scope_decision=replace(
+                    decision,
+                    authorization_binding=replace(
+                        authorization,
+                        permission_revision="permission_other",
+                    ),
+                )
+            )
+        with self.assertRaises(ContractValidationError):
+            item.to_dict(
+                scope_decision=replace(
+                    decision,
+                    authorization_binding=replace(
+                        authorization,
+                        grant_revision="grant_other",
+                    ),
+                )
+            )
+
+    def test_structural_public_denial_has_uniform_shape_without_existence_signal(self) -> None:
+        item, inventory, observation, authorization = _public_structural_fixture()
+        denied = StructuralPublicScopeDecision.deny(
+            authorization_binding=authorization,
+        )
+        empty_item = replace(
+            item,
+            source_observation_ids=(),
+            source_inventory_item_id="item_empty_public",
+            source_inventory_id=None,
+        )
+        empty_inventory = SourceInventory.create(
+            source_asset_id="asset_wp1",
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            items=(empty_item,),
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        empty_observation = replace(
+            observation,
+            source_inventory_item_id=empty_inventory.items[0].source_inventory_item_id,
+            structural_observation_id="observation_empty_public",
+        )
+        self.assertEqual(
+            item.to_dict(scope_decision=denied), {"status": "denied", "reason_code": "scope_denied"}
+        )
+        self.assertEqual(
+            inventory.to_dict(scope_decision=denied),
+            {"status": "denied", "reason_code": "scope_denied"},
+        )
+        self.assertEqual(
+            observation.to_dict(scope_decision=denied),
+            empty_observation.to_dict(scope_decision=denied),
+        )
+
+        populated_bundle = replace(
+            _minimal_bundle(),
+            source_inventory=[inventory],
+            structural_observations=[observation],
+        )
+        empty_bundle = replace(
+            _minimal_bundle(),
+            source_inventory=[empty_inventory],
+            structural_observations=[empty_observation],
+        )
+        self.assertEqual(
+            populated_bundle.to_public_dict(scope_decision=denied)["structural_evidence"],
+            empty_bundle.to_public_dict(scope_decision=denied)["structural_evidence"],
+        )
+        self.assertEqual(
+            populated_bundle.to_public_dict(scope_decision=denied)["structural_evidence"],
+            empty_bundle.to_public_dict(scope_decision=denied)["structural_evidence"],
+        )
+
+    def test_structural_private_serialization_round_trips_exactly(self) -> None:
+        item, inventory, observation, _ = _public_structural_fixture()
+        self.assertEqual(
+            item.to_persistence_dict(),
+            SourceInventoryItem.from_persistence_dict(
+                item.to_persistence_dict()
+            ).to_persistence_dict(),
+        )
+        self.assertEqual(
+            inventory.to_persistence_dict(),
+            SourceInventory.from_persistence_dict(
+                inventory.to_persistence_dict()
+            ).to_persistence_dict(),
+        )
+        self.assertEqual(
+            observation.to_persistence_dict(),
+            StructuralObservation.from_persistence_dict(
+                observation.to_persistence_dict()
+            ).to_persistence_dict(),
+        )
+
+    def test_populated_bundle_public_allowlist_cannot_traverse_private_records(self) -> None:
+        bundle, inventory, requirement, ledger = _inventory_bundle()
+        item = inventory.items[0]
+        observation = StructuralObservation.create(
+            source_inventory_item_id=item.source_inventory_item_id,
+            source_asset_id=item.source_asset_id,
+            source_observation_id="observation_bundle_public_wp1",
+            structure_kind="html_table",
+            columns=(
+                StructuralColumn(
+                    column_ordinal=0,
+                    original_header="Status",
+                    normalized_header="status",
+                ),
+            ),
+            rows=(
+                StructuralRow(
+                    row_ordinal=0,
+                    cells=(
+                        StructuralCell(
+                            cell_state="populated",
+                            row_ordinal=0,
+                            column_ordinal=0,
+                            value="Open",
+                            normalized_value="open",
+                        ),
+                    ),
+                ),
+            ),
+            header_relationships=({"header_path": ["Status"]},),
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+        )
+        populated = replace(bundle, structural_observations=[observation])
+        decision = StructuralPublicScopeDecision.authorize(
+            permission_scope=item.permission_scope,
+            authorization_binding=CoverageAuthorizationBinding(
+                actor_context_id="actor_bundle_public_wp1",
+                permission_revision="permission_bundle_public_wp1",
+                grant_revision="grant_bundle_public_wp1",
+            ),
+        )
+
+        public = populated.to_public_dict(scope_decision=decision)
+        self.assertEqual(
+            set(public),
+            {
+                "public_schema",
+                "producer_type",
+                "created_at",
+                "mail_import",
+                "parse_status",
+                "structural_evidence",
+            },
+        )
+        serialized = repr(public)
+        for private_value in (
+            item.source_inventory_item_id,
+            inventory.source_inventory_id,
+            observation.structural_observation_id,
+            requirement.claim_requirement_id,
+            ledger.coverage_ledger_id,
+            FP,
+            FP2,
+            "Open",
+            "open",
+            "Status",
+            "private/table.pst",
+            "permission_scope",
+            "version_manifest",
+            "coverage_ledger",
+            "claim_requirement",
+            "mail_import_session_id",
+            "email_message_id",
+        ):
+            self.assertNotIn(private_value, serialized)
+
+        public_with_claim = populated.to_public_dict(
+            scope_decision=decision,
+            include_answer_claims=True,
+        )
+        self.assertEqual(
+            set(public_with_claim["answer_claims"][0]),
+            {
+                "state",
+                "reason_codes",
+                "claim_requirement_id",
+                "coverage_ledger_id",
+                "evidence_snapshot_ids",
+                "source_fingerprint",
+                "parser_fingerprint",
+                "tokenizer_fingerprint",
+                "index_fingerprint",
+            },
+        )
+        self.assertNotIn("version_manifests", public_with_claim)
+        self.assertNotIn("coverage_ledgers", public_with_claim)
+        self.assertNotIn("claim_requirements", public_with_claim)
+
+    def test_governed_reference_is_actor_revision_scoped_and_opaque(self) -> None:
+        item, inventory, observation, authorization = _public_structural_fixture()
+        private_payload = observation.to_persistence_dict()
+
+        def reference_for(binding: CoverageAuthorizationBinding) -> str:
+            decision = StructuralPublicScopeDecision.authorize(
+                permission_scope=item.permission_scope,
+                authorization_binding=binding,
+            )
+            return observation.to_public_dict(
+                scope_decision=decision,
+                source_inventory_item=item,
+            )["governed_reference"]
+
+        baseline = reference_for(authorization)
+        actor_variant = reference_for(replace(authorization, actor_context_id="actor_public_other"))
+        permission_variant = reference_for(
+            replace(authorization, permission_revision="permission_public_other")
+        )
+        grant_variant = reference_for(replace(authorization, grant_revision="grant_public_other"))
+        self.assertEqual(observation.to_persistence_dict(), private_payload)
+        self.assertEqual(len({baseline, actor_variant, permission_variant, grant_variant}), 4)
+        for reference in (baseline, actor_variant, permission_variant, grant_variant):
+            self.assertTrue(reference.startswith("governed:structural_observation:"))
+            self.assertNotIn(observation.structural_observation_id, reference)
+            self.assertNotIn(item.source_inventory_item_id, reference)
+            self.assertNotIn(inventory.source_inventory_id, reference)
+            self.assertNotIn(FP, reference)
+            self.assertNotIn(FP2, reference)
+
+    def test_claim_inclusion_requires_scope_even_without_structural_rows(self) -> None:
+        bundle, inventory, requirement, ledger = _inventory_bundle()
+        item = inventory.items[0]
+        authorization = CoverageAuthorizationBinding(
+            actor_context_id="actor_claim_public_wp1",
+            permission_revision="permission_claim_public_wp1",
+            grant_revision="grant_claim_public_wp1",
+        )
+        authorized_ledger = replace(
+            ledger,
+            authorization_binding=authorization,
+            coverage_ledger_id="",
+        )
+        manifest = bundle.version_manifests[0]
+        claim = AnswerClaim.create(
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=authorized_ledger,
+            claim_requirement=requirement,
+            source_inventory=inventory,
+            version_manifest=manifest,
+            authorization_binding=authorization,
+            evidence_snapshot_ids=(),
+        )
+        claimed_bundle = replace(
+            bundle,
+            coverage_ledgers=[authorized_ledger],
+            answer_claims=[claim],
+        )
+        self.assertEqual(claimed_bundle.structural_observations, [])
+        decision = StructuralPublicScopeDecision.authorize(
+            permission_scope=item.permission_scope,
+            authorization_binding=authorization,
+        )
+        public = claimed_bundle.to_public_dict(
+            scope_decision=decision,
+            include_answer_claims=True,
+        )
+        self.assertEqual(len(public["answer_claims"]), 1)
+        self.assertEqual(
+            set(public["answer_claims"][0]),
+            {
+                "state",
+                "reason_codes",
+                "claim_requirement_id",
+                "coverage_ledger_id",
+                "evidence_snapshot_ids",
+                "source_fingerprint",
+                "parser_fingerprint",
+                "tokenizer_fingerprint",
+                "index_fingerprint",
+            },
+        )
+
+        with self.assertRaises(ContractValidationError):
+            claimed_bundle.to_public_dict(include_answer_claims=True)
+
+    def test_claim_inclusion_rejects_mismatched_authorization_without_structural_rows(
+        self,
+    ) -> None:
+        bundle, inventory, requirement, ledger = _inventory_bundle()
+        item = inventory.items[0]
+        authorization = CoverageAuthorizationBinding(
+            actor_context_id="actor_claim_public_mismatch",
+            permission_revision="permission_claim_public_mismatch",
+            grant_revision="grant_claim_public_mismatch",
+        )
+        authorized_ledger = replace(
+            ledger,
+            authorization_binding=authorization,
+            coverage_ledger_id="",
+        )
+        claim = AnswerClaim.create(
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=authorized_ledger,
+            claim_requirement=requirement,
+            source_inventory=inventory,
+            version_manifest=bundle.version_manifests[0],
+            authorization_binding=authorization,
+            evidence_snapshot_ids=(),
+        )
+        claimed_bundle = replace(
+            bundle,
+            coverage_ledgers=[authorized_ledger],
+            answer_claims=[claim],
+        )
+        self.assertEqual(claimed_bundle.structural_observations, [])
+        mismatched = StructuralPublicScopeDecision.authorize(
+            permission_scope=item.permission_scope,
+            authorization_binding=replace(
+                authorization,
+                grant_revision="grant_claim_other",
+            ),
+        )
+        with self.assertRaises(ContractValidationError):
+            claimed_bundle.to_public_dict(
+                scope_decision=mismatched,
+                include_answer_claims=True,
+            )
+        denied = StructuralPublicScopeDecision.deny(
+            authorization_binding=authorization,
+        )
+        denied_public = claimed_bundle.to_public_dict(
+            scope_decision=denied,
+            include_answer_claims=True,
+        )
+        self.assertEqual(
+            denied_public["answer_claims"],
+            {"status": "denied", "reason_code": "scope_denied"},
+        )
+
     def test_contracts_are_deterministic_and_round_trip(self) -> None:
         item = SourceInventoryItem.create(
             source_asset_id="asset_wp1",
@@ -62,7 +444,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
         )
         self.assertEqual(
             item.source_inventory_item_id,
-            SourceInventoryItem.create(**item.to_dict()).source_inventory_item_id,
+            SourceInventoryItem.create(**item.to_persistence_dict()).source_inventory_item_id,
         )
         observation = StructuralObservation.create(
             source_inventory_item_id=item.source_inventory_item_id,
@@ -181,12 +563,16 @@ class Issue51WP1ContractTests(unittest.TestCase):
             index_fingerprint=FP,
         )
         self.assertEqual(
-            item.to_dict(),
-            SourceInventoryItem.from_dict(item.to_dict()).to_dict(),
+            item.to_persistence_dict(),
+            SourceInventoryItem.from_persistence_dict(
+                item.to_persistence_dict()
+            ).to_persistence_dict(),
         )
         self.assertEqual(
-            observation.to_dict(),
-            StructuralObservation.from_dict(observation.to_dict()).to_dict(),
+            observation.to_persistence_dict(),
+            StructuralObservation.from_persistence_dict(
+                observation.to_persistence_dict()
+            ).to_persistence_dict(),
         )
         self.assertEqual(
             ledger.to_dict(),
@@ -242,8 +628,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
                     bundle,
                     coverage_ledgers=[variant],
                     answer_claims=[claim],
-                ).to_dict()
-                restored = MailEvidenceBundle.from_dict(payload)
+                ).to_persistence_dict()
+                restored = MailEvidenceBundle.from_persistence_dict(payload)
                 self.assertEqual(restored.coverage_ledgers[0].display_pagination, pagination)
                 self.assertEqual(
                     restored.coverage_ledgers[0].coverage_ledger_id,
@@ -353,7 +739,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             )
 
     def test_intentionally_excluded_requires_closed_complete_proof(self) -> None:
-        valid = _excluded_item().to_dict()
+        valid = _excluded_item().to_persistence_dict()
         proof_fields = (
             "exclusion_policy_version_id",
             "exclusion_authorized_actor_id",
@@ -407,7 +793,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             "unsupported",
             "failed",
         ):
-            invalid = dict(_excluded_item().to_dict())
+            invalid = dict(_excluded_item().to_persistence_dict())
             invalid["processing_state"] = processing_state
             with self.subTest(processing_state=processing_state):
                 with self.assertRaises(ContractValidationError):
@@ -845,9 +1231,9 @@ class Issue51WP1ContractTests(unittest.TestCase):
             answer_claims=[claim],
             version_manifests=[manifest],
         )
-        payload = populated.to_dict()
-        restored = MailEvidenceBundle.from_dict(payload)
-        self.assertEqual(restored.to_dict(), payload)
+        payload = populated.to_persistence_dict()
+        restored = MailEvidenceBundle.from_persistence_dict(payload)
+        self.assertEqual(restored.to_persistence_dict(), payload)
 
         connection = _RowsConnection()
         store = PostgreSQLMailEvidenceStore(connection)
@@ -907,7 +1293,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             mail_import_session_id=restored.mail_import_session.mail_import_session_id
         )
         self.assertIsNotNone(round_trip)
-        self.assertEqual(round_trip.to_dict(), payload)
+        self.assertEqual(round_trip.to_persistence_dict(), payload)
         self.assertEqual(
             _selected_columns(connection.queries[0].sql),
             (
@@ -1100,19 +1486,19 @@ class Issue51WP1ContractTests(unittest.TestCase):
 
     def test_source_inventory_relational_integrity_fails_closed_in_file_payloads(self) -> None:
         bundle, inventory, requirement, ledger = _inventory_bundle()
-        payload = bundle.to_dict()
+        payload = bundle.to_persistence_dict()
 
         mismatched_inventory = deepcopy(payload)
         mismatched_inventory["source_inventory"][0]["items"][0]["source_inventory_id"] = (
             "inventory_other"
         )
         with self.assertRaises(ContractValidationError):
-            MailEvidenceBundle.from_dict(mismatched_inventory)
+            MailEvidenceBundle.from_persistence_dict(mismatched_inventory)
 
         mismatched_asset = deepcopy(payload)
         mismatched_asset["source_inventory"][0]["items"][0]["source_asset_id"] = "asset_other"
         with self.assertRaises(ContractValidationError):
-            MailEvidenceBundle.from_dict(mismatched_asset)
+            MailEvidenceBundle.from_persistence_dict(mismatched_asset)
 
         orphan_projection = deepcopy(payload)
         orphan_projection["source_inventory_items"].append(
@@ -1122,27 +1508,27 @@ class Issue51WP1ContractTests(unittest.TestCase):
             }
         )
         with self.assertRaises(ContractValidationError):
-            MailEvidenceBundle.from_dict(orphan_projection)
+            MailEvidenceBundle.from_persistence_dict(orphan_projection)
 
         orphan_ledger = deepcopy(payload)
         orphan_ledger["coverage_ledgers"][0]["source_inventory_id"] = "inventory_other"
         with self.assertRaises(ContractValidationError):
-            MailEvidenceBundle.from_dict(orphan_ledger)
+            MailEvidenceBundle.from_persistence_dict(orphan_ledger)
 
         mismatched_ledger_claim = deepcopy(payload)
         mismatched_ledger_claim["coverage_ledgers"][0]["claim_requirement_id"] = "requirement_other"
         with self.assertRaises(ContractValidationError):
-            MailEvidenceBundle.from_dict(mismatched_ledger_claim)
+            MailEvidenceBundle.from_persistence_dict(mismatched_ledger_claim)
 
         orphan_claim = deepcopy(payload)
         orphan_claim["answer_claims"][0]["coverage_ledger_id"] = "coverage_other"
         with self.assertRaises(ContractValidationError):
-            MailEvidenceBundle.from_dict(orphan_claim)
+            MailEvidenceBundle.from_persistence_dict(orphan_claim)
 
         mismatched_claim = deepcopy(payload)
         mismatched_claim["answer_claims"][0]["claim_requirement_id"] = "requirement_other"
         with self.assertRaises(ContractValidationError):
-            MailEvidenceBundle.from_dict(mismatched_claim)
+            MailEvidenceBundle.from_persistence_dict(mismatched_claim)
 
         self.assertEqual(
             ledger.source_inventory_id,
@@ -1260,6 +1646,77 @@ def _excluded_item(*, proof: str = FP) -> SourceInventoryItem:
         exclusion_reason_code="outside_claim_scope",
         exclusion_claim_scope_proof_sha256=proof,
     )
+
+
+def _public_structural_fixture() -> (
+    tuple[
+        SourceInventoryItem,
+        SourceInventory,
+        StructuralObservation,
+        CoverageAuthorizationBinding,
+    ]
+):
+    authorization = CoverageAuthorizationBinding(
+        actor_context_id="actor_public_wp1",
+        permission_revision="permission_public_wp1",
+        grant_revision="grant_public_wp1",
+    )
+    item = SourceInventoryItem.create(
+        source_asset_id="asset_wp1",
+        structure_kind="html_table",
+        content_type="text/html",
+        ordinal=0,
+        processing_state="parsed",
+        raw_retention_state="retained",
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        permission_scope={
+            "scope_type": "asset",
+            "scope_id": "asset_wp1",
+            "visibility": "restricted",
+        },
+        location={"location_detail": "private/table.pst", "table_ordinal": 0},
+        source_observation_ids=("observation_public_wp1",),
+    )
+    inventory = SourceInventory.create(
+        source_asset_id="asset_wp1",
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        items=(item,),
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    item = inventory.items[0]
+    observation = StructuralObservation.create(
+        source_inventory_item_id=item.source_inventory_item_id,
+        source_asset_id=item.source_asset_id,
+        source_observation_id="observation_public_wp1",
+        structure_kind="html_table",
+        columns=(
+            StructuralColumn(
+                column_ordinal=0,
+                original_header="Status",
+                normalized_header="status",
+            ),
+        ),
+        rows=(
+            StructuralRow(
+                row_ordinal=0,
+                cells=(
+                    StructuralCell(
+                        cell_state="populated",
+                        row_ordinal=0,
+                        column_ordinal=0,
+                        value="Open",
+                        normalized_value="open",
+                    ),
+                ),
+            ),
+        ),
+        header_relationships=({"header_path": ["Status"]},),
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+    )
+    return item, inventory, observation, authorization
 
 
 def _inventory_bundle() -> (

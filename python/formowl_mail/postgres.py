@@ -252,7 +252,7 @@ class PostgreSQLMailEvidenceStore:
                     record,
                     import_session.source_asset_id,
                 ),
-                factory=SourceInventory.from_dict,
+                factory=SourceInventory.from_persistence_dict,
             ),
             "source_inventory_id",
         )
@@ -271,7 +271,7 @@ class PostgreSQLMailEvidenceStore:
                     "parser_fingerprint",
                 ),
                 row_validator=_validate_source_inventory_item_row,
-                factory=SourceInventoryItem.from_dict,
+                factory=SourceInventoryItem.from_persistence_dict,
             ),
             "source_inventory_item_id",
         )
@@ -296,7 +296,7 @@ class PostgreSQLMailEvidenceStore:
                     record,
                     source_inventory_items,
                 ),
-                factory=StructuralObservation.from_dict,
+                factory=StructuralObservation.from_persistence_dict,
             ),
             "structural_observation_id",
         )
@@ -417,7 +417,7 @@ class PostgreSQLMailEvidenceStore:
         )
         messages = _messages_for_import(logical_messages, message_occurrences)
 
-        return MailEvidenceBundle.from_dict(
+        return MailEvidenceBundle.from_persistence_dict(
             {
                 "mail_evidence_bundle_id": _safe_row_str(
                     session_row,
@@ -439,9 +439,13 @@ class PostgreSQLMailEvidenceStore:
                 "mail_parse_run": parse_runs[0].to_dict(),
                 "parse_warnings": [item.to_dict() for item in parse_warnings],
                 "created_at": _safe_row_str(session_row, "bundle_created_at"),
-                "source_inventory": [item.to_dict() for item in source_inventories],
-                "source_inventory_items": [item.to_dict() for item in source_inventory_items],
-                "structural_observations": [item.to_dict() for item in structural_observations],
+                "source_inventory": [item.to_persistence_dict() for item in source_inventories],
+                "source_inventory_items": [
+                    item.to_persistence_dict() for item in source_inventory_items
+                ],
+                "structural_observations": [
+                    item.to_persistence_dict() for item in structural_observations
+                ],
                 "claim_requirements": [item.to_dict() for item in claim_requirements],
                 "coverage_ledgers": [item.to_dict() for item in coverage_ledgers],
                 "answer_claims": [item.to_persistence_dict() for item in answer_claims],
@@ -962,11 +966,11 @@ def _validate_source_inventory_rows(
     items: Sequence[SourceInventoryItem],
 ) -> None:
     expected = {
-        item.source_inventory_item_id: item.to_dict()
+        item.source_inventory_item_id: item.to_persistence_dict()
         for inventory in inventories
         for item in inventory.items
     }
-    actual = {item.source_inventory_item_id: item.to_dict() for item in items}
+    actual = {item.source_inventory_item_id: item.to_persistence_dict() for item in items}
     if len(actual) != len(items) or actual != expected:
         raise ContractValidationError(
             "postgres source inventory child rows do not match persisted aggregates"
@@ -1242,12 +1246,12 @@ def _query_rows_by_ids(
 
 def _validate_bundle(bundle: MailEvidenceBundle | dict[str, Any]) -> MailEvidenceBundle:
     if isinstance(bundle, MailEvidenceBundle):
-        payload = bundle.to_dict()
+        payload = bundle.to_persistence_dict()
     elif isinstance(bundle, dict):
         payload = to_plain(bundle)
     else:
         raise ContractValidationError("mail evidence store requires a bundle")
-    return MailEvidenceBundle.from_dict(payload)
+    return MailEvidenceBundle.from_persistence_dict(payload)
 
 
 def _payload(row: dict[str, Any]) -> dict[str, Any]:

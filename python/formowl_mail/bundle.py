@@ -12,6 +12,7 @@ from formowl_contract import (
     SourceInventory,
     SourceInventoryItem,
     StructuralObservation,
+    StructuralPublicScopeDecision,
     VersionManifest,
     now_iso,
     sha256_json,
@@ -549,14 +550,108 @@ class MailEvidenceBundle:
         return tuple(item for inventory in self.source_inventory for item in inventory.items)
 
     def to_dict(self) -> dict[str, Any]:
-        return self.to_persistence_dict()
+        return self.to_public_dict()
+
+    def to_public_dict(
+        self,
+        *,
+        scope_decision: StructuralPublicScopeDecision | None = None,
+        include_answer_claims: bool = False,
+    ) -> dict[str, Any]:
+        if not isinstance(include_answer_claims, bool):
+            raise ContractValidationError("include_answer_claims must be a boolean")
+        has_structural_records = bool(
+            self.source_inventory or self.structural_observations or self.source_inventory_items
+        )
+        requires_scope_decision = has_structural_records or include_answer_claims
+        if requires_scope_decision and not isinstance(
+            scope_decision,
+            StructuralPublicScopeDecision,
+        ):
+            raise ContractValidationError(
+                "public mail bundle serialization requires a typed scope decision"
+            )
+        payload: dict[str, Any] = {
+            "public_schema": "mail_evidence_bundle_v1",
+            "producer_type": self.producer_type,
+            "created_at": self.created_at,
+            "mail_import": {
+                "status": self.mail_import_session.status,
+                "retention_policy": self.mail_import_session.retention_policy,
+                "raw_archive_retention_decision": (
+                    self.mail_import_session.raw_archive_retention_decision
+                ),
+                "import_profile": self.mail_import_session.import_profile,
+            },
+            "parse_status": self.mail_parse_run.status,
+        }
+        if not has_structural_records:
+            payload["structural_evidence"] = {"status": "not_present"}
+        else:
+            assert scope_decision is not None
+            item_by_id = {
+                item.source_inventory_item_id: item
+                for inventory in self.source_inventory
+                for item in inventory.items
+            }
+            if scope_decision.decision_state == "denied":
+                payload["structural_evidence"] = _structural_denial()
+            else:
+                payload["structural_evidence"] = {
+                    "status": "authorized",
+                    "source_inventory": [
+                        inventory.to_public_dict(scope_decision=scope_decision)
+                        for inventory in self.source_inventory
+                    ],
+                    "source_inventory_items": [
+                        item.to_public_dict(scope_decision=scope_decision)
+                        for item in self.source_inventory_items
+                    ],
+                    "structural_observations": [
+                        observation.to_public_dict(
+                            scope_decision=scope_decision,
+                            source_inventory_item=item_by_id.get(
+                                observation.source_inventory_item_id
+                            ),
+                        )
+                        for observation in self.structural_observations
+                    ],
+                }
+        assert_public_payload_safe(payload, "mail_evidence_bundle.public")
+        if include_answer_claims:
+            assert scope_decision is not None
+            if scope_decision.decision_state == "denied":
+                payload["answer_claims"] = _structural_denial()
+                return payload
+            ledger_by_id = {ledger.coverage_ledger_id: ledger for ledger in self.coverage_ledgers}
+            for claim in self.answer_claims:
+                ledger = ledger_by_id.get(claim.coverage_ledger_id)
+                if ledger is None:
+                    raise ContractValidationError(
+                        "public answer claim projection references an unknown ledger"
+                    )
+                if (
+                    ledger.authorization_binding is not None
+                    and scope_decision.authorization_binding != ledger.authorization_binding
+                ):
+                    raise ContractValidationError(
+                        "public answer claim scope decision does not match ledger authorization"
+                    )
+            # AnswerClaim.to_dict() is the separately approved nine-field
+            # wire contract.  The generic mail guard intentionally does not
+            # reinterpret its approved fingerprint/index field names.
+            payload["answer_claims"] = [claim.to_dict() for claim in self.answer_claims]
+        return payload
 
     def to_persistence_dict(self) -> dict[str, Any]:
         return _private_payload(self)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "MailEvidenceBundle":
-        return cls.from_persistence_dict(value)
+        raise ContractValidationError(
+            "public mail bundle projections are not persistence records; "
+            "use from_persistence_dict"
+        )
 
     @classmethod
     def from_persistence_dict(cls, value: dict[str, Any]) -> "MailEvidenceBundle":
@@ -567,12 +662,14 @@ class MailEvidenceBundle:
             "source_inventory",
             SourceInventory,
             required=False,
+            factory=SourceInventory.from_persistence_dict,
         )
         source_inventory_items = _record_list(
             item,
             "source_inventory_items",
             SourceInventoryItem,
             required=False,
+            factory=SourceInventoryItem.from_persistence_dict,
         )
         _validate_source_inventory_item_projection(source_inventories, source_inventory_items)
         claim_requirements = _record_list(
@@ -645,6 +742,7 @@ class MailEvidenceBundle:
                 "structural_observations",
                 StructuralObservation,
                 required=False,
+                factory=StructuralObservation.from_persistence_dict,
             ),
             claim_requirements=claim_requirements,
             coverage_ledgers=coverage_ledgers,
@@ -674,7 +772,7 @@ class MailEvidenceBundle:
             ),
             version_manifests=version_manifests,
         )
-        bundle.to_dict()
+        bundle.to_persistence_dict()
         return bundle
 
 
@@ -814,7 +912,7 @@ def build_mail_evidence_bundle(
         parse_warnings=warnings,
         created_at=resolved_created_at,
     )
-    bundle.to_dict()
+    bundle.to_persistence_dict()
     return bundle
 
 
@@ -1318,13 +1416,17 @@ def _public_payload(value: Any, context: str) -> dict[str, Any]:
     return payload
 
 
+def _structural_denial() -> dict[str, Any]:
+    return {"status": "denied", "reason_code": "scope_denied"}
+
+
 def _private_payload(value: Any) -> dict[str, Any]:
     payload = _private_plain(value)
     if not isinstance(payload, dict):
         raise ContractValidationError("private mail evidence payload must be an object")
     if isinstance(value, MailEvidenceBundle):
         payload["source_inventory_items"] = [
-            item.to_dict() for item in value.source_inventory_items
+            item.to_persistence_dict() for item in value.source_inventory_items
         ]
     return payload
 
@@ -1333,6 +1435,12 @@ def _private_plain(value: Any) -> Any:
     if isinstance(value, AnswerClaim):
         return value.to_persistence_dict()
     if isinstance(value, CoverageLedger):
+        return value.to_persistence_dict()
+    if isinstance(value, SourceInventory):
+        return value.to_persistence_dict()
+    if isinstance(value, SourceInventoryItem):
+        return value.to_persistence_dict()
+    if isinstance(value, StructuralObservation):
         return value.to_persistence_dict()
     if is_dataclass(value):
         return {
@@ -1469,11 +1577,11 @@ def _validate_source_inventory_item_projection(
     projected_items: Sequence[SourceInventoryItem],
 ) -> None:
     expected = {
-        item.source_inventory_item_id: item.to_dict()
+        item.source_inventory_item_id: item.to_persistence_dict()
         for inventory in inventories
         for item in inventory.items
     }
-    actual = {item.source_inventory_item_id: item.to_dict() for item in projected_items}
+    actual = {item.source_inventory_item_id: item.to_persistence_dict() for item in projected_items}
     if len(actual) != len(projected_items) or actual != expected:
         raise ContractValidationError(
             "mail bundle source inventory child projection does not match aggregates"

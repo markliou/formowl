@@ -216,10 +216,10 @@ class PostgreSQLMailEvidenceStoreTests(unittest.TestCase):
 
     def test_private_body_round_trips_but_public_query_remains_redacted(self) -> None:
         bundle = _mail_bundle(_paths.fresh_test_dir("mail-evidence-postgres-private-body"))
-        payload = bundle.to_dict()
+        payload = bundle.to_persistence_dict()
         private_text = "Review C:\\tmp\\archive.pst and SELECT * FROM mailbox_messages"
         payload["body_segments"][0]["text"] = private_text
-        private_bundle = MailEvidenceBundle.from_dict(payload)
+        private_bundle = MailEvidenceBundle.from_persistence_dict(payload)
         connection = _RecordingMailConnection()
         store = PostgreSQLMailEvidenceStore(connection)
 
@@ -250,7 +250,7 @@ class PostgreSQLMailEvidenceStoreTests(unittest.TestCase):
 
     def test_invalid_bundle_and_unsafe_lookup_fail_before_database_side_effects(self) -> None:
         bundle = _mail_bundle(_paths.fresh_test_dir("mail-evidence-postgres-invalid"))
-        payload = bundle.to_dict()
+        payload = bundle.to_persistence_dict()
         payload["mail_import_session"]["source_asset_id"] = "../asset_escape"
         connection = _RecordingMailConnection()
 
@@ -536,7 +536,7 @@ def _mail_archive(*, archive_id: str = "archive_launch") -> dict:
 
 
 def _with_optional_phase1_rows(bundle: MailEvidenceBundle) -> MailEvidenceBundle:
-    payload = bundle.to_dict()
+    payload = bundle.to_persistence_dict()
     parent_message = bundle.messages[0]
     embedded_message = EmailMessage(
         email_message_id="emailmsg_embedded_audit_001",
@@ -590,7 +590,7 @@ def _with_optional_phase1_rows(bundle: MailEvidenceBundle) -> MailEvidenceBundle
             source_observation_id=parent_message.source_observation_ids[0],
         ).to_dict()
     )
-    return MailEvidenceBundle.from_dict(payload)
+    return MailEvidenceBundle.from_persistence_dict(payload)
 
 
 def _mail_session_grant(
