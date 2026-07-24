@@ -167,6 +167,11 @@ class Issue51WP1ContractTests(unittest.TestCase):
         claim = AnswerClaim.create(
             state="FOUND",
             reason_codes=("direct_evidence",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            authorization_binding=authorization,
             claim_requirement_id=requirement.claim_requirement_id,
             coverage_ledger_id=ledger.coverage_ledger_id,
             evidence_snapshot_ids=("snapshot_wp1",),
@@ -318,19 +323,25 @@ class Issue51WP1ContractTests(unittest.TestCase):
         )
 
     def test_answer_claim_has_one_exact_public_wire_and_separate_private_wire(self) -> None:
+        bundle, source_inventory, requirement, ledger = _inventory_bundle()
+        manifest = bundle.version_manifests[0]
         claim = AnswerClaim.create(
             answer_claim_id="answer_claim_wp1",
             state="FOUND",
             reason_codes=("direct_evidence",),
-            claim_requirement_id="requirement_wp1",
-            coverage_ledger_id="coverage_wp1",
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            claim_requirement_id=requirement.claim_requirement_id,
+            coverage_ledger_id=ledger.coverage_ledger_id,
             evidence_snapshot_ids=("snapshot_wp1",),
-            source_fingerprint=FP,
-            parser_fingerprint=FP2,
-            tokenizer_fingerprint=FP,
-            index_fingerprint=FP2,
-            version_manifest_id="version_wp1",
-            implementation_fingerprint=FP,
+            source_fingerprint=manifest.source_fingerprint,
+            parser_fingerprint=manifest.parser_fingerprint,
+            tokenizer_fingerprint=manifest.tokenizer_fingerprint,
+            index_fingerprint=manifest.index_fingerprint,
+            version_manifest_id=manifest.version_manifest_id,
+            implementation_fingerprint=manifest.implementation_fingerprint,
         )
         expected_keys = {
             "state",
@@ -355,15 +366,221 @@ class Issue51WP1ContractTests(unittest.TestCase):
         self.assertIn("version_manifest_id", private)
         self.assertIn("implementation_fingerprint", private)
         self.assertEqual(
-            AnswerClaim.from_persistence_dict(private).to_persistence_dict(),
+            AnswerClaim.from_persistence_dict(
+                private,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+            ).to_persistence_dict(),
             private,
         )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.from_persistence_dict(
+                private,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+            )
+        for missing_key in (
+            "coverage_ledger_id",
+            "version_manifest_id",
+            "implementation_fingerprint",
+        ):
+            missing_binding = dict(private)
+            missing_binding.pop(missing_key)
+            with self.subTest(missing_key=missing_key):
+                with self.assertRaises(ContractValidationError):
+                    AnswerClaim.from_persistence_dict(
+                        missing_binding,
+                        coverage_ledger=ledger,
+                        claim_requirement=requirement,
+                        source_inventory=source_inventory,
+                        version_manifest=manifest,
+                    )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.from_dict(public).to_persistence_dict()
         for extra_key in ("answer_claim_id", "answer_claim_state", "state_2"):
             invalid = dict(public)
             invalid[extra_key] = "CONFLICT"
             with self.subTest(extra_key=extra_key):
                 with self.assertRaises(ContractValidationError):
                     AnswerClaim.from_dict(invalid)
+
+    def test_incomplete_ledger_supports_insufficient_coverage_claim(self) -> None:
+        bundle, source_inventory, requirement, ledger = _inventory_bundle()
+        manifest = bundle.version_manifests[0]
+        self.assertFalse(ledger.complete_authorized_scope)
+        self.assertTrue(ledger.binding_valid_for_claim(source_inventory, requirement, manifest))
+        claim = AnswerClaim.create(
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            evidence_snapshot_ids=(),
+        )
+        private = claim.to_persistence_dict()
+        restored = AnswerClaim.from_persistence_dict(
+            private,
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+        )
+        self.assertEqual(restored.to_dict(), claim.to_dict())
+        self.assertFalse(ledger.usable_for_claim(source_inventory, requirement, manifest))
+        for state in (
+            "FOUND",
+            "CONFLICT",
+            "NOT_FOUND_WITHIN_COMPLETE_SCOPE",
+            "INSUFFICIENT_COVERAGE",
+        ):
+            with self.subTest(state=state):
+                self.assertEqual(
+                    AnswerClaim.create(
+                        state=state,
+                        reason_codes=("wp1_binding_valid",),
+                        coverage_ledger=ledger,
+                        claim_requirement=requirement,
+                        source_inventory=source_inventory,
+                        version_manifest=manifest,
+                        evidence_snapshot_ids=(),
+                    ).state,
+                    state,
+                )
+
+    def test_answer_claim_rejects_invalid_typed_bindings(self) -> None:
+        bundle, source_inventory, requirement, ledger = _inventory_bundle()
+        manifest = bundle.version_manifests[0]
+        base = {
+            "state": "INSUFFICIENT_COVERAGE",
+            "reason_codes": ("incomplete_scope",),
+            "evidence_snapshot_ids": (),
+        }
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(**base)
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                **base,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+            )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                **base,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+            )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                **base,
+                coverage_ledger=ledger.to_dict(),
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+            )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                **base,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                source_fingerprint=FP2,
+            )
+        stale_manifest = replace(manifest, index_freshness="stale")
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                **base,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=stale_manifest,
+            )
+        mismatched_ledger = replace(
+            ledger,
+            version_binding=CoverageVersionBinding.from_manifest(
+                replace(manifest, index_fingerprint=FP2)
+            ),
+        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                **base,
+                coverage_ledger=mismatched_ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+            )
+        wrong_requirement = ClaimRequirement.create(
+            query_id="query_other",
+            kind="single_value",
+            target="ticket",
+        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                **base,
+                coverage_ledger=ledger,
+                claim_requirement=wrong_requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+            )
+        wrong_inventory = SourceInventory.create(
+            source_asset_id="asset_other",
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            items=(
+                SourceInventoryItem.create(
+                    source_asset_id="asset_other",
+                    structure_kind="message",
+                    content_type="message/rfc822",
+                    ordinal=0,
+                    processing_state="parsed",
+                    raw_retention_state="retained",
+                    source_fingerprint=FP,
+                    parser_fingerprint=FP2,
+                    permission_scope={"scope_type": "asset", "scope_id": "asset_other"},
+                ),
+            ),
+        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                **base,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=wrong_inventory,
+                version_manifest=manifest,
+            )
+        authorization = CoverageAuthorizationBinding(
+            actor_context_id="actor_wp1",
+            permission_revision="permission_wp1",
+            grant_revision="grant_wp1",
+        )
+        authorized_ledger = replace(ledger, authorization_binding=authorization)
+        wrong_authorization = replace(
+            authorization,
+            grant_revision="grant_other",
+        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                **base,
+                coverage_ledger=authorized_ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+            )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                **base,
+                coverage_ledger=authorized_ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                authorization_binding=wrong_authorization,
+            )
 
     def test_stale_and_mismatched_fingerprints_are_representable_but_unusable(self) -> None:
         fresh = VersionManifest.create(
@@ -468,6 +685,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             claim_requirement_id=requirement.claim_requirement_id,
             source_inventory_id=inventory.source_inventory_id,
             relevant_inventory_item_ids=(item.source_inventory_item_id,),
+            version_binding=None,
             complete_authorized_scope=False,
         )
         manifest = VersionManifest.create(
@@ -476,7 +694,6 @@ class Issue51WP1ContractTests(unittest.TestCase):
             tokenizer_fingerprint=FP,
             index_fingerprint=FP,
             implementation_fingerprint=FP,
-            index_freshness="stale",
         )
         authorization = CoverageAuthorizationBinding(
             actor_context_id="actor_wp1",
@@ -499,16 +716,21 @@ class Issue51WP1ContractTests(unittest.TestCase):
         claim = AnswerClaim.create(
             answer_claim_id="answer_claim_wp1",
             state="INSUFFICIENT_COVERAGE",
-            reason_codes=("stale_index",),
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=inventory,
+            version_manifest=manifest,
+            authorization_binding=authorization,
             claim_requirement_id=requirement.claim_requirement_id,
             coverage_ledger_id=ledger.coverage_ledger_id,
             evidence_snapshot_ids=(),
-            source_fingerprint=FP,
-            parser_fingerprint=FP2,
-            tokenizer_fingerprint=FP,
-            index_fingerprint=FP,
+            source_fingerprint=manifest.source_fingerprint,
+            parser_fingerprint=manifest.parser_fingerprint,
+            tokenizer_fingerprint=manifest.tokenizer_fingerprint,
+            index_fingerprint=manifest.index_fingerprint,
             version_manifest_id=manifest.version_manifest_id,
-            implementation_fingerprint=FP2,
+            implementation_fingerprint=manifest.implementation_fingerprint,
         )
         populated = replace(
             bundle,
@@ -969,24 +1191,33 @@ def _inventory_bundle() -> (
         target="ticket",
         created_at="2026-07-24T00:00:00+00:00",
     )
+    manifest = VersionManifest.create(
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        tokenizer_fingerprint=FP,
+        index_fingerprint=FP,
+        implementation_fingerprint=FP,
+        created_at="2026-07-24T00:00:00+00:00",
+    )
     ledger = CoverageLedger(
         query_id=requirement.query_id,
         claim_requirement_id=requirement.claim_requirement_id,
         source_inventory_id=inventory.source_inventory_id,
         relevant_inventory_item_ids=(inventory.items[0].source_inventory_item_id,),
+        version_binding=CoverageVersionBinding.from_manifest(manifest),
         complete_authorized_scope=False,
     )
     claim = AnswerClaim.create(
         answer_claim_id="answer_inventory_wp1",
         state="INSUFFICIENT_COVERAGE",
         reason_codes=("incomplete_scope",),
+        coverage_ledger=ledger,
+        claim_requirement=requirement,
+        source_inventory=inventory,
+        version_manifest=manifest,
         claim_requirement_id=requirement.claim_requirement_id,
         coverage_ledger_id=ledger.coverage_ledger_id,
         evidence_snapshot_ids=(),
-        source_fingerprint=FP,
-        parser_fingerprint=FP2,
-        tokenizer_fingerprint=FP,
-        index_fingerprint=FP,
     )
     populated = replace(
         bundle,
@@ -994,6 +1225,7 @@ def _inventory_bundle() -> (
         claim_requirements=[requirement],
         coverage_ledgers=[ledger],
         answer_claims=[claim],
+        version_manifests=[manifest],
     )
     return populated, inventory, requirement, ledger
 

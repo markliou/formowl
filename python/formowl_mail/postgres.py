@@ -338,6 +338,22 @@ class PostgreSQLMailEvidenceStore:
             ),
             "coverage_ledger_id",
         )
+        version_manifests = _sort_records(
+            _query_import_rows(
+                self.connection,
+                table_name="version_manifest",
+                id_field="version_manifest_id",
+                mail_import_session_id=import_session_id,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
+                factory=VersionManifest.from_dict,
+            ),
+            "version_manifest_id",
+        )
+        inventory_by_id = {item.source_inventory_id: item for item in source_inventories}
+        requirement_by_id = {item.claim_requirement_id: item for item in claim_requirements}
+        ledger_by_id = {item.coverage_ledger_id: item for item in coverage_ledgers}
+        manifest_by_id = {item.version_manifest_id: item for item in version_manifests}
         answer_claims = _sort_records(
             _query_import_rows(
                 self.connection,
@@ -353,21 +369,26 @@ class PostgreSQLMailEvidenceStore:
                     claim_requirements,
                     coverage_ledgers,
                 ),
-                factory=AnswerClaim.from_persistence_dict,
+                factory=lambda payload: AnswerClaim.from_persistence_dict(
+                    payload,
+                    coverage_ledger=ledger_by_id.get(payload.get("coverage_ledger_id")),
+                    claim_requirement=requirement_by_id.get(payload.get("claim_requirement_id")),
+                    source_inventory=(
+                        inventory_by_id.get(
+                            ledger_by_id[payload["coverage_ledger_id"]].source_inventory_id
+                        )
+                        if payload.get("coverage_ledger_id") in ledger_by_id
+                        else None
+                    ),
+                    version_manifest=manifest_by_id.get(payload.get("version_manifest_id")),
+                    authorization_binding=(
+                        ledger_by_id[payload["coverage_ledger_id"]].authorization_binding
+                        if payload.get("coverage_ledger_id") in ledger_by_id
+                        else None
+                    ),
+                ),
             ),
             "answer_claim_id",
-        )
-        version_manifests = _sort_records(
-            _query_import_rows(
-                self.connection,
-                table_name="version_manifest",
-                id_field="version_manifest_id",
-                mail_import_session_id=import_session_id,
-                workspace_id=workspace_id,
-                owner_user_id=owner_user_id,
-                factory=VersionManifest.from_dict,
-            ),
-            "version_manifest_id",
         )
         if not parse_runs:
             raise ContractValidationError("mail evidence store row set is missing mail_parse_run")

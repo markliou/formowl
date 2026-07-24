@@ -1473,39 +1473,38 @@ class CoverageLedger:
     def from_persistence_dict(cls, value: Mapping[str, Any]) -> "CoverageLedger":
         return cls.from_dict(value)
 
-    def usable_for_claim(
+    def binding_valid_for_claim(
         self,
         source_inventory: SourceInventory,
         claim_requirement: ClaimRequirement,
         expected_manifest: VersionManifest,
         expected_authorization_binding: CoverageAuthorizationBinding | None = None,
     ) -> bool:
-        """Return true only after validating all typed proof inputs."""
+        """Validate typed referential and version bindings without requiring completeness.
+
+        An incomplete ledger is a valid input to an ``INSUFFICIENT_COVERAGE``
+        claim.  Definitive claim states use ``usable_for_claim`` below, which
+        adds the complete-scope proof requirements.
+        """
 
         if not isinstance(source_inventory, SourceInventory):
-            raise ContractValidationError("usable_for_claim requires SourceInventory")
+            raise ContractValidationError("binding validation requires SourceInventory")
         if not isinstance(claim_requirement, ClaimRequirement):
-            raise ContractValidationError("usable_for_claim requires ClaimRequirement")
+            raise ContractValidationError("binding validation requires ClaimRequirement")
         if not isinstance(expected_manifest, VersionManifest):
-            raise ContractValidationError("usable_for_claim requires VersionManifest")
+            raise ContractValidationError("binding validation requires VersionManifest")
         if expected_authorization_binding is not None and not isinstance(
             expected_authorization_binding,
             CoverageAuthorizationBinding,
         ):
-            raise ContractValidationError("usable_for_claim expected authorization must be typed")
-        if not self.complete_authorized_scope:
-            return False
+            raise ContractValidationError("binding validation authorization must be typed")
         if self.source_inventory_id != source_inventory.source_inventory_id:
             return False
         if self.claim_requirement_id != claim_requirement.claim_requirement_id:
             return False
         if self.query_id != claim_requirement.query_id:
             return False
-        if self.authorization_binding is None or self.version_binding is None:
-            return False
-        if expected_authorization_binding is not None and (
-            self.authorization_binding != expected_authorization_binding
-        ):
+        if self.version_binding is None:
             return False
         if expected_manifest.index_freshness != "fresh":
             return False
@@ -1516,9 +1515,37 @@ class CoverageLedger:
             or source_inventory.parser_fingerprint != expected_manifest.parser_fingerprint
         ):
             return False
+        if self.authorization_binding is None:
+            if expected_authorization_binding is not None:
+                return False
+        elif expected_authorization_binding != self.authorization_binding:
+            return False
         item_by_id = {item.source_inventory_item_id: item for item in source_inventory.items}
         if set(self.relevant_inventory_item_ids) - set(item_by_id):
             return False
+        return True
+
+    def usable_for_claim(
+        self,
+        source_inventory: SourceInventory,
+        claim_requirement: ClaimRequirement,
+        expected_manifest: VersionManifest,
+        expected_authorization_binding: CoverageAuthorizationBinding | None = None,
+    ) -> bool:
+        """Return true only after validating all typed proof inputs."""
+
+        if not self.binding_valid_for_claim(
+            source_inventory,
+            claim_requirement,
+            expected_manifest,
+            expected_authorization_binding,
+        ):
+            return False
+        if not self.complete_authorized_scope:
+            return False
+        if self.authorization_binding is None or self.version_binding is None:
+            return False
+        item_by_id = {item.source_inventory_item_id: item for item in source_inventory.items}
         if set(self.searched_structural_observation_ids) & set(
             self.searched_ordinary_observation_ids
         ):
@@ -1609,8 +1636,50 @@ class AnswerClaim:
     answer_claim_id: str = ""
     version_manifest_id: str | None = None
     implementation_fingerprint: str | None = None
+    coverage_ledger: CoverageLedger | None = field(default=None, repr=False, compare=False)
+    claim_requirement: ClaimRequirement | None = field(default=None, repr=False, compare=False)
+    source_inventory: SourceInventory | None = field(default=None, repr=False, compare=False)
+    version_manifest: VersionManifest | None = field(default=None, repr=False, compare=False)
+    authorization_binding: CoverageAuthorizationBinding | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    _wire_only: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if self._wire_only:
+            if any(
+                binding is not None
+                for binding in (
+                    self.coverage_ledger,
+                    self.claim_requirement,
+                    self.source_inventory,
+                    self.version_manifest,
+                    self.authorization_binding,
+                )
+            ):
+                raise ContractValidationError("wire-only answer claims cannot carry bindings")
+        else:
+            normalized = _validated_answer_claim_binding(
+                {
+                    "claim_requirement_id": self.claim_requirement_id,
+                    "coverage_ledger_id": self.coverage_ledger_id,
+                    "source_fingerprint": self.source_fingerprint,
+                    "parser_fingerprint": self.parser_fingerprint,
+                    "tokenizer_fingerprint": self.tokenizer_fingerprint,
+                    "index_fingerprint": self.index_fingerprint,
+                    "version_manifest_id": self.version_manifest_id,
+                    "implementation_fingerprint": self.implementation_fingerprint,
+                },
+                coverage_ledger=self.coverage_ledger,
+                claim_requirement=self.claim_requirement,
+                source_inventory=self.source_inventory,
+                version_manifest=self.version_manifest,
+                authorization_binding=self.authorization_binding,
+            )
+            for field_name, value in normalized.items():
+                object.__setattr__(self, field_name, value)
         _choice(self.state, ANSWER_CLAIM_STATE_VALUES, "answer_claim.state")
         if not self.reason_codes:
             raise ContractValidationError("answer claim requires at least one reason code")
@@ -1653,16 +1722,38 @@ class AnswerClaim:
             )
 
     @classmethod
-    def create(cls, **values: Any) -> "AnswerClaim":
+    def create(
+        cls,
+        *,
+        coverage_ledger: CoverageLedger | None = None,
+        claim_requirement: ClaimRequirement | None = None,
+        source_inventory: SourceInventory | None = None,
+        version_manifest: VersionManifest | None = None,
+        authorization_binding: CoverageAuthorizationBinding | None = None,
+        **values: Any,
+    ) -> "AnswerClaim":
         values = dict(values)
         for field_name in ("reason_codes", "evidence_snapshot_ids"):
             if field_name in values:
-                values[field_name] = list(values[field_name])
-        if {"answer_claim_id", "version_manifest_id", "implementation_fingerprint"}.intersection(
-            values
-        ):
-            return cls.from_persistence_dict(values)
-        return cls.from_dict(values)
+                values[field_name] = tuple(values[field_name])
+        values.update(
+            _validated_answer_claim_binding(
+                values,
+                coverage_ledger=coverage_ledger,
+                claim_requirement=claim_requirement,
+                source_inventory=source_inventory,
+                version_manifest=version_manifest,
+                authorization_binding=authorization_binding,
+            )
+        )
+        return cls(
+            **values,
+            coverage_ledger=coverage_ledger,
+            claim_requirement=claim_requirement,
+            source_inventory=source_inventory,
+            version_manifest=version_manifest,
+            authorization_binding=authorization_binding,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -1680,6 +1771,27 @@ class AnswerClaim:
         return payload
 
     def to_persistence_dict(self) -> dict[str, Any]:
+        if self._wire_only:
+            raise ContractValidationError(
+                "wire-only answer claims cannot be persisted without validated bindings"
+            )
+        _validated_answer_claim_binding(
+            {
+                "claim_requirement_id": self.claim_requirement_id,
+                "coverage_ledger_id": self.coverage_ledger_id,
+                "source_fingerprint": self.source_fingerprint,
+                "parser_fingerprint": self.parser_fingerprint,
+                "tokenizer_fingerprint": self.tokenizer_fingerprint,
+                "index_fingerprint": self.index_fingerprint,
+                "version_manifest_id": self.version_manifest_id,
+                "implementation_fingerprint": self.implementation_fingerprint,
+            },
+            coverage_ledger=self.coverage_ledger,
+            claim_requirement=self.claim_requirement,
+            source_inventory=self.source_inventory,
+            version_manifest=self.version_manifest,
+            authorization_binding=self.authorization_binding,
+        )
         payload = {
             "answer_claim_id": self.answer_claim_id,
             **self.to_dict(),
@@ -1704,31 +1816,111 @@ class AnswerClaim:
             parser_fingerprint=_required_str(item, "parser_fingerprint"),
             tokenizer_fingerprint=_required_str(item, "tokenizer_fingerprint"),
             index_fingerprint=_required_str(item, "index_fingerprint"),
+            _wire_only=True,
         )
 
     @classmethod
-    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "AnswerClaim":
+    def from_persistence_dict(
+        cls,
+        value: Mapping[str, Any],
+        *,
+        coverage_ledger: CoverageLedger | None = None,
+        claim_requirement: ClaimRequirement | None = None,
+        source_inventory: SourceInventory | None = None,
+        version_manifest: VersionManifest | None = None,
+        authorization_binding: CoverageAuthorizationBinding | None = None,
+    ) -> "AnswerClaim":
         item = _mapping(value, "answer_claim.persistence")
         _require_exact_keys(
             item,
             _ANSWER_CLAIM_PERSISTENCE_KEYS,
             "answer_claim.persistence",
-            required={"answer_claim_id"} | _ANSWER_CLAIM_PUBLIC_KEYS,
+            required=_ANSWER_CLAIM_PERSISTENCE_KEYS,
+        )
+        normalized = _validated_answer_claim_binding(
+            item,
+            coverage_ledger=coverage_ledger,
+            claim_requirement=claim_requirement,
+            source_inventory=source_inventory,
+            version_manifest=version_manifest,
+            authorization_binding=authorization_binding,
         )
         return cls(
             answer_claim_id=_required_str(item, "answer_claim_id"),
             state=_required_str(item, "state"),
             reason_codes=_tuple_strings(item, "reason_codes", codes=True),
-            claim_requirement_id=_required_str(item, "claim_requirement_id"),
-            coverage_ledger_id=_required_str(item, "coverage_ledger_id"),
+            claim_requirement_id=normalized["claim_requirement_id"],
+            coverage_ledger_id=normalized["coverage_ledger_id"],
             evidence_snapshot_ids=_tuple_strings(item, "evidence_snapshot_ids", ids=True),
-            source_fingerprint=_required_str(item, "source_fingerprint"),
-            parser_fingerprint=_required_str(item, "parser_fingerprint"),
-            tokenizer_fingerprint=_required_str(item, "tokenizer_fingerprint"),
-            index_fingerprint=_required_str(item, "index_fingerprint"),
-            version_manifest_id=_optional_str(item, "version_manifest_id"),
-            implementation_fingerprint=_optional_str(item, "implementation_fingerprint"),
+            source_fingerprint=normalized["source_fingerprint"],
+            parser_fingerprint=normalized["parser_fingerprint"],
+            tokenizer_fingerprint=normalized["tokenizer_fingerprint"],
+            index_fingerprint=normalized["index_fingerprint"],
+            version_manifest_id=normalized["version_manifest_id"],
+            implementation_fingerprint=normalized["implementation_fingerprint"],
+            coverage_ledger=coverage_ledger,
+            claim_requirement=claim_requirement,
+            source_inventory=source_inventory,
+            version_manifest=version_manifest,
+            authorization_binding=authorization_binding,
         )
+
+
+def _validated_answer_claim_binding(
+    values: Mapping[str, Any],
+    *,
+    coverage_ledger: CoverageLedger | None,
+    claim_requirement: ClaimRequirement | None,
+    source_inventory: SourceInventory | None,
+    version_manifest: VersionManifest | None,
+    authorization_binding: CoverageAuthorizationBinding | None,
+) -> dict[str, Any]:
+    if not isinstance(coverage_ledger, CoverageLedger):
+        raise ContractValidationError("answer claim requires a typed CoverageLedger")
+    if not isinstance(claim_requirement, ClaimRequirement):
+        raise ContractValidationError("answer claim requires a typed ClaimRequirement")
+    if not isinstance(source_inventory, SourceInventory):
+        raise ContractValidationError("answer claim requires a typed SourceInventory")
+    if not isinstance(version_manifest, VersionManifest):
+        raise ContractValidationError("answer claim requires a typed VersionManifest")
+    if authorization_binding is not None and not isinstance(
+        authorization_binding,
+        CoverageAuthorizationBinding,
+    ):
+        raise ContractValidationError("answer claim authorization binding must be typed")
+    expected_authorization = coverage_ledger.authorization_binding
+    if expected_authorization is not None:
+        if authorization_binding is None or authorization_binding != expected_authorization:
+            raise ContractValidationError(
+                "answer claim authorization binding does not match coverage"
+            )
+    elif authorization_binding is not None:
+        raise ContractValidationError(
+            "answer claim supplied authorization without a ledger binding"
+        )
+    if not coverage_ledger.binding_valid_for_claim(
+        source_inventory,
+        claim_requirement,
+        version_manifest,
+        authorization_binding,
+    ):
+        raise ContractValidationError("answer claim coverage binding is not usable")
+
+    derived = {
+        "claim_requirement_id": claim_requirement.claim_requirement_id,
+        "coverage_ledger_id": coverage_ledger.coverage_ledger_id,
+        "source_fingerprint": version_manifest.source_fingerprint,
+        "parser_fingerprint": version_manifest.parser_fingerprint,
+        "tokenizer_fingerprint": version_manifest.tokenizer_fingerprint,
+        "index_fingerprint": version_manifest.index_fingerprint,
+        "version_manifest_id": version_manifest.version_manifest_id,
+        "implementation_fingerprint": version_manifest.implementation_fingerprint,
+    }
+    for field_name, expected_value in derived.items():
+        supplied_value = values.get(field_name)
+        if supplied_value is not None and supplied_value != expected_value:
+            raise ContractValidationError("answer claim binding fields do not match typed evidence")
+    return derived
 
 
 def fingerprint_manifest(

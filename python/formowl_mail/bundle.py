@@ -575,6 +575,29 @@ class MailEvidenceBundle:
             required=False,
         )
         _validate_source_inventory_item_projection(source_inventories, source_inventory_items)
+        claim_requirements = _record_list(
+            item,
+            "claim_requirements",
+            ClaimRequirement,
+            required=False,
+        )
+        coverage_ledgers = _record_list(
+            item,
+            "coverage_ledgers",
+            CoverageLedger,
+            required=False,
+            factory=CoverageLedger.from_persistence_dict,
+        )
+        version_manifests = _record_list(
+            item,
+            "version_manifests",
+            VersionManifest,
+            required=False,
+        )
+        inventory_by_id = {record.source_inventory_id: record for record in source_inventories}
+        requirement_by_id = {record.claim_requirement_id: record for record in claim_requirements}
+        ledger_by_id = {record.coverage_ledger_id: record for record in coverage_ledgers}
+        manifest_by_id = {record.version_manifest_id: record for record in version_manifests}
         bundle = cls(
             mail_evidence_bundle_id=_required_str(item, "mail_evidence_bundle_id"),
             producer_type=_required_choice(item, "producer_type", _PRODUCER_TYPES),
@@ -623,32 +646,33 @@ class MailEvidenceBundle:
                 StructuralObservation,
                 required=False,
             ),
-            claim_requirements=_record_list(
-                item,
-                "claim_requirements",
-                ClaimRequirement,
-                required=False,
-            ),
-            coverage_ledgers=_record_list(
-                item,
-                "coverage_ledgers",
-                CoverageLedger,
-                required=False,
-                factory=CoverageLedger.from_persistence_dict,
-            ),
+            claim_requirements=claim_requirements,
+            coverage_ledgers=coverage_ledgers,
             answer_claims=_record_list(
                 item,
                 "answer_claims",
                 AnswerClaim,
                 required=False,
-                factory=AnswerClaim.from_persistence_dict,
+                factory=lambda payload: AnswerClaim.from_persistence_dict(
+                    payload,
+                    coverage_ledger=ledger_by_id.get(payload.get("coverage_ledger_id")),
+                    claim_requirement=requirement_by_id.get(payload.get("claim_requirement_id")),
+                    source_inventory=(
+                        inventory_by_id.get(
+                            ledger_by_id[payload["coverage_ledger_id"]].source_inventory_id
+                        )
+                        if payload.get("coverage_ledger_id") in ledger_by_id
+                        else None
+                    ),
+                    version_manifest=manifest_by_id.get(payload.get("version_manifest_id")),
+                    authorization_binding=(
+                        ledger_by_id[payload["coverage_ledger_id"]].authorization_binding
+                        if payload.get("coverage_ledger_id") in ledger_by_id
+                        else None
+                    ),
+                ),
             ),
-            version_manifests=_record_list(
-                item,
-                "version_manifests",
-                VersionManifest,
-                required=False,
-            ),
+            version_manifests=version_manifests,
         )
         bundle.to_dict()
         return bundle
