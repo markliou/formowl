@@ -12,6 +12,7 @@ from formowl_contract import (
     ContractValidationError,
     CoverageLedger,
     DisplayPagination,
+    EXCLUSION_REASON_CODE_VALUES,
     SourceInventoryItem,
     StructuralCell,
     StructuralColumn,
@@ -202,6 +203,75 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 index_fingerprint=FP,
             )
 
+    def test_intentionally_excluded_requires_closed_complete_proof(self) -> None:
+        valid = _excluded_item().to_dict()
+        proof_fields = (
+            "exclusion_policy_version_id",
+            "exclusion_authorized_actor_id",
+            "exclusion_reason_code",
+            "exclusion_claim_scope_proof_sha256",
+        )
+        for field_name in proof_fields:
+            missing = dict(valid)
+            missing.pop(field_name)
+            with self.subTest(missing=field_name):
+                with self.assertRaises(ContractValidationError):
+                    SourceInventoryItem.from_dict(missing)
+
+        wrong_types = {
+            "exclusion_policy_version_id": 123,
+            "exclusion_authorized_actor_id": 123,
+            "exclusion_reason_code": 123,
+            "exclusion_claim_scope_proof_sha256": 123,
+        }
+        for field_name, wrong_type in wrong_types.items():
+            invalid = dict(valid)
+            invalid[field_name] = wrong_type
+            with self.subTest(wrong_type=field_name):
+                with self.assertRaises(ContractValidationError):
+                    SourceInventoryItem.from_dict(invalid)
+
+        unsafe_values = {
+            "exclusion_policy_version_id": "/private/policy",
+            "exclusion_authorized_actor_id": "postgresql://actor",
+            "exclusion_reason_code": "SELECT * FROM reasons",
+            "exclusion_claim_scope_proof_sha256": "/private/proof",
+        }
+        for field_name, unsafe_value in unsafe_values.items():
+            invalid = dict(valid)
+            invalid[field_name] = unsafe_value
+            with self.subTest(unsafe_value=field_name):
+                with self.assertRaises(ContractValidationError):
+                    SourceInventoryItem.from_dict(invalid)
+
+        invalid_hash = dict(valid)
+        invalid_hash["exclusion_claim_scope_proof_sha256"] = "sha256:" + "g" * 64
+        with self.assertRaises(ContractValidationError):
+            SourceInventoryItem.from_dict(invalid_hash)
+
+        self.assertIn(valid["exclusion_reason_code"], EXCLUSION_REASON_CODE_VALUES)
+
+    def test_exclusion_proof_is_rejected_for_non_excluded_states(self) -> None:
+        for processing_state in (
+            "parsed",
+            "preserved_unparsed",
+            "unsupported",
+            "failed",
+        ):
+            invalid = dict(_excluded_item().to_dict())
+            invalid["processing_state"] = processing_state
+            with self.subTest(processing_state=processing_state):
+                with self.assertRaises(ContractValidationError):
+                    SourceInventoryItem.from_dict(invalid)
+
+    def test_exclusion_proof_changes_deterministic_inventory_id(self) -> None:
+        first = _excluded_item(proof=FP)
+        second = _excluded_item(proof=FP2)
+        self.assertNotEqual(
+            first.source_inventory_item_id,
+            second.source_inventory_item_id,
+        )
+
     def test_answer_claim_has_one_exact_public_wire_and_separate_private_wire(self) -> None:
         claim = AnswerClaim.create(
             answer_claim_id="answer_claim_wp1",
@@ -295,11 +365,15 @@ class Issue51WP1ContractTests(unittest.TestCase):
             structure_kind="message",
             content_type="message/rfc822",
             ordinal=0,
-            processing_state="preserved_unparsed",
+            processing_state="intentionally_excluded",
             raw_retention_state="externally_managed",
             source_fingerprint=FP,
             parser_fingerprint=FP2,
             permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
+            exclusion_policy_version_id="policy_version_wp1",
+            exclusion_authorized_actor_id="actor_wp1",
+            exclusion_reason_code="outside_claim_scope",
+            exclusion_claim_scope_proof_sha256=FP2,
         )
         requirement = ClaimRequirement.create(
             query_id="query_wp1",
@@ -369,6 +443,10 @@ class Issue51WP1ContractTests(unittest.TestCase):
         self.assertIsNotNone(round_trip)
         self.assertEqual(round_trip.to_dict(), payload)
         self.assertEqual(
+            round_trip.source_inventory[0].exclusion_claim_scope_proof_sha256,
+            FP2,
+        )
+        self.assertEqual(
             set(evidence_coverage_postgre_sql_tables()),
             {
                 "source_inventory_item",
@@ -416,6 +494,24 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 PostgreSQLMailEvidenceStore(connection).upsert_bundle(bundle)
                 unit.commit()
         self.assertEqual(connection.rows, {})
+
+
+def _excluded_item(*, proof: str = FP) -> SourceInventoryItem:
+    return SourceInventoryItem.create(
+        source_asset_id="asset_wp1",
+        structure_kind="message",
+        content_type="message/rfc822",
+        ordinal=0,
+        processing_state="intentionally_excluded",
+        raw_retention_state="retained",
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
+        exclusion_policy_version_id="policy_version_wp1",
+        exclusion_authorized_actor_id="actor_wp1",
+        exclusion_reason_code="outside_claim_scope",
+        exclusion_claim_scope_proof_sha256=proof,
+    )
 
 
 def _minimal_bundle() -> MailEvidenceBundle:

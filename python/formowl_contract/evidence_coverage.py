@@ -38,6 +38,14 @@ RAW_RETENTION_STATE_VALUES = (
     "deleted_by_policy",
     "externally_managed",
 )
+EXCLUSION_REASON_CODE_VALUES = (
+    "outside_claim_scope",
+    "policy_scope_exclusion",
+    "privacy_restriction",
+    "unsupported_by_policy",
+    "user_requested_exclusion",
+    "duplicate_source",
+)
 CLAIM_REQUIREMENT_KIND_VALUES = (
     "single_value",
     "latest_value",
@@ -279,6 +287,10 @@ class SourceInventoryItem:
     source_fingerprint: str
     parser_fingerprint: str
     permission_scope: Mapping[str, Any]
+    exclusion_policy_version_id: str | None = None
+    exclusion_authorized_actor_id: str | None = None
+    exclusion_reason_code: str | None = None
+    exclusion_claim_scope_proof_sha256: str | None = None
     parent_inventory_item_id: str | None = None
     location: Mapping[str, Any] = field(default_factory=dict)
     version_lineage: tuple[str, ...] = ()
@@ -295,6 +307,7 @@ class SourceInventoryItem:
         _fingerprint(self.source_fingerprint, "source_fingerprint")
         _fingerprint(self.parser_fingerprint, "parser_fingerprint")
         _safe_mapping(self.permission_scope, "source_inventory_item.permission_scope")
+        _validate_exclusion_proof(self)
         _optional_id(self.parent_inventory_item_id, "parent_inventory_item_id")
         _safe_mapping(self.location, "source_inventory_item.location")
         _tuple_of_strings(self.version_lineage, "version_lineage", ids=True)
@@ -308,6 +321,13 @@ class SourceInventoryItem:
         for field_name in ("version_lineage", "source_observation_ids"):
             if field_name in values:
                 values[field_name] = list(values[field_name])
+        for field_name in (
+            "exclusion_policy_version_id",
+            "exclusion_authorized_actor_id",
+            "exclusion_reason_code",
+            "exclusion_claim_scope_proof_sha256",
+        ):
+            values.setdefault(field_name, None)
         values.setdefault(
             "source_inventory_item_id",
             stable_resource_contract_id(
@@ -337,6 +357,12 @@ class SourceInventoryItem:
             source_fingerprint=_required_str(item, "source_fingerprint"),
             parser_fingerprint=_required_str(item, "parser_fingerprint"),
             permission_scope=_required_mapping(item, "permission_scope"),
+            exclusion_policy_version_id=_optional_str(item, "exclusion_policy_version_id"),
+            exclusion_authorized_actor_id=_optional_str(item, "exclusion_authorized_actor_id"),
+            exclusion_reason_code=_optional_str(item, "exclusion_reason_code"),
+            exclusion_claim_scope_proof_sha256=_optional_str(
+                item, "exclusion_claim_scope_proof_sha256"
+            ),
             parent_inventory_item_id=_optional_str(item, "parent_inventory_item_id"),
             location=_optional_mapping(item, "location", {}),
             version_lineage=_tuple_strings(item, "version_lineage"),
@@ -1131,6 +1157,36 @@ def _dataclass_payload(value: Any) -> dict[str, Any]:
     return payload
 
 
+def _validate_exclusion_proof(item: SourceInventoryItem) -> None:
+    fields = (
+        item.exclusion_policy_version_id,
+        item.exclusion_authorized_actor_id,
+        item.exclusion_reason_code,
+        item.exclusion_claim_scope_proof_sha256,
+    )
+    if item.processing_state == "intentionally_excluded":
+        if any(value is None for value in fields):
+            raise ContractValidationError(
+                "intentionally_excluded inventory items require complete exclusion proof"
+            )
+        _id(item.exclusion_policy_version_id, "exclusion_policy_version_id")
+        _id(item.exclusion_authorized_actor_id, "exclusion_authorized_actor_id")
+        _choice(
+            item.exclusion_reason_code,
+            EXCLUSION_REASON_CODE_VALUES,
+            "exclusion_reason_code",
+        )
+        _fingerprint(
+            item.exclusion_claim_scope_proof_sha256,
+            "exclusion_claim_scope_proof_sha256",
+        )
+        return
+    if any(value is not None for value in fields):
+        raise ContractValidationError(
+            "exclusion proof fields are only valid for intentionally_excluded items"
+        )
+
+
 def _public_plain(value: Any) -> Any:
     if is_dataclass(value):
         return {
@@ -1424,6 +1480,7 @@ __all__ = [
     "CoverageLedger",
     "DisplayPagination",
     "EvidenceVersionManifest",
+    "EXCLUSION_REASON_CODE_VALUES",
     "FingerprintManifest",
     "INDEX_FRESHNESS_VALUES",
     "IndexFreshness",
