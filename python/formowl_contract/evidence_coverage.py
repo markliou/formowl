@@ -1405,6 +1405,12 @@ class CoverageProofRecord:
             "coverage_proof.ordinary_observation_ids",
             ids=True,
         )
+        if len(self.structural_observation_ids) != len(set(self.structural_observation_ids)):
+            raise ContractValidationError(
+                "coverage proof structural observation IDs must be unique"
+            )
+        if len(self.ordinary_observation_ids) != len(set(self.ordinary_observation_ids)):
+            raise ContractValidationError("coverage proof ordinary observation IDs must be unique")
         _optional_fingerprint(
             self.populated_value_fingerprint,
             "coverage_proof.populated_value_fingerprint",
@@ -2483,8 +2489,8 @@ def _coverage_proof_semantic_key(record: CoverageProofRecord) -> tuple[Any, ...]
         record.version_manifest_id,
         record.inventory_item_id,
         record.proof_kind,
-        record.structural_observation_ids,
-        record.ordinary_observation_ids,
+        frozenset(record.structural_observation_ids),
+        frozenset(record.ordinary_observation_ids),
         record.populated_value_fingerprint,
     )
 

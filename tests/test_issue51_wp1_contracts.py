@@ -1315,6 +1315,64 @@ class Issue51WP1ContractTests(unittest.TestCase):
                         coverage_ledger_id="",
                     )
 
+        for proof_kind, observation_field in (
+            ("structural", "structural_observation_ids"),
+            ("ordinary", "ordinary_observation_ids"),
+        ):
+            with self.subTest(repeated_observation_ids=proof_kind):
+                with self.assertRaises(ContractValidationError):
+                    CoverageProofRecord.create(
+                        source_inventory_id=source_inventory.source_inventory_id,
+                        claim_requirement_id=requirement.claim_requirement_id,
+                        version_manifest_id=manifest.version_manifest_id,
+                        inventory_item_id=source_inventory.items[0].source_inventory_item_id,
+                        proof_kind=proof_kind,
+                        **{
+                            observation_field: (
+                                "observation_direct_wp1_a",
+                                "observation_direct_wp1_a",
+                            )
+                        },
+                    )
+
+        for proof_kind, observation_field in (
+            ("structural", "structural_observation_ids"),
+            ("ordinary", "ordinary_observation_ids"),
+        ):
+            with self.subTest(reversed_semantic_order=proof_kind):
+                first = CoverageProofRecord.create(
+                    source_inventory_id=source_inventory.source_inventory_id,
+                    claim_requirement_id=requirement.claim_requirement_id,
+                    version_manifest_id=manifest.version_manifest_id,
+                    inventory_item_id=source_inventory.items[0].source_inventory_item_id,
+                    proof_kind=proof_kind,
+                    **{
+                        observation_field: (
+                            "observation_direct_wp1_a",
+                            "observation_direct_wp1_b",
+                        )
+                    },
+                )
+                second = CoverageProofRecord.create(
+                    source_inventory_id=source_inventory.source_inventory_id,
+                    claim_requirement_id=requirement.claim_requirement_id,
+                    version_manifest_id=manifest.version_manifest_id,
+                    inventory_item_id=source_inventory.items[0].source_inventory_item_id,
+                    proof_kind=proof_kind,
+                    **{
+                        observation_field: (
+                            "observation_direct_wp1_b",
+                            "observation_direct_wp1_a",
+                        )
+                    },
+                )
+                with self.assertRaises(ContractValidationError):
+                    replace(
+                        ledger,
+                        proof_records=(first, second),
+                        coverage_ledger_id="",
+                    )
+
     def test_answer_claim_rejects_invalid_typed_bindings(self) -> None:
         bundle, source_inventory, requirement, ledger = _inventory_bundle()
         manifest = bundle.version_manifests[0]
