@@ -276,21 +276,32 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
                 changed,
             )
 
-        item = replace(inventory.items[0], processing_state="failed")
-        failed_inventory = SourceInventory(
-            source_inventory_id=inventory.source_inventory_id,
+        failed_item_payload = inventory.items[0].to_persistence_dict()
+        failed_item_payload.pop("source_inventory_item_id")
+        failed_item_payload["source_inventory_id"] = None
+        failed_item_payload["processing_state"] = "failed"
+        item = SourceInventoryItem.create(**failed_item_payload)
+        failed_inventory = SourceInventory.create(
             source_asset_id=inventory.source_asset_id,
             source_fingerprint=inventory.source_fingerprint,
             parser_fingerprint=inventory.parser_fingerprint,
             items=(item,),
             created_at=inventory.created_at,
         )
+        failed_item = failed_inventory.items[0]
         failed_ledger = _complete_ledger(
             failed_inventory,
             requirement,
             manifest,
             authorization,
-            replace(proof, inventory_item_id=item.source_inventory_item_id),
+            CoverageProofRecord.create(
+                source_inventory_id=failed_inventory.source_inventory_id,
+                claim_requirement_id=requirement.claim_requirement_id,
+                version_manifest_id=manifest.version_manifest_id,
+                inventory_item_id=failed_item.source_inventory_item_id,
+                proof_kind="structural",
+                structural_observation_ids=("observation_wp1",),
+            ),
         )
         self.assertFalse(
             failed_ledger.usable_for_claim(
