@@ -285,7 +285,7 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
             ledger.usable_for_claim(
                 inventory,
                 requirement,
-                replace(manifest, index_fingerprint=FP2),
+                _manifest(index_fingerprint=FP2),
                 authorization,
                 ledger.scope_partition.scope_authority,
             )
@@ -294,7 +294,7 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
             ledger.usable_for_claim(
                 inventory,
                 requirement,
-                replace(manifest, index_freshness="stale"),
+                _manifest(index_freshness="stale"),
                 authorization,
                 ledger.scope_partition.scope_authority,
             )
@@ -311,7 +311,15 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
         self.assertFalse(
             ledger.usable_for_claim(
                 inventory,
-                replace(requirement, query_id="query_other"),
+                ClaimRequirement.create(
+                    query_id="query_other",
+                    kind=requirement.kind,
+                    target=requirement.target,
+                    predicate=requirement.predicate,
+                    parameters=dict(requirement.parameters),
+                    required_scope=requirement.required_scope,
+                    created_at=requirement.created_at,
+                ),
                 manifest,
                 authorization,
                 ledger.scope_partition.scope_authority,
@@ -425,13 +433,18 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
         self.assertNotEqual(first.coverage_ledger_id, changed.coverage_ledger_id)
 
 
-def _manifest() -> VersionManifest:
+def _manifest(
+    *,
+    index_fingerprint: str = FP,
+    index_freshness: str = "fresh",
+) -> VersionManifest:
     return VersionManifest.create(
         source_fingerprint=FP,
         parser_fingerprint=FP,
         tokenizer_fingerprint=FP,
-        index_fingerprint=FP,
+        index_fingerprint=index_fingerprint,
         implementation_fingerprint=FP,
+        index_freshness=index_freshness,
         created_at="2026-07-24T00:00:00+00:00",
     )
 

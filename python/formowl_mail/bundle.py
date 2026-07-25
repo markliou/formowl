@@ -1762,6 +1762,8 @@ def _validate_wp1_persistence_state(
 def _private_plain(value: Any) -> Any:
     if isinstance(value, AnswerClaim):
         return value.to_persistence_dict()
+    if isinstance(value, ClaimRequirement):
+        return value.to_persistence_dict()
     if isinstance(value, CoverageLedger):
         return value.to_persistence_dict()
     if isinstance(value, SourceInventory):
@@ -1769,6 +1771,8 @@ def _private_plain(value: Any) -> Any:
     if isinstance(value, SourceInventoryItem):
         return value.to_persistence_dict()
     if isinstance(value, StructuralObservation):
+        return value.to_persistence_dict()
+    if isinstance(value, VersionManifest):
         return value.to_persistence_dict()
     if is_dataclass(value):
         return {

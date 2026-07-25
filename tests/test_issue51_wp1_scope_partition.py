@@ -37,6 +37,16 @@ def _authority_verifier() -> CoverageScopeAuthorityVerifier:
     return CoverageScopeAuthorityVerifier.from_external_root(AUTHORITY_ROOT)
 
 
+def _manifest_variant(
+    manifest: VersionManifest,
+    **changes: str,
+) -> VersionManifest:
+    payload = manifest.to_dict()
+    payload.update(changes)
+    payload.pop("version_manifest_id")
+    return VersionManifest.create(**payload)
+
+
 class CoverageScopePartitionTests(unittest.TestCase):
     def test_complete_scope_requires_the_total_independent_partition(self) -> None:
         inventory, requirement, manifest, authorization, partition, proofs = _fixture()
@@ -135,7 +145,7 @@ class CoverageScopePartitionTests(unittest.TestCase):
             ledger.usable_for_claim(
                 inventory,
                 requirement,
-                replace(manifest, index_fingerprint=FP2),
+                _manifest_variant(manifest, index_fingerprint=FP2),
                 authorization,
                 partition.scope_authority,
             )

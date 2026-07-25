@@ -1336,6 +1336,13 @@ class ClaimRequirement:
         _tuple_of_strings(self.required_scope, "claim_requirement.required_scope", ids=True)
         _text(self.created_at, "claim_requirement.created_at")
         object.__setattr__(self, "parameters", _freeze_mapping(self.parameters))
+        expected_id = stable_resource_contract_id(
+            "claimreq",
+            "ClaimRequirement",
+            self._identity_payload(),
+        )
+        if self.claim_requirement_id != expected_id:
+            raise ContractValidationError("claim requirement id does not match semantic identity")
 
     @classmethod
     def create(
@@ -1369,13 +1376,49 @@ class ClaimRequirement:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        payload = _dataclass_payload(self)
+        payload = {
+            "claim_requirement_id": self.claim_requirement_id,
+            "query_id": self.query_id,
+            "kind": self.kind,
+            "target": self.target,
+            "predicate": self.predicate,
+            "parameters": _public_plain(self.parameters),
+            "required_scope": list(self.required_scope),
+            "created_at": self.created_at,
+        }
         _assert_public_contract(payload, "claim_requirement")
         return payload
+
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+    def _identity_payload(self) -> dict[str, Any]:
+        return {
+            "query_id": self.query_id,
+            "kind": self.kind,
+            "target": self.target,
+            "predicate": self.predicate,
+            "parameters": _persistence_plain(self.parameters),
+            "required_scope": list(self.required_scope),
+        }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "ClaimRequirement":
         item = _mapping(value, "claim_requirement")
+        _require_exact_keys(
+            item,
+            {
+                "claim_requirement_id",
+                "query_id",
+                "kind",
+                "target",
+                "predicate",
+                "parameters",
+                "required_scope",
+                "created_at",
+            },
+            "claim_requirement",
+        )
         return cls(
             claim_requirement_id=_required_str(item, "claim_requirement_id"),
             query_id=_required_str(item, "query_id"),
@@ -1386,6 +1429,10 @@ class ClaimRequirement:
             required_scope=_tuple_strings(item, "required_scope"),
             created_at=_required_str(item, "created_at"),
         )
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "ClaimRequirement":
+        return cls.from_dict(value)
 
 
 @dataclass(frozen=True)
@@ -1426,6 +1473,13 @@ class VersionManifest:
             "created_at",
         ):
             _text(getattr(self, field_name), f"version_manifest.{field_name}")
+        expected_id = stable_resource_contract_id(
+            "version",
+            "VersionManifest",
+            self._identity_payload(),
+        )
+        if self.version_manifest_id != expected_id:
+            raise ContractValidationError("version manifest id does not match semantic identity")
 
     @classmethod
     def create(
@@ -1468,6 +1522,24 @@ class VersionManifest:
         _assert_public_contract(payload, "version_manifest")
         return payload
 
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+    def _identity_payload(self) -> dict[str, Any]:
+        return {
+            "source_fingerprint": self.source_fingerprint,
+            "parser_fingerprint": self.parser_fingerprint,
+            "tokenizer_fingerprint": self.tokenizer_fingerprint,
+            "index_fingerprint": self.index_fingerprint,
+            "implementation_fingerprint": self.implementation_fingerprint,
+            "index_freshness": self.index_freshness,
+            "source_version": self.source_version,
+            "parser_version": self.parser_version,
+            "tokenizer_version": self.tokenizer_version,
+            "index_version": self.index_version,
+            "implementation_version": self.implementation_version,
+        }
+
     def matches(self, other: "VersionManifest") -> bool:
         if not isinstance(other, VersionManifest):
             raise ContractValidationError("version manifest comparison requires VersionManifest")
@@ -1499,6 +1571,25 @@ class VersionManifest:
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "VersionManifest":
         item = _mapping(value, "version_manifest")
+        _require_exact_keys(
+            item,
+            {
+                "version_manifest_id",
+                "source_fingerprint",
+                "parser_fingerprint",
+                "tokenizer_fingerprint",
+                "index_fingerprint",
+                "implementation_fingerprint",
+                "index_freshness",
+                "source_version",
+                "parser_version",
+                "tokenizer_version",
+                "index_version",
+                "implementation_version",
+                "created_at",
+            },
+            "version_manifest",
+        )
         return cls(
             version_manifest_id=_required_str(item, "version_manifest_id"),
             source_fingerprint=_required_str(item, "source_fingerprint"),
@@ -1506,14 +1597,18 @@ class VersionManifest:
             tokenizer_fingerprint=_required_str(item, "tokenizer_fingerprint"),
             index_fingerprint=_required_str(item, "index_fingerprint"),
             implementation_fingerprint=_required_str(item, "implementation_fingerprint"),
-            index_freshness=_optional_str(item, "index_freshness") or "fresh",
-            source_version=_optional_str(item, "source_version") or "1",
-            parser_version=_optional_str(item, "parser_version") or "1",
-            tokenizer_version=_optional_str(item, "tokenizer_version") or "1",
-            index_version=_optional_str(item, "index_version") or "1",
-            implementation_version=_optional_str(item, "implementation_version") or "1",
+            index_freshness=_required_str(item, "index_freshness"),
+            source_version=_required_str(item, "source_version"),
+            parser_version=_required_str(item, "parser_version"),
+            tokenizer_version=_required_str(item, "tokenizer_version"),
+            index_version=_required_str(item, "index_version"),
+            implementation_version=_required_str(item, "implementation_version"),
             created_at=_required_str(item, "created_at"),
         )
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "VersionManifest":
+        return cls.from_dict(value)
 
 
 # Explicit aliases keep the contract name stable for adapters that describe

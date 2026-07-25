@@ -36,6 +36,7 @@ from formowl_contract import (
     StructuralRow,
     SourceInventory,
     VersionManifest,
+    sha256_json,
 )
 from formowl_graph.storage import (
     PostgreSQLMigrationRunner,
@@ -62,6 +63,16 @@ AUTHORITY_ROOT = "issue51-wp1-test-authority-root-v2"
 
 def _authority_verifier() -> CoverageScopeAuthorityVerifier:
     return CoverageScopeAuthorityVerifier.from_external_root(AUTHORITY_ROOT)
+
+
+def _manifest_variant(
+    manifest: VersionManifest,
+    **changes: str,
+) -> VersionManifest:
+    payload = manifest.to_dict()
+    payload.update(changes)
+    payload.pop("version_manifest_id")
+    return VersionManifest.create(**payload)
 
 
 _WP1_FAMILY_FIELDS_FOR_TESTS = (
@@ -732,6 +743,104 @@ class Issue51WP1ContractTests(unittest.TestCase):
             postgres_restored.coverage_ledgers[0].fallback_usage.to_dict(),
             fallback_usage.to_dict(),
         )
+
+    def test_claim_requirement_and_manifest_file_replays_require_closed_canonical_ids(self) -> None:
+        bundle, _inventory, _requirement, _ledger = _inventory_bundle()
+        payload = bundle.to_persistence_dict()
+
+        forged_requirement = deepcopy(payload)
+        forged_requirement["claim_requirements"][0]["claim_requirement_id"] = "claimreq_forged"
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_persistence_dict(forged_requirement)
+
+        forged_manifest = deepcopy(payload)
+        forged_manifest["version_manifests"][0]["version_manifest_id"] = "version_forged"
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_persistence_dict(forged_manifest)
+
+        manifest_payload = payload["version_manifests"][0]
+        self.assertEqual(
+            VersionManifest.from_persistence_dict(manifest_payload).to_dict(),
+            manifest_payload,
+        )
+        for malformed in (
+            {
+                **manifest_payload,
+                "index_fingerprint": FP2,
+            },
+            {key: value for key, value in manifest_payload.items() if key != "index_freshness"},
+            {
+                **manifest_payload,
+                "unexpected": "rejected",
+            },
+        ):
+            with self.assertRaises(ContractValidationError):
+                VersionManifest.from_persistence_dict(malformed)
+
+    def test_postgres_reads_validate_payload_hash_for_ordinary_and_manifest_rows(self) -> None:
+        bundle, inventory, _requirement, _ledger = _inventory_bundle()
+        cases = (
+            ("source_inventory", inventory.source_inventory_id),
+            ("version_manifest", bundle.version_manifests[0].version_manifest_id),
+        )
+        for table_name, record_id in cases:
+            with self.subTest(table_name=table_name):
+                connection = _RowsConnection()
+                store = PostgreSQLMailEvidenceStore(connection)
+                store.upsert_bundle(bundle)
+                row = connection.rows[table_name][record_id]
+                row["payload"] = {**row["payload"], "tampered": table_name}
+                with self.assertRaises(ContractValidationError):
+                    store.get_bundle(
+                        mail_import_session_id=bundle.mail_import_session.mail_import_session_id
+                    )
+                self.assertTrue(
+                    all(
+                        "payload_hash" in query.sql
+                        for query in connection.queries
+                        if query.sql.startswith("SELECT ")
+                    )
+                )
+
+        for bad_hash in ("missing", "malformed"):
+            with self.subTest(bad_hash=bad_hash):
+                connection = _RowsConnection()
+                store = PostgreSQLMailEvidenceStore(connection)
+                store.upsert_bundle(bundle)
+                row = connection.rows["version_manifest"][
+                    bundle.version_manifests[0].version_manifest_id
+                ]
+                if bad_hash == "missing":
+                    row.pop("payload_hash")
+                else:
+                    row["payload_hash"] = "not-a-sha256"
+                with self.assertRaises(ContractValidationError):
+                    store.get_bundle(
+                        mail_import_session_id=bundle.mail_import_session.mail_import_session_id
+                    )
+
+    def test_postgres_replays_reject_forged_claim_requirement_and_manifest_ids(self) -> None:
+        bundle, _inventory, requirement, _ledger = _inventory_bundle()
+        cases = (
+            ("claim_requirement", requirement.claim_requirement_id, "claim_requirement_id"),
+            (
+                "version_manifest",
+                bundle.version_manifests[0].version_manifest_id,
+                "version_manifest_id",
+            ),
+        )
+        for table_name, record_id, id_field in cases:
+            with self.subTest(table_name=table_name):
+                connection = _RowsConnection()
+                store = PostgreSQLMailEvidenceStore(connection)
+                store.upsert_bundle(bundle)
+                row = connection.rows[table_name][record_id]
+                row["payload"] = {**row["payload"], id_field: f"{id_field}_forged"}
+                row["payload_hash"] = sha256_json(row["payload"])
+                with self.assertRaises(ContractValidationError):
+                    store.get_bundle(
+                        mail_import_session_id=bundle.mail_import_session.mail_import_session_id
+                    )
 
     def test_persisted_authoritative_claim_requires_external_scope_authority(self) -> None:
         from test_issue51_wp1_scope_partition import _complete_ledger, _fixture
@@ -2370,7 +2479,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 version_manifest=manifest,
                 source_fingerprint=FP2,
             )
-        stale_manifest = replace(manifest, index_freshness="stale")
+        stale_manifest = _manifest_variant(manifest, index_freshness="stale")
         with self.assertRaises(ContractValidationError):
             AnswerClaim.create(
                 **base,
@@ -2382,7 +2491,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
         mismatched_ledger = replace(
             ledger,
             version_binding=CoverageVersionBinding.from_manifest(
-                replace(manifest, index_fingerprint=FP2)
+                _manifest_variant(manifest, index_fingerprint=FP2)
             ),
             coverage_ledger_id="",
         )
@@ -2473,8 +2582,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
             index_fingerprint=FP,
             implementation_fingerprint=FP,
         )
-        stale = replace(fresh, index_freshness="stale")
-        mismatch = replace(fresh, index_fingerprint=FP2)
+        stale = _manifest_variant(fresh, index_freshness="stale")
+        mismatch = _manifest_variant(fresh, index_fingerprint=FP2)
         self.assertFalse(stale.usable_for_claim(fresh))
         self.assertFalse(mismatch.usable_for_claim(fresh))
         with self.assertRaises(ContractValidationError):
@@ -2712,6 +2821,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             _selected_columns(connection.queries[0].sql),
             (
                 "payload",
+                "payload_hash",
                 "mail_import_session_id",
                 "workspace_id",
                 "owner_user_id",

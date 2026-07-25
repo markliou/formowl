@@ -156,7 +156,7 @@ class PostgreSQLMailEvidenceStore:
         session_row = self.connection.query_one(
             SQLStatement(
                 sql=(
-                    "SELECT payload, mail_import_session_id, workspace_id, owner_user_id, "
+                    "SELECT payload, payload_hash, mail_import_session_id, workspace_id, owner_user_id, "
                     "mail_evidence_bundle_id, producer_type, "
                     "bundle_created_at FROM mail_import_session "
                     "WHERE (%(mail_import_session_id)s IS NULL "
@@ -173,6 +173,7 @@ class PostgreSQLMailEvidenceStore:
         if session_row is None:
             return None
 
+        _validate_payload_hash(session_row)
         session_payload = _payload(session_row)
         wp1_persistence = _validate_wp1_persistence_state(
             session_payload.get(_WP1_PERSISTENCE_FIELD)
@@ -1240,7 +1241,14 @@ def _query_import_rows(
         if not _SAFE_RECORD_ID.fullmatch(column_name):
             raise ContractValidationError("invalid persisted scope column")
     selected_columns = ", ".join(
-        (id_field, "payload", "mail_import_session_id", "workspace_id", "owner_user_id")
+        (
+            id_field,
+            "payload",
+            "payload_hash",
+            "mail_import_session_id",
+            "workspace_id",
+            "owner_user_id",
+        )
         + tuple(scope_columns)
     )
     rows = connection.query_all(
@@ -1255,6 +1263,7 @@ def _query_import_rows(
     )
     records = []
     for row in rows:
+        _validate_payload_hash(row)
         _validate_row_scope(
             row,
             mail_import_session_id=mail_import_session_id,
@@ -1327,13 +1336,16 @@ def _query_rows_by_ids(
     rows = connection.query_all(
         SQLStatement(
             sql=(
-                f"SELECT payload FROM {table_name} "
+                f"SELECT payload, payload_hash FROM {table_name} "
                 f"WHERE {id_field} = ANY(%({id_field}s)s) ORDER BY {id_field}"
             ),
             parameters={f"{id_field}s": list(ids)},
         )
     )
-    records = [factory(_payload(row)) for row in rows]
+    records = []
+    for row in rows:
+        _validate_payload_hash(row)
+        records.append(factory(_payload(row)))
     return canonical_order_records(canonical_table_family(table_name), records)
 
 
@@ -1359,6 +1371,19 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ContractValidationError("mail evidence row payload must be an object")
     return payload
+
+
+def _validate_payload_hash(row: Mapping[str, Any]) -> None:
+    payload = row.get("payload")
+    payload_hash = row.get("payload_hash")
+    if not isinstance(payload, dict):
+        raise ContractValidationError("mail evidence row payload must be an object")
+    if (
+        not isinstance(payload_hash, str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload_hash)
+        or payload_hash != sha256_json(payload)
+    ):
+        raise ContractValidationError("persisted mail evidence payload hash is invalid")
 
 
 def _safe_row_str(row: dict[str, Any], key: str) -> str:
