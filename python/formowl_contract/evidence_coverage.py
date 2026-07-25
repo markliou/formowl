@@ -755,6 +755,13 @@ class SourceInventoryItem:
         _fingerprint(self.parser_fingerprint, "parser_fingerprint")
         _safe_mapping(self.permission_scope, "source_inventory_item.permission_scope")
         _optional_id(self.source_inventory_id, "source_inventory_id")
+        _tuple_of_strings(self.version_lineage, "version_lineage", ids=True)
+        _tuple_of_strings(self.source_observation_ids, "source_observation_ids", ids=True)
+        object.__setattr__(
+            self,
+            "source_observation_ids",
+            tuple(sorted(self.source_observation_ids)),
+        )
         _validate_exclusion_proof(self)
         if self.intentional_exclusion_proof is not None and not isinstance(
             self.intentional_exclusion_proof,
@@ -784,28 +791,35 @@ class SourceInventoryItem:
                 raise ContractValidationError(
                     "intentional exclusion proof is bound to another inventory item"
                 )
-            expected_item_id = stable_resource_contract_id(
-                "inventory",
-                "SourceInventoryItem",
-                _source_inventory_item_identity_payload(self),
-            )
-            if self.source_inventory_item_id != expected_item_id:
-                raise ContractValidationError(
-                    "source inventory item id does not match typed exclusion proof identity"
-                )
         _optional_id(self.parent_inventory_item_id, "parent_inventory_item_id")
         _safe_mapping(self.location, "source_inventory_item.location")
-        _tuple_of_strings(self.version_lineage, "version_lineage", ids=True)
-        _tuple_of_strings(self.source_observation_ids, "source_observation_ids", ids=True)
+        expected_item_id = stable_resource_contract_id(
+            "inventory",
+            "SourceInventoryItem",
+            _source_inventory_item_identity_payload(self),
+        )
+        if self.source_inventory_item_id != expected_item_id:
+            raise ContractValidationError(
+                "source inventory item id does not match canonical semantic identity"
+            )
         object.__setattr__(self, "permission_scope", _freeze_mapping(self.permission_scope))
         object.__setattr__(self, "location", _freeze_mapping(self.location))
 
     @classmethod
     def create(cls, **values: Any) -> "SourceInventoryItem":
         values = dict(values)
-        for field_name in ("version_lineage", "source_observation_ids"):
-            if field_name in values:
-                values[field_name] = list(values[field_name])
+        if "version_lineage" in values:
+            values["version_lineage"] = list(values["version_lineage"])
+        else:
+            values["version_lineage"] = []
+        values.setdefault("location", {})
+        if "source_observation_ids" in values:
+            observation_ids = values["source_observation_ids"]
+            values["source_observation_ids"] = list(observation_ids)
+            if all(type(item) is str for item in values["source_observation_ids"]):
+                values["source_observation_ids"].sort()
+        else:
+            values["source_observation_ids"] = []
         values.setdefault("intentional_exclusion_proof", None)
         if isinstance(values["intentional_exclusion_proof"], IntentionalExclusionProof):
             values["intentional_exclusion_proof"] = values[
@@ -4811,8 +4825,11 @@ def _source_inventory_item_identity_payload_from_mapping(
     payload = {
         str(key): _persistence_plain(item)
         for key, item in value.items()
-        if key != "source_inventory_item_id"
+        if key != "source_inventory_item_id" and item is not None
     }
+    observation_ids = payload.get("source_observation_ids")
+    if isinstance(observation_ids, list) and all(type(item) is str for item in observation_ids):
+        payload["source_observation_ids"] = sorted(observation_ids)
     proof = payload.get("intentional_exclusion_proof")
     if isinstance(proof, Mapping):
         proof_payload = dict(proof)
