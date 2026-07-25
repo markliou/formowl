@@ -197,14 +197,25 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
             temporary_directory.cleanup()
 
         manifest = migration_files()
-        connection = _RecordingConnection()
-        with self.assertRaises(ContractValidationError):
-            PostgreSQLMigrationRunner(connection).migration_replay(tuple(reversed(manifest)))
-        self.assertEqual(connection.actions, [])
+        for missing_filename in (
+            "001_metadata_store.sql",
+            "002_vector_index.sql",
+            "003_ingestion_records.sql",
+            "004_mail_evidence.sql",
+            "006_evidence_coverage.sql",
+        ):
+            with self.subTest(missing_filename=missing_filename):
+                invalid_manifest = tuple(
+                    migration for migration in manifest if migration.filename != missing_filename
+                )
+                connection = _RecordingConnection()
+                with self.assertRaises(ContractValidationError):
+                    PostgreSQLMigrationRunner(connection).migration_replay(invalid_manifest)
+                self.assertEqual(connection.actions, [])
 
         connection = _RecordingConnection()
         with self.assertRaises(ContractValidationError):
-            PostgreSQLMigrationRunner(connection).migration_replay(manifest[:-1])
+            PostgreSQLMigrationRunner(connection).migration_replay(tuple(reversed(manifest)))
         self.assertEqual(connection.actions, [])
 
         connection = _RecordingConnection()

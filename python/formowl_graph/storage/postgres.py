@@ -17,6 +17,13 @@ _RESERVED_MIGRATION_FILENAMES = {
     6: "006_evidence_coverage.sql",
     7: "007_task_lifecycle.sql",
 }
+_REQUIRED_MIGRATION_FILENAMES = {
+    1: "001_metadata_store.sql",
+    2: "002_vector_index.sql",
+    3: "003_ingestion_records.sql",
+    4: "004_mail_evidence.sql",
+    6: "006_evidence_coverage.sql",
+}
 
 
 @dataclass(frozen=True)
@@ -344,10 +351,12 @@ def _validate_migration_manifest(
         slots.append(slot)
     if slots != sorted(slots):
         raise ContractValidationError("migration manifest must be ordered by numeric slot")
-    if slots.count(6) != 1:
-        raise ContractValidationError(
-            "WP1 migration manifest requires exactly one 006_evidence_coverage.sql"
-        )
+    filenames_by_slot = dict(
+        zip(slots, (migration.filename for migration in migrations), strict=True)
+    )
+    for slot, filename in _REQUIRED_MIGRATION_FILENAMES.items():
+        if filenames_by_slot.get(slot) != filename:
+            raise ContractValidationError(f"migration manifest requires {filename}")
     return migrations
 
 
