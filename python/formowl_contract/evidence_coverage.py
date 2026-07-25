@@ -11,10 +11,13 @@ payloads are rejected rather than silently serialized.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, is_dataclass
+from dataclasses import dataclass, field, is_dataclass, replace
 from enum import Enum
+import hashlib
+import hmac
 import math
 import re
+import secrets
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
@@ -62,6 +65,7 @@ ANSWER_CLAIM_STATE_VALUES = (
     "INSUFFICIENT_COVERAGE",
 )
 _ANSWER_CLAIM_FACTORY_TOKEN = object()
+_COVERAGE_AUTHORITY_CAPABILITY_TOKEN = object()
 INDEX_FRESHNESS_VALUES = ("fresh", "stale", "mismatch", "unavailable")
 COVERAGE_FALLBACK_STATUS_VALUES = (
     "not_required",
@@ -1737,6 +1741,103 @@ class CoverageItemRelevanceDecision:
         )
 
 
+class _CoverageScopeAuthorityCapability:
+    __slots__ = ("authority_id", "verifier_fingerprint", "proof")
+
+    def __init__(
+        self,
+        authority_id: str,
+        verifier_fingerprint: str,
+        proof: str,
+        *,
+        _constructor_token: object,
+    ) -> None:
+        if _constructor_token is not _COVERAGE_AUTHORITY_CAPABILITY_TOKEN:
+            raise ContractValidationError(
+                "scope authority capability is not publicly constructible"
+            )
+        self.authority_id = authority_id
+        self.verifier_fingerprint = verifier_fingerprint
+        self.proof = proof
+
+
+class CoverageScopeAuthorityVerifier:
+    """External authority root for scope validation.
+
+    The root is intentionally process/external state.  Only its derived
+    fingerprint is persisted with an authority; the root and the capability
+    issued from it are never serialized.  Revalidation after restart therefore
+    requires the same externally retained root, while a newly generated
+    verifier cannot validate an older persisted authority.
+    """
+
+    __slots__ = ("_root", "_verifier_fingerprint")
+
+    def __init__(self, root: bytes | str) -> None:
+        if isinstance(root, str):
+            root_bytes = root.encode("utf-8")
+        elif isinstance(root, bytes):
+            root_bytes = root
+        else:
+            raise ContractValidationError("scope authority verifier root must be bytes or string")
+        if len(root_bytes) < 16:
+            raise ContractValidationError(
+                "scope authority verifier root must contain at least 16 bytes"
+            )
+        self._root = root_bytes
+        self._verifier_fingerprint = (
+            "sha256:"
+            + hashlib.sha256(b"formowl:coverage-scope-authority-verifier:" + root_bytes).hexdigest()
+        )
+
+    @classmethod
+    def generate(cls) -> "CoverageScopeAuthorityVerifier":
+        return cls(secrets.token_bytes(32))
+
+    @classmethod
+    def from_external_root(cls, root: bytes | str) -> "CoverageScopeAuthorityVerifier":
+        return cls(root)
+
+    @property
+    def verifier_fingerprint(self) -> str:
+        return self._verifier_fingerprint
+
+    def _capability_for(self, authority_id: str) -> _CoverageScopeAuthorityCapability:
+        _id(authority_id, "coverage_scope_authority.authority_id")
+        proof = hmac.new(
+            self._root,
+            (self._verifier_fingerprint + ":" + authority_id).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return _CoverageScopeAuthorityCapability(
+            authority_id=authority_id,
+            verifier_fingerprint=self._verifier_fingerprint,
+            proof=proof,
+            _constructor_token=_COVERAGE_AUTHORITY_CAPABILITY_TOKEN,
+        )
+
+    def _trust(self, authority: "CoverageScopeAuthority") -> "CoverageScopeAuthority":
+        if not isinstance(authority, CoverageScopeAuthority):
+            raise ContractValidationError("scope authority verifier requires a typed authority")
+        if authority.authority_verifier_fingerprint != self._verifier_fingerprint:
+            raise ContractValidationError(
+                "scope authority was issued by a different external verifier"
+            )
+        trusted = replace(authority)
+        object.__setattr__(
+            trusted,
+            "_authority_capability",
+            self._capability_for(trusted.authority_id),
+        )
+        object.__setattr__(trusted, "_authority_provenance", "trusted")
+        return trusted
+
+    def revalidate(self, authority: "CoverageScopeAuthority") -> "CoverageScopeAuthority":
+        """Reattach trusted process-local capability to persisted authority data."""
+
+        return self._trust(authority)
+
+
 @dataclass(frozen=True)
 class CoverageScopeAuthority:
     """The independently supplied typed authority from which categories derive."""
@@ -1748,9 +1849,16 @@ class CoverageScopeAuthority:
     scope_policy: CoverageScopePolicyBinding
     authorization_decisions: tuple[CoverageItemAuthorizationDecision, ...]
     relevance_decisions: tuple[CoverageItemRelevanceDecision, ...]
+    authority_verifier_fingerprint: str = ""
     authority_id: str = ""
     _authority_provenance: str = field(
         default="untrusted_constructor",
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _authority_capability: _CoverageScopeAuthorityCapability | None = field(
+        default=None,
         init=False,
         repr=False,
         compare=False,
@@ -1759,6 +1867,11 @@ class CoverageScopeAuthority:
     def __post_init__(self) -> None:
         _id(self.source_inventory_id, "coverage_scope_authority.source_inventory_id")
         _id(self.claim_requirement_id, "coverage_scope_authority.claim_requirement_id")
+        if self.authority_verifier_fingerprint:
+            _fingerprint(
+                self.authority_verifier_fingerprint,
+                "coverage_scope_authority.authority_verifier_fingerprint",
+            )
         if not isinstance(self.authorization_binding, CoverageAuthorizationBinding):
             raise ContractValidationError("coverage scope authority authorization is invalid")
         if not isinstance(self.version_binding, CoverageVersionBinding):
@@ -1814,6 +1927,7 @@ class CoverageScopeAuthority:
         scope_policy: CoverageScopePolicyBinding,
         authorization_decisions: Sequence[CoverageItemAuthorizationDecision],
         relevance_decisions: Sequence[CoverageItemRelevanceDecision],
+        authority_verifier: CoverageScopeAuthorityVerifier | None = None,
     ) -> "CoverageScopeAuthority":
         if not all(
             isinstance(value, expected_type)
@@ -1826,6 +1940,10 @@ class CoverageScopeAuthority:
             )
         ):
             raise ContractValidationError("scope authority requires typed inputs")
+        if not isinstance(authority_verifier, CoverageScopeAuthorityVerifier):
+            raise ContractValidationError(
+                "scope authority creation requires an independent external verifier"
+            )
         authority = cls(
             source_inventory_id=source_inventory.source_inventory_id,
             claim_requirement_id=claim_requirement.claim_requirement_id,
@@ -1834,6 +1952,7 @@ class CoverageScopeAuthority:
             scope_policy=scope_policy,
             authorization_decisions=tuple(authorization_decisions),
             relevance_decisions=tuple(relevance_decisions),
+            authority_verifier_fingerprint=authority_verifier.verifier_fingerprint,
         )
         if not authority.validate_for_claim(
             source_inventory,
@@ -1843,8 +1962,7 @@ class CoverageScopeAuthority:
             scope_policy,
         ):
             raise ContractValidationError("scope authority decisions do not match typed inputs")
-        object.__setattr__(authority, "_authority_provenance", "trusted")
-        return authority
+        return authority_verifier._trust(authority)
 
     def _identity_payload(self) -> dict[str, Any]:
         return {
@@ -1853,6 +1971,7 @@ class CoverageScopeAuthority:
             "authorization_binding": self.authorization_binding.to_dict(),
             "version_binding": self.version_binding.to_dict(),
             "scope_policy": self.scope_policy.to_dict(),
+            "authority_verifier_fingerprint": self.authority_verifier_fingerprint,
             "authorization_decisions": [
                 decision.to_persistence_dict() for decision in self.authorization_decisions
             ],
@@ -1890,14 +2009,23 @@ class CoverageScopeAuthority:
         )
 
     def to_persistence_dict(self) -> dict[str, Any]:
-        return {**self._identity_payload(), "authority_id": self.authority_id}
+        return {
+            **self._identity_payload(),
+            "authority_id": self.authority_id,
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return self.to_persistence_dict()
 
     @property
     def _is_trusted_for_authoritative_use(self) -> bool:
-        return self._authority_provenance == "trusted"
+        capability = self._authority_capability
+        return bool(
+            self._authority_provenance == "trusted"
+            and isinstance(capability, _CoverageScopeAuthorityCapability)
+            and capability.authority_id == self.authority_id
+            and capability.verifier_fingerprint == self.authority_verifier_fingerprint
+        )
 
     @classmethod
     def from_persistence_dict(cls, value: Mapping[str, Any]) -> "CoverageScopeAuthority":
@@ -1910,6 +2038,7 @@ class CoverageScopeAuthority:
                 "authorization_binding",
                 "version_binding",
                 "scope_policy",
+                "authority_verifier_fingerprint",
                 "authorization_decisions",
                 "relevance_decisions",
                 "authority_id",
@@ -1927,6 +2056,10 @@ class CoverageScopeAuthority:
             ),
             scope_policy=CoverageScopePolicyBinding.from_dict(
                 _required_mapping(item, "scope_policy")
+            ),
+            authority_verifier_fingerprint=_required_str(
+                item,
+                "authority_verifier_fingerprint",
             ),
             authorization_decisions=tuple(
                 CoverageItemAuthorizationDecision.from_persistence_dict(entry)
@@ -4307,6 +4440,7 @@ __all__ = [
     "CoverageProofRecord",
     "CoverageScopePartition",
     "CoverageScopeAuthority",
+    "CoverageScopeAuthorityVerifier",
     "CoverageScopePolicyBinding",
     "CoverageVersionBinding",
     "DisplayPagination",

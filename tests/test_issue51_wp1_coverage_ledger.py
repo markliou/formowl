@@ -17,6 +17,7 @@ from formowl_contract import (
     CoverageProofRecord,
     CoverageScopePartition,
     CoverageScopeAuthority,
+    CoverageScopeAuthorityVerifier,
     CoverageScopePolicyBinding,
     CoverageVersionBinding,
     SourceInventory,
@@ -28,6 +29,11 @@ from formowl_contract import (
 FP = "sha256:" + "a" * 64
 FP2 = "sha256:" + "b" * 64
 SCOPE_POLICY_FP = "sha256:" + "c" * 64
+AUTHORITY_ROOT = "issue51-wp1-test-authority-root-v2"
+
+
+def _authority_verifier() -> CoverageScopeAuthorityVerifier:
+    return CoverageScopeAuthorityVerifier.from_external_root(AUTHORITY_ROOT)
 
 
 class CoverageLedgerClosedProofTests(unittest.TestCase):
@@ -415,6 +421,7 @@ def _complete_ledger(
         scope_policy=policy,
         authorization_decisions=authorizations,
         relevance_decisions=relevance,
+        authority_verifier=_authority_verifier(),
     )
     scope_partition = CoverageScopePartition.create(
         scope_authority=authority,

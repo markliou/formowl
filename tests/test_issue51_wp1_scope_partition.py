@@ -16,6 +16,7 @@ from formowl_contract import (
     CoverageProofRecord,
     CoverageScopePartition,
     CoverageScopeAuthority,
+    CoverageScopeAuthorityVerifier,
     CoverageScopePolicyBinding,
     CoverageVersionBinding,
     SourceInventory,
@@ -29,6 +30,11 @@ from formowl_mail import PostgreSQLMailEvidenceStore
 FP = "sha256:" + "a" * 64
 FP2 = "sha256:" + "b" * 64
 SCOPE_POLICY_FP = "sha256:" + "c" * 64
+AUTHORITY_ROOT = "issue51-wp1-test-authority-root-v2"
+
+
+def _authority_verifier() -> CoverageScopeAuthorityVerifier:
+    return CoverageScopeAuthorityVerifier.from_external_root(AUTHORITY_ROOT)
 
 
 class CoverageScopePartitionTests(unittest.TestCase):
@@ -189,6 +195,7 @@ class CoverageScopePartitionTests(unittest.TestCase):
                     *partition.scope_authority.authorization_decisions[1:],
                 ),
                 relevance_decisions=partition.scope_authority.relevance_decisions,
+                authority_verifier=_authority_verifier(),
             )
 
     def test_observation_accounting_is_total_and_exact(self) -> None:
@@ -447,6 +454,7 @@ def _partition(
         scope_policy=_scope_policy(),
         authorization_decisions=authorizations,
         relevance_decisions=relevance,
+        authority_verifier=_authority_verifier(),
     )
     return CoverageScopePartition.create(
         scope_authority=authority,

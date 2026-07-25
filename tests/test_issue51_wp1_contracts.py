@@ -19,6 +19,7 @@ from formowl_contract import (
     CoverageProofRecord,
     CoverageScopePartition,
     CoverageScopeAuthority,
+    CoverageScopeAuthorityVerifier,
     CoverageScopePolicyBinding,
     CoverageVersionBinding,
     DisplayPagination,
@@ -52,6 +53,13 @@ from formowl_mail.postgres import (
 FP = "sha256:" + "a" * 64
 FP2 = "sha256:" + "b" * 64
 SCOPE_POLICY_FP = "sha256:" + "c" * 64
+AUTHORITY_ROOT = "issue51-wp1-test-authority-root-v2"
+
+
+def _authority_verifier() -> CoverageScopeAuthorityVerifier:
+    return CoverageScopeAuthorityVerifier.from_external_root(AUTHORITY_ROOT)
+
+
 _WP1_FAMILY_FIELDS_FOR_TESTS = (
     "source_inventory",
     "source_inventory_items",
@@ -603,6 +611,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             scope_policy=scope_policy,
             authorization_decisions=authorization_decisions,
             relevance_decisions=relevance_decisions,
+            authority_verifier=_authority_verifier(),
         )
         scope_partition = CoverageScopePartition.create(
             scope_authority=scope_authority,
@@ -712,6 +721,16 @@ class Issue51WP1ContractTests(unittest.TestCase):
         parsed_authority = CoverageScopeAuthority.from_persistence_dict(
             persisted["scope_authority"]
         )
+        with self.assertRaises(ContractValidationError):
+            CoverageScopeAuthority.create(
+                source_inventory=source_inventory,
+                claim_requirement=requirement,
+                authorization_binding=parsed_authority.authorization_binding,
+                version_manifest=manifest,
+                scope_policy=parsed_authority.scope_policy,
+                authorization_decisions=parsed_authority.authorization_decisions,
+                relevance_decisions=parsed_authority.relevance_decisions,
+            )
         replayed_authority = CoverageScopeAuthority(
             source_inventory_id=parsed_authority.source_inventory_id,
             claim_requirement_id=parsed_authority.claim_requirement_id,
@@ -720,9 +739,36 @@ class Issue51WP1ContractTests(unittest.TestCase):
             scope_policy=parsed_authority.scope_policy,
             authorization_decisions=parsed_authority.authorization_decisions,
             relevance_decisions=parsed_authority.relevance_decisions,
+            authority_verifier_fingerprint=parsed_authority.authority_verifier_fingerprint,
             authority_id=parsed_authority.authority_id,
         )
         self.assertFalse(replayed_authority._is_trusted_for_authoritative_use)
+
+        arbitrary_verifier = CoverageScopeAuthorityVerifier.generate()
+        with self.assertRaises(ContractValidationError):
+            arbitrary_verifier.revalidate(parsed_authority)
+        arbitrary_authority = CoverageScopeAuthority.create(
+            source_inventory=source_inventory,
+            claim_requirement=requirement,
+            authorization_binding=parsed_authority.authorization_binding,
+            version_manifest=manifest,
+            scope_policy=parsed_authority.scope_policy,
+            authorization_decisions=parsed_authority.authorization_decisions,
+            relevance_decisions=parsed_authority.relevance_decisions,
+            authority_verifier=arbitrary_verifier,
+        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                state="FOUND",
+                reason_codes=("complete_scope",),
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=source_inventory,
+                version_manifest=manifest,
+                expected_scope_authority=arbitrary_authority,
+                authorization_binding=authorization,
+                evidence_snapshot_ids=(),
+            )
 
         with self.assertRaises(ContractValidationError):
             AnswerClaim.create(
@@ -812,13 +858,15 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 authorization_binding=authorization,
             )
 
+        restarted_verifier = CoverageScopeAuthorityVerifier.from_external_root(AUTHORITY_ROOT)
+        restored_authority = restarted_verifier.revalidate(parsed_authority)
         restored = AnswerClaim.from_persistence_dict(
             persisted,
             coverage_ledger=ledger,
             claim_requirement=requirement,
             source_inventory=source_inventory,
             version_manifest=manifest,
-            expected_scope_authority=partition.scope_authority,
+            expected_scope_authority=restored_authority,
             authorization_binding=authorization,
         )
         self.assertEqual(restored.to_persistence_dict(), persisted)
@@ -837,7 +885,7 @@ class Issue51WP1ContractTests(unittest.TestCase):
             )
         restored_bundle = MailEvidenceBundle.from_persistence_dict(
             bundle_payload,
-            expected_scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
+            expected_scope_authorities={ledger.coverage_ledger_id: restored_authority},
         )
         self.assertEqual(restored_bundle.to_persistence_dict(), bundle_payload)
 
@@ -854,11 +902,11 @@ class Issue51WP1ContractTests(unittest.TestCase):
             )
         store.upsert_bundle(
             bundle,
-            expected_scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
+            expected_scope_authorities={ledger.coverage_ledger_id: restored_authority},
         )
         restored_from_postgres = store.get_bundle(
             mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
-            expected_scope_authorities={ledger.coverage_ledger_id: partition.scope_authority},
+            expected_scope_authorities={ledger.coverage_ledger_id: restored_authority},
         )
         self.assertIsNotNone(restored_from_postgres)
         self.assertEqual(restored_from_postgres.to_persistence_dict(), bundle_payload)
@@ -3003,6 +3051,7 @@ def _direct_claim_fixture(
         scope_policy=scope_policy,
         authorization_decisions=(authorization_decision,),
         relevance_decisions=(relevance_decision,),
+        authority_verifier=_authority_verifier(),
     )
     scope_partition = CoverageScopePartition.create(
         scope_authority=scope_authority,
