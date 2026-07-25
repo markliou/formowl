@@ -938,11 +938,13 @@ class SourceInventory:
                 raise ContractValidationError(
                     "source inventory items must share parser_fingerprint"
                 )
+        canonical_items = _canonical_source_inventory_items(self.items)
+        object.__setattr__(self, "items", canonical_items)
         expected_source_inventory_id = self._canonical_source_inventory_id(
             source_asset_id=self.source_asset_id,
             source_fingerprint=self.source_fingerprint,
             parser_fingerprint=self.parser_fingerprint,
-            items=self.items,
+            items=canonical_items,
         )
         if self.source_inventory_id != expected_source_inventory_id:
             raise ContractValidationError(
@@ -957,13 +959,10 @@ class SourceInventory:
         parser_fingerprint: str,
         items: Sequence[SourceInventoryItem],
     ) -> str:
-        item_payloads = [_inventory_item_identity_payload(item) for item in items]
-        item_payloads.sort(
-            key=lambda item: (
-                item["ordinal"],
-                sha256_json(item),
-            )
-        )
+        item_payloads = [
+            _inventory_item_identity_payload(item)
+            for item in _canonical_source_inventory_items(items)
+        ]
         return stable_resource_contract_id(
             "inventoryset",
             "SourceInventory",
@@ -1046,7 +1045,7 @@ class SourceInventory:
             source_asset_id=source_asset_id,
             source_fingerprint=source_fingerprint,
             parser_fingerprint=parser_fingerprint,
-            items=tuple(bound_items),
+            items=_canonical_source_inventory_items(bound_items),
             created_at=created_at or now_iso(),
         )
 
@@ -2445,6 +2444,26 @@ class CoverageScopeAuthority:
             if decision.inventory_item_id in set(relevance_ids)
         ):
             raise ContractValidationError("ineligible items cannot have relevance decisions")
+        object.__setattr__(
+            self,
+            "authorization_decisions",
+            tuple(
+                sorted(
+                    self.authorization_decisions,
+                    key=lambda decision: decision.inventory_item_id,
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "relevance_decisions",
+            tuple(
+                sorted(
+                    self.relevance_decisions,
+                    key=lambda decision: decision.inventory_item_id,
+                )
+            ),
+        )
         expected_id = stable_resource_contract_id(
             "coverage-scope-authority",
             "CoverageScopeAuthority",
@@ -3137,12 +3156,12 @@ class CoverageProofRecord:
         object.__setattr__(
             self,
             "structural_observation_ids",
-            tuple(self.structural_observation_ids),
+            tuple(sorted(self.structural_observation_ids)),
         )
         object.__setattr__(
             self,
             "ordinary_observation_ids",
-            tuple(self.ordinary_observation_ids),
+            tuple(sorted(self.ordinary_observation_ids)),
         )
 
     @classmethod
@@ -3391,6 +3410,37 @@ class CoverageLedger:
         proof_semantics = [_coverage_proof_semantic_key(record) for record in self.proof_records]
         if len(proof_semantics) != len(set(proof_semantics)):
             raise ContractValidationError("coverage ledger proof records must be unique")
+        object.__setattr__(
+            self,
+            "relevant_inventory_item_ids",
+            tuple(sorted(self.relevant_inventory_item_ids)),
+        )
+        object.__setattr__(
+            self,
+            "searched_structural_observation_ids",
+            tuple(sorted(self.searched_structural_observation_ids)),
+        )
+        object.__setattr__(
+            self,
+            "searched_ordinary_observation_ids",
+            tuple(sorted(self.searched_ordinary_observation_ids)),
+        )
+        for field_name in (
+            "omitted_inventory_item_ids",
+            "failed_inventory_item_ids",
+            "unsupported_inventory_item_ids",
+            "redacted_inventory_item_ids",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                tuple(sorted(getattr(self, field_name))),
+            )
+        object.__setattr__(
+            self,
+            "proof_records",
+            tuple(sorted(self.proof_records, key=_coverage_proof_sort_key)),
+        )
         if not isinstance(self.display_pagination, DisplayPagination):
             raise ContractValidationError("coverage ledger display_pagination is invalid")
         expected_coverage_ledger_id = stable_resource_contract_id(
@@ -4743,6 +4793,27 @@ def _inventory_item_identity_payload(item: SourceInventoryItem) -> dict[str, Any
     return payload
 
 
+def _canonical_source_inventory_items(
+    items: Sequence[SourceInventoryItem],
+) -> tuple[SourceInventoryItem, ...]:
+    """Canonicalize the aggregate's set-like item container.
+
+    ``ordinal`` preserves source order; the identity payload hash is a stable
+    tie-breaker for distinct items sharing an ordinal.  The item container
+    order itself is not semantic.
+    """
+
+    return tuple(
+        sorted(
+            items,
+            key=lambda item: (
+                item.ordinal,
+                sha256_json(_inventory_item_identity_payload(item)),
+            ),
+        )
+    )
+
+
 def _coverage_proof_semantic_key(record: CoverageProofRecord) -> tuple[Any, ...]:
     return (
         record.source_inventory_id,
@@ -4758,6 +4829,25 @@ def _coverage_proof_semantic_key(record: CoverageProofRecord) -> tuple[Any, ...]
             if record.intentional_exclusion_proof is None
             else record.intentional_exclusion_proof.proof_fingerprint
         ),
+    )
+
+
+def _coverage_proof_sort_key(record: CoverageProofRecord) -> tuple[Any, ...]:
+    return (
+        record.source_inventory_id,
+        record.claim_requirement_id,
+        record.version_manifest_id,
+        record.inventory_item_id,
+        record.proof_kind,
+        tuple(record.structural_observation_ids),
+        tuple(record.ordinary_observation_ids),
+        record.populated_value_fingerprint or "",
+        (
+            ""
+            if record.intentional_exclusion_proof is None
+            else record.intentional_exclusion_proof.proof_fingerprint
+        ),
+        record.proof_id,
     )
 
 

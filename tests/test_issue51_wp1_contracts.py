@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from copy import deepcopy
+import json
 from pathlib import Path
 import copy
 import pickle
@@ -2980,6 +2981,310 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 scope_decision=decision,
                 include_answer_claims=True,
             ),
+        )
+
+    def test_finding6_canonicalizes_inventory_and_ledger_set_like_inputs(self) -> None:
+        def wire_bytes(payload: dict[str, object]) -> bytes:
+            return json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+
+        item_zero = SourceInventoryItem.create(
+            source_asset_id="asset_wp1",
+            structure_kind="message",
+            content_type="message/rfc822",
+            ordinal=0,
+            processing_state="parsed",
+            raw_retention_state="retained",
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
+            source_observation_ids=("ordinary_zero", "structural_zero"),
+        )
+        item_one = SourceInventoryItem.create(
+            source_asset_id="asset_wp1",
+            structure_kind="message",
+            content_type="message/rfc822",
+            ordinal=1,
+            processing_state="parsed",
+            raw_retention_state="retained",
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
+            source_observation_ids=("ordinary_one", "structural_one"),
+        )
+        inventory = SourceInventory.create(
+            source_asset_id="asset_wp1",
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            items=(item_one, item_zero),
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        reordered_inventory = SourceInventory.create(
+            source_asset_id=inventory.source_asset_id,
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+            items=tuple(reversed(inventory.items)),
+            created_at=inventory.created_at,
+        )
+        self.assertEqual(inventory.source_inventory_id, reordered_inventory.source_inventory_id)
+        self.assertEqual(inventory.items, reordered_inventory.items)
+        self.assertEqual(
+            wire_bytes(inventory.to_persistence_dict()),
+            wire_bytes(reordered_inventory.to_persistence_dict()),
+        )
+        persisted_inventory = deepcopy(inventory.to_persistence_dict())
+        persisted_inventory["items"].reverse()
+        restored_inventory = SourceInventory.from_persistence_dict(persisted_inventory)
+        self.assertEqual(restored_inventory, inventory)
+        self.assertEqual(
+            wire_bytes(restored_inventory.to_persistence_dict()),
+            wire_bytes(inventory.to_persistence_dict()),
+        )
+        semantic_inventory_change = SourceInventory.create(
+            source_asset_id=inventory.source_asset_id,
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+            items=(
+                item_zero,
+                SourceInventoryItem.create(
+                    **{
+                        **item_one.to_persistence_dict(),
+                        "ordinal": 2,
+                        "source_inventory_id": None,
+                    }
+                ),
+            ),
+            created_at=inventory.created_at,
+        )
+        self.assertNotEqual(
+            inventory.source_inventory_id,
+            semantic_inventory_change.source_inventory_id,
+        )
+
+        requirement = ClaimRequirement.create(
+            query_id="query_finding6_wp1",
+            kind="single_value",
+            target="ticket",
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        manifest = VersionManifest.create(
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            tokenizer_fingerprint=FP,
+            index_fingerprint=FP,
+            implementation_fingerprint=FP,
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        authorization = CoverageAuthorizationBinding(
+            actor_context_id="actor_finding6_wp1",
+            permission_revision="permission_finding6_wp1",
+            grant_revision="grant_finding6_wp1",
+        )
+        scope_policy = CoverageScopePolicyBinding(
+            scope_policy_id="scope-policy-finding6-wp1",
+            scope_policy_version="1",
+            scope_policy_fingerprint=SCOPE_POLICY_FP,
+        )
+        authorization_decisions = tuple(
+            CoverageItemAuthorizationDecision.create(
+                source_inventory_item=item,
+                authorization_binding=authorization,
+                decision_state="authorized",
+            )
+            for item in inventory.items
+        )
+        relevance_decisions = tuple(
+            CoverageItemRelevanceDecision.create(
+                source_inventory_item=item,
+                claim_requirement=requirement,
+                scope_policy=scope_policy,
+                decision_state="relevant",
+            )
+            for item in inventory.items
+        )
+        authority = CoverageScopeAuthority.create(
+            source_inventory=inventory,
+            claim_requirement=requirement,
+            authorization_binding=authorization,
+            version_manifest=manifest,
+            scope_policy=scope_policy,
+            authorization_decisions=tuple(reversed(authorization_decisions)),
+            relevance_decisions=tuple(reversed(relevance_decisions)),
+            authority_verifier=_authority_verifier(),
+        )
+        partitions = (
+            CoverageObservationPartition(
+                inventory_item_id=inventory.items[0].source_inventory_item_id,
+                structural_observation_ids=("structural_zero",),
+                ordinary_observation_ids=("ordinary_zero",),
+            ),
+            CoverageObservationPartition(
+                inventory_item_id=inventory.items[1].source_inventory_item_id,
+                structural_observation_ids=("structural_one",),
+                ordinary_observation_ids=("ordinary_one",),
+            ),
+        )
+        scope_partition = CoverageScopePartition.create(
+            scope_authority=authority,
+            observation_partitions=tuple(reversed(partitions)),
+        )
+        proof_records = tuple(
+            CoverageProofRecord.create(
+                source_inventory_id=inventory.source_inventory_id,
+                claim_requirement_id=requirement.claim_requirement_id,
+                version_manifest_id=manifest.version_manifest_id,
+                inventory_item_id=item.source_inventory_item_id,
+                proof_kind="fallback",
+            )
+            for item in inventory.items
+        )
+        ledger = CoverageLedger.create(
+            query_id=requirement.query_id,
+            claim_requirement_id=requirement.claim_requirement_id,
+            source_inventory_id=inventory.source_inventory_id,
+            relevant_inventory_item_ids=tuple(
+                item.source_inventory_item_id for item in reversed(inventory.items)
+            ),
+            searched_structural_observation_ids=("structural_one", "structural_zero"),
+            searched_ordinary_observation_ids=("ordinary_one", "ordinary_zero"),
+            omitted_inventory_item_ids=tuple(
+                item.source_inventory_item_id for item in reversed(inventory.items)
+            ),
+            failed_inventory_item_ids=tuple(
+                item.source_inventory_item_id for item in inventory.items
+            ),
+            unsupported_inventory_item_ids=tuple(
+                item.source_inventory_item_id for item in reversed(inventory.items)
+            ),
+            redacted_inventory_item_ids=tuple(
+                item.source_inventory_item_id for item in inventory.items
+            ),
+            authorization_binding=authorization,
+            version_binding=CoverageVersionBinding.from_manifest(manifest),
+            scope_partition=scope_partition,
+            proof_records=tuple(reversed(proof_records)),
+            complete_authorized_scope=False,
+        )
+        ledger_payload = ledger.to_persistence_dict()
+        permuted_ledger_payload = deepcopy(ledger_payload)
+        for field_name in (
+            "relevant_inventory_item_ids",
+            "searched_structural_observation_ids",
+            "searched_ordinary_observation_ids",
+            "omitted_inventory_item_ids",
+            "failed_inventory_item_ids",
+            "unsupported_inventory_item_ids",
+            "redacted_inventory_item_ids",
+            "proof_records",
+        ):
+            permuted_ledger_payload[field_name].reverse()
+        permuted_scope = permuted_ledger_payload["scope_partition"]
+        permuted_scope["observation_partitions"].reverse()
+        permuted_authority = permuted_scope["scope_authority"]
+        permuted_authority["authorization_decisions"].reverse()
+        permuted_authority["relevance_decisions"].reverse()
+        for partition in permuted_scope["observation_partitions"]:
+            partition["structural_observation_ids"].reverse()
+            partition["ordinary_observation_ids"].reverse()
+        restored_ledger = CoverageLedger.from_persistence_dict(permuted_ledger_payload)
+        self.assertEqual(restored_ledger.coverage_ledger_id, ledger.coverage_ledger_id)
+        self.assertEqual(
+            wire_bytes(restored_ledger.to_persistence_dict()),
+            wire_bytes(ledger_payload),
+        )
+        direct_reordered_ledger = CoverageLedger(
+            query_id=ledger.query_id,
+            claim_requirement_id=ledger.claim_requirement_id,
+            source_inventory_id=ledger.source_inventory_id,
+            relevant_inventory_item_ids=tuple(reversed(ledger.relevant_inventory_item_ids)),
+            searched_structural_observation_ids=tuple(
+                reversed(ledger.searched_structural_observation_ids)
+            ),
+            searched_ordinary_observation_ids=tuple(
+                reversed(ledger.searched_ordinary_observation_ids)
+            ),
+            omitted_inventory_item_ids=tuple(reversed(ledger.omitted_inventory_item_ids)),
+            failed_inventory_item_ids=tuple(reversed(ledger.failed_inventory_item_ids)),
+            unsupported_inventory_item_ids=tuple(reversed(ledger.unsupported_inventory_item_ids)),
+            redacted_inventory_item_ids=tuple(reversed(ledger.redacted_inventory_item_ids)),
+            authorization_binding=ledger.authorization_binding,
+            version_binding=ledger.version_binding,
+            scope_partition=ledger.scope_partition,
+            fallback_usage=ledger.fallback_usage,
+            proof_records=tuple(reversed(ledger.proof_records)),
+            complete_authorized_scope=ledger.complete_authorized_scope,
+            display_pagination=ledger.display_pagination,
+            coverage_ledger_id=ledger.coverage_ledger_id,
+        )
+        self.assertEqual(direct_reordered_ledger, ledger)
+        semantic_ledger_change = replace(
+            ledger,
+            query_id="query_finding6_other",
+            coverage_ledger_id="",
+        )
+        self.assertNotEqual(semantic_ledger_change.coverage_ledger_id, ledger.coverage_ledger_id)
+
+        claim = AnswerClaim.create(
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=inventory,
+            version_manifest=manifest,
+            expected_scope_authority=authority,
+            authorization_binding=authorization,
+            evidence_snapshot_ids=(),
+        )
+        reordered_claim = AnswerClaim.create(
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=restored_ledger,
+            claim_requirement=requirement,
+            source_inventory=restored_inventory,
+            version_manifest=manifest,
+            expected_scope_authority=authority,
+            authorization_binding=authorization,
+            evidence_snapshot_ids=(),
+        )
+        self.assertEqual(reordered_claim.answer_claim_id, claim.answer_claim_id)
+        self.assertEqual(reordered_claim.to_dict(), claim.to_dict())
+
+        bundle = replace(
+            _minimal_bundle(),
+            source_inventory=[inventory],
+            claim_requirements=[requirement],
+            coverage_ledgers=[ledger],
+            answer_claims=[claim],
+            version_manifests=[manifest],
+        )
+        bundle_payload = bundle.to_persistence_dict()
+        permuted_bundle_payload = deepcopy(bundle_payload)
+        permuted_bundle_payload["source_inventory"][0]["items"].reverse()
+        permuted_bundle_payload["source_inventory_items"].reverse()
+        permuted_bundle_payload["coverage_ledgers"][0] = permuted_ledger_payload
+        permuted_bundle = MailEvidenceBundle.from_persistence_dict(permuted_bundle_payload)
+        self.assertEqual(
+            wire_bytes(permuted_bundle.to_persistence_dict()),
+            wire_bytes(bundle_payload),
+        )
+        connection = _RowsConnection(reverse_query_rows=True)
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(permuted_bundle)
+        postgres_bundle = store.get_bundle(
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id
+        )
+        self.assertIsNotNone(postgres_bundle)
+        assert postgres_bundle is not None
+        self.assertEqual(
+            wire_bytes(postgres_bundle.to_persistence_dict()),
+            wire_bytes(bundle_payload),
+        )
+        self.assertEqual(
+            postgres_bundle.coverage_ledgers[0].coverage_ledger_id,
+            ledger.coverage_ledger_id,
         )
 
     def test_postgres_rejects_legacy_and_partial_wp1_state(self) -> None:
