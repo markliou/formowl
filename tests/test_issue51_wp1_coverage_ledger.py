@@ -351,8 +351,8 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
                 proof_kind="ordinary",
             )
         for changed in (
-            replace(proof, version_manifest_id="manifest_other"),
-            replace(proof, source_inventory_id="inventory_other"),
+            _proof_variant(proof, version_manifest_id="manifest_other"),
+            _proof_variant(proof, source_inventory_id="inventory_other"),
         ):
             with self.subTest(changed=changed):
                 with self.assertRaises(ContractValidationError):
@@ -365,9 +365,9 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
                     )
 
         with self.assertRaises(ContractValidationError):
-            changed = replace(proof, inventory_item_id="item_other")
+            changed = _proof_variant(proof, inventory_item_id="item_other")
             _complete_ledger(inventory, requirement, manifest, authorization, changed)
-        changed = replace(proof, structural_observation_ids=("observation_other",))
+        changed = _proof_variant(proof, structural_observation_ids=("observation_other",))
         with self.assertRaises(ContractValidationError):
             _complete_ledger(
                 inventory,
@@ -447,6 +447,16 @@ def _manifest(
         index_freshness=index_freshness,
         created_at="2026-07-24T00:00:00+00:00",
     )
+
+
+def _proof_variant(
+    proof: CoverageProofRecord,
+    **changes: object,
+) -> CoverageProofRecord:
+    payload = proof.to_persistence_dict()
+    payload.update(changes)
+    payload.pop("proof_id")
+    return CoverageProofRecord.create(**payload)
 
 
 def _fixture() -> (

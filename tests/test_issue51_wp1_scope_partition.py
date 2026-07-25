@@ -217,7 +217,7 @@ class CoverageScopePartitionTests(unittest.TestCase):
                 manifest,
                 authorization,
                 partition,
-                (replace(proofs[0], ordinary_observation_ids=()), proofs[1]),
+                (_proof_variant(proofs[0], ordinary_observation_ids=()), proofs[1]),
                 searched_ordinary=(),
             )
         with self.assertRaises(ContractValidationError):
@@ -276,8 +276,8 @@ class CoverageScopePartitionTests(unittest.TestCase):
             version_binding=CoverageVersionBinding.from_manifest(manifest),
             scope_partition=wrong_item_partition,
             proof_records=(
-                replace(proofs[0], structural_observation_ids=("obs_b_struct",)),
-                replace(proofs[1], proof_kind="fallback", structural_observation_ids=()),
+                _proof_variant(proofs[0], structural_observation_ids=("obs_b_struct",)),
+                _proof_variant(proofs[1], proof_kind="fallback", structural_observation_ids=()),
             ),
             complete_authorized_scope=True,
         )
@@ -481,6 +481,16 @@ def _manifest() -> VersionManifest:
         implementation_fingerprint=FP,
         created_at="2026-07-24T00:00:00+00:00",
     )
+
+
+def _proof_variant(
+    proof: CoverageProofRecord,
+    **changes: object,
+) -> CoverageProofRecord:
+    payload = proof.to_persistence_dict()
+    payload.update(changes)
+    payload.pop("proof_id")
+    return CoverageProofRecord.create(**payload)
 
 
 def _fixture() -> (

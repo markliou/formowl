@@ -3163,22 +3163,64 @@ class CoverageProofRecord:
             "ordinary_observation_ids",
             tuple(sorted(self.ordinary_observation_ids)),
         )
+        expected_id = stable_resource_contract_id(
+            "coverageproof",
+            "CoverageProofRecord",
+            self._identity_payload(),
+        )
+        if self.proof_id != expected_id:
+            raise ContractValidationError(
+                "coverage proof id does not match canonical semantic identity"
+            )
+
+    def _identity_payload(self) -> dict[str, Any]:
+        payload = {
+            "source_inventory_id": self.source_inventory_id,
+            "claim_requirement_id": self.claim_requirement_id,
+            "version_manifest_id": self.version_manifest_id,
+            "inventory_item_id": self.inventory_item_id,
+            "proof_kind": self.proof_kind,
+            "structural_observation_ids": list(self.structural_observation_ids),
+            "ordinary_observation_ids": list(self.ordinary_observation_ids),
+        }
+        if self.populated_value_fingerprint is not None:
+            payload["populated_value_fingerprint"] = self.populated_value_fingerprint
+        if self.intentional_exclusion_proof is not None:
+            payload["intentional_exclusion_proof"] = (
+                self.intentional_exclusion_proof.to_persistence_dict()
+            )
+        return payload
 
     @classmethod
     def create(cls, **values: Any) -> "CoverageProofRecord":
         values = dict(values)
         for field_name in ("structural_observation_ids", "ordinary_observation_ids"):
             values[field_name] = list(values.get(field_name, ()))
+            if all(type(item) is str for item in values[field_name]):
+                values[field_name].sort()
         if isinstance(values.get("intentional_exclusion_proof"), IntentionalExclusionProof):
             values["intentional_exclusion_proof"] = values[
                 "intentional_exclusion_proof"
             ].to_persistence_dict()
+        identity_payload = {
+            "source_inventory_id": values["source_inventory_id"],
+            "claim_requirement_id": values["claim_requirement_id"],
+            "version_manifest_id": values["version_manifest_id"],
+            "inventory_item_id": values["inventory_item_id"],
+            "proof_kind": values["proof_kind"],
+            "structural_observation_ids": values["structural_observation_ids"],
+            "ordinary_observation_ids": values["ordinary_observation_ids"],
+        }
+        if values.get("populated_value_fingerprint") is not None:
+            identity_payload["populated_value_fingerprint"] = values["populated_value_fingerprint"]
+        if values.get("intentional_exclusion_proof") is not None:
+            identity_payload["intentional_exclusion_proof"] = values["intentional_exclusion_proof"]
         values.setdefault(
             "proof_id",
             stable_resource_contract_id(
                 "coverageproof",
                 "CoverageProofRecord",
-                {key: values[key] for key in sorted(values) if key != "proof_id"},
+                identity_payload,
             ),
         )
         return cls.from_dict(values)
@@ -3256,6 +3298,10 @@ class CoverageProofRecord:
                 )
             ),
         )
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "CoverageProofRecord":
+        return cls.from_dict(value)
 
 
 @dataclass(frozen=True)

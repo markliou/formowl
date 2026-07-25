@@ -38,6 +38,7 @@ from formowl_contract import (
     SourceInventory,
     VersionManifest,
     sha256_json,
+    stable_resource_contract_id,
 )
 from formowl_graph.storage import (
     PostgreSQLMigrationRunner,
@@ -74,6 +75,16 @@ def _manifest_variant(
     payload.update(changes)
     payload.pop("version_manifest_id")
     return VersionManifest.create(**payload)
+
+
+def _proof_variant(
+    proof: CoverageProofRecord,
+    **changes: object,
+) -> CoverageProofRecord:
+    payload = proof.to_persistence_dict()
+    payload.update(changes)
+    payload.pop("proof_id")
+    return CoverageProofRecord.create(**payload)
 
 
 _WP1_FAMILY_FIELDS_FOR_TESTS = (
@@ -1190,8 +1201,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
             complete_authorized_scope=False,
             coverage_ledger_id="",
             proof_records=(
-                replace(proofs[0], populated_value_fingerprint=FP),
-                replace(proofs[1], populated_value_fingerprint=FP2),
+                _proof_variant(proofs[0], populated_value_fingerprint=FP),
+                _proof_variant(proofs[1], populated_value_fingerprint=FP2),
             ),
         )
         self.assertFalse(
@@ -2352,27 +2363,11 @@ class Issue51WP1ContractTests(unittest.TestCase):
             include_direct_proof=True,
         )
         proof = ledger.proof_records[0]
-        duplicate_cases = (
-            ("repeated_same_object", (proof, proof)),
-            (
-                "same_proof_id",
-                (
-                    proof,
-                    replace(
-                        proof,
-                        structural_observation_ids=("observation_direct_wp1_b",),
-                    ),
-                ),
-            ),
-            (
-                "semantic_duplicate",
-                (
-                    proof,
-                    replace(proof, proof_id="proof_semantic_duplicate"),
-                ),
-            ),
-        )
-        for case_name, proof_records in duplicate_cases:
+        with self.assertRaises(ContractValidationError):
+            replace(proof, structural_observation_ids=("observation_direct_wp1_b",))
+        with self.assertRaises(ContractValidationError):
+            replace(proof, proof_id="proof_semantic_duplicate")
+        for case_name, proof_records in (("repeated_same_object", (proof, proof)),):
             with self.subTest(case_name=case_name):
                 with self.assertRaises(ContractValidationError):
                     replace(
@@ -2438,6 +2433,120 @@ class Issue51WP1ContractTests(unittest.TestCase):
                         proof_records=(first, second),
                         coverage_ledger_id="",
                     )
+
+    def test_coverage_proof_id_is_canonical_before_ledger_and_claim_identity(self) -> None:
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            ledger,
+            scope_authority,
+            _scope_partition,
+        ) = _direct_claim_fixture(
+            kind="single_value",
+            include_direct_proof=True,
+        )
+        item_id = source_inventory.items[0].source_inventory_item_id
+        first = CoverageProofRecord.create(
+            source_inventory_id=source_inventory.source_inventory_id,
+            claim_requirement_id=requirement.claim_requirement_id,
+            version_manifest_id=manifest.version_manifest_id,
+            inventory_item_id=item_id,
+            proof_kind="structural",
+            structural_observation_ids=(
+                "observation_direct_wp1_a",
+                "observation_direct_wp1_b",
+            ),
+        )
+        reversed_create = CoverageProofRecord.create(
+            source_inventory_id=source_inventory.source_inventory_id,
+            claim_requirement_id=requirement.claim_requirement_id,
+            version_manifest_id=manifest.version_manifest_id,
+            inventory_item_id=item_id,
+            proof_kind="structural",
+            structural_observation_ids=(
+                "observation_direct_wp1_b",
+                "observation_direct_wp1_a",
+            ),
+        )
+        self.assertEqual(first.proof_id, reversed_create.proof_id)
+        self.assertEqual(first.to_persistence_dict(), reversed_create.to_persistence_dict())
+
+        direct_reordered = CoverageProofRecord(
+            proof_id=first.proof_id,
+            source_inventory_id=first.source_inventory_id,
+            claim_requirement_id=first.claim_requirement_id,
+            version_manifest_id=first.version_manifest_id,
+            inventory_item_id=first.inventory_item_id,
+            proof_kind=first.proof_kind,
+            structural_observation_ids=tuple(reversed(first.structural_observation_ids)),
+            ordinary_observation_ids=first.ordinary_observation_ids,
+        )
+        self.assertEqual(direct_reordered.to_persistence_dict(), first.to_persistence_dict())
+
+        permuted_payload = first.to_persistence_dict()
+        permuted_payload["structural_observation_ids"].reverse()
+        restored = CoverageProofRecord.from_persistence_dict(permuted_payload)
+        self.assertEqual(restored.proof_id, first.proof_id)
+        self.assertEqual(restored.to_persistence_dict(), first.to_persistence_dict())
+
+        noncanonical_id = stable_resource_contract_id(
+            "coverageproof",
+            "CoverageProofRecord",
+            {
+                "source_inventory_id": first.source_inventory_id,
+                "claim_requirement_id": first.claim_requirement_id,
+                "version_manifest_id": first.version_manifest_id,
+                "inventory_item_id": first.inventory_item_id,
+                "proof_kind": first.proof_kind,
+                "structural_observation_ids": list(reversed(first.structural_observation_ids)),
+                "ordinary_observation_ids": list(first.ordinary_observation_ids),
+            },
+        )
+        forged_payload = dict(permuted_payload)
+        forged_payload["proof_id"] = noncanonical_id
+        with self.assertRaises(ContractValidationError):
+            CoverageProofRecord.from_persistence_dict(forged_payload)
+        forged_payload["proof_id"] = "coverageproof_forged"
+        with self.assertRaises(ContractValidationError):
+            CoverageProofRecord.from_persistence_dict(forged_payload)
+
+        first_ledger = replace(
+            ledger,
+            proof_records=(first,),
+            coverage_ledger_id="",
+        )
+        reversed_ledger = replace(
+            ledger,
+            proof_records=(reversed_create,),
+            coverage_ledger_id="",
+        )
+        self.assertEqual(first_ledger.coverage_ledger_id, reversed_ledger.coverage_ledger_id)
+        first_claim = AnswerClaim.create(
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=first_ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            expected_scope_authority=scope_authority,
+            authorization_binding=authorization,
+            evidence_snapshot_ids=(),
+        )
+        reversed_claim = AnswerClaim.create(
+            state="INSUFFICIENT_COVERAGE",
+            reason_codes=("incomplete_scope",),
+            coverage_ledger=reversed_ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            expected_scope_authority=scope_authority,
+            authorization_binding=authorization,
+            evidence_snapshot_ids=(),
+        )
+        self.assertEqual(first_claim.answer_claim_id, reversed_claim.answer_claim_id)
+        self.assertEqual(first_claim.to_dict(), reversed_claim.to_dict())
 
     def test_answer_claim_rejects_invalid_typed_bindings(self) -> None:
         bundle, source_inventory, requirement, ledger = _inventory_bundle()
