@@ -93,11 +93,12 @@ class PostgresMigration:
             raise ContractValidationError("PostgresMigration requires a SQL migration filename")
         if not isinstance(text, str):
             raise ContractValidationError("PostgresMigration SQL text must be a string")
+        statement_count = len(_split_sql_statements(text))
         return cls(
             migration_id=Path(filename).stem,
             filename=filename,
             sql_sha256=sha256_json({"filename": filename, "sql": text}),
-            statement_count=sum(1 for chunk in text.split(";") if chunk.strip()),
+            statement_count=statement_count,
         )
 
 
@@ -442,10 +443,113 @@ def _reject_dsn_or_raw_locator(value: dict[str, Any]) -> None:
 
 
 def _split_sql_statements(text: str) -> tuple[str, ...]:
-    statements = tuple(chunk.strip() for chunk in text.split(";") if chunk.strip())
-    if not statements:
+    statements: list[str] = []
+    buffer: list[str] = []
+    index = 0
+    state = "normal"
+    dollar_tag = ""
+    while index < len(text):
+        char = text[index]
+        following = text[index + 1] if index + 1 < len(text) else ""
+        if state == "normal":
+            if char == "-" and following == "-":
+                buffer.extend((char, following))
+                index += 2
+                state = "line_comment"
+                continue
+            if char == "/" and following == "*":
+                buffer.extend((char, following))
+                index += 2
+                state = "block_comment"
+                continue
+            if char == "'":
+                buffer.append(char)
+                index += 1
+                state = "single_quote"
+                continue
+            if char == '"':
+                buffer.append(char)
+                index += 1
+                state = "double_quote"
+                continue
+            if char == "$":
+                match = re.match(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$", text[index:])
+                if match is not None:
+                    dollar_tag = match.group(0)
+                    buffer.append(dollar_tag)
+                    index += len(dollar_tag)
+                    state = "dollar_quote"
+                    continue
+            if char == ";":
+                candidate = "".join(buffer).strip()
+                if _contains_executable_sql(candidate):
+                    statements.append(candidate)
+                buffer.clear()
+                index += 1
+                continue
+            buffer.append(char)
+            index += 1
+            continue
+        if state == "line_comment":
+            buffer.append(char)
+            index += 1
+            if char == "\n":
+                state = "normal"
+            continue
+        if state == "block_comment":
+            buffer.append(char)
+            index += 1
+            if char == "*" and following == "/":
+                buffer.append(following)
+                index += 1
+                state = "normal"
+            continue
+        if state == "single_quote":
+            buffer.append(char)
+            index += 1
+            if char == "'":
+                if following == "'":
+                    buffer.append(following)
+                    index += 1
+                else:
+                    state = "normal"
+            continue
+        if state == "double_quote":
+            buffer.append(char)
+            index += 1
+            if char == '"':
+                if following == '"':
+                    buffer.append(following)
+                    index += 1
+                else:
+                    state = "normal"
+            continue
+        if state == "dollar_quote":
+            if text.startswith(dollar_tag, index):
+                buffer.append(dollar_tag)
+                index += len(dollar_tag)
+                state = "normal"
+                dollar_tag = ""
+            else:
+                buffer.append(char)
+                index += 1
+            continue
+        raise ContractValidationError("migration SQL parser entered an invalid state")
+    if state not in {"normal", "line_comment"}:
+        raise ContractValidationError("migration SQL contains an unterminated quoted value")
+    candidate = "".join(buffer).strip()
+    if _contains_executable_sql(candidate):
+        statements.append(candidate)
+    statements_tuple = tuple(statements)
+    if not statements_tuple:
         raise ContractValidationError("migration file must contain at least one statement")
-    return statements
+    return statements_tuple
+
+
+def _contains_executable_sql(value: str) -> bool:
+    without_block_comments = re.sub(r"/\*.*?\*/", " ", value, flags=re.DOTALL)
+    without_comments = re.sub(r"--[^\n]*(?:\n|$)", " ", without_block_comments)
+    return bool(without_comments.strip())
 
 
 def _validate_public_identifier(value: str, field_name: str) -> None:

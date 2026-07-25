@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -32,6 +33,7 @@ from formowl_graph.storage import (
     postgre_sql_connection_configuration,
     transaction_rollback_tests_against_postgre_sql,
 )
+from formowl_graph.storage.postgres import _split_sql_statements
 
 
 class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
@@ -113,8 +115,13 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
                 (migration_dir / path.name).write_text(
                     path.read_text(encoding="utf-8"), encoding="utf-8"
                 )
+            oauth_fixture = Path("tests/fixtures/postgres/005_oauth_identity.sql")
+            self.assertEqual(
+                hashlib.sha256(oauth_fixture.read_bytes()).hexdigest(),
+                "5af3eff6d1cf774483c3ac30c6db5da4a1baf28f814066a92bc1d1b28826d2e7",
+            )
             (migration_dir / "005_oauth_identity.sql").write_text(
-                "CREATE TABLE IF NOT EXISTS synthetic_oauth_identity (id text PRIMARY KEY);",
+                oauth_fixture.read_text(encoding="utf-8"),
                 encoding="utf-8",
             )
             (migration_dir / "007_task_lifecycle.sql").write_text(
@@ -149,8 +156,64 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
                 {migration_id for migration_id in replay_order},
                 {item.migration_id for item in manifest},
             )
+            self.assertEqual(
+                len(statements),
+                sum(item.statement_count for item in manifest),
+            )
+            oauth_statements = [
+                statement.sql
+                for statement in statements
+                if statement.parameters["migration_id"] == "005_oauth_identity"
+            ]
+            self.assertEqual(
+                len(oauth_statements),
+                next(
+                    item.statement_count
+                    for item in manifest
+                    if item.filename == "005_oauth_identity.sql"
+                ),
+            )
+            self.assertEqual(
+                sum(sql.count("DO $formowl_migration$") for sql in oauth_statements),
+                2,
+            )
+            self.assertFalse(any(sql.strip().startswith("END IF") for sql in oauth_statements))
             self.assertEqual(connection.actions, ["execute"] * len(statements))
             self.assertNotIn("postgresql://", str(statements).lower())
+
+    def test_sql_splitter_respects_lexical_boundaries_and_rejects_unterminated_input(
+        self,
+    ) -> None:
+        statements = _split_sql_statements(
+            """
+            -- top-level comment with a ; semicolon
+            SELECT 'single;quoted''value';
+            /* block comment with a ; semicolon */
+            SELECT "double;quoted""value";
+            DO $formowl_migration$
+            BEGIN
+                RAISE NOTICE 'dollar;quoted';
+            END
+            $formowl_migration$;
+            """
+        )
+        self.assertEqual(len(statements), 3)
+        self.assertIn("single;quoted''value", statements[0])
+        self.assertIn('double;quoted""value', statements[1])
+        self.assertIn("DO $formowl_migration$", statements[2])
+        self.assertIn("END", statements[2])
+        self.assertNotIn("END", statements[0])
+        self.assertNotIn("END", statements[1])
+
+        for malformed in (
+            "SELECT 'unterminated;",
+            'SELECT "unterminated;',
+            "DO $$ BEGIN RAISE NOTICE 'unterminated';",
+            "/* unterminated comment SELECT 1;",
+        ):
+            with self.subTest(malformed=malformed):
+                with self.assertRaises(ContractValidationError):
+                    _split_sql_statements(malformed)
 
     def test_migration_chain_rejects_invalid_manifests_before_replay(self) -> None:
         source_dir = Path("python/formowl_graph/storage/migrations")
