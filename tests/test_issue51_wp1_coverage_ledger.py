@@ -8,6 +8,13 @@ import _paths  # noqa: F401
 from formowl_contract import (
     ClaimRequirement,
     ContractValidationError,
+    COVERAGE_FALLBACK_LIMIT_POLICY_FINGERPRINT,
+    COVERAGE_FALLBACK_LIMIT_POLICY_ID,
+    COVERAGE_FALLBACK_LIMIT_POLICY_VERSION,
+    COVERAGE_FALLBACK_MAX_ATTEMPTS,
+    COVERAGE_FALLBACK_MAX_BYTES,
+    COVERAGE_FALLBACK_MAX_ELAPSED_MS,
+    COVERAGE_FALLBACK_MAX_ITEMS,
     CoverageAuthorizationBinding,
     CoverageItemAuthorizationDecision,
     CoverageItemRelevanceDecision,
@@ -70,6 +77,9 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
                     "byte_budget": 0,
                     "elapsed_ms_budget": 0,
                     "attempt_budget": 1,
+                    "limit_policy_id": COVERAGE_FALLBACK_LIMIT_POLICY_ID,
+                    "limit_policy_version": COVERAGE_FALLBACK_LIMIT_POLICY_VERSION,
+                    "limit_policy_fingerprint": COVERAGE_FALLBACK_LIMIT_POLICY_FINGERPRINT,
                 }
             )
         with self.assertRaises(ContractValidationError):
@@ -84,6 +94,9 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
                     "byte_budget": 0,
                     "elapsed_ms_budget": 0,
                     "attempt_budget": 1,
+                    "limit_policy_id": COVERAGE_FALLBACK_LIMIT_POLICY_ID,
+                    "limit_policy_version": COVERAGE_FALLBACK_LIMIT_POLICY_VERSION,
+                    "limit_policy_fingerprint": COVERAGE_FALLBACK_LIMIT_POLICY_FINGERPRINT,
                 }
             )
         with self.assertRaises(ContractValidationError):
@@ -128,6 +141,86 @@ class CoverageLedgerClosedProofTests(unittest.TestCase):
             CoverageFallbackUsage.from_dict(completed.to_dict()).to_dict(),
             completed.to_dict(),
         )
+
+    def test_fallback_limits_are_closed_versioned_and_finite(self) -> None:
+        boundary_values = (
+            ("items", "item_budget", COVERAGE_FALLBACK_MAX_ITEMS),
+            ("bytes", "byte_budget", COVERAGE_FALLBACK_MAX_BYTES),
+            ("elapsed_ms", "elapsed_ms_budget", COVERAGE_FALLBACK_MAX_ELAPSED_MS),
+            ("attempt_count", "attempt_budget", COVERAGE_FALLBACK_MAX_ATTEMPTS),
+        )
+        for usage_name, budget_name, maximum in boundary_values:
+            with self.subTest(usage_name=usage_name):
+                values = {
+                    "status": "completed",
+                    "items": 0,
+                    "bytes": 0,
+                    "elapsed_ms": 0,
+                    "attempt_count": 1,
+                    "item_budget": 0,
+                    "byte_budget": 0,
+                    "elapsed_ms_budget": 0,
+                    "attempt_budget": 1,
+                }
+                values[usage_name] = maximum
+                values[budget_name] = maximum
+                bounded = CoverageFallbackUsage(**values)
+                self.assertEqual(
+                    CoverageFallbackUsage.from_dict(bounded.to_dict()).to_dict(),
+                    bounded.to_dict(),
+                )
+
+                over_limit = dict(values)
+                over_limit[usage_name] = maximum + 1
+                over_limit[budget_name] = maximum + 1
+                with self.assertRaises(ContractValidationError):
+                    CoverageFallbackUsage(**over_limit)
+
+                budget_over_limit = dict(values)
+                budget_over_limit[usage_name] = 0
+                budget_over_limit[budget_name] = maximum + 1
+                with self.assertRaises(ContractValidationError):
+                    CoverageFallbackUsage(**budget_over_limit)
+
+        base = CoverageFallbackUsage(
+            status="completed",
+            attempt_count=1,
+            attempt_budget=1,
+        ).to_dict()
+        for policy_field in (
+            "limit_policy_id",
+            "limit_policy_version",
+            "limit_policy_fingerprint",
+        ):
+            with self.subTest(policy_field=policy_field):
+                missing = dict(base)
+                missing.pop(policy_field)
+                with self.assertRaises(ContractValidationError):
+                    CoverageFallbackUsage.from_dict(missing)
+
+                mismatched = dict(base)
+                mismatched[policy_field] = (
+                    "different-policy" if policy_field != "limit_policy_fingerprint" else FP2
+                )
+                with self.assertRaises(ContractValidationError):
+                    CoverageFallbackUsage.from_dict(mismatched)
+
+        for numeric_field in (
+            "items",
+            "bytes",
+            "elapsed_ms",
+            "attempt_count",
+            "item_budget",
+            "byte_budget",
+            "elapsed_ms_budget",
+            "attempt_budget",
+        ):
+            for invalid in (True, -1, 10**100):
+                with self.subTest(numeric_field=numeric_field, invalid=invalid):
+                    malformed = dict(base)
+                    malformed[numeric_field] = invalid
+                    with self.assertRaises(ContractValidationError):
+                        CoverageFallbackUsage.from_dict(malformed)
 
     def test_complete_scope_rejects_missing_or_unresolved_proof(self) -> None:
         inventory, requirement, manifest, authorization, proof = _fixture()

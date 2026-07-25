@@ -14,6 +14,7 @@ from formowl_contract import (
     ClaimRequirement,
     ContractValidationError,
     CoverageAuthorizationBinding,
+    CoverageFallbackUsage,
     CoverageItemAuthorizationDecision,
     CoverageItemRelevanceDecision,
     CoverageLedger,
@@ -688,6 +689,48 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 authorization,
                 scope_partition.scope_authority,
             )
+        )
+
+    def test_fallback_limit_binding_round_trips_through_file_and_postgres_bundle(self) -> None:
+        bundle, source_inventory, requirement, ledger = _inventory_bundle()
+        fallback_usage = CoverageFallbackUsage(
+            status="completed",
+            items=2,
+            bytes=100,
+            elapsed_ms=20,
+            attempt_count=1,
+            item_budget=2,
+            byte_budget=100,
+            elapsed_ms_budget=20,
+            attempt_budget=1,
+        )
+        ledger = replace(ledger, fallback_usage=fallback_usage, coverage_ledger_id="")
+        bundle = replace(
+            bundle,
+            coverage_ledgers=[ledger],
+            answer_claims=[],
+        )
+
+        payload = bundle.to_persistence_dict()
+        file_restored = MailEvidenceBundle.from_persistence_dict(payload)
+        self.assertEqual(file_restored.to_persistence_dict(), payload)
+        self.assertEqual(
+            file_restored.coverage_ledgers[0].fallback_usage.to_dict(),
+            fallback_usage.to_dict(),
+        )
+
+        connection = _RowsConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(file_restored)
+        postgres_restored = store.get_bundle(
+            mail_import_session_id=bundle.mail_import_session.mail_import_session_id
+        )
+        self.assertIsNotNone(postgres_restored)
+        assert postgres_restored is not None
+        self.assertEqual(postgres_restored.to_persistence_dict(), payload)
+        self.assertEqual(
+            postgres_restored.coverage_ledgers[0].fallback_usage.to_dict(),
+            fallback_usage.to_dict(),
         )
 
     def test_persisted_authoritative_claim_requires_external_scope_authority(self) -> None:

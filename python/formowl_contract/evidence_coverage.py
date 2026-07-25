@@ -74,6 +74,22 @@ COVERAGE_FALLBACK_STATUS_VALUES = (
     "failed",
     "cancelled",
 )
+COVERAGE_FALLBACK_LIMIT_POLICY_ID = "coverage_fallback_limits_v1"
+COVERAGE_FALLBACK_LIMIT_POLICY_VERSION = "1"
+COVERAGE_FALLBACK_MAX_ITEMS = 1_000
+COVERAGE_FALLBACK_MAX_BYTES = 100_000_000
+COVERAGE_FALLBACK_MAX_ELAPSED_MS = 600_000
+COVERAGE_FALLBACK_MAX_ATTEMPTS = 100
+COVERAGE_FALLBACK_LIMIT_POLICY_FINGERPRINT = sha256_json(
+    {
+        "policy_id": COVERAGE_FALLBACK_LIMIT_POLICY_ID,
+        "policy_version": COVERAGE_FALLBACK_LIMIT_POLICY_VERSION,
+        "max_items": COVERAGE_FALLBACK_MAX_ITEMS,
+        "max_bytes": COVERAGE_FALLBACK_MAX_BYTES,
+        "max_elapsed_ms": COVERAGE_FALLBACK_MAX_ELAPSED_MS,
+        "max_attempts": COVERAGE_FALLBACK_MAX_ATTEMPTS,
+    }
+)
 COVERAGE_NON_SEARCH_REASON_VALUES = (
     "not_searched",
     "not_authorized",
@@ -2815,20 +2831,42 @@ class CoverageFallbackUsage:
     byte_budget: int = 0
     elapsed_ms_budget: int = 0
     attempt_budget: int = 0
+    limit_policy_id: str = COVERAGE_FALLBACK_LIMIT_POLICY_ID
+    limit_policy_version: str = COVERAGE_FALLBACK_LIMIT_POLICY_VERSION
+    limit_policy_fingerprint: str = COVERAGE_FALLBACK_LIMIT_POLICY_FINGERPRINT
 
     def __post_init__(self) -> None:
         _choice(self.status, COVERAGE_FALLBACK_STATUS_VALUES, "fallback_usage.status")
-        for field_name in (
-            "items",
-            "bytes",
-            "elapsed_ms",
-            "attempt_count",
-            "item_budget",
-            "byte_budget",
-            "elapsed_ms_budget",
-            "attempt_budget",
-        ):
-            _nonnegative_int(getattr(self, field_name), f"fallback_usage.{field_name}")
+        _id(self.limit_policy_id, "fallback_usage.limit_policy_id")
+        _id(self.limit_policy_version, "fallback_usage.limit_policy_version")
+        _fingerprint(
+            self.limit_policy_fingerprint,
+            "fallback_usage.limit_policy_fingerprint",
+        )
+        if self.limit_policy_id != COVERAGE_FALLBACK_LIMIT_POLICY_ID:
+            raise ContractValidationError("fallback usage limit policy id is unsupported")
+        if self.limit_policy_version != COVERAGE_FALLBACK_LIMIT_POLICY_VERSION:
+            raise ContractValidationError("fallback usage limit policy version is unsupported")
+        if self.limit_policy_fingerprint != COVERAGE_FALLBACK_LIMIT_POLICY_FINGERPRINT:
+            raise ContractValidationError(
+                "fallback usage limit policy fingerprint does not match policy"
+            )
+        numeric_limits = (
+            ("items", COVERAGE_FALLBACK_MAX_ITEMS),
+            ("bytes", COVERAGE_FALLBACK_MAX_BYTES),
+            ("elapsed_ms", COVERAGE_FALLBACK_MAX_ELAPSED_MS),
+            ("attempt_count", COVERAGE_FALLBACK_MAX_ATTEMPTS),
+            ("item_budget", COVERAGE_FALLBACK_MAX_ITEMS),
+            ("byte_budget", COVERAGE_FALLBACK_MAX_BYTES),
+            ("elapsed_ms_budget", COVERAGE_FALLBACK_MAX_ELAPSED_MS),
+            ("attempt_budget", COVERAGE_FALLBACK_MAX_ATTEMPTS),
+        )
+        for field_name, maximum in numeric_limits:
+            _bounded_nonnegative_int(
+                getattr(self, field_name),
+                f"fallback_usage.{field_name}",
+                maximum,
+            )
         usage_budget_pairs = (
             ("items", "item_budget"),
             ("bytes", "byte_budget"),
@@ -2886,6 +2924,9 @@ class CoverageFallbackUsage:
             "byte_budget",
             "elapsed_ms_budget",
             "attempt_budget",
+            "limit_policy_id",
+            "limit_policy_version",
+            "limit_policy_fingerprint",
         }
         _require_exact_keys(item, fields, "coverage_fallback_usage")
         return cls(
@@ -2898,6 +2939,9 @@ class CoverageFallbackUsage:
             byte_budget=_required_int(item, "byte_budget"),
             elapsed_ms_budget=_required_int(item, "elapsed_ms_budget"),
             attempt_budget=_required_int(item, "attempt_budget"),
+            limit_policy_id=_required_str(item, "limit_policy_id"),
+            limit_policy_version=_required_str(item, "limit_policy_version"),
+            limit_policy_fingerprint=_required_str(item, "limit_policy_fingerprint"),
         )
 
 
@@ -4976,6 +5020,13 @@ def _nonnegative_int(value: Any, field_name: str) -> int:
     return result
 
 
+def _bounded_nonnegative_int(value: Any, field_name: str, maximum: int) -> int:
+    result = _nonnegative_int(value, field_name)
+    if result > maximum:
+        raise ContractValidationError(f"{field_name} exceeds governed maximum {maximum}")
+    return result
+
+
 def _safe_mapping(value: Mapping[str, Any], field_name: str) -> None:
     if not isinstance(value, Mapping):
         raise ContractValidationError(f"{field_name} must be an object")
@@ -5062,6 +5113,13 @@ __all__ = [
     "CELL_STATE_VALUES",
     "ClaimRequirement",
     "ClaimRequirementKind",
+    "COVERAGE_FALLBACK_LIMIT_POLICY_FINGERPRINT",
+    "COVERAGE_FALLBACK_LIMIT_POLICY_ID",
+    "COVERAGE_FALLBACK_LIMIT_POLICY_VERSION",
+    "COVERAGE_FALLBACK_MAX_ATTEMPTS",
+    "COVERAGE_FALLBACK_MAX_BYTES",
+    "COVERAGE_FALLBACK_MAX_ELAPSED_MS",
+    "COVERAGE_FALLBACK_MAX_ITEMS",
     "COVERAGE_FALLBACK_STATUS_VALUES",
     "COVERAGE_ITEM_AUTHORIZATION_STATE_VALUES",
     "COVERAGE_ITEM_RELEVANCE_STATE_VALUES",
