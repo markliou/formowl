@@ -2711,8 +2711,10 @@ class Issue51WP1ContractTests(unittest.TestCase):
 
     def test_migration_006_is_discoverable_and_replay_is_idempotent(self) -> None:
         manifest = migration_files()
-        self.assertEqual(manifest[-1].filename, "006_evidence_coverage.sql")
-        self.assertGreaterEqual(manifest[-1].statement_count, 12)
+        wp1_migration = next(
+            item for item in manifest if item.filename == "006_evidence_coverage.sql"
+        )
+        self.assertGreaterEqual(wp1_migration.statement_count, 12)
         ddl = Path("python/formowl_graph/storage/migrations/006_evidence_coverage.sql").read_text(
             encoding="utf-8"
         )

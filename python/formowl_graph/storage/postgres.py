@@ -11,6 +11,12 @@ _MIGRATION_DIR = Path(__file__).resolve().parent / "migrations"
 _SAFE_PUBLIC_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _DSN_PATTERN = re.compile(r"postgres(?:ql)?://", re.IGNORECASE)
 _RAW_PATH_PATTERN = re.compile(r"^(?:/|\\\\|[A-Za-z]:[\\/]|file://)", re.IGNORECASE)
+_MIGRATION_FILENAME = re.compile(r"^(?P<slot>[0-9]{3})_[A-Za-z0-9][A-Za-z0-9_.-]*\.sql$")
+_RESERVED_MIGRATION_FILENAMES = {
+    5: "005_oauth_identity.sql",
+    6: "006_evidence_coverage.sql",
+    7: "007_task_lifecycle.sql",
+}
 
 
 @dataclass(frozen=True)
@@ -190,17 +196,29 @@ class PostgreSQLUnitOfWork:
 class PostgreSQLMigrationRunner:
     """Replay locked SQL migrations through the internal connection protocol."""
 
-    def __init__(self, connection: PostgreSQLConnection) -> None:
+    def __init__(
+        self,
+        connection: PostgreSQLConnection,
+        migration_dir: Path | None = None,
+    ) -> None:
         self.connection = connection
+        self.migration_dir = Path(migration_dir) if migration_dir is not None else _MIGRATION_DIR
 
     def migration_replay(
         self, migrations: tuple[PostgresMigration, ...] | None = None
     ) -> list[SQLStatement]:
-        statements = []
-        for migration in migrations or migration_files():
-            path = _MIGRATION_DIR / migration.filename
+        manifest = _validate_migration_manifest(
+            migration_files(self.migration_dir) if migrations is None else migrations
+        )
+        resolved_paths: list[tuple[PostgresMigration, Path]] = []
+        for migration in manifest:
+            path = self.migration_dir / migration.filename
             if not path.is_file():
                 raise ContractValidationError("migration file missing from locked manifest")
+            resolved_paths.append((migration, path))
+
+        statements = []
+        for migration, path in resolved_paths:
             for index, sql in enumerate(
                 _split_sql_statements(path.read_text(encoding="utf-8")), start=1
             ):
@@ -283,8 +301,54 @@ class PostgreSQLMetadataRepository:
         raise ContractValidationError("canonical commits require governed review backend")
 
 
-def migration_files() -> tuple[PostgresMigration, ...]:
-    return tuple(PostgresMigration.from_file(path) for path in sorted(_MIGRATION_DIR.glob("*.sql")))
+def migration_files(
+    migration_dir: Path | None = None,
+) -> tuple[PostgresMigration, ...]:
+    root = Path(migration_dir) if migration_dir is not None else _MIGRATION_DIR
+    paths = list(root.glob("*.sql"))
+    slots: dict[int, Path] = {}
+    for path in paths:
+        slot = _migration_slot(path.name)
+        if slot in slots:
+            raise ContractValidationError("migration manifest contains duplicate numeric slots")
+        slots[slot] = path
+    migrations = tuple(PostgresMigration.from_file(slots[slot]) for slot in sorted(slots))
+    return _validate_migration_manifest(migrations)
+
+
+def _migration_slot(filename: str) -> int:
+    match = _MIGRATION_FILENAME.fullmatch(filename)
+    if match is None:
+        raise ContractValidationError("migration filename must use a three-digit numeric slot")
+    slot = int(match.group("slot"))
+    if slot == 0:
+        raise ContractValidationError("migration numeric slot must be positive")
+    reserved_filename = _RESERVED_MIGRATION_FILENAMES.get(slot)
+    if reserved_filename is not None and filename != reserved_filename:
+        raise ContractValidationError("reserved migration slot has an unexpected filename")
+    return slot
+
+
+def _validate_migration_manifest(
+    migrations: tuple[PostgresMigration, ...],
+) -> tuple[PostgresMigration, ...]:
+    slots: list[int] = []
+    for migration in migrations:
+        if not isinstance(migration, PostgresMigration):
+            raise ContractValidationError("migration manifest contains an invalid record")
+        if migration.migration_id != Path(migration.filename).stem:
+            raise ContractValidationError("migration manifest ID does not match filename")
+        slot = _migration_slot(migration.filename)
+        if slot in slots:
+            raise ContractValidationError("migration manifest contains duplicate numeric slots")
+        slots.append(slot)
+    if slots != sorted(slots):
+        raise ContractValidationError("migration manifest must be ordered by numeric slot")
+    if slots.count(6) != 1:
+        raise ContractValidationError(
+            "WP1 migration manifest requires exactly one 006_evidence_coverage.sql"
+        )
+    return migrations
 
 
 def postgre_sql_backed_repository_interfaces() -> tuple[str, ...]:

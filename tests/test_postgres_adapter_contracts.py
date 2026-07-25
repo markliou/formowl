@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+import tempfile
 import unittest
 
 import _paths  # noqa: F401
@@ -68,14 +70,8 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         manifest = migration_files()
         index_names = grant_audit_query_indexes()
 
-        expected_manifest = (
-            "001_metadata_store.sql",
-            "002_vector_index.sql",
-            "003_ingestion_records.sql",
-            "004_mail_evidence.sql",
-            "006_evidence_coverage.sql",
-        )
         migration_filenames = tuple(item.filename for item in manifest)
+        wp1_migrations = [item for item in manifest if item.filename == "006_evidence_coverage.sql"]
         migration_replay = all(item.statement_count >= 3 for item in manifest)
         grant_audit_query_indexes_marker = {
             "idx_formowl_graph_records_scope",
@@ -85,7 +81,11 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
             "idx_formowl_audit_log_actor_target",
         }.issubset(set(index_names))
 
-        self.assertEqual(migration_filenames, expected_manifest)
+        self.assertEqual(migration_filenames, tuple(sorted(migration_filenames)))
+        self.assertEqual(
+            tuple(item.filename for item in wp1_migrations), ("006_evidence_coverage.sql",)
+        )
+        self.assertGreaterEqual(wp1_migrations[0].statement_count, 12)
         self.assertTrue(migration_replay)
         self.assertTrue(grant_audit_query_indexes_marker)
         self.assertEqual(
@@ -101,6 +101,116 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
             "scripts/postgres_transaction_rollback_live_smoke.py",
             transaction_rollback_tests_against_postgre_sql(),
         )
+
+    def test_migration_chain_composes_reserved_005_and_007_without_fabricating_them(
+        self,
+    ) -> None:
+        source_dir = Path("python/formowl_graph/storage/migrations")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            migration_dir = Path(temporary_directory)
+            for path in source_dir.glob("*.sql"):
+                (migration_dir / path.name).write_text(
+                    path.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            (migration_dir / "005_oauth_identity.sql").write_text(
+                "CREATE TABLE IF NOT EXISTS synthetic_oauth_identity (id text PRIMARY KEY);",
+                encoding="utf-8",
+            )
+            (migration_dir / "007_task_lifecycle.sql").write_text(
+                "CREATE TABLE IF NOT EXISTS synthetic_task_lifecycle (id text PRIMARY KEY);",
+                encoding="utf-8",
+            )
+
+            manifest = migration_files(migration_dir)
+            self.assertEqual(
+                tuple(item.filename for item in manifest),
+                (
+                    "001_metadata_store.sql",
+                    "002_vector_index.sql",
+                    "003_ingestion_records.sql",
+                    "004_mail_evidence.sql",
+                    "005_oauth_identity.sql",
+                    "006_evidence_coverage.sql",
+                    "007_task_lifecycle.sql",
+                ),
+            )
+            connection = _RecordingConnection()
+            statements = PostgreSQLMigrationRunner(
+                connection,
+                migration_dir=migration_dir,
+            ).migration_replay()
+            replay_order = [statement.parameters["migration_id"] for statement in statements]
+            self.assertEqual(
+                replay_order,
+                sorted(replay_order, key=lambda migration_id: int(migration_id[:3])),
+            )
+            self.assertEqual(
+                {migration_id for migration_id in replay_order},
+                {item.migration_id for item in manifest},
+            )
+            self.assertEqual(connection.actions, ["execute"] * len(statements))
+            self.assertNotIn("postgresql://", str(statements).lower())
+
+    def test_migration_chain_rejects_invalid_manifests_before_replay(self) -> None:
+        source_dir = Path("python/formowl_graph/storage/migrations")
+
+        def seeded_directory() -> tuple[tempfile.TemporaryDirectory[str], Path]:
+            temporary_directory = tempfile.TemporaryDirectory()
+            migration_dir = Path(temporary_directory.name)
+            for path in source_dir.glob("*.sql"):
+                (migration_dir / path.name).write_text(
+                    path.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            return temporary_directory, migration_dir
+
+        temporary_directory, migration_dir = seeded_directory()
+        try:
+            (migration_dir / "bad_name.sql").write_text("SELECT 1;", encoding="utf-8")
+            with self.assertRaises(ContractValidationError):
+                migration_files(migration_dir)
+        finally:
+            temporary_directory.cleanup()
+
+        temporary_directory, migration_dir = seeded_directory()
+        try:
+            (migration_dir / "005_wrong_name.sql").write_text("SELECT 1;", encoding="utf-8")
+            with self.assertRaises(ContractValidationError):
+                migration_files(migration_dir)
+        finally:
+            temporary_directory.cleanup()
+
+        temporary_directory, migration_dir = seeded_directory()
+        try:
+            (migration_dir / "006_evidence_coverage.sql").unlink()
+            with self.assertRaises(ContractValidationError):
+                migration_files(migration_dir)
+        finally:
+            temporary_directory.cleanup()
+
+        temporary_directory, migration_dir = seeded_directory()
+        try:
+            (migration_dir / "008_first.sql").write_text("SELECT 1;", encoding="utf-8")
+            (migration_dir / "008_second.sql").write_text("SELECT 1;", encoding="utf-8")
+            with self.assertRaises(ContractValidationError):
+                migration_files(migration_dir)
+        finally:
+            temporary_directory.cleanup()
+
+        manifest = migration_files()
+        connection = _RecordingConnection()
+        with self.assertRaises(ContractValidationError):
+            PostgreSQLMigrationRunner(connection).migration_replay(tuple(reversed(manifest)))
+        self.assertEqual(connection.actions, [])
+
+        connection = _RecordingConnection()
+        with self.assertRaises(ContractValidationError):
+            PostgreSQLMigrationRunner(connection).migration_replay(manifest[:-1])
+        self.assertEqual(connection.actions, [])
+
+        connection = _RecordingConnection()
+        with self.assertRaises(ContractValidationError):
+            PostgreSQLMigrationRunner(connection).migration_replay(manifest + (manifest[-1],))
+        self.assertEqual(connection.actions, [])
 
     def test_migration_runner_replays_locked_manifest_without_public_connection_details(
         self,
