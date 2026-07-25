@@ -922,6 +922,42 @@ class SourceInventory:
                 raise ContractValidationError(
                     "source inventory items must share parser_fingerprint"
                 )
+        expected_source_inventory_id = self._canonical_source_inventory_id(
+            source_asset_id=self.source_asset_id,
+            source_fingerprint=self.source_fingerprint,
+            parser_fingerprint=self.parser_fingerprint,
+            items=self.items,
+        )
+        if self.source_inventory_id != expected_source_inventory_id:
+            raise ContractValidationError(
+                "source inventory id does not match canonical aggregate identity"
+            )
+
+    @staticmethod
+    def _canonical_source_inventory_id(
+        *,
+        source_asset_id: str,
+        source_fingerprint: str,
+        parser_fingerprint: str,
+        items: Sequence[SourceInventoryItem],
+    ) -> str:
+        item_payloads = [_inventory_item_identity_payload(item) for item in items]
+        item_payloads.sort(
+            key=lambda item: (
+                item["ordinal"],
+                sha256_json(item),
+            )
+        )
+        return stable_resource_contract_id(
+            "inventoryset",
+            "SourceInventory",
+            {
+                "source_asset_id": source_asset_id,
+                "source_fingerprint": source_fingerprint,
+                "parser_fingerprint": parser_fingerprint,
+                "items": item_payloads,
+            },
+        )
 
     @classmethod
     def create(
@@ -949,16 +985,11 @@ class SourceInventory:
                 raise ContractValidationError(
                     "source inventory item parser fingerprint does not match aggregate"
                 )
-        inventory_body = {
-            "source_asset_id": source_asset_id,
-            "source_fingerprint": source_fingerprint,
-            "parser_fingerprint": parser_fingerprint,
-            "items": [_inventory_item_identity_payload(item) for item in item_values],
-        }
-        source_inventory_id = stable_resource_contract_id(
-            "inventoryset",
-            "SourceInventory",
-            inventory_body,
+        source_inventory_id = cls._canonical_source_inventory_id(
+            source_asset_id=source_asset_id,
+            source_fingerprint=source_fingerprint,
+            parser_fingerprint=parser_fingerprint,
+            items=item_values,
         )
         bound_items = []
         for item in item_values:

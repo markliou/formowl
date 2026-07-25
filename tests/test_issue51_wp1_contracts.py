@@ -1657,6 +1657,66 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 expected_scope_authorities={ledger.coverage_ledger_id: authority},
             )
 
+    def test_source_inventory_persistence_rejects_forged_aggregate_identity(self) -> None:
+        inventory, *_ = _excluded_scope_fixture()
+        first_payload = inventory.items[0].to_persistence_dict()
+        first_payload.pop("source_inventory_item_id")
+        first_payload["source_inventory_id"] = None
+        unbound_proof = replace(
+            inventory.items[0].intentional_exclusion_proof,
+            source_inventory_id=None,
+            source_inventory_item_id=None,
+            proof_id="",
+            proof_fingerprint="",
+        )
+        first_payload["intentional_exclusion_proof"] = unbound_proof.to_persistence_dict()
+        first_item = SourceInventoryItem.create(**first_payload)
+        second_item = SourceInventoryItem.create(
+            source_asset_id=inventory.source_asset_id,
+            structure_kind="message",
+            content_type="message/rfc822",
+            ordinal=1,
+            processing_state="parsed",
+            raw_retention_state="retained",
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+            permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
+        )
+        rebound_inventory = SourceInventory.create(
+            source_asset_id=inventory.source_asset_id,
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+            items=(first_item, second_item),
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        forged_payload = rebound_inventory.to_persistence_dict()
+        forged_payload["items"] = forged_payload["items"][:1]
+        with self.assertRaises(ContractValidationError):
+            SourceInventory.from_persistence_dict(forged_payload)
+
+        forged_bundle = replace(
+            _minimal_bundle(),
+            source_inventory=[rebound_inventory],
+        )
+        forged_bundle_payload = forged_bundle.to_persistence_dict()
+        forged_bundle_payload["source_inventory"][0]["items"] = forged_bundle_payload[
+            "source_inventory"
+        ][0]["items"][:1]
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_persistence_dict(forged_bundle_payload)
+
+        connection = _RowsConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(forged_bundle)
+        stored_payload = connection.rows["source_inventory"][rebound_inventory.source_inventory_id][
+            "payload"
+        ]
+        stored_payload["items"] = stored_payload["items"][:1]
+        with self.assertRaises(ContractValidationError):
+            store.get_bundle(
+                mail_import_session_id=forged_bundle.mail_import_session.mail_import_session_id,
+            )
+
     def test_exclusion_proof_changes_deterministic_inventory_id(self) -> None:
         first = _excluded_item(policy_version_id="policy_version_wp1")
         second = _excluded_item(policy_version_id="policy_version_wp1_changed")
