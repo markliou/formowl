@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from copy import deepcopy
 from pathlib import Path
+import copy
+import pickle
 import unittest
 
 import _paths  # noqa: F401
@@ -1072,6 +1074,64 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 partition.scope_authority,
             )
         )
+
+    def test_process_local_authority_and_claim_serialization_is_fail_closed(self) -> None:
+        from test_issue51_wp1_scope_partition import _complete_ledger, _fixture
+
+        (
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            partition,
+            proofs,
+        ) = _fixture()
+        ledger = _complete_ledger(
+            source_inventory,
+            requirement,
+            manifest,
+            authorization,
+            partition,
+            proofs,
+        )
+        claim = AnswerClaim.create(
+            state="FOUND",
+            reason_codes=("complete_scope",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=source_inventory,
+            version_manifest=manifest,
+            expected_scope_authority=partition.scope_authority,
+            authorization_binding=authorization,
+            evidence_snapshot_ids=(),
+        )
+
+        for operation in (
+            lambda: pickle.dumps(partition.scope_authority),
+            lambda: copy.copy(partition.scope_authority),
+            lambda: copy.deepcopy(partition.scope_authority),
+        ):
+            with self.assertRaises(TypeError) as context:
+                operation()
+            self.assertNotIn(AUTHORITY_ROOT, str(context.exception))
+
+        verifier = _authority_verifier()
+        for operation in (
+            lambda: pickle.dumps(verifier),
+            lambda: copy.copy(verifier),
+            lambda: copy.deepcopy(verifier),
+        ):
+            with self.assertRaises(TypeError) as context:
+                operation()
+            self.assertNotIn(AUTHORITY_ROOT, str(context.exception))
+
+        for operation in (
+            lambda: pickle.dumps(claim),
+            lambda: copy.copy(claim),
+            lambda: copy.deepcopy(claim),
+        ):
+            with self.assertRaises(TypeError):
+                operation()
 
     def test_display_pagination_is_presentation_only_for_ledger_and_claim_identity(self) -> None:
         bundle, source_inventory, requirement, ledger = _inventory_bundle()

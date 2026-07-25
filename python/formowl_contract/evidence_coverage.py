@@ -1760,6 +1760,15 @@ class _CoverageScopeAuthorityCapability:
         self.verifier_fingerprint = verifier_fingerprint
         self.proof = proof
 
+    def __reduce_ex__(self, protocol: int) -> object:
+        raise TypeError("scope authority capability cannot be serialized")
+
+    def __copy__(self) -> object:
+        raise TypeError("scope authority capability cannot be copied")
+
+    def __deepcopy__(self, memo: dict[int, object]) -> object:
+        raise TypeError("scope authority capability cannot be deep-copied")
+
 
 class CoverageScopeAuthorityVerifier:
     """External authority root for scope validation.
@@ -1789,6 +1798,15 @@ class CoverageScopeAuthorityVerifier:
             "sha256:"
             + hashlib.sha256(b"formowl:coverage-scope-authority-verifier:" + root_bytes).hexdigest()
         )
+
+    def __reduce_ex__(self, protocol: int) -> object:
+        raise TypeError("scope authority verifier cannot be serialized")
+
+    def __copy__(self) -> object:
+        raise TypeError("scope authority verifier cannot be copied")
+
+    def __deepcopy__(self, memo: dict[int, object]) -> object:
+        raise TypeError("scope authority verifier cannot be deep-copied")
 
     @classmethod
     def generate(cls) -> "CoverageScopeAuthorityVerifier":
@@ -1915,6 +1933,15 @@ class CoverageScopeAuthority:
                 raise ContractValidationError("scope authority id does not match identity")
         else:
             object.__setattr__(self, "authority_id", expected_id)
+
+    def __reduce_ex__(self, protocol: int) -> object:
+        raise TypeError("scope authority cannot be serialized; use to_persistence_dict instead")
+
+    def __copy__(self) -> object:
+        raise TypeError("scope authority cannot be copied")
+
+    def __deepcopy__(self, memo: dict[int, object]) -> object:
+        raise TypeError("scope authority cannot be deep-copied")
 
     @classmethod
     def create(
@@ -3410,6 +3437,15 @@ class AnswerClaim:
     )
     _wire_only: bool = field(default=False, repr=False, compare=False)
     _factory_token: object | None = field(default=None, repr=False, compare=False)
+
+    def __reduce_ex__(self, protocol: int) -> object:
+        raise TypeError("answer claims cannot be serialized; use to_persistence_dict instead")
+
+    def __copy__(self) -> object:
+        raise TypeError("answer claims cannot be copied")
+
+    def __deepcopy__(self, memo: dict[int, object]) -> object:
+        raise TypeError("answer claims cannot be deep-copied")
 
     def __post_init__(self) -> None:
         if self._wire_only:
