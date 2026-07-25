@@ -425,6 +425,8 @@ class IntentionalExclusionProof:
     exclusion_policy_version_id: str
     authorized_actor_id: str
     reason_code: str
+    source_inventory_id: str | None = None
+    source_inventory_item_id: str | None = None
     proof_id: str = ""
     proof_fingerprint: str = ""
 
@@ -451,6 +453,15 @@ class IntentionalExclusionProof:
             "exclusion.exclusion_policy_version_id",
         )
         _id(self.authorized_actor_id, "exclusion.authorized_actor_id")
+        _optional_id(self.source_inventory_id, "exclusion.source_inventory_id")
+        _optional_id(
+            self.source_inventory_item_id,
+            "exclusion.source_inventory_item_id",
+        )
+        if (self.source_inventory_id is None) != (self.source_inventory_item_id is None):
+            raise ContractValidationError(
+                "exclusion aggregate and item membership bindings must be paired"
+            )
         if self.authorized_actor_id != self.authorization_binding.actor_context_id:
             raise ContractValidationError(
                 "exclusion authorized actor must match authorization binding"
@@ -514,6 +525,26 @@ class IntentionalExclusionProof:
             exclusion_policy_version_id=exclusion_policy_version_id,
             authorized_actor_id=actor_id,
             reason_code=reason_code,
+            source_inventory_id=None,
+            source_inventory_item_id=None,
+        )
+
+    def bind_to_inventory(
+        self,
+        *,
+        source_inventory_id: str,
+        source_inventory_item_id: str,
+    ) -> "IntentionalExclusionProof":
+        """Bind the proof after canonical inventory and item IDs exist."""
+
+        _id(source_inventory_id, "exclusion.source_inventory_id")
+        _id(source_inventory_item_id, "exclusion.source_inventory_item_id")
+        return replace(
+            self,
+            source_inventory_id=source_inventory_id,
+            source_inventory_item_id=source_inventory_item_id,
+            proof_id="",
+            proof_fingerprint="",
         )
 
     def _identity_payload(self) -> dict[str, Any]:
@@ -530,6 +561,8 @@ class IntentionalExclusionProof:
             "exclusion_policy_version_id": self.exclusion_policy_version_id,
             "authorized_actor_id": self.authorized_actor_id,
             "reason_code": self.reason_code,
+            "source_inventory_id": self.source_inventory_id,
+            "source_inventory_item_id": self.source_inventory_item_id,
         }
 
     def to_persistence_dict(self) -> dict[str, Any]:
@@ -562,6 +595,8 @@ class IntentionalExclusionProof:
                 "exclusion_policy_version_id",
                 "authorized_actor_id",
                 "reason_code",
+                "source_inventory_id",
+                "source_inventory_item_id",
                 "proof_id",
                 "proof_fingerprint",
             },
@@ -593,6 +628,8 @@ class IntentionalExclusionProof:
             ),
             authorized_actor_id=_required_str(item, "authorized_actor_id"),
             reason_code=_required_str(item, "reason_code"),
+            source_inventory_id=_optional_str(item, "source_inventory_id"),
+            source_inventory_item_id=_optional_str(item, "source_inventory_item_id"),
             proof_id=_required_str(item, "proof_id"),
             proof_fingerprint=_required_str(item, "proof_fingerprint"),
         )
@@ -627,6 +664,8 @@ class IntentionalExclusionProof:
             return False
         if (
             source_inventory_item.source_inventory_id != source_inventory.source_inventory_id
+            or self.source_inventory_id != source_inventory.source_inventory_id
+            or self.source_inventory_item_id != source_inventory_item.source_inventory_item_id
             or source_inventory_item.intentional_exclusion_proof != self
             or self.source_unit_fingerprint != _source_unit_fingerprint(source_inventory_item)
             or self.claim_requirement_id != claim_requirement.claim_requirement_id
@@ -707,14 +746,32 @@ class SourceInventoryItem:
         ):
             raise ContractValidationError("intentional exclusion proof is invalid")
         if self.intentional_exclusion_proof is not None:
+            if self.source_inventory_id is not None and (
+                self.intentional_exclusion_proof.source_inventory_id is None
+                or self.intentional_exclusion_proof.source_inventory_item_id is None
+            ):
+                raise ContractValidationError(
+                    "bound inventory items require bound exclusion proof membership"
+                )
+            if self.intentional_exclusion_proof.source_inventory_id not in (
+                None,
+                self.source_inventory_id,
+            ):
+                raise ContractValidationError(
+                    "intentional exclusion proof is bound to another inventory"
+                )
+            if (
+                self.intentional_exclusion_proof.source_inventory_item_id is not None
+                and self.intentional_exclusion_proof.source_inventory_item_id
+                != self.source_inventory_item_id
+            ):
+                raise ContractValidationError(
+                    "intentional exclusion proof is bound to another inventory item"
+                )
             expected_item_id = stable_resource_contract_id(
                 "inventory",
                 "SourceInventoryItem",
-                {
-                    key: value
-                    for key, value in self.to_persistence_dict().items()
-                    if key != "source_inventory_item_id"
-                },
+                _source_inventory_item_identity_payload(self),
             )
             if self.source_inventory_item_id != expected_item_id:
                 raise ContractValidationError(
@@ -743,7 +800,7 @@ class SourceInventoryItem:
             stable_resource_contract_id(
                 "inventory",
                 "SourceInventoryItem",
-                {key: values[key] for key in sorted(values) if key != "source_inventory_item_id"},
+                _source_inventory_item_identity_payload_from_mapping(values),
             ),
         )
         return cls.from_persistence_dict(values)
@@ -846,6 +903,15 @@ class SourceInventory:
                 raise ContractValidationError(
                     "source inventory items must belong to source_inventory_id"
                 )
+            if item.intentional_exclusion_proof is not None:
+                if (
+                    item.intentional_exclusion_proof.source_inventory_id != self.source_inventory_id
+                    or item.intentional_exclusion_proof.source_inventory_item_id
+                    != item.source_inventory_item_id
+                ):
+                    raise ContractValidationError(
+                        "source inventory exclusion proof membership does not match aggregate"
+                    )
             if item.source_asset_id != self.source_asset_id:
                 raise ContractValidationError("source inventory items must share source_asset_id")
             if item.source_fingerprint != self.source_fingerprint:
@@ -900,10 +966,34 @@ class SourceInventory:
                 raise ContractValidationError(
                     "source inventory item points at a different aggregate"
                 )
+            if (
+                item.intentional_exclusion_proof is not None
+                and item.intentional_exclusion_proof.source_inventory_id
+                not in (None, source_inventory_id)
+            ):
+                raise ContractValidationError(
+                    "source inventory exclusion proof points at a different aggregate"
+                )
             item_values_for_binding = item.to_persistence_dict()
             item_values_for_binding.pop("source_inventory_item_id", None)
             item_values_for_binding["source_inventory_id"] = source_inventory_id
-            bound_items.append(SourceInventoryItem.create(**item_values_for_binding))
+            proof = item.intentional_exclusion_proof
+            if proof is not None:
+                item_id = stable_resource_contract_id(
+                    "inventory",
+                    "SourceInventoryItem",
+                    _source_inventory_item_identity_payload_from_mapping(item_values_for_binding),
+                )
+                proof = proof.bind_to_inventory(
+                    source_inventory_id=source_inventory_id,
+                    source_inventory_item_id=item_id,
+                )
+                item_values_for_binding["intentional_exclusion_proof"] = proof.to_persistence_dict()
+                item_values_for_binding["source_inventory_item_id"] = item_id
+                bound_item = SourceInventoryItem.from_persistence_dict(item_values_for_binding)
+            else:
+                bound_item = SourceInventoryItem.create(**item_values_for_binding)
+            bound_items.append(bound_item)
         return cls(
             source_inventory_id=source_inventory_id,
             source_asset_id=source_asset_id,
@@ -2858,6 +2948,14 @@ class CoverageProofRecord:
                 raise ContractValidationError(
                     "intentionally_excluded proof requires a typed exclusion proof"
                 )
+            if (
+                self.intentional_exclusion_proof.source_inventory_id != self.source_inventory_id
+                or self.intentional_exclusion_proof.source_inventory_item_id
+                != self.inventory_item_id
+            ):
+                raise ContractValidationError(
+                    "coverage exclusion proof membership does not match proof record"
+                )
         elif self.intentional_exclusion_proof is not None:
             raise ContractValidationError(
                 "typed exclusion proof is only valid for intentionally_excluded records"
@@ -4441,9 +4539,36 @@ def _persistence_dataclass_payload(value: Any) -> dict[str, Any]:
     }
 
 
+def _source_inventory_item_identity_payload_from_mapping(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = {
+        str(key): _persistence_plain(item)
+        for key, item in value.items()
+        if key != "source_inventory_item_id"
+    }
+    proof = payload.get("intentional_exclusion_proof")
+    if isinstance(proof, Mapping):
+        proof_payload = dict(proof)
+        for key in (
+            "source_inventory_id",
+            "source_inventory_item_id",
+            "proof_id",
+            "proof_fingerprint",
+        ):
+            proof_payload.pop(key, None)
+        payload["intentional_exclusion_proof"] = proof_payload
+    return payload
+
+
+def _source_inventory_item_identity_payload(
+    item: SourceInventoryItem,
+) -> dict[str, Any]:
+    return _source_inventory_item_identity_payload_from_mapping(item.to_persistence_dict())
+
+
 def _inventory_item_identity_payload(item: SourceInventoryItem) -> dict[str, Any]:
-    payload = item.to_persistence_dict()
-    payload.pop("source_inventory_item_id", None)
+    payload = _source_inventory_item_identity_payload(item)
     payload.pop("source_inventory_id", None)
     return payload
 
@@ -4577,6 +4702,8 @@ def _public_plain(value: Any) -> Any:
 
 
 def _persistence_plain(value: Any) -> Any:
+    if isinstance(value, IntentionalExclusionProof):
+        return value.to_persistence_dict()
     if isinstance(value, StructuralCell):
         return value.to_persistence_dict()
     if isinstance(value, StructuralColumn):

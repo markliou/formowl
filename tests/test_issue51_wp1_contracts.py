@@ -1301,6 +1301,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
             "exclusion_policy_version_id",
             "authorized_actor_id",
             "reason_code",
+            "source_inventory_id",
+            "source_inventory_item_id",
             "proof_id",
             "proof_fingerprint",
         )
@@ -1326,6 +1328,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
             "exclusion_policy_version_id": 123,
             "authorized_actor_id": 123,
             "reason_code": 123,
+            "source_inventory_id": 123,
+            "source_inventory_item_id": 123,
             "proof_id": 123,
             "proof_fingerprint": 123,
         }
@@ -1432,6 +1436,9 @@ class Issue51WP1ContractTests(unittest.TestCase):
             authorization_binding=authorization,
             scope_policy=authority.scope_policy,
             exclusion_policy_version_id="policy_version_foreign",
+        ).bind_to_inventory(
+            source_inventory_id=inventory.source_inventory_id,
+            source_inventory_item_id=inventory.items[0].source_inventory_item_id,
         )
         forged_record = CoverageProofRecord.create(
             source_inventory_id=inventory.source_inventory_id,
@@ -1545,6 +1552,109 @@ class Issue51WP1ContractTests(unittest.TestCase):
             store.get_bundle(
                 mail_import_session_id=restored.mail_import_session.mail_import_session_id,
                 expected_scope_authorities={ledger.coverage_ledger_id: replayed},
+            )
+
+    def test_exclusion_proof_rejects_cross_inventory_replay(self) -> None:
+        (
+            inventory,
+            requirement,
+            manifest,
+            authorization,
+            ledger,
+            authority,
+            proof,
+        ) = _excluded_scope_fixture()
+        other_item = SourceInventoryItem.create(
+            source_asset_id="asset_other_exclusion",
+            structure_kind="message",
+            content_type="message/rfc822",
+            ordinal=0,
+            processing_state="parsed",
+            raw_retention_state="retained",
+            source_fingerprint=FP2,
+            parser_fingerprint=FP,
+            permission_scope={"scope_type": "asset", "scope_id": "asset_other_exclusion"},
+        )
+        other_inventory = SourceInventory.create(
+            source_asset_id="asset_other_exclusion",
+            source_fingerprint=FP2,
+            parser_fingerprint=FP,
+            items=(other_item,),
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        replayed = replace(
+            proof,
+            source_inventory_id=other_inventory.source_inventory_id,
+            source_inventory_item_id=other_inventory.items[0].source_inventory_item_id,
+            proof_id="",
+            proof_fingerprint="",
+        )
+
+        item_payload = inventory.items[0].to_persistence_dict()
+        item_payload["intentional_exclusion_proof"] = replayed.to_persistence_dict()
+        with self.assertRaises(ContractValidationError):
+            SourceInventoryItem.from_persistence_dict(item_payload)
+        with self.assertRaises(ContractValidationError):
+            CoverageProofRecord.create(
+                source_inventory_id=inventory.source_inventory_id,
+                claim_requirement_id=requirement.claim_requirement_id,
+                version_manifest_id=manifest.version_manifest_id,
+                inventory_item_id=inventory.items[0].source_inventory_item_id,
+                proof_kind="intentionally_excluded",
+                intentional_exclusion_proof=replayed,
+            )
+
+        claim = AnswerClaim.create(
+            state="NOT_FOUND_WITHIN_COMPLETE_SCOPE",
+            reason_codes=("complete_exclusion_scope",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=inventory,
+            version_manifest=manifest,
+            authorization_binding=authorization,
+            expected_scope_authority=authority,
+            evidence_snapshot_ids=(),
+        )
+        bundle = replace(
+            _minimal_bundle(),
+            source_inventory=[inventory],
+            claim_requirements=[requirement],
+            coverage_ledgers=[ledger],
+            answer_claims=[claim],
+            version_manifests=[manifest],
+        )
+        payload = bundle.to_persistence_dict()
+        payload["source_inventory"][0]["items"][0]["intentional_exclusion_proof"] = (
+            replayed.to_persistence_dict()
+        )
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_persistence_dict(
+                payload,
+                expected_scope_authorities={ledger.coverage_ledger_id: authority},
+            )
+
+        valid_bundle = replace(
+            _minimal_bundle(),
+            source_inventory=[inventory],
+            claim_requirements=[requirement],
+            coverage_ledgers=[ledger],
+            answer_claims=[claim],
+            version_manifests=[manifest],
+        )
+        connection = _RowsConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(
+            valid_bundle,
+            expected_scope_authorities={ledger.coverage_ledger_id: authority},
+        )
+        stored_payload = connection.rows["source_inventory"][inventory.source_inventory_id][
+            "payload"
+        ]
+        stored_payload["items"][0]["intentional_exclusion_proof"] = replayed.to_persistence_dict()
+        with self.assertRaises(ContractValidationError):
+            store.get_bundle(
+                mail_import_session_id=valid_bundle.mail_import_session.mail_import_session_id,
+                expected_scope_authorities={ledger.coverage_ledger_id: authority},
             )
 
     def test_exclusion_proof_changes_deterministic_inventory_id(self) -> None:
@@ -3148,7 +3258,14 @@ def _excluded_item(
             "intentional_exclusion_proof": proof,
         }
     )
-    return SourceInventoryItem.create(**item_payload)
+    unbound_item = SourceInventoryItem.create(**item_payload)
+    return SourceInventory.create(
+        source_asset_id="asset_wp1",
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        items=(unbound_item,),
+        created_at="2026-07-24T00:00:00+00:00",
+    ).items[0]
 
 
 def _excluded_scope_fixture() -> (
