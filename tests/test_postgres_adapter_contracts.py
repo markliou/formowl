@@ -22,6 +22,7 @@ from formowl_graph.storage import (
     PostgreSQLMigrationRunner,
     PostgreSQLMetadataRepository,
     PostgreSQLUnitOfWork,
+    PostgresMigration,
     ReviewDecision,
     UserGraphRevision,
     build_permission_query_index_sql,
@@ -242,6 +243,57 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         self.assertTrue(
             all("postgresql://" not in str(item.to_dict()).lower() for item in statements)
         )
+
+    def test_migration_replay_rejects_forged_file_metadata_before_execute(self) -> None:
+        manifest = migration_files()
+        forged = tuple(
+            PostgresMigration(
+                migration_id=migration.migration_id,
+                filename=migration.filename,
+                sql_sha256=(
+                    "sha256:" + "0" * 64
+                    if migration.filename == "006_evidence_coverage.sql"
+                    else migration.sql_sha256
+                ),
+                statement_count=(
+                    migration.statement_count + 1
+                    if migration.filename == "004_mail_evidence.sql"
+                    else migration.statement_count
+                ),
+            )
+            for migration in manifest
+        )
+        connection = _RecordingConnection()
+
+        with self.assertRaises(ContractValidationError):
+            PostgreSQLMigrationRunner(connection).migration_replay(forged)
+
+        self.assertEqual(connection.actions, [])
+
+    def test_migration_replay_uses_validated_file_snapshot(self) -> None:
+        source_dir = Path("python/formowl_graph/storage/migrations")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            migration_dir = Path(temporary_directory)
+            for path in source_dir.glob("*.sql"):
+                (migration_dir / path.name).write_text(
+                    path.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            manifest = migration_files(migration_dir)
+            target = migration_dir / "006_evidence_coverage.sql"
+            target.write_text(
+                target.read_text(encoding="utf-8")
+                + "\nCREATE TABLE forged_after_manifest (id text);",
+                encoding="utf-8",
+            )
+            connection = _RecordingConnection()
+
+            with self.assertRaises(ContractValidationError):
+                PostgreSQLMigrationRunner(
+                    connection,
+                    migration_dir=migration_dir,
+                ).migration_replay(manifest)
+
+            self.assertEqual(connection.actions, [])
 
     def test_transactional_write_and_rollback_on_partial_failure(self) -> None:
         connection = _RecordingConnection()

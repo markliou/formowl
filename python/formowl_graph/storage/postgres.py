@@ -85,11 +85,18 @@ class PostgresMigration:
     def from_file(cls, path: Path) -> "PostgresMigration":
         if not path.name.endswith(".sql") or not path.is_file():
             raise ContractValidationError("PostgresMigration requires a SQL migration file")
-        text = path.read_text(encoding="utf-8")
+        return cls.from_text(filename=path.name, text=path.read_text(encoding="utf-8"))
+
+    @classmethod
+    def from_text(cls, *, filename: str, text: str) -> "PostgresMigration":
+        if not isinstance(filename, str) or not filename.endswith(".sql"):
+            raise ContractValidationError("PostgresMigration requires a SQL migration filename")
+        if not isinstance(text, str):
+            raise ContractValidationError("PostgresMigration SQL text must be a string")
         return cls(
-            migration_id=path.stem,
-            filename=path.name,
-            sql_sha256=sha256_json({"filename": path.name, "sql": text}),
+            migration_id=Path(filename).stem,
+            filename=filename,
+            sql_sha256=sha256_json({"filename": filename, "sql": text}),
             statement_count=sum(1 for chunk in text.split(";") if chunk.strip()),
         )
 
@@ -218,17 +225,23 @@ class PostgreSQLMigrationRunner:
             migration_files(self.migration_dir) if migrations is None else migrations
         )
         resolved_paths: list[tuple[PostgresMigration, Path]] = []
+        resolved_files: list[tuple[PostgresMigration, tuple[str, ...]]] = []
         for migration in manifest:
             path = self.migration_dir / migration.filename
             if not path.is_file():
                 raise ContractValidationError("migration file missing from locked manifest")
             resolved_paths.append((migration, path))
 
-        statements = []
         for migration, path in resolved_paths:
-            for index, sql in enumerate(
-                _split_sql_statements(path.read_text(encoding="utf-8")), start=1
-            ):
+            text = path.read_text(encoding="utf-8")
+            derived = PostgresMigration.from_text(filename=path.name, text=text)
+            if migration != derived:
+                raise ContractValidationError("migration manifest metadata does not match file")
+            resolved_files.append((migration, _split_sql_statements(text)))
+
+        statements = []
+        for migration, migration_statements in resolved_files:
+            for index, sql in enumerate(migration_statements, start=1):
                 statement = SQLStatement(
                     sql=sql,
                     parameters={
