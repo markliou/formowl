@@ -404,6 +404,270 @@ class StructuralRow:
 
 
 @dataclass(frozen=True)
+class IntentionalExclusionProof:
+    """Typed proof that one raw unit is outside one exact claim scope.
+
+    The proof is deliberately derived from typed source, claim, version, and
+    authorization records.  It does not accept a caller-provided digest as
+    evidence.  ``proof_fingerprint`` is only the deterministic fingerprint of
+    this closed record and is validated on every persistence read.
+    """
+
+    source_unit_fingerprint: str
+    claim_requirement_id: str
+    claim_requirement_fingerprint: str
+    version_manifest_id: str
+    source_fingerprint: str
+    parser_fingerprint: str
+    permission_scope_fingerprint: str
+    authorization_binding: "CoverageAuthorizationBinding"
+    scope_policy: "CoverageScopePolicyBinding"
+    exclusion_policy_version_id: str
+    authorized_actor_id: str
+    reason_code: str
+    proof_id: str = ""
+    proof_fingerprint: str = ""
+
+    def __post_init__(self) -> None:
+        _fingerprint(self.source_unit_fingerprint, "exclusion.source_unit_fingerprint")
+        _id(self.claim_requirement_id, "exclusion.claim_requirement_id")
+        _fingerprint(
+            self.claim_requirement_fingerprint,
+            "exclusion.claim_requirement_fingerprint",
+        )
+        _id(self.version_manifest_id, "exclusion.version_manifest_id")
+        _fingerprint(self.source_fingerprint, "exclusion.source_fingerprint")
+        _fingerprint(self.parser_fingerprint, "exclusion.parser_fingerprint")
+        _fingerprint(
+            self.permission_scope_fingerprint,
+            "exclusion.permission_scope_fingerprint",
+        )
+        if not isinstance(self.authorization_binding, CoverageAuthorizationBinding):
+            raise ContractValidationError("exclusion authorization binding is invalid")
+        if not isinstance(self.scope_policy, CoverageScopePolicyBinding):
+            raise ContractValidationError("exclusion scope policy is invalid")
+        _id(
+            self.exclusion_policy_version_id,
+            "exclusion.exclusion_policy_version_id",
+        )
+        _id(self.authorized_actor_id, "exclusion.authorized_actor_id")
+        if self.authorized_actor_id != self.authorization_binding.actor_context_id:
+            raise ContractValidationError(
+                "exclusion authorized actor must match authorization binding"
+            )
+        _choice(self.reason_code, EXCLUSION_REASON_CODE_VALUES, "exclusion.reason_code")
+        expected_id = stable_resource_contract_id(
+            "intentional-exclusion",
+            "IntentionalExclusionProof",
+            self._identity_payload(),
+        )
+        expected_fingerprint = sha256_json(self._identity_payload())
+        if self.proof_id:
+            _id(self.proof_id, "exclusion.proof_id")
+            if self.proof_id != expected_id:
+                raise ContractValidationError("exclusion proof id does not match identity")
+        else:
+            object.__setattr__(self, "proof_id", expected_id)
+        if self.proof_fingerprint:
+            _fingerprint(self.proof_fingerprint, "exclusion.proof_fingerprint")
+            if self.proof_fingerprint != expected_fingerprint:
+                raise ContractValidationError("exclusion proof fingerprint does not match identity")
+        else:
+            object.__setattr__(self, "proof_fingerprint", expected_fingerprint)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        source_inventory_item: "SourceInventoryItem",
+        claim_requirement: "ClaimRequirement",
+        version_manifest: "VersionManifest",
+        authorization_binding: "CoverageAuthorizationBinding",
+        scope_policy: "CoverageScopePolicyBinding",
+        exclusion_policy_version_id: str,
+        reason_code: str = "outside_claim_scope",
+        authorized_actor_id: str | None = None,
+    ) -> "IntentionalExclusionProof":
+        if not isinstance(source_inventory_item, SourceInventoryItem):
+            raise ContractValidationError("exclusion proof requires SourceInventoryItem")
+        if not isinstance(claim_requirement, ClaimRequirement):
+            raise ContractValidationError("exclusion proof requires ClaimRequirement")
+        if not isinstance(version_manifest, VersionManifest):
+            raise ContractValidationError("exclusion proof requires VersionManifest")
+        if not isinstance(authorization_binding, CoverageAuthorizationBinding):
+            raise ContractValidationError("exclusion proof authorization must be typed")
+        if not isinstance(scope_policy, CoverageScopePolicyBinding):
+            raise ContractValidationError("exclusion proof scope policy must be typed")
+        actor_id = authorized_actor_id or authorization_binding.actor_context_id
+        return cls(
+            source_unit_fingerprint=_source_unit_fingerprint(source_inventory_item),
+            claim_requirement_id=claim_requirement.claim_requirement_id,
+            claim_requirement_fingerprint=sha256_json(claim_requirement.to_dict()),
+            version_manifest_id=version_manifest.version_manifest_id,
+            source_fingerprint=version_manifest.source_fingerprint,
+            parser_fingerprint=version_manifest.parser_fingerprint,
+            permission_scope_fingerprint=sha256_json(
+                _persistence_plain(source_inventory_item.permission_scope)
+            ),
+            authorization_binding=authorization_binding,
+            scope_policy=scope_policy,
+            exclusion_policy_version_id=exclusion_policy_version_id,
+            authorized_actor_id=actor_id,
+            reason_code=reason_code,
+        )
+
+    def _identity_payload(self) -> dict[str, Any]:
+        return {
+            "source_unit_fingerprint": self.source_unit_fingerprint,
+            "claim_requirement_id": self.claim_requirement_id,
+            "claim_requirement_fingerprint": self.claim_requirement_fingerprint,
+            "version_manifest_id": self.version_manifest_id,
+            "source_fingerprint": self.source_fingerprint,
+            "parser_fingerprint": self.parser_fingerprint,
+            "permission_scope_fingerprint": self.permission_scope_fingerprint,
+            "authorization_binding": self.authorization_binding.to_dict(),
+            "scope_policy": self.scope_policy.to_dict(),
+            "exclusion_policy_version_id": self.exclusion_policy_version_id,
+            "authorized_actor_id": self.authorized_actor_id,
+            "reason_code": self.reason_code,
+        }
+
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return {
+            **self._identity_payload(),
+            "proof_id": self.proof_id,
+            "proof_fingerprint": self.proof_fingerprint,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = {"status": "redacted", "reason_code": "intentionally_excluded"}
+        _assert_public_contract(payload, "intentional_exclusion_proof.public")
+        return payload
+
+    @classmethod
+    def from_persistence_dict(cls, value: Mapping[str, Any]) -> "IntentionalExclusionProof":
+        item = _mapping(value, "intentional_exclusion_proof")
+        _require_exact_keys(
+            item,
+            {
+                "source_unit_fingerprint",
+                "claim_requirement_id",
+                "claim_requirement_fingerprint",
+                "version_manifest_id",
+                "source_fingerprint",
+                "parser_fingerprint",
+                "permission_scope_fingerprint",
+                "authorization_binding",
+                "scope_policy",
+                "exclusion_policy_version_id",
+                "authorized_actor_id",
+                "reason_code",
+                "proof_id",
+                "proof_fingerprint",
+            },
+            "intentional_exclusion_proof",
+        )
+        return cls(
+            source_unit_fingerprint=_required_str(item, "source_unit_fingerprint"),
+            claim_requirement_id=_required_str(item, "claim_requirement_id"),
+            claim_requirement_fingerprint=_required_str(
+                item,
+                "claim_requirement_fingerprint",
+            ),
+            version_manifest_id=_required_str(item, "version_manifest_id"),
+            source_fingerprint=_required_str(item, "source_fingerprint"),
+            parser_fingerprint=_required_str(item, "parser_fingerprint"),
+            permission_scope_fingerprint=_required_str(
+                item,
+                "permission_scope_fingerprint",
+            ),
+            authorization_binding=CoverageAuthorizationBinding.from_dict(
+                _required_mapping(item, "authorization_binding")
+            ),
+            scope_policy=CoverageScopePolicyBinding.from_dict(
+                _required_mapping(item, "scope_policy")
+            ),
+            exclusion_policy_version_id=_required_str(
+                item,
+                "exclusion_policy_version_id",
+            ),
+            authorized_actor_id=_required_str(item, "authorized_actor_id"),
+            reason_code=_required_str(item, "reason_code"),
+            proof_id=_required_str(item, "proof_id"),
+            proof_fingerprint=_required_str(item, "proof_fingerprint"),
+        )
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "IntentionalExclusionProof":
+        return cls.from_persistence_dict(value)
+
+    def validate_for_claim(
+        self,
+        *,
+        source_inventory: "SourceInventory",
+        source_inventory_item: "SourceInventoryItem",
+        claim_requirement: "ClaimRequirement",
+        expected_manifest: "VersionManifest",
+        expected_authorization_binding: "CoverageAuthorizationBinding",
+        expected_scope_authority: "CoverageScopeAuthority | None" = None,
+        definitive: bool = False,
+    ) -> bool:
+        if not all(
+            isinstance(value, expected_type)
+            for value, expected_type in (
+                (source_inventory, SourceInventory),
+                (source_inventory_item, SourceInventoryItem),
+                (claim_requirement, ClaimRequirement),
+                (expected_manifest, VersionManifest),
+                (expected_authorization_binding, CoverageAuthorizationBinding),
+            )
+        ):
+            raise ContractValidationError("exclusion validation requires typed inputs")
+        if source_inventory_item.processing_state != "intentionally_excluded":
+            return False
+        if (
+            source_inventory_item.source_inventory_id != source_inventory.source_inventory_id
+            or source_inventory_item.intentional_exclusion_proof != self
+            or self.source_unit_fingerprint != _source_unit_fingerprint(source_inventory_item)
+            or self.claim_requirement_id != claim_requirement.claim_requirement_id
+            or self.claim_requirement_fingerprint != sha256_json(claim_requirement.to_dict())
+            or self.version_manifest_id != expected_manifest.version_manifest_id
+            or self.source_fingerprint != expected_manifest.source_fingerprint
+            or self.parser_fingerprint != expected_manifest.parser_fingerprint
+            or self.permission_scope_fingerprint
+            != sha256_json(_persistence_plain(source_inventory_item.permission_scope))
+            or self.authorization_binding != expected_authorization_binding
+            or self.authorized_actor_id != expected_authorization_binding.actor_context_id
+            or expected_manifest.index_freshness != "fresh"
+        ):
+            return False
+        if expected_scope_authority is not None:
+            if not expected_scope_authority._is_trusted_for_authoritative_use:
+                return False
+            if not expected_scope_authority.validate_for_claim(
+                source_inventory,
+                claim_requirement,
+                expected_manifest,
+                expected_authorization_binding,
+                self.scope_policy,
+            ):
+                return False
+            if (
+                source_inventory_item.source_inventory_item_id
+                not in expected_scope_authority.authorized_irrelevant_item_ids
+            ):
+                return False
+        elif definitive:
+            return False
+        if definitive and self.reason_code not in {
+            "outside_claim_scope",
+            "policy_scope_exclusion",
+        }:
+            return False
+        return True
+
+
+@dataclass(frozen=True)
 class SourceInventoryItem:
     """One raw source structure and its independent processing/retention state."""
 
@@ -418,10 +682,7 @@ class SourceInventoryItem:
     parser_fingerprint: str
     permission_scope: Mapping[str, Any]
     source_inventory_id: str | None = None
-    exclusion_policy_version_id: str | None = None
-    exclusion_authorized_actor_id: str | None = None
-    exclusion_reason_code: str | None = None
-    exclusion_claim_scope_proof_sha256: str | None = None
+    intentional_exclusion_proof: IntentionalExclusionProof | None = None
     parent_inventory_item_id: str | None = None
     location: Mapping[str, Any] = field(default_factory=dict)
     version_lineage: tuple[str, ...] = ()
@@ -440,6 +701,25 @@ class SourceInventoryItem:
         _safe_mapping(self.permission_scope, "source_inventory_item.permission_scope")
         _optional_id(self.source_inventory_id, "source_inventory_id")
         _validate_exclusion_proof(self)
+        if self.intentional_exclusion_proof is not None and not isinstance(
+            self.intentional_exclusion_proof,
+            IntentionalExclusionProof,
+        ):
+            raise ContractValidationError("intentional exclusion proof is invalid")
+        if self.intentional_exclusion_proof is not None:
+            expected_item_id = stable_resource_contract_id(
+                "inventory",
+                "SourceInventoryItem",
+                {
+                    key: value
+                    for key, value in self.to_persistence_dict().items()
+                    if key != "source_inventory_item_id"
+                },
+            )
+            if self.source_inventory_item_id != expected_item_id:
+                raise ContractValidationError(
+                    "source inventory item id does not match typed exclusion proof identity"
+                )
         _optional_id(self.parent_inventory_item_id, "parent_inventory_item_id")
         _safe_mapping(self.location, "source_inventory_item.location")
         _tuple_of_strings(self.version_lineage, "version_lineage", ids=True)
@@ -453,13 +733,11 @@ class SourceInventoryItem:
         for field_name in ("version_lineage", "source_observation_ids"):
             if field_name in values:
                 values[field_name] = list(values[field_name])
-        for field_name in (
-            "exclusion_policy_version_id",
-            "exclusion_authorized_actor_id",
-            "exclusion_reason_code",
-            "exclusion_claim_scope_proof_sha256",
-        ):
-            values.setdefault(field_name, None)
+        values.setdefault("intentional_exclusion_proof", None)
+        if isinstance(values["intentional_exclusion_proof"], IntentionalExclusionProof):
+            values["intentional_exclusion_proof"] = values[
+                "intentional_exclusion_proof"
+            ].to_persistence_dict()
         values.setdefault(
             "source_inventory_item_id",
             stable_resource_contract_id(
@@ -506,6 +784,15 @@ class SourceInventoryItem:
     @classmethod
     def from_persistence_dict(cls, value: Mapping[str, Any]) -> "SourceInventoryItem":
         item = _mapping(value, "source_inventory_item")
+        if {
+            "exclusion_policy_version_id",
+            "exclusion_authorized_actor_id",
+            "exclusion_reason_code",
+            "exclusion_claim_scope_proof_sha256",
+        } & set(item):
+            raise ContractValidationError(
+                "legacy scalar exclusion fields are not accepted; use typed exclusion proof"
+            )
         return cls(
             source_inventory_item_id=_required_str(item, "source_inventory_item_id"),
             source_asset_id=_required_str(item, "source_asset_id"),
@@ -518,11 +805,15 @@ class SourceInventoryItem:
             parser_fingerprint=_required_str(item, "parser_fingerprint"),
             permission_scope=_required_mapping(item, "permission_scope"),
             source_inventory_id=_optional_str(item, "source_inventory_id"),
-            exclusion_policy_version_id=_optional_str(item, "exclusion_policy_version_id"),
-            exclusion_authorized_actor_id=_optional_str(item, "exclusion_authorized_actor_id"),
-            exclusion_reason_code=_optional_str(item, "exclusion_reason_code"),
-            exclusion_claim_scope_proof_sha256=_optional_str(
-                item, "exclusion_claim_scope_proof_sha256"
+            intentional_exclusion_proof=(
+                None
+                if item.get("intentional_exclusion_proof") is None
+                else IntentionalExclusionProof.from_persistence_dict(
+                    _mapping(
+                        item["intentional_exclusion_proof"],
+                        "source_inventory_item.intentional_exclusion_proof",
+                    )
+                )
             ),
             parent_inventory_item_id=_optional_str(item, "parent_inventory_item_id"),
             location=_optional_mapping(item, "location", {}),
@@ -2502,6 +2793,7 @@ class CoverageProofRecord:
     structural_observation_ids: tuple[str, ...] = ()
     ordinary_observation_ids: tuple[str, ...] = ()
     populated_value_fingerprint: str | None = None
+    intentional_exclusion_proof: IntentionalExclusionProof | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -2561,6 +2853,15 @@ class CoverageProofRecord:
             raise ContractValidationError(
                 f"{self.proof_kind} proof must not carry a populated value"
             )
+        if self.proof_kind == "intentionally_excluded":
+            if self.intentional_exclusion_proof is None:
+                raise ContractValidationError(
+                    "intentionally_excluded proof requires a typed exclusion proof"
+                )
+        elif self.intentional_exclusion_proof is not None:
+            raise ContractValidationError(
+                "typed exclusion proof is only valid for intentionally_excluded records"
+            )
         if self.populated_value_fingerprint is not None and not (
             self.structural_observation_ids or self.ordinary_observation_ids
         ):
@@ -2581,6 +2882,10 @@ class CoverageProofRecord:
         values = dict(values)
         for field_name in ("structural_observation_ids", "ordinary_observation_ids"):
             values[field_name] = list(values.get(field_name, ()))
+        if isinstance(values.get("intentional_exclusion_proof"), IntentionalExclusionProof):
+            values["intentional_exclusion_proof"] = values[
+                "intentional_exclusion_proof"
+            ].to_persistence_dict()
         values.setdefault(
             "proof_id",
             stable_resource_contract_id(
@@ -2592,9 +2897,27 @@ class CoverageProofRecord:
         return cls.from_dict(values)
 
     def to_dict(self) -> dict[str, Any]:
-        payload = _dataclass_payload(self)
+        payload = {
+            "proof_id": self.proof_id,
+            "source_inventory_id": self.source_inventory_id,
+            "claim_requirement_id": self.claim_requirement_id,
+            "version_manifest_id": self.version_manifest_id,
+            "inventory_item_id": self.inventory_item_id,
+            "proof_kind": self.proof_kind,
+            "structural_observation_ids": list(self.structural_observation_ids),
+            "ordinary_observation_ids": list(self.ordinary_observation_ids),
+        }
+        if self.populated_value_fingerprint is not None:
+            payload["populated_value_fingerprint"] = self.populated_value_fingerprint
+        if self.intentional_exclusion_proof is not None:
+            payload["intentional_exclusion_proof"] = (
+                self.intentional_exclusion_proof.to_persistence_dict()
+            )
         _assert_public_contract(payload, "coverage_proof")
         return payload
+
+    def to_persistence_dict(self) -> dict[str, Any]:
+        return self.to_dict()
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "CoverageProofRecord":
@@ -2611,6 +2934,7 @@ class CoverageProofRecord:
                 "structural_observation_ids",
                 "ordinary_observation_ids",
                 "populated_value_fingerprint",
+                "intentional_exclusion_proof",
             },
             "coverage_proof",
             required={
@@ -2634,6 +2958,16 @@ class CoverageProofRecord:
             structural_observation_ids=_tuple_strings(item, "structural_observation_ids"),
             ordinary_observation_ids=_tuple_strings(item, "ordinary_observation_ids"),
             populated_value_fingerprint=_optional_str(item, "populated_value_fingerprint"),
+            intentional_exclusion_proof=(
+                None
+                if item.get("intentional_exclusion_proof") is None
+                else IntentionalExclusionProof.from_persistence_dict(
+                    _mapping(
+                        item["intentional_exclusion_proof"],
+                        "coverage_proof.intentional_exclusion_proof",
+                    )
+                )
+            ),
         )
 
 
@@ -2818,8 +3152,6 @@ class CoverageLedger:
             raise ContractValidationError(
                 "complete coverage requires an independently bound scope partition"
             )
-        if not self.relevant_inventory_item_ids:
-            raise ContractValidationError("complete coverage requires a non-empty relevant scope")
         if not self.proof_records:
             raise ContractValidationError("complete coverage requires a non-empty proof set")
         if (
@@ -2838,9 +3170,20 @@ class CoverageLedger:
         proof_item_ids = [record.inventory_item_id for record in self.proof_records]
         if len(proof_item_ids) != len(set(proof_item_ids)):
             raise ContractValidationError("complete coverage proof items must be unique")
-        if set(proof_item_ids) != set(self.relevant_inventory_item_ids):
+        ordinary_proof_item_ids = {
+            record.inventory_item_id
+            for record in self.proof_records
+            if record.proof_kind != "intentionally_excluded"
+        }
+        if ordinary_proof_item_ids != set(self.relevant_inventory_item_ids):
             raise ContractValidationError(
                 "complete coverage proof set must cover exactly the relevant inventory"
+            )
+        if not self.relevant_inventory_item_ids and not any(
+            record.proof_kind == "intentionally_excluded" for record in self.proof_records
+        ):
+            raise ContractValidationError(
+                "complete coverage with an empty relevant scope requires exclusion proof"
             )
         if set(self.relevant_inventory_item_ids) != set(
             self.scope_partition.authorized_relevant_item_ids
@@ -2882,6 +3225,12 @@ class CoverageLedger:
                 raise ContractValidationError(
                     "complete coverage proof records must bind the ledger scope and manifest"
                 )
+            if record.proof_kind == "intentionally_excluded":
+                if record.structural_observation_ids or record.ordinary_observation_ids:
+                    raise ContractValidationError(
+                        "complete exclusion proofs must not carry observations"
+                    )
+                continue
             partition = self.scope_partition.observation_partition_for(record.inventory_item_id)
             if partition is None:
                 raise ContractValidationError(
@@ -3059,6 +3408,22 @@ class CoverageLedger:
                 self.scope_partition.authorized_relevant_item_ids
             ):
                 return False
+        if (
+            expected_scope_authority is not None
+            and self.authorization_binding is not None
+            and isinstance(expected_scope_authority, CoverageScopeAuthority)
+        ):
+            for record in self.proof_records:
+                if not _validate_ledger_exclusion_record(
+                    record,
+                    source_inventory=source_inventory,
+                    claim_requirement=claim_requirement,
+                    expected_manifest=expected_manifest,
+                    expected_authorization_binding=self.authorization_binding,
+                    expected_scope_authority=expected_scope_authority,
+                    definitive=False,
+                ):
+                    return False
         return True
 
     def _binding_valid_for_incomplete_claim(
@@ -3084,6 +3449,18 @@ class CoverageLedger:
             expected_authorization_binding,
         ):
             return False
+        if self.authorization_binding is not None:
+            for record in self.proof_records:
+                if not _validate_ledger_exclusion_record(
+                    record,
+                    source_inventory=source_inventory,
+                    claim_requirement=claim_requirement,
+                    expected_manifest=expected_manifest,
+                    expected_authorization_binding=self.authorization_binding,
+                    expected_scope_authority=None,
+                    definitive=False,
+                ):
+                    return False
         if self.scope_partition is None:
             return True
         if self.authorization_binding is None:
@@ -3334,7 +3711,24 @@ class CoverageLedger:
         ):
             return False
         proof_by_item = {record.inventory_item_id: record for record in self.proof_records}
-        if set(proof_by_item) != set(self.relevant_inventory_item_ids):
+        ordinary_proof_by_item = {
+            item_id: record
+            for item_id, record in proof_by_item.items()
+            if record.proof_kind != "intentionally_excluded"
+        }
+        if set(ordinary_proof_by_item) != set(self.relevant_inventory_item_ids):
+            return False
+        excluded_item_ids = {
+            item.source_inventory_item_id
+            for item in source_inventory.items
+            if item.processing_state == "intentionally_excluded"
+        }
+        exclusion_proof_by_item = {
+            item_id: record
+            for item_id, record in proof_by_item.items()
+            if record.proof_kind == "intentionally_excluded"
+        }
+        if set(exclusion_proof_by_item) != excluded_item_ids:
             return False
         for record in self.proof_records:
             if (
@@ -3364,6 +3758,21 @@ class CoverageLedger:
                 set(self.searched_ordinary_observation_ids)
             ):
                 return False
+            if record.proof_kind == "intentionally_excluded":
+                if (
+                    record.inventory_item_id in self.relevant_inventory_item_ids
+                    or not _validate_ledger_exclusion_record(
+                        record,
+                        source_inventory=source_inventory,
+                        claim_requirement=claim_requirement,
+                        expected_manifest=expected_manifest,
+                        expected_authorization_binding=self.authorization_binding,
+                        expected_scope_authority=expected_scope_authority,
+                        definitive=True,
+                    )
+                ):
+                    return False
+                continue
             partition = self.scope_partition.observation_partition_for(record.inventory_item_id)
             if partition is None:
                 return False
@@ -4049,6 +4458,11 @@ def _coverage_proof_semantic_key(record: CoverageProofRecord) -> tuple[Any, ...]
         frozenset(record.structural_observation_ids),
         frozenset(record.ordinary_observation_ids),
         record.populated_value_fingerprint,
+        (
+            None
+            if record.intentional_exclusion_proof is None
+            else record.intentional_exclusion_proof.proof_fingerprint
+        ),
     )
 
 
@@ -4090,33 +4504,64 @@ def _structural_public_summary(
 
 
 def _validate_exclusion_proof(item: SourceInventoryItem) -> None:
-    fields = (
-        item.exclusion_policy_version_id,
-        item.exclusion_authorized_actor_id,
-        item.exclusion_reason_code,
-        item.exclusion_claim_scope_proof_sha256,
-    )
     if item.processing_state == "intentionally_excluded":
-        if any(value is None for value in fields):
+        if item.intentional_exclusion_proof is None:
             raise ContractValidationError(
-                "intentionally_excluded inventory items require complete exclusion proof"
+                "intentionally_excluded inventory items require a typed exclusion proof"
             )
-        _id(item.exclusion_policy_version_id, "exclusion_policy_version_id")
-        _id(item.exclusion_authorized_actor_id, "exclusion_authorized_actor_id")
-        _choice(
-            item.exclusion_reason_code,
-            EXCLUSION_REASON_CODE_VALUES,
-            "exclusion_reason_code",
-        )
-        _fingerprint(
-            item.exclusion_claim_scope_proof_sha256,
-            "exclusion_claim_scope_proof_sha256",
-        )
         return
-    if any(value is not None for value in fields):
+    if item.intentional_exclusion_proof is not None:
         raise ContractValidationError(
-            "exclusion proof fields are only valid for intentionally_excluded items"
+            "typed exclusion proof is only valid for intentionally_excluded items"
         )
+
+
+def _validate_ledger_exclusion_record(
+    record: CoverageProofRecord,
+    *,
+    source_inventory: SourceInventory,
+    claim_requirement: ClaimRequirement,
+    expected_manifest: VersionManifest,
+    expected_authorization_binding: CoverageAuthorizationBinding | None,
+    expected_scope_authority: CoverageScopeAuthority | None,
+    definitive: bool,
+) -> bool:
+    if record.proof_kind != "intentionally_excluded":
+        return True
+    item = next(
+        (
+            candidate
+            for candidate in source_inventory.items
+            if candidate.source_inventory_item_id == record.inventory_item_id
+        ),
+        None,
+    )
+    if item is None or expected_authorization_binding is None:
+        return False
+    proof = record.intentional_exclusion_proof
+    if proof is None:
+        return False
+    return proof.validate_for_claim(
+        source_inventory=source_inventory,
+        source_inventory_item=item,
+        claim_requirement=claim_requirement,
+        expected_manifest=expected_manifest,
+        expected_authorization_binding=expected_authorization_binding,
+        expected_scope_authority=expected_scope_authority,
+        definitive=definitive,
+    )
+
+
+def _source_unit_fingerprint(item: SourceInventoryItem) -> str:
+    """Fingerprint the raw logical unit without circular identity fields."""
+
+    payload = item.to_persistence_dict()
+    payload.pop("source_inventory_item_id", None)
+    payload.pop("source_inventory_id", None)
+    payload.pop("processing_state", None)
+    payload.pop("raw_retention_state", None)
+    payload.pop("intentional_exclusion_proof", None)
+    return sha256_json(payload)
 
 
 def _public_plain(value: Any) -> Any:

@@ -26,6 +26,7 @@ from formowl_contract import (
     CoverageVersionBinding,
     DisplayPagination,
     EXCLUSION_REASON_CODE_VALUES,
+    IntentionalExclusionProof,
     SourceInventoryItem,
     StructuralCell,
     StructuralColumn,
@@ -1285,51 +1286,83 @@ class Issue51WP1ContractTests(unittest.TestCase):
 
     def test_intentionally_excluded_requires_closed_complete_proof(self) -> None:
         valid = _excluded_item().to_persistence_dict()
+        self.assertIn("intentional_exclusion_proof", valid)
+        proof = valid["intentional_exclusion_proof"]
         proof_fields = (
+            "source_unit_fingerprint",
+            "claim_requirement_id",
+            "claim_requirement_fingerprint",
+            "version_manifest_id",
+            "source_fingerprint",
+            "parser_fingerprint",
+            "permission_scope_fingerprint",
+            "authorization_binding",
+            "scope_policy",
             "exclusion_policy_version_id",
-            "exclusion_authorized_actor_id",
-            "exclusion_reason_code",
-            "exclusion_claim_scope_proof_sha256",
+            "authorized_actor_id",
+            "reason_code",
+            "proof_id",
+            "proof_fingerprint",
         )
         for field_name in proof_fields:
-            missing = dict(valid)
+            missing = dict(proof)
             missing.pop(field_name)
+            invalid = dict(valid)
+            invalid["intentional_exclusion_proof"] = missing
             with self.subTest(missing=field_name):
                 with self.assertRaises(ContractValidationError):
-                    SourceInventoryItem.from_dict(missing)
+                    SourceInventoryItem.from_dict(invalid)
 
         wrong_types = {
+            "source_unit_fingerprint": 123,
+            "claim_requirement_id": 123,
+            "claim_requirement_fingerprint": 123,
+            "version_manifest_id": 123,
+            "source_fingerprint": 123,
+            "parser_fingerprint": 123,
+            "permission_scope_fingerprint": 123,
+            "authorization_binding": 123,
+            "scope_policy": 123,
             "exclusion_policy_version_id": 123,
-            "exclusion_authorized_actor_id": 123,
-            "exclusion_reason_code": 123,
-            "exclusion_claim_scope_proof_sha256": 123,
+            "authorized_actor_id": 123,
+            "reason_code": 123,
+            "proof_id": 123,
+            "proof_fingerprint": 123,
         }
         for field_name, wrong_type in wrong_types.items():
+            invalid_proof = dict(proof)
+            invalid_proof[field_name] = wrong_type
             invalid = dict(valid)
-            invalid[field_name] = wrong_type
+            invalid["intentional_exclusion_proof"] = invalid_proof
             with self.subTest(wrong_type=field_name):
                 with self.assertRaises(ContractValidationError):
                     SourceInventoryItem.from_dict(invalid)
 
         unsafe_values = {
+            "claim_requirement_id": "/private/requirement",
+            "version_manifest_id": "postgresql://manifest",
             "exclusion_policy_version_id": "/private/policy",
-            "exclusion_authorized_actor_id": "postgresql://actor",
-            "exclusion_reason_code": "SELECT * FROM reasons",
-            "exclusion_claim_scope_proof_sha256": "/private/proof",
+            "authorized_actor_id": "postgresql://actor",
+            "reason_code": "SELECT * FROM reasons",
+            "proof_id": "/private/proof",
         }
         for field_name, unsafe_value in unsafe_values.items():
+            invalid_proof = dict(proof)
+            invalid_proof[field_name] = unsafe_value
             invalid = dict(valid)
-            invalid[field_name] = unsafe_value
+            invalid["intentional_exclusion_proof"] = invalid_proof
             with self.subTest(unsafe_value=field_name):
                 with self.assertRaises(ContractValidationError):
                     SourceInventoryItem.from_dict(invalid)
 
-        invalid_hash = dict(valid)
-        invalid_hash["exclusion_claim_scope_proof_sha256"] = "sha256:" + "g" * 64
+        invalid_fingerprint = dict(proof)
+        invalid_fingerprint["proof_fingerprint"] = "sha256:" + "g" * 64
+        invalid = dict(valid)
+        invalid["intentional_exclusion_proof"] = invalid_fingerprint
         with self.assertRaises(ContractValidationError):
-            SourceInventoryItem.from_dict(invalid_hash)
+            SourceInventoryItem.from_dict(invalid)
 
-        self.assertIn(valid["exclusion_reason_code"], EXCLUSION_REASON_CODE_VALUES)
+        self.assertIn(proof["reason_code"], EXCLUSION_REASON_CODE_VALUES)
 
     def test_exclusion_proof_is_rejected_for_non_excluded_states(self) -> None:
         for processing_state in (
@@ -1344,9 +1377,179 @@ class Issue51WP1ContractTests(unittest.TestCase):
                 with self.assertRaises(ContractValidationError):
                     SourceInventoryItem.from_dict(invalid)
 
+    def test_exclusion_proof_requires_external_scope_authority_for_definitive_negative(
+        self,
+    ) -> None:
+        (
+            inventory,
+            requirement,
+            manifest,
+            authorization,
+            ledger,
+            authority,
+            proof,
+        ) = _excluded_scope_fixture()
+        claim = AnswerClaim.create(
+            state="NOT_FOUND_WITHIN_COMPLETE_SCOPE",
+            reason_codes=("complete_exclusion_scope",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=inventory,
+            version_manifest=manifest,
+            authorization_binding=authorization,
+            expected_scope_authority=authority,
+            evidence_snapshot_ids=(),
+        )
+        self.assertEqual(claim.state, "NOT_FOUND_WITHIN_COMPLETE_SCOPE")
+
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                state="NOT_FOUND_WITHIN_COMPLETE_SCOPE",
+                reason_codes=("complete_exclusion_scope",),
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=inventory,
+                version_manifest=manifest,
+                authorization_binding=authorization,
+                evidence_snapshot_ids=(),
+            )
+
+        foreign_item = SourceInventoryItem.create(
+            source_asset_id="asset_foreign_exclusion",
+            structure_kind="message",
+            content_type="message/rfc822",
+            ordinal=1,
+            processing_state="parsed",
+            raw_retention_state="retained",
+            source_fingerprint=FP2,
+            parser_fingerprint=FP,
+            permission_scope={"scope_type": "asset", "scope_id": "asset_foreign_exclusion"},
+        )
+        foreign_proof = IntentionalExclusionProof.create(
+            source_inventory_item=foreign_item,
+            claim_requirement=requirement,
+            version_manifest=manifest,
+            authorization_binding=authorization,
+            scope_policy=authority.scope_policy,
+            exclusion_policy_version_id="policy_version_foreign",
+        )
+        forged_record = CoverageProofRecord.create(
+            source_inventory_id=inventory.source_inventory_id,
+            claim_requirement_id=requirement.claim_requirement_id,
+            version_manifest_id=manifest.version_manifest_id,
+            inventory_item_id=inventory.items[0].source_inventory_item_id,
+            proof_kind="intentionally_excluded",
+            intentional_exclusion_proof=foreign_proof,
+        )
+        forged_ledger = replace(
+            ledger,
+            proof_records=(forged_record,),
+            coverage_ledger_id="",
+        )
+        with self.assertRaises(ContractValidationError):
+            AnswerClaim.create(
+                state="NOT_FOUND_WITHIN_COMPLETE_SCOPE",
+                reason_codes=("foreign_exclusion_proof",),
+                coverage_ledger=forged_ledger,
+                claim_requirement=requirement,
+                source_inventory=inventory,
+                version_manifest=manifest,
+                authorization_binding=authorization,
+                expected_scope_authority=authority,
+                evidence_snapshot_ids=(),
+            )
+
+        proof_payload = proof.to_persistence_dict()
+        proof_payload["claim_requirement_id"] = "requirement_foreign"
+        with self.assertRaises(ContractValidationError):
+            IntentionalExclusionProof.from_persistence_dict(proof_payload)
+
+        decision = StructuralPublicScopeDecision.authorize(
+            permission_scope=inventory.items[0].permission_scope,
+            authorization_binding=authorization,
+        )
+        public = inventory.items[0].to_dict(scope_decision=decision)
+        serialized = repr(public)
+        self.assertNotIn(proof.proof_id, serialized)
+        self.assertNotIn(proof.proof_fingerprint, serialized)
+        self.assertNotIn(proof.exclusion_policy_version_id, serialized)
+        self.assertEqual(
+            proof.to_dict(),
+            {"status": "redacted", "reason_code": "intentionally_excluded"},
+        )
+
+    def test_exclusion_proof_file_and_postgres_definitive_round_trip(self) -> None:
+        (
+            inventory,
+            requirement,
+            manifest,
+            authorization,
+            ledger,
+            authority,
+            _proof,
+        ) = _excluded_scope_fixture()
+        claim = AnswerClaim.create(
+            state="NOT_FOUND_WITHIN_COMPLETE_SCOPE",
+            reason_codes=("complete_exclusion_scope",),
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=inventory,
+            version_manifest=manifest,
+            authorization_binding=authorization,
+            expected_scope_authority=authority,
+            evidence_snapshot_ids=(),
+        )
+        bundle = replace(
+            _minimal_bundle(),
+            source_inventory=[inventory],
+            claim_requirements=[requirement],
+            coverage_ledgers=[ledger],
+            answer_claims=[claim],
+            version_manifests=[manifest],
+        )
+        payload = bundle.to_persistence_dict()
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_persistence_dict(payload)
+        restored = MailEvidenceBundle.from_persistence_dict(
+            payload,
+            expected_scope_authorities={ledger.coverage_ledger_id: authority},
+        )
+        self.assertEqual(restored.to_persistence_dict(), payload)
+
+        replayed = CoverageScopeAuthority.from_persistence_dict(
+            payload["answer_claims"][0]["scope_authority"]
+        )
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_persistence_dict(
+                payload,
+                expected_scope_authorities={ledger.coverage_ledger_id: replayed},
+            )
+
+        connection = _RowsConnection()
+        store = PostgreSQLMailEvidenceStore(connection)
+        store.upsert_bundle(
+            restored,
+            expected_scope_authorities={ledger.coverage_ledger_id: authority},
+        )
+        with self.assertRaises(ContractValidationError):
+            store.get_bundle(
+                mail_import_session_id=restored.mail_import_session.mail_import_session_id,
+            )
+        postgres_restored = store.get_bundle(
+            mail_import_session_id=restored.mail_import_session.mail_import_session_id,
+            expected_scope_authorities={ledger.coverage_ledger_id: authority},
+        )
+        self.assertIsNotNone(postgres_restored)
+        self.assertEqual(postgres_restored.to_persistence_dict(), payload)
+        with self.assertRaises(ContractValidationError):
+            store.get_bundle(
+                mail_import_session_id=restored.mail_import_session.mail_import_session_id,
+                expected_scope_authorities={ledger.coverage_ledger_id: replayed},
+            )
+
     def test_exclusion_proof_changes_deterministic_inventory_id(self) -> None:
-        first = _excluded_item(proof=FP)
-        second = _excluded_item(proof=FP2)
+        first = _excluded_item(policy_version_id="policy_version_wp1")
+        second = _excluded_item(policy_version_id="policy_version_wp1_changed")
         self.assertNotEqual(
             first.source_inventory_item_id,
             second.source_inventory_item_id,
@@ -2124,16 +2327,54 @@ class Issue51WP1ContractTests(unittest.TestCase):
             structure_kind="message",
             content_type="message/rfc822",
             ordinal=0,
-            processing_state="intentionally_excluded",
+            processing_state="parsed",
             raw_retention_state="externally_managed",
             source_fingerprint=FP,
             parser_fingerprint=FP2,
             permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
-            exclusion_policy_version_id="policy_version_wp1",
-            exclusion_authorized_actor_id="actor_wp1",
-            exclusion_reason_code="outside_claim_scope",
-            exclusion_claim_scope_proof_sha256=FP2,
         )
+        requirement = ClaimRequirement.create(
+            query_id="query_wp1",
+            kind="existential_witness",
+            target="ticket",
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        manifest = VersionManifest.create(
+            source_fingerprint=FP,
+            parser_fingerprint=FP2,
+            tokenizer_fingerprint=FP,
+            index_fingerprint=FP,
+            implementation_fingerprint=FP,
+            created_at="2026-07-24T00:00:00+00:00",
+        )
+        authorization = CoverageAuthorizationBinding(
+            actor_context_id="actor_wp1",
+            permission_revision="permission_wp1",
+            grant_revision="grant_wp1",
+        )
+        scope_policy = CoverageScopePolicyBinding(
+            scope_policy_id="scope-policy-wp1",
+            scope_policy_version="1",
+            scope_policy_fingerprint=SCOPE_POLICY_FP,
+        )
+        exclusion_proof = IntentionalExclusionProof.create(
+            source_inventory_item=item,
+            claim_requirement=requirement,
+            version_manifest=manifest,
+            authorization_binding=authorization,
+            scope_policy=scope_policy,
+            exclusion_policy_version_id="policy_version_wp1",
+        )
+        item_payload = item.to_persistence_dict()
+        item_payload.pop("source_inventory_item_id")
+        item_payload.pop("source_inventory_id", None)
+        item_payload.update(
+            {
+                "processing_state": "intentionally_excluded",
+                "intentional_exclusion_proof": exclusion_proof,
+            }
+        )
+        item = SourceInventoryItem.create(**item_payload)
         inventory = SourceInventory.create(
             source_asset_id="asset_wp1",
             source_fingerprint=FP,
@@ -2142,40 +2383,23 @@ class Issue51WP1ContractTests(unittest.TestCase):
             created_at="2026-07-24T00:00:00+00:00",
         )
         item = inventory.items[0]
-        requirement = ClaimRequirement.create(
-            query_id="query_wp1",
-            kind="existential_witness",
-            target="ticket",
-        )
-        ledger = CoverageLedger(
-            query_id=requirement.query_id,
-            claim_requirement_id=requirement.claim_requirement_id,
-            source_inventory_id=inventory.source_inventory_id,
-            relevant_inventory_item_ids=(item.source_inventory_item_id,),
-            version_binding=None,
-            complete_authorized_scope=False,
-        )
-        manifest = VersionManifest.create(
-            source_fingerprint=FP,
-            parser_fingerprint=FP2,
-            tokenizer_fingerprint=FP,
-            index_fingerprint=FP,
-            implementation_fingerprint=FP,
-        )
-        authorization = CoverageAuthorizationBinding(
-            actor_context_id="actor_wp1",
-            permission_revision="permission_wp1",
-            grant_revision="grant_wp1",
-        )
         proof = CoverageProofRecord.create(
             source_inventory_id=inventory.source_inventory_id,
             claim_requirement_id=requirement.claim_requirement_id,
             version_manifest_id=manifest.version_manifest_id,
             inventory_item_id=item.source_inventory_item_id,
             proof_kind="intentionally_excluded",
+            intentional_exclusion_proof=item.intentional_exclusion_proof,
         )
         ledger = replace(
-            ledger,
+            CoverageLedger(
+                query_id=requirement.query_id,
+                claim_requirement_id=requirement.claim_requirement_id,
+                source_inventory_id=inventory.source_inventory_id,
+                relevant_inventory_item_ids=(),
+                version_binding=None,
+                complete_authorized_scope=False,
+            ),
             authorization_binding=authorization,
             version_binding=CoverageVersionBinding.from_manifest(manifest),
             proof_records=(proof,),
@@ -2284,8 +2508,8 @@ class Issue51WP1ContractTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            round_trip.source_inventory[0].items[0].exclusion_claim_scope_proof_sha256,
-            FP2,
+            round_trip.source_inventory[0].items[0].intentional_exclusion_proof.proof_fingerprint,
+            item.intentional_exclusion_proof.proof_fingerprint,
         )
         self.assertEqual(
             set(evidence_coverage_postgre_sql_tables()),
@@ -2868,21 +3092,187 @@ class Issue51WP1ContractTests(unittest.TestCase):
         self.assertEqual(connection.rows, {})
 
 
-def _excluded_item(*, proof: str = FP) -> SourceInventoryItem:
-    return SourceInventoryItem.create(
+def _excluded_item(
+    *,
+    policy_version_id: str = "policy_version_wp1",
+) -> SourceInventoryItem:
+    base = SourceInventoryItem.create(
         source_asset_id="asset_wp1",
         structure_kind="message",
         content_type="message/rfc822",
         ordinal=0,
-        processing_state="intentionally_excluded",
+        processing_state="parsed",
         raw_retention_state="retained",
         source_fingerprint=FP,
         parser_fingerprint=FP2,
         permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
-        exclusion_policy_version_id="policy_version_wp1",
-        exclusion_authorized_actor_id="actor_wp1",
-        exclusion_reason_code="outside_claim_scope",
-        exclusion_claim_scope_proof_sha256=proof,
+    )
+    requirement = ClaimRequirement.create(
+        query_id="query_exclusion_wp1",
+        kind="single_value",
+        target="ticket",
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    manifest = VersionManifest.create(
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        tokenizer_fingerprint=FP,
+        index_fingerprint=FP,
+        implementation_fingerprint=FP,
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    authorization = CoverageAuthorizationBinding(
+        actor_context_id="actor_wp1",
+        permission_revision="permission_wp1",
+        grant_revision="grant_wp1",
+    )
+    scope_policy = CoverageScopePolicyBinding(
+        scope_policy_id="scope-policy-exclusion-wp1",
+        scope_policy_version="1",
+        scope_policy_fingerprint=SCOPE_POLICY_FP,
+    )
+    proof = IntentionalExclusionProof.create(
+        source_inventory_item=base,
+        claim_requirement=requirement,
+        version_manifest=manifest,
+        authorization_binding=authorization,
+        scope_policy=scope_policy,
+        exclusion_policy_version_id=policy_version_id,
+    )
+    item_payload = base.to_persistence_dict()
+    item_payload.pop("source_inventory_item_id")
+    item_payload.pop("source_inventory_id", None)
+    item_payload.update(
+        {
+            "processing_state": "intentionally_excluded",
+            "intentional_exclusion_proof": proof,
+        }
+    )
+    return SourceInventoryItem.create(**item_payload)
+
+
+def _excluded_scope_fixture() -> (
+    tuple[
+        SourceInventory,
+        ClaimRequirement,
+        VersionManifest,
+        CoverageAuthorizationBinding,
+        CoverageLedger,
+        CoverageScopeAuthority,
+        IntentionalExclusionProof,
+    ]
+):
+    base = SourceInventoryItem.create(
+        source_asset_id="asset_wp1",
+        structure_kind="message",
+        content_type="message/rfc822",
+        ordinal=0,
+        processing_state="parsed",
+        raw_retention_state="retained",
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
+    )
+    requirement = ClaimRequirement.create(
+        query_id="query_exclusion_scope_wp1",
+        kind="single_value",
+        target="ticket",
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    manifest = VersionManifest.create(
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        tokenizer_fingerprint=FP,
+        index_fingerprint=FP,
+        implementation_fingerprint=FP,
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    authorization = CoverageAuthorizationBinding(
+        actor_context_id="actor_exclusion_scope_wp1",
+        permission_revision="permission_exclusion_scope_wp1",
+        grant_revision="grant_exclusion_scope_wp1",
+    )
+    scope_policy = CoverageScopePolicyBinding(
+        scope_policy_id="scope-policy-exclusion-scope-wp1",
+        scope_policy_version="1",
+        scope_policy_fingerprint=SCOPE_POLICY_FP,
+    )
+    proof = IntentionalExclusionProof.create(
+        source_inventory_item=base,
+        claim_requirement=requirement,
+        version_manifest=manifest,
+        authorization_binding=authorization,
+        scope_policy=scope_policy,
+        exclusion_policy_version_id="policy-version-exclusion-scope-wp1",
+    )
+    item_payload = base.to_persistence_dict()
+    item_payload.pop("source_inventory_item_id")
+    item_payload.update(
+        {
+            "processing_state": "intentionally_excluded",
+            "intentional_exclusion_proof": proof,
+        }
+    )
+    inventory = SourceInventory.create(
+        source_asset_id="asset_wp1",
+        source_fingerprint=FP,
+        parser_fingerprint=FP2,
+        items=(SourceInventoryItem.create(**item_payload),),
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    item = inventory.items[0]
+    authorization_decision = CoverageItemAuthorizationDecision.create(
+        source_inventory_item=item,
+        authorization_binding=authorization,
+        decision_state="authorized",
+    )
+    relevance_decision = CoverageItemRelevanceDecision.create(
+        source_inventory_item=item,
+        claim_requirement=requirement,
+        scope_policy=scope_policy,
+        decision_state="irrelevant",
+    )
+    authority = CoverageScopeAuthority.create(
+        source_inventory=inventory,
+        claim_requirement=requirement,
+        authorization_binding=authorization,
+        version_manifest=manifest,
+        scope_policy=scope_policy,
+        authorization_decisions=(authorization_decision,),
+        relevance_decisions=(relevance_decision,),
+        authority_verifier=_authority_verifier(),
+    )
+    partition = CoverageScopePartition.create(
+        scope_authority=authority,
+        observation_partitions=(),
+    )
+    proof_record = CoverageProofRecord.create(
+        source_inventory_id=inventory.source_inventory_id,
+        claim_requirement_id=requirement.claim_requirement_id,
+        version_manifest_id=manifest.version_manifest_id,
+        inventory_item_id=item.source_inventory_item_id,
+        proof_kind="intentionally_excluded",
+        intentional_exclusion_proof=item.intentional_exclusion_proof,
+    )
+    ledger = CoverageLedger.create(
+        query_id=requirement.query_id,
+        claim_requirement_id=requirement.claim_requirement_id,
+        source_inventory_id=inventory.source_inventory_id,
+        relevant_inventory_item_ids=(),
+        authorization_binding=authorization,
+        version_binding=CoverageVersionBinding.from_manifest(manifest),
+        scope_partition=partition,
+        proof_records=(proof_record,),
+        complete_authorized_scope=True,
+    )
+    return (
+        inventory,
+        requirement,
+        manifest,
+        authorization,
+        ledger,
+        authority,
+        item.intentional_exclusion_proof,
     )
 
 
