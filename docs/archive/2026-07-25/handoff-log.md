@@ -13,6 +13,67 @@ Lifecycle label: `active`.
 - Never split a dated entry, discard content, or rewrite archive history.
 - Append only concise cross-agent facts, blockers, verification, and next action.
 
+## 2026-07-11 — Issues #38–#40 completion update
+
+- Issue #38 now isolates blocked and completed authority fixtures, cleans up
+  partial fixture setup failures, avoids writes to operator-controlled ignored
+  state, and passes the authority suite from both operator and clean-clone
+  layouts. The four broad real-evidence gates remain intentionally blocked;
+  harness reproducibility does not complete those evidence requirements.
+- Issue #39 now uses one shared MCP JSON-RPC engine and JSONL compatibility
+  runner, fails closed without authenticated session identity, binds Project,
+  Wiki, and semantic calls to gateway-controlled identity, records rejected and
+  denied transcript status, delegates semantic work only to injected handlers,
+  and exposes the effective-graph alias deprecation policy.
+- Issue #40 moved prior board, role-goal, and handoff history into immutable
+  dated snapshots with manifest hashes and bounded active startup files. A
+  deterministic archive-integrity test enforces hashes, links, retention limits,
+  checklist preservation, and current-versus-archive authority boundaries.
+- Final issues #38-#40 reviewer gate passed 3/3. Franklin verified shared
+  protocol and fixture cleanup correctness; Carver verified identity,
+  transcript, alias, and no-new-capability governance; Helmholtz verified
+  clean-state authority, completed fixture coherence, archive integrity, and
+  status honesty. All returned `RELEASE_DECISION: AGREE` with no blockers.
+- Final canonical evidence before publication: root suite 725 tests OK, KG
+  authority suite 589 tests OK, MCP focused 132 tests OK, read-only repository
+  enterprise/preflight 60 tests OK, archive integrity 4 tests OK, and full Ruff
+  check/format check passed for 323 files.
+
+## 2026-07-11 — Pre-feature production cleanup
+
+- Removed test-only MCP gateway scenarios and assertion markers from production,
+  deleted unused retrieval/JSON-RPC marker helpers, and centralized mail bundle
+  selection, grant normalization, and grant-expiry behavior in one private mail
+  access helper. Production Python is net 153 lines smaller.
+- Retrieval now has one private implementation while the deprecated
+  `query_effective_graph` alias retains its full keyword-only signature and the
+  canonical `query_effective_graph_view` still requires an effective graph
+  view. Shared observability is canonical; Project/Wiki legacy imports remain
+  deprecated compatibility re-exports and `SPEC.md` documents that boundary.
+- Canonical dev-container verification passed 726 tests, full Ruff check, and
+  325-file format check. Engineering, governance/safety, and maintainability
+  reviewers returned 3/3 `RELEASE_DECISION: AGREE` after signature and
+  specification compatibility blockers were fixed.
+
+## 2026-07-11 — Pre-feature structural cleanup
+
+- Consolidated duplicated evaluator validation, ChatGPT intake validation,
+  HTTP smoke orchestration, PostgreSQL container lifecycle, mail payload
+  validation, and atomic JSON persistence. Eleven evaluation/smoke entrypoints
+  are thinner while retaining their CLI, report schema, error, privacy, and
+  claim-boundary contracts.
+- Tests now validate real adapters, interfaces, and migration content as the
+  primary surfaces. Previously exported name-list helpers remain thin
+  compatibility wrappers to avoid an unannounced API break. A private
+  graph-storage write seam remains as an alias to the shared atomic writer so
+  rollback failure injection stays testable without restoring duplicate
+  persistence code.
+- The second cleanup phase changes 1,334 lines added and 1,514 deleted, net
+  `-180`; scripts and experiment entrypoints are net `-893`. Canonical
+  dev-container verification passed 730 tests, full Ruff check, 331-file format
+  check, and `git diff --check`. Production/API, evaluator/privacy, and
+  shell/safety reviewers returned 3/3 `RELEASE_DECISION: AGREE`.
+
 ## 2026-07-15 — Candidate Assertion and Domain Pack minimum core
 
 - Completed the bounded implementation in isolated worktree
@@ -234,22 +295,3 @@ Lifecycle label: `active`.
 - Three read-only reviewers agreed on the source-neutral WP1-WP6 contract posted as issue #51 comment `5070970116`.
 - Issue #53 is a hard reviewed lifecycle prerequisite before WP5; issue #52 remains the sole independent raw-PST oracle gate.
 - Next: push the integration baseline, then delegate only the contract's disjoint packages; never claim methodology-quality UAT while authority is blocked.
-
-## 2026-07-25 — Issue #51 WP1 interface freeze and integration
-
-- WP1 code is frozen at `0f2e69b`; the reviewed code-plus-packet head is
-  `eac8473d`, with durable packet `docs/issue51-wp1-interface-freeze.md`.
-- Russell and Herschel both returned `RELEASE_DECISION: AGREE` with no blockers
-  on exact packet head `eac8473d`; the cumulative packet review remains the
-  current freeze gate.
-- Integration merge `9e8a5f6` has parents `bed52a4` and `eac8473d`. Integrated
-  canonical WP1 evidence is the exact 8-module suite (118 tests OK), targeted
-  Ruff/format pass, and passing diff checks.
-- Authority remains valid-but-blocked: authority fingerprint
-  `sha256:c8e3fc5ec13d690f33d27797942a3b9b090319d4be8f269c77bccd646d787177`,
-  execution fingerprint
-  `sha256:291c7ea5c5737079cc9ae9d4100fd9ce94f926adfff1a112235ed0aa93cf9665`,
-  binding count `64`.
-- Next package is WP2: complete raw inventory/structural extraction and
-  independent raw-oracle reconciliation, consuming but not mutating the frozen
-  WP1 interface.

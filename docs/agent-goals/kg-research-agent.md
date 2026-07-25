@@ -52,7 +52,11 @@ an actual boolean.
 
 ## Status
 
-`active`
+`active` — WP1 is frozen and integrated. The code freeze is
+`0f2e69b065d082fdb5fb43506f309b1dc2efc1f1`; the reviewed code-plus-packet
+head is `eac8473d`, and integration merge `9e8a5f6` has parents `bed52a4` and
+`eac8473d`. The durable packet is
+`docs/issue51-wp1-interface-freeze.md`.
 
 ## Acceptance Criteria
 
@@ -90,8 +94,9 @@ an actual boolean.
   `ascii_identifier_regex_v1`, not the frozen target.
   Authority fingerprint is
   `sha256:c8e3fc5ec13d690f33d27797942a3b9b090319d4be8f269c77bccd646d787177`;
-  Gate-0 execution fingerprint is
-  `sha256:4a19889a41e2c00757ec888c148aa02bfa9e534c6334176c1f73d27a8de51ddb`.
+  execution fingerprint is
+  `sha256:291c7ea5c5737079cc9ae9d4100fd9ce94f926adfff1a112235ed0aa93cf9665`;
+  pipeline source binding count is `64`.
 - `--require-ready` exits nonzero. No methodology-quality UAT,
   KG-versus-ontology claim, methodology completion, or launch-readiness claim
   is permitted.
@@ -104,8 +109,9 @@ an actual boolean.
 
 ## Next Action
 
-Commit and push the clean Gate-0/documentation baseline, then delegate the
-contract's disjoint implementation packages only to the three assigned
-GPT-5.6-luna/high agents. Freeze and review each upstream interface before its
-consumer starts; implement #53 before WP5; keep all acceptance and methodology
-claims fail-closed.
+Begin WP2: complete raw inventory and structural extraction, then reconcile it
+against an independent raw oracle. Consume the frozen WP1 interface without
+mutating it; freeze and review each upstream interface before its consumer
+starts. Issue #53 must land as a dedicated reviewed lifecycle prerequisite
+before WP5, and Issue #52 remains the only independent acceptance authority.
+Keep all acceptance and methodology claims fail-closed.

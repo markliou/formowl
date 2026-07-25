@@ -91,6 +91,11 @@ archival is preserved at
     enforcement; reviewed issue #53 lifecycle prerequisite; WP5 one canonical
     runtime/UAT path; WP6 manifest, parity, restart, revocation, budgets, full
     container verification, and three read-only reviewers.
+  - WP1 contracts, persistence, and interface freeze are complete and integrated
+    at `9e8a5f6`: code `0f2e69b`, reviewed packet head `eac8473d`,
+    `docs/issue51-wp1-interface-freeze.md`, Russell/Herschel `AGREE`, exact
+    8-module suite 118 tests OK, targeted Ruff/format, diff checks, and
+    valid-but-blocked authority evidence.
   - The sole UAT PST bridge is
     `formowl_mail.import_workflow.run_upload_session_mail_import`; no alternate
     UAT Asset, parser, bundle, index, coverage, claim, or hidden task truth.

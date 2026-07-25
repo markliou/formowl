@@ -16,6 +16,18 @@ role instructions.
 - [`manifest.json`](2026-07-11/manifest.json) records source paths, byte counts,
   line counts, and SHA-256 hashes for mechanical comparison.
 
+## Snapshot 2026-07-23
+
+- [`handoff-log.md`](2026-07-23/handoff-log.md)
+- [`manifest.json`](2026-07-23/manifest.json) records source paths, byte counts,
+  line counts, and SHA-256 hashes for mechanical comparison.
+
+## Snapshot 2026-07-25
+
+- [`handoff-log.md`](2026-07-25/handoff-log.md)
+- [`manifest.json`](2026-07-25/manifest.json) records source paths, byte counts,
+  line counts, and SHA-256 hashes for mechanical comparison.
+
 ## Archive Rules
 
 - Snapshots are byte-identical to active source files immediately before archival.
