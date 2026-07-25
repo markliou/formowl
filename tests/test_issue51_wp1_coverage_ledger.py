@@ -1,0 +1,577 @@
+from __future__ import annotations
+
+from dataclasses import replace
+import unittest
+
+import _paths  # noqa: F401
+
+from formowl_contract import (
+    ClaimRequirement,
+    ContractValidationError,
+    COVERAGE_FALLBACK_LIMIT_POLICY_FINGERPRINT,
+    COVERAGE_FALLBACK_LIMIT_POLICY_ID,
+    COVERAGE_FALLBACK_LIMIT_POLICY_VERSION,
+    COVERAGE_FALLBACK_MAX_ATTEMPTS,
+    COVERAGE_FALLBACK_MAX_BYTES,
+    COVERAGE_FALLBACK_MAX_ELAPSED_MS,
+    COVERAGE_FALLBACK_MAX_ITEMS,
+    CoverageAuthorizationBinding,
+    CoverageItemAuthorizationDecision,
+    CoverageItemRelevanceDecision,
+    CoverageFallbackUsage,
+    CoverageLedger,
+    CoverageObservationPartition,
+    CoverageProofRecord,
+    CoverageScopePartition,
+    CoverageScopeAuthority,
+    CoverageScopeAuthorityVerifier,
+    CoverageScopePolicyBinding,
+    CoverageVersionBinding,
+    SourceInventory,
+    SourceInventoryItem,
+    VersionManifest,
+)
+
+
+FP = "sha256:" + "a" * 64
+FP2 = "sha256:" + "b" * 64
+SCOPE_POLICY_FP = "sha256:" + "c" * 64
+AUTHORITY_ROOT = "issue51-wp1-test-authority-root-v2"
+
+
+def _authority_verifier() -> CoverageScopeAuthorityVerifier:
+    return CoverageScopeAuthorityVerifier.from_external_root(AUTHORITY_ROOT)
+
+
+class CoverageLedgerClosedProofTests(unittest.TestCase):
+    def test_closed_typed_records_reject_unknown_and_wrong_types(self) -> None:
+        authorization = CoverageAuthorizationBinding(
+            actor_context_id="actor_wp1",
+            permission_revision="permission_wp1",
+            grant_revision=FP,
+        )
+        with self.assertRaises(ContractValidationError):
+            CoverageAuthorizationBinding.from_dict(
+                {
+                    "actor_context_id": "actor_wp1",
+                    "permission_revision": "permission_wp1",
+                    "grant_revision": "grant_wp1",
+                    "extra": "rejected",
+                }
+            )
+        with self.assertRaises(ContractValidationError):
+            CoverageAuthorizationBinding(
+                actor_context_id=123,  # type: ignore[arg-type]
+                permission_revision="permission_wp1",
+                grant_revision=FP,
+            )
+        with self.assertRaises(ContractValidationError):
+            CoverageFallbackUsage.from_dict(
+                {
+                    "status": "completed",
+                    "items": True,
+                    "bytes": 0,
+                    "elapsed_ms": 0,
+                    "attempt_count": 1,
+                    "item_budget": 1,
+                    "byte_budget": 0,
+                    "elapsed_ms_budget": 0,
+                    "attempt_budget": 1,
+                    "limit_policy_id": COVERAGE_FALLBACK_LIMIT_POLICY_ID,
+                    "limit_policy_version": COVERAGE_FALLBACK_LIMIT_POLICY_VERSION,
+                    "limit_policy_fingerprint": COVERAGE_FALLBACK_LIMIT_POLICY_FINGERPRINT,
+                }
+            )
+        with self.assertRaises(ContractValidationError):
+            CoverageFallbackUsage.from_dict(
+                {
+                    "status": "completed",
+                    "items": 1.0,
+                    "bytes": 0,
+                    "elapsed_ms": 0,
+                    "attempt_count": 1,
+                    "item_budget": 1,
+                    "byte_budget": 0,
+                    "elapsed_ms_budget": 0,
+                    "attempt_budget": 1,
+                    "limit_policy_id": COVERAGE_FALLBACK_LIMIT_POLICY_ID,
+                    "limit_policy_version": COVERAGE_FALLBACK_LIMIT_POLICY_VERSION,
+                    "limit_policy_fingerprint": COVERAGE_FALLBACK_LIMIT_POLICY_FINGERPRINT,
+                }
+            )
+        with self.assertRaises(ContractValidationError):
+            CoverageVersionBinding.from_dict(
+                {
+                    **CoverageVersionBinding.from_manifest(_manifest()).to_dict(),
+                    "unknown": "rejected",
+                }
+            )
+        self.assertEqual(authorization.grant_revision, FP)
+
+    def test_fallback_statuses_and_budgets_fail_closed(self) -> None:
+        with self.assertRaises(ContractValidationError):
+            CoverageFallbackUsage(
+                status="not_required",
+                attempt_budget=1,
+            )
+        with self.assertRaises(ContractValidationError):
+            CoverageFallbackUsage(
+                status="completed",
+                attempt_count=2,
+                attempt_budget=1,
+            )
+        with self.assertRaises(ContractValidationError):
+            CoverageFallbackUsage(
+                status="budget_exhausted",
+                attempt_count=1,
+                attempt_budget=2,
+            )
+        completed = CoverageFallbackUsage(
+            status="completed",
+            items=2,
+            bytes=100,
+            elapsed_ms=20,
+            attempt_count=1,
+            item_budget=2,
+            byte_budget=100,
+            elapsed_ms_budget=20,
+            attempt_budget=1,
+        )
+        self.assertEqual(
+            CoverageFallbackUsage.from_dict(completed.to_dict()).to_dict(),
+            completed.to_dict(),
+        )
+
+    def test_fallback_limits_are_closed_versioned_and_finite(self) -> None:
+        boundary_values = (
+            ("items", "item_budget", COVERAGE_FALLBACK_MAX_ITEMS),
+            ("bytes", "byte_budget", COVERAGE_FALLBACK_MAX_BYTES),
+            ("elapsed_ms", "elapsed_ms_budget", COVERAGE_FALLBACK_MAX_ELAPSED_MS),
+            ("attempt_count", "attempt_budget", COVERAGE_FALLBACK_MAX_ATTEMPTS),
+        )
+        for usage_name, budget_name, maximum in boundary_values:
+            with self.subTest(usage_name=usage_name):
+                values = {
+                    "status": "completed",
+                    "items": 0,
+                    "bytes": 0,
+                    "elapsed_ms": 0,
+                    "attempt_count": 1,
+                    "item_budget": 0,
+                    "byte_budget": 0,
+                    "elapsed_ms_budget": 0,
+                    "attempt_budget": 1,
+                }
+                values[usage_name] = maximum
+                values[budget_name] = maximum
+                bounded = CoverageFallbackUsage(**values)
+                self.assertEqual(
+                    CoverageFallbackUsage.from_dict(bounded.to_dict()).to_dict(),
+                    bounded.to_dict(),
+                )
+
+                over_limit = dict(values)
+                over_limit[usage_name] = maximum + 1
+                over_limit[budget_name] = maximum + 1
+                with self.assertRaises(ContractValidationError):
+                    CoverageFallbackUsage(**over_limit)
+
+                budget_over_limit = dict(values)
+                budget_over_limit[usage_name] = 0
+                budget_over_limit[budget_name] = maximum + 1
+                with self.assertRaises(ContractValidationError):
+                    CoverageFallbackUsage(**budget_over_limit)
+
+        base = CoverageFallbackUsage(
+            status="completed",
+            attempt_count=1,
+            attempt_budget=1,
+        ).to_dict()
+        for policy_field in (
+            "limit_policy_id",
+            "limit_policy_version",
+            "limit_policy_fingerprint",
+        ):
+            with self.subTest(policy_field=policy_field):
+                missing = dict(base)
+                missing.pop(policy_field)
+                with self.assertRaises(ContractValidationError):
+                    CoverageFallbackUsage.from_dict(missing)
+
+                mismatched = dict(base)
+                mismatched[policy_field] = (
+                    "different-policy" if policy_field != "limit_policy_fingerprint" else FP2
+                )
+                with self.assertRaises(ContractValidationError):
+                    CoverageFallbackUsage.from_dict(mismatched)
+
+        for numeric_field in (
+            "items",
+            "bytes",
+            "elapsed_ms",
+            "attempt_count",
+            "item_budget",
+            "byte_budget",
+            "elapsed_ms_budget",
+            "attempt_budget",
+        ):
+            for invalid in (True, -1, 10**100):
+                with self.subTest(numeric_field=numeric_field, invalid=invalid):
+                    malformed = dict(base)
+                    malformed[numeric_field] = invalid
+                    with self.assertRaises(ContractValidationError):
+                        CoverageFallbackUsage.from_dict(malformed)
+
+    def test_complete_scope_rejects_missing_or_unresolved_proof(self) -> None:
+        inventory, requirement, manifest, authorization, proof = _fixture()
+        common = {
+            "query_id": requirement.query_id,
+            "claim_requirement_id": requirement.claim_requirement_id,
+            "source_inventory_id": inventory.source_inventory_id,
+            "relevant_inventory_item_ids": (inventory.items[0].source_inventory_item_id,),
+            "searched_structural_observation_ids": ("observation_wp1",),
+            "authorization_binding": authorization,
+            "version_binding": CoverageVersionBinding.from_manifest(manifest),
+            "proof_records": (proof,),
+            "complete_authorized_scope": True,
+        }
+        for field_name, value in (
+            ("authorization_binding", None),
+            ("version_binding", None),
+            ("proof_records", ()),
+            ("relevant_inventory_item_ids", ()),
+            ("omitted_inventory_item_ids", (inventory.items[0].source_inventory_item_id,)),
+            ("failed_inventory_item_ids", (inventory.items[0].source_inventory_item_id,)),
+            ("unsupported_inventory_item_ids", (inventory.items[0].source_inventory_item_id,)),
+            ("redacted_inventory_item_ids", (inventory.items[0].source_inventory_item_id,)),
+        ):
+            values = dict(common)
+            values[field_name] = value
+            with self.subTest(field_name=field_name):
+                with self.assertRaises(ContractValidationError):
+                    CoverageLedger(**values)
+        for status in ("budget_exhausted", "failed", "cancelled"):
+            values = dict(common)
+            values["fallback_usage"] = (
+                CoverageFallbackUsage(
+                    status=status,
+                    attempt_count=1,
+                    attempt_budget=1,
+                )
+                if status == "budget_exhausted"
+                else CoverageFallbackUsage(
+                    status=status,
+                    attempt_count=1,
+                    attempt_budget=1,
+                )
+            )
+            with self.subTest(status=status):
+                with self.assertRaises(ContractValidationError):
+                    CoverageLedger(**values)
+
+    def test_usable_for_claim_validates_typed_bindings_and_processing(self) -> None:
+        inventory, requirement, manifest, authorization, proof = _fixture()
+        ledger = _complete_ledger(inventory, requirement, manifest, authorization, proof)
+        self.assertTrue(
+            ledger.usable_for_claim(
+                inventory,
+                requirement,
+                manifest,
+                authorization,
+                ledger.scope_partition.scope_authority,
+            )
+        )
+        self.assertFalse(
+            ledger.usable_for_claim(
+                inventory,
+                requirement,
+                _manifest(index_fingerprint=FP2),
+                authorization,
+                ledger.scope_partition.scope_authority,
+            )
+        )
+        self.assertFalse(
+            ledger.usable_for_claim(
+                inventory,
+                requirement,
+                _manifest(index_freshness="stale"),
+                authorization,
+                ledger.scope_partition.scope_authority,
+            )
+        )
+        self.assertFalse(
+            ledger.usable_for_claim(
+                inventory,
+                requirement,
+                manifest,
+                replace(authorization, grant_revision=FP2),
+                ledger.scope_partition.scope_authority,
+            )
+        )
+        self.assertFalse(
+            ledger.usable_for_claim(
+                inventory,
+                ClaimRequirement.create(
+                    query_id="query_other",
+                    kind=requirement.kind,
+                    target=requirement.target,
+                    predicate=requirement.predicate,
+                    parameters=dict(requirement.parameters),
+                    required_scope=requirement.required_scope,
+                    created_at=requirement.created_at,
+                ),
+                manifest,
+                authorization,
+                ledger.scope_partition.scope_authority,
+            )
+        )
+        with self.assertRaises(ContractValidationError):
+            ledger.usable_for_claim(
+                object(),
+                requirement,
+                manifest,
+                authorization,
+                ledger.scope_partition.scope_authority,
+            )  # type: ignore[arg-type]
+        with self.assertRaises(ContractValidationError):
+            ledger.usable_for_claim(
+                inventory,
+                requirement,
+                object(),
+                authorization,
+                ledger.scope_partition.scope_authority,
+            )  # type: ignore[arg-type]
+
+    def test_usable_for_claim_rejects_unsearched_or_mismatched_proof(self) -> None:
+        inventory, requirement, manifest, authorization, proof = _fixture()
+        with self.assertRaises(ContractValidationError):
+            replace(
+                proof,
+                ordinary_observation_ids=("observation_wp1",),
+                proof_kind="ordinary",
+            )
+        for changed in (
+            _proof_variant(proof, version_manifest_id="manifest_other"),
+            _proof_variant(proof, source_inventory_id="inventory_other"),
+        ):
+            with self.subTest(changed=changed):
+                with self.assertRaises(ContractValidationError):
+                    _complete_ledger(
+                        inventory,
+                        requirement,
+                        manifest,
+                        authorization,
+                        changed,
+                    )
+
+        with self.assertRaises(ContractValidationError):
+            changed = _proof_variant(proof, inventory_item_id="item_other")
+            _complete_ledger(inventory, requirement, manifest, authorization, changed)
+        changed = _proof_variant(proof, structural_observation_ids=("observation_other",))
+        with self.assertRaises(ContractValidationError):
+            _complete_ledger(
+                inventory,
+                requirement,
+                manifest,
+                authorization,
+                changed,
+            )
+
+        failed_item_payload = inventory.items[0].to_persistence_dict()
+        failed_item_payload.pop("source_inventory_item_id")
+        failed_item_payload["source_inventory_id"] = None
+        failed_item_payload["processing_state"] = "failed"
+        item = SourceInventoryItem.create(**failed_item_payload)
+        failed_inventory = SourceInventory.create(
+            source_asset_id=inventory.source_asset_id,
+            source_fingerprint=inventory.source_fingerprint,
+            parser_fingerprint=inventory.parser_fingerprint,
+            items=(item,),
+            created_at=inventory.created_at,
+        )
+        failed_item = failed_inventory.items[0]
+        failed_ledger = _complete_ledger(
+            failed_inventory,
+            requirement,
+            manifest,
+            authorization,
+            CoverageProofRecord.create(
+                source_inventory_id=failed_inventory.source_inventory_id,
+                claim_requirement_id=requirement.claim_requirement_id,
+                version_manifest_id=manifest.version_manifest_id,
+                inventory_item_id=failed_item.source_inventory_item_id,
+                proof_kind="structural",
+                structural_observation_ids=("observation_wp1",),
+            ),
+        )
+        self.assertFalse(
+            failed_ledger.usable_for_claim(
+                failed_inventory,
+                requirement,
+                manifest,
+                authorization,
+                failed_ledger.scope_partition.scope_authority,
+            )
+        )
+
+    def test_deterministic_ledger_id_and_round_trip_include_typed_proof(self) -> None:
+        inventory, requirement, manifest, authorization, proof = _fixture()
+        first = _complete_ledger(inventory, requirement, manifest, authorization, proof)
+        second = CoverageLedger.from_dict(first.to_dict())
+        self.assertEqual(first.coverage_ledger_id, second.coverage_ledger_id)
+        self.assertEqual(first.to_dict(), second.to_dict())
+        changed = replace(
+            first,
+            fallback_usage=CoverageFallbackUsage(
+                status="completed",
+                attempt_count=1,
+                attempt_budget=1,
+            ),
+            complete_authorized_scope=False,
+            coverage_ledger_id="",
+        )
+        self.assertNotEqual(first.coverage_ledger_id, changed.coverage_ledger_id)
+
+
+def _manifest(
+    *,
+    index_fingerprint: str = FP,
+    index_freshness: str = "fresh",
+) -> VersionManifest:
+    return VersionManifest.create(
+        source_fingerprint=FP,
+        parser_fingerprint=FP,
+        tokenizer_fingerprint=FP,
+        index_fingerprint=index_fingerprint,
+        implementation_fingerprint=FP,
+        index_freshness=index_freshness,
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+
+
+def _proof_variant(
+    proof: CoverageProofRecord,
+    **changes: object,
+) -> CoverageProofRecord:
+    payload = proof.to_persistence_dict()
+    payload.update(changes)
+    payload.pop("proof_id")
+    return CoverageProofRecord.create(**payload)
+
+
+def _fixture() -> (
+    tuple[
+        SourceInventory,
+        ClaimRequirement,
+        VersionManifest,
+        CoverageAuthorizationBinding,
+        CoverageProofRecord,
+    ]
+):
+    item = SourceInventoryItem.create(
+        source_asset_id="asset_wp1",
+        structure_kind="message",
+        content_type="message/rfc822",
+        ordinal=0,
+        processing_state="parsed",
+        raw_retention_state="retained",
+        source_fingerprint=FP,
+        parser_fingerprint=FP,
+        permission_scope={"scope_type": "asset", "scope_id": "asset_wp1"},
+        source_observation_ids=("observation_wp1",),
+    )
+    inventory = SourceInventory.create(
+        source_asset_id="asset_wp1",
+        source_fingerprint=FP,
+        parser_fingerprint=FP,
+        items=(item,),
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    item = inventory.items[0]
+    requirement = ClaimRequirement.create(
+        query_id="query_wp1",
+        kind="single_value",
+        target="ticket",
+        created_at="2026-07-24T00:00:00+00:00",
+    )
+    manifest = _manifest()
+    authorization = CoverageAuthorizationBinding(
+        actor_context_id="actor_wp1",
+        permission_revision="permission_wp1",
+        grant_revision="grant_wp1",
+    )
+    proof = CoverageProofRecord.create(
+        source_inventory_id=inventory.source_inventory_id,
+        claim_requirement_id=requirement.claim_requirement_id,
+        version_manifest_id=manifest.version_manifest_id,
+        inventory_item_id=item.source_inventory_item_id,
+        proof_kind="structural",
+        structural_observation_ids=("observation_wp1",),
+    )
+    return inventory, requirement, manifest, authorization, proof
+
+
+def _complete_ledger(
+    inventory: SourceInventory,
+    requirement: ClaimRequirement,
+    manifest: VersionManifest,
+    authorization: CoverageAuthorizationBinding,
+    proof: CoverageProofRecord,
+) -> CoverageLedger:
+    policy = CoverageScopePolicyBinding(
+        scope_policy_id="scope-policy-wp1",
+        scope_policy_version="1",
+        scope_policy_fingerprint=SCOPE_POLICY_FP,
+    )
+    authorizations = tuple(
+        CoverageItemAuthorizationDecision.create(
+            source_inventory_item=item,
+            authorization_binding=authorization,
+            decision_state="authorized",
+        )
+        for item in inventory.items
+    )
+    relevance = tuple(
+        CoverageItemRelevanceDecision.create(
+            source_inventory_item=item,
+            claim_requirement=requirement,
+            scope_policy=policy,
+            decision_state="relevant",
+        )
+        for item in inventory.items
+    )
+    authority = CoverageScopeAuthority.create(
+        source_inventory=inventory,
+        claim_requirement=requirement,
+        authorization_binding=authorization,
+        version_manifest=manifest,
+        scope_policy=policy,
+        authorization_decisions=authorizations,
+        relevance_decisions=relevance,
+        authority_verifier=_authority_verifier(),
+    )
+    scope_partition = CoverageScopePartition.create(
+        scope_authority=authority,
+        observation_partitions=(
+            CoverageObservationPartition(
+                inventory_item_id=inventory.items[0].source_inventory_item_id,
+                structural_observation_ids=("observation_wp1",),
+            ),
+        ),
+    )
+    return CoverageLedger.create(
+        query_id=requirement.query_id,
+        claim_requirement_id=requirement.claim_requirement_id,
+        source_inventory_id=inventory.source_inventory_id,
+        relevant_inventory_item_ids=(inventory.items[0].source_inventory_item_id,),
+        searched_structural_observation_ids=("observation_wp1",),
+        authorization_binding=authorization,
+        version_binding=CoverageVersionBinding.from_manifest(manifest),
+        scope_partition=scope_partition,
+        proof_records=(proof,),
+        complete_authorized_scope=True,
+    )
+
+
+if __name__ == "__main__":
+    unittest.main()

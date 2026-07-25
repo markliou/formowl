@@ -59,10 +59,12 @@ class MailEvidenceBundleTests(unittest.TestCase):
         )
 
         self.assertEqual(bundle.mail_evidence_bundle_id, rebuilt.mail_evidence_bundle_id)
-        self.assertEqual(bundle.to_dict(), rebuilt.to_dict())
+        self.assertEqual(bundle.to_persistence_dict(), rebuilt.to_persistence_dict())
         self.assertEqual(
-            MailEvidenceBundle.from_dict(bundle.to_dict()).to_dict(),
-            bundle.to_dict(),
+            MailEvidenceBundle.from_persistence_dict(
+                bundle.to_persistence_dict()
+            ).to_persistence_dict(),
+            bundle.to_persistence_dict(),
         )
         self.assertEqual(bundle.producer_type, "server_side_parser")
         self.assertEqual(
@@ -358,14 +360,14 @@ class MailEvidenceBundleTests(unittest.TestCase):
         ]
         for field_name in required_arrays:
             with self.subTest(field_name=field_name):
-                payload = bundle.to_dict()
+                payload = bundle.to_persistence_dict()
                 payload.pop(field_name)
                 with self.assertRaises(ContractValidationError):
-                    MailEvidenceBundle.from_dict(payload)
+                    MailEvidenceBundle.from_persistence_dict(payload)
 
-        payload_without_optional_warnings = bundle.to_dict()
+        payload_without_optional_warnings = bundle.to_persistence_dict()
         payload_without_optional_warnings.pop("parse_warnings")
-        parsed = MailEvidenceBundle.from_dict(payload_without_optional_warnings)
+        parsed = MailEvidenceBundle.from_persistence_dict(payload_without_optional_warnings)
         self.assertEqual(parsed.parse_warnings, [])
 
     def test_builder_rejects_empty_mixed_and_orphan_mail_observations(self) -> None:
@@ -525,14 +527,14 @@ class MailEvidenceBundleTests(unittest.TestCase):
             upload_session_id="upload_session_mail_001",
             created_at="2026-07-05T10:00:00+00:00",
         )
-        unsafe_payload = copy.deepcopy(bundle.to_dict())
+        unsafe_payload = copy.deepcopy(bundle.to_persistence_dict())
         unsafe_payload["messages"][0]["api_key"] = "not-public"
         with self.assertRaises(ContractValidationError):
-            MailEvidenceBundle.from_dict(unsafe_payload)
-        unsafe_segment_payload = copy.deepcopy(bundle.to_dict())
+            MailEvidenceBundle.from_persistence_dict(unsafe_payload)
+        unsafe_segment_payload = copy.deepcopy(bundle.to_persistence_dict())
         unsafe_segment_payload["body_segments"][0]["api_key"] = "not-public"
         with self.assertRaises(ContractValidationError):
-            MailEvidenceBundle.from_dict(unsafe_segment_payload)
+            MailEvidenceBundle.from_persistence_dict(unsafe_segment_payload)
         self.assertEqual(_tree_snapshot(temp_dir), before_failure_snapshot)
 
         self.assertFalse((temp_dir / "mail").exists())

@@ -11,6 +11,19 @@ _MIGRATION_DIR = Path(__file__).resolve().parent / "migrations"
 _SAFE_PUBLIC_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _DSN_PATTERN = re.compile(r"postgres(?:ql)?://", re.IGNORECASE)
 _RAW_PATH_PATTERN = re.compile(r"^(?:/|\\\\|[A-Za-z]:[\\/]|file://)", re.IGNORECASE)
+_MIGRATION_FILENAME = re.compile(r"^(?P<slot>[0-9]{3})_[A-Za-z0-9][A-Za-z0-9_.-]*\.sql$")
+_RESERVED_MIGRATION_FILENAMES = {
+    5: "005_oauth_identity.sql",
+    6: "006_evidence_coverage.sql",
+    7: "007_task_lifecycle.sql",
+}
+_REQUIRED_MIGRATION_FILENAMES = {
+    1: "001_metadata_store.sql",
+    2: "002_vector_index.sql",
+    3: "003_ingestion_records.sql",
+    4: "004_mail_evidence.sql",
+    6: "006_evidence_coverage.sql",
+}
 
 
 @dataclass(frozen=True)
@@ -72,12 +85,20 @@ class PostgresMigration:
     def from_file(cls, path: Path) -> "PostgresMigration":
         if not path.name.endswith(".sql") or not path.is_file():
             raise ContractValidationError("PostgresMigration requires a SQL migration file")
-        text = path.read_text(encoding="utf-8")
+        return cls.from_text(filename=path.name, text=path.read_text(encoding="utf-8"))
+
+    @classmethod
+    def from_text(cls, *, filename: str, text: str) -> "PostgresMigration":
+        if not isinstance(filename, str) or not filename.endswith(".sql"):
+            raise ContractValidationError("PostgresMigration requires a SQL migration filename")
+        if not isinstance(text, str):
+            raise ContractValidationError("PostgresMigration SQL text must be a string")
+        statement_count = len(_split_sql_statements(text))
         return cls(
-            migration_id=path.stem,
-            filename=path.name,
-            sql_sha256=sha256_json({"filename": path.name, "sql": text}),
-            statement_count=sum(1 for chunk in text.split(";") if chunk.strip()),
+            migration_id=Path(filename).stem,
+            filename=filename,
+            sql_sha256=sha256_json({"filename": filename, "sql": text}),
+            statement_count=statement_count,
         )
 
 
@@ -158,9 +179,13 @@ class PostgreSQLUnitOfWork:
     def __init__(self, connection: PostgreSQLConnection) -> None:
         self.connection = connection
         self.committed = False
+        self._active = False
 
     def __enter__(self) -> "PostgreSQLUnitOfWork":
+        if self._active:
+            raise ContractValidationError("PostgreSQLUnitOfWork cannot be entered twice")
         self.connection.begin()
+        self._active = True
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
@@ -168,29 +193,56 @@ class PostgreSQLUnitOfWork:
             self.connection.commit()
         else:
             self.connection.rollback()
+        self._active = False
         return False
 
     def commit(self) -> None:
+        if not self._active:
+            raise ContractValidationError("PostgreSQLUnitOfWork.commit requires an active scope")
         self.committed = True
+
+    @property
+    def active(self) -> bool:
+        """Whether this unit of work currently owns an open transaction."""
+
+        return self._active
 
 
 class PostgreSQLMigrationRunner:
     """Replay locked SQL migrations through the internal connection protocol."""
 
-    def __init__(self, connection: PostgreSQLConnection) -> None:
+    def __init__(
+        self,
+        connection: PostgreSQLConnection,
+        migration_dir: Path | None = None,
+    ) -> None:
         self.connection = connection
+        self.migration_dir = Path(migration_dir) if migration_dir is not None else _MIGRATION_DIR
 
     def migration_replay(
         self, migrations: tuple[PostgresMigration, ...] | None = None
     ) -> list[SQLStatement]:
-        statements = []
-        for migration in migrations or migration_files():
-            path = _MIGRATION_DIR / migration.filename
+        manifest = _validate_migration_manifest(
+            migration_files(self.migration_dir) if migrations is None else migrations
+        )
+        resolved_paths: list[tuple[PostgresMigration, Path]] = []
+        resolved_files: list[tuple[PostgresMigration, tuple[str, ...]]] = []
+        for migration in manifest:
+            path = self.migration_dir / migration.filename
             if not path.is_file():
                 raise ContractValidationError("migration file missing from locked manifest")
-            for index, sql in enumerate(
-                _split_sql_statements(path.read_text(encoding="utf-8")), start=1
-            ):
+            resolved_paths.append((migration, path))
+
+        for migration, path in resolved_paths:
+            text = path.read_text(encoding="utf-8")
+            derived = PostgresMigration.from_text(filename=path.name, text=text)
+            if migration != derived:
+                raise ContractValidationError("migration manifest metadata does not match file")
+            resolved_files.append((migration, _split_sql_statements(text)))
+
+        statements = []
+        for migration, migration_statements in resolved_files:
+            for index, sql in enumerate(migration_statements, start=1):
                 statement = SQLStatement(
                     sql=sql,
                     parameters={
@@ -270,8 +322,56 @@ class PostgreSQLMetadataRepository:
         raise ContractValidationError("canonical commits require governed review backend")
 
 
-def migration_files() -> tuple[PostgresMigration, ...]:
-    return tuple(PostgresMigration.from_file(path) for path in sorted(_MIGRATION_DIR.glob("*.sql")))
+def migration_files(
+    migration_dir: Path | None = None,
+) -> tuple[PostgresMigration, ...]:
+    root = Path(migration_dir) if migration_dir is not None else _MIGRATION_DIR
+    paths = list(root.glob("*.sql"))
+    slots: dict[int, Path] = {}
+    for path in paths:
+        slot = _migration_slot(path.name)
+        if slot in slots:
+            raise ContractValidationError("migration manifest contains duplicate numeric slots")
+        slots[slot] = path
+    migrations = tuple(PostgresMigration.from_file(slots[slot]) for slot in sorted(slots))
+    return _validate_migration_manifest(migrations)
+
+
+def _migration_slot(filename: str) -> int:
+    match = _MIGRATION_FILENAME.fullmatch(filename)
+    if match is None:
+        raise ContractValidationError("migration filename must use a three-digit numeric slot")
+    slot = int(match.group("slot"))
+    if slot == 0:
+        raise ContractValidationError("migration numeric slot must be positive")
+    reserved_filename = _RESERVED_MIGRATION_FILENAMES.get(slot)
+    if reserved_filename is not None and filename != reserved_filename:
+        raise ContractValidationError("reserved migration slot has an unexpected filename")
+    return slot
+
+
+def _validate_migration_manifest(
+    migrations: tuple[PostgresMigration, ...],
+) -> tuple[PostgresMigration, ...]:
+    slots: list[int] = []
+    for migration in migrations:
+        if not isinstance(migration, PostgresMigration):
+            raise ContractValidationError("migration manifest contains an invalid record")
+        if migration.migration_id != Path(migration.filename).stem:
+            raise ContractValidationError("migration manifest ID does not match filename")
+        slot = _migration_slot(migration.filename)
+        if slot in slots:
+            raise ContractValidationError("migration manifest contains duplicate numeric slots")
+        slots.append(slot)
+    if slots != sorted(slots):
+        raise ContractValidationError("migration manifest must be ordered by numeric slot")
+    filenames_by_slot = dict(
+        zip(slots, (migration.filename for migration in migrations), strict=True)
+    )
+    for slot, filename in _REQUIRED_MIGRATION_FILENAMES.items():
+        if filenames_by_slot.get(slot) != filename:
+            raise ContractValidationError(f"migration manifest requires {filename}")
+    return migrations
 
 
 def postgre_sql_backed_repository_interfaces() -> tuple[str, ...]:
@@ -343,10 +443,113 @@ def _reject_dsn_or_raw_locator(value: dict[str, Any]) -> None:
 
 
 def _split_sql_statements(text: str) -> tuple[str, ...]:
-    statements = tuple(chunk.strip() for chunk in text.split(";") if chunk.strip())
-    if not statements:
+    statements: list[str] = []
+    buffer: list[str] = []
+    index = 0
+    state = "normal"
+    dollar_tag = ""
+    while index < len(text):
+        char = text[index]
+        following = text[index + 1] if index + 1 < len(text) else ""
+        if state == "normal":
+            if char == "-" and following == "-":
+                buffer.extend((char, following))
+                index += 2
+                state = "line_comment"
+                continue
+            if char == "/" and following == "*":
+                buffer.extend((char, following))
+                index += 2
+                state = "block_comment"
+                continue
+            if char == "'":
+                buffer.append(char)
+                index += 1
+                state = "single_quote"
+                continue
+            if char == '"':
+                buffer.append(char)
+                index += 1
+                state = "double_quote"
+                continue
+            if char == "$":
+                match = re.match(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$", text[index:])
+                if match is not None:
+                    dollar_tag = match.group(0)
+                    buffer.append(dollar_tag)
+                    index += len(dollar_tag)
+                    state = "dollar_quote"
+                    continue
+            if char == ";":
+                candidate = "".join(buffer).strip()
+                if _contains_executable_sql(candidate):
+                    statements.append(candidate)
+                buffer.clear()
+                index += 1
+                continue
+            buffer.append(char)
+            index += 1
+            continue
+        if state == "line_comment":
+            buffer.append(char)
+            index += 1
+            if char == "\n":
+                state = "normal"
+            continue
+        if state == "block_comment":
+            buffer.append(char)
+            index += 1
+            if char == "*" and following == "/":
+                buffer.append(following)
+                index += 1
+                state = "normal"
+            continue
+        if state == "single_quote":
+            buffer.append(char)
+            index += 1
+            if char == "'":
+                if following == "'":
+                    buffer.append(following)
+                    index += 1
+                else:
+                    state = "normal"
+            continue
+        if state == "double_quote":
+            buffer.append(char)
+            index += 1
+            if char == '"':
+                if following == '"':
+                    buffer.append(following)
+                    index += 1
+                else:
+                    state = "normal"
+            continue
+        if state == "dollar_quote":
+            if text.startswith(dollar_tag, index):
+                buffer.append(dollar_tag)
+                index += len(dollar_tag)
+                state = "normal"
+                dollar_tag = ""
+            else:
+                buffer.append(char)
+                index += 1
+            continue
+        raise ContractValidationError("migration SQL parser entered an invalid state")
+    if state not in {"normal", "line_comment"}:
+        raise ContractValidationError("migration SQL contains an unterminated quoted value")
+    candidate = "".join(buffer).strip()
+    if _contains_executable_sql(candidate):
+        statements.append(candidate)
+    statements_tuple = tuple(statements)
+    if not statements_tuple:
         raise ContractValidationError("migration file must contain at least one statement")
-    return statements
+    return statements_tuple
+
+
+def _contains_executable_sql(value: str) -> bool:
+    without_block_comments = re.sub(r"/\*.*?\*/", " ", value, flags=re.DOTALL)
+    without_comments = re.sub(r"--[^\n]*(?:\n|$)", " ", without_block_comments)
+    return bool(without_comments.strip())
 
 
 def _validate_public_identifier(value: str, field_name: str) -> None:
