@@ -1625,6 +1625,7 @@ def _execute_prevalidated_sharded_semantic_request(
     serialized_bytes = 2
     found_in_any_complete_shard = False
     thin_topology_candidate_only = False
+    matched_in_any_shard = False
     try:
         for template in templates:
             execution_scope = template.prevalidated_execution_scopes.get(
@@ -1696,12 +1697,11 @@ def _execute_prevalidated_sharded_semantic_request(
                     authorized_inventory_item_ids=template.structural_relevant_item_ids,
                     coverage_ledger=template.baseline_scope.coverage_ledger,
                 )
-                if not execution.matches:
-                    return _semantic_insufficient_payload(request)
                 matches = execution.matches
                 thin_topology_candidate_only = True
             else:
                 return _semantic_insufficient_payload(request)
+            matched_in_any_shard = matched_in_any_shard or bool(matches)
             for match in matches:
                 projection = getattr(match, "projection_values", None)
                 if (
@@ -1730,6 +1730,9 @@ def _execute_prevalidated_sharded_semantic_request(
                 unique_projections.add(projection)
                 serialized_bytes += projected_bytes + (1 if len(unique_projections) > 1 else 0)
     except (ContractValidationError, OSError, TypeError, ValueError):
+        return _semantic_insufficient_payload(request)
+
+    if thin_topology_candidate_only and not matched_in_any_shard:
         return _semantic_insufficient_payload(request)
 
     ordered_projections = tuple(

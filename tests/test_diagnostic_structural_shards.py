@@ -103,6 +103,24 @@ def _message_with_ambiguous_headers(message_id: str, projected_value: str) -> by
 def _message_with_fully_ambiguous_headers(message_id: str) -> bytes:
     """Produce a synthetic compact table with no exact schema index keys."""
 
+    return _message_with_fully_ambiguous_rows(
+        message_id,
+        rows=(("First", "Zone A"),),
+    )
+
+
+def _message_with_fully_ambiguous_rows(
+    message_id: str,
+    *,
+    rows: tuple[tuple[str, str], ...],
+) -> bytes:
+    """Produce an unindexed synthetic table with caller-selected rows."""
+
+    rendered_rows = "".join(
+        f"<tr><td>{item}</td><td>{item}</td>"
+        f"<td>{region}</td><td>{region}</td></tr>"
+        for item, region in rows
+    )
     return (
         "From: sender@example.test\n"
         "To: recipient@example.test\n"
@@ -115,7 +133,7 @@ def _message_with_fully_ambiguous_headers(message_id: str) -> bytes:
         "<html><body><table>"
         "<tr><th>Item Code</th><th>Item Code</th>"
         "<th>Source Region</th><th>Source Region</th></tr>"
-        "<tr><td>First</td><td>Second</td><td>Zone A</td><td>Zone A</td></tr>"
+        f"{rendered_rows}"
         "</table></body></html>\n"
     ).encode()
 
@@ -614,6 +632,60 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
             semantic_profile=profile,
         )
         return manifest, profile, verifier, bridge_dir, checkpoint_dir
+
+    def _thin_topology_templates(
+        self,
+        *,
+        bridge_dir: Path,
+        profile: DiagnosticSemanticProfile,
+        verifier: CoverageScopeAuthorityVerifier,
+    ) -> tuple[object, ...]:
+        store = FileDiagnosticStructuralShardStore(bridge_dir, create=False)
+        aggregate = store.load_complete_manifest()
+        baseline_templates = diagnostic_mcp.prepare_prevalidated_semantic_shard_templates(
+            aggregate=aggregate,
+            bundles=tuple(
+                store.iter_bundles(
+                    aggregate,
+                    scope_authority_verifier=verifier,
+                )
+            ),
+            profile=profile,
+            scope_authority_verifier=verifier,
+        )
+        templates = []
+        for baseline_template in baseline_templates:
+            observation = baseline_template.baseline_scope.structural_observations[0]
+            row = observation.rows[0]
+            malformed_observation = replace(
+                observation,
+                rows=(
+                    replace(
+                        row,
+                        cells=(
+                            replace(
+                                row.cells[0],
+                                row_ordinal=row.row_ordinal + 1,
+                            ),
+                            *row.cells[1:],
+                        ),
+                    ),
+                    *observation.rows[1:],
+                ),
+            )
+            templates.append(
+                diagnostic_mcp._prepare_prevalidated_semantic_shard_template(
+                    aggregate=aggregate,
+                    profile=profile,
+                    scope_authority_verifier=verifier,
+                    shard_record=baseline_template.shard_record,
+                    baseline_scope=replace(
+                        baseline_template.baseline_scope,
+                        structural_observations=(malformed_observation,),
+                    ),
+                )
+            )
+        return tuple(templates)
 
     def _mutate_first_bundle_and_republish_aggregate(
         self,
@@ -2807,6 +2879,91 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
             derive_scope.assert_not_called()
             topology.assert_not_called()
             canonical_claim.assert_not_called()
+
+    def test_thin_topology_aggregate_skips_no_match_shard_and_collects_later_matches(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, profile, verifier, bridge_dir, _ = self._materialize(
+                root,
+                messages=(
+                    _message_with_fully_ambiguous_rows(
+                        "no-match@example.test",
+                        rows=(("Ignored", "Zone B"),),
+                    ),
+                    _message_with_fully_ambiguous_rows(
+                        "positive@example.test",
+                        rows=tuple(
+                            (f"Item {ordinal:02d}", "Zone A")
+                            for ordinal in range(1, 16)
+                        ),
+                    ),
+                ),
+                shard_batch_size=1,
+            )
+            templates = self._thin_topology_templates(
+                bridge_dir=bridge_dir,
+                profile=profile,
+                verifier=verifier,
+            )
+
+            with patch(
+                "formowl_mail.diagnostic_mcp.execute_authorized_structured_set",
+                wraps=diagnostic_mcp.execute_authorized_structured_set,
+            ) as execution:
+                result = _runtime(
+                    bridge_dir,
+                    profile=profile,
+                    verifier=verifier,
+                    prevalidated_semantic_shard_templates=templates,
+                ).execute_semantic_request(_semantic_request())
+
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["claim_state"], "CANDIDATE_MATCHES")
+            self.assertEqual(result["retrieval_layer"], "candidate_only_kg_evidence")
+            self.assertFalse(result["canonical_kg"])
+            self.assertEqual(len(result["complete_projection"]["values"]), 15)
+            self.assertEqual(execution.call_count, 2)
+
+    def test_thin_topology_aggregate_all_no_match_is_insufficient(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, profile, verifier, bridge_dir, _ = self._materialize(
+                root,
+                messages=(
+                    _message_with_fully_ambiguous_rows(
+                        "no-match-one@example.test",
+                        rows=(("Ignored One", "Zone B"),),
+                    ),
+                    _message_with_fully_ambiguous_rows(
+                        "no-match-two@example.test",
+                        rows=(("Ignored Two", "Zone C"),),
+                    ),
+                ),
+                shard_batch_size=1,
+            )
+            templates = self._thin_topology_templates(
+                bridge_dir=bridge_dir,
+                profile=profile,
+                verifier=verifier,
+            )
+
+            with patch(
+                "formowl_mail.diagnostic_mcp.execute_authorized_structured_set",
+                wraps=diagnostic_mcp.execute_authorized_structured_set,
+            ) as execution:
+                result = _runtime(
+                    bridge_dir,
+                    profile=profile,
+                    verifier=verifier,
+                    prevalidated_semantic_shard_templates=templates,
+                ).execute_semantic_request(_semantic_request())
+
+            self.assertEqual(result["status"], "insufficient")
+            self.assertEqual(result["claim_state"], "UNRESOLVED")
+            self.assertFalse(result["canonical_kg"])
+            self.assertEqual(execution.call_count, 2)
 
     def test_authority_failure_precedes_alias_grounding_and_row_execution(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
