@@ -683,19 +683,41 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
         for baseline_template in baseline_templates:
             observation = baseline_template.baseline_scope.structural_observations[0]
             malformed_observation = self._with_coordinate_overlap(observation)
+            malformed_scope = self._bundle_derived_baseline_scope(
+                baseline_template=baseline_template,
+                profile=profile,
+                structural_observations=(malformed_observation,),
+            )
             templates.append(
                 diagnostic_mcp._prepare_prevalidated_semantic_shard_template(
                     aggregate=aggregate,
                     profile=profile,
                     scope_authority_verifier=verifier,
                     shard_record=baseline_template.shard_record,
-                    baseline_scope=replace(
-                        baseline_template.baseline_scope,
-                        structural_observations=(malformed_observation,),
-                    ),
+                    baseline_scope=malformed_scope,
                 )
             )
         return tuple(templates)
+
+    def _bundle_derived_baseline_scope(
+        self,
+        *,
+        baseline_template: object,
+        profile: DiagnosticSemanticProfile,
+        structural_observations: tuple[object, ...],
+    ) -> object:
+        bundle = replace(
+            baseline_template.bundle,
+            structural_observations=list(structural_observations),
+        )
+        scope = diagnostic_mcp._baseline_semantic_scope(
+            diagnostic_mcp._resolved_semantic_scopes(
+                bundles=(bundle,),
+                profile=profile,
+            )
+        )
+        self.assertIsNotNone(scope)
+        return scope
 
     def _mutate_first_bundle_and_republish_aggregate(
         self,
@@ -2817,8 +2839,9 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
             malformed_observation = self._with_coordinate_overlap(
                 baseline_observation
             )
-            malformed_scope = replace(
-                baseline_template.baseline_scope,
+            malformed_scope = self._bundle_derived_baseline_scope(
+                baseline_template=baseline_template,
+                profile=profile,
                 structural_observations=(malformed_observation,),
             )
 
@@ -3048,8 +3071,9 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
             )
             for case, malformed_observation in cases:
                 with self.subTest(case=case):
-                    malformed_scope = replace(
-                        baseline_template.baseline_scope,
+                    malformed_scope = self._bundle_derived_baseline_scope(
+                        baseline_template=baseline_template,
+                        profile=profile,
                         structural_observations=(malformed_observation,),
                     )
                     template = (

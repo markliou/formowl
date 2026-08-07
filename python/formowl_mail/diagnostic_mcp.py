@@ -1087,7 +1087,11 @@ def _prepare_prevalidated_semantic_shard_template(
                 structural_observations=baseline_scope.structural_observations,
             )
         )
-    except ContractValidationError:
+    except ContractValidationError as topology_error:
+        if not _baseline_structural_values_match_bundle(baseline_scope):
+            raise ContractValidationError(
+                "diagnostic prevalidated shard structural lineage is invalid"
+            ) from topology_error
         candidate_topology_attestation = (
             TaskAnsweringEngine
             ._prepare_prevalidated_diagnostic_candidate_topology_attestation(
@@ -1114,6 +1118,54 @@ def _prepare_prevalidated_semantic_shard_template(
         raise ContractValidationError("diagnostic prevalidated shard templates are invalid")
     _PREVALIDATED_TEMPLATE_ISSUANCES[id(template)] = template
     return template
+
+
+def _baseline_structural_values_match_bundle(
+    baseline_scope: _ResolvedSemanticScope,
+) -> bool:
+    """Bind a candidate tuple to unique, ordered, value-equal bundle records."""
+
+    if not isinstance(baseline_scope, _ResolvedSemanticScope):
+        return False
+    bundle_observations = baseline_scope.bundle.structural_observations
+    observations = baseline_scope.structural_observations
+    if (
+        isinstance(bundle_observations, (str, bytes))
+        or not isinstance(bundle_observations, Sequence)
+        or not isinstance(observations, tuple)
+        or not observations
+    ):
+        return False
+    bundle_by_id: dict[str, StructuralObservation] = {}
+    bundle_position_by_id: dict[str, int] = {}
+    for position, observation in enumerate(bundle_observations):
+        if (
+            not isinstance(observation, StructuralObservation)
+            or not isinstance(observation.source_observation_id, str)
+            or not observation.source_observation_id
+            or observation.source_observation_id in bundle_by_id
+        ):
+            return False
+        bundle_by_id[observation.source_observation_id] = observation
+        bundle_position_by_id[observation.source_observation_id] = position
+    seen_ids: set[str] = set()
+    source_positions: list[int] = []
+    for observation in observations:
+        if (
+            not isinstance(observation, StructuralObservation)
+            or not isinstance(observation.source_observation_id, str)
+            or not observation.source_observation_id
+            or observation.source_observation_id in seen_ids
+        ):
+            return False
+        source_observation = bundle_by_id.get(observation.source_observation_id)
+        if source_observation is None or observation != source_observation:
+            return False
+        seen_ids.add(observation.source_observation_id)
+        source_positions.append(
+            bundle_position_by_id[observation.source_observation_id]
+        )
+    return source_positions == sorted(source_positions)
 
 
 def _template_has_runtime_topology_proof(
