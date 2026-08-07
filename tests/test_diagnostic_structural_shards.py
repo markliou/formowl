@@ -524,6 +524,32 @@ def _write_private_aggregate(
 
 
 class DiagnosticStructuralShardTests(unittest.TestCase):
+    def _with_coordinate_overlap(self, observation: object) -> object:
+        row = observation.rows[0]
+        self.assertGreaterEqual(len(row.cells), 2)
+        overlapping_cell = replace(
+            row.cells[-2],
+            column_span=(
+                row.cells[-1].column_ordinal
+                - row.cells[-2].column_ordinal
+                + 1
+            ),
+        )
+        return replace(
+            observation,
+            rows=(
+                replace(
+                    row,
+                    cells=(
+                        *row.cells[:-2],
+                        overlapping_cell,
+                        row.cells[-1],
+                    ),
+                ),
+                *observation.rows[1:],
+            ),
+        )
+
     def _prepare(
         self,
         root: Path,
@@ -656,23 +682,7 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
         templates = []
         for baseline_template in baseline_templates:
             observation = baseline_template.baseline_scope.structural_observations[0]
-            row = observation.rows[0]
-            malformed_observation = replace(
-                observation,
-                rows=(
-                    replace(
-                        row,
-                        cells=(
-                            replace(
-                                row.cells[0],
-                                row_ordinal=row.row_ordinal + 1,
-                            ),
-                            *row.cells[1:],
-                        ),
-                    ),
-                    *observation.rows[1:],
-                ),
-            )
+            malformed_observation = self._with_coordinate_overlap(observation)
             templates.append(
                 diagnostic_mcp._prepare_prevalidated_semantic_shard_template(
                     aggregate=aggregate,
@@ -2804,44 +2814,25 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
                 scope_authority_verifier=verifier,
             )[0]
             baseline_observation = baseline_template.baseline_scope.structural_observations[0]
-            baseline_row = baseline_observation.rows[0]
-            malformed_cell = replace(
-                baseline_row.cells[0],
-                row_ordinal=baseline_row.row_ordinal + 1,
-            )
-            self.assertIsInstance(malformed_cell, StructuralCell)
-            malformed_observation = replace(
-                baseline_observation,
-                rows=(
-                    replace(
-                        baseline_row,
-                        cells=(malformed_cell, *baseline_row.cells[1:]),
-                    ),
-                    *baseline_observation.rows[1:],
-                ),
+            malformed_observation = self._with_coordinate_overlap(
+                baseline_observation
             )
             malformed_scope = replace(
                 baseline_template.baseline_scope,
                 structural_observations=(malformed_observation,),
             )
 
-            with patch(
-                "formowl_mail.diagnostic_mcp."
-                "TaskAnsweringEngine._prepare_prevalidated_diagnostic_topology_attestation",
-                side_effect=AssertionError(
-                    "thin compatibility must not issue a canonical topology attestation"
-                ),
-            ):
-                template = diagnostic_mcp._prepare_prevalidated_semantic_shard_template(
-                    aggregate=baseline_template.aggregate,
-                    profile=profile,
-                    scope_authority_verifier=verifier,
-                    shard_record=baseline_template.shard_record,
-                    baseline_scope=malformed_scope,
-                )
+            template = diagnostic_mcp._prepare_prevalidated_semantic_shard_template(
+                aggregate=baseline_template.aggregate,
+                profile=profile,
+                scope_authority_verifier=verifier,
+                shard_record=baseline_template.shard_record,
+                baseline_scope=malformed_scope,
+            )
 
             self.assertTrue(template.thin_topology_compatibility)
             self.assertIsNone(template.topology_attestation)
+            self.assertIsNotNone(template.candidate_topology_attestation)
             self.assertEqual(template.prevalidated_execution_scopes, {})
             with (
                 patch(
@@ -2879,6 +2870,185 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
             derive_scope.assert_not_called()
             topology.assert_not_called()
             canonical_claim.assert_not_called()
+
+    def test_mixed_indexed_unindexed_overlap_is_candidate_only_positive(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, profile, verifier, bridge_dir, _ = self._materialize(
+                root,
+                messages=(
+                    _message_with_ambiguous_headers(
+                        "mixed-overlap@example.test",
+                        "Alpha",
+                    ),
+                ),
+                shard_batch_size=1,
+            )
+            template = self._thin_topology_templates(
+                bridge_dir=bridge_dir,
+                profile=profile,
+                verifier=verifier,
+            )[0]
+
+            self.assertTrue(template.schema_candidate_observation_ordinals)
+            self.assertEqual(
+                template.schema_unindexed_observation_ordinals,
+                (0,),
+            )
+            self.assertTrue(template.thin_topology_compatibility)
+            self.assertIsNone(template.topology_attestation)
+            self.assertIsNotNone(template.candidate_topology_attestation)
+            self.assertEqual(template.prevalidated_execution_scopes, {})
+            with (
+                patch(
+                    "formowl_mail.diagnostic_mcp.execute_authorized_structured_set",
+                    wraps=diagnostic_mcp.execute_authorized_structured_set,
+                ) as execution,
+                patch(
+                    "formowl_mail.diagnostic_mcp."
+                    "TaskAnsweringEngine._answer_prevalidated_diagnostic_structured_claim",
+                    side_effect=AssertionError(
+                        "candidate compatibility must not construct a canonical claim"
+                    ),
+                ) as canonical_claim,
+            ):
+                result = _runtime(
+                    bridge_dir,
+                    profile=profile,
+                    verifier=verifier,
+                    prevalidated_semantic_shard_templates=(template,),
+                ).execute_semantic_request(_semantic_request())
+
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["claim_state"], "CANDIDATE_MATCHES")
+            self.assertEqual(result["retrieval_layer"], "candidate_only_kg_evidence")
+            self.assertFalse(result["canonical_kg"])
+            self.assertEqual(execution.call_count, 1)
+            canonical_claim.assert_not_called()
+
+    def test_candidate_overlap_attestation_rejects_altered_tuple_before_executor(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, profile, verifier, bridge_dir, _ = self._materialize(
+                root,
+                messages=(
+                    _message_with_ambiguous_headers(
+                        "altered-overlap@example.test",
+                        "Alpha",
+                    ),
+                ),
+                shard_batch_size=1,
+            )
+            template = self._thin_topology_templates(
+                bridge_dir=bridge_dir,
+                profile=profile,
+                verifier=verifier,
+            )[0]
+            original_observations = (
+                template.baseline_scope.structural_observations
+            )
+            cloned_observations = tuple(list(original_observations))
+            self.assertIsNot(cloned_observations, original_observations)
+            object.__setattr__(
+                template,
+                "baseline_scope",
+                replace(
+                    template.baseline_scope,
+                    structural_observations=cloned_observations,
+                ),
+            )
+
+            with patch(
+                "formowl_mail.diagnostic_mcp.execute_authorized_structured_set"
+            ) as execution:
+                result = _runtime(
+                    bridge_dir,
+                    profile=profile,
+                    verifier=verifier,
+                    prevalidated_semantic_shard_templates=(template,),
+                ).execute_semantic_request(_semantic_request())
+
+            self.assertEqual(result["status"], "insufficient")
+            self.assertEqual(result["claim_state"], "UNRESOLVED")
+            execution.assert_not_called()
+
+    def test_candidate_overlap_compatibility_rejects_other_topology_faults(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, profile, verifier, bridge_dir, _ = self._materialize(
+                root,
+                messages=(
+                    _message_with_fully_ambiguous_headers(
+                        "non-overlap-fault@example.test"
+                    ),
+                ),
+                shard_batch_size=1,
+            )
+            store = FileDiagnosticStructuralShardStore(bridge_dir, create=False)
+            aggregate = store.load_complete_manifest()
+            baseline_template = diagnostic_mcp.prepare_prevalidated_semantic_shard_templates(
+                aggregate=aggregate,
+                bundles=tuple(
+                    store.iter_bundles(
+                        aggregate,
+                        scope_authority_verifier=verifier,
+                    )
+                ),
+                profile=profile,
+                scope_authority_verifier=verifier,
+            )[0]
+            observation = baseline_template.baseline_scope.structural_observations[0]
+            row = observation.rows[0]
+            cases = (
+                (
+                    "row_anchor_mismatch",
+                    0,
+                    replace(
+                        row.cells[0],
+                        row_ordinal=row.row_ordinal + 1,
+                    ),
+                ),
+                (
+                    "row_span_outside",
+                    0,
+                    replace(row.cells[0], row_span=len(observation.rows) + 1),
+                ),
+                (
+                    "column_span_outside",
+                    len(row.cells) - 1,
+                    replace(row.cells[-1], column_span=len(observation.columns) + 1),
+                ),
+            )
+            for case, cell_index, replacement_cell in cases:
+                with self.subTest(case=case):
+                    cells = list(row.cells)
+                    cells[cell_index] = replacement_cell
+                    malformed_scope = replace(
+                        baseline_template.baseline_scope,
+                        structural_observations=(
+                            replace(
+                                observation,
+                                rows=(
+                                    replace(row, cells=tuple(cells)),
+                                    *observation.rows[1:],
+                                ),
+                            ),
+                        ),
+                    )
+                    with self.assertRaises(ContractValidationError):
+                        diagnostic_mcp._prepare_prevalidated_semantic_shard_template(
+                            aggregate=aggregate,
+                            profile=profile,
+                            scope_authority_verifier=verifier,
+                            shard_record=baseline_template.shard_record,
+                            baseline_scope=malformed_scope,
+                        )
 
     def test_thin_topology_aggregate_skips_no_match_shard_and_collects_later_matches(
         self,

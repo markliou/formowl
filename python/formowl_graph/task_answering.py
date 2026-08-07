@@ -433,12 +433,25 @@ class _ResolvedStructuralMatch:
 
 
 _PREVALIDATED_DIAGNOSTIC_TOPOLOGY_ATTESTATION_TOKEN = object()
+_PREVALIDATED_DIAGNOSTIC_CANDIDATE_TOPOLOGY_ATTESTATION_TOKEN = object()
 _PREVALIDATED_DIAGNOSTIC_CAPABILITY_TOKEN = object()
 
 
 @dataclass(frozen=True)
 class _PrevalidatedDiagnosticTopologyAttestation:
     """Private process-local proof for one exact structural observation tuple."""
+
+    identity_binding: object = field(repr=False, compare=False)
+    structural_observations: tuple[StructuralObservation, ...] = field(
+        repr=False,
+        compare=False,
+    )
+    _token: object = field(repr=False, compare=False, default=None)
+
+
+@dataclass(frozen=True)
+class _PrevalidatedDiagnosticCandidateTopologyAttestation:
+    """Private proof for one exact overlap-only diagnostic structural tuple."""
 
     identity_binding: object = field(repr=False, compare=False)
     structural_observations: tuple[StructuralObservation, ...] = field(
@@ -495,6 +508,10 @@ _PREVALIDATED_DIAGNOSTIC_CAPABILITY_ISSUANCES: dict[
 _PREVALIDATED_DIAGNOSTIC_TOPOLOGY_ATTESTATION_ISSUANCES: dict[
     int,
     _PrevalidatedDiagnosticTopologyAttestation,
+] = {}
+_PREVALIDATED_DIAGNOSTIC_CANDIDATE_TOPOLOGY_ATTESTATION_ISSUANCES: dict[
+    int,
+    _PrevalidatedDiagnosticCandidateTopologyAttestation,
 ] = {}
 
 
@@ -812,23 +829,24 @@ class TaskAnsweringEngine:
         return attestation
 
     @classmethod
-    def _diagnostic_thin_topology_compatibility_is_admissible(
+    def _prepare_prevalidated_diagnostic_candidate_topology_attestation(
         cls,
         *,
+        identity_binding: object,
         structural_observations: tuple[StructuralObservation, ...],
-    ) -> bool:
-        """Recognize only the compact-export topology mismatch class.
+    ) -> object:
+        """Issue an opaque proof for the compact-export overlap-only class.
 
-        This does not issue a canonical topology attestation and is not a
-        bypass for the canonical claim path.  It is a bounded classifier for
-        an internal diagnostic compatibility route: every observation must be
-        a typed structural observation and every topology rejection must be
-        the known ``invalid_evidence`` shape.  Binding, type, and unexpected
-        failures remain hard startup errors.
+        This is not a canonical topology proof. Every observation must retain
+        valid row anchors and in-range row/column spans; the only admitted
+        topology defect is at least one occupied-coordinate overlap. The
+        returned proof is process-local and bound to the exact template and
+        exact startup tuple.
         """
 
         if (
-            not isinstance(structural_observations, tuple)
+            identity_binding is None
+            or not isinstance(structural_observations, tuple)
             or not structural_observations
             or any(
                 not isinstance(observation, StructuralObservation)
@@ -836,17 +854,32 @@ class TaskAnsweringEngine:
             )
         ):
             raise ContractValidationError("diagnostic thin topology compatibility is invalid")
-        mismatch_found = False
+        overlap_found = False
         for observation in structural_observations:
             try:
-                _validate_structural_topology(observation)
+                overlap_found = (
+                    _validate_diagnostic_overlap_only_topology(observation)
+                    or overlap_found
+                )
             except _CanonicalClaimFailure as exc:
-                if exc.code != "invalid_evidence":
-                    raise ContractValidationError(
-                        "diagnostic thin topology compatibility is invalid"
-                    ) from exc
-                mismatch_found = True
-        return mismatch_found
+                raise ContractValidationError(
+                    "diagnostic thin topology compatibility is invalid"
+                ) from exc
+        if not overlap_found:
+            raise ContractValidationError(
+                "diagnostic thin topology compatibility is invalid"
+            )
+        attestation = _PrevalidatedDiagnosticCandidateTopologyAttestation(
+            identity_binding=identity_binding,
+            structural_observations=structural_observations,
+            _token=(
+                _PREVALIDATED_DIAGNOSTIC_CANDIDATE_TOPOLOGY_ATTESTATION_TOKEN
+            ),
+        )
+        _PREVALIDATED_DIAGNOSTIC_CANDIDATE_TOPOLOGY_ATTESTATION_ISSUANCES[
+            id(attestation)
+        ] = attestation
+        return attestation
 
     @classmethod
     def _prevalidated_diagnostic_topology_attestation_is_valid(
@@ -862,6 +895,32 @@ class TaskAnsweringEngine:
             isinstance(attestation, _PrevalidatedDiagnosticTopologyAttestation)
             and attestation._token is _PREVALIDATED_DIAGNOSTIC_TOPOLOGY_ATTESTATION_TOKEN
             and _PREVALIDATED_DIAGNOSTIC_TOPOLOGY_ATTESTATION_ISSUANCES.get(id(attestation))
+            is attestation
+            and attestation.identity_binding is identity_binding
+            and isinstance(structural_observations, tuple)
+            and attestation.structural_observations is structural_observations
+        )
+
+    @classmethod
+    def _prevalidated_diagnostic_candidate_topology_attestation_is_valid(
+        cls,
+        attestation: object,
+        *,
+        identity_binding: object,
+        structural_observations: object,
+    ) -> bool:
+        """Check one candidate-only issuance and exact template/tuple identity."""
+
+        return (
+            isinstance(
+                attestation,
+                _PrevalidatedDiagnosticCandidateTopologyAttestation,
+            )
+            and attestation._token
+            is _PREVALIDATED_DIAGNOSTIC_CANDIDATE_TOPOLOGY_ATTESTATION_TOKEN
+            and _PREVALIDATED_DIAGNOSTIC_CANDIDATE_TOPOLOGY_ATTESTATION_ISSUANCES.get(
+                id(attestation)
+            )
             is attestation
             and attestation.identity_binding is identity_binding
             and isinstance(structural_observations, tuple)
@@ -1758,6 +1817,46 @@ def _validate_structural_topology(observation: StructuralObservation) -> None:
             ):
                 raise _CanonicalClaimFailure("invalid_evidence")
             occupied_coordinates.update(covered_coordinates)
+
+
+def _validate_diagnostic_overlap_only_topology(
+    observation: StructuralObservation,
+) -> bool:
+    """Validate every topology invariant except the known compact overlap."""
+
+    column_ordinals = {column.column_ordinal for column in observation.columns}
+    row_ordinals = {row.row_ordinal for row in observation.rows}
+    occupied_coordinates: set[tuple[int, int]] = set()
+    overlap_found = False
+    for row in observation.rows:
+        for cell in row.cells:
+            covered_rows = set(
+                range(
+                    cell.row_ordinal,
+                    cell.row_ordinal + cell.row_span,
+                )
+            )
+            covered_columns = set(
+                range(
+                    cell.column_ordinal,
+                    cell.column_ordinal + cell.column_span,
+                )
+            )
+            covered_coordinates = {
+                (row_ordinal, column_ordinal)
+                for row_ordinal in covered_rows
+                for column_ordinal in covered_columns
+            }
+            if (
+                cell.row_ordinal != row.row_ordinal
+                or not covered_rows.issubset(row_ordinals)
+                or not covered_columns.issubset(column_ordinals)
+            ):
+                raise _CanonicalClaimFailure("invalid_evidence")
+            if occupied_coordinates & covered_coordinates:
+                overlap_found = True
+            occupied_coordinates.update(covered_coordinates)
+    return overlap_found
 
 
 def _derive_canonical_structural_values(

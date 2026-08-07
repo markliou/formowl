@@ -403,6 +403,7 @@ class PrevalidatedSemanticShardTemplate:
     schema_candidate_observation_ordinals: Mapping[tuple[str, str], tuple[int, ...]]
     schema_unindexed_observation_ordinals: tuple[int, ...]
     topology_attestation: object
+    candidate_topology_attestation: object
     thin_topology_compatibility: bool
     prevalidated_execution_scopes: Mapping[
         tuple[str, str],
@@ -1059,11 +1060,6 @@ def _prepare_prevalidated_semantic_shard_template(
         schema_candidate_observation_ordinals,
         schema_unindexed_observation_ordinals,
     ) = _prevalidated_schema_candidate_index(baseline_scope.structural_observations)
-    thin_topology_compatibility = _thin_topology_compatibility_is_admissible(
-        structural_observations=baseline_scope.structural_observations,
-        schema_candidate_observation_ordinals=schema_candidate_observation_ordinals,
-        schema_unindexed_observation_ordinals=schema_unindexed_observation_ordinals,
-    )
     template = PrevalidatedSemanticShardTemplate(
         aggregate=aggregate,
         profile=profile,
@@ -1080,20 +1076,35 @@ def _prepare_prevalidated_semantic_shard_template(
         schema_candidate_observation_ordinals=schema_candidate_observation_ordinals,
         schema_unindexed_observation_ordinals=schema_unindexed_observation_ordinals,
         topology_attestation=None,
-        thin_topology_compatibility=thin_topology_compatibility,
+        candidate_topology_attestation=None,
+        thin_topology_compatibility=False,
         prevalidated_execution_scopes=MappingProxyType({}),
     )
-    if not thin_topology_compatibility:
-        # The topology proof binds this exact template object before any
-        # supported query-pair capability is issued.
-        object.__setattr__(
-            template,
-            "topology_attestation",
+    try:
+        topology_attestation = (
             TaskAnsweringEngine._prepare_prevalidated_diagnostic_topology_attestation(
                 identity_binding=template,
                 structural_observations=baseline_scope.structural_observations,
-            ),
+            )
         )
+    except ContractValidationError:
+        candidate_topology_attestation = (
+            TaskAnsweringEngine
+            ._prepare_prevalidated_diagnostic_candidate_topology_attestation(
+                identity_binding=template,
+                structural_observations=baseline_scope.structural_observations,
+            )
+        )
+        object.__setattr__(
+            template,
+            "candidate_topology_attestation",
+            candidate_topology_attestation,
+        )
+        object.__setattr__(template, "thin_topology_compatibility", True)
+    else:
+        # The canonical topology proof binds this exact template object before
+        # any supported query-pair capability is issued.
+        object.__setattr__(template, "topology_attestation", topology_attestation)
     object.__setattr__(
         template,
         "prevalidated_execution_scopes",
@@ -1103,37 +1114,6 @@ def _prepare_prevalidated_semantic_shard_template(
         raise ContractValidationError("diagnostic prevalidated shard templates are invalid")
     _PREVALIDATED_TEMPLATE_ISSUANCES[id(template)] = template
     return template
-
-
-def _thin_topology_compatibility_is_admissible(
-    *,
-    structural_observations: tuple[StructuralObservation, ...],
-    schema_candidate_observation_ordinals: Mapping[tuple[str, str], tuple[int, ...]],
-    schema_unindexed_observation_ordinals: tuple[int, ...],
-) -> bool:
-    """Allow one candidate-only route for a compact export contract mismatch.
-
-    The compatibility boundary is deliberately narrower than generic
-    malformed-evidence handling: every observation must be schema-unindexed,
-    no exact schema pair may be claimed, and the only observed topology
-    failure class must be the typed diagnostic thin-export mismatch recognized
-    by ``TaskAnsweringEngine``.  Canonical capabilities are never issued for
-    this mode.
-    """
-
-    if (
-        not isinstance(structural_observations, tuple)
-        or not structural_observations
-        or not isinstance(schema_candidate_observation_ordinals, Mapping)
-        or not isinstance(schema_unindexed_observation_ordinals, tuple)
-        or schema_candidate_observation_ordinals
-        or schema_unindexed_observation_ordinals
-        != tuple(range(len(structural_observations)))
-    ):
-        return False
-    return TaskAnsweringEngine._diagnostic_thin_topology_compatibility_is_admissible(
-        structural_observations=structural_observations
-    )
 
 
 def _template_has_runtime_topology_proof(
@@ -1146,14 +1126,22 @@ def _template_has_runtime_topology_proof(
     if template.thin_topology_compatibility:
         return (
             template.topology_attestation is None
-            and not template.schema_candidate_observation_ordinals
-            and template.schema_unindexed_observation_ordinals
-            == tuple(range(len(template.baseline_scope.structural_observations)))
+            and TaskAnsweringEngine
+            ._prevalidated_diagnostic_candidate_topology_attestation_is_valid(
+                template.candidate_topology_attestation,
+                identity_binding=template,
+                structural_observations=(
+                    template.baseline_scope.structural_observations
+                ),
+            )
         )
-    return TaskAnsweringEngine._prevalidated_diagnostic_topology_attestation_is_valid(
-        template.topology_attestation,
-        identity_binding=template,
-        structural_observations=template.baseline_scope.structural_observations,
+    return (
+        template.candidate_topology_attestation is None
+        and TaskAnsweringEngine._prevalidated_diagnostic_topology_attestation_is_valid(
+            template.topology_attestation,
+            identity_binding=template,
+            structural_observations=template.baseline_scope.structural_observations,
+        )
     )
 
 
