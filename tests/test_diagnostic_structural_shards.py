@@ -2976,7 +2976,7 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
             self.assertEqual(result["claim_state"], "UNRESOLVED")
             execution.assert_not_called()
 
-    def test_candidate_overlap_compatibility_rejects_other_topology_faults(
+    def test_candidate_topology_compatibility_admits_typed_mismatch_surface(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -3005,7 +3005,8 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
             )[0]
             observation = baseline_template.baseline_scope.structural_observations[0]
             row = observation.rows[0]
-            cases = (
+            cases = []
+            for case, cell_index, replacement_cell in (
                 (
                     "row_anchor_mismatch",
                     0,
@@ -3024,24 +3025,34 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
                     len(row.cells) - 1,
                     replace(row.cells[-1], column_span=len(observation.columns) + 1),
                 ),
-            )
-            for case, cell_index, replacement_cell in cases:
-                with self.subTest(case=case):
-                    cells = list(row.cells)
-                    cells[cell_index] = replacement_cell
-                    malformed_scope = replace(
-                        baseline_template.baseline_scope,
-                        structural_observations=(
-                            replace(
-                                observation,
-                                rows=(
-                                    replace(row, cells=tuple(cells)),
-                                    *observation.rows[1:],
-                                ),
+            ):
+                cells = list(row.cells)
+                cells[cell_index] = replacement_cell
+                cases.append(
+                    (
+                        case,
+                        replace(
+                            observation,
+                            rows=(
+                                replace(row, cells=tuple(cells)),
+                                *observation.rows[1:],
                             ),
                         ),
                     )
-                    with self.assertRaises(ContractValidationError):
+                )
+            cases.append(
+                (
+                    "coordinate_overlap",
+                    self._with_coordinate_overlap(observation),
+                )
+            )
+            for case, malformed_observation in cases:
+                with self.subTest(case=case):
+                    malformed_scope = replace(
+                        baseline_template.baseline_scope,
+                        structural_observations=(malformed_observation,),
+                    )
+                    template = (
                         diagnostic_mcp._prepare_prevalidated_semantic_shard_template(
                             aggregate=aggregate,
                             profile=profile,
@@ -3049,6 +3060,11 @@ class DiagnosticStructuralShardTests(unittest.TestCase):
                             shard_record=baseline_template.shard_record,
                             baseline_scope=malformed_scope,
                         )
+                    )
+                    self.assertTrue(template.thin_topology_compatibility)
+                    self.assertIsNone(template.topology_attestation)
+                    self.assertIsNotNone(template.candidate_topology_attestation)
+                    self.assertEqual(template.prevalidated_execution_scopes, {})
 
     def test_thin_topology_aggregate_skips_no_match_shard_and_collects_later_matches(
         self,

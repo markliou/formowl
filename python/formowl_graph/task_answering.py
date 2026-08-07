@@ -451,7 +451,7 @@ class _PrevalidatedDiagnosticTopologyAttestation:
 
 @dataclass(frozen=True)
 class _PrevalidatedDiagnosticCandidateTopologyAttestation:
-    """Private proof for one exact overlap-only diagnostic structural tuple."""
+    """Private proof for one exact typed-mismatch diagnostic structural tuple."""
 
     identity_binding: object = field(repr=False, compare=False)
     structural_observations: tuple[StructuralObservation, ...] = field(
@@ -835,11 +835,12 @@ class TaskAnsweringEngine:
         identity_binding: object,
         structural_observations: tuple[StructuralObservation, ...],
     ) -> object:
-        """Issue an opaque proof for the compact-export overlap-only class.
+        """Issue an opaque proof for the compact-export topology surface.
 
-        This is not a canonical topology proof. Every observation must retain
-        valid row anchors and in-range row/column spans; the only admitted
-        topology defect is at least one occupied-coordinate overlap. The
+        This is not a canonical topology proof. It explicitly classifies only
+        the typed geometry conditions enforced by ``_validate_structural_topology``:
+        row-anchor mismatch, row-span outside, column-span outside, and
+        coordinate overlap. At least one such mismatch must exist. The
         returned proof is process-local and bound to the exact template and
         exact startup tuple.
         """
@@ -854,18 +855,12 @@ class TaskAnsweringEngine:
             )
         ):
             raise ContractValidationError("diagnostic thin topology compatibility is invalid")
-        overlap_found = False
+        mismatch_reasons: set[str] = set()
         for observation in structural_observations:
-            try:
-                overlap_found = (
-                    _validate_diagnostic_overlap_only_topology(observation)
-                    or overlap_found
-                )
-            except _CanonicalClaimFailure as exc:
-                raise ContractValidationError(
-                    "diagnostic thin topology compatibility is invalid"
-                ) from exc
-        if not overlap_found:
+            mismatch_reasons.update(
+                _diagnostic_structural_topology_mismatch_reasons(observation)
+            )
+        if not mismatch_reasons:
             raise ContractValidationError(
                 "diagnostic thin topology compatibility is invalid"
             )
@@ -1819,15 +1814,15 @@ def _validate_structural_topology(observation: StructuralObservation) -> None:
             occupied_coordinates.update(covered_coordinates)
 
 
-def _validate_diagnostic_overlap_only_topology(
+def _diagnostic_structural_topology_mismatch_reasons(
     observation: StructuralObservation,
-) -> bool:
-    """Validate every topology invariant except the known compact overlap."""
+) -> frozenset[str]:
+    """Classify only the typed geometry surface used by canonical validation."""
 
     column_ordinals = {column.column_ordinal for column in observation.columns}
     row_ordinals = {row.row_ordinal for row in observation.rows}
     occupied_coordinates: set[tuple[int, int]] = set()
-    overlap_found = False
+    reasons: set[str] = set()
     for row in observation.rows:
         for cell in row.cells:
             covered_rows = set(
@@ -1847,16 +1842,16 @@ def _validate_diagnostic_overlap_only_topology(
                 for row_ordinal in covered_rows
                 for column_ordinal in covered_columns
             }
-            if (
-                cell.row_ordinal != row.row_ordinal
-                or not covered_rows.issubset(row_ordinals)
-                or not covered_columns.issubset(column_ordinals)
-            ):
-                raise _CanonicalClaimFailure("invalid_evidence")
+            if cell.row_ordinal != row.row_ordinal:
+                reasons.add("row_anchor_mismatch")
+            if not covered_rows.issubset(row_ordinals):
+                reasons.add("row_span_outside")
+            if not covered_columns.issubset(column_ordinals):
+                reasons.add("column_span_outside")
             if occupied_coordinates & covered_coordinates:
-                overlap_found = True
+                reasons.add("coordinate_overlap")
             occupied_coordinates.update(covered_coordinates)
-    return overlap_found
+    return frozenset(reasons)
 
 
 def _derive_canonical_structural_values(
