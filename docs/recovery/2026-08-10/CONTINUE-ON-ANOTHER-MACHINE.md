@@ -84,18 +84,18 @@ evidence.
 - All UAT containers were intentionally stopped before the outage.
 - No parser, materialization, image build, deployment, or subagent process is
   expected to be running after this checkpoint.
-- Terra worker `019fe9b2-ca09-7591-aab2-ec55f411e4ea` stopped at a safe
-  checkpoint. It verified all 280 source-packet manifest entries with zero
-  checksum failures, but did not inspect source evidence, make semantic
-  selections, or create choices, adjudications, bindings, retained-lineage
-  output, or a safe output report.
-- Its only failed probe was a packet-local import check because the copied
-  `source-python` tree did not include
-  `formowl_graph.research_acceptance`. No repair was attempted. Treat this as a
-  packet/tooling preflight item, not as semantic progress.
-- The next implementation worker must be a fresh `fork_context=false` Terra
-  xhigh agent using a sanitized source-only packet. It must not read oracle or
-  runtime-answer artifacts.
+- The current source-only Terra worker stopped cleanly and reported no
+  oracle/query/expected-answer/browser/runtime contamination.
+- It changed only five packet-local builder, materializer, and test files. It
+  created no choices, adjudications, bindings, retained-lineage report, safe
+  worker report, or checksum manifest; `outputs/` remains empty.
+- Builder tests passed 6/6. The combined suite reached 36 passed and one failure
+  caused by the test using an external temporary-output location. The worker
+  patched that test to use packet `outputs/`, but the suite was not rerun after
+  the power-cut stop request.
+- Resume from the private Terra checkpoint archive, verify its hash, and rerun
+  focused tests before generating any output. Do not infer progress from the
+  expected answer set.
 - The worker must resolve the 22 part-number header ties, including the six
   non-equivalent or incomplete cases, review the four
   `admit_after_new_structural_review` sources, and represent any retained
@@ -103,6 +103,18 @@ evidence.
   answer union.
 - The coordinator must independently run the offline oracle acceptance after
   the worker finishes.
+
+The deployment-readiness audit returned `RELEASE_DECISION: BLOCK`:
+
+1. the semantic preflight's `candidate_binding_sha256` is not compared with the
+   binding mounted by the deployment script; and
+2. the browser verifier command, safe report path, and approved browser base URL
+   remain unresolved materialization inputs.
+
+The auditor otherwise passed semantic-preflight tests 4/4, browser-contract
+tests 10/10, and the static deploy self-test. It also noted that
+`root_compose_sha256` is declared but not enforced by the direct-Docker script.
+Close both blockers before image build or deployment.
 
 The deployment gate remains:
 
@@ -232,6 +244,26 @@ sha256sum -c INPUT_SHA256SUMS.private
 
 Do not commit either private directory or either private archive.
 
+The source-only Terra worker's latest packet state is preserved in a newer
+private checkpoint archive:
+
+```text
+.formowl-private-recovery-r8-20260810/
+  track1-r8-source-only-terra-checkpoint.private.tar.gz
+  TRACK1-TERRA-CHECKPOINT-SHA256.private
+```
+
+Expected SHA-256:
+
+```text
+5b391308b291b5898139b3e8b4a6653ca73cfde95af2a606a9f85a49283ec884
+```
+
+This archive includes the five packet-local edits and the still-empty
+`outputs/` directory. It supersedes the earlier source-only archive for code
+checkpoint purposes but does not contain accepted semantic outputs. Transfer it
+only through an approved private channel; it is intentionally not in Git.
+
 ## Track 2 State
 
 Track 2 remains separate under issue #33. Its two bounded research documents
@@ -244,6 +276,9 @@ docs/kg-ontology-v2-runtime-evaluation-plan.md
 
 Track 2 must not modify the UAT web, sidecar, private projection bindings,
 deployment, or raw PST, and it must not block Track 1 diagnostic acceptance.
+The design stage is complete; runtime tokenizer migration, re-indexing existing
+observations, same-pipeline POC ablations, and issue #33 exit gates have not yet
+run.
 
 ## Worktree Safety
 
@@ -260,8 +295,11 @@ thread: 019f8d32-9002-7f10-840c-0c4c5e43fa32
 goal status: active
 goal authority: docs/agent-goals/dual-track-uat-kg-coordinator.md
 operational checkpoint: this file
+machine-readable checkpoint:
+  docs/recovery/2026-08-10/current-session-checkpoint.safe.json
 private evidence/runtime checkpoint: the two separately transferred private
-  recovery archives above
+  recovery archives above, preferring the Terra checkpoint for the source-only
+  packet
 ```
 
 After pulling, do not assume any container or subagent is alive. Reconstruct

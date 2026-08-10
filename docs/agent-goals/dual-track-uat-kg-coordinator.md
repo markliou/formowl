@@ -121,16 +121,26 @@ Restart adjudication with a fresh agent and a sanitized source-only packet.
 
 ## Power-Cut Recovery Checkpoint — 2026-08-10
 
-Observed live UAT state immediately before the planned outage:
+No exact-77 candidate is accepted or deployed. The three UAT containers were
+stopped before the handoff; the old MCP must not be restarted as acceptance
+evidence.
 
-```text
-formowl-mail-diagnostic-uat: running
-formowl-codex-uat-sidecar: running
-formowl-mcp-uat: stopped, exit 137, OOMKilled=false
-```
+The fresh source-only Terra worker stopped cleanly with no oracle/query/runtime
+contamination. It changed five packet-local builder/materializer/test files,
+created no outputs, passed the builder tests 6/6, and reached 36 passed plus one
+temporary-output-location failure in the combined suite. It patched that test
+but did not rerun after the stop request. The private checkpoint archive and
+all five hashes are recorded in
+`../recovery/2026-08-10/current-session-checkpoint.safe.json`.
 
-No exact-77 candidate is deployed. The stopped MCP container must not be
-restarted as acceptance evidence.
+The deployment-readiness auditor returned `RELEASE_DECISION: BLOCK`: the deploy
+template does not enforce that the semantic preflight hash belongs to the
+mounted binding, and its browser verifier command/base URL are still unresolved
+materialization inputs. Do not build or deploy until both are closed.
+
+Track 2 is design-ready, not implemented. Its architecture boundary and
+same-pipeline runtime/evaluation plan are tracked and hashed; tokenizer
+migration, observation re-index, POC ablations, and issue #33 exit gates remain.
 
 Restart order on this or another computer:
 
@@ -141,8 +151,9 @@ Restart order on this or another computer:
    latest maintainer comments.
 5. Restore only private artifacts whose hashes match the handoff inventory;
    never reconstruct semantic decisions from expected answers.
-6. Restart Track 1 with a fresh source-only Terra agent.
-7. Keep the deployment-plan worker output separate from semantic artifacts.
+6. Rerun the source-only packet tests before generating the five outputs.
+7. Keep the deployment-plan audit separate from semantic artifacts and close
+   both recorded blockers.
 8. Run offline oracle acceptance before any image build.
 9. Replace only `formowl-mcp-uat` after an exact offline pass.
 10. Run direct MCP, browser contract, and independent human-readability UAT.

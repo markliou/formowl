@@ -1,0 +1,77 @@
+{
+  "artifact_type": "formowl_cross_machine_session_checkpoint_v1",
+  "created_at": "2026-08-10T11:59:46+08:00",
+  "thread_id": "019f8d32-9002-7f10-840c-0c4c5e43fa32",
+  "goal_status": "active",
+  "public_branch": "recovery/dual-track-uat-kg-20260810",
+  "public_head_before_checkpoint_commit": "45cbea569b02560858a8e850a4debe0c80c2c065",
+  "methodology_authority": {
+    "authority_valid": true,
+    "status": "blocked",
+    "methodology_ready": false,
+    "current_tokenizer_id": "ascii_identifier_regex_v1",
+    "target_tokenizer_id": "jieba_sentencepiece_frozen_profile_candidate_admission_v1"
+  },
+  "track_1": {
+    "accepted_or_deployed": false,
+    "source_only_worker": {
+      "status": "stopped_at_checkpoint",
+      "contaminated": false,
+      "outputs_empty": true,
+      "modified_packet_relative_files": {
+        "tools/build_projection_coordinate_choices_private.py": "sha256:f6f7fde6bd80fa28faabb6caa6505f1bc1b08e982dfa8b7e7052bd9fe09688e1",
+        "tools/convert_projection_coordinate_choices_private.py": "sha256:286defd4703eae28cc42eab079439ad22297528262644c17346a2ff9aa2214e2",
+        "tools/formowl_materialize_reviewed_bindings_private.py": "sha256:6b66f8f1f1e1154afacdc2604a07b773b3e454b76c572334c3a06d8c467993d9",
+        "tools/test_build_projection_coordinate_choices_private.py": "sha256:1cc81f1be73eb9ac8f90ae8f27a19f5c9b9feb7b003aeb6c6723a3647a6fd953",
+        "tools/test_convert_projection_coordinate_choices_private.py": "sha256:56c1bdfd0a450e7c61d02c8e70fc1e16e47197f4391cc1293af71baa8cbe2ac2"
+      },
+      "verification": {
+        "builder_focused": "6_passed",
+        "combined_before_final_test_patch": "36_passed_1_failed",
+        "combined_after_final_test_patch": "not_rerun"
+      },
+      "private_checkpoint_archive": {
+        "filename": "track1-r8-source-only-terra-checkpoint.private.tar.gz",
+        "sha256": "5b391308b291b5898139b3e8b4a6653ca73cfde95af2a606a9f85a49283ec884",
+        "in_git": false
+      }
+    },
+    "deployment_audit": {
+      "release_decision": "BLOCK",
+      "blocking_findings": [
+        "semantic preflight candidate_binding_sha256 is not compared with the binding mounted by the deployment template",
+        "browser verifier command and browser base URL remain unresolved materialization inputs"
+      ],
+      "non_blocking_findings": [
+        "root_compose_sha256 is declared but not enforced by the direct-Docker deployment script"
+      ],
+      "verified_tests": {
+        "semantic_preflight": "4_passed",
+        "browser_contract": "10_passed",
+        "static_deploy_self_test": "passed"
+      }
+    }
+  },
+  "track_2": {
+    "status": "design_ready_implementation_not_started",
+    "issue": 33,
+    "tracked_documents": {
+      "docs/kg-ontology-v2-rd-boundary.md": "sha256:fa8fd3ea1747972dc9b3bc7dea64e0314c3b783046faf07c322d2dcae5104645",
+      "docs/kg-ontology-v2-runtime-evaluation-plan.md": "sha256:246224e93d3e22dc354c5c4bb72a6a8d2340e148b5527491242ed089ae927663"
+    },
+    "remaining": [
+      "runtime tokenizer/profile migration",
+      "existing-observation reindex without PST reparse",
+      "same-pipeline POC and preregistered ablations",
+      "independent issue-33 exit-gate review"
+    ]
+  },
+  "resume_order": [
+    "pull the public recovery branch and read the coordinator goal and recovery handoff",
+    "privately transfer and verify the Terra checkpoint archive",
+    "rerun the packet-local focused tests before generating any output",
+    "finish source-only artifacts and independent offline acceptance",
+    "repair both deployment-audit blockers before build or deployment",
+    "resume Track 2 from the two tracked design documents without touching Track 1 private bindings"
+  ]
+}

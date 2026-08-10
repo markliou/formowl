@@ -76,14 +76,22 @@ citations/sources = 0
 ## Live State At Checkpoint
 
 ```text
-formowl-mail-diagnostic-uat: running
-formowl-codex-uat-sidecar: running
+formowl-mail-diagnostic-uat: stopped
+formowl-codex-uat-sidecar: stopped
 formowl-mcp-uat: stopped
-formowl-mcp-uat exit code: 137
-formowl-mcp-uat OOMKilled: false
 ```
 
 No exact-77 candidate was deployed.
+
+The source-only Terra worker also stopped. It created no outputs and reported
+no contamination. Five packet-local implementation/test files are preserved in
+the latest private checkpoint archive; focused builder tests passed 6/6, while
+the combined suite must be rerun after its final test-location patch.
+
+The deployment-readiness auditor returned `RELEASE_DECISION: BLOCK` because the
+deploy template does not bind the semantic preflight hash to the mounted
+binding and the browser verifier command/base URL are unresolved. Do not build
+or deploy until both findings are fixed and re-reviewed.
 
 ## Local Private Recovery Packet
 
@@ -103,6 +111,18 @@ It contains private reviewed artifacts and runtime utilities, but not a copy of
 the raw export. The state archive was created after both running containers
 were stopped. It must be transferred only through an approved private channel
 and must never be committed or pushed.
+
+The latest source-only worker checkpoint is:
+
+```text
+archive:
+  track1-r8-source-only-terra-checkpoint.private.tar.gz
+SHA-256:
+  5b391308b291b5898139b3e8b4a6653ca73cfde95af2a606a9f85a49283ec884
+```
+
+It supersedes the earlier source-only archive for packet-local code state. Its
+`outputs/` directory is still empty.
 
 ## Safe Shutdown Boundary
 
@@ -137,4 +157,5 @@ docs/kg-ontology-v2-runtime-evaluation-plan.md
 
 Their hashes are recorded in `SECOND_TRACK_SHA256SUMS`. These documents are
 research boundaries and execution plans only; they do not change methodology
-authority or the live UAT.
+authority or the live UAT. Track 2 implementation and same-pipeline experiments
+have not started.
