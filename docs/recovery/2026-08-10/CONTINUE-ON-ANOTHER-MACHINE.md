@@ -50,7 +50,16 @@ evidence.
 - The rejected r7 result must not be reused.
 - All UAT containers were intentionally stopped before the outage.
 - No parser, materialization, image build, deployment, or subagent process is
-  expected to be running.
+  expected to be running after this checkpoint.
+- Terra worker `019fe9b2-ca09-7591-aab2-ec55f411e4ea` stopped at a safe
+  checkpoint. It verified all 280 source-packet manifest entries with zero
+  checksum failures, but did not inspect source evidence, make semantic
+  selections, or create choices, adjudications, bindings, retained-lineage
+  output, or a safe output report.
+- Its only failed probe was a packet-local import check because the copied
+  `source-python` tree did not include
+  `formowl_graph.research_acceptance`. No repair was attempted. Treat this as a
+  packet/tooling preflight item, not as semantic progress.
 - The next implementation worker must be a fresh `fork_context=false` Terra
   xhigh agent using a sanitized source-only packet. It must not read oracle or
   runtime-answer artifacts.
@@ -79,6 +88,43 @@ elapsed < 360 seconds
 ```
 
 Do not build or deploy before every offline field passes exactly.
+
+## Public Recovery Tools Added At This Checkpoint
+
+The following tracked tools preserve the current coordinator-side acceptance
+work:
+
+```text
+docs/recovery/2026-08-10/build-semantic-preflight-r8.py
+docs/recovery/2026-08-10/test-build-semantic-preflight-r8.py
+docs/recovery/2026-08-10/verify-browser-contract-r8.py
+docs/recovery/2026-08-10/test-verify-browser-contract-r8.py
+```
+
+The semantic preflight converts an exact private offline acceptance result into
+the hash/count-only deployment-preflight shape. The browser verifier checks the
+actual sidecar session-summary deltas, matching orchestrator/model state,
+exactly one FormOwl tool call, exact response metadata, 77 distinct readable
+bullets, no table wall, no initial citations/sources, no raw diagnostic dump,
+and no answer-value leak in failure reports.
+
+Verification completed before the power-cut handoff:
+
+```text
+host:
+  browser verifier tests: 10/10 passed
+  semantic preflight tests: 4/4 passed
+
+read-only formowl-dev:local container:
+  browser verifier tests: 10/10 passed
+  semantic preflight tests: 4/4 passed
+```
+
+The earlier verifier review blocked three issues: hard-coded route provenance,
+Markdown duplicate bypass, and missing negative tests. The files above contain
+the corresponding patches. The same reviewer reran the focused test in the
+read-only dev container (10/10 passed) and returned
+`RELEASE_DECISION: AGREE` with no remaining concrete blockers.
 
 ## Private Packet Is Not In Git
 
@@ -111,6 +157,48 @@ uat-codex-state.private.tar.gz:
 The public recovery manifest and the private manifest were both verified
 successfully immediately before this handoff.
 
+The fresh source-only Terra packet is also private and is not in Git:
+
+```text
+.formowl-private-track1-r8-source-only-20260810/
+```
+
+It contains 280 manifest entries, has no worker outputs, and is bound to:
+
+```text
+INPUT_SHA256SUMS.private:
+0dd583b779d93e3e6b585f517a3a0202a991c9da7abeb6b9e27e2ccad263b191
+
+SOURCE_COMMIT.txt content:
+34c76d2520f3157a9087430b20f0c21cae5189dd
+```
+
+A separately transferable private archive was created beside the older
+recovery archive:
+
+```text
+.formowl-private-recovery-r8-20260810/track1-r8-source-only.private.tar.gz
+.formowl-private-recovery-r8-20260810/TRACK1-SOURCE-ONLY-SHA256.private
+```
+
+Expected archive SHA-256:
+
+```text
+31d715891d320ee6faff54c8b52cd2b37f4a895ee7302c929b6c60abbde8c3ec
+```
+
+Transfer this archive only through an approved private channel. On the other
+machine:
+
+```sh
+sha256sum -c TRACK1-SOURCE-ONLY-SHA256.private
+tar -xzf track1-r8-source-only.private.tar.gz
+cd .formowl-private-track1-r8-source-only-20260810
+sha256sum -c INPUT_SHA256SUMS.private
+```
+
+Do not commit either private directory or either private archive.
+
 ## Track 2 State
 
 Track 2 remains separate under issue #33. Its two bounded research documents
@@ -129,3 +217,20 @@ deployment, or raw PST, and it must not block Track 1 diagnostic acceptance.
 The source worktree contains many unrelated modified and untracked files from
 other long-running work. Do not run `git reset`, broad `git add`, or a blanket
 commit. Continue to stage only explicitly owned recovery or UAT files.
+
+The live Codex thread, tool sessions, subagent process state, Docker process
+state, and in-memory context cannot be restored by `git pull`. The durable
+replacement is:
+
+```text
+thread: 019f8d32-9002-7f10-840c-0c4c5e43fa32
+goal status: active
+goal authority: docs/agent-goals/dual-track-uat-kg-coordinator.md
+operational checkpoint: this file
+private evidence/runtime checkpoint: the two separately transferred private
+  recovery archives above
+```
+
+After pulling, do not assume any container or subagent is alive. Reconstruct
+from the tracked goal and verified private packet, then resume from source-only
+semantic adjudication rather than from remembered answer values.
