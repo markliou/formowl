@@ -9,9 +9,35 @@ files listed below.
 ## Pull This State
 
 ```sh
-git fetch origin
+git fetch origin --prune
 git switch recovery/dual-track-uat-kg-20260810
 git pull --ff-only origin recovery/dual-track-uat-kg-20260810
+```
+
+The current machine used a deliberately dirty composite worktree. Do not
+pretend that composite is one clean release branch. Three public refs preserve
+the separable Git state:
+
+```text
+coordinator/recovery:
+  origin/recovery/dual-track-uat-kg-20260810
+
+Issue #51 authority and integrated WP1 baseline:
+  origin/issue/51-integration-baseline
+  c7fd4b21c6dd5757fdbd18d19beebb2bacd7351f
+
+diagnostic structured-runtime source copied into the source-only packet:
+  origin/uat-semantic-structured-recovery-20260805
+  34c76d2520f3157a9087430b20f0c21cae5189dd
+```
+
+Keep these refs in separate worktrees instead of merging them blindly:
+
+```sh
+git worktree add --detach ../formowl-issue51-public \
+  origin/issue/51-integration-baseline
+git worktree add --detach ../formowl-uat-source \
+  origin/uat-semantic-structured-recovery-20260805
 ```
 
 Then read, in order:
@@ -23,21 +49,28 @@ docs/recovery/2026-08-10/README.md
 this file
 ```
 
-Run:
+Run the tracked methodology check from the Issue #51 public worktree:
 
 ```sh
+cd ../formowl-issue51-public
 python3 scripts/methodology_authority_check.py --check
 ```
 
-Expected state on 2026-08-10:
+The clean public Issue #51 ref was re-extracted and checked immediately before
+this handoff. Expected state:
 
 ```text
 authority_valid=true
 methodology_ready=false
 status=blocked
-current tokenizer=ascii_identifier_regex_v1
 target tokenizer=jieba_sentencepiece_frozen_profile_candidate_admission_v1
+runtime availability=unavailable_profile
 ```
+
+The original dirty/private runtime composite separately probed as valid but
+blocked with `ascii_identifier_regex_v1`. That runtime-specific state is not a
+claim about the clean public Issue #51 worktree. The source-only worker packet
+pins its explicit diagnostic mode and source commit independently.
 
 This blocked methodology state does not prevent the narrowly scoped internal
 diagnostic Track 1 UAT, but that UAT must continue to report
