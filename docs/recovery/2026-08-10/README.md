@@ -91,14 +91,17 @@ The current computer also contains a local-only, untracked private packet:
 
 ```text
 directory: .formowl-private-recovery-r8-20260810
-size at checkpoint: 33 MiB
-file-count manifest entries: 109
+size at checkpoint: 36 MiB
+file-count manifest entries: 110
 SHA256SUMS.private SHA-256:
-  b5cd8a4a28b3225b327d9489aeb73a2302a4fff961e05256a059406204d965f9
+  3c9c66ea0a734ccc6c0076c5b5499d1848485944fa084c14a9afef113c4a0d4e
+UAT/Codex state archive SHA-256:
+  35f429268845eebd63fc6bfb9d86d9dc3766a8b957b8b8bf5f3b2e5be826b1ed
 ```
 
 It contains private reviewed artifacts and runtime utilities, but not a copy of
-the raw export. It must be transferred only through an approved private channel
+the raw export. The state archive was created after both running containers
+were stopped. It must be transferred only through an approved private channel
 and must never be committed or pushed.
 
 ## Safe Shutdown Boundary
