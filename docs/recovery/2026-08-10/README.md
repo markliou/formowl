@@ -85,6 +85,22 @@ formowl-mcp-uat OOMKilled: false
 
 No exact-77 candidate was deployed.
 
+## Local Private Recovery Packet
+
+The current computer also contains a local-only, untracked private packet:
+
+```text
+directory: .formowl-private-recovery-r8-20260810
+size at checkpoint: 33 MiB
+file-count manifest entries: 109
+SHA256SUMS.private SHA-256:
+  b5cd8a4a28b3225b327d9489aeb73a2302a4fff961e05256a059406204d965f9
+```
+
+It contains private reviewed artifacts and runtime utilities, but not a copy of
+the raw export. It must be transferred only through an approved private channel
+and must never be committed or pushed.
+
 ## Safe Shutdown Boundary
 
 - Do not start a new PST parse, full-corpus reconstruction, Docker build, or
