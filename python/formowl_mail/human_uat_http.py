@@ -12,11 +12,18 @@ import re
 import secrets
 import threading
 from time import perf_counter
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 import unicodedata
 from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from formowl_contract import ContractValidationError, now_iso, sha256_json
+from formowl_contract import (
+    ContractValidationError,
+    now_iso,
+    sha256_json,
+    validate_semantic_request,
+)
 from formowl_graph import (
     EvidenceRequirement,
     ProjectionSpec,
@@ -46,10 +53,7 @@ from .human_uat_orchestrator import (
     UatConversationOutcome,
     UatEvidenceToolRequest,
 )
-from .query import (
-    MailEvidenceQueryGateway,
-    typed_numeric_identifier_aliases as _typed_numeric_identifier_aliases,
-)
+from .query import MailEvidenceQueryGateway
 
 _MAX_REQUEST_BYTES = 32 * 1024
 _MAX_UPLOAD_REQUEST_BYTES = 520 * 1024 * 1024
@@ -60,6 +64,9 @@ _MAX_NOTE_CHARS = 1000
 _MAX_CHAT_HISTORY_MESSAGES = 16
 _DEFAULT_RESULT_LIMIT = 50
 _MAX_RESULT_LIMIT = 100
+_DEFAULT_DIAGNOSTIC_MCP_TIMEOUT_SECONDS = 15.0
+_MAX_DIAGNOSTIC_MCP_TIMEOUT_SECONDS = 30.0
+_MAX_DIAGNOSTIC_MCP_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_EVENT_SEQUENCE = (2**53) - 1
 _DEFAULT_EVENT_RETENTION_DAYS = 30
 _DEFAULT_MAX_EVENT_STORE_BYTES = 16 * 1024 * 1024
@@ -156,24 +163,6 @@ _UPLOAD_OPEN_SOURCES = {"composer", "landing", "no_result"}
 _UPLOAD_CLOSE_SOURCES = {"button", "backdrop", "iframe_cancel"}
 _UPLOAD_VALIDATION_REASONS = {"file_count", "file_type", "file_size", "total_size"}
 _UPLOAD_SIZE_BUCKETS = {"under_5mb", "5_to_25mb", "25_to_60mb", "60_to_500mb"}
-_LEGACY_QUERY_ALIASES = (
-    (
-        ("量產", "打件", "生產排程", "投產"),
-        ("SMT", "production", "schedule"),
-        ("量產", "打件", "SMT", "production"),
-    ),
-    (
-        ("pull-in", "pull in", "pullin", "拉料", "催料", "提前交貨"),
-        ("pull-in", "pull", "delivery"),
-        ("pull-in", "pull in", "pullin", "拉料", "催料"),
-    ),
-    (
-        ("交期", "到料", "到貨", "交貨"),
-        ("delivery", "ETA", "ETD", "due"),
-        ("交期", "到料", "到貨", "交貨", "delivery", "ETA", "ETD"),
-    ),
-)
-_LEGACY_EXACT_QUERY_FILTERS = ("文顥",)
 
 
 @dataclass(frozen=True)
@@ -181,6 +170,8 @@ class MailHumanUatHttpConfig:
     bundle: MailEvidenceBundle
     state_dir: str | Path
     conversation_model: UatConversationModel | None = None
+    diagnostic_mcp_url: str | None = None
+    diagnostic_mcp_timeout_seconds: float = _DEFAULT_DIAGNOSTIC_MCP_TIMEOUT_SECONDS
     fixed_now: str | None = None
     max_request_bytes: int = _MAX_REQUEST_BYTES
     max_upload_request_bytes: int = _MAX_UPLOAD_REQUEST_BYTES
@@ -188,6 +179,115 @@ class MailHumanUatHttpConfig:
     max_upload_files: int = _MAX_UPLOAD_FILES
     event_retention_days: int = _DEFAULT_EVENT_RETENTION_DAYS
     max_event_store_bytes: int = _DEFAULT_MAX_EVENT_STORE_BYTES
+
+
+class DiagnosticMcpClient(Protocol):
+    """Narrow UAT boundary for one governed diagnostic MCP invocation."""
+
+    def query_effective_graph_view(
+        self,
+        *,
+        query_text: str,
+        semantic_request: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Reject redirects so the configured diagnostic MCP is the only target."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> Request | None:
+        return None
+
+
+class FormOwlDiagnosticMcpHttpClient:
+    """Bounded JSON-RPC client for the diagnostic FormOwl MCP boundary."""
+
+    def __init__(
+        self,
+        endpoint_url: str,
+        *,
+        timeout_seconds: float = _DEFAULT_DIAGNOSTIC_MCP_TIMEOUT_SECONDS,
+    ) -> None:
+        self._endpoint_url = _validated_diagnostic_mcp_url(endpoint_url)
+        self._timeout_seconds = _validated_diagnostic_mcp_timeout(timeout_seconds)
+        self._opener = build_opener(_NoRedirectHandler())
+
+    def query_effective_graph_view(
+        self,
+        *,
+        query_text: str,
+        semantic_request: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        normalized_request = validate_semantic_request(semantic_request)
+        if (
+            not isinstance(query_text, str)
+            or not query_text.strip()
+            or len(query_text) > _MAX_QUERY_CHARS
+        ):
+            raise ContractValidationError("diagnostic MCP query text is invalid")
+        request_id = f"uat_semantic_{secrets.token_hex(12)}"
+        request_payload = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {
+                "name": "query_effective_graph_view",
+                "arguments": {
+                    # The source text is retained only for the diagnostic MCP
+                    # audit boundary. Execution is solely semantic_request.
+                    "query_text": query_text,
+                    "semantic_request": normalized_request,
+                },
+            },
+        }
+        request_body = json.dumps(
+            request_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        request = Request(
+            self._endpoint_url,
+            data=request_body,
+            method="POST",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+        )
+        try:
+            with self._opener.open(request, timeout=self._timeout_seconds) as response:
+                status_code = response.getcode()
+                if status_code != HTTPStatus.OK:
+                    raise RuntimeError("diagnostic MCP returned an unexpected HTTP status")
+                content_length = response.headers.get("Content-Length")
+                if content_length is not None:
+                    if (
+                        not content_length.isdigit()
+                        or int(content_length) > _MAX_DIAGNOSTIC_MCP_RESPONSE_BYTES
+                    ):
+                        raise RuntimeError("diagnostic MCP response is invalid")
+                body = response.read(_MAX_DIAGNOSTIC_MCP_RESPONSE_BYTES + 1)
+        except (HTTPError, URLError, OSError) as exc:
+            raise RuntimeError("diagnostic MCP request failed") from exc
+        if len(body) > _MAX_DIAGNOSTIC_MCP_RESPONSE_BYTES:
+            raise RuntimeError("diagnostic MCP response is too large")
+        try:
+            response_payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("diagnostic MCP response is invalid") from exc
+        if not isinstance(response_payload, Mapping):
+            raise RuntimeError("diagnostic MCP response is invalid")
+        if response_payload.get("jsonrpc") != "2.0" or response_payload.get("id") != request_id:
+            raise RuntimeError("diagnostic MCP response is invalid")
+        if "error" in response_payload:
+            raise RuntimeError("diagnostic MCP reported a transport error")
+        result = response_payload.get("result")
+        if not isinstance(result, Mapping) or result.get("isError") is True:
+            raise RuntimeError("diagnostic MCP reported a tool error")
+        structured_content = result.get("structuredContent")
+        if not isinstance(structured_content, Mapping):
+            raise RuntimeError("diagnostic MCP structured result is invalid")
+        return dict(structured_content)
 
 
 @dataclass
@@ -204,6 +304,7 @@ class MailHumanUatService:
         config: MailHumanUatHttpConfig,
         *,
         base_gateway: MailEvidenceQueryGateway | None = None,
+        diagnostic_mcp_client: DiagnosticMcpClient | None = None,
     ) -> None:
         if (
             not isinstance(config.max_request_bytes, int)
@@ -222,11 +323,22 @@ class MailHumanUatService:
                 raise ContractValidationError(f"UAT {field_name} must be positive")
         if config.max_upload_file_bytes > config.max_upload_request_bytes:
             raise ContractValidationError("UAT max upload file bytes must not exceed request bytes")
+        _validated_diagnostic_mcp_timeout(config.diagnostic_mcp_timeout_seconds)
+        if config.diagnostic_mcp_url is not None:
+            _validated_diagnostic_mcp_url(config.diagnostic_mcp_url)
         if not config.bundle.messages or not config.bundle.body_segments:
             raise ContractValidationError("UAT mail evidence bundle must contain messages")
         safe_public_string(config.bundle.mail_evidence_bundle_id, "mail_evidence_bundle_id")
         config.bundle.mail_import_session.to_dict()
         self.config = config
+        self._diagnostic_mcp_client = diagnostic_mcp_client or (
+            FormOwlDiagnosticMcpHttpClient(
+                config.diagnostic_mcp_url,
+                timeout_seconds=config.diagnostic_mcp_timeout_seconds,
+            )
+            if config.diagnostic_mcp_url is not None
+            else None
+        )
         resolved_base_gateway = base_gateway or MailEvidenceQueryGateway([config.bundle])
         if resolved_base_gateway.mail_evidence_bundle_ids != (
             config.bundle.mail_evidence_bundle_id,
@@ -359,11 +471,34 @@ class MailHumanUatService:
                     else None
                 )
 
+            tool_request_count = 0
+            semantic_mcp_call_count = 0
+
             def call_formowl_tool(
-                request: UatEvidenceToolRequest,
+                request: UatEvidenceToolRequest | Mapping[str, Any],
             ) -> Mapping[str, Any]:
+                nonlocal semantic_mcp_call_count, tool_request_count
+                tool_request_count += 1
                 with self._lock:
                     self._formowl_tool_call_count += 1
+                if isinstance(request, Mapping):
+                    if semantic_mcp_call_count:
+                        raise ContractValidationError(
+                            "a semantic UAT query may call FormOwl MCP only once"
+                        )
+                    if tool_request_count != 1:
+                        raise ContractValidationError(
+                            "semantic UAT queries may not mix tool request types"
+                        )
+                    semantic_mcp_call_count += 1
+                    return self._execute_semantic_mcp_query(
+                        query_text=user_text,
+                        semantic_request=request,
+                        tracking=tracking,
+                        parent_query_id=query_id,
+                    )
+                if not isinstance(request, UatEvidenceToolRequest):
+                    raise ContractValidationError("UAT tool request is invalid")
                 result = self._execute_evidence_query(
                     query_text=request.query_text,
                     limit=request.limit,
@@ -395,6 +530,11 @@ class MailHumanUatService:
                     latest_evidence=latest_evidence,
                     chat_orchestration_ms=chat_orchestration_ms,
                 )
+                failure_stage = "semantic_telemetry_persistence"
+                self._append_semantic_stage_telemetry(
+                    outcome.semantic_telemetry,
+                    created_at=response["generated_at"],
+                )
                 failure_stage = "result_persistence"
                 self._event_store.append(
                     {
@@ -404,19 +544,7 @@ class MailHumanUatService:
                         "orchestration_action": response["orchestration"]["action"],
                         "model": outcome.model_name,
                         "formowl_tool_called": outcome.tool_request is not None,
-                        "tool_name": (
-                            "search_formowl_evidence" if outcome.tool_request is not None else None
-                        ),
-                        "tool_query_hash": (
-                            sha256_json(outcome.tool_request.query_text)
-                            if outcome.tool_request is not None
-                            else None
-                        ),
-                        "required_term_hashes": (
-                            [sha256_json(term) for term in outcome.tool_request.required_terms]
-                            if outcome.tool_request is not None
-                            else []
-                        ),
+                        **_tool_request_event_metadata(outcome.tool_request),
                         "tool_result_count": response["result_count"],
                         "assistant_response_hash": sha256_json(outcome.answer_text),
                         "answer_fallback_used": outcome.fallback_reason is not None,
@@ -464,6 +592,36 @@ class MailHumanUatService:
                 raise
         return response
 
+    def _append_semantic_stage_telemetry(
+        self,
+        records: Sequence[Any],
+        *,
+        created_at: str,
+    ) -> None:
+        """Persist only hash-and-count semantic diagnostics, never turn content."""
+
+        for record in records:
+            to_dict = getattr(record, "to_dict", None)
+            if not callable(to_dict):
+                raise ContractValidationError("semantic telemetry record is invalid")
+            payload = to_dict()
+            if not isinstance(payload, Mapping) or set(payload) != {
+                "stage",
+                "reason_code",
+                "input_hash",
+                "attempt_count",
+                "public_term_count",
+                "completed_web_search_count",
+            }:
+                raise ContractValidationError("semantic telemetry payload is invalid")
+            self._event_store.append(
+                {
+                    "event_type": "semantic_stage_telemetry",
+                    "created_at": created_at,
+                    **dict(payload),
+                }
+            )
+
     def query(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         _expect_exact_keys(payload, _QUERY_KEYS, required={"query_text"})
         query_text = _validated_text(
@@ -493,6 +651,52 @@ class MailHumanUatService:
             source=source,
             tracking=tracking,
         )
+
+    def _execute_semantic_mcp_query(
+        self,
+        *,
+        query_text: str,
+        semantic_request: Mapping[str, Any],
+        tracking: Mapping[str, Any],
+        parent_query_id: str,
+    ) -> dict[str, Any]:
+        """Execute one typed semantic request through the FormOwl MCP boundary."""
+
+        normalized_request = validate_semantic_request(semantic_request)
+        client = self._diagnostic_mcp_client
+        if client is None:
+            raise ContractValidationError("semantic UAT requires a diagnostic MCP client")
+        started = perf_counter()
+        mcp_payload = client.query_effective_graph_view(
+            query_text=query_text,
+            semantic_request=normalized_request,
+        )
+        response = _semantic_mcp_payload_to_uat_response(
+            payload=mcp_payload,
+            semantic_request=normalized_request,
+            query_id=parent_query_id,
+            query_text=query_text,
+            fixed_now=self.config.fixed_now,
+            timings_ms={
+                "formowl_orchestration": round((perf_counter() - started) * 1000.0, 3),
+            },
+        )
+        self._event_store.append(
+            {
+                "event_type": "semantic_mcp_result",
+                "created_at": response["generated_at"],
+                "query_id": parent_query_id,
+                "semantic_request_hash": sha256_json(normalized_request),
+                "mcp_tool_name": "query_effective_graph_view",
+                "mcp_call_count": 1,
+                "mcp_status": response["status"],
+                "result_count": response["result_count"],
+                "answerability_status": response["answerability"]["status"],
+                "timings_ms": response["timings_ms"],
+                **tracking,
+            }
+        )
+        return response
 
     def _execute_evidence_query(
         self,
@@ -556,18 +760,6 @@ class MailHumanUatService:
             self._query_count += 1
             self._remember_tracking(tracking)
 
-        if normalized_required_terms:
-            # Required-term execution is source-neutral: only generic indexed
-            # identifier equivalence is added before the gateway sees the
-            # query.  The gateway owns posting intersection and exact
-            # verification; no domain alias or filter is allowed here.
-            expanded_query = _expand_index_query(task_frame.retrieval_query_text)
-            filter_groups: tuple[tuple[str, ...], ...] = ()
-        else:
-            # Preserve the older no-required-term UAT query vocabulary as a
-            # compatibility shim only.  It is deliberately unreachable from
-            # required-term execution, which remains generic and index-owned.
-            expanded_query, filter_groups = _expand_legacy_query(task_frame.retrieval_query_text)
         bundle = self.config.bundle
         actor = bundle.mail_import_session
         with self._lock:
@@ -577,7 +769,7 @@ class MailHumanUatService:
             sum(_logical_source_count(candidate_bundle) for candidate_bundle in all_bundles),
         )
         base_execution = self._base_gateway.execute_mail_evidence_query(
-            query_text=expanded_query,
+            query_text=task_frame.retrieval_query_text,
             requester_user_id=actor.owner_user_id,
             workspace_id=actor.workspace_id,
             session_id="session_mail_human_uat",
@@ -585,7 +777,7 @@ class MailHumanUatService:
             limit=retrieval_candidate_limit,
             now=self.config.fixed_now,
             required_terms=normalized_required_terms,
-            snippet_filter_groups=filter_groups,
+            snippet_filter_groups=(),
             collapse_source_items=True,
         )
         with self._lock:
@@ -598,7 +790,7 @@ class MailHumanUatService:
         if upload_gateway is not None:
             gateway_executions.extend(
                 upload_gateway.execute_mail_evidence_query(
-                    query_text=expanded_query,
+                    query_text=task_frame.retrieval_query_text,
                     requester_user_id=actor.owner_user_id,
                     workspace_id=actor.workspace_id,
                     session_id="session_mail_human_uat",
@@ -606,7 +798,7 @@ class MailHumanUatService:
                     limit=retrieval_candidate_limit,
                     now=self.config.fixed_now,
                     required_terms=normalized_required_terms,
-                    snippet_filter_groups=filter_groups,
+                    snippet_filter_groups=(),
                     collapse_source_items=True,
                 )
                 for bundle_id in uploaded_bundle_ids
@@ -704,70 +896,34 @@ class MailHumanUatService:
                     for item in supporting_evidence
                     if item.get("citation") is not None
                 ]
-            if filter_groups:
-                (
-                    result["_legacy_subject_filter_matches"],
-                    result["_legacy_snippet_filter_matches"],
-                ) = _legacy_filter_match_counts(
-                    subject,
-                    snippet_text,
-                    filter_groups,
-                )
             results.append(result)
 
         results = _deduplicate_results(results)
         ranking_started = perf_counter()
         if sort == "recent":
-            if filter_groups:
-                results.sort(
-                    key=lambda item: (
-                        int(item.get("_legacy_subject_filter_matches", 0)),
-                        int(item.get("_legacy_snippet_filter_matches", 0)),
-                        _timestamp_sort_key(item.get("sent_at")),
-                        int(item["score"]),
-                        str(item.get("citation", {}).get("source_observation_id", "")),
-                    ),
-                    reverse=True,
-                )
-            else:
-                results.sort(
-                    key=lambda item: (
-                        _timestamp_sort_key(item.get("sent_at")),
-                        int(item["score"]),
-                        len(item.get("matched_terms", ())),
-                        str(item.get("citation", {}).get("source_observation_id", "")),
-                    ),
-                    reverse=True,
-                )
+            results.sort(
+                key=lambda item: (
+                    _timestamp_sort_key(item.get("sent_at")),
+                    int(item["score"]),
+                    len(item.get("matched_terms", ())),
+                    str(item.get("citation", {}).get("source_observation_id", "")),
+                ),
+                reverse=True,
+            )
         else:
-            if filter_groups:
-                results.sort(
-                    key=lambda item: (
-                        int(item.get("_legacy_subject_filter_matches", 0)),
-                        int(item.get("_legacy_snippet_filter_matches", 0)),
-                        int(item["score"]),
-                        len(item.get("matched_terms", ())),
-                        _timestamp_sort_key(item.get("sent_at")),
-                        str(item.get("citation", {}).get("source_observation_id", "")),
-                    ),
-                    reverse=True,
-                )
-            else:
-                results.sort(
-                    key=lambda item: (
-                        int(item["score"]),
-                        len(item.get("matched_terms", ())),
-                        _timestamp_sort_key(item.get("sent_at")),
-                        str(item.get("citation", {}).get("source_observation_id", "")),
-                    ),
-                    reverse=True,
-                )
+            results.sort(
+                key=lambda item: (
+                    int(item["score"]),
+                    len(item.get("matched_terms", ())),
+                    _timestamp_sort_key(item.get("sent_at")),
+                    str(item.get("citation", {}).get("source_observation_id", "")),
+                ),
+                reverse=True,
+            )
         uat_ranking_ms = (perf_counter() - ranking_started) * 1000.0
         total_result_count = len(results)
         displayed_results = results[:limit]
         for result in displayed_results:
-            result.pop("_legacy_subject_filter_matches", None)
-            result.pop("_legacy_snippet_filter_matches", None)
             result.pop("_source_item_id", None)
 
         generated_at = _timestamp(self.config.fixed_now)
@@ -785,8 +941,6 @@ class MailHumanUatService:
         )
         if normalized_required_terms and not displayed_results and has_visible_gateway_result:
             warnings.append("required_terms_no_exact_match")
-        if filter_groups and not displayed_results and has_visible_gateway_result:
-            warnings.append("business_filter_no_exact_match")
         if not displayed_results and "no_visible_mail_evidence_matched" not in warnings:
             warnings.append("no_visible_mail_evidence_matched")
         display_has_more = total_result_count > len(displayed_results)
@@ -916,8 +1070,14 @@ class MailHumanUatService:
         if outcome.tool_request is not None:
             if outcome.response_kind != "answer":
                 raise RuntimeError("UAT tool calls must end in an answer")
-            action = "call_formowl_tool"
             evidence = dict(outcome.tool_result or {})
+            if (
+                isinstance(outcome.tool_request, Mapping)
+                and evidence.get("status") == "clarification_required"
+            ):
+                action = "clarify"
+            else:
+                action = "call_formowl_tool"
         elif outcome.response_kind == "render_prior_evidence":
             if latest_evidence is None:
                 raise RuntimeError("UAT model requested missing prior evidence")
@@ -934,8 +1094,22 @@ class MailHumanUatService:
         if not isinstance(results, list):
             raise RuntimeError("UAT evidence results are invalid")
         results = [dict(item) for item in results if isinstance(item, Mapping)]
+        answer_items = evidence.get("answer_items", [])
+        if not isinstance(answer_items, list) or any(
+            not isinstance(item, str) or not item.strip() for item in answer_items
+        ):
+            raise RuntimeError("UAT answer items are invalid")
+        answer_items = list(answer_items)
         projection = evidence.get("projection", {})
         projection = dict(projection) if isinstance(projection, Mapping) else {}
+        result_count = evidence.get("result_count", len(results))
+        total_result_count = evidence.get("total_result_count", len(results))
+        displayed_result_count = evidence.get("displayed_result_count", len(results))
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in (result_count, total_result_count, displayed_result_count)
+        ):
+            raise RuntimeError("UAT evidence result counts are invalid")
         if evidence:
             projection["output_format"] = (
                 _requested_projection_format(user_text)
@@ -947,9 +1121,13 @@ class MailHumanUatService:
         warnings = list(evidence.get("warnings", []))
         if outcome.fallback_reason is not None:
             warnings.append("codex_answer_fallback_used")
-        assistant_text, assistant_redaction_count = redact_authorized_evidence_text(
-            outcome.answer_text
-        )
+        answer_text = outcome.answer_text
+        if isinstance(outcome.tool_request, Mapping):
+            answer_text = _semantic_mcp_assistant_text(
+                status=str(evidence.get("status", "")),
+                fallback=answer_text,
+            )
+        assistant_text, assistant_redaction_count = redact_authorized_evidence_text(answer_text)
         if assistant_redaction_count:
             warnings.append("unsafe_mail_evidence_content_redacted")
         generated_at = _timestamp(self.config.fixed_now)
@@ -960,10 +1138,11 @@ class MailHumanUatService:
             "generated_at": generated_at,
             "assistant_text": assistant_text,
             "sort": evidence.get("sort"),
-            "result_count": len(results),
-            "total_result_count": int(evidence.get("total_result_count", len(results))),
-            "displayed_result_count": int(evidence.get("displayed_result_count", len(results))),
+            "result_count": result_count,
+            "total_result_count": total_result_count,
+            "displayed_result_count": displayed_result_count,
             "results": results,
+            "answer_items": answer_items,
             "warnings": sorted(set(warnings)),
             "notice": evidence.get("notice"),
             "task_frame": dict(evidence.get("task_frame", {})),
@@ -977,9 +1156,7 @@ class MailHumanUatService:
                 "model": outcome.model_name,
                 "formowl_tool_called": outcome.tool_request is not None,
                 "answer_fallback_used": outcome.fallback_reason is not None,
-                "tool_name": (
-                    "search_formowl_evidence" if outcome.tool_request is not None else None
-                ),
+                "tool_name": _tool_request_event_metadata(outcome.tool_request)["tool_name"],
             },
             "claim_boundary": dict(evidence.get("claim_boundary", {})),
         }
@@ -1639,6 +1816,228 @@ class _PrivateUatEventStore:
             raise
 
 
+def _validated_diagnostic_mcp_url(value: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > 2048:
+        raise ContractValidationError("diagnostic MCP URL is invalid")
+    parsed = urlparse(value.strip())
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ContractValidationError("diagnostic MCP URL is invalid")
+    return value.strip()
+
+
+def _validated_diagnostic_mcp_timeout(value: float) -> float:
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or value <= 0
+        or value > _MAX_DIAGNOSTIC_MCP_TIMEOUT_SECONDS
+    ):
+        raise ContractValidationError("diagnostic MCP timeout is invalid")
+    return float(value)
+
+
+def _tool_request_event_metadata(
+    tool_request: UatEvidenceToolRequest | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if tool_request is None:
+        return {
+            "tool_name": None,
+            "tool_query_hash": None,
+            "required_term_hashes": [],
+            "semantic_request_hash": None,
+        }
+    if isinstance(tool_request, UatEvidenceToolRequest):
+        return {
+            "tool_name": "search_formowl_evidence",
+            "tool_query_hash": sha256_json(tool_request.query_text),
+            "required_term_hashes": [sha256_json(term) for term in tool_request.required_terms],
+            "semantic_request_hash": None,
+        }
+    if isinstance(tool_request, Mapping):
+        normalized = validate_semantic_request(tool_request)
+        return {
+            "tool_name": "query_effective_graph_view",
+            "tool_query_hash": None,
+            "required_term_hashes": [],
+            "semantic_request_hash": sha256_json(normalized),
+        }
+    raise ContractValidationError("UAT tool request is invalid")
+
+
+def _semantic_mcp_payload_to_uat_response(
+    *,
+    payload: Mapping[str, Any],
+    semantic_request: Mapping[str, Any],
+    query_id: str,
+    query_text: str,
+    fixed_now: str | None,
+    timings_ms: Mapping[str, float],
+) -> dict[str, Any]:
+    """Project a safe complete-set MCP result without source/citation walls."""
+
+    normalized_request = validate_semantic_request(semantic_request)
+    if not isinstance(payload, Mapping):
+        raise ContractValidationError("diagnostic MCP semantic result is invalid")
+    status = payload.get("status")
+    if status not in {"ok", "clarification_required", "insufficient", "permission_denied"}:
+        raise ContractValidationError("diagnostic MCP semantic status is invalid")
+    complete_projection = payload.get("complete_projection")
+    if not isinstance(complete_projection, Mapping):
+        raise ContractValidationError("diagnostic MCP semantic projection is invalid")
+    projection_state = complete_projection.get("state")
+    values = complete_projection.get("values")
+    if projection_state not in {
+        "complete",
+        "not_available",
+        "result_budget_exceeded",
+        "projection_unavailable",
+    } or not isinstance(values, list):
+        raise ContractValidationError("diagnostic MCP semantic projection is invalid")
+    if status == "ok" and projection_state != "complete":
+        raise ContractValidationError("diagnostic MCP semantic projection is incomplete")
+    if status != "ok" and values:
+        raise ContractValidationError("diagnostic MCP semantic projection is invalid")
+
+    answer_items: list[str] = []
+    answer_item_redacted = False
+    for item in values:
+        if not isinstance(item, Mapping) or set(item) != {"values"}:
+            raise ContractValidationError("diagnostic MCP semantic result item is invalid")
+        item_values = item["values"]
+        if (
+            not isinstance(item_values, list)
+            or not item_values
+            or any(
+                not isinstance(value, str) or not value.strip() or len(value) > _MAX_QUERY_CHARS
+                for value in item_values
+            )
+        ):
+            raise ContractValidationError("diagnostic MCP semantic result item is invalid")
+        rendered_value, redaction_count = redact_authorized_evidence_text("／".join(item_values))
+        answer_items.append(rendered_value)
+        answer_item_redacted = answer_item_redacted or bool(redaction_count)
+
+    display_pagination = payload.get("display_pagination")
+    if not isinstance(display_pagination, Mapping):
+        raise ContractValidationError("diagnostic MCP semantic pagination is invalid")
+    page_size = display_pagination.get("page_size")
+    page_number = display_pagination.get("page_number")
+    displayed_count = display_pagination.get("displayed_count")
+    has_more = display_pagination.get("has_more")
+    if (
+        page_size != normalized_request["page_size"]
+        or page_number != normalized_request["page_number"]
+        or not isinstance(displayed_count, int)
+        or isinstance(displayed_count, bool)
+        or displayed_count < 0
+        or displayed_count != len(answer_items)
+        or not isinstance(has_more, bool)
+    ):
+        raise ContractValidationError("diagnostic MCP semantic pagination is invalid")
+    if status == "ok" and has_more:
+        raise ContractValidationError("semantic all-matching response must be complete")
+
+    if status == "ok":
+        answerability_status = "sufficient_evidence"
+        reason_codes = ["evidence_requirement_satisfied"]
+        warnings: list[str] = []
+        notice = "已完成完整符合條件集合；來源可依需求另外要求。"
+    elif status == "clarification_required":
+        answerability_status = "clarification_required"
+        reason_codes = ["semantic_grounding_ambiguous"]
+        warnings = ["semantic_clarification_required"]
+        notice = "需要更明確的條件後才能安全查詢。"
+    elif status == "permission_denied":
+        answerability_status = "permission_denied"
+        reason_codes = ["permission_denied"]
+        warnings = ["semantic_permission_denied"]
+        notice = "目前沒有足夠權限查詢這個範圍。"
+    else:
+        answerability_status = "insufficient_evidence"
+        reason_codes = ["insufficient_complete_scope"]
+        warnings = ["semantic_insufficient_evidence"]
+        notice = "目前無法確認完整的可查詢範圍，因此不會提供不完整答案。"
+
+    generated_at = _timestamp(fixed_now)
+    response = {
+        "status": status,
+        "query_id": query_id,
+        "query_hash": sha256_json(query_text),
+        "generated_at": generated_at,
+        "sort": None,
+        "result_count": len(answer_items),
+        "total_result_count": len(answer_items),
+        "displayed_result_count": len(answer_items),
+        # These are answer values, not evidence-source rows.  The browser
+        # renders them immediately as a readable answer list.
+        "answer_items": answer_items,
+        "results": [],
+        "warnings": sorted(
+            {
+                *warnings,
+                *({"unsafe_mail_evidence_content_redacted"} if answer_item_redacted else set()),
+            }
+        ),
+        "notice": notice,
+        "task_frame": {},
+        "coverage": {
+            "cardinality_mode": normalized_request["cardinality"],
+            "total_source_item_count": len(answer_items),
+            "returned_source_item_count": len(answer_items),
+            "displayed_source_item_count": len(answer_items),
+            "is_exhaustive": status == "ok",
+            "has_more": False,
+            "result_representation": "unique_projection_values",
+        },
+        "answerability": {
+            "status": answerability_status,
+            "reason_codes": reason_codes,
+        },
+        "projection": {
+            "output_format": "list",
+            "primary_fields": ["projection_values"],
+            "secondary_fields": [],
+            "page_size": page_size,
+            "page_offset": (page_number - 1) * page_size,
+            "has_more": has_more,
+        },
+        "timings_ms": dict(timings_ms),
+        "claim_boundary": {
+            "chatgpt_bypassed": True,
+            "mail_upload_performed": False,
+            "uploaded_mail_available": False,
+            "read_only_mail_evidence": True,
+            "project_or_wiki_write_performed": False,
+            "canonical_graph_write_performed": False,
+            "autonomous_business_decision": False,
+            "production_ready": False,
+        },
+    }
+    assert_authorized_evidence_payload_safe(
+        response,
+        "mail_human_uat_semantic_mcp_response",
+    )
+    return response
+
+
+def _semantic_mcp_assistant_text(*, status: str, fallback: str) -> str:
+    if status == "clarification_required":
+        return "這個條件仍有歧義；請指定要查的項目、欄位或值。"
+    if status == "permission_denied":
+        return "我沒有足夠權限查詢這個範圍。"
+    if status == "insufficient":
+        return "目前無法確認完整的可查詢範圍，因此不會提供不完整答案。"
+    return fallback
+
+
 def _expect_exact_keys(
     payload: Mapping[str, Any],
     allowed: set[str],
@@ -1817,43 +2216,6 @@ def _logical_source_count(bundle: MailEvidenceBundle) -> int:
     """Count logical mail sources, never parser body segments."""
 
     return len({message.email_message_id for message in bundle.messages})
-
-
-def _expand_index_query(query_text: str) -> str:
-    expansions: list[str] = []
-    for numeric_alias in _typed_numeric_identifier_aliases(query_text):
-        if numeric_alias not in expansions:
-            expansions.append(numeric_alias)
-    return " ".join([query_text, *expansions]).strip()
-
-
-def _expand_legacy_query(
-    query_text: str,
-) -> tuple[str, tuple[tuple[str, ...], ...]]:
-    lowered = query_text.casefold()
-    expansions: list[str] = list(_typed_numeric_identifier_aliases(query_text))
-    filters: list[tuple[str, ...]] = []
-    for triggers, aliases, result_terms in _LEGACY_QUERY_ALIASES:
-        if any(trigger.casefold() in lowered for trigger in triggers):
-            expansions.extend(alias for alias in aliases if alias not in expansions)
-            filters.append(result_terms)
-    for term in _LEGACY_EXACT_QUERY_FILTERS:
-        if term.casefold() in lowered:
-            filters.append((term,))
-    return " ".join([query_text, *expansions]).strip(), tuple(filters)
-
-
-def _legacy_filter_match_counts(
-    subject: str,
-    snippet: str,
-    groups: tuple[tuple[str, ...], ...],
-) -> tuple[int, int]:
-    subject_lowered = subject.casefold()
-    snippet_lowered = snippet.casefold()
-    return (
-        sum(any(term.casefold() in subject_lowered for term in group) for group in groups),
-        sum(any(term.casefold() in snippet_lowered for term in group) for group in groups),
-    )
 
 
 def _query_needles(query_text: str) -> tuple[str, ...]:
@@ -2184,6 +2546,18 @@ _CHAT_UAT_HTML = """<!doctype html>
     .assistant-title { margin-bottom: 7px; font-weight: 650; }
     .assistant-text {
       min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+    }
+    .semantic-answer-list {
+      display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none;
+    }
+    .semantic-answer-item {
+      display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px;
+      align-items: start; border: 1px solid var(--line); border-radius: 12px;
+      background: #fbfcfa; padding: 11px 13px; line-height: 1.6;
+      overflow-wrap: anywhere; word-break: break-word;
+    }
+    .semantic-answer-order {
+      color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 800;
     }
     .sources-disclosure {
       display: inline-flex; align-items: center; gap: 6px; margin-top: 14px;
@@ -2780,17 +3154,38 @@ _CHAT_UAT_HTML = """<!doctype html>
     function renderAssistantResult(payload, holder) {
       holder.replaceChildren();
       const results = Array.isArray(payload.results) ? payload.results : [];
+      const answerItems = Array.isArray(payload.answer_items)
+        ? payload.answer_items.filter((item) => typeof item === "string" && item.trim())
+        : [];
       if (payload.assistant_text) {
         const answer = document.createElement("div");
         answer.className = "assistant-text";
         answer.textContent = payload.assistant_text;
         holder.appendChild(answer);
       }
+      if (answerItems.length) {
+        const list = document.createElement("ol");
+        list.className = "semantic-answer-list";
+        list.setAttribute("aria-label", "查詢結果");
+        for (const [index, value] of answerItems.entries()) {
+          const item = document.createElement("li");
+          item.className = "semantic-answer-item";
+          const order = document.createElement("span");
+          order.className = "semantic-answer-order";
+          order.textContent = String(index + 1);
+          const content = document.createElement("span");
+          content.textContent = value;
+          item.append(order, content);
+          list.appendChild(item);
+        }
+        holder.appendChild(list);
+      }
 
       if (!results.length) {
         if (
           payload.orchestration
           && payload.orchestration.action === "call_formowl_tool"
+          && !answerItems.length
         ) {
           const actions = document.createElement("div");
           actions.className = "feedback-row";
@@ -3487,6 +3882,8 @@ _UPLOAD_IFRAME_HTML = """<!doctype html>
 
 
 __all__ = [
+    "DiagnosticMcpClient",
+    "FormOwlDiagnosticMcpHttpClient",
     "MailHumanUatHttpConfig",
     "MailHumanUatService",
     "build_mail_human_uat_http_handler",

@@ -143,6 +143,19 @@ from .public_safety import (
     redact_public_raw_references,
     safe_public_string,
 )
+from .structured_intent import (
+    AdmissibleSemanticScope,
+    ExecutableSemanticPlan,
+    PermissionFirstSemanticPlanner,
+    SemanticPlanClarificationRequired,
+    SemanticSchemaAliasMap,
+    SemanticTaskSkeleton,
+    StructuredIntent,
+    query_mail_evidence_input_schema,
+    semantic_request_json_schema,
+    structured_intent_json_schema,
+    validate_semantic_request,
+)
 from .evidence_coverage import (
     ANSWER_CLAIM_STATE_VALUES,
     AnswerClaim,
@@ -396,4 +409,15 @@ __all__ = [
     "validate_workspace_member",
     "validate_wiki_projection_spec",
     "validate_wiki_projection_policy",
+    "AdmissibleSemanticScope",
+    "ExecutableSemanticPlan",
+    "PermissionFirstSemanticPlanner",
+    "SemanticPlanClarificationRequired",
+    "SemanticSchemaAliasMap",
+    "SemanticTaskSkeleton",
+    "StructuredIntent",
+    "query_mail_evidence_input_schema",
+    "semantic_request_json_schema",
+    "structured_intent_json_schema",
+    "validate_semantic_request",
 ]

@@ -1,0 +1,38 @@
+{
+  "ontology_revision": "formowl_public_semantic_ontology_v1",
+  "provenance": "Public source-neutral canonical projection of governed executor concepts. Every label list contains only its canonical self-label; runtime terminology variants must be researched by the isolated public web grounder.",
+  "object_aliases": {
+    "html_table": [
+      "html_table"
+    ]
+  },
+  "predicate_aliases": {
+    "coo": [
+      "coo"
+    ],
+    "p/n": [
+      "p/n"
+    ],
+    "status": [
+      "status"
+    ]
+  },
+    "value_aliases": {
+        "status": {
+            "closed": [
+                "closed"
+      ],
+      "not started": [
+        "not started"
+      ],
+      "open": [
+        "open"
+            ]
+        }
+    },
+    "value_domains": {
+        "coo": "open_public_value",
+        "p/n": "open_public_value",
+        "status": "closed_enum"
+    }
+}

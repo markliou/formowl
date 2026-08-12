@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 from pathlib import Path
 import stat
@@ -23,11 +24,47 @@ from formowl_mail.human_uat_orchestrator import (  # noqa: E402
     validate_codex_runtime_state,
 )
 
+_PRIVATE_PLANNER_ROLE = "private-planner"
+_PUBLIC_WEB_GROUNDER_ROLE = "public-web-grounder"
+_RUNTIME_ROLES = (_PRIVATE_PLANNER_ROLE, _PUBLIC_WEB_GROUNDER_ROLE)
+
+
+def _role_allows_public_web_search(role: str) -> bool:
+    if role not in _RUNTIME_ROLES:
+        raise ContractValidationError("Codex UAT runtime role is invalid")
+    return role == _PUBLIC_WEB_GROUNDER_ROLE
+
+
+def _require_dual_runtime_api() -> None:
+    """Refuse to provision a web role against the legacy no-web runtime API."""
+
+    for function in (
+        prepare_codex_runtime_state,
+        prepare_codex_runtime_state_from_auth_cache,
+        validate_codex_runtime_state,
+        build_hardened_codex_app_server_command,
+    ):
+        try:
+            signature = inspect.signature(function)
+        except (TypeError, ValueError) as exc:
+            raise ContractValidationError("Codex semantic dual-runtime API is unavailable") from exc
+        if "allow_public_web_search" not in signature.parameters:
+            raise ContractValidationError("Codex semantic dual-runtime API is unavailable")
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("init", "serve"))
     parser.add_argument("--state-dir", type=Path, required=True)
+    parser.add_argument(
+        "--runtime-role",
+        choices=_RUNTIME_ROLES,
+        required=True,
+        help=(
+            "private-planner disables web access; public-web-grounder enables "
+            "web search and must use a separate state root and socket."
+        ),
+    )
     auth_group = parser.add_mutually_exclusive_group()
     auth_group.add_argument(
         "--api-key-file",
@@ -54,6 +91,8 @@ def main() -> int:
         parser.error("the Codex UAT sidecar must run as a non-root user")
 
     try:
+        _require_dual_runtime_api()
+        allow_public_web_search = _role_allows_public_web_search(args.runtime_role)
         if args.command == "init":
             if args.api_key_file is None and not args.chatgpt_auth_stdin:
                 parser.error("init requires exactly one Codex authentication source")
@@ -63,6 +102,7 @@ def main() -> int:
                 paths = prepare_codex_runtime_state_from_auth_cache(
                     state_dir=args.state_dir,
                     auth_cache=_read_auth_cache_stdin(),
+                    allow_public_web_search=allow_public_web_search,
                 )
             else:
                 api_key = _read_secret(args.api_key_file)
@@ -70,9 +110,11 @@ def main() -> int:
                     codex_command=args.codex_command,
                     state_dir=args.state_dir,
                     api_key=api_key,
+                    allow_public_web_search=allow_public_web_search,
                 )
             print(
                 "FORMOWL_CODEX_UAT_RUNTIME_INITIALIZED "
+                f"runtime_role={args.runtime_role} "
                 f"state_dir={paths.state_dir} login_method={paths.login_method}",
                 flush=True,
             )
@@ -82,11 +124,15 @@ def main() -> int:
             parser.error("serve requires --socket-path")
         if args.api_key_file is not None or args.chatgpt_auth_stdin:
             parser.error("serve does not accept authentication input")
-        paths = validate_codex_runtime_state(args.state_dir)
+        paths = validate_codex_runtime_state(
+            args.state_dir,
+            allow_public_web_search=allow_public_web_search,
+        )
         socket_path = _prepare_socket_path(args.socket_path)
         command = build_hardened_codex_app_server_command(
             args.codex_command,
             listen_url=f"unix://{socket_path}",
+            allow_public_web_search=allow_public_web_search,
         )
         environment = build_codex_runtime_environment(paths.codex_home)
         os.execvpe(command[0], command, environment)

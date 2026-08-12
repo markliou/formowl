@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import http.client
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import threading
@@ -79,7 +80,7 @@ class _ScriptedConversationModel:
         step = self.steps.pop(0)
         tool_request = step.get("tool_request")
         tool_result = None
-        if isinstance(tool_request, UatEvidenceToolRequest):
+        if isinstance(tool_request, (UatEvidenceToolRequest, dict)):
             self.tool_call_count += 1
             tool_result = evidence_tool(tool_request)
         return UatConversationOutcome(
@@ -488,6 +489,150 @@ class MailHumanUatHttpTests(unittest.TestCase):
             "PO470002002",
             json.dumps(chat_results[1]["required_term_hashes"]),
         )
+
+    def test_semantic_chat_calls_true_mcp_once_and_renders_77_answers_directly(
+        self,
+    ) -> None:
+        answer_values = [f"generic-value-{index:03d}" for index in range(1, 78)]
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "已完成查詢。",
+                    "display_format": "list",
+                    "tool_request": _semantic_request(),
+                }
+            ]
+        )
+        with _RecordingDiagnosticMcp(
+            _semantic_mcp_payload(status="ok", values=answer_values)
+        ) as diagnostic_mcp:
+            service = MailHumanUatService(
+                MailHumanUatHttpConfig(
+                    bundle=_bundle(),
+                    state_dir=_paths.fresh_test_dir("mail-human-uat-semantic-mcp"),
+                    conversation_model=model,
+                    diagnostic_mcp_url=diagnostic_mcp.url,
+                    fixed_now=NOW,
+                )
+            )
+            with (
+                mock.patch.object(
+                    service._base_gateway,
+                    "execute_mail_evidence_query",
+                    side_effect=AssertionError("semantic UAT must not use lexical gateway"),
+                ),
+                _RunningSurface(service) as surface,
+            ):
+                response, body = surface.request_json(
+                    "/api/chat",
+                    {
+                        "query_text": "list generic records with quiescent state",
+                        "visitor_id": VISITOR_ID,
+                        "session_id": SESSION_ID,
+                        "sequence": 1,
+                        "source": "composer",
+                    },
+                )
+                page_response, page_body = surface.request("GET", "/")
+
+        payload = json.loads(body)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["results"], [])
+        self.assertEqual(payload["answer_items"], answer_values)
+        self.assertEqual(payload["result_count"], 77)
+        self.assertTrue(payload["coverage"]["is_exhaustive"])
+        self.assertEqual(
+            payload["coverage"]["result_representation"],
+            "unique_projection_values",
+        )
+        self.assertEqual(len(diagnostic_mcp.calls), 1)
+        request = diagnostic_mcp.calls[0]
+        self.assertEqual(request["jsonrpc"], "2.0")
+        self.assertEqual(request["method"], "tools/call")
+        self.assertEqual(request["params"]["name"], "query_effective_graph_view")
+        arguments = request["params"]["arguments"]
+        self.assertEqual(
+            arguments,
+            {
+                "query_text": "list generic records with quiescent state",
+                "semantic_request": _semantic_request(),
+            },
+        )
+        self.assertEqual(model.tool_call_count, 1)
+
+        html = page_body.decode("utf-8")
+        self.assertEqual(page_response.status, 200)
+        render_start = html.index("function renderAssistantResult")
+        render_end = html.index("async function ask", render_start)
+        render = html[render_start:render_end]
+        self.assertIn("const answerItems = Array.isArray(payload.answer_items)", render)
+        self.assertIn('list.className = "semantic-answer-list";', render)
+        self.assertIn('item.className = "semantic-answer-item";', render)
+        self.assertIn('list.setAttribute("aria-label", "查詢結果");', render)
+        self.assertLess(
+            render.index("holder.appendChild(list);"),
+            render.index("if (!results.length)"),
+        )
+        self.assertNotIn("查看來源（${answerItems.length}）", render)
+        self.assertIn(".semantic-answer-item", html)
+        self.assertNotIn(
+            "_LEGACY_QUERY_ALIASES",
+            Path(__file__)
+            .parents[1]
+            .joinpath("python/formowl_mail/human_uat_http.py")
+            .read_text(encoding="utf-8"),
+        )
+
+    def test_semantic_clarification_is_normal_http_response_after_one_mcp_call(
+        self,
+    ) -> None:
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "已完成查詢。",
+                    "display_format": "list",
+                    "tool_request": _semantic_request(),
+                }
+            ]
+        )
+        with _RecordingDiagnosticMcp(
+            _semantic_mcp_payload(
+                status="clarification_required",
+                values=[],
+            )
+        ) as diagnostic_mcp:
+            service = MailHumanUatService(
+                MailHumanUatHttpConfig(
+                    bundle=_bundle(),
+                    state_dir=_paths.fresh_test_dir("mail-human-uat-semantic-clarification"),
+                    conversation_model=model,
+                    diagnostic_mcp_url=diagnostic_mcp.url,
+                    fixed_now=NOW,
+                )
+            )
+            with _RunningSurface(service) as surface:
+                response, body = surface.request_json(
+                    "/api/chat",
+                    {
+                        "query_text": "list generic records with quiescent state",
+                        "visitor_id": VISITOR_ID,
+                        "session_id": SESSION_ID,
+                        "sequence": 1,
+                        "source": "composer",
+                    },
+                )
+
+        payload = json.loads(body)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(payload["status"], "clarification_required")
+        self.assertEqual(payload["orchestration"]["action"], "clarify")
+        self.assertEqual(payload["results"], [])
+        self.assertEqual(payload["answer_items"], [])
+        self.assertIn("請指定", payload["assistant_text"])
+        self.assertEqual(len(diagnostic_mcp.calls), 1)
 
     def test_chat_matches_typed_identifier_to_numeric_source_and_etd(self) -> None:
         bundle = _bundle()
@@ -2621,6 +2766,93 @@ def _eml_with_attached_message(*, body: str, attached_body: str) -> bytes:
         f"{attached_body}\r\n"
         "--formowl-uat-outer--\r\n"
     ).encode("utf-8")
+
+
+def _semantic_request() -> dict[str, object]:
+    return {
+        "query_class": "attribute_filter",
+        "object_type_mention": "vessel record",
+        "predicate_mention": "resonance state",
+        "operator": "equals",
+        "value_mention": "quiescent",
+        "projection_mention": "vessel record",
+        "cardinality": "all_matching",
+        "page_size": 100,
+        "page_number": 1,
+    }
+
+
+def _semantic_mcp_payload(*, status: str, values: list[str]) -> dict[str, object]:
+    projection_state = "complete" if status == "ok" else "not_available"
+    return {
+        "status": status,
+        "complete_projection": {
+            "state": projection_state,
+            "values": [{"values": [value]} for value in values],
+            "safe_result_budget": {
+                "max_unique_projection_rows": 100,
+                "max_serialized_bytes": 65536,
+            },
+        },
+        "display_pagination": {
+            "page_size": 100,
+            "page_number": 1,
+            "displayed_count": len(values),
+            "has_more": False,
+        },
+    }
+
+
+class _RecordingDiagnosticMcp:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+        self.calls: list[dict[str, object]] = []
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                content_length = int(self.headers.get("Content-Length", "0"))
+                request = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                owner.calls.append(request)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": request["id"],
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(owner.payload, ensure_ascii=False),
+                            }
+                        ],
+                        "structuredContent": owner.payload,
+                    },
+                }
+                encoded = json.dumps(response, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, _format: str, *_args: object) -> None:
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def __enter__(self) -> "_RecordingDiagnosticMcp":
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+    @property
+    def url(self) -> str:
+        host, port = self.server.server_address
+        return f"http://{host}:{port}/mcp"
 
 
 class _RunningSurface:

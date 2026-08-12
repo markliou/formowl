@@ -798,7 +798,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
                 )
                 self.assertEqual(transport.deleted_threads, ["thread_1"])
 
-    def test_multiple_tool_calls_are_bounded_and_latest_refinement_is_projected(
+    def test_second_formowl_call_is_rejected_before_a_refinement_executes(
         self,
     ) -> None:
         first_call = {
@@ -842,21 +842,21 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
                 transport,
                 workspace_dir=workspace,
             )
-            outcome = model.respond(
-                history=(),
-                user_text="查 ID-42 的確認交期",
-                latest_evidence=None,
-                safety_identifier="session-multiple-tools",
-                evidence_tool=evidence_tool,
-            )
+            with self.assertRaisesRegex(RuntimeError, "too many UAT tools"):
+                model.respond(
+                    history=(),
+                    user_text="查 ID-42 的確認交期",
+                    latest_evidence=None,
+                    safety_identifier="session-multiple-tools",
+                    evidence_tool=evidence_tool,
+                )
 
-        self.assertEqual(len(evidence_calls), 2)
-        self.assertEqual(outcome.tool_request.query_text, "ID-42 confirmed delivery date")
-        self.assertEqual(outcome.tool_result["results"][0]["snippet"], "refined")
+        self.assertEqual(len(evidence_calls), 1)
+        self.assertEqual(evidence_calls[0].query_text, "ID-42 delivery")
         self.assertEqual(len(transport.turn_calls), 1)
-        self.assertEqual(transport.deleted_threads, [])
+        self.assertEqual(transport.deleted_threads, ["thread_1"])
 
-    def test_identical_refinement_reuses_result_without_requerying_backend(self) -> None:
+    def test_identical_second_formowl_call_is_rejected_without_requerying_backend(self) -> None:
         tool_call = {
             "tool_name": "search_formowl_evidence",
             "arguments": {
@@ -885,19 +885,21 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
                 transport,
                 workspace_dir=workspace,
             )
-            outcome = model.respond(
-                history=(),
-                user_text="查 ID-42",
-                latest_evidence=None,
-                safety_identifier="session-duplicate-tool",
-                evidence_tool=lambda request: (evidence_calls.append(request) or evidence_result),
-            )
+            with self.assertRaisesRegex(RuntimeError, "too many UAT tools"):
+                model.respond(
+                    history=(),
+                    user_text="查 ID-42",
+                    latest_evidence=None,
+                    safety_identifier="session-duplicate-tool",
+                    evidence_tool=lambda request: (
+                        evidence_calls.append(request) or evidence_result
+                    ),
+                )
 
         self.assertEqual(len(evidence_calls), 1)
-        self.assertEqual(outcome.tool_result, evidence_result)
         self.assertEqual(len(transport.turn_calls), 1)
 
-    def test_more_than_three_tool_calls_fail_closed(self) -> None:
+    def test_more_than_one_tool_call_fails_closed(self) -> None:
         tool_calls = [
             {
                 "tool_name": "search_formowl_evidence",
@@ -931,7 +933,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
                     ),
                 )
 
-        self.assertEqual(len(evidence_calls), 3)
+        self.assertEqual(len(evidence_calls), 1)
         self.assertEqual(transport.deleted_threads, ["thread_1"])
 
     def test_invalid_final_message_discards_thread(self) -> None:
@@ -1389,6 +1391,10 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
 
     def test_codex_command_disables_non_formowl_capabilities(self) -> None:
         command = build_hardened_codex_app_server_command("codex")
+        web_command = build_hardened_codex_app_server_command(
+            "codex",
+            allow_public_web_search=True,
+        )
 
         self.assertEqual(command[:4], ("codex", "app-server", "--listen", "stdio://"))
         disabled = {
@@ -1410,6 +1416,9 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         )
         self.assertIn('sandbox_mode="read-only"', command)
         self.assertNotIn('sandbox_mode="danger-full-access"', command)
+        self.assertIn("web_search=disabled", command)
+        self.assertIn("web_search=live", web_command)
+        self.assertNotIn("web_search=enabled", web_command)
         self.assertIn("mcp_servers={}", command)
         self.assertNotIn("OPENAI_API_KEY", " ".join(command))
 
@@ -1472,6 +1481,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         self.assertEqual(paths.workspace, paths.state_dir / "codex-workspace")
         self.assertEqual(paths.login_method, "api")
         self.assertIn('sandbox_mode = "read-only"', config)
+        self.assertIn('web_search = "disabled"', config)
         self.assertIn("[mcp_servers]", config)
         self.assertEqual(config.count("[[skills.config]]"), 5)
         self.assertEqual(validated_paths, paths)
@@ -1495,14 +1505,20 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
             paths = prepare_codex_runtime_state_from_auth_cache(
                 state_dir=Path(temp_dir) / "runtime",
                 auth_cache=auth_cache,
+                allow_public_web_search=True,
             )
             config = (paths.codex_home / "config.toml").read_text(encoding="utf-8")
             copied = json.loads((paths.codex_home / "auth.json").read_text(encoding="utf-8"))
-            validated_paths = validate_codex_runtime_state(paths.state_dir)
+            validated_paths = validate_codex_runtime_state(
+                paths.state_dir,
+                allow_public_web_search=True,
+            )
 
         self.assertEqual(paths.login_method, "chatgpt")
         self.assertEqual(copied["tokens"]["access_token"], secret)
         self.assertIn('forced_login_method = "chatgpt"', config)
+        self.assertIn('web_search = "live"', config)
+        self.assertNotIn('web_search = "enabled"', config)
         self.assertEqual(validated_paths, paths)
 
     def test_prepare_codex_runtime_rejects_invalid_chatgpt_auth_without_leak(self) -> None:
@@ -1607,6 +1623,26 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
             apps_response={"data": [], "nextCursor": None},
             runtime_workspace=workspace,
         )
+        web_config = json.loads(json.dumps(safe_config))
+        web_config["web_search"] = "live"
+        web_config["features"]["web_search"] = True
+        _assert_hardened_codex_runtime(
+            config_response={"config": web_config, "layers": []},
+            mcp_response={"data": [], "nextCursor": None},
+            skills_response=safe_skills,
+            apps_response={"data": [], "nextCursor": None},
+            runtime_workspace=workspace,
+            allow_public_web_search=True,
+        )
+        with self.assertRaisesRegex(RuntimeError, "unsafe configuration"):
+            _assert_hardened_codex_runtime(
+                config_response={"config": safe_config, "layers": []},
+                mcp_response={"data": [], "nextCursor": None},
+                skills_response=safe_skills,
+                apps_response={"data": [], "nextCursor": None},
+                runtime_workspace=workspace,
+                allow_public_web_search=True,
+            )
 
         enabled_skills = json.loads(json.dumps(safe_skills))
         enabled_skills["data"][0]["skills"][0]["enabled"] = True
