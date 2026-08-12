@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import re
 import secrets
-from typing import Any, Callable, Iterator, Mapping, Protocol, runtime_checkable
+from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence, runtime_checkable
 
 from formowl_contract import (
     AnswerClaim,
@@ -126,6 +126,146 @@ class VerifiedMailEvidencePublication:
     write_count: int
     owner_query: dict[str, Any]
     created: bool
+
+
+@dataclass(frozen=True)
+class FreshUatAttestationReceipt:
+    """Metadata-only receipt for a fresh internal diagnostic-UAT publication."""
+
+    historical_provenance_status: str
+    aggregate_manifest_id: str
+
+    def __post_init__(self) -> None:
+        if self.historical_provenance_status != "legacy_authority_unverified":
+            raise ContractValidationError("fresh UAT provenance status is invalid")
+        _validate_task_record_id(self.aggregate_manifest_id, "aggregate_manifest_id")
+
+
+_FRESH_UAT_SHARD_FIELDS = frozenset(
+    {
+        "ordinal",
+        "normalized_bundle",
+        "normalized_bundle_sha256",
+        "immutable_source_hashes",
+    }
+)
+_FRESH_UAT_LEGACY_FIELDS = frozenset(
+    {
+        "legacy_authority_id",
+        "legacy_proof_id",
+        "legacy_coverage_ledger_id",
+    }
+)
+
+
+def _validate_fresh_uat_attestation_input(
+    *,
+    normalized_shards: Sequence[Mapping[str, Any]],
+    immutable_source_hashes: Mapping[str, str],
+) -> tuple[Mapping[str, Any], ...]:
+    """Validate only current, hash-pinned normalized shard facts before writes."""
+
+    if (
+        isinstance(normalized_shards, (str, bytes))
+        or not isinstance(normalized_shards, Sequence)
+        or not normalized_shards
+    ):
+        raise ContractValidationError("fresh UAT normalized shards are invalid")
+    if not isinstance(immutable_source_hashes, Mapping):
+        raise ContractValidationError("fresh UAT immutable source hashes are invalid")
+
+    normalized = tuple(normalized_shards)
+    expected_immutable_hashes: dict[str, str] = {}
+    for expected_ordinal, shard in enumerate(normalized):
+        if not isinstance(shard, Mapping):
+            raise ContractValidationError("fresh UAT normalized shard is invalid")
+        shard_fields = set(shard)
+        if shard_fields & _FRESH_UAT_LEGACY_FIELDS or shard_fields != _FRESH_UAT_SHARD_FIELDS:
+            raise ContractValidationError("fresh UAT legacy provenance is not accepted")
+        if shard.get("ordinal") != expected_ordinal:
+            raise ContractValidationError("fresh UAT shard ordinal is invalid")
+        normalized_bundle = shard.get("normalized_bundle")
+        supplied_hash = shard.get("normalized_bundle_sha256")
+        if (
+            not isinstance(normalized_bundle, Mapping)
+            or not isinstance(supplied_hash, str)
+            or not _SHA256.fullmatch(supplied_hash)
+            or sha256_json(dict(normalized_bundle)) != supplied_hash
+        ):
+            raise ContractValidationError("fresh UAT normalized bundle hash is invalid")
+        per_shard_hashes = shard.get("immutable_source_hashes")
+        if not isinstance(per_shard_hashes, Mapping) or not per_shard_hashes:
+            raise ContractValidationError("fresh UAT immutable source hashes are invalid")
+        for source_key, source_hash in per_shard_hashes.items():
+            if (
+                not isinstance(source_key, str)
+                or not source_key
+                or not isinstance(source_hash, str)
+                or not _SHA256.fullmatch(source_hash)
+                or source_key in expected_immutable_hashes
+            ):
+                raise ContractValidationError("fresh UAT immutable source hashes are invalid")
+            expected_immutable_hashes[source_key] = source_hash
+
+    supplied_immutable_hashes = dict(immutable_source_hashes)
+    if (
+        supplied_immutable_hashes != expected_immutable_hashes
+        or any(
+            not isinstance(source_key, str)
+            or not source_key
+            or not isinstance(source_hash, str)
+            or not _SHA256.fullmatch(source_hash)
+            for source_key, source_hash in supplied_immutable_hashes.items()
+        )
+    ):
+        raise ContractValidationError("fresh UAT immutable source hashes are inconsistent")
+    return normalized
+
+
+def publish_fresh_uat_attestation(
+    *,
+    output_dir: str | Path,
+    normalized_shards: Sequence[Mapping[str, Any]],
+    immutable_source_hashes: Mapping[str, str],
+    source_asset_id: str,
+    source_fingerprint: str,
+    workspace_id: str,
+    owner_user_id: str,
+    permission_scope: Mapping[str, Any],
+    actor_context_id: str,
+    issued_at: str,
+    known_as_of: str,
+    semantic_profile_fingerprint: str,
+    scope_manifest_id: str,
+    scope_policy_id: str,
+    scope_policy_version: str,
+    scope_policy_fingerprint: str,
+    authority_verifier_root: str | bytes,
+) -> FreshUatAttestationReceipt:
+    """Issue current diagnostic-UAT evidence only from explicit normalized facts."""
+
+    del (
+        output_dir,
+        source_asset_id,
+        source_fingerprint,
+        workspace_id,
+        owner_user_id,
+        permission_scope,
+        actor_context_id,
+        issued_at,
+        known_as_of,
+        semantic_profile_fingerprint,
+        scope_manifest_id,
+        scope_policy_id,
+        scope_policy_version,
+        scope_policy_fingerprint,
+        authority_verifier_root,
+    )
+    _validate_fresh_uat_attestation_input(
+        normalized_shards=normalized_shards,
+        immutable_source_hashes=immutable_source_hashes,
+    )
+    raise ContractValidationError("fresh UAT materialization is unavailable")
 
 
 @dataclass(frozen=True)
