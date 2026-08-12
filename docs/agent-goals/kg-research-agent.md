@@ -59,13 +59,14 @@ head is `eac8473d`, and integration merge `9e8a5f6` has parents `bed52a4` and
 `docs/issue51-wp1-interface-freeze.md`.
 
 The separately assigned bounded Issue #33 **Track 2 implementation lane is
-complete and retired** at
-`03d6d269725a3d9890bb3c8f1bab37dcba4d2d87`. Its tokenizer/profile binding and
-generic inferred-type ontology correction must not be reimplemented under
-another Track 2 task. Neo4j benchmarking, adapter, migration, and projection
-work is closed by maintainer decision; PostgreSQL remains the canonical
-baseline. This does not mark methodology authority ready or satisfy Issue #33's
-independent-holdout and semantic-comparison close criteria.
+closed** through `8730e21`, `ead8d97`, and `8f10404`. Focused canonical
+verification passed tokenizer 14/14, ontology 5/5, and authority 15/15; 3/3
+reviewers returned `AGREE`. Its tokenizer/profile binding and generic
+inferred-type ontology correction must not be duplicated. PostgreSQL remains
+canonical. The absent maintainer-approved model artifact and corpus hash are
+separate readiness inputs; methodology authority remains blocked, and this
+does not satisfy Issue #33's broader independent-holdout or research-acceptance
+criteria.
 
 ## Acceptance Criteria
 

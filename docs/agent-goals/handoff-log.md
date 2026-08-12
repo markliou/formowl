@@ -254,23 +254,17 @@ Lifecycle label: `active`.
   independent raw-oracle reconciliation, consuming but not mutating the frozen
   WP1 interface.
 
-## 2026-08-12 — Track 2 bounded implementation complete and retired
+## 2026-08-12 — Track 2 bounded implementation lane closed
 
-- The bounded Issue #33 Track 2 runtime-integration checkpoint is complete and
-  pushed at `03d6d269725a3d9890bb3c8f1bab37dcba4d2d87`.
-- The completed scope is one process-frozen tokenizer profile/fingerprint
-  across query, evidence, candidate KG, and four UAT processes, plus the
-  generic ontology correction: inferred mismatch never hard-prunes or zeros a
-  candidate, compatible inferred types receive a capped additive bonus
-  `<= 0.2`, and explicit governed core-supertype promotion remains hard.
-- Focused canonical verification passed 124/124 tests plus targeted Ruff
-  check/format. `methodology_authority_check.py --check` remains
-  valid-but-blocked; no methodology-readiness or KG-versus-ontology superiority
-  claim follows.
-- Maintainer decision rejects Neo4j work. PostgreSQL remains the canonical
-  baseline; do not resume benchmarks, adapters, migrations, traversal
-  projections, dual writes, or SPEC changes for Neo4j.
-- Historical dual-track recovery documents and Issue #33 progress comments are
-  superseded for implementation status. Do not dispatch duplicate Track 2
-  tokenizer or ontology implementation. Issue #33 may remain open only for its
-  broader independent-holdout and methodology acceptance gates.
+- Final commits are `8730e21`, `ead8d97`, and `8f10404`: immutable
+  content-bound tokenizer packaging, exact authority-count alignment, and
+  fail-closed contradictory package-plus-legacy configuration.
+- Canonical focused verification passed tokenizer 14/14, ontology 5/5, and
+  authority 15/15 with Ruff, format, and diff checks passing; 3/3 reviewers
+  returned `AGREE`.
+- PostgreSQL remains canonical. Do not dispatch duplicate Track 2 tokenizer,
+  ontology, or Neo4j implementation. The missing maintainer-approved model
+  artifact and corpus hash are separate readiness inputs.
+- Methodology authority remains valid-but-blocked. This closes only the bounded
+  implementation lane, not Issue #33's broader independent-holdout,
+  same-pipeline comparison, end-answer, or research-acceptance gates.
