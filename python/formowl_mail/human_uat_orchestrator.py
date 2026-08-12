@@ -368,7 +368,7 @@ def load_semantic_ontology_context(path: str | Path) -> SemanticSchemaAliasMap:
         raw = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ContractValidationError("semantic ontology could not be loaded") from exc
-    if not isinstance(raw, Mapping) or set(raw) not in {
+    if not isinstance(raw, Mapping) or set(raw) not in (
         {
             "ontology_revision",
             "provenance",
@@ -384,7 +384,7 @@ def load_semantic_ontology_context(path: str | Path) -> SemanticSchemaAliasMap:
             "value_aliases",
             "value_domains",
         },
-    }:
+    ):
         raise ContractValidationError("semantic ontology fields are invalid")
     if not isinstance(raw["ontology_revision"], str) or not raw["ontology_revision"].strip():
         raise ContractValidationError("semantic ontology revision is invalid")
