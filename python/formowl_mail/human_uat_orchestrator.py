@@ -117,6 +117,7 @@ _RETRYABLE_SEMANTIC_REASON_CODES = frozenset(
     {
         "invalid_structured_output",
         "runtime_unavailable",
+        "web_search_incomplete",
         "semantic_request_invalid",
     }
 )

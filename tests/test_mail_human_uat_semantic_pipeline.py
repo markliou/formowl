@@ -608,12 +608,129 @@ class MailHumanUatSemanticPipelineTests(unittest.TestCase):
                             ),
                             "completed_item_types": completed_item_types,
                         },
+                        {
+                            "final_message": _grounding(
+                                "vessels",
+                                "vessel record",
+                                text_prefix=("webSearch completed according to prose only\n"),
+                            ),
+                            "completed_item_types": completed_item_types,
+                        },
                     ),
                     user_text="Return all vessels whose resonance state is dormant.",
                 )
 
                 self.assertEqual(outcome.response_kind, "clarification")
                 self.assertFalse(formowl_calls)
+                self.assertEqual(len(_web.turn_calls), 2)
+
+    def test_missing_web_receipt_retries_once_then_calls_exactly_one_mcp(self) -> None:
+        """A transient skipped search retries grounding, never the MCP."""
+
+        plan = _semantic_request()
+        outcome, private, web, formowl_calls = self._run_model(
+            private_turns=(
+                {
+                    "final_message": _extraction(
+                        (
+                            ("vessels", "public_terminology"),
+                            ("resonance state", "public_terminology"),
+                            ("quiescent", "public_terminology"),
+                        )
+                    )
+                },
+                {"final_message": json.dumps(plan, separators=(",", ":"))},
+            ),
+            web_turns=(
+                {
+                    "final_message": _grounding("vessels", "vessel record"),
+                    "completed_web_search_item_types": (),
+                },
+                {
+                    "final_message": _grounding("vessels", "vessel record"),
+                    "completed_web_search_item_types": ("websearch",),
+                },
+                {
+                    "final_message": _grounding("resonance state", "resonance state"),
+                    "completed_web_search_item_types": ("websearch",),
+                },
+                {
+                    "final_message": _grounding("quiescent", "quiescent"),
+                    "completed_web_search_item_types": ("websearch",),
+                },
+            ),
+            user_text="Return all vessels whose resonance state is quiescent.",
+        )
+
+        self.assertEqual(outcome.response_kind, "answer")
+        self.assertEqual(formowl_calls, [plan])
+        self.assertEqual(len(private.turn_calls), 2)
+        self.assertEqual(len(web.turn_calls), 4)
+        self.assertEqual(
+            [
+                (
+                    record.stage,
+                    record.reason_code,
+                    record.attempt_count,
+                    record.completed_web_search_count,
+                )
+                for record in outcome.semantic_telemetry
+                if record.stage == "public_web_grounding"
+            ],
+            [
+                ("public_web_grounding", "web_search_incomplete", 1, 0),
+                ("public_web_grounding", "ok", 2, 3),
+            ],
+        )
+
+    def test_missing_web_receipt_twice_fails_closed_without_mcp(self) -> None:
+        """A semantic answer cannot bypass missing completed-search receipts."""
+
+        outcome, private, web, formowl_calls = self._run_model(
+            private_turns=(
+                {
+                    "final_message": _extraction(
+                        (
+                            ("vessels", "public_terminology"),
+                            ("resonance state", "public_terminology"),
+                            ("quiescent", "public_terminology"),
+                        )
+                    )
+                },
+            ),
+            web_turns=(
+                {
+                    "final_message": _grounding("vessels", "vessel record"),
+                    "completed_web_search_item_types": (),
+                },
+                {
+                    "final_message": _grounding("vessels", "vessel record"),
+                    "completed_web_search_item_types": (),
+                },
+            ),
+            user_text="Return all vessels whose resonance state is quiescent.",
+        )
+
+        self.assertEqual(outcome.response_kind, "clarification")
+        self.assertFalse(formowl_calls)
+        self.assertEqual(len(private.turn_calls), 1)
+        self.assertEqual(len(web.turn_calls), 2)
+        self.assertEqual(
+            [
+                (
+                    record.stage,
+                    record.reason_code,
+                    record.attempt_count,
+                    record.completed_web_search_count,
+                )
+                for record in outcome.semantic_telemetry
+                if record.stage == "public_web_grounding"
+            ],
+            [
+                ("public_web_grounding", "web_search_incomplete", 1, 0),
+                ("public_web_grounding", "web_search_incomplete", 2, 0),
+            ],
+        )
 
     def test_ambiguous_public_grounding_returns_clarification_without_mcp_call(self) -> None:
         outcome, _private, _web, formowl_calls = self._run_model(
