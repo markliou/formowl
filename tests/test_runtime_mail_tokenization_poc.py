@@ -395,6 +395,25 @@ class RuntimeMailTokenizationPocTests(unittest.TestCase):
 
         configured_mail_tokenizer_profile.cache_clear()
 
+    def test_package_with_legacy_ascii_mode_fails_closed(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                PROFILE_PACKAGE_ENV: "/not-used/tokenizer-package",
+                TOKENIZER_MODE_ENV: LEGACY_ASCII_TEST_MODE,
+            },
+            clear=False,
+        ):
+            os.environ.pop(MODEL_PATH_ENV, None)
+            os.environ.pop(MODEL_SHA256_ENV, None)
+            os.environ.pop(TRAINING_CORPUS_SHA256_ENV, None)
+            configured_mail_tokenizer_profile.cache_clear()
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "^frozen tokenizer profile is unavailable$",
+            ):
+                configured_mail_tokenizer_profile()
+
     def test_package_rejects_manifest_or_model_tampering(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

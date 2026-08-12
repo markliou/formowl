@@ -134,6 +134,9 @@ def configured_mail_tokenizer_profile() -> MailTokenizerProfile:
     """Validate and freeze the tokenizer profile for this process."""
 
     mode = _configured_tokenizer_mode()
+    package_path = os.environ.get(_PROFILE_PACKAGE_ENV)
+    if package_path is not None and mode == _LEGACY_ASCII_TEST_MODE:
+        raise RuntimeError("frozen tokenizer profile is unavailable")
     if mode == _LEGACY_ASCII_TEST_MODE:
         return _profile(
             tokenizer_id=ASCII_IDENTIFIER_REGEX_TOKENIZER_ID,
@@ -142,7 +145,6 @@ def configured_mail_tokenizer_profile() -> MailTokenizerProfile:
             model_sha256=None,
             training_corpus_sha256=None,
         )
-    package_path = os.environ.get(_PROFILE_PACKAGE_ENV)
     if package_path is not None:
         if any(
             name in os.environ
