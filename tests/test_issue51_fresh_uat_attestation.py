@@ -85,12 +85,14 @@ def _immutable_source_hashes() -> dict[str, str]:
 def _issuer_kwargs(
     *,
     output_dir: Path,
-    normalized_shards: tuple[dict[str, object], ...] | None = None,
+    normalized_shards: object | None = None,
     immutable_source_hashes: dict[str, str] | None = None,
 ) -> dict[str, object]:
     return {
         "output_dir": output_dir,
-        "normalized_shards": normalized_shards or _two_shards(),
+        "normalized_shards": (
+            normalized_shards if normalized_shards is not None else _two_shards()
+        ),
         "immutable_source_hashes": immutable_source_hashes or _immutable_source_hashes(),
         "source_asset_id": "asset_fresh_uat",
         "source_fingerprint": _sha256_text("synthetic-source"),
@@ -161,8 +163,7 @@ def _receipt_verifier():
     verifier = getattr(persistence, "verify_fresh_uat_attestation_receipt", None)
     if not callable(verifier):
         raise AssertionError(
-            "missing public API "
-            "formowl_mail.persistence.verify_fresh_uat_attestation_receipt"
+            "missing public API " "formowl_mail.persistence.verify_fresh_uat_attestation_receipt"
         )
     return verifier
 
@@ -200,7 +201,7 @@ class FreshUatAttestationContractTests(unittest.TestCase):
         self,
         *,
         output_dir: Path,
-        normalized_shards: tuple[dict[str, object], ...] | None = None,
+        normalized_shards: object | None = None,
         immutable_source_hashes: dict[str, str] | None = None,
     ) -> object:
         return _publisher()(
@@ -210,6 +211,71 @@ class FreshUatAttestationContractTests(unittest.TestCase):
                 immutable_source_hashes=immutable_source_hashes,
             )
         )
+
+    def test_lazy_shards_are_consumed_once_and_bundles_are_not_prebuilt(self) -> None:
+        persistence = importlib.import_module("formowl_mail.persistence")
+        original_builder = persistence._build_fresh_uat_bundle
+        original_publisher = persistence.FileMailEvidenceBundleStore.publish_verified_bundle
+        first, second = deepcopy(_two_shards())
+        build_calls: list[int] = []
+        published_count = 0
+
+        class OnePassShards:
+            def __init__(self) -> None:
+                self.iteration_count = 0
+
+            def __iter__(self):
+                self.iteration_count += 1
+                if self.iteration_count != 1:
+                    raise AssertionError("publisher must not re-iterate lazy normalized shards")
+                for shard in (first, second):
+                    yield shard
+
+        def bounded_builder(**kwargs: object):
+            ordinal = kwargs["normalized_shard"]["ordinal"]  # type: ignore[index]
+            self.assertEqual(
+                published_count,
+                ordinal,
+                "publisher must persist each shard before building the next",
+            )
+            build_calls.append(ordinal)
+            self.assertEqual(
+                build_calls,
+                list(range(len(build_calls))),
+                "publisher must build and persist shards in source order",
+            )
+            return original_builder(**kwargs)
+
+        def bounded_publisher(*args: object, **kwargs: object):
+            nonlocal published_count
+            publication = original_publisher(*args, **kwargs)
+            published_count += 1
+            return publication
+
+        source = OnePassShards()
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(
+                persistence,
+                "_build_fresh_uat_bundle",
+                side_effect=bounded_builder,
+            ),
+            patch.object(
+                persistence.FileMailEvidenceBundleStore,
+                "publish_verified_bundle",
+                side_effect=bounded_publisher,
+                autospec=True,
+            ),
+        ):
+            receipt = self._publish(
+                output_dir=Path(temporary),
+                normalized_shards=source,
+            )
+
+        self.assertTrue(receipt.aggregate_manifest_id)
+        self.assertEqual(source.iteration_count, 1)
+        self.assertEqual(build_calls, [0, 1])
+        self.assertEqual(published_count, 2)
 
     def test_current_strict_loader_round_trip_has_unverified_legacy_provenance_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -235,7 +301,10 @@ class FreshUatAttestationContractTests(unittest.TestCase):
             "legacy_proof_id",
             "legacy_coverage_ledger_id",
         ):
-            with self.subTest(legacy_field=legacy_field), tempfile.TemporaryDirectory() as temporary:
+            with (
+                self.subTest(legacy_field=legacy_field),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
                 first, second = deepcopy(_two_shards())
                 first[legacy_field] = "legacy-value"
                 with self.assertRaises(_contract_validation_error()):
@@ -293,9 +362,7 @@ class FreshUatAttestationContractTests(unittest.TestCase):
                 "actor": {"actor_context_id": "actor_other"},
                 "issued_at": {"issued_at": "2026-08-13T00:00:00+00:00"},
                 "known_as_of": {"known_as_of": "2026-08-13T00:00:00+00:00"},
-                "profile": {
-                    "semantic_profile_fingerprint": _sha256_text("other-semantic-profile")
-                },
+                "profile": {"semantic_profile_fingerprint": _sha256_text("other-semantic-profile")},
                 "scope": {
                     "permission_scope": {
                         "scope_type": "asset",
@@ -347,8 +414,7 @@ class FreshUatAttestationContractTests(unittest.TestCase):
             "formowl_ingestion.extractors.mail.pst",
         )
         previously_loaded = {
-            module_name: sys.modules.pop(module_name, None)
-            for module_name in forbidden_modules
+            module_name: sys.modules.pop(module_name, None) for module_name in forbidden_modules
         }
         original_import = builtins.__import__
         original_import_module = importlib.import_module

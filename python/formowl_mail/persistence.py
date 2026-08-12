@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import secrets
 import tempfile
-from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, runtime_checkable
 
 from formowl_contract import (
     AnswerClaim,
@@ -199,23 +199,39 @@ _FRESH_UAT_LEGACY_FIELDS = frozenset(
 
 def _validate_fresh_uat_attestation_input(
     *,
-    normalized_shards: Sequence[Mapping[str, Any]],
+    normalized_shards: Iterable[Mapping[str, Any]],
     immutable_source_hashes: Mapping[str, str],
-) -> tuple[Mapping[str, Any], ...]:
-    """Validate only current, hash-pinned normalized shard facts before writes."""
+) -> Iterator[Mapping[str, Any]]:
+    """Yield current hash-pinned shards without retaining their payloads.
+
+    The caller consumes this iterator while publishing each shard.  The
+    immutable-source union is checked only after the source is exhausted, so
+    every supplied source remains required without materializing the complete
+    normalized input.
+    """
 
     if (
         isinstance(normalized_shards, (str, bytes))
-        or not isinstance(normalized_shards, Sequence)
-        or not normalized_shards
+        or isinstance(normalized_shards, Mapping)
+        or not isinstance(normalized_shards, Iterable)
     ):
         raise ContractValidationError("fresh UAT normalized shards are invalid")
     if not isinstance(immutable_source_hashes, Mapping):
         raise ContractValidationError("fresh UAT immutable source hashes are invalid")
 
-    normalized = tuple(normalized_shards)
-    expected_immutable_hashes: dict[str, str] = {}
-    for expected_ordinal, shard in enumerate(normalized):
+    remaining_immutable_source_keys = set(immutable_source_hashes)
+    if not remaining_immutable_source_keys or any(
+        not isinstance(source_key, str)
+        or not source_key
+        or not isinstance(source_hash, str)
+        or not _SHA256.fullmatch(source_hash)
+        for source_key, source_hash in immutable_source_hashes.items()
+    ):
+        raise ContractValidationError("fresh UAT immutable source hashes are invalid")
+
+    observed_any = False
+    for expected_ordinal, shard in enumerate(normalized_shards):
+        observed_any = True
         if not isinstance(shard, Mapping):
             raise ContractValidationError("fresh UAT normalized shard is invalid")
         shard_fields = set(shard)
@@ -241,24 +257,16 @@ def _validate_fresh_uat_attestation_input(
                 or not source_key
                 or not isinstance(source_hash, str)
                 or not _SHA256.fullmatch(source_hash)
-                or source_key in expected_immutable_hashes
+                or source_key not in remaining_immutable_source_keys
+                or immutable_source_hashes[source_key] != source_hash
             ):
                 raise ContractValidationError("fresh UAT immutable source hashes are invalid")
-            expected_immutable_hashes[source_key] = source_hash
+            remaining_immutable_source_keys.remove(source_key)
+        yield shard
+        del shard
 
-    supplied_immutable_hashes = dict(immutable_source_hashes)
-    if (
-        supplied_immutable_hashes != expected_immutable_hashes
-        or any(
-            not isinstance(source_key, str)
-            or not source_key
-            or not isinstance(source_hash, str)
-            or not _SHA256.fullmatch(source_hash)
-            for source_key, source_hash in supplied_immutable_hashes.items()
-        )
-    ):
+    if not observed_any or remaining_immutable_source_keys:
         raise ContractValidationError("fresh UAT immutable source hashes are inconsistent")
-    return normalized
 
 
 def _fresh_uat_attestation_binding_fingerprint(
@@ -337,19 +345,17 @@ def verify_fresh_uat_attestation_receipt(
 
     if not isinstance(receipt, FreshUatAttestationReceipt):
         raise ContractValidationError("fresh UAT receipt is invalid")
-    binding_fingerprint, _normalized_scope, _verifier = (
-        _fresh_uat_attestation_binding_fingerprint(
-            actor_context_id=actor_context_id,
-            issued_at=issued_at,
-            known_as_of=known_as_of,
-            semantic_profile_fingerprint=semantic_profile_fingerprint,
-            permission_scope=permission_scope,
-            scope_manifest_id=scope_manifest_id,
-            scope_policy_id=scope_policy_id,
-            scope_policy_version=scope_policy_version,
-            scope_policy_fingerprint=scope_policy_fingerprint,
-            authority_verifier_root=authority_verifier_root,
-        )
+    binding_fingerprint, _normalized_scope, _verifier = _fresh_uat_attestation_binding_fingerprint(
+        actor_context_id=actor_context_id,
+        issued_at=issued_at,
+        known_as_of=known_as_of,
+        semantic_profile_fingerprint=semantic_profile_fingerprint,
+        permission_scope=permission_scope,
+        scope_manifest_id=scope_manifest_id,
+        scope_policy_id=scope_policy_id,
+        scope_policy_version=scope_policy_version,
+        scope_policy_fingerprint=scope_policy_fingerprint,
+        authority_verifier_root=authority_verifier_root,
     )
     if receipt.attestation_binding_fingerprint != binding_fingerprint:
         raise ContractValidationError("fresh UAT receipt binding is invalid")
@@ -409,7 +415,7 @@ def _fresh_uat_shard_record(
     normalized_shard: Mapping[str, Any],
     bundle: MailEvidenceBundle,
     bundle_path: Path,
-    existing_export_verification: "DiagnosticExistingExportVerification",
+    existing_export_verification_fingerprint: str,
 ) -> "DiagnosticStructuralShardRecord":
     """Create path-free accounting from one already strict-persisted shard bundle."""
 
@@ -419,6 +425,8 @@ def _fresh_uat_shard_record(
         not isinstance(normalized_bundle_sha256, str)
         or not _SHA256.fullmatch(normalized_bundle_sha256)
         or not isinstance(bundle, MailEvidenceBundle)
+        or not isinstance(existing_export_verification_fingerprint, str)
+        or not _SHA256.fullmatch(existing_export_verification_fingerprint)
         or bundle_path.is_symlink()
         or not bundle_path.is_file()
     ):
@@ -430,9 +438,7 @@ def _fresh_uat_shard_record(
         ordinal=ordinal,
         mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
         bundle_fingerprint=sha256_file(bundle_path),
-        existing_export_verification_fingerprint=(
-            existing_export_verification.verification_fingerprint
-        ),
+        existing_export_verification_fingerprint=existing_export_verification_fingerprint,
         selected_path_fingerprint=sha256_json(
             {
                 "normalized_bundle_sha256": normalized_bundle_sha256,
@@ -779,7 +785,9 @@ def _build_fresh_uat_bundle(
         query_id=requirement.query_id,
         claim_requirement_id=requirement.claim_requirement_id,
         source_inventory_id=inventory.source_inventory_id,
-        relevant_inventory_item_ids=tuple(item.source_inventory_item_id for item in inventory.items),
+        relevant_inventory_item_ids=tuple(
+            item.source_inventory_item_id for item in inventory.items
+        ),
         searched_structural_observation_ids=tuple(
             observation.structural_observation_id for observation in structural_observations
         ),
@@ -925,7 +933,7 @@ def _build_fresh_uat_bundle(
 def publish_fresh_uat_attestation(
     *,
     output_dir: str | Path,
-    normalized_shards: Sequence[Mapping[str, Any]],
+    normalized_shards: Iterable[Mapping[str, Any]],
     immutable_source_hashes: Mapping[str, str],
     source_asset_id: str,
     source_fingerprint: str,
@@ -965,29 +973,6 @@ def publish_fresh_uat_attestation(
         authority_verifier_root=authority_verifier_root,
     )
 
-    built = tuple(
-        _build_fresh_uat_bundle(
-            normalized_shard=shard,
-            source_asset_id=source_asset_id,
-            source_fingerprint=source_fingerprint,
-            workspace_id=workspace_id,
-            owner_user_id=owner_user_id,
-            permission_scope=normalized_scope,
-            actor_context_id=actor_context_id,
-            issued_at=issued_at,
-            semantic_profile_fingerprint=semantic_profile_fingerprint,
-            scope_manifest_id=scope_manifest_id,
-            scope_policy_id=scope_policy_id,
-            scope_policy_version=scope_policy_version,
-            scope_policy_fingerprint=scope_policy_fingerprint,
-            authority_verifier_root=authority_verifier_root,
-        )
-        for shard in validated_shards
-    )
-    bundles = tuple(item[0] for item in built)
-    if len({bundle.mail_evidence_bundle_id for bundle in bundles}) != len(bundles):
-        raise ContractValidationError("fresh UAT normalized shards are not distinct")
-
     destination = Path(output_dir)
     if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
         raise ContractValidationError("fresh UAT destination is invalid")
@@ -999,8 +984,35 @@ def publish_fresh_uat_attestation(
     promoted = False
     try:
         shard_store = FileDiagnosticStructuralShardStore(staging_base)
-        persisted: list[tuple[MailEvidenceBundle, Path]] = []
-        for ordinal, (bundle, _bundle_verifier) in enumerate(built):
+        pending_verification_fingerprint = sha256_json(
+            {"fresh_uat_pending_existing_export_verification": ("metadata_not_finalized")}
+        )
+        records: list[DiagnosticStructuralShardRecord] = []
+        normalized_bundle_hashes: list[str] = []
+        expected_message_count = 0
+        expected_body_segment_count = 0
+        first_source_inventory_id: str | None = None
+        bundle_ids: set[str] = set()
+        for ordinal, shard in enumerate(validated_shards):
+            bundle, _bundle_verifier = _build_fresh_uat_bundle(
+                normalized_shard=shard,
+                source_asset_id=source_asset_id,
+                source_fingerprint=source_fingerprint,
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
+                permission_scope=normalized_scope,
+                actor_context_id=actor_context_id,
+                issued_at=issued_at,
+                semantic_profile_fingerprint=semantic_profile_fingerprint,
+                scope_manifest_id=scope_manifest_id,
+                scope_policy_id=scope_policy_id,
+                scope_policy_version=scope_policy_version,
+                scope_policy_fingerprint=scope_policy_fingerprint,
+                authority_verifier_root=authority_verifier_root,
+            )
+            if bundle.mail_evidence_bundle_id in bundle_ids:
+                raise ContractValidationError("fresh UAT normalized shards are not distinct")
+            bundle_ids.add(bundle.mail_evidence_bundle_id)
             store = shard_store.bundle_store(ordinal, create=True)
             store.publish_verified_bundle(
                 bundle,
@@ -1012,19 +1024,35 @@ def publish_fresh_uat_attestation(
             bundle_path = shard_store.unique_bundle_path(ordinal)
             if bundle_path is None:
                 raise ContractValidationError("fresh UAT shard publication is incomplete")
-            persisted.append((FileMailEvidenceBundleStore._read(bundle_path), bundle_path))
+            persisted_bundle = FileMailEvidenceBundleStore._read(bundle_path)
+            if first_source_inventory_id is None:
+                first_source_inventory_id = persisted_bundle.source_inventory[0].source_inventory_id
+            expected_message_count += len(persisted_bundle.message_occurrences)
+            expected_body_segment_count += len(persisted_bundle.body_segments)
+            normalized_bundle_sha256 = shard["normalized_bundle_sha256"]
+            if not isinstance(normalized_bundle_sha256, str) or not _SHA256.fullmatch(
+                normalized_bundle_sha256
+            ):
+                raise ContractValidationError("fresh UAT normalized bundle hash is invalid")
+            records.append(
+                _fresh_uat_shard_record(
+                    ordinal=ordinal,
+                    normalized_shard=shard,
+                    bundle=persisted_bundle,
+                    bundle_path=bundle_path,
+                    existing_export_verification_fingerprint=(pending_verification_fingerprint),
+                )
+            )
+            normalized_bundle_hashes.append(normalized_bundle_sha256)
+            del persisted_bundle
+            del bundle
+            del shard
 
-        expected_message_count = sum(
-            len(bundle.message_occurrences) for bundle, _path in persisted
-        )
-        expected_body_segment_count = sum(
-            len(bundle.body_segments) for bundle, _path in persisted
-        )
+        if first_source_inventory_id is None:
+            raise ContractValidationError("fresh UAT normalized shards are invalid")
         existing_export_verification = DiagnosticExistingExportVerification.create(
             scope_manifest_id=scope_manifest_id,
-            source_inventory_id=(
-                persisted[0][0].source_inventory[0].source_inventory_id
-            ),
+            source_inventory_id=first_source_inventory_id,
             operator_scope_binding_fingerprint=sha256_json(
                 {
                     "scope_manifest_id": scope_manifest_id,
@@ -1045,19 +1073,27 @@ def publish_fresh_uat_attestation(
             matched_message_occurrence_count=expected_message_count,
         )
         records = tuple(
-            _fresh_uat_shard_record(
-                ordinal=ordinal,
-                normalized_shard=validated_shards[ordinal],
-                bundle=bundle,
-                bundle_path=bundle_path,
-                existing_export_verification=existing_export_verification,
+            DiagnosticStructuralShardRecord(
+                ordinal=record.ordinal,
+                mail_evidence_bundle_id=record.mail_evidence_bundle_id,
+                bundle_fingerprint=record.bundle_fingerprint,
+                existing_export_verification_fingerprint=(
+                    existing_export_verification.verification_fingerprint
+                ),
+                selected_path_fingerprint=record.selected_path_fingerprint,
+                selector_coverage_fingerprint=record.selector_coverage_fingerprint,
+                selected_message_count=record.selected_message_count,
+                body_segment_count=record.body_segment_count,
+                structural_observation_count=record.structural_observation_count,
+                selected_top_level_message_count=record.selected_top_level_message_count,
+                embedded_message_occurrence_count=record.embedded_message_occurrence_count,
+                historical_compatibility_checkpoint_fingerprint=(
+                    record.historical_compatibility_checkpoint_fingerprint
+                ),
             )
-            for ordinal, (bundle, bundle_path) in enumerate(persisted)
+            for record in records
         )
         accounting = shard_store.recompute_body_segment_accounting(records)
-        normalized_bundle_hashes = tuple(
-            shard["normalized_bundle_sha256"] for shard in validated_shards
-        )
         aggregate = DiagnosticStructuralAggregateManifest.create(
             scope_manifest_id=scope_manifest_id,
             source_asset_id=source_asset_id,
@@ -1089,21 +1125,16 @@ def publish_fresh_uat_attestation(
                 item.selected_message_count for item in records
             ),
             materialized_body_segment_count=accounting.total_body_segment_count,
-            materialized_message_body_segment_count=(
-                accounting.message_body_segment_count
-            ),
-            materialized_attachment_text_segment_count=(
-                accounting.attachment_text_segment_count
-            ),
+            materialized_message_body_segment_count=(accounting.message_body_segment_count),
+            materialized_attachment_text_segment_count=(accounting.attachment_text_segment_count),
         )
         shard_store.publish_complete_manifest(aggregate)
         staged_manifest = shard_store.load_complete_manifest()
-        tuple(
-            shard_store.iter_bundles(
-                staged_manifest,
-                scope_authority_verifier=authority_verifier,
-            )
-        )
+        for bundle in shard_store.iter_bundles(
+            staged_manifest,
+            scope_authority_verifier=authority_verifier,
+        ):
+            del bundle
         if final_root.exists() or final_root.is_symlink():
             raise ContractValidationError("fresh UAT destination is already published")
         os.replace(shard_store.root, final_root)
@@ -1111,12 +1142,11 @@ def publish_fresh_uat_attestation(
         _fsync_directory(destination)
         final_store = FileDiagnosticStructuralShardStore(destination, create=False)
         final_manifest = final_store.load_complete_manifest()
-        tuple(
-            final_store.iter_bundles(
-                final_manifest,
-                scope_authority_verifier=authority_verifier,
-            )
-        )
+        for bundle in final_store.iter_bundles(
+            final_manifest,
+            scope_authority_verifier=authority_verifier,
+        ):
+            del bundle
     except Exception:
         if promoted:
             _remove_fresh_uat_staging_tree(final_root)
