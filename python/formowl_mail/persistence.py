@@ -14,17 +14,37 @@ from formowl_contract import (
     ClaimRequirement,
     ContractValidationError,
     CoverageAuthorizationBinding,
+    CoverageItemAuthorizationDecision,
+    CoverageItemRelevanceDecision,
     CoverageLedger,
+    CoverageObservationPartition,
     CoverageScopeAuthority,
     CoverageScopeAuthorityVerifier,
+    CoverageScopePartition,
+    CoverageScopePolicyBinding,
+    CoverageProofRecord,
+    CoverageVersionBinding,
+    DisplayPagination,
     SourceInventory,
+    SourceInventoryItem,
+    StructuralCell,
+    StructuralColumn,
+    StructuralObservation,
+    StructuralRow,
     VersionManifest,
     sha256_json,
     stable_resource_contract_id,
+    validate_permission_scope,
 )
 
 from .bundle import (
+    EmailMessage,
+    EmailMessageOccurrence,
     MailEvidenceBundle,
+    MailArchiveOccurrence,
+    MailFolderOccurrence,
+    MailImportSession,
+    MailParseRun,
     _MAIL_EVIDENCE_PERSISTENCE_CONSUME_CAPABILITY,
 )
 from .query import MailEvidenceQueryResult
@@ -220,6 +240,474 @@ def _validate_fresh_uat_attestation_input(
     ):
         raise ContractValidationError("fresh UAT immutable source hashes are inconsistent")
     return normalized
+
+
+def _build_fresh_uat_bundle(
+    *,
+    normalized_shard: Mapping[str, Any],
+    source_asset_id: str,
+    source_fingerprint: str,
+    workspace_id: str,
+    owner_user_id: str,
+    permission_scope: Mapping[str, Any],
+    actor_context_id: str,
+    issued_at: str,
+    semantic_profile_fingerprint: str,
+    scope_manifest_id: str,
+    scope_policy_id: str,
+    scope_policy_version: str,
+    scope_policy_fingerprint: str,
+    authority_verifier_root: str | bytes,
+) -> tuple[MailEvidenceBundle, CoverageScopeAuthorityVerifier]:
+    """Project one normalized current shard into strict-loadable typed evidence."""
+
+    if not isinstance(normalized_shard, Mapping):
+        raise ContractValidationError("fresh UAT normalized shard is invalid")
+    normalized_bundle = normalized_shard.get("normalized_bundle")
+    normalized_bundle_sha256 = normalized_shard.get("normalized_bundle_sha256")
+    if (
+        not isinstance(normalized_bundle, Mapping)
+        or not isinstance(normalized_bundle_sha256, str)
+        or sha256_json(dict(normalized_bundle)) != normalized_bundle_sha256
+        or set(normalized_bundle)
+        != {"schema", "shard_key", "source_items", "structural_observations"}
+        or normalized_bundle.get("schema") != "formowl_normalized_evidence_shard_v1"
+    ):
+        raise ContractValidationError("fresh UAT normalized bundle is invalid")
+    shard_key = normalized_bundle.get("shard_key")
+    source_items = normalized_bundle.get("source_items")
+    structural_rows = normalized_bundle.get("structural_observations")
+    if (
+        not isinstance(shard_key, str)
+        or not shard_key
+        or not isinstance(source_items, list)
+        or not source_items
+        or not isinstance(structural_rows, list)
+        or not structural_rows
+    ):
+        raise ContractValidationError("fresh UAT normalized bundle is invalid")
+    normalized_scope = validate_permission_scope(permission_scope)
+    parser_fingerprint = sha256_json(
+        {
+            "materializer": "fresh_uat_normalized_shard_v1",
+            "normalized_bundle_sha256": normalized_bundle_sha256,
+        }
+    )
+    observations_by_source: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
+    for observation in structural_rows:
+        if (
+            not isinstance(observation, Mapping)
+            or set(observation)
+            != {
+                "observation_key",
+                "source_key",
+                "structure_kind",
+                "columns",
+                "rows",
+            }
+            or not isinstance(observation.get("observation_key"), str)
+            or not observation["observation_key"]
+            or not isinstance(observation.get("source_key"), str)
+            or not observation["source_key"]
+            or not isinstance(observation.get("structure_kind"), str)
+            or not observation["structure_kind"]
+            or not isinstance(observation.get("columns"), list)
+            or not observation["columns"]
+            or any(not isinstance(column, str) or not column for column in observation["columns"])
+            or not isinstance(observation.get("rows"), list)
+        ):
+            raise ContractValidationError("fresh UAT normalized structural observation is invalid")
+        observation_id = stable_resource_contract_id(
+            "freshuatobservation",
+            "FreshUatNormalizedObservation",
+            {
+                "shard_key": shard_key,
+                "observation_key": observation["observation_key"],
+                "normalized_bundle_sha256": normalized_bundle_sha256,
+            },
+        )
+        observations_by_source.setdefault(observation["source_key"], []).append(
+            (observation_id, observation)
+        )
+
+    unbound_items: list[SourceInventoryItem] = []
+    item_specs: dict[str, Mapping[str, Any]] = {}
+    for expected_ordinal, source_item in enumerate(source_items):
+        if (
+            not isinstance(source_item, Mapping)
+            or set(source_item)
+            != {
+                "source_key",
+                "structure_kind",
+                "content_type",
+                "ordinal",
+                "observation_keys",
+            }
+            or not isinstance(source_item.get("source_key"), str)
+            or not source_item["source_key"]
+            or source_item["source_key"] in item_specs
+            or not isinstance(source_item.get("structure_kind"), str)
+            or not source_item["structure_kind"]
+            or not isinstance(source_item.get("content_type"), str)
+            or not source_item["content_type"]
+            or source_item.get("ordinal") != expected_ordinal
+            or not isinstance(source_item.get("observation_keys"), list)
+        ):
+            raise ContractValidationError("fresh UAT normalized source item is invalid")
+        source_key = source_item["source_key"]
+        source_observation_ids = tuple(
+            observation_id for observation_id, _ in observations_by_source.get(source_key, ())
+        )
+        if not source_observation_ids:
+            raise ContractValidationError("fresh UAT normalized source coverage is incomplete")
+        item_specs[source_key] = source_item
+        unbound_items.append(
+            SourceInventoryItem.create(
+                source_asset_id=source_asset_id,
+                structure_kind=source_item["structure_kind"],
+                content_type=source_item["content_type"],
+                ordinal=expected_ordinal,
+                processing_state="parsed",
+                raw_retention_state="externally_managed",
+                source_fingerprint=source_fingerprint,
+                parser_fingerprint=parser_fingerprint,
+                permission_scope=normalized_scope,
+                location={"normalized_source_key": source_key},
+                source_observation_ids=source_observation_ids,
+            )
+        )
+    if set(observations_by_source) != set(item_specs):
+        raise ContractValidationError("fresh UAT normalized source coverage is incomplete")
+    inventory = SourceInventory.create(
+        source_asset_id=source_asset_id,
+        source_fingerprint=source_fingerprint,
+        parser_fingerprint=parser_fingerprint,
+        items=unbound_items,
+        created_at=issued_at,
+    )
+    item_by_source_key = {
+        str(dict(item.location)["normalized_source_key"]): item for item in inventory.items
+    }
+    structural_observations: list[StructuralObservation] = []
+    for source_key, source_observations in observations_by_source.items():
+        inventory_item = item_by_source_key.get(source_key)
+        if inventory_item is None:
+            raise ContractValidationError("fresh UAT normalized source coverage is incomplete")
+        for observation_id, observation in source_observations:
+            columns = tuple(
+                StructuralColumn(
+                    column_ordinal=ordinal,
+                    original_header=header,
+                    normalized_header=header,
+                )
+                for ordinal, header in enumerate(observation["columns"])
+            )
+            rows: list[StructuralRow] = []
+            for row_ordinal, row in enumerate(observation["rows"]):
+                if (
+                    not isinstance(row, list)
+                    or len(row) != len(columns)
+                    or any(not isinstance(value, str) for value in row)
+                ):
+                    raise ContractValidationError("fresh UAT normalized structural row is invalid")
+                rows.append(
+                    StructuralRow(
+                        row_ordinal=row_ordinal,
+                        cells=tuple(
+                            StructuralCell(
+                                cell_state="populated" if value else "empty",
+                                row_ordinal=row_ordinal,
+                                column_ordinal=column_ordinal,
+                                value=value or None,
+                                normalized_value=value or None,
+                            )
+                            for column_ordinal, value in enumerate(row)
+                        ),
+                    )
+                )
+            structural_observations.append(
+                StructuralObservation.create(
+                    structural_observation_id=observation_id,
+                    source_inventory_item_id=inventory_item.source_inventory_item_id,
+                    source_asset_id=source_asset_id,
+                    source_observation_id=observation_id,
+                    structure_kind=observation["structure_kind"],
+                    columns=columns,
+                    rows=tuple(rows),
+                    header_relationships=(),
+                    source_fingerprint=source_fingerprint,
+                    parser_fingerprint=parser_fingerprint,
+                )
+            )
+    structural_observations.sort(key=lambda item: item.structural_observation_id)
+    version_manifest = VersionManifest.create(
+        source_fingerprint=source_fingerprint,
+        parser_fingerprint=parser_fingerprint,
+        tokenizer_fingerprint=sha256_json(
+            {"semantic_profile_fingerprint": semantic_profile_fingerprint}
+        ),
+        index_fingerprint=sha256_json(
+            {
+                "normalized_bundle_sha256": normalized_bundle_sha256,
+                "source_inventory": inventory.to_persistence_dict(),
+                "structural_observations": [
+                    observation.to_persistence_dict() for observation in structural_observations
+                ],
+            }
+        ),
+        implementation_fingerprint=sha256_json(
+            {
+                "materializer": "fresh_uat_normalized_shard_v1",
+                "scope_manifest_id": scope_manifest_id,
+                "semantic_profile_fingerprint": semantic_profile_fingerprint,
+            }
+        ),
+        parser_version="fresh_uat_normalized_v1",
+        tokenizer_version="fresh_uat_structural_v1",
+        index_version="fresh_uat_structural_v1",
+        implementation_version="fresh_uat_attestation_v1",
+        created_at=issued_at,
+    )
+    requirement = ClaimRequirement.create(
+        query_id=stable_resource_contract_id(
+            "query",
+            "FreshUatStructuralScope",
+            {"scope_manifest_id": scope_manifest_id, "shard_key": shard_key},
+        ),
+        kind="all_matching",
+        target="structural_row",
+        predicate="fresh_uat_structural_scope",
+        parameters={
+            "scope_kind": "internal_diagnostic_uat",
+            "normalized_bundle_sha256": normalized_bundle_sha256,
+        },
+        required_scope=tuple(item.source_inventory_item_id for item in inventory.items),
+        created_at=issued_at,
+    )
+    authorization = CoverageAuthorizationBinding(
+        actor_context_id=actor_context_id,
+        permission_revision=sha256_json(
+            {
+                "workspace_id": workspace_id,
+                "owner_user_id": owner_user_id,
+                "source_asset_id": source_asset_id,
+                "permission_scope": normalized_scope,
+            }
+        ),
+        grant_revision=sha256_json(
+            {
+                "source_inventory_id": inventory.source_inventory_id,
+                "source_fingerprint": source_fingerprint,
+            }
+        ),
+    )
+    scope_policy = CoverageScopePolicyBinding.create(
+        scope_policy_id=scope_policy_id,
+        scope_policy_version=scope_policy_version,
+        scope_policy_fingerprint=scope_policy_fingerprint,
+    )
+    verifier = CoverageScopeAuthorityVerifier.from_external_root(authority_verifier_root)
+    authority = CoverageScopeAuthority.create(
+        source_inventory=inventory,
+        claim_requirement=requirement,
+        authorization_binding=authorization,
+        version_manifest=version_manifest,
+        scope_policy=scope_policy,
+        authorization_decisions=tuple(
+            CoverageItemAuthorizationDecision.create(
+                source_inventory_item=item,
+                authorization_binding=authorization,
+                decision_state="authorized",
+            )
+            for item in inventory.items
+        ),
+        relevance_decisions=tuple(
+            CoverageItemRelevanceDecision.create(
+                source_inventory_item=item,
+                claim_requirement=requirement,
+                scope_policy=scope_policy,
+                decision_state="relevant",
+            )
+            for item in inventory.items
+        ),
+        authority_verifier=verifier,
+    )
+    observation_ids_by_item: dict[str, list[str]] = {}
+    for observation in structural_observations:
+        observation_ids_by_item.setdefault(observation.source_inventory_item_id, []).append(
+            observation.structural_observation_id
+        )
+    partitions = tuple(
+        CoverageObservationPartition(
+            inventory_item_id=item.source_inventory_item_id,
+            structural_observation_ids=tuple(
+                sorted(observation_ids_by_item.get(item.source_inventory_item_id, ()))
+            ),
+        )
+        for item in inventory.items
+    )
+    if any(not partition.structural_observation_ids for partition in partitions):
+        raise ContractValidationError("fresh UAT normalized source coverage is incomplete")
+    scope_partition = CoverageScopePartition.create(
+        scope_authority=authority,
+        observation_partitions=partitions,
+    )
+    proofs = tuple(
+        CoverageProofRecord.create(
+            source_inventory_id=inventory.source_inventory_id,
+            claim_requirement_id=requirement.claim_requirement_id,
+            version_manifest_id=version_manifest.version_manifest_id,
+            inventory_item_id=partition.inventory_item_id,
+            proof_kind="structural",
+            structural_observation_ids=partition.structural_observation_ids,
+        )
+        for partition in partitions
+    )
+    ledger = CoverageLedger.create(
+        query_id=requirement.query_id,
+        claim_requirement_id=requirement.claim_requirement_id,
+        source_inventory_id=inventory.source_inventory_id,
+        relevant_inventory_item_ids=tuple(item.source_inventory_item_id for item in inventory.items),
+        searched_structural_observation_ids=tuple(
+            observation.structural_observation_id for observation in structural_observations
+        ),
+        authorization_binding=authorization,
+        version_binding=CoverageVersionBinding.from_manifest(version_manifest),
+        scope_partition=scope_partition,
+        proof_records=proofs,
+        complete_authorized_scope=True,
+        display_pagination=DisplayPagination(page_size=1),
+    )
+    import_session_id = stable_resource_contract_id(
+        "mailimport",
+        "FreshUatMailImport",
+        {"source_asset_id": source_asset_id, "shard_key": shard_key, "source": source_fingerprint},
+    )
+    import_session = MailImportSession(
+        mail_import_session_id=import_session_id,
+        workspace_id=workspace_id,
+        owner_user_id=owner_user_id,
+        source_asset_id=source_asset_id,
+        archive_sha256=source_fingerprint,
+        retention_policy="retain_indefinitely",
+        raw_archive_retention_decision="retained_by_policy",
+        created_at=issued_at,
+        import_profile="fresh_internal_diagnostic_uat",
+        status="succeeded",
+    )
+    archive_id = stable_resource_contract_id(
+        "archive", "FreshUatArchive", {"session": import_session_id}
+    )
+    mailbox_id = stable_resource_contract_id(
+        "mailbox", "FreshUatMailbox", {"session": import_session_id}
+    )
+    archive_occurrence = MailArchiveOccurrence(
+        mail_archive_occurrence_id=stable_resource_contract_id(
+            "mailarchiveocc", "FreshUatArchiveOccurrence", {"session": import_session_id}
+        ),
+        mail_import_session_id=import_session_id,
+        source_asset_id=source_asset_id,
+        archive_id=archive_id,
+        mailbox_id=mailbox_id,
+        archive_sha256=source_fingerprint,
+        created_at=issued_at,
+    )
+    first_observation_id = structural_observations[0].source_observation_id
+    folder_hash = sha256_json({"mailbox_id": mailbox_id, "shard_key": shard_key})
+    email_message_id = stable_resource_contract_id(
+        "email", "FreshUatMessage", {"session": import_session_id}
+    )
+    message_id = stable_resource_contract_id(
+        "message", "FreshUatMessageIdentity", {"session": import_session_id}
+    )
+    message_occurrence_id = stable_resource_contract_id(
+        "messageocc", "FreshUatMessageOccurrence", {"session": import_session_id}
+    )
+    message = EmailMessage(
+        email_message_id=email_message_id,
+        message_fingerprint=sha256_json(
+            {"normalized_bundle_sha256": normalized_bundle_sha256, "shard_key": shard_key}
+        ),
+        message_id=message_id,
+        archive_id=archive_id,
+        mailbox_id=mailbox_id,
+        source_observation_ids=[first_observation_id],
+        body_evidence_state="not_present",
+    )
+    bundle = MailEvidenceBundle(
+        mail_evidence_bundle_id=stable_resource_contract_id(
+            "mailevidencebundle",
+            "FreshUatMailEvidenceBundle",
+            {
+                "mail_import_session_id": import_session_id,
+                "source_inventory_id": inventory.source_inventory_id,
+                "version_manifest_id": version_manifest.version_manifest_id,
+            },
+        ),
+        producer_type="fixture_parser",
+        mail_import_session=import_session,
+        archive_occurrences=[archive_occurrence],
+        folder_occurrences=[
+            MailFolderOccurrence(
+                mail_folder_occurrence_id=stable_resource_contract_id(
+                    "mailfolderocc", "FreshUatFolder", {"session": import_session_id}
+                ),
+                mail_archive_occurrence_id=archive_occurrence.mail_archive_occurrence_id,
+                archive_id=archive_id,
+                mailbox_id=mailbox_id,
+                folder_path_hash=folder_hash,
+                source_observation_id=first_observation_id,
+            )
+        ],
+        messages=[message],
+        message_occurrences=[
+            EmailMessageOccurrence(
+                email_message_occurrence_id=stable_resource_contract_id(
+                    "emailmessageocc", "FreshUatMessageOccurrence", {"session": import_session_id}
+                ),
+                email_message_id=email_message_id,
+                mail_archive_occurrence_id=archive_occurrence.mail_archive_occurrence_id,
+                message_occurrence_id=message_occurrence_id,
+                message_id=message_id,
+                archive_id=archive_id,
+                mailbox_id=mailbox_id,
+                folder_path_hash=folder_hash,
+                source_observation_id=first_observation_id,
+            )
+        ],
+        body_segments=[],
+        attachments=[],
+        attachment_occurrences=[],
+        quoted_message_candidates=[],
+        embedded_message_relations=[],
+        mail_parse_run=MailParseRun(
+            mail_parse_run_id=stable_resource_contract_id(
+                "mailparserun", "FreshUatParseRun", {"session": import_session_id}
+            ),
+            mail_import_session_id=import_session_id,
+            extractor_run_id=stable_resource_contract_id(
+                "extractor", "FreshUatNormalizedMaterializer", {"shard_key": shard_key}
+            ),
+            parser_name="fresh_uat_normalized_materializer",
+            parser_version="1",
+            input_hash=source_fingerprint,
+            config_hash=parser_fingerprint,
+            status="succeeded",
+            started_at=issued_at,
+            completed_at=issued_at,
+        ),
+        created_at=issued_at,
+        source_inventory=[inventory],
+        structural_observations=structural_observations,
+        claim_requirements=[requirement],
+        coverage_ledgers=[ledger],
+        version_manifests=[version_manifest],
+        _expected_scope_authorities={
+            f"{requirement.claim_requirement_id}:{inventory.source_inventory_id}": authority
+        },
+    )
+    bundle.to_persistence_dict()
+    return bundle, verifier
 
 
 def publish_fresh_uat_attestation(
