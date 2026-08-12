@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import _paths  # noqa: F401
 
@@ -151,6 +152,45 @@ def _strict_loader(output_dir: Path):
     return manifest, tuple(store.iter_bundles(manifest, scope_authority_verifier=verifier))
 
 
+def _receipt_verifier():
+    """Return the public receipt verifier used for binding mismatch rejection."""
+
+    persistence = importlib.import_module("formowl_mail.persistence")
+    verifier = getattr(persistence, "verify_fresh_uat_attestation_receipt", None)
+    if not callable(verifier):
+        raise AssertionError(
+            "missing public API "
+            "formowl_mail.persistence.verify_fresh_uat_attestation_receipt"
+        )
+    return verifier
+
+
+def _attestation_binding_kwargs() -> dict[str, object]:
+    values = _issuer_kwargs(output_dir=Path("/metadata-only-output"))
+    return {
+        field_name: values[field_name]
+        for field_name in (
+            "actor_context_id",
+            "issued_at",
+            "known_as_of",
+            "semantic_profile_fingerprint",
+            "permission_scope",
+            "scope_manifest_id",
+            "scope_policy_id",
+            "scope_policy_version",
+            "scope_policy_fingerprint",
+            "authority_verifier_root",
+        )
+    }
+
+
+def _assert_no_partial_output(test_case: unittest.TestCase, output_dir: Path) -> None:
+    if not output_dir.exists():
+        return
+    files = tuple(path for path in output_dir.rglob("*") if path.is_file())
+    test_case.assertEqual(files, (), "atomic publication left a partial output file")
+
+
 class FreshUatAttestationContractTests(unittest.TestCase):
     """Synthetic acceptance contract for fresh, current UAT attestation issuance."""
 
@@ -238,6 +278,151 @@ class FreshUatAttestationContractTests(unittest.TestCase):
                     output_dir=Path(temporary),
                     normalized_shards=(first, second),
                 )
+
+    def test_attestation_actor_time_profile_scope_and_verifier_mismatches_are_rejected(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = self._publish(output_dir=Path(temporary))
+            bindings = _attestation_binding_kwargs()
+            _receipt_verifier()(receipt=receipt, **bindings)
+
+            mismatches = {
+                "actor": {"actor_context_id": "actor_other"},
+                "issued_at": {"issued_at": "2026-08-13T00:00:00+00:00"},
+                "known_as_of": {"known_as_of": "2026-08-13T00:00:00+00:00"},
+                "profile": {
+                    "semantic_profile_fingerprint": _sha256_text("other-semantic-profile")
+                },
+                "scope": {
+                    "permission_scope": {
+                        "scope_type": "asset",
+                        "scope_id": "asset_other",
+                        "visibility": "restricted",
+                    }
+                },
+                "verifier": {"authority_verifier_root": "other-authority-root"},
+            }
+            for mismatch_name, replacement in mismatches.items():
+                with self.subTest(mismatch=mismatch_name):
+                    expected = dict(bindings)
+                    expected.update(replacement)
+                    with self.assertRaises(_contract_validation_error()):
+                        _receipt_verifier()(receipt=receipt, **expected)
+
+    def test_shard_remove_or_add_against_bound_immutable_input_is_rejected(self) -> None:
+        first, second = deepcopy(_two_shards())
+        with self.subTest("remove"), tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(_contract_validation_error()):
+                self._publish(
+                    output_dir=Path(temporary),
+                    normalized_shards=(first,),
+                    immutable_source_hashes=_immutable_source_hashes(),
+                )
+
+        with self.subTest("add"), tempfile.TemporaryDirectory() as temporary:
+            third = _normalized_shard(2)
+            with self.assertRaises(_contract_validation_error()):
+                self._publish(
+                    output_dir=Path(temporary),
+                    normalized_shards=(first, second, third),
+                    immutable_source_hashes=_immutable_source_hashes(),
+                )
+
+    def test_publisher_does_not_mutate_immutable_source_hashes_input(self) -> None:
+        immutable_source_hashes = _immutable_source_hashes()
+        original = deepcopy(immutable_source_hashes)
+        with tempfile.TemporaryDirectory() as temporary:
+            self._publish(
+                output_dir=Path(temporary),
+                immutable_source_hashes=immutable_source_hashes,
+            )
+        self.assertEqual(immutable_source_hashes, original)
+
+    def test_publisher_never_traverses_raw_pst_export_parser_or_extractor_entrypoints(self) -> None:
+        bridge = importlib.import_module("formowl_mail.diagnostic_structural_bridge")
+        calls: list[str] = []
+
+        def forbidden(name: str):
+            def fail(*_args: object, **_kwargs: object) -> None:
+                calls.append(name)
+                raise AssertionError(f"publisher must not invoke raw bridge entrypoint: {name}")
+
+            return fail
+
+        with (
+            patch.object(
+                bridge,
+                "export_pst_to_readpst_directory",
+                side_effect=forbidden("export"),
+            ),
+            patch.object(
+                bridge,
+                "extract_readpst_export",
+                side_effect=forbidden("export_extractor"),
+            ),
+            patch.object(
+                bridge,
+                "extract_selected_readpst_export",
+                side_effect=forbidden("selected_export_extractor"),
+            ),
+            patch.object(
+                bridge,
+                "select_readpst_export_messages",
+                side_effect=forbidden("selector"),
+            ),
+            patch.object(
+                bridge,
+                "_parser_config",
+                side_effect=forbidden("parser"),
+            ),
+            patch.object(
+                bridge.PstMailArchiveExtractor,
+                "extract",
+                side_effect=forbidden("archive_extractor"),
+            ),
+            tempfile.TemporaryDirectory() as temporary,
+        ):
+            self._publish(output_dir=Path(temporary))
+
+        self.assertEqual(calls, [])
+
+    def test_atomic_write_failures_leave_no_partial_output(self) -> None:
+        persistence = importlib.import_module("formowl_mail.persistence")
+        for operation in ("open", "fsync", "replace"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
+                output_dir = Path(temporary) / "fresh-uat-output"
+                with patch.object(
+                    persistence.os,
+                    operation,
+                    side_effect=OSError(f"synthetic {operation} failure"),
+                ):
+                    with self.assertRaises(OSError):
+                        self._publish(output_dir=output_dir)
+                _assert_no_partial_output(self, output_dir)
+
+    def test_receipt_is_metadata_only_and_excludes_private_or_legacy_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            receipt = self._publish(output_dir=Path(temporary))
+
+        serializer = getattr(receipt, "to_dict", None)
+        if not callable(serializer):
+            raise AssertionError("fresh UAT receipt must expose metadata through to_dict")
+        payload = serializer()
+        self.assertIsInstance(payload, dict)
+        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        for forbidden in (
+            "normalized_bundle",
+            "source_items",
+            "structural_observations",
+            "synthetic-value",
+            "/private/",
+            "legacy_authority_id",
+            "legacy_proof_id",
+            "legacy_coverage_ledger_id",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, serialized)
 
 
 if __name__ == "__main__":
