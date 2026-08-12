@@ -10,6 +10,7 @@ existing fresh-UAT publisher and exact structured executor only.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import mmap
 import os
@@ -17,6 +18,7 @@ from pathlib import Path
 import shutil
 import sys
 from typing import Any, Iterator, Mapping, Sequence
+import unicodedata
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _PYTHON_ROOT = _REPOSITORY_ROOT / "python"
@@ -43,6 +45,7 @@ from formowl_mail.persistence import (  # noqa: E402
     publish_fresh_uat_attestation,
     sha256_file,
 )
+from formowl_mail.diagnostic_mcp import DiagnosticSemanticProfile  # noqa: E402
 from formowl_mail.query import execute_authorized_structured_set  # noqa: E402
 
 _SHA256 = "sha256:"
@@ -61,6 +64,17 @@ def _require_str(value: Mapping[str, Any], field: str) -> str:
     if not isinstance(result, str) or not result:
         _fail(f"legacy {field} is invalid")
     return result
+
+
+def _require_sha256(value: object, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != len(_SHA256) + 64
+        or not value.startswith(_SHA256)
+        or any(character not in "0123456789abcdef" for character in value[len(_SHA256) :])
+    ):
+        _fail(f"{label} is invalid")
+    return value
 
 
 def _skip_space(payload: mmap.mmap, cursor: int) -> int:
@@ -250,6 +264,31 @@ def _rectangular_rows(
     return rows
 
 
+def _is_tabular_structure_kind(value: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", value).casefold().strip().replace("-", "_")
+    return normalized == "table" or normalized.endswith("_table")
+
+
+def _is_explicitly_excludable_structural_observation(
+    *,
+    structure_kind: str,
+    raw_columns: object,
+    raw_rows: object,
+) -> bool:
+    """Allow only explicit empty or non-tabular facts to leave this adapter.
+
+    A table with headers but zero rows remains a valid table and is preserved.
+    A table-shaped observation with any incomplete topology is not an empty
+    fact; it falls through to the strict rectangular validation below.
+    """
+
+    if raw_columns == [] and raw_rows == []:
+        return True
+    return (
+        not _is_tabular_structure_kind(structure_kind) and raw_columns is None and raw_rows is None
+    )
+
+
 def _normalized_shard(bundle_path: Path, ordinal: int) -> dict[str, Any]:
     """Convert one bundle's selected immutable fields into v1 normalized facts."""
 
@@ -294,9 +333,23 @@ def _normalized_shard(bundle_path: Path, ordinal: int) -> dict[str, Any]:
             source = sources.get(_require_str(observation, "source_inventory_item_id"))
             if source is None:
                 _fail("legacy structural observation is not joined to an inventory item")
+            structure_kind = _require_str(observation, "structure_kind")
             raw_columns = observation.get("columns")
+            raw_rows = observation.get("rows")
+            if _is_explicitly_excludable_structural_observation(
+                structure_kind=structure_kind,
+                raw_columns=raw_columns,
+                raw_rows=raw_rows,
+            ):
+                # An explicitly empty structural observation or a non-tabular
+                # observation without tabular topology has no executable
+                # structured facts. It is deterministically inadmissible to
+                # this table-only normalized set.
+                continue
             if not isinstance(raw_columns, list) or not raw_columns:
                 _fail("legacy structural columns are invalid")
+            if not isinstance(raw_rows, list):
+                _fail("legacy structural rows are invalid")
             columns_by_ordinal: dict[int, Mapping[str, Any]] = {}
             for column in raw_columns:
                 if not isinstance(column, Mapping):
@@ -320,7 +373,7 @@ def _normalized_shard(bundle_path: Path, ordinal: int) -> dict[str, Any]:
                     "legacy_bundle_sha256": bundle_hash,
                     "source_key": source["source_key"],
                     "ordinal": observation_ordinal,
-                    "structure_kind": _require_str(observation, "structure_kind"),
+                    "structure_kind": structure_kind,
                     "columns": columns,
                     "rows": rows,
                 }
@@ -330,7 +383,7 @@ def _normalized_shard(bundle_path: Path, ordinal: int) -> dict[str, Any]:
                 {
                     "observation_key": observation_key,
                     "source_key": source["source_key"],
-                    "structure_kind": _require_str(observation, "structure_kind"),
+                    "structure_kind": structure_kind,
                     "columns": columns,
                     "rows": rows,
                 }
@@ -396,24 +449,100 @@ def _legacy_bundle_paths(source_root: Path) -> tuple[Path, ...]:
     return tuple(bundle_paths)
 
 
-def _load_aliases(profile_path: Path) -> SemanticSchemaAliasMap:
+def _load_semantic_profile(profile_path: Path) -> DiagnosticSemanticProfile:
     try:
         payload = json.loads(profile_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ContractValidationError("semantic profile is unreadable") from exc
-    if not isinstance(payload, Mapping) or not isinstance(payload.get("aliases"), Mapping):
-        _fail("semantic profile aliases are invalid")
-    aliases = payload["aliases"]
-    return SemanticSchemaAliasMap(
-        object_aliases=aliases.get("object_aliases"),
-        predicate_aliases=aliases.get("predicate_aliases"),
-        value_aliases=aliases.get("value_aliases"),
-        value_domains=aliases.get("value_domains", {}),
+        if not isinstance(payload, Mapping):
+            _fail("semantic profile is invalid")
+        return DiagnosticSemanticProfile.from_private_dict(payload)
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ContractValidationError,
+    ) as exc:
+        raise ContractValidationError("semantic profile is unavailable") from exc
+
+
+def _normalized_semantic_text(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def _canonical_projection_tuples(
+    projections: Sequence[tuple[str, ...]],
+) -> tuple[tuple[str, ...], ...]:
+    checked: list[tuple[str, ...]] = []
+    for projection in projections:
+        if (
+            not isinstance(projection, tuple)
+            or not projection
+            or any(not isinstance(value, str) or not value.strip() for value in projection)
+        ):
+            _fail("candidate projection values are invalid")
+        checked.append(projection)
+    return tuple(
+        sorted(
+            set(checked),
+            key=lambda values: (
+                tuple(_normalized_semantic_text(value) for value in values),
+                values,
+            ),
+        )
     )
 
 
-def _projection_fingerprint(values: Sequence[str]) -> str:
-    return sha256_json({"distinct_projection_values": sorted(set(values))})
+def _projection_fingerprint(projections: Sequence[tuple[str, ...]]) -> str:
+    ordered = _canonical_projection_tuples(projections)
+    return sha256_json([list(projection) for projection in ordered])
+
+
+def _parse_iso_instant(value: str, label: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        _fail(f"{label} is invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        _fail(f"{label} is invalid")
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        _fail(f"{label} is invalid")
+    return parsed
+
+
+def _fresh_attestation_inputs(
+    *,
+    profile: DiagnosticSemanticProfile,
+    issued_at: str,
+    source_fingerprint: str,
+) -> dict[str, Any]:
+    if not isinstance(profile, DiagnosticSemanticProfile):
+        _fail("semantic profile is invalid")
+    _require_sha256(source_fingerprint, "fresh source fingerprint")
+    issued_at_value = _parse_iso_instant(issued_at, "operator issued-at")
+    known_as_of_value = _parse_iso_instant(profile.known_as_of, "semantic profile known-as-of")
+    if issued_at_value < known_as_of_value:
+        _fail("operator issued-at precedes semantic profile known-as-of")
+    return {
+        "workspace_id": profile.workspace_id,
+        "owner_user_id": profile.owner_user_id,
+        "actor_context_id": profile.actor_context_id,
+        "issued_at": issued_at,
+        "known_as_of": profile.known_as_of,
+        "semantic_profile_fingerprint": profile.profile_fingerprint,
+        "scope_policy_fingerprint": sha256_json(
+            {
+                "kind": "fresh_uat_scope_policy_v1",
+                "profile_fingerprint": profile.profile_fingerprint,
+                "source_fingerprint": source_fingerprint,
+                "workspace_id": profile.workspace_id,
+                "owner_user_id": profile.owner_user_id,
+                "actor_context_id": profile.actor_context_id,
+                "known_as_of": profile.known_as_of,
+                "issued_at": issued_at,
+            }
+        ),
+    }
 
 
 def _exact_candidate_result(
@@ -450,7 +579,7 @@ def _exact_candidate_result(
     store = FileDiagnosticStructuralShardStore(output_dir, create=False)
     manifest = store.load_complete_manifest()
     verifier = CoverageScopeAuthorityVerifier.from_external_root(authority_root)
-    projections: set[str] = set()
+    projections: set[tuple[str, ...]] = set()
     for bundle in store.iter_bundles(manifest, scope_authority_verifier=verifier):
         inventory = bundle.source_inventory[0]
         execution = execute_authorized_structured_set(
@@ -462,9 +591,19 @@ def _exact_candidate_result(
             coverage_ledger=bundle.coverage_ledgers[0],
         )
         for match in execution.matches:
-            projections.update(match.projection_values)
-    values = tuple(sorted(projections))
-    return len(values), _projection_fingerprint(values)
+            projections.add(match.projection_values)
+    ordered_projections = _canonical_projection_tuples(tuple(projections))
+    return len(ordered_projections), _projection_fingerprint(ordered_projections)
+
+
+def _write_packet(packet_path: Path, packet: Mapping[str, Any]) -> None:
+    """Write the diagnostic metadata packet after the bounded acceptance run."""
+
+    packet_path.parent.mkdir(parents=True, exist_ok=True)
+    packet_path.write_text(
+        json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _arguments() -> argparse.Namespace:
@@ -474,6 +613,7 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--packet", type=Path, required=True)
     parser.add_argument("--semantic-profile", type=Path, required=True)
     parser.add_argument("--authority-root", type=Path, required=True)
+    parser.add_argument("--issued-at", required=True)
     parser.add_argument("--object-type", required=True)
     parser.add_argument("--predicate", required=True)
     parser.add_argument("--value", required=True)
@@ -485,10 +625,11 @@ def _arguments() -> argparse.Namespace:
 
 def main() -> int:
     arguments = _arguments()
-    if arguments.output_dir.exists():
+    if arguments.output_dir.exists() or arguments.output_dir.is_symlink():
         _fail("fresh output directory must not already exist")
-    if arguments.expected_count < 0 or not arguments.expected_fingerprint.startswith(_SHA256):
+    if arguments.expected_count < 0:
         _fail("expected semantic acceptance result is invalid")
+    _require_sha256(arguments.expected_fingerprint, "expected semantic acceptance result")
     bundle_paths = _legacy_bundle_paths(arguments.source_root)
     # First streaming byte-hash pass gives the existing publisher its complete
     # immutable input map without decoding any legacy JSON.  The new publisher
@@ -503,9 +644,14 @@ def main() -> int:
     source_fingerprint = sha256_json(
         {"immutable_bundle_sha256": tuple(sorted(immutable_hashes.values()))}
     )
-    aliases = _load_aliases(arguments.semantic_profile)
+    profile = _load_semantic_profile(arguments.semantic_profile)
+    attestation_inputs = _fresh_attestation_inputs(
+        profile=profile,
+        issued_at=arguments.issued_at,
+        source_fingerprint=source_fingerprint,
+    )
     try:
-        publish_fresh_uat_attestation(
+        receipt = publish_fresh_uat_attestation(
             output_dir=arguments.output_dir,
             normalized_shards=(
                 _normalized_shard(path, ordinal) for ordinal, path in enumerate(bundle_paths)
@@ -513,27 +659,27 @@ def main() -> int:
             immutable_source_hashes=immutable_hashes,
             source_asset_id="fresh_uat_asset_r8",
             source_fingerprint=source_fingerprint,
-            workspace_id="fresh_uat_workspace_r8",
-            owner_user_id="fresh_uat_owner_r8",
+            workspace_id=attestation_inputs["workspace_id"],
+            owner_user_id=attestation_inputs["owner_user_id"],
             permission_scope={
                 "scope_type": "asset",
                 "scope_id": "fresh_uat_asset_r8",
                 "visibility": "restricted",
             },
-            actor_context_id="fresh_uat_actor_r8",
-            issued_at="2026-08-12T00:00:00+00:00",
-            known_as_of="2026-08-12T00:00:00+00:00",
-            semantic_profile_fingerprint=sha256_file(arguments.semantic_profile),
+            actor_context_id=attestation_inputs["actor_context_id"],
+            issued_at=attestation_inputs["issued_at"],
+            known_as_of=attestation_inputs["known_as_of"],
+            semantic_profile_fingerprint=attestation_inputs["semantic_profile_fingerprint"],
             scope_manifest_id="fresh_uat_scope_r8",
             scope_policy_id="fresh_uat_scope_policy_r8",
             scope_policy_version="1",
-            scope_policy_fingerprint=sha256_json({"scope_policy": "fresh_uat_r8"}),
+            scope_policy_fingerprint=attestation_inputs["scope_policy_fingerprint"],
             authority_verifier_root=authority_root,
         )
         count, fingerprint = _exact_candidate_result(
             output_dir=arguments.output_dir,
             authority_root=authority_root,
-            aliases=aliases,
+            aliases=profile.schema_alias_map,
             object_type=arguments.object_type,
             predicate=arguments.predicate,
             value=arguments.value,
@@ -541,8 +687,9 @@ def main() -> int:
         )
         passed = count == arguments.expected_count and fingerprint == arguments.expected_fingerprint
         packet = {
+            "artifact_type": "formowl_offline_semantic_acceptance_r8",
             "status": "passed" if passed else "failed",
-            "release_decision": "CANDIDATE_EXACT_AGREE" if passed else "CANDIDATE_EXACT_DISAGREE",
+            "release_decision": ("CANDIDATE_EXACT_AGREE" if passed else "CANDIDATE_EXACT_DISAGREE"),
             "count": count,
             "fingerprint": fingerprint,
             "oracle_missing_count": 0 if passed else None,
@@ -552,14 +699,17 @@ def main() -> int:
             "canonical_kg": False,
             "source_count": 0,
             "citation_count": 0,
+            # The packet binds the validated private profile without exposing
+            # its aliases, workspace, owner, actor, or source contents.
+            "issued_at": attestation_inputs["issued_at"],
+            "known_as_of": attestation_inputs["known_as_of"],
+            "semantic_profile_fingerprint": attestation_inputs["semantic_profile_fingerprint"],
+            "attestation_binding_fingerprint": receipt.attestation_binding_fingerprint,
         }
-        arguments.packet.parent.mkdir(parents=True, exist_ok=True)
-        arguments.packet.write_text(
-            json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        _write_packet(arguments.packet, packet)
         return 0 if passed else 1
     except Exception:
+        arguments.packet.unlink(missing_ok=True)
         if arguments.output_dir.exists():
             shutil.rmtree(arguments.output_dir)
         raise
