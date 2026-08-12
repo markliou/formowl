@@ -170,6 +170,10 @@ class OpenPublicValueSemanticProfileTests(unittest.TestCase):
         payload = profile.to_private_dict()
 
         self.assertEqual(
+            sha256_json(profile.binding_fingerprint_payload),
+            profile.profile_fingerprint,
+        )
+        self.assertEqual(
             payload["aliases"]["value_domains"],
             {
                 "synthetic property": "open_public_value",
@@ -223,6 +227,10 @@ class OpenPublicValueSemanticProfileTests(unittest.TestCase):
 
         restored = DiagnosticSemanticProfile.from_private_dict(legacy_payload)
 
+        self.assertEqual(
+            sha256_json(restored.binding_fingerprint_payload),
+            restored.profile_fingerprint,
+        )
         self.assertEqual(
             restored.schema_alias_map.value_domain("synthetic property"), "closed_enum"
         )

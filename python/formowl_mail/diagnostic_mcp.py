@@ -200,15 +200,22 @@ class DiagnosticSemanticProfile:
             raise ValueError("semantic profile known-as-of is invalid")
         if type(self._legacy_value_domain_fingerprint) is not bool:
             raise ValueError("semantic profile fingerprint shape is invalid")
-        expected_fingerprint = sha256_json(self.fingerprint_payload)
         if self._legacy_value_domain_fingerprint:
             if any(
                 domain != "closed_enum" for domain in self.schema_alias_map.value_domains.values()
             ):
                 raise ValueError("legacy semantic profile cannot use open value domains")
-            expected_fingerprint = sha256_json(self.legacy_fingerprint_payload)
+        expected_fingerprint = sha256_json(self.binding_fingerprint_payload)
         if self.profile_fingerprint != expected_fingerprint:
             raise ValueError("semantic profile fingerprint does not match contents")
+
+    @property
+    def binding_fingerprint_payload(self) -> dict[str, Any]:
+        """Return the exact profile shape bound by the stored fingerprint."""
+
+        if self._legacy_value_domain_fingerprint:
+            return self.legacy_fingerprint_payload
+        return self.fingerprint_payload
 
     @property
     def fingerprint_payload(self) -> dict[str, Any]:
