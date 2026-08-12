@@ -144,6 +144,16 @@ _SEMANTIC_PROFILE_SCOPE_KEYS = frozenset(
     }
 )
 _SEMANTIC_RUNTIME_SCOPE_KIND = "runtime_grounded_structured_set_v1"
+_FRESH_UAT_SCOPE_KIND = "internal_diagnostic_uat"
+_FRESH_UAT_SCOPE_PREDICATE = "fresh_uat_structural_scope"
+_FRESH_UAT_IMPORT_PROFILE = "fresh_internal_diagnostic_uat"
+_FRESH_UAT_PARSER_NAME = "fresh_uat_normalized_materializer"
+_FRESH_UAT_PARSER_VERSION = "1"
+_FRESH_UAT_MANIFEST_PARSER_VERSION = "fresh_uat_normalized_v1"
+_FRESH_UAT_MANIFEST_TOKENIZER_VERSION = "fresh_uat_structural_v1"
+_FRESH_UAT_MANIFEST_INDEX_VERSION = "fresh_uat_structural_v1"
+_FRESH_UAT_MANIFEST_IMPLEMENTATION_VERSION = "fresh_uat_attestation_v1"
+_FRESH_UAT_MATERIALIZER = "fresh_uat_normalized_shard_v1"
 
 
 @dataclass(frozen=True)
@@ -1036,15 +1046,29 @@ def prepare_prevalidated_semantic_shard_templates(
 
     templates: list[PrevalidatedSemanticShardTemplate] = []
     for ordinal, (record, bundle) in enumerate(zip(records, cached_bundles, strict=True)):
-        if record.ordinal != ordinal or not _shard_bundle_matches_existing_export_verification(
+        if record.ordinal != ordinal:
+            raise ContractValidationError("diagnostic prevalidated shard templates are invalid")
+        scopes = _resolved_semantic_scopes(bundles=(bundle,), profile=profile)
+        fresh_scope = _fresh_uat_semantic_scope(scopes)
+        if fresh_scope is not None:
+            if not _shard_bundle_matches_fresh_uat_attestation(
+                bundle=bundle,
+                record=record,
+                aggregate=aggregate,
+                profile=profile,
+                scope_authority_verifier=scope_authority_verifier,
+            ):
+                raise ContractValidationError("diagnostic prevalidated shard templates are invalid")
+            baseline = fresh_scope
+        elif not _shard_bundle_matches_existing_export_verification(
             bundle=bundle,
             record=record,
             aggregate=aggregate,
             profile=profile,
         ):
             raise ContractValidationError("diagnostic prevalidated shard templates are invalid")
-        scopes = _resolved_semantic_scopes(bundles=(bundle,), profile=profile)
-        baseline = _baseline_semantic_scope(scopes)
+        else:
+            baseline = _baseline_semantic_scope(scopes)
         if baseline is None or not admissible_scope_complete(
             _combined_admissibility(scopes, profile=profile)
         ):
@@ -2219,6 +2243,9 @@ def _execute_prevalidated_sharded_semantic_request(
                 found_in_any_complete_shard = (
                     found_in_any_complete_shard or outcome.claim.state == "FOUND"
                 )
+                candidate_only_aggregate = candidate_only_aggregate or _is_fresh_uat_baseline_scope(
+                    template.baseline_scope
+                )
             elif template.thin_topology_compatibility and _template_has_runtime_topology_proof(
                 template
             ):
@@ -2359,6 +2386,8 @@ def _execute_prevalidated_sharded_semantic_request(
         # storage handle. Evidence remains available only through a later
         # governed request when a user explicitly asks for it.
         "citation_handles": [],
+        "source_count": 0,
+        "citation_count": 0,
         "canonical_kg": CANONICAL_KG,
     }
 
@@ -2447,6 +2476,218 @@ def _shard_bundle_matches_existing_export_verification(
         and version_manifest.implementation_version
         == DIAGNOSTIC_STRUCTURAL_BRIDGE_IMPLEMENTATION_VERSION
         and version_manifest.implementation_fingerprint == expected_implementation_fingerprint
+    )
+
+
+def _shard_bundle_matches_fresh_uat_attestation(
+    *,
+    bundle: MailEvidenceBundle,
+    record: DiagnosticStructuralShardRecord,
+    aggregate: DiagnosticStructuralAggregateManifest,
+    profile: DiagnosticSemanticProfile,
+    scope_authority_verifier: CoverageScopeAuthorityVerifier,
+) -> bool:
+    """Verify the separate fresh-normalized UAT provenance path.
+
+    ``existing_export_verification`` remains aggregate compatibility
+    accounting for this path.  Fresh authority is instead the externally
+    revalidated scope authority bound to the normalized materializer,
+    profile, source, actor, and scope-policy facts below.
+    """
+
+    if not all(
+        isinstance(value, expected_type)
+        for value, expected_type in (
+            (bundle, MailEvidenceBundle),
+            (record, DiagnosticStructuralShardRecord),
+            (aggregate, DiagnosticStructuralAggregateManifest),
+            (profile, DiagnosticSemanticProfile),
+            (scope_authority_verifier, CoverageScopeAuthorityVerifier),
+        )
+    ):
+        return False
+    if (
+        record.mail_evidence_bundle_id != bundle.mail_evidence_bundle_id
+        or record.existing_export_verification_fingerprint
+        != aggregate.existing_export_verification.verification_fingerprint
+        or len(bundle.message_occurrences) != record.selected_message_count
+        or len(bundle.body_segments) != record.body_segment_count
+        or len(bundle.structural_observations) != record.structural_observation_count
+        or record.selected_top_level_message_count != record.selected_message_count
+        or record.embedded_message_occurrence_count != 0
+        or len(bundle.source_inventory) != 1
+        or len(bundle.claim_requirements) != 1
+        or len(bundle.coverage_ledgers) != 1
+        or len(bundle.version_manifests) != 1
+        or bundle.producer_type != "fixture_parser"
+    ):
+        return False
+
+    inventory = bundle.source_inventory[0]
+    requirement = bundle.claim_requirements[0]
+    ledger = bundle.coverage_ledgers[0]
+    version_manifest = bundle.version_manifests[0]
+    authorization = ledger.authorization_binding
+    partition = ledger.scope_partition
+    authority = partition.scope_authority if partition is not None else None
+    if not all(
+        isinstance(value, expected_type)
+        for value, expected_type in (
+            (inventory, SourceInventory),
+            (requirement, ClaimRequirement),
+            (ledger, CoverageLedger),
+            (version_manifest, VersionManifest),
+            (authorization, CoverageAuthorizationBinding),
+            (authority, CoverageScopeAuthority),
+        )
+    ):
+        return False
+
+    parameters = dict(requirement.parameters)
+    normalized_bundle_sha256 = parameters.get("normalized_bundle_sha256")
+    inventory_items = tuple(inventory.items)
+    if (
+        set(parameters) != {"scope_kind", "normalized_bundle_sha256"}
+        or parameters.get("scope_kind") != _FRESH_UAT_SCOPE_KIND
+        or not isinstance(normalized_bundle_sha256, str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", normalized_bundle_sha256)
+        or not inventory_items
+    ):
+        return False
+    permission_scope = dict(inventory_items[0].permission_scope)
+    if any(
+        item.source_asset_id != aggregate.source_asset_id
+        or item.source_fingerprint != aggregate.source_fingerprint
+        or item.parser_fingerprint
+        != sha256_json(
+            {
+                "materializer": _FRESH_UAT_MATERIALIZER,
+                "normalized_bundle_sha256": normalized_bundle_sha256,
+            }
+        )
+        or dict(item.permission_scope) != permission_scope
+        for item in inventory_items
+    ):
+        return False
+
+    parser_fingerprint = sha256_json(
+        {
+            "materializer": _FRESH_UAT_MATERIALIZER,
+            "normalized_bundle_sha256": normalized_bundle_sha256,
+        }
+    )
+    expected_index_fingerprint = sha256_json(
+        {
+            "normalized_bundle_sha256": normalized_bundle_sha256,
+            "source_inventory": inventory.to_persistence_dict(),
+            "structural_observations": [
+                observation.to_persistence_dict() for observation in bundle.structural_observations
+            ],
+        }
+    )
+    expected_implementation_fingerprint = sha256_json(
+        {
+            "materializer": _FRESH_UAT_MATERIALIZER,
+            "scope_manifest_id": aggregate.scope_manifest_id,
+            "semantic_profile_fingerprint": profile.profile_fingerprint,
+        }
+    )
+    expected_permission_revision = sha256_json(
+        {
+            "workspace_id": aggregate.workspace_id,
+            "owner_user_id": aggregate.owner_user_id,
+            "source_asset_id": aggregate.source_asset_id,
+            "permission_scope": permission_scope,
+        }
+    )
+    expected_grant_revision = sha256_json(
+        {
+            "source_inventory_id": inventory.source_inventory_id,
+            "source_fingerprint": aggregate.source_fingerprint,
+        }
+    )
+    try:
+        revalidated_authority = scope_authority_verifier.revalidate(authority)
+        trusted_authority = _trusted_scope_authority(
+            bundle=bundle,
+            coverage_ledger=ledger,
+            claim_requirement=requirement,
+            source_inventory=inventory,
+        )
+        authority_valid = revalidated_authority.validate_for_claim(
+            inventory,
+            requirement,
+            version_manifest,
+            authorization,
+            revalidated_authority.scope_policy,
+        )
+        ledger_usable = ledger.usable_for_claim(
+            inventory,
+            requirement,
+            version_manifest,
+            authorization,
+            revalidated_authority,
+        )
+    except ContractValidationError:
+        return False
+    return bool(
+        bundle.mail_import_session.source_asset_id == aggregate.source_asset_id
+        and bundle.mail_import_session.archive_sha256 == aggregate.source_fingerprint
+        and bundle.mail_import_session.workspace_id == aggregate.workspace_id
+        and bundle.mail_import_session.owner_user_id == aggregate.owner_user_id
+        and bundle.mail_import_session.import_profile == _FRESH_UAT_IMPORT_PROFILE
+        and bundle.mail_import_session.status == "succeeded"
+        and inventory.source_asset_id == aggregate.source_asset_id
+        and inventory.source_fingerprint == aggregate.source_fingerprint
+        and inventory.parser_fingerprint == parser_fingerprint
+        and inventory.created_at == bundle.mail_import_session.created_at
+        and requirement.kind == "all_matching"
+        and requirement.target == "structural_row"
+        and requirement.predicate == _FRESH_UAT_SCOPE_PREDICATE
+        and set(requirement.required_scope)
+        == {item.source_inventory_item_id for item in inventory_items}
+        and requirement.created_at == bundle.mail_import_session.created_at
+        and record.selector_coverage_fingerprint
+        == sha256_json(
+            {
+                "ordinal": record.ordinal,
+                "normalized_bundle_sha256": normalized_bundle_sha256,
+            }
+        )
+        and version_manifest.source_fingerprint == aggregate.source_fingerprint
+        and version_manifest.parser_fingerprint == parser_fingerprint
+        and version_manifest.tokenizer_fingerprint
+        == sha256_json({"semantic_profile_fingerprint": profile.profile_fingerprint})
+        and version_manifest.index_fingerprint == expected_index_fingerprint
+        and version_manifest.implementation_fingerprint == expected_implementation_fingerprint
+        and version_manifest.parser_version == _FRESH_UAT_MANIFEST_PARSER_VERSION
+        and version_manifest.tokenizer_version == _FRESH_UAT_MANIFEST_TOKENIZER_VERSION
+        and version_manifest.index_version == _FRESH_UAT_MANIFEST_INDEX_VERSION
+        and version_manifest.implementation_version == _FRESH_UAT_MANIFEST_IMPLEMENTATION_VERSION
+        and version_manifest.created_at == bundle.mail_import_session.created_at
+        and bundle.mail_parse_run.parser_name == _FRESH_UAT_PARSER_NAME
+        and bundle.mail_parse_run.parser_version == _FRESH_UAT_PARSER_VERSION
+        and bundle.mail_parse_run.input_hash == aggregate.source_fingerprint
+        and bundle.mail_parse_run.config_hash == parser_fingerprint
+        and bundle.mail_parse_run.status == "succeeded"
+        and bundle.mail_parse_run.started_at == bundle.mail_import_session.created_at
+        and bundle.mail_parse_run.completed_at == bundle.mail_import_session.created_at
+        and bundle.created_at == bundle.mail_import_session.created_at
+        and authorization.actor_context_id == profile.actor_context_id
+        and authorization.permission_revision == expected_permission_revision
+        and authorization.grant_revision == expected_grant_revision
+        and ledger.query_id == requirement.query_id
+        and ledger.claim_requirement_id == requirement.claim_requirement_id
+        and ledger.source_inventory_id == inventory.source_inventory_id
+        and ledger.complete_authorized_scope
+        and revalidated_authority._is_trusted_for_authoritative_use
+        and revalidated_authority.authority_verifier_fingerprint
+        == scope_authority_verifier.verifier_fingerprint
+        and trusted_authority is not None
+        and trusted_authority._is_trusted_for_authoritative_use
+        and trusted_authority == revalidated_authority
+        and authority_valid
+        and ledger_usable
     )
 
 
@@ -2560,7 +2801,10 @@ def validate_diagnostic_semantic_profile_binding(
     has_compact_baseline_scope = _baseline_semantic_scope(scopes) is not None and isinstance(
         scope_authority_verifier, CoverageScopeAuthorityVerifier
     )
-    if not (has_legacy_predicate_scopes or has_compact_baseline_scope):
+    has_fresh_uat_scope = _fresh_uat_semantic_scope(scopes) is not None and isinstance(
+        scope_authority_verifier, CoverageScopeAuthorityVerifier
+    )
+    if not (has_legacy_predicate_scopes or has_compact_baseline_scope or has_fresh_uat_scope):
         raise ValueError("diagnostic semantic profile bundle binding is invalid")
 
 
@@ -2589,6 +2833,30 @@ def _baseline_semantic_scope(
         == DIAGNOSTIC_STRUCTURAL_BASELINE_SCOPE_KIND
     )
     return candidates[0] if len(candidates) == 1 else None
+
+
+def _fresh_uat_semantic_scope(
+    scopes: Sequence[_ResolvedSemanticScope],
+) -> _ResolvedSemanticScope | None:
+    """Find the separate, current normalized-attestation scope only."""
+
+    candidates = tuple(
+        scope
+        for scope in scopes
+        if scope.claim_requirement.predicate == _FRESH_UAT_SCOPE_PREDICATE
+        and scope.claim_requirement.parameters.get("scope_kind") == _FRESH_UAT_SCOPE_KIND
+    )
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _is_fresh_uat_baseline_scope(scope: object) -> bool:
+    """Recognize only the predicate-neutral current fresh-UAT scope."""
+
+    return bool(
+        isinstance(scope, _ResolvedSemanticScope)
+        and scope.claim_requirement.predicate == _FRESH_UAT_SCOPE_PREDICATE
+        and dict(scope.claim_requirement.parameters).get("scope_kind") == _FRESH_UAT_SCOPE_KIND
+    )
 
 
 def _derive_runtime_query_scope(
@@ -3062,6 +3330,8 @@ def _semantic_base_payload(
             "has_more": False,
         },
         "citation_handles": [],
+        "source_count": 0,
+        "citation_count": 0,
         "canonical_kg": CANONICAL_KG,
     }
 

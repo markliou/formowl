@@ -410,6 +410,32 @@ class FreshAttestationActualMcpIntegrationTests(unittest.TestCase):
                     )
                 )
 
+        with (
+            self.subTest("prevalidation_authority_root_mismatch"),
+            tempfile.TemporaryDirectory() as temporary,
+        ):
+            store = _publish_tiny_attestation(
+                output_dir=Path(temporary),
+                profile=profile,
+            )
+            aggregate = store.load_complete_manifest()
+            bundles = tuple(
+                store.iter_bundles(
+                    aggregate,
+                    scope_authority_verifier=verifier,
+                )
+            )
+            wrong_verifier = CoverageScopeAuthorityVerifier.from_external_root(
+                _WRONG_AUTHORITY_ROOT
+            )
+            with self.assertRaises(ContractValidationError):
+                prepare_prevalidated_semantic_shard_templates(
+                    aggregate=aggregate,
+                    bundles=bundles,
+                    profile=profile,
+                    scope_authority_verifier=wrong_verifier,
+                )
+
         with self.subTest("persisted_bundle_tamper"), tempfile.TemporaryDirectory() as temporary:
             store = _publish_tiny_attestation(
                 output_dir=Path(temporary),
