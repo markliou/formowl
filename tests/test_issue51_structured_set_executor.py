@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import importlib
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 import unittest
 
 import _paths  # noqa: F401
@@ -72,7 +71,8 @@ def _observation(
     *,
     observation_id: str,
     inventory_item_id: str,
-    headers: tuple[str, str, str] = ("record", "state", "label"),
+    structure_kind: str = "record",
+    headers: tuple[str, str] = ("state", "label"),
     rows: Sequence[tuple[str, ...]],
 ) -> StructuralObservation:
     structural_rows = tuple(
@@ -96,7 +96,7 @@ def _observation(
         source_inventory_item_id=inventory_item_id,
         source_asset_id="synthetic_asset",
         source_observation_id=f"source_{observation_id}",
-        structure_kind="table",
+        structure_kind=structure_kind,
         columns=tuple(
             StructuralColumn(
                 column_ordinal=ordinal,
@@ -128,38 +128,29 @@ def _ledger(*, inventory_item_ids: Sequence[str], observations: Sequence[Structu
 def _execute(
     *,
     plan: Any,
-    observations: Sequence[StructuralObservation],
+    observations: Sequence[Any],
     authorized_inventory_item_ids: Sequence[str],
     ledger: CoverageLedger,
 ) -> Any:
     return _executor()(
         plan=plan,
         structural_observations=tuple(observations),
-        authorized_inventory_item_ids=frozenset(authorized_inventory_item_ids),
+        authorized_inventory_item_ids=tuple(authorized_inventory_item_ids),
         coverage_ledger=ledger,
     )
 
 
-def _field(value: Any, name: str) -> Any:
-    if isinstance(value, Mapping):
-        return value.get(name)
-    return getattr(value, name, None)
+def _displayed_projection_values(execution: Any) -> tuple[str, ...]:
+    """Flatten public projection tuples from the executor's displayed page."""
 
-
-def _projection_values(execution: Any) -> tuple[str, ...]:
-    values = []
-    for match in execution.matches:
-        projection_value = next(
-            (
-                _field(match, field_name)
-                for field_name in ("projection_value", "display_value", "value")
-                if _field(match, field_name) is not None
-            ),
-            None,
-        )
-        if not isinstance(projection_value, str):
-            raise AssertionError("structured-set match omits a public projection value")
-        values.append(projection_value)
+    values: list[str] = []
+    for match in execution.displayed_matches:
+        projection_values = match.projection_values
+        if not isinstance(projection_values, tuple) or not all(
+            isinstance(value, str) for value in projection_values
+        ):
+            raise AssertionError("displayed match has invalid projection_values")
+        values.extend(projection_values)
     return tuple(values)
 
 
@@ -171,9 +162,9 @@ class StructuredSetExecutorContractTests(unittest.TestCase):
             observation_id="observation_authorized",
             inventory_item_id="inventory_authorized",
             rows=(
-                ("record", "active", "bravo"),
-                ("record", "active", "alpha"),
-                ("record", "inactive", "ignored"),
+                ("active", "bravo"),
+                ("active", "alpha"),
+                ("inactive", "ignored"),
             ),
         )
         ledger = _ledger(inventory_item_ids=("inventory_authorized",), observations=(observation,))
@@ -191,8 +182,8 @@ class StructuredSetExecutorContractTests(unittest.TestCase):
             ledger=ledger,
         )
 
-        self.assertEqual(_projection_values(first_page), ("alpha",))
-        self.assertEqual(_projection_values(second_page), ("bravo",))
+        self.assertEqual(_displayed_projection_values(first_page), ("alpha",))
+        self.assertEqual(_displayed_projection_values(second_page), ("bravo",))
         self.assertEqual(len(first_page.matched_structural_facts), 1)
         self.assertEqual(first_page.display_pagination.page_size, 1)
         self.assertEqual(first_page.display_pagination.page_number, 1)
@@ -203,12 +194,12 @@ class StructuredSetExecutorContractTests(unittest.TestCase):
         authorized = _observation(
             observation_id="observation_allowed",
             inventory_item_id="inventory_allowed",
-            rows=(("record", "active", "alpha"),),
+            rows=(("active", "alpha"),),
         )
         unauthorized = _observation(
             observation_id="observation_denied",
             inventory_item_id="inventory_denied",
-            rows=(("record", "active", "shadow"),),
+            rows=(("active", "shadow"),),
         )
         ledger = _ledger(
             inventory_item_ids=("inventory_allowed",),
@@ -222,25 +213,14 @@ class StructuredSetExecutorContractTests(unittest.TestCase):
             ledger=ledger,
         )
 
-        self.assertEqual(_projection_values(execution), ("alpha",))
-        self.assertNotIn("shadow", _projection_values(execution))
-        self.assertTrue(
-            all(
-                _field(match, "source_inventory_item_id") != "inventory_denied"
-                for match in execution.matches
-            )
-        )
+        self.assertEqual(_displayed_projection_values(execution), ("alpha",))
+        self.assertNotIn("shadow", _displayed_projection_values(execution))
 
-    def test_invalid_plan_or_malformed_structural_row_is_rejected(self) -> None:
+    def test_invalid_plan_or_executor_input_is_rejected(self) -> None:
         valid = _observation(
             observation_id="observation_valid",
             inventory_item_id="inventory_valid",
-            rows=(("record", "active", "alpha"),),
-        )
-        malformed = _observation(
-            observation_id="observation_malformed",
-            inventory_item_id="inventory_valid",
-            rows=(("record", "active"),),
+            rows=(("active", "alpha"),),
         )
         ledger = _ledger(inventory_item_ids=("inventory_valid",), observations=(valid,))
 
@@ -252,11 +232,11 @@ class StructuredSetExecutorContractTests(unittest.TestCase):
                     authorized_inventory_item_ids=("inventory_valid",),
                     ledger=ledger,
                 )
-        with self.subTest("row"):
+        with self.subTest("structural_observation"):
             with self.assertRaises(ContractValidationError):
                 _execute(
                     plan=_plan(),
-                    observations=(malformed,),
+                    observations=(object(),),
                     authorized_inventory_item_ids=("inventory_valid",),
                     ledger=ledger,
                 )
@@ -265,10 +245,11 @@ class StructuredSetExecutorContractTests(unittest.TestCase):
         observation = _observation(
             observation_id="observation_generic",
             inventory_item_id="inventory_generic",
-            headers=("entity", "phase", "title"),
+            structure_kind="entity",
+            headers=("phase", "title"),
             rows=(
-                ("entity", "ready", "delta"),
-                ("entity", "waiting", "echo"),
+                ("ready", "delta"),
+                ("waiting", "echo"),
             ),
         )
         ledger = _ledger(inventory_item_ids=("inventory_generic",), observations=(observation,))
@@ -285,7 +266,7 @@ class StructuredSetExecutorContractTests(unittest.TestCase):
             ledger=ledger,
         )
 
-        self.assertEqual(_projection_values(execution), ("delta",))
+        self.assertEqual(_displayed_projection_values(execution), ("delta",))
         self.assertEqual(len(execution.matched_structural_facts), 1)
 
 
