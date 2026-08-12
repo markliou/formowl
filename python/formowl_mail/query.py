@@ -12,7 +12,11 @@ import unicodedata
 
 from formowl_contract import (
     ContractValidationError,
+    CoverageLedger,
+    DisplayPagination,
+    ExecutableSemanticPlan,
     Grant,
+    StructuralObservation,
     sha256_json,
     to_plain,
 )
@@ -83,6 +87,122 @@ class MailEvidenceReadResult:
             "mail_evidence_read_result",
         )
         return payload
+
+
+@dataclass(frozen=True)
+class StructuralObservationMatchFact:
+    """Governed row-coherent match identity for one structural observation."""
+
+    source_observation_id: str
+    structural_observation_id: str
+    source_inventory_item_id: str
+    matched_row_ordinals: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "source_observation_id",
+            "structural_observation_id",
+            "source_inventory_item_id",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ContractValidationError(f"{field_name} is invalid")
+            safe_public_string(value, field_name)
+        if any(
+            not isinstance(row_ordinal, int) or isinstance(row_ordinal, bool) or row_ordinal < 0
+            for row_ordinal in self.matched_row_ordinals
+        ):
+            raise ContractValidationError("matched_row_ordinals are invalid")
+        canonical = tuple(sorted(set(self.matched_row_ordinals)))
+        if self.matched_row_ordinals != canonical:
+            raise ContractValidationError("matched_row_ordinals must be ordered and unique")
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = to_plain(self)
+        assert_authorized_evidence_payload_safe(
+            payload,
+            "structural_observation_match_fact",
+        )
+        return payload
+
+
+@dataclass(frozen=True)
+class StructuredSetMatch:
+    """One row selected by a grounded semantic plan before presentation."""
+
+    source_observation_id: str
+    structural_observation_id: str
+    source_inventory_item_id: str
+    row_ordinal: int
+    projection_values: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "source_observation_id",
+            "structural_observation_id",
+            "source_inventory_item_id",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ContractValidationError(f"{field_name} is invalid")
+        if (
+            not isinstance(self.row_ordinal, int)
+            or isinstance(self.row_ordinal, bool)
+            or self.row_ordinal < 0
+        ):
+            raise ContractValidationError("structured set row ordinal is invalid")
+        if any(not isinstance(value, str) or not value for value in self.projection_values):
+            raise ContractValidationError("structured set projection values are invalid")
+        object.__setattr__(self, "projection_values", tuple(self.projection_values))
+
+
+@dataclass(frozen=True)
+class StructuredSetExecution:
+    """Structured-filter result plus inputs for the existing claim engine.
+
+    ``coverage_ledger`` is passed through from the governed WP3 scope.  This
+    executor intentionally does not derive final claim truth, completeness,
+    conflict state, or user-facing prose.
+    """
+
+    plan: ExecutableSemanticPlan
+    matches: tuple[StructuredSetMatch, ...]
+    displayed_matches: tuple[StructuredSetMatch, ...]
+    matched_structural_facts: tuple[StructuralObservationMatchFact, ...]
+    total_matching_rows: int
+    authorized_structural_observation_ids: tuple[str, ...]
+    display_pagination: DisplayPagination
+    coverage_ledger: CoverageLedger | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.plan, ExecutableSemanticPlan):
+            raise ContractValidationError("structured set plan is invalid")
+        if self.total_matching_rows != len(self.matches):
+            raise ContractValidationError("structured set total is invalid")
+        if any(not isinstance(match, StructuredSetMatch) for match in self.matches):
+            raise ContractValidationError("structured set matches are invalid")
+        if any(not isinstance(match, StructuredSetMatch) for match in self.displayed_matches):
+            raise ContractValidationError("structured set displayed matches are invalid")
+        if any(
+            not isinstance(fact, StructuralObservationMatchFact)
+            for fact in self.matched_structural_facts
+        ):
+            raise ContractValidationError("structured set match facts are invalid")
+        if any(
+            not isinstance(value, str) or not value
+            for value in self.authorized_structural_observation_ids
+        ):
+            raise ContractValidationError("structured set authorized observations are invalid")
+        if self.authorized_structural_observation_ids != tuple(
+            sorted(set(self.authorized_structural_observation_ids))
+        ):
+            raise ContractValidationError("structured set authorized observations are invalid")
+        if not isinstance(self.display_pagination, DisplayPagination):
+            raise ContractValidationError("structured set pagination is invalid")
+        if self.coverage_ledger is not None and not isinstance(
+            self.coverage_ledger, CoverageLedger
+        ):
+            raise ContractValidationError("structured set coverage ledger is invalid")
 
 
 @dataclass(frozen=True)
@@ -1516,6 +1636,235 @@ def _can_read_bundle(
     return False
 
 
+def execute_authorized_structured_set(
+    *,
+    plan: ExecutableSemanticPlan,
+    structural_observations: Sequence[StructuralObservation],
+    authorized_inventory_item_ids: Sequence[str],
+    coverage_ledger: CoverageLedger | None = None,
+) -> StructuredSetExecution:
+    """Execute one exact all-matching filter over the complete authorized rows.
+
+    The caller establishes permission/source/version/context/time/status
+    admissibility before grounding ``plan`` and supplies every structured
+    observation in that authorized scope here.  This function performs no
+    lexical, fuzzy, embedding, or ontology-score retrieval: values are
+    normalized only for exact equality against the already-grounded plan.
+
+    The returned rows and match facts are inputs to
+    :meth:`TaskAnsweringEngine.answer_canonical_claim`; final no-match,
+    partial, conflict, and sufficient states remain owned by that engine and
+    its ``CoverageLedger``.
+    """
+
+    if not isinstance(plan, ExecutableSemanticPlan):
+        raise ContractValidationError("structured semantic plan is invalid")
+    if plan.query_class != "attribute_filter" or plan.cardinality != "all_matching":
+        raise ContractValidationError("structured semantic plan is not an all-matching filter")
+    if coverage_ledger is not None and not isinstance(coverage_ledger, CoverageLedger):
+        raise ContractValidationError("structured semantic coverage ledger is invalid")
+    if isinstance(structural_observations, (str, bytes)) or not isinstance(
+        structural_observations,
+        Sequence,
+    ):
+        raise ContractValidationError("structured semantic observations are invalid")
+    if isinstance(authorized_inventory_item_ids, (str, bytes)) or not isinstance(
+        authorized_inventory_item_ids,
+        Sequence,
+    ):
+        raise ContractValidationError("structured semantic authorized scope is invalid")
+    authorized_values = tuple(authorized_inventory_item_ids)
+    if not authorized_values or any(
+        not isinstance(value, str) or not value for value in authorized_values
+    ):
+        raise ContractValidationError("structured semantic authorized scope is invalid")
+    authorized_ids = frozenset(authorized_values)
+    if any(
+        not isinstance(observation, StructuralObservation)
+        for observation in structural_observations
+    ):
+        raise ContractValidationError("structured semantic observations are invalid")
+
+    # Permission is the first data-dependent boundary.  Neither column aliases
+    # nor values from an unauthorized observation are inspected below.
+    authorized_observations = tuple(
+        observation
+        for observation in structural_observations
+        if observation.source_inventory_item_id in authorized_ids
+    )
+    object_type_forms = frozenset(plan.object_type_match_forms)
+    matches: list[StructuredSetMatch] = []
+    for observation in authorized_observations:
+        if _normalize_structured_semantic_text(observation.structure_kind) not in object_type_forms:
+            continue
+        predicate_ordinals = _semantic_column_ordinals(
+            observation,
+            plan.predicate_match_forms,
+        )
+        if not predicate_ordinals:
+            continue
+        projection_ordinals = _semantic_column_ordinals(
+            observation,
+            plan.projection_match_forms,
+        )
+        for row in observation.rows:
+            if not _semantic_row_matches(
+                row,
+                predicate_ordinals=predicate_ordinals,
+                value_forms=plan.value_match_forms,
+            ):
+                continue
+            matches.append(
+                StructuredSetMatch(
+                    source_observation_id=observation.source_observation_id,
+                    structural_observation_id=observation.structural_observation_id,
+                    source_inventory_item_id=observation.source_inventory_item_id,
+                    row_ordinal=row.row_ordinal,
+                    projection_values=_semantic_row_values(
+                        row,
+                        column_ordinals=projection_ordinals,
+                    ),
+                )
+            )
+
+    ordered_matches = tuple(
+        sorted(
+            matches,
+            key=lambda match: _structured_set_match_sort_key(match, plan),
+            reverse=plan.order_direction == "descending",
+        )
+    )
+    page_start = (plan.page_number - 1) * plan.page_size
+    displayed_matches = ordered_matches[page_start : page_start + plan.page_size]
+    facts_by_observation: dict[
+        tuple[str, str, str],
+        list[int],
+    ] = {}
+    for match in ordered_matches:
+        facts_by_observation.setdefault(
+            (
+                match.source_observation_id,
+                match.structural_observation_id,
+                match.source_inventory_item_id,
+            ),
+            [],
+        ).append(match.row_ordinal)
+    match_facts = tuple(
+        StructuralObservationMatchFact(
+            source_observation_id=source_observation_id,
+            structural_observation_id=structural_observation_id,
+            source_inventory_item_id=source_inventory_item_id,
+            matched_row_ordinals=tuple(sorted(set(row_ordinals))),
+        )
+        for (
+            source_observation_id,
+            structural_observation_id,
+            source_inventory_item_id,
+        ), row_ordinals in sorted(facts_by_observation.items())
+    )
+    pagination = DisplayPagination(
+        page_size=plan.page_size,
+        page_number=plan.page_number,
+        displayed_count=len(displayed_matches),
+        has_more=len(ordered_matches) > page_start + len(displayed_matches),
+    )
+    return StructuredSetExecution(
+        plan=plan,
+        matches=ordered_matches,
+        displayed_matches=displayed_matches,
+        matched_structural_facts=match_facts,
+        total_matching_rows=len(ordered_matches),
+        authorized_structural_observation_ids=tuple(
+            sorted({observation.source_observation_id for observation in authorized_observations})
+        ),
+        display_pagination=pagination,
+        coverage_ledger=coverage_ledger,
+    )
+
+
+def _semantic_column_ordinals(
+    observation: StructuralObservation,
+    match_forms: Sequence[str],
+) -> frozenset[int]:
+    forms = frozenset(_normalize_structured_semantic_text(value) for value in match_forms)
+    return frozenset(
+        column.column_ordinal
+        for column in observation.columns
+        if any(
+            _normalize_structured_semantic_text(value) in forms
+            for value in (column.original_header, column.normalized_header)
+            if isinstance(value, str)
+        )
+    )
+
+
+def _semantic_row_matches(
+    row: Any,
+    *,
+    predicate_ordinals: frozenset[int],
+    value_forms: Sequence[str],
+) -> bool:
+    normalized_values = frozenset(
+        _normalize_structured_semantic_text(value) for value in value_forms
+    )
+    return any(
+        cell.cell_state == "populated"
+        and cell.column_ordinal in predicate_ordinals
+        and any(
+            _normalize_structured_semantic_text(value) in normalized_values
+            for value in (cell.normalized_value, cell.value)
+            if isinstance(value, str)
+        )
+        for cell in row.cells
+    )
+
+
+def _semantic_row_values(
+    row: Any,
+    *,
+    column_ordinals: frozenset[int],
+) -> tuple[str, ...]:
+    values: list[str] = []
+    for cell in row.cells:
+        if (
+            cell.cell_state != "populated"
+            or cell.column_ordinal not in column_ordinals
+            or not isinstance(cell.value, str)
+            or not cell.value
+            or cell.value in values
+        ):
+            continue
+        values.append(cell.value)
+    return tuple(values)
+
+
+def _structured_set_match_sort_key(
+    match: StructuredSetMatch,
+    plan: ExecutableSemanticPlan,
+) -> tuple[Any, ...]:
+    if plan.order_by == "projection":
+        return (
+            tuple(_normalize_structured_semantic_text(value) for value in match.projection_values),
+            match.source_observation_id,
+            match.row_ordinal,
+        )
+    if plan.order_by == "row_ordinal":
+        return (
+            match.row_ordinal,
+            match.source_observation_id,
+            tuple(_normalize_structured_semantic_text(value) for value in match.projection_values),
+        )
+    return (
+        match.source_observation_id,
+        match.row_ordinal,
+        tuple(_normalize_structured_semantic_text(value) for value in match.projection_values),
+    )
+
+
+def _normalize_structured_semantic_text(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).strip().casefold().split())
+
+
 def _validate_query_inputs(
     *,
     query_text: str,
@@ -1616,6 +1965,10 @@ __all__ = [
     "MailEvidenceQueryGateway",
     "MailEvidenceQueryResult",
     "MailEvidenceReadResult",
+    "StructuralObservationMatchFact",
+    "StructuredSetExecution",
+    "StructuredSetMatch",
     "build_mail_evidence_query_handler",
     "build_mail_evidence_read_handler",
+    "execute_authorized_structured_set",
 ]
