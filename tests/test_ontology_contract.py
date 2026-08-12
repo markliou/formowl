@@ -242,18 +242,26 @@ class OntologyContractTests(unittest.TestCase):
         )
 
         self.assertFalse(hard.compatible)
-        self.assertTrue(low_confidence.compatible)
+        self.assertFalse(low_confidence.compatible)
         self.assertFalse(low_confidence.hard_reject)
         self.assertEqual(
             low_confidence.reason,
-            "low_confidence_core_supertype_mismatch_soft_prior",
+            "low_confidence_core_supertype_mismatch_capped_additive_no_bonus",
         )
-        self.assertEqual(low_confidence.score_multiplier, 0.65)
+        self.assertEqual(low_confidence.score_multiplier, 1.0)
+        self.assertEqual(low_confidence.additive_score_adjustment, 0.0)
         self.assertFalse(high_confidence.compatible)
-        self.assertTrue(high_confidence.hard_reject)
-        self.assertEqual(high_confidence.score_multiplier, 0.0)
+        self.assertFalse(high_confidence.hard_reject)
+        self.assertEqual(high_confidence.score_multiplier, 1.0)
+        self.assertEqual(high_confidence.additive_score_adjustment, 0.0)
+        self.assertEqual(
+            high_confidence.reason,
+            "high_confidence_core_supertype_mismatch_capped_additive_no_bonus",
+        )
         self.assertTrue(compatible.compatible)
         self.assertEqual(compatible.score_multiplier, 1.0)
+        self.assertEqual(compatible.additive_score_adjustment, 0.102)
+        self.assertEqual(compatible.maximum_additive_score_adjustment, 0.2)
 
         for kwargs in (
             {"left_type_confidence": True, "right_type_confidence": 0.8},

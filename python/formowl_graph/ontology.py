@@ -41,6 +41,8 @@ class SoftTypeCompatibilityDecision:
     compatible: bool
     hard_reject: bool
     score_multiplier: float
+    additive_score_adjustment: float
+    maximum_additive_score_adjustment: float
     reason: str
     left_type_confidence: float
     right_type_confidence: float
@@ -53,6 +55,8 @@ class SoftTypeCompatibilityDecision:
             "compatible": self.compatible,
             "hard_reject": self.hard_reject,
             "score_multiplier": self.score_multiplier,
+            "additive_score_adjustment": self.additive_score_adjustment,
+            "maximum_additive_score_adjustment": self.maximum_additive_score_adjustment,
             "reason": self.reason,
             "left_type_confidence": self.left_type_confidence,
             "right_type_confidence": self.right_type_confidence,
@@ -99,26 +103,43 @@ def soft_core_supertypes_compatible(
     right_type_confidence: float,
     high_confidence_threshold: float = 0.9,
     mismatch_score_multiplier: float = 0.65,
+    maximum_additive_score_adjustment: float = 0.2,
 ) -> SoftTypeCompatibilityDecision:
-    """Soft type prior for noisy candidate generation experiments.
+    """Capped additive type prior for noisy candidate retrieval.
 
     This deliberately does not replace the hard governance gate used by
-    ``propose_type_alignment_candidate``. It gives experiments a way to model
-    predicted type noise without silently dropping plausible candidates.
+    ``propose_type_alignment_candidate``. Inferred type compatibility may add
+    a bounded rerank bonus, but an inferred mismatch never deletes or zeros a
+    candidate. ``mismatch_score_multiplier`` remains a validated compatibility
+    argument for older callers; the default retrieval decision no longer
+    applies multiplicative mismatch pruning.
     """
 
     _validate_confidence(left_type_confidence, "left_type_confidence")
     _validate_confidence(right_type_confidence, "right_type_confidence")
     _validate_confidence(high_confidence_threshold, "high_confidence_threshold")
     _validate_confidence(mismatch_score_multiplier, "mismatch_score_multiplier")
+    _validate_confidence(
+        maximum_additive_score_adjustment,
+        "maximum_additive_score_adjustment",
+    )
     hard = core_supertypes_compatible(left_core_supertype_id, right_core_supertype_id)
     if hard.compatible:
+        additive_score_adjustment = round(
+            min(left_type_confidence, right_type_confidence)
+            * maximum_additive_score_adjustment,
+            6,
+        )
         return SoftTypeCompatibilityDecision(
             left_core_supertype_id=left_core_supertype_id,
             right_core_supertype_id=right_core_supertype_id,
             compatible=True,
             hard_reject=False,
             score_multiplier=1.0,
+            additive_score_adjustment=additive_score_adjustment,
+            maximum_additive_score_adjustment=float(
+                maximum_additive_score_adjustment
+            ),
             reason=hard.reason,
             left_type_confidence=float(left_type_confidence),
             right_type_confidence=float(right_type_confidence),
@@ -133,9 +154,13 @@ def soft_core_supertypes_compatible(
             left_core_supertype_id=left_core_supertype_id,
             right_core_supertype_id=right_core_supertype_id,
             compatible=False,
-            hard_reject=True,
-            score_multiplier=0.0,
-            reason="high_confidence_core_supertype_mismatch",
+            hard_reject=False,
+            score_multiplier=1.0,
+            additive_score_adjustment=0.0,
+            maximum_additive_score_adjustment=float(
+                maximum_additive_score_adjustment
+            ),
+            reason="high_confidence_core_supertype_mismatch_capped_additive_no_bonus",
             left_type_confidence=float(left_type_confidence),
             right_type_confidence=float(right_type_confidence),
             high_confidence_threshold=float(high_confidence_threshold),
@@ -143,10 +168,12 @@ def soft_core_supertypes_compatible(
     return SoftTypeCompatibilityDecision(
         left_core_supertype_id=left_core_supertype_id,
         right_core_supertype_id=right_core_supertype_id,
-        compatible=True,
+        compatible=False,
         hard_reject=False,
-        score_multiplier=float(mismatch_score_multiplier),
-        reason="low_confidence_core_supertype_mismatch_soft_prior",
+        score_multiplier=1.0,
+        additive_score_adjustment=0.0,
+        maximum_additive_score_adjustment=float(maximum_additive_score_adjustment),
+        reason="low_confidence_core_supertype_mismatch_capped_additive_no_bonus",
         left_type_confidence=float(left_type_confidence),
         right_type_confidence=float(right_type_confidence),
         high_confidence_threshold=float(high_confidence_threshold),

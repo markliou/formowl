@@ -7,15 +7,24 @@ from typing import Any, Mapping, Sequence
 from formowl_contract import (
     ContractValidationError,
     Grant,
+    Observation,
     redact_public_raw_references,
     sha256_json,
     to_plain,
+)
+from formowl_core import ascii_identifier_regex_tokens
+from formowl_core.tokenization import (
+    DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE,
+    MailCandidateAdmissionTokenizerProfile,
 )
 
 from ._access import grant_expired, matching_bundles, normalize_grants
 from ._guards import assert_public_payload_safe, safe_public_string
 from .bundle import MailEvidenceBundle
 
+MAIL_TOKENIZER_PROFILE = DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE
+MAIL_TOKENIZER_ID = MAIL_TOKENIZER_PROFILE.tokenizer_id
+MAIL_TOKENIZER_PROFILE_FINGERPRINT = MAIL_TOKENIZER_PROFILE.profile_fingerprint
 _MAIL_EVIDENCE_PERMISSIONS = {"read", "evidence_snippet", "mail_evidence_read"}
 _SEMANTIC_GATEWAY_TEXT_REDACTIONS = (
     re.compile(r"\bwith\s+.+\s+as\s*\(", re.IGNORECASE),
@@ -45,21 +54,89 @@ class _IndexedMailSnippet:
     mail_evidence_bundle_id: str
     searchable_tokens: set[str]
     payload: dict[str, Any]
+    source_observation_hash: str | None = None
+    protected_identifier_tokens: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
 class _MailSnippetIndex:
     snippets: tuple[_IndexedMailSnippet, ...]
     snippet_indexes_by_token: dict[str, tuple[int, ...]]
+    profile_fingerprint: str = MAIL_TOKENIZER_PROFILE_FINGERPRINT
+    observation_snapshot_fingerprint: str | None = None
+    candidate_manifest_fingerprint: str | None = None
+    index_fingerprint: str | None = None
+    protected_identifier_count: int = 0
+
+
+@dataclass(frozen=True)
+class ExistingObservationIndexBuildManifest:
+    """Safe manifest for an Observation-only candidate re-index."""
+
+    artifact_id: str
+    schema_version: int
+    input_kind: str
+    observation_snapshot_fingerprint: str
+    observation_count: int
+    indexed_observation_count: int
+    indexed_snippet_count: int
+    admitted_candidate_count: int
+    protected_identifier_count: int
+    candidate_manifest_fingerprint: str
+    index_fingerprint: str
+    query_profile_fingerprint: str
+    evidence_profile_fingerprint: str
+    raw_pst_read_count: int
+    pst_parser_invocation_count: int
+    new_extractor_run_count: int
+    missing_lineage_count: int
+
+    def to_safe_dict(self) -> dict[str, Any]:
+        payload = to_plain(self)
+        assert_public_payload_safe(payload, "existing_observation_index_build_manifest")
+        return payload
 
 
 class MailEvidenceQueryGateway:
     """Permission-checked query facade over normalized mail evidence bundles."""
 
-    def __init__(self, bundles: Sequence[MailEvidenceBundle]) -> None:
+    def __init__(
+        self,
+        bundles: Sequence[MailEvidenceBundle],
+        *,
+        tokenizer_profile: MailCandidateAdmissionTokenizerProfile | None = None,
+        snippet_index_by_bundle_id: Mapping[str, _MailSnippetIndex] | None = None,
+    ) -> None:
         self._bundles = list(bundles)
-        self._snippet_index_by_bundle_id = {
-            bundle.mail_evidence_bundle_id: _build_snippet_index(bundle) for bundle in self._bundles
+        self._tokenizer_profile = tokenizer_profile or MAIL_TOKENIZER_PROFILE
+        self._tokenizer_profile_override = tokenizer_profile
+        supplied_indexes = dict(snippet_index_by_bundle_id or {})
+        known_bundle_ids = {bundle.mail_evidence_bundle_id for bundle in self._bundles}
+        if set(supplied_indexes) - known_bundle_ids:
+            raise ContractValidationError("mail evidence index does not match selected bundles")
+        self._snippet_index_by_bundle_id: dict[str, _MailSnippetIndex] = {}
+        for bundle in self._bundles:
+            snippet_index = supplied_indexes.get(bundle.mail_evidence_bundle_id)
+            if snippet_index is None:
+                if self._tokenizer_profile_override is None:
+                    snippet_index = _build_snippet_index(bundle)
+                else:
+                    snippet_index = _build_snippet_index(
+                        bundle,
+                        tokenizer_profile=self._tokenizer_profile_override,
+                    )
+            _require_matching_profile(snippet_index, self._tokenizer_profile)
+            self._snippet_index_by_bundle_id[bundle.mail_evidence_bundle_id] = snippet_index
+
+    @property
+    def tokenizer_profile_fingerprint(self) -> str:
+        return self._tokenizer_profile.profile_fingerprint
+
+    @property
+    def index_fingerprints(self) -> dict[str, str | None]:
+        return {
+            bundle_id: snippet_index.index_fingerprint
+            for bundle_id, snippet_index in self._snippet_index_by_bundle_id.items()
         }
 
     def query_mail_evidence(
@@ -129,6 +206,7 @@ class MailEvidenceQueryGateway:
             query_text=query_text,
             limit=limit,
             snippet_index_by_bundle_id=self._snippet_index_by_bundle_id,
+            tokenizer_profile=self._tokenizer_profile_override,
         )
         if not snippets:
             return MailEvidenceQueryResult(
@@ -189,19 +267,39 @@ def _search_visible_bundles(
     query_text: str,
     limit: int,
     snippet_index_by_bundle_id: Mapping[str, _MailSnippetIndex] | None = None,
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile | None = None,
 ) -> list[dict[str, Any]]:
+    profile = tokenizer_profile or MAIL_TOKENIZER_PROFILE
     terms = _tokenize(query_text)
+    protected_query_tokens: set[str] = set()
+    if tokenizer_profile is not None:
+        query_tokenization = profile.analyze(query_text)
+        terms = set(query_tokenization.tokens)
+        protected_query_tokens = {
+            span.exact_token for span in query_tokenization.protected_identifiers
+        }
     snippets: list[dict[str, Any]] = []
     for bundle in bundles:
         if snippet_index_by_bundle_id is None:
-            snippet_index = _build_snippet_index(bundle)
+            snippet_index = _build_snippet_index(
+                bundle,
+                tokenizer_profile=profile,
+            )
         else:
             snippet_index = snippet_index_by_bundle_id.get(bundle.mail_evidence_bundle_id)
             if snippet_index is None:
-                snippet_index = _build_snippet_index(bundle)
+                snippet_index = _build_snippet_index(
+                    bundle,
+                    tokenizer_profile=profile,
+                )
+        _require_matching_profile(snippet_index, profile)
         candidate_indexes = _candidate_snippet_indexes(snippet_index, terms)
         for snippet_index_value in candidate_indexes:
             indexed = snippet_index.snippets[snippet_index_value]
+            if protected_query_tokens and not protected_query_tokens.issubset(
+                indexed.searchable_tokens
+            ):
+                continue
             matched_terms = sorted(term for term in terms if term in indexed.searchable_tokens)
             if not matched_terms:
                 continue
@@ -229,10 +327,18 @@ def _candidate_snippet_indexes(
     return tuple(sorted(indexes))
 
 
-def _build_snippet_index(bundle: MailEvidenceBundle) -> _MailSnippetIndex:
+def _build_snippet_index(
+    bundle: MailEvidenceBundle,
+    *,
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile | None = None,
+    source_observation_hashes: Mapping[str, str] | None = None,
+    observation_snapshot_fingerprint: str | None = None,
+) -> _MailSnippetIndex:
+    profile = tokenizer_profile or MAIL_TOKENIZER_PROFILE
     messages_by_id = {message.email_message_id: message for message in bundle.messages}
     indexed: list[_IndexedMailSnippet] = []
     indexes_by_token: dict[str, list[int]] = {}
+    protected_identifier_count = 0
     for segment in bundle.body_segments:
         message = messages_by_id.get(segment.email_message_id)
         searchable = " ".join(
@@ -246,8 +352,16 @@ def _build_snippet_index(bundle: MailEvidenceBundle) -> _MailSnippetIndex:
             if isinstance(item, str)
         )
         tokens = _tokenize(searchable)
+        protected_tokens: frozenset[str] = frozenset()
+        if tokenizer_profile is not None:
+            tokenization = profile.analyze(searchable)
+            tokens = set(tokenization.tokens)
+            protected_tokens = frozenset(
+                span.exact_token for span in tokenization.protected_identifiers
+            )
         if not tokens:
             continue
+        protected_identifier_count += len(protected_tokens)
         snippet_index = len(indexed)
         indexed.append(
             _IndexedMailSnippet(
@@ -262,16 +376,132 @@ def _build_snippet_index(bundle: MailEvidenceBundle) -> _MailSnippetIndex:
                     "subject": message.subject if message else None,
                     "snippet": segment.text,
                 },
+                source_observation_hash=(
+                    source_observation_hashes.get(segment.source_observation_id)
+                    if source_observation_hashes is not None
+                    else None
+                ),
+                protected_identifier_tokens=protected_tokens,
             )
         )
         for token in tokens:
             indexes_by_token.setdefault(token, []).append(snippet_index)
+    candidate_manifest_fingerprint = sha256_json(
+        [
+            {
+                "source_observation_hash": snippet.source_observation_hash,
+                "candidate_token_hashes": sorted(
+                    sha256_json(token) for token in snippet.searchable_tokens
+                ),
+                "protected_identifier_token_hashes": sorted(
+                    sha256_json(token) for token in snippet.protected_identifier_tokens
+                ),
+            }
+            for snippet in indexed
+        ]
+    )
+    index_fingerprint = sha256_json(
+        {
+            "observation_snapshot_fingerprint": observation_snapshot_fingerprint,
+            "profile_fingerprint": profile.profile_fingerprint,
+            "candidate_manifest_fingerprint": candidate_manifest_fingerprint,
+            "postings": {
+                sha256_json(token): tuple(indexes)
+                for token, indexes in sorted(indexes_by_token.items())
+            },
+        }
+    )
     return _MailSnippetIndex(
         snippets=tuple(indexed),
         snippet_indexes_by_token={
             token: tuple(indexes) for token, indexes in indexes_by_token.items()
         },
+        profile_fingerprint=profile.profile_fingerprint,
+        observation_snapshot_fingerprint=observation_snapshot_fingerprint,
+        candidate_manifest_fingerprint=candidate_manifest_fingerprint,
+        index_fingerprint=index_fingerprint,
+        protected_identifier_count=protected_identifier_count,
     )
+
+
+def build_existing_observation_snippet_index(
+    observations: Sequence[Observation],
+    *,
+    bundle: MailEvidenceBundle,
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+) -> tuple[_MailSnippetIndex, ExistingObservationIndexBuildManifest]:
+    """Re-tokenize a bundle from existing Observation records only."""
+
+    normalized: list[Observation] = []
+    observation_ids: set[str] = set()
+    ordered_observation_hashes: list[str] = []
+    source_observation_hashes: dict[str, str] = {}
+    for observation in observations:
+        if not isinstance(observation, Observation):
+            raise ContractValidationError("existing observation index requires Observation records")
+        validated = Observation.from_dict(observation.to_dict())
+        if validated.observation_id in observation_ids:
+            raise ContractValidationError(
+                "existing observation index has duplicate observation ids"
+            )
+        observation_ids.add(validated.observation_id)
+        observation_hash = sha256_json(validated.to_dict())
+        ordered_observation_hashes.append(observation_hash)
+        source_observation_hashes[validated.observation_id] = observation_hash
+        normalized.append(validated)
+    if not normalized:
+        raise ContractValidationError("existing observation index requires observations")
+
+    body_observation_ids = {
+        observation.observation_id
+        for observation in normalized
+        if observation.modality == "mail" and observation.observation_type == "email_body_segment"
+    }
+    indexed_source_observation_ids = {
+        segment.source_observation_id for segment in bundle.body_segments
+    }
+    missing_lineage = sorted(indexed_source_observation_ids - observation_ids)
+    unindexed_body_observations = sorted(body_observation_ids - indexed_source_observation_ids)
+    if missing_lineage or unindexed_body_observations:
+        raise ContractValidationError("existing observation index lineage is incomplete")
+
+    observation_snapshot_fingerprint = sha256_json(
+        {
+            "schema_version": 1,
+            "ordered_observation_hashes": ordered_observation_hashes,
+            "observation_count": len(normalized),
+        }
+    )
+    snippet_index = _build_snippet_index(
+        bundle,
+        tokenizer_profile=tokenizer_profile,
+        source_observation_hashes=source_observation_hashes,
+        observation_snapshot_fingerprint=observation_snapshot_fingerprint,
+    )
+    admitted_candidate_count = sum(
+        len(snippet.searchable_tokens) for snippet in snippet_index.snippets
+    )
+    manifest = ExistingObservationIndexBuildManifest(
+        artifact_id="formowl_existing_observation_mail_index_manifest_v1",
+        schema_version=1,
+        input_kind="existing_observations_only",
+        observation_snapshot_fingerprint=observation_snapshot_fingerprint,
+        observation_count=len(normalized),
+        indexed_observation_count=len(indexed_source_observation_ids),
+        indexed_snippet_count=len(snippet_index.snippets),
+        admitted_candidate_count=admitted_candidate_count,
+        protected_identifier_count=snippet_index.protected_identifier_count,
+        candidate_manifest_fingerprint=str(snippet_index.candidate_manifest_fingerprint),
+        index_fingerprint=str(snippet_index.index_fingerprint),
+        query_profile_fingerprint=tokenizer_profile.profile_fingerprint,
+        evidence_profile_fingerprint=tokenizer_profile.profile_fingerprint,
+        raw_pst_read_count=0,
+        pst_parser_invocation_count=0,
+        new_extractor_run_count=0,
+        missing_lineage_count=0,
+    )
+    manifest.to_safe_dict()
+    return snippet_index, manifest
 
 
 def _safe_snippet(payload: dict[str, Any]) -> dict[str, Any]:
@@ -381,11 +611,21 @@ def _validate_query_inputs(
 
 
 def _tokenize(value: str) -> set[str]:
-    return {token for token in re.split(r"[^a-zA-Z0-9_@.-]+", value.lower()) if token}
+    return ascii_identifier_regex_tokens(value)
+
+
+def _require_matching_profile(
+    snippet_index: _MailSnippetIndex,
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+) -> None:
+    if snippet_index.profile_fingerprint != tokenizer_profile.profile_fingerprint:
+        raise ContractValidationError("mail evidence tokenizer profile mismatch")
 
 
 __all__ = [
+    "ExistingObservationIndexBuildManifest",
     "MailEvidenceQueryGateway",
     "MailEvidenceQueryResult",
+    "build_existing_observation_snippet_index",
     "build_mail_evidence_query_handler",
 ]
