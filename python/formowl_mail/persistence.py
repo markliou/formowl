@@ -633,7 +633,7 @@ def _build_fresh_uat_bundle(
                         row_ordinal=row_ordinal,
                         cells=tuple(
                             StructuralCell(
-                                cell_state="populated" if value else "empty",
+                                cell_state="populated" if value else "blank",
                                 row_ordinal=row_ordinal,
                                 column_ordinal=column_ordinal,
                                 value=value or None,

@@ -71,6 +71,15 @@ def _normalized_shard(ordinal: int) -> dict[str, object]:
     }
 
 
+def _normalized_shard_with_blank_cell(ordinal: int) -> dict[str, object]:
+    shard = _normalized_shard(ordinal)
+    normalized_bundle = shard["normalized_bundle"]
+    normalized_bundle["structural_observations"][0]["columns"].append("optional")  # type: ignore[index]
+    normalized_bundle["structural_observations"][0]["rows"][0].append("")  # type: ignore[index]
+    shard["normalized_bundle_sha256"] = _sha256_json(normalized_bundle)
+    return shard
+
+
 def _two_shards() -> tuple[dict[str, object], dict[str, object]]:
     return (_normalized_shard(0), _normalized_shard(1))
 
@@ -294,6 +303,22 @@ class FreshUatAttestationContractTests(unittest.TestCase):
                 (0, 1),
             )
             self.assertEqual(len(bundles), 2)
+
+    def test_normalized_empty_cell_round_trips_as_contract_blank(self) -> None:
+        shard = _normalized_shard_with_blank_cell(0)
+        immutable_source_hashes = dict(shard["immutable_source_hashes"])
+        with tempfile.TemporaryDirectory() as temporary:
+            self._publish(
+                output_dir=Path(temporary),
+                normalized_shards=(shard,),
+                immutable_source_hashes=immutable_source_hashes,
+            )
+            _manifest, bundles = _strict_loader(Path(temporary))
+
+        cells = bundles[0].structural_observations[0].rows[0].cells
+        self.assertEqual(cells[-1].cell_state, "blank")
+        self.assertIsNone(cells[-1].value)
+        self.assertIsNone(cells[-1].normalized_value)
 
     def test_legacy_authority_proof_and_ledger_fields_are_rejected(self) -> None:
         for legacy_field in (
