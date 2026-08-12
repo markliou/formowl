@@ -9,6 +9,7 @@ from .tokenization import (
     configured_mail_tokenizer_id,
     configured_mail_tokenizer_profile,
     jieba_sentencepiece_frozen_profile_candidate_admission_tokens,
+    load_mail_tokenizer_profile_package,
     validate_configured_mail_tokenizer,
 )
 
@@ -22,6 +23,7 @@ __all__ = [
     "configured_mail_tokenizer_profile",
     "diff_lines",
     "jieba_sentencepiece_frozen_profile_candidate_admission_tokens",
+    "load_mail_tokenizer_profile_package",
     "read_json_object",
     "sha256_prefixed",
     "sha256_prefixed_id",
