@@ -36,6 +36,7 @@ HOST_PORT="8088"
 MCP_HOST_PORT="8091"
 TOKENIZER_MODEL=""
 TOKENIZER_SHA256=""
+TOKENIZER_TRAINING_CORPUS_SHA256=""
 PUBLIC_ONTOLOGY="$PLAN_DIR/public-semantic-ontology-v1.json"
 
 CORE_NETWORK="formowl-diagnostic-uat"
@@ -123,6 +124,7 @@ Required for dry-run and start:
   --private-manifest-host ABSOLUTE_FILE
   --tokenizer-model ABSOLUTE_FILE
   --tokenizer-sha256 SHA256_HEX
+  --tokenizer-training-corpus-sha256 SHA256_HEX
 
 Optional:
   --public-ontology ABSOLUTE_FILE
@@ -176,6 +178,8 @@ validate_tokenizer() {
   [[ -n "$TOKENIZER_MODEL" ]] || fail "--tokenizer-model is required"
   [[ "$TOKENIZER_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
     fail "--tokenizer-sha256 must be a lowercase SHA-256 hex digest"
+  [[ "$TOKENIZER_TRAINING_CORPUS_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
+    fail "--tokenizer-training-corpus-sha256 must be a lowercase SHA-256 hex digest"
   require_regular_file "$TOKENIZER_MODEL" "tokenizer model"
   [[ "$(sha256_file "$TOKENIZER_MODEL")" == "$TOKENIZER_SHA256" ]] ||
     fail "tokenizer model SHA256 does not match the approved frozen artifact"
@@ -434,6 +438,7 @@ init_sidecar_state() {
     -e FORMOWL_MAIL_TOKENIZER_MODE=jieba_sentencepiece_frozen \
     -e "FORMOWL_MAIL_SENTENCEPIECE_MODEL=${TOKENIZER_CONTAINER_PATH}" \
     -e "FORMOWL_MAIL_SENTENCEPIECE_MODEL_SHA256=sha256:${TOKENIZER_SHA256}" \
+    -e "FORMOWL_MAIL_SENTENCEPIECE_TRAINING_CORPUS_SHA256=sha256:${TOKENIZER_TRAINING_CORPUS_SHA256}" \
     "$IMAGE" \
     python3 "$CODEX_ENGINE_CONTAINER_PATH" init \
       --state-dir "$container_state" \
@@ -464,6 +469,7 @@ start_sidecar() {
     -e FORMOWL_MAIL_TOKENIZER_MODE=jieba_sentencepiece_frozen \
     -e "FORMOWL_MAIL_SENTENCEPIECE_MODEL=${TOKENIZER_CONTAINER_PATH}" \
     -e "FORMOWL_MAIL_SENTENCEPIECE_MODEL_SHA256=sha256:${TOKENIZER_SHA256}" \
+    -e "FORMOWL_MAIL_SENTENCEPIECE_TRAINING_CORPUS_SHA256=sha256:${TOKENIZER_TRAINING_CORPUS_SHA256}" \
     "$IMAGE" \
     python3 "$CODEX_ENGINE_CONTAINER_PATH" serve \
       --state-dir "$container_state" \
@@ -488,6 +494,7 @@ start_diagnostic_mcp() {
     -e FORMOWL_MAIL_TOKENIZER_MODE=jieba_sentencepiece_frozen \
     -e "FORMOWL_MAIL_SENTENCEPIECE_MODEL=${TOKENIZER_CONTAINER_PATH}" \
     -e "FORMOWL_MAIL_SENTENCEPIECE_MODEL_SHA256=sha256:${TOKENIZER_SHA256}" \
+    -e "FORMOWL_MAIL_SENTENCEPIECE_TRAINING_CORPUS_SHA256=sha256:${TOKENIZER_TRAINING_CORPUS_SHA256}" \
     "$IMAGE" "${DIAGNOSTIC_COMMAND[@]}" >/dev/null
 }
 
@@ -513,6 +520,7 @@ start_uat_http() {
     -e FORMOWL_MAIL_TOKENIZER_MODE=jieba_sentencepiece_frozen \
     -e "FORMOWL_MAIL_SENTENCEPIECE_MODEL=${TOKENIZER_CONTAINER_PATH}" \
     -e "FORMOWL_MAIL_SENTENCEPIECE_MODEL_SHA256=sha256:${TOKENIZER_SHA256}" \
+    -e "FORMOWL_MAIL_SENTENCEPIECE_TRAINING_CORPUS_SHA256=sha256:${TOKENIZER_TRAINING_CORPUS_SHA256}" \
     "$IMAGE" \
     python3 "$UAT_LAUNCHER_CONTAINER_PATH" \
       --host 0.0.0.0 \
@@ -669,6 +677,7 @@ parse_args() {
       --private-manifest-host) PRIVATE_MANIFEST_HOST="${2-}"; shift 2 ;;
       --tokenizer-model) TOKENIZER_MODEL="${2-}"; shift 2 ;;
       --tokenizer-sha256) TOKENIZER_SHA256="${2-}"; shift 2 ;;
+      --tokenizer-training-corpus-sha256) TOKENIZER_TRAINING_CORPUS_SHA256="${2-}"; shift 2 ;;
       --public-ontology) PUBLIC_ONTOLOGY="${2-}"; shift 2 ;;
       --codex-command) CODEX_COMMAND="${2-}"; shift 2 ;;
       --host-port) HOST_PORT="${2-}"; shift 2 ;;

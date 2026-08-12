@@ -30,7 +30,6 @@ import os
 from pathlib import Path
 import re
 import sys
-import tempfile
 import time
 from typing import Any, Iterable, Mapping, Sequence
 import unicodedata
@@ -43,8 +42,11 @@ for import_path in (PYTHON_ROOT, SCRIPT_ROOT):
         sys.path.insert(0, str(import_path))
 
 import mail_full_pst_domain_hard_case_eval as hard_eval  # noqa: E402
-import mail_full_pst_exm_lexical_ontology_eval as lexical_eval  # noqa: E402
 from formowl_contract import sha256_json, stable_resource_contract_id  # noqa: E402
+from formowl_core.tokenization import (  # noqa: E402
+    JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
+    configured_mail_tokenizer_profile,
+)
 from formowl_evaluator.report_validation import (  # noqa: E402
     mapping_dict_or_empty as _dict_or_empty,
     public_outputs_are_safe,
@@ -64,6 +66,9 @@ from formowl_graph.candidate_retrieval import (  # noqa: E402
     require_default_candidate_evidence_harness_contract,
 )
 
+MAIL_TOKENIZER_PROFILE = configured_mail_tokenizer_profile()
+MAIL_TOKENIZER_ID = MAIL_TOKENIZER_PROFILE.tokenizer_id
+MAIL_TOKENIZER_PROFILE_FINGERPRINT = MAIL_TOKENIZER_PROFILE.profile_fingerprint
 DEFAULT_BASELINE_REPORT = ROOT / ".test-tmp" / "formowl-mail-domain-hard-case-baseline-v4.json"
 DEFAULT_WORK_DIR = ROOT / ".test-tmp" / "formowl-mail-domain-hard-case-baseline-work-v4"
 DEFAULT_OUTPUT = ROOT / ".test-tmp" / "formowl-mail-domain-hard-kg-fusion-eval.json"
@@ -95,38 +100,6 @@ _EVIDENCE_ONTOLOGY_SIGNALS = frozenset(
     }
 )
 EVIDENCE_ONTOLOGY_SIGNAL_VOCABULARY_HASH = sha256_json(sorted(_EVIDENCE_ONTOLOGY_SIGNALS))
-_CORE_COORDINATION_TERMS = frozenset(
-    {
-        "approval",
-        "approved",
-        "blocked",
-        "cancel",
-        "cancelled",
-        "change",
-        "conflict",
-        "decision",
-        "delay",
-        "denied",
-        "exception",
-        "fail",
-        "failed",
-        "final",
-        "fixed",
-        "hold",
-        "issue",
-        "pending",
-        "problem",
-        "reject",
-        "rejected",
-        "revised",
-        "risk",
-        "shortage",
-        "slip",
-        "urgent",
-        "waiver",
-    }
-)
-
 _STOPWORDS = {
     "a",
     "about",
@@ -256,8 +229,6 @@ class _MailSegment:
 
 @dataclass(frozen=True)
 class _CandidateKgIndex:
-    segmenters: Any
-    compiled_policy: Any
     text_policy_runtime: CandidateEvidenceTextPolicyRuntime
     evidence_index: CandidateEvidenceIndex
     evaluation_context_id: str
@@ -629,9 +600,7 @@ def _load_mail_segments(work_dir: Path) -> list[_MailSegment]:
 
 
 def _build_candidate_kg_index(segments: Sequence[_MailSegment]) -> _CandidateKgIndex:
-    segments, segmenters, compiled_policy, text_policy_runtime = (
-        _apply_default_lexical_candidate_policy(segments)
-    )
+    segments, text_policy_runtime = _apply_default_lexical_candidate_policy(segments)
     segment_by_id = {segment.observation_id: segment for segment in segments}
     ids_by_component: dict[str, list[str]] = defaultdict(list)
     tokens_by_component: dict[str, set[str]] = defaultdict(set)
@@ -704,8 +673,6 @@ def _build_candidate_kg_index(segments: Sequence[_MailSegment]) -> _CandidateKgI
     )
 
     return _CandidateKgIndex(
-        segmenters=segmenters,
-        compiled_policy=compiled_policy,
         text_policy_runtime=text_policy_runtime,
         evidence_index=evidence_index,
         evaluation_context_id=evaluation_context_id,
@@ -734,63 +701,15 @@ def _apply_default_lexical_candidate_policy(
     segments: Sequence[_MailSegment],
 ) -> tuple[
     tuple[_MailSegment, ...],
-    lexical_eval._SegmenterBundle,
-    lexical_eval._CompiledOntologyPolicy,
     CandidateEvidenceTextPolicyRuntime,
 ]:
-    corpus_hash = sha256_json(
-        {
-            "policy_version": KG_POLICY_VERSION,
-            "observation_ids": [segment.observation_id for segment in segments],
-        }
-    )
-    raw_records = [
-        {
-            "corpus_hash": corpus_hash,
-            "observation_id": segment.observation_id,
-            "message_value": segment.message_id
-            or segment.message_occurrence_id
-            or segment.observation_id,
-            "thread_value": segment.thread_id,
-            "text": segment.searchable_text,
-        }
-        for segment in segments
-    ]
-    with tempfile.TemporaryDirectory(prefix="formowl-domain-hard-lexical-") as private_dir:
-        segmenters = lexical_eval._prepare_segmenters(
-            raw_records,
-            output_private_dir=Path(private_dir),
-            require_external_segmenters=True,
-        )
-        prepared = lexical_eval._prepare_corpus(
-            raw_records,
-            segmenters=segmenters,
-            parsed_corpus_count=1,
-        )
-    compiled_policy = lexical_eval._compile_programmatic_ontology_policy(
-        prepared.segments,
-        scorer_kind=lexical_eval.PROGRAMMATIC_SCORER_FROZEN_PROFILE,
-    )
+    if MAIL_TOKENIZER_ID != JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID:
+        raise FileNotFoundError("external_segmenters_required")
 
     tokenized_segments: list[_MailSegment] = []
-    for source_segment, prepared_segment in zip(segments, prepared.segments, strict=True):
-        lexical_candidates = set(
-            lexical_eval._important_lexemes(
-                prepared_segment.lexemes_by_policy[lexical_eval.POLICY_FROZEN_PROGRAMMATIC],
-                lexical_eval.POLICY_FROZEN_PROGRAMMATIC,
-                compiled_policy=compiled_policy,
-            )
-        )
-        tokens = frozenset(
-            _lexeme_surfaces(lexical_candidates)
-            | _core_coordination_terms(source_segment.searchable_text)
-        )
-        actor_tokens = frozenset(
-            _lexeme_surfaces(
-                lexical_eval._regex_lexemes(source_segment.actor_text)
-                | lexical_eval._query_protected_lexemes(source_segment.actor_text)
-            )
-        )
+    for source_segment in segments:
+        tokens = frozenset(MAIL_TOKENIZER_PROFILE.tokenize(source_segment.searchable_text))
+        actor_tokens = frozenset(MAIL_TOKENIZER_PROFILE.tokenize(source_segment.actor_text))
         tokenized_segments.append(
             _MailSegment(
                 observation_id=source_segment.observation_id,
@@ -821,22 +740,18 @@ def _apply_default_lexical_candidate_policy(
             )
         )
 
-    query_tokenizer_runtime_id = "mail_domain_hard_normative_query_text_policy_v1"
+    query_tokenizer_runtime_id = "mail_domain_hard_process_frozen_profile_v1"
 
     def tokenize_query(value: str) -> set[str]:
-        return _query_tokens_from_policy(
-            value,
-            segmenters=segmenters,
-            compiled_policy=compiled_policy,
-        )
+        return MAIL_TOKENIZER_PROFILE.tokenize(unicodedata.normalize("NFKC", value))
 
     text_policy_binding = CandidateEvidenceTextPolicyBinding(
         normalization_policy_version=NORMALIZATION_POLICY_VERSION,
-        segmentation_policy_version=lexical_eval.SEGMENTATION_POLICY_VERSION,
-        candidate_admission_policy=lexical_eval.POLICY_FROZEN_PROGRAMMATIC,
-        candidate_admission_policy_hash=compiled_policy.policy_hash,
-        sentencepiece_model_hash=segmenters.sentencepiece_model_hash,
-        sentencepiece_training_corpus_hash=segmenters.training_corpus_hash,
+        segmentation_policy_version="jieba_sentencepiece_process_frozen_v1",
+        candidate_admission_policy="frozen_profile_candidate_admission_v1",
+        candidate_admission_policy_hash=MAIL_TOKENIZER_PROFILE_FINGERPRINT,
+        sentencepiece_model_hash=str(MAIL_TOKENIZER_PROFILE.model_sha256),
+        sentencepiece_training_corpus_hash=str(MAIL_TOKENIZER_PROFILE.training_corpus_sha256),
         query_tokenizer_runtime_id=query_tokenizer_runtime_id,
         query_tokenizer_implementation_hash=(
             candidate_evidence_tokenizer_implementation_hash(tokenize_query)
@@ -849,8 +764,6 @@ def _apply_default_lexical_candidate_policy(
     )
     return (
         tuple(tokenized_segments),
-        segmenters,
-        compiled_policy,
         text_policy_runtime,
     )
 
@@ -859,52 +772,10 @@ def _query_tokens(value: str, kg_index: _CandidateKgIndex) -> set[str]:
     return set(kg_index.text_policy_runtime.tokenize(value))
 
 
-def _query_tokens_from_policy(
-    value: str,
-    *,
-    segmenters: lexical_eval._SegmenterBundle,
-    compiled_policy: lexical_eval._CompiledOntologyPolicy,
-) -> set[str]:
-    value = unicodedata.normalize("NFKC", value)
-    return _lexeme_surfaces(
-        _admitted_lexemes_for_text(
-            value,
-            segmenters=segmenters,
-            compiled_policy=compiled_policy,
-        )
-    ) | _core_coordination_terms(value)
+def _tokenize(value: str) -> set[str]:
+    """Expose the same process-frozen profile used by KG evidence admission."""
 
-
-def _admitted_lexemes_for_text(
-    value: str,
-    *,
-    segmenters: lexical_eval._SegmenterBundle,
-    compiled_policy: lexical_eval._CompiledOntologyPolicy,
-) -> set[str]:
-    lexemes = lexical_eval._regex_lexemes(value)
-    lexemes.update(lexical_eval._jieba_lexemes(value, segmenters.jieba_module))
-    lexemes.update(lexical_eval._sentencepiece_lexemes(value, segmenters.sentencepiece_processor))
-    lexemes.update(lexical_eval._query_protected_lexemes(value))
-    return set(
-        lexical_eval._important_lexemes(
-            lexemes,
-            lexical_eval.POLICY_FROZEN_PROGRAMMATIC,
-            compiled_policy=compiled_policy,
-        )
-    )
-
-
-def _lexeme_surfaces(lexemes: set[str]) -> set[str]:
-    return {lexeme.split(":", 1)[1] if ":" in lexeme else lexeme for lexeme in lexemes if lexeme}
-
-
-def _core_coordination_terms(value: str) -> set[str]:
-    normalized = unicodedata.normalize("NFKC", value).lower()
-    return {
-        match.group(0)
-        for match in re.finditer(r"[a-z][a-z0-9_-]{2,}", normalized)
-        if match.group(0) in _CORE_COORDINATION_TERMS
-    }
+    return MAIL_TOKENIZER_PROFILE.tokenize(value)
 
 
 def _source_neutral_ontology_signals(

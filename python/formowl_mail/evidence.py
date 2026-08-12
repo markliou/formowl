@@ -15,13 +15,16 @@ from formowl_contract import (
 from formowl_core import (
     configured_mail_candidate_admission_tokens,
     configured_mail_tokenizer_id,
+    configured_mail_tokenizer_profile,
     read_json_object,
     write_json_atomic,
 )
 
 from ._guards import assert_public_payload_safe, safe_public_string
 
+MAIL_TOKENIZER_PROFILE = configured_mail_tokenizer_profile()
 MAIL_TOKENIZER_ID = configured_mail_tokenizer_id()
+MAIL_TOKENIZER_PROFILE_FINGERPRINT = MAIL_TOKENIZER_PROFILE.profile_fingerprint
 _SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 

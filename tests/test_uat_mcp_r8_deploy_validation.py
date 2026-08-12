@@ -62,6 +62,7 @@ def _dry_run(
     *,
     tokenizer_model: Path | None = None,
     tokenizer_sha256: str | None = None,
+    tokenizer_training_corpus_sha256: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -120,6 +121,13 @@ def _dry_run(
             command.extend(["--tokenizer-model", str(tokenizer_model)])
         if tokenizer_sha256 is not None:
             command.extend(["--tokenizer-sha256", tokenizer_sha256])
+        if tokenizer_training_corpus_sha256 is not None:
+            command.extend(
+                [
+                    "--tokenizer-training-corpus-sha256",
+                    tokenizer_training_corpus_sha256,
+                ]
+            )
         return subprocess.run(command, check=False, capture_output=True, text=True)
 
 
@@ -162,10 +170,16 @@ class UatMcpR8DeployPublicOntologyValidationTests(unittest.TestCase):
                 tokenizer_sha256=hashlib.sha256(model.read_bytes()).hexdigest(),
             )
             digest = hashlib.sha256(model.read_bytes()).hexdigest()
-            valid = _dry_run(tokenizer_model=model, tokenizer_sha256=digest)
+            training_corpus_sha256 = hashlib.sha256(b"approved frozen training corpus").hexdigest()
+            valid = _dry_run(
+                tokenizer_model=model,
+                tokenizer_sha256=digest,
+                tokenizer_training_corpus_sha256=training_corpus_sha256,
+            )
             mismatched = _dry_run(
                 tokenizer_model=model,
                 tokenizer_sha256="0" * 64,
+                tokenizer_training_corpus_sha256=training_corpus_sha256,
             )
 
         self.assertNotEqual(model_only.returncode, 0)
@@ -176,12 +190,29 @@ class UatMcpR8DeployPublicOntologyValidationTests(unittest.TestCase):
 
         self.assertIn('TOKENIZER_MODEL=""', script)
         self.assertIn('TOKENIZER_SHA256=""', script)
+        self.assertIn('TOKENIZER_TRAINING_CORPUS_SHA256=""', script)
         self.assertNotIn("/home/", script)
 
         self.assertEqual(valid.returncode, 0, valid.stderr)
         self.assertIn(f"tokenizer_sha256=sha256:{digest}", valid.stdout)
         self.assertNotEqual(mismatched.returncode, 0)
         self.assertIn("tokenizer model SHA256 does not match", mismatched.stderr)
+
+        runtime_prefix = (
+            "-e FORMOWL_MAIL_TOKENIZER_MODE=jieba_sentencepiece_frozen \\\n"
+            '    -e "FORMOWL_MAIL_SENTENCEPIECE_MODEL=${TOKENIZER_CONTAINER_PATH}" \\\n'
+            '    -e "FORMOWL_MAIL_SENTENCEPIECE_MODEL_SHA256=sha256:${TOKENIZER_SHA256}" \\\n'
+            '    -e "FORMOWL_MAIL_SENTENCEPIECE_TRAINING_CORPUS_SHA256='
+            'sha256:${TOKENIZER_TRAINING_CORPUS_SHA256}" \\'
+        )
+        self.assertEqual(script.count(runtime_prefix), 4)
+        self.assertEqual(
+            script.count(
+                '--mount "type=bind,src=${TOKENIZER_MODEL},'
+                'dst=${TOKENIZER_CONTAINER_PATH},readonly"'
+            ),
+            4,
+        )
 
 
 if __name__ == "__main__":

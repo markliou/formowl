@@ -3,9 +3,11 @@ from .json_files import read_json_object, write_json_atomic
 from .tokenization import (
     ASCII_IDENTIFIER_REGEX_TOKENIZER_ID,
     JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
+    MailTokenizerProfile,
     ascii_identifier_regex_tokens,
     configured_mail_candidate_admission_tokens,
     configured_mail_tokenizer_id,
+    configured_mail_tokenizer_profile,
     jieba_sentencepiece_frozen_profile_candidate_admission_tokens,
     validate_configured_mail_tokenizer,
 )
@@ -13,9 +15,11 @@ from .tokenization import (
 __all__ = [
     "ASCII_IDENTIFIER_REGEX_TOKENIZER_ID",
     "JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID",
+    "MailTokenizerProfile",
     "ascii_identifier_regex_tokens",
     "configured_mail_candidate_admission_tokens",
     "configured_mail_tokenizer_id",
+    "configured_mail_tokenizer_profile",
     "diff_lines",
     "jieba_sentencepiece_frozen_profile_candidate_admission_tokens",
     "read_json_object",

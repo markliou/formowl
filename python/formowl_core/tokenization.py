@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from functools import lru_cache
 import hashlib
 import importlib
+import json
 import os
 from pathlib import Path
 import re
@@ -18,10 +20,12 @@ JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID = (
 
 _MODEL_PATH_ENV = "FORMOWL_MAIL_SENTENCEPIECE_MODEL"
 _MODEL_SHA256_ENV = "FORMOWL_MAIL_SENTENCEPIECE_MODEL_SHA256"
+_TRAINING_CORPUS_SHA256_ENV = "FORMOWL_MAIL_SENTENCEPIECE_TRAINING_CORPUS_SHA256"
 _TOKENIZER_MODE_ENV = "FORMOWL_MAIL_TOKENIZER_MODE"
 _FROZEN_MODE = "jieba_sentencepiece_frozen"
 _LEGACY_ASCII_TEST_MODE = "legacy_ascii_test"
 _MAX_MODEL_BYTES = 16 * 1024 * 1024
+_PROFILE_SCHEMA_ID = "formowl_mail_process_frozen_tokenizer_profile_v1"
 _ASCII_IDENTIFIER_SEPARATOR = re.compile(r"[^a-zA-Z0-9_@.-]+")
 _ASCII_TOKEN = re.compile(r"[a-zA-Z0-9_@.-]+")
 _CJK_CHARACTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
@@ -64,6 +68,38 @@ _STOPWORDS = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class MailTokenizerProfile:
+    """The immutable tokenizer configuration bound to one runtime process."""
+
+    tokenizer_id: str
+    profile_fingerprint: str
+    model_path: str | None
+    model_sha256: str | None
+    training_corpus_sha256: str | None
+    _sentencepiece_processor: Any | None = field(
+        repr=False,
+        compare=False,
+        default=None,
+    )
+    _jieba_module: Any | None = field(
+        repr=False,
+        compare=False,
+        default=None,
+    )
+
+    def tokenize(self, value: str) -> set[str]:
+        if self.tokenizer_id == ASCII_IDENTIFIER_REGEX_TOKENIZER_ID:
+            return ascii_identifier_regex_tokens(value)
+        if self._sentencepiece_processor is None or self._jieba_module is None:
+            raise RuntimeError("frozen tokenizer profile is unavailable")
+        return _frozen_profile_tokens(
+            value,
+            processor=self._sentencepiece_processor,
+            jieba_module=self._jieba_module,
+        )
+
+
 def ascii_identifier_regex_tokens(value: str) -> set[str]:
     """Return the legacy ASCII identifier-like tokens."""
 
@@ -71,25 +107,48 @@ def ascii_identifier_regex_tokens(value: str) -> set[str]:
     return {token for token in _ASCII_IDENTIFIER_SEPARATOR.split(value.lower()) if token}
 
 
-def configured_mail_tokenizer_id() -> str:
-    """Return the tokenizer profile actually configured for this process."""
+@lru_cache(maxsize=1)
+def configured_mail_tokenizer_profile() -> MailTokenizerProfile:
+    """Validate and freeze the tokenizer profile for this process."""
 
     mode = _configured_tokenizer_mode()
     if mode == _LEGACY_ASCII_TEST_MODE:
-        return ASCII_IDENTIFIER_REGEX_TOKENIZER_ID
+        return _profile(
+            tokenizer_id=ASCII_IDENTIFIER_REGEX_TOKENIZER_ID,
+            model_path=None,
+            model_sha256=None,
+            training_corpus_sha256=None,
+        )
     model_path = os.environ.get(_MODEL_PATH_ENV)
     model_sha256 = os.environ.get(_MODEL_SHA256_ENV)
-    _configured_sentencepiece_processor(model_path, model_sha256)
-    _jieba_module()
-    return JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID
+    training_corpus_sha256 = os.environ.get(_TRAINING_CORPUS_SHA256_ENV)
+    processor = _configured_sentencepiece_processor(model_path, model_sha256)
+    if not training_corpus_sha256 or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        training_corpus_sha256,
+    ):
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    jieba_module = _jieba_module()
+    return _profile(
+        tokenizer_id=JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
+        model_path=model_path,
+        model_sha256=model_sha256,
+        training_corpus_sha256=training_corpus_sha256,
+        sentencepiece_processor=processor,
+        jieba_module=jieba_module,
+    )
+
+
+def configured_mail_tokenizer_id() -> str:
+    """Return the tokenizer profile actually bound to this process."""
+
+    return configured_mail_tokenizer_profile().tokenizer_id
 
 
 def configured_mail_candidate_admission_tokens(value: str) -> set[str]:
-    """Tokenize with the required profile or an explicit legacy-test override."""
+    """Tokenize with the immutable profile bound to this process."""
 
-    if configured_mail_tokenizer_id() == ASCII_IDENTIFIER_REGEX_TOKENIZER_ID:
-        return ascii_identifier_regex_tokens(value)
-    return jieba_sentencepiece_frozen_profile_candidate_admission_tokens(value)
+    return configured_mail_tokenizer_profile().tokenize(value)
 
 
 def validate_configured_mail_tokenizer() -> str:
@@ -103,11 +162,19 @@ def jieba_sentencepiece_frozen_profile_candidate_admission_tokens(
 ) -> set[str]:
     """Return admitted tokens from the configured frozen Jieba+SentencePiece profile."""
 
+    profile = configured_mail_tokenizer_profile()
+    if profile.tokenizer_id != JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID:
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    return profile.tokenize(value)
+
+
+def _frozen_profile_tokens(
+    value: str,
+    *,
+    processor: Any,
+    jieba_module: Any,
+) -> set[str]:
     _require_text(value)
-    model_path = os.environ.get(_MODEL_PATH_ENV)
-    model_sha256 = os.environ.get(_MODEL_SHA256_ENV)
-    processor = _configured_sentencepiece_processor(model_path, model_sha256)
-    jieba_module = _jieba_module()
 
     admitted = ascii_identifier_regex_tokens(value)
     for piece in jieba_module.cut(value, cut_all=False):
@@ -119,6 +186,33 @@ def jieba_sentencepiece_frozen_profile_candidate_admission_tokens(
     for piece in sentencepiece_pieces:
         admitted.update(_admitted_piece_tokens(str(piece).replace("\u2581", "")))
     return admitted
+
+
+def _profile(
+    *,
+    tokenizer_id: str,
+    model_path: str | None,
+    model_sha256: str | None,
+    training_corpus_sha256: str | None,
+    sentencepiece_processor: Any | None = None,
+    jieba_module: Any | None = None,
+) -> MailTokenizerProfile:
+    payload = {
+        "profile_schema_id": _PROFILE_SCHEMA_ID,
+        "tokenizer_id": tokenizer_id,
+        "model_sha256": model_sha256,
+        "training_corpus_sha256": training_corpus_sha256,
+    }
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return MailTokenizerProfile(
+        tokenizer_id=tokenizer_id,
+        profile_fingerprint="sha256:" + hashlib.sha256(encoded).hexdigest(),
+        model_path=model_path,
+        model_sha256=model_sha256,
+        training_corpus_sha256=training_corpus_sha256,
+        _sentencepiece_processor=sentencepiece_processor,
+        _jieba_module=jieba_module,
+    )
 
 
 def _admitted_piece_tokens(value: Any) -> set[str]:
@@ -228,9 +322,11 @@ def _require_text(value: Any) -> None:
 __all__ = [
     "ASCII_IDENTIFIER_REGEX_TOKENIZER_ID",
     "JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID",
+    "MailTokenizerProfile",
     "ascii_identifier_regex_tokens",
     "configured_mail_candidate_admission_tokens",
     "configured_mail_tokenizer_id",
+    "configured_mail_tokenizer_profile",
     "jieba_sentencepiece_frozen_profile_candidate_admission_tokens",
     "validate_configured_mail_tokenizer",
 ]

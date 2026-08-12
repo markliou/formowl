@@ -703,8 +703,6 @@ def _minimal_kg_index(
         tokenize_query=tokenize_query,
     )
     return module._CandidateKgIndex(
-        segmenters=None,
-        compiled_policy=None,
         text_policy_runtime=text_policy_runtime,
         evidence_index=CandidateEvidenceIndex(
             records,

@@ -23,6 +23,7 @@ from formowl_contract import (
 from formowl_core import (
     configured_mail_candidate_admission_tokens,
     configured_mail_tokenizer_id,
+    configured_mail_tokenizer_profile,
 )
 
 from ._access import grant_expired, matching_bundles, normalize_grants
@@ -34,7 +35,9 @@ from ._guards import (
 )
 from .bundle import MailEvidenceBundle
 
+MAIL_TOKENIZER_PROFILE = configured_mail_tokenizer_profile()
 MAIL_TOKENIZER_ID = configured_mail_tokenizer_id()
+MAIL_TOKENIZER_PROFILE_FINGERPRINT = MAIL_TOKENIZER_PROFILE.profile_fingerprint
 _MAIL_EVIDENCE_PERMISSIONS = {"read", "evidence_snippet", "mail_evidence_read"}
 _PROTECTED_IDENTIFIER_TOKEN = re.compile(r"(?=.{5,}\Z)(?=.*\d)[a-z0-9_@.-]+\Z")
 _TYPED_NUMERIC_IDENTIFIER_RE = re.compile(
