@@ -59,7 +59,7 @@ class MethodologyAuthorityTests(unittest.TestCase):
         self.assertIn("methodology_ready_for_quality_uat", report["blocked_claim_ids"])
         self.assertRegex(report["execution_fingerprint"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(report["authority_state_fingerprint"], r"^sha256:[0-9a-f]{64}$")
-        self.assertEqual(report["pipeline_source_binding_count"], 64)
+        self.assertEqual(report["pipeline_source_binding_count"], 68)
         rendered = json.dumps(report, sort_keys=True)
         for forbidden in ("/home/", "/tmp/", "/workspace/", "postgresql://", "raw_path"):
             self.assertNotIn(forbidden, rendered)
