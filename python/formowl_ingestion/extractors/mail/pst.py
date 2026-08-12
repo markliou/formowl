@@ -4253,12 +4253,11 @@ def _source_unit_classification_for_unit(
             attachment_name_fingerprint=attachment_name_fingerprint,
         )
     else:
-        classification = _inventory_parse_file(
+        classification, _ = _parse_exported_message_file(
             unit.path,
             source_local_key=source_local_key,
             source_unit_kind=source_unit_kind,
             config=config,
-            warnings=warnings,
         )
         try:
             _pst_assert_utf8_safe(
@@ -11542,6 +11541,8 @@ def _parse_exported_message_file(
         config=config,
         warnings=warnings,
     )
+    if classification.message is not None and not _is_mail_message(classification.message):
+        classification = replace(classification, message=None)
     return classification, _source_unit_parser_warnings(classification)
 
 
@@ -12941,7 +12942,17 @@ def _classify_attachment_part(
             text=None,
             extracted_text_segments=[],
         )
-    text, failure_code, recovered = _strict_body_charset_decode(part, payload)
+    try:
+        charset_parameter = part.get_param("charset", header="content-type")
+    except Exception:
+        charset_parameter = _PST_TRAVERSAL_BINDING_MISSING
+    if charset_parameter is None:
+        text, failure_code, recovered = _decode_text_payload(
+            payload,
+            declared_charset="us-ascii",
+        )
+    else:
+        text, failure_code, recovered = _strict_body_charset_decode(part, payload)
     if failure_code is not None:
         _append_warning_once(warnings, f"pst_parser_attachment_{failure_code}")
         state = (
