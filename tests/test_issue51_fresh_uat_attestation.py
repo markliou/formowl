@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import builtins
 from copy import deepcopy
 import hashlib
 import importlib
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -340,52 +342,51 @@ class FreshUatAttestationContractTests(unittest.TestCase):
         self.assertEqual(immutable_source_hashes, original)
 
     def test_publisher_never_traverses_raw_pst_export_parser_or_extractor_entrypoints(self) -> None:
-        bridge = importlib.import_module("formowl_mail.diagnostic_structural_bridge")
-        calls: list[str] = []
+        forbidden_modules = (
+            "formowl_mail.diagnostic_structural_bridge",
+            "formowl_ingestion.extractors.mail.pst",
+        )
+        previously_loaded = {
+            module_name: sys.modules.pop(module_name, None)
+            for module_name in forbidden_modules
+        }
+        original_import = builtins.__import__
+        original_import_module = importlib.import_module
 
-        def forbidden(name: str):
-            def fail(*_args: object, **_kwargs: object) -> None:
-                calls.append(name)
-                raise AssertionError(f"publisher must not invoke raw bridge entrypoint: {name}")
+        def reject_raw_module(module_name: str) -> None:
+            if module_name in forbidden_modules or module_name.startswith(
+                tuple(f"{name}." for name in forbidden_modules)
+            ):
+                raise AssertionError(
+                    f"publisher must not import raw traversal module: {module_name}"
+                )
 
-            return fail
+        def guarded_import(
+            name: str,
+            globals: object = None,
+            locals: object = None,
+            fromlist: object = (),
+            level: int = 0,
+        ) -> object:
+            reject_raw_module(name)
+            return original_import(name, globals, locals, fromlist, level)
 
-        with (
-            patch.object(
-                bridge,
-                "export_pst_to_readpst_directory",
-                side_effect=forbidden("export"),
-            ),
-            patch.object(
-                bridge,
-                "extract_readpst_export",
-                side_effect=forbidden("export_extractor"),
-            ),
-            patch.object(
-                bridge,
-                "extract_selected_readpst_export",
-                side_effect=forbidden("selected_export_extractor"),
-            ),
-            patch.object(
-                bridge,
-                "select_readpst_export_messages",
-                side_effect=forbidden("selector"),
-            ),
-            patch.object(
-                bridge,
-                "_parser_config",
-                side_effect=forbidden("parser"),
-            ),
-            patch.object(
-                bridge.PstMailArchiveExtractor,
-                "extract",
-                side_effect=forbidden("archive_extractor"),
-            ),
-            tempfile.TemporaryDirectory() as temporary,
-        ):
-            self._publish(output_dir=Path(temporary))
+        def guarded_import_module(name: str, package: str | None = None) -> object:
+            reject_raw_module(name)
+            return original_import_module(name, package)
 
-        self.assertEqual(calls, [])
+        try:
+            with (
+                patch.object(builtins, "__import__", side_effect=guarded_import),
+                patch.object(importlib, "import_module", side_effect=guarded_import_module),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                self._publish(output_dir=Path(temporary))
+        finally:
+            for module_name in forbidden_modules:
+                sys.modules.pop(module_name, None)
+                if previously_loaded[module_name] is not None:
+                    sys.modules[module_name] = previously_loaded[module_name]
 
     def test_atomic_write_failures_leave_no_partial_output(self) -> None:
         persistence = importlib.import_module("formowl_mail.persistence")
