@@ -73,6 +73,13 @@ archival is preserved at
 - Issue #51 Gate 0 is complete on clean integration commit `79bc129`: the
   authority guard is valid-but-blocked, the exact baseline suites pass, and the
   three-reviewer execution contract is posted as GitHub comment `5070970116`.
+- The bounded Issue #33 **Track 2 implementation checkpoint is complete** at
+  `03d6d269725a3d9890bb3c8f1bab37dcba4d2d87`. Do not reopen or duplicate its
+  tokenizer/profile binding or generic ontology-rerank implementation under a
+  new Track 2 task. Neo4j work is rejected and PostgreSQL remains the canonical
+  baseline. This completion is diagnostic-only: methodology authority,
+  independent holdout, raw-oracle completeness, same-pipeline comparative
+  evidence, and live end-answer acceptance remain separate blocked gates.
 
 ## Current Unchecked Work
 
@@ -222,6 +229,20 @@ archival is preserved at
 
 ## Recent Completions
 
+- [x] Complete and retire the bounded Issue #33 Track 2 runtime-integration
+  implementation lane.
+  - Commit `03d6d26` binds query, evidence, and candidate-KG admission to one
+    process-frozen tokenizer profile/fingerprint, including pinned model and
+    training-corpus hashes, without PST/parser/extractor invocation.
+  - Generic ontology correction makes inferred core-supertype mismatch a
+    non-pruning, non-zeroing signal; compatible inferred types receive only a
+    capped additive bonus of at most `0.2`, while explicit governed
+    core-supertype promotion remains a hard compatibility decision.
+  - Focused canonical evidence was 124/124 tests passing with targeted Ruff
+    check/format passing. The authority check remains valid-but-blocked.
+  - Anti-duplication rule: do not create another Track 2 tokenizer, ontology
+    correction, Neo4j benchmark, migration, or traversal-projection task from
+    historical handoffs or superseded Issue #33 comments.
 - [x] Complete GitHub issue #50: keep authorized mail evidence readable without
   weakening denied-path or implementation-detail protections.
   - Authorized `subject`, `snippet`, `text`, and assistant evidence now use a

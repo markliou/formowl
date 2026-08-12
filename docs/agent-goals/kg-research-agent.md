@@ -58,6 +58,15 @@ head is `eac8473d`, and integration merge `9e8a5f6` has parents `bed52a4` and
 `eac8473d`. The durable packet is
 `docs/issue51-wp1-interface-freeze.md`.
 
+The separately assigned bounded Issue #33 **Track 2 implementation lane is
+complete and retired** at
+`03d6d269725a3d9890bb3c8f1bab37dcba4d2d87`. Its tokenizer/profile binding and
+generic inferred-type ontology correction must not be reimplemented under
+another Track 2 task. Neo4j benchmarking, adapter, migration, and projection
+work is closed by maintainer decision; PostgreSQL remains the canonical
+baseline. This does not mark methodology authority ready or satisfy Issue #33's
+independent-holdout and semantic-comparison close criteria.
+
 ## Acceptance Criteria
 
 - One shared contract module owns `SourceInventory`, structural observations,
@@ -114,4 +123,5 @@ against an independent raw oracle. Consume the frozen WP1 interface without
 mutating it; freeze and review each upstream interface before its consumer
 starts. Issue #53 must land as a dedicated reviewed lifecycle prerequisite
 before WP5, and Issue #52 remains the only independent acceptance authority.
-Keep all acceptance and methodology claims fail-closed.
+Keep all acceptance and methodology claims fail-closed. Do not dispatch or
+resume work under the retired Track 2 implementation label.

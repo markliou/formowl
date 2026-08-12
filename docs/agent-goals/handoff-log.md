@@ -253,3 +253,24 @@ Lifecycle label: `active`.
 - Next package is WP2: complete raw inventory/structural extraction and
   independent raw-oracle reconciliation, consuming but not mutating the frozen
   WP1 interface.
+
+## 2026-08-12 — Track 2 bounded implementation complete and retired
+
+- The bounded Issue #33 Track 2 runtime-integration checkpoint is complete and
+  pushed at `03d6d269725a3d9890bb3c8f1bab37dcba4d2d87`.
+- The completed scope is one process-frozen tokenizer profile/fingerprint
+  across query, evidence, candidate KG, and four UAT processes, plus the
+  generic ontology correction: inferred mismatch never hard-prunes or zeros a
+  candidate, compatible inferred types receive a capped additive bonus
+  `<= 0.2`, and explicit governed core-supertype promotion remains hard.
+- Focused canonical verification passed 124/124 tests plus targeted Ruff
+  check/format. `methodology_authority_check.py --check` remains
+  valid-but-blocked; no methodology-readiness or KG-versus-ontology superiority
+  claim follows.
+- Maintainer decision rejects Neo4j work. PostgreSQL remains the canonical
+  baseline; do not resume benchmarks, adapters, migrations, traversal
+  projections, dual writes, or SPEC changes for Neo4j.
+- Historical dual-track recovery documents and Issue #33 progress comments are
+  superseded for implementation status. Do not dispatch duplicate Track 2
+  tokenizer or ontology implementation. Issue #33 may remain open only for its
+  broader independent-holdout and methodology acceptance gates.
