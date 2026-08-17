@@ -12,7 +12,7 @@ import re
 import secrets
 import threading
 from time import perf_counter
-from typing import Any, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
 import unicodedata
 from urllib.parse import urlparse
 from urllib.error import HTTPError, URLError
@@ -24,13 +24,6 @@ from formowl_contract import (
     sha256_json,
     validate_semantic_request,
 )
-from formowl_graph import (
-    EvidenceRequirement,
-    ProjectionSpec,
-    TaskAnchor,
-    TaskFrame,
-    revise_task_frame,
-)
 
 from ._guards import (
     assert_authorized_evidence_payload_safe,
@@ -38,22 +31,18 @@ from ._guards import (
     redact_authorized_evidence_text,
     safe_public_string,
 )
-from .bundle import MailEvidenceBundle
-from .human_uat_upload import (
-    PrivateUatMailUploadStore,
-    UatUploadRequestTooLarge,
-    UatUploadedResourcePart,
-    parse_uat_resource_multipart,
-    parse_uat_stored_resource,
-    parse_uat_uploaded_resource,
+from .document_uat_mcp import (
+    project_document_uat_payload_public,
+    validate_document_uat_payload,
 )
-from .human_uat_orchestrator import (
-    UatConversationMessage,
-    UatConversationModel,
-    UatConversationOutcome,
-    UatEvidenceToolRequest,
-)
-from .query import MailEvidenceQueryGateway
+
+if TYPE_CHECKING:
+    from formowl_graph import ProjectionSpec, TaskFrame
+
+    from .bundle import MailEvidenceBundle
+    from .human_uat_orchestrator import UatConversationOutcome
+    from .human_uat_upload import UatUploadedResourcePart
+    from .query import MailEvidenceQueryGateway
 
 _MAX_REQUEST_BYTES = 32 * 1024
 _MAX_UPLOAD_REQUEST_BYTES = 520 * 1024 * 1024
@@ -163,14 +152,104 @@ _UPLOAD_OPEN_SOURCES = {"composer", "landing", "no_result"}
 _UPLOAD_CLOSE_SOURCES = {"button", "backdrop", "iframe_cancel"}
 _UPLOAD_VALIDATION_REASONS = {"file_count", "file_type", "file_size", "total_size"}
 _UPLOAD_SIZE_BUCKETS = {"under_5mb", "5_to_25mb", "25_to_60mb", "60_to_500mb"}
+_LEGACY_RUNTIME_LOCK = threading.Lock()
+_LEGACY_RUNTIME_LOADED = False
+
+
+class UatUploadRequestTooLarge(ValueError):
+    """Document-first-safe placeholder replaced by the legacy upload runtime."""
+
+
+class UatConversationModel(Protocol):
+    """Structural conversation boundary used by both UAT runtime modes."""
+
+    model_name: str
+
+    def respond(
+        self,
+        *,
+        history: Sequence[Any],
+        user_text: str,
+        latest_evidence: Mapping[str, Any] | None,
+        safety_identifier: str,
+        evidence_tool: Callable[..., Mapping[str, Any]],
+    ) -> Any: ...
+
+    def discard_conversation(self, safety_identifier: str) -> None: ...
+
+
+@dataclass(frozen=True)
+class _NormalizedEvidenceToolRequest:
+    query_text: str
+    required_terms: tuple[str, ...]
+    sort: str
+    limit: int
+
+
+def _load_legacy_runtime() -> None:
+    """Load graph, query, upload, and PST-backed dependencies only on demand."""
+
+    global EvidenceRequirement
+    global MailEvidenceQueryGateway
+    global PrivateUatMailUploadStore
+    global ProjectionSpec
+    global TaskAnchor
+    global TaskFrame
+    global UatConversationMessage
+    global UatUploadRequestTooLarge
+    global _LEGACY_RUNTIME_LOADED
+    global parse_uat_resource_multipart
+    global parse_uat_stored_resource
+    global parse_uat_uploaded_resource
+    global revise_task_frame
+
+    if _LEGACY_RUNTIME_LOADED:
+        return
+    with _LEGACY_RUNTIME_LOCK:
+        if _LEGACY_RUNTIME_LOADED:
+            return
+        from formowl_graph import (
+            EvidenceRequirement as _EvidenceRequirement,
+            ProjectionSpec as _ProjectionSpec,
+            TaskAnchor as _TaskAnchor,
+            TaskFrame as _TaskFrame,
+            revise_task_frame as _revise_task_frame,
+        )
+
+        from .human_uat_orchestrator import (
+            UatConversationMessage as _UatConversationMessage,
+        )
+        from .human_uat_upload import (
+            PrivateUatMailUploadStore as _PrivateUatMailUploadStore,
+            UatUploadRequestTooLarge as _UatUploadRequestTooLarge,
+            parse_uat_resource_multipart as _parse_uat_resource_multipart,
+            parse_uat_stored_resource as _parse_uat_stored_resource,
+            parse_uat_uploaded_resource as _parse_uat_uploaded_resource,
+        )
+        from .query import MailEvidenceQueryGateway as _MailEvidenceQueryGateway
+
+        EvidenceRequirement = _EvidenceRequirement
+        MailEvidenceQueryGateway = _MailEvidenceQueryGateway
+        PrivateUatMailUploadStore = _PrivateUatMailUploadStore
+        ProjectionSpec = _ProjectionSpec
+        TaskAnchor = _TaskAnchor
+        TaskFrame = _TaskFrame
+        UatConversationMessage = _UatConversationMessage
+        UatUploadRequestTooLarge = _UatUploadRequestTooLarge
+        parse_uat_resource_multipart = _parse_uat_resource_multipart
+        parse_uat_stored_resource = _parse_uat_stored_resource
+        parse_uat_uploaded_resource = _parse_uat_uploaded_resource
+        revise_task_frame = _revise_task_frame
+        _LEGACY_RUNTIME_LOADED = True
 
 
 @dataclass(frozen=True)
 class MailHumanUatHttpConfig:
-    bundle: MailEvidenceBundle
+    bundle: MailEvidenceBundle | None
     state_dir: str | Path
     conversation_model: UatConversationModel | None = None
     diagnostic_mcp_url: str | None = None
+    document_mcp_url: str | None = None
     diagnostic_mcp_timeout_seconds: float = _DEFAULT_DIAGNOSTIC_MCP_TIMEOUT_SECONDS
     fixed_now: str | None = None
     max_request_bytes: int = _MAX_REQUEST_BYTES
@@ -189,6 +268,16 @@ class DiagnosticMcpClient(Protocol):
         *,
         query_text: str,
         semantic_request: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
+
+
+class DocumentMcpClient(Protocol):
+    """Narrow read-only boundary for one authorized document MCP invocation."""
+
+    def read_authorized_documents(
+        self,
+        *,
+        request: _NormalizedEvidenceToolRequest,
     ) -> Mapping[str, Any]: ...
 
 
@@ -290,9 +379,88 @@ class FormOwlDiagnosticMcpHttpClient:
         return dict(structured_content)
 
 
+class FormOwlDocumentMcpHttpClient:
+    """Bounded client for the packet-local authorized-document MCP."""
+
+    def __init__(
+        self,
+        endpoint_url: str,
+        *,
+        timeout_seconds: float = _DEFAULT_DIAGNOSTIC_MCP_TIMEOUT_SECONDS,
+    ) -> None:
+        self._endpoint_url = _validated_diagnostic_mcp_url(endpoint_url)
+        self._timeout_seconds = _validated_diagnostic_mcp_timeout(timeout_seconds)
+        self._opener = build_opener(_NoRedirectHandler())
+
+    def read_authorized_documents(
+        self,
+        *,
+        request: Any,
+    ) -> Mapping[str, Any]:
+        normalized_request = _validated_evidence_tool_request(request)
+        request_id = f"uat_document_{secrets.token_hex(12)}"
+        request_payload = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {
+                "name": "read_authorized_documents",
+                "arguments": {
+                    "query_text": normalized_request.query_text,
+                    "required_terms": list(normalized_request.required_terms),
+                    "limit": min(normalized_request.limit, 30),
+                },
+            },
+        }
+        request_body = json.dumps(
+            request_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        http_request = Request(
+            self._endpoint_url,
+            data=request_body,
+            method="POST",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+        )
+        try:
+            with self._opener.open(
+                http_request,
+                timeout=self._timeout_seconds,
+            ) as response:
+                if response.getcode() != HTTPStatus.OK:
+                    raise RuntimeError("document MCP returned an unexpected HTTP status")
+                body = response.read(_MAX_DIAGNOSTIC_MCP_RESPONSE_BYTES + 1)
+        except (HTTPError, URLError, OSError) as exc:
+            raise RuntimeError("document MCP request failed") from exc
+        if len(body) > _MAX_DIAGNOSTIC_MCP_RESPONSE_BYTES:
+            raise RuntimeError("document MCP response is too large")
+        try:
+            response_payload = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("document MCP response is invalid") from exc
+        if (
+            not isinstance(response_payload, Mapping)
+            or response_payload.get("jsonrpc") != "2.0"
+            or response_payload.get("id") != request_id
+            or "error" in response_payload
+        ):
+            raise RuntimeError("document MCP response is invalid")
+        result = response_payload.get("result")
+        if not isinstance(result, Mapping) or result.get("isError") is True:
+            raise RuntimeError("document MCP reported a tool error")
+        structured_content = result.get("structuredContent")
+        if not isinstance(structured_content, Mapping):
+            raise RuntimeError("document MCP structured result is invalid")
+        return _validated_document_mcp_payload(structured_content)
+
+
 @dataclass
 class _UatConversationState:
-    history: list[UatConversationMessage]
+    history: list[Any]
     latest_evidence: dict[str, Any] | None = None
 
 
@@ -305,6 +473,7 @@ class MailHumanUatService:
         *,
         base_gateway: MailEvidenceQueryGateway | None = None,
         diagnostic_mcp_client: DiagnosticMcpClient | None = None,
+        document_mcp_client: DocumentMcpClient | None = None,
     ) -> None:
         if (
             not isinstance(config.max_request_bytes, int)
@@ -326,10 +495,26 @@ class MailHumanUatService:
         _validated_diagnostic_mcp_timeout(config.diagnostic_mcp_timeout_seconds)
         if config.diagnostic_mcp_url is not None:
             _validated_diagnostic_mcp_url(config.diagnostic_mcp_url)
-        if not config.bundle.messages or not config.bundle.body_segments:
-            raise ContractValidationError("UAT mail evidence bundle must contain messages")
-        safe_public_string(config.bundle.mail_evidence_bundle_id, "mail_evidence_bundle_id")
-        config.bundle.mail_import_session.to_dict()
+        if config.document_mcp_url is not None:
+            _validated_diagnostic_mcp_url(config.document_mcp_url)
+        if config.diagnostic_mcp_url is not None and config.document_mcp_url is not None:
+            raise ContractValidationError("UAT MCP modes are mutually exclusive")
+        self._document_first = (
+            config.document_mcp_url is not None or document_mcp_client is not None
+        )
+        if self._document_first:
+            if config.bundle is not None or base_gateway is not None:
+                raise ContractValidationError("document-first UAT must not load mail evidence")
+        else:
+            _load_legacy_runtime()
+            if (
+                config.bundle is None
+                or not config.bundle.messages
+                or not config.bundle.body_segments
+            ):
+                raise ContractValidationError("UAT mail evidence bundle must contain messages")
+            safe_public_string(config.bundle.mail_evidence_bundle_id, "mail_evidence_bundle_id")
+            config.bundle.mail_import_session.to_dict()
         self.config = config
         self._diagnostic_mcp_client = diagnostic_mcp_client or (
             FormOwlDiagnosticMcpHttpClient(
@@ -339,26 +524,35 @@ class MailHumanUatService:
             if config.diagnostic_mcp_url is not None
             else None
         )
-        resolved_base_gateway = base_gateway or MailEvidenceQueryGateway([config.bundle])
-        if resolved_base_gateway.mail_evidence_bundle_ids != (
-            config.bundle.mail_evidence_bundle_id,
-        ):
-            raise ContractValidationError("UAT base gateway does not match its bundle")
-        self._base_gateway = resolved_base_gateway
-        base_session_id = config.bundle.mail_import_session.mail_import_session_id
-        self._base_message_by_source_item = {
-            (base_session_id, message.email_message_id): message
-            for message in config.bundle.messages
-        }
+        self._document_mcp_client = document_mcp_client or (
+            FormOwlDocumentMcpHttpClient(
+                config.document_mcp_url,
+                timeout_seconds=config.diagnostic_mcp_timeout_seconds,
+            )
+            if config.document_mcp_url is not None
+            else None
+        )
+        if self._document_first:
+            self._base_gateway = None
+            self._base_message_by_source_item = {}
+        else:
+            assert config.bundle is not None
+            resolved_base_gateway = base_gateway or MailEvidenceQueryGateway([config.bundle])
+            if resolved_base_gateway.mail_evidence_bundle_ids != (
+                config.bundle.mail_evidence_bundle_id,
+            ):
+                raise ContractValidationError("UAT base gateway does not match its bundle")
+            self._base_gateway = resolved_base_gateway
+            base_session_id = config.bundle.mail_import_session.mail_import_session_id
+            self._base_message_by_source_item = {
+                (base_session_id, message.email_message_id): message
+                for message in config.bundle.messages
+            }
         self._event_store = _PrivateUatEventStore(
             config.state_dir,
             retention_days=config.event_retention_days,
             max_bytes=config.max_event_store_bytes,
             fixed_now=config.fixed_now,
-        )
-        self._upload_store = PrivateUatMailUploadStore(
-            config.state_dir,
-            max_file_bytes=config.max_upload_file_bytes,
         )
         self._known_query_ids: set[str] = set()
         self._verdict_counts: Counter[str] = Counter()
@@ -371,9 +565,27 @@ class MailHumanUatService:
         self._query_count = 0
         self._chat_count = 0
         self._formowl_tool_call_count = 0
+        self._formowl_mcp_attempted_call_count = 0
+        self._formowl_mcp_successful_call_count = 0
+        self._latest_mcp_response_commitment: str | None = None
+        self._latest_tool_result_reinject_commitment: str | None = None
+        self._latest_final_response_commitment: str | None = None
         self._feedback_count = 0
         self._lock = threading.RLock()
         self.started_at = _timestamp(config.fixed_now)
+        if self._document_first:
+            self._uploaded_content_hashes = set()
+            self._uploaded_resource_count = 0
+            self._uploaded_bundles = []
+            self._uploaded_warnings = Counter()
+            self._uploaded_message_ids = frozenset()
+            self._all_bundles = ()
+            return
+        self._upload_store = PrivateUatMailUploadStore(
+            config.state_dir,
+            max_file_bytes=config.max_upload_file_bytes,
+        )
+        assert config.bundle is not None
         actor = config.bundle.mail_import_session
         stored_resources = self._upload_store.load()
         loaded_uploads = [
@@ -399,7 +611,7 @@ class MailHumanUatService:
             uploaded_file_count = self._uploaded_resource_count
         payload = {
             "status": "ready",
-            "surface": "mail_human_uat",
+            "surface": ("document_first_human_uat" if self._document_first else "mail_human_uat"),
             "chatgpt_bypassed": True,
             "authentication_required": False,
             "shared_uat": True,
@@ -413,12 +625,21 @@ class MailHumanUatService:
                 else None
             ),
             "upload_required": False,
-            "upload_supported": True,
+            "upload_supported": not self._document_first,
             "uploaded_file_count": uploaded_file_count,
             "read_only_business_systems": True,
-            "index_build_mode": self._base_gateway.index_build_mode,
-            "index_worker_count": self._base_gateway.index_worker_count,
-            "index_build_elapsed_ms": self._base_gateway.index_build_elapsed_ms,
+            "index_build_mode": (
+                "authorized_document_snapshot"
+                if self._document_first
+                else self._base_gateway.index_build_mode
+            ),
+            "index_worker_count": (
+                0 if self._document_first else self._base_gateway.index_worker_count
+            ),
+            "index_build_elapsed_ms": (
+                0.0 if self._document_first else self._base_gateway.index_build_elapsed_ms
+            ),
+            "document_first": self._document_first,
         }
         assert_public_payload_safe(payload, "mail_human_uat_health")
         return payload
@@ -470,18 +691,30 @@ class MailHumanUatService:
                     if state is not None and state.latest_evidence is not None
                     else None
                 )
+                model_history = () if self._document_first else history
 
             tool_request_count = 0
             semantic_mcp_call_count = 0
+            turn_attempted_mcp_call_count = 0
+            turn_successful_mcp_call_count = 0
 
             def call_formowl_tool(
-                request: UatEvidenceToolRequest | Mapping[str, Any],
+                request: Any,
+                *,
+                timeout_seconds: float | None = None,
             ) -> Mapping[str, Any]:
                 nonlocal semantic_mcp_call_count, tool_request_count
+                nonlocal turn_attempted_mcp_call_count
+                nonlocal turn_successful_mcp_call_count
                 tool_request_count += 1
                 with self._lock:
-                    self._formowl_tool_call_count += 1
+                    self._formowl_mcp_attempted_call_count += 1
+                turn_attempted_mcp_call_count += 1
                 if isinstance(request, Mapping):
+                    if self._document_first:
+                        raise ContractValidationError(
+                            "document-first UAT accepts only document tool requests"
+                        )
                     if semantic_mcp_call_count:
                         raise ContractValidationError(
                             "a semantic UAT query may call FormOwl MCP only once"
@@ -491,36 +724,64 @@ class MailHumanUatService:
                             "semantic UAT queries may not mix tool request types"
                         )
                     semantic_mcp_call_count += 1
-                    return self._execute_semantic_mcp_query(
+                    result = self._execute_semantic_mcp_query(
                         query_text=user_text,
                         semantic_request=request,
                         tracking=tracking,
                         parent_query_id=query_id,
                     )
-                if not isinstance(request, UatEvidenceToolRequest):
-                    raise ContractValidationError("UAT tool request is invalid")
-                result = self._execute_evidence_query(
-                    query_text=request.query_text,
-                    limit=request.limit,
-                    sort=request.sort,
-                    source="orchestrator",
-                    tracking=tracking,
-                    required_terms=request.required_terms,
-                    preserve_session_task=False,
-                    parent_query_id=query_id,
-                )
+                else:
+                    normalized_request = _validated_evidence_tool_request(request)
+                    if self._document_first:
+                        client = self._document_mcp_client
+                        if client is None:
+                            raise ContractValidationError(
+                                "document-first UAT requires a document MCP client"
+                            )
+                        result = _validated_document_mcp_payload(
+                            client.read_authorized_documents(
+                                request=normalized_request,
+                            ),
+                        )
+                    else:
+                        result = self._execute_evidence_query(
+                            query_text=normalized_request.query_text,
+                            limit=normalized_request.limit,
+                            sort=normalized_request.sort,
+                            source="orchestrator",
+                            tracking=tracking,
+                            required_terms=normalized_request.required_terms,
+                            preserve_session_task=False,
+                            parent_query_id=query_id,
+                        )
+                with self._lock:
+                    self._formowl_mcp_successful_call_count += 1
+                    self._formowl_tool_call_count += 1
+                turn_successful_mcp_call_count += 1
                 return result
 
             failure_stage = "model_response"
             try:
                 chat_orchestration_started = perf_counter()
                 outcome = model.respond(
-                    history=history,
+                    history=model_history,
                     user_text=user_text,
                     latest_evidence=latest_evidence,
                     safety_identifier=conversation_id,
                     evidence_tool=call_formowl_tool,
                 )
+                if self._document_first and (
+                    outcome.fallback_reason is not None
+                    or not isinstance(outcome.answer_text, str)
+                    or not outcome.answer_text.strip()
+                ):
+                    raise RuntimeError("document-first UAT requires a valid Codex synthesis")
+                if self._document_first and outcome.tool_request is not None:
+                    if (
+                        outcome.mcp_attempted_call_count != turn_attempted_mcp_call_count
+                        or outcome.mcp_successful_call_count != turn_successful_mcp_call_count
+                    ):
+                        raise RuntimeError("document-first MCP call counts are inconsistent")
                 chat_orchestration_ms = (perf_counter() - chat_orchestration_started) * 1000.0
                 failure_stage = "response_assembly"
                 response = self._chat_response(
@@ -555,21 +816,28 @@ class MailHumanUatService:
 
                 failure_stage = "conversation_state_commit"
                 with self._lock:
+                    if outcome.mcp_successful_call_count:
+                        self._latest_mcp_response_commitment = outcome.mcp_response_commitment
+                        self._latest_tool_result_reinject_commitment = (
+                            outcome.tool_result_reinject_commitment
+                        )
+                        self._latest_final_response_commitment = outcome.final_response_commitment
                     state = self._conversation_states_by_conversation_id.setdefault(
                         conversation_id,
                         _UatConversationState(history=[]),
                     )
-                    state.history.extend(
-                        (
-                            UatConversationMessage(role="user", content=user_text),
-                            UatConversationMessage(
-                                role="assistant",
-                                content=outcome.answer_text,
-                            ),
+                    if not self._document_first:
+                        state.history.extend(
+                            (
+                                UatConversationMessage(role="user", content=user_text),
+                                UatConversationMessage(
+                                    role="assistant",
+                                    content=outcome.answer_text,
+                                ),
+                            )
                         )
-                    )
-                    del state.history[:-_MAX_CHAT_HISTORY_MESSAGES]
-                    if outcome.tool_result is not None:
+                        del state.history[:-_MAX_CHAT_HISTORY_MESSAGES]
+                    if outcome.tool_result is not None and not self._document_first:
                         state.latest_evidence = dict(outcome.tool_result)
             except Exception as exc:
                 try:
@@ -623,6 +891,8 @@ class MailHumanUatService:
             )
 
     def query(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        if self._document_first:
+            raise ContractValidationError("document-first UAT exposes chat only")
         _expect_exact_keys(payload, _QUERY_KEYS, required={"query_text"})
         query_text = _validated_text(
             payload.get("query_text"),
@@ -1090,11 +1360,15 @@ class MailHumanUatService:
             action = "answer_without_tool"
             evidence = {}
 
+        if self._document_first and evidence:
+            evidence = project_document_uat_payload_public(evidence)
         results = evidence.get("results", [])
         if not isinstance(results, list):
             raise RuntimeError("UAT evidence results are invalid")
         results = [dict(item) for item in results if isinstance(item, Mapping)]
         answer_items = evidence.get("answer_items", [])
+        if self._document_first and "answer_items" in evidence:
+            raise RuntimeError("document MCP must not return answer items")
         if not isinstance(answer_items, list) or any(
             not isinstance(item, str) or not item.strip() for item in answer_items
         ):
@@ -1133,6 +1407,11 @@ class MailHumanUatService:
         generated_at = _timestamp(self.config.fixed_now)
         response = {
             "status": str(evidence.get("status", "ok")),
+            **(
+                {"document_payload_projection": evidence["document_payload_projection"]}
+                if self._document_first and evidence
+                else {}
+            ),
             "query_id": query_id,
             "query_hash": sha256_json(user_text),
             "generated_at": generated_at,
@@ -1157,6 +1436,11 @@ class MailHumanUatService:
                 "formowl_tool_called": outcome.tool_request is not None,
                 "answer_fallback_used": outcome.fallback_reason is not None,
                 "tool_name": _tool_request_event_metadata(outcome.tool_request)["tool_name"],
+                "mcp_attempted_call_count": outcome.mcp_attempted_call_count,
+                "mcp_successful_call_count": outcome.mcp_successful_call_count,
+                "mcp_response_commitment": outcome.mcp_response_commitment,
+                "tool_result_reinject_commitment": (outcome.tool_result_reinject_commitment),
+                "final_response_commitment": outcome.final_response_commitment,
             },
             "claim_boundary": dict(evidence.get("claim_boundary", {})),
         }
@@ -1170,6 +1454,8 @@ class MailHumanUatService:
         self,
         files: Sequence[UatUploadedResourcePart],
     ) -> dict[str, Any]:
+        if self._document_first:
+            raise ContractValidationError("document-first UAT does not accept uploads")
         if not files or len(files) > self.config.max_upload_files:
             raise ContractValidationError("UAT upload file count is invalid")
         actor = self.config.bundle.mail_import_session
@@ -1390,6 +1676,11 @@ class MailHumanUatService:
                 "query_count": self._query_count,
                 "chat_count": self._chat_count,
                 "formowl_tool_call_count": self._formowl_tool_call_count,
+                "mcp_attempted_call_count": self._formowl_mcp_attempted_call_count,
+                "mcp_successful_call_count": self._formowl_mcp_successful_call_count,
+                "mcp_response_commitment": self._latest_mcp_response_commitment,
+                "tool_result_reinject_commitment": (self._latest_tool_result_reinject_commitment),
+                "final_response_commitment": self._latest_final_response_commitment,
                 "feedback_count": self._feedback_count,
                 "interaction_count": sum(self._interaction_counts.values()),
                 "interaction_counts": dict(sorted(self._interaction_counts.items())),
@@ -1398,7 +1689,7 @@ class MailHumanUatService:
                 "verdict_counts": {
                     verdict: self._verdict_counts.get(verdict, 0) for verdict in sorted(_VERDICTS)
                 },
-                "upload_supported": True,
+                "upload_supported": not self._document_first,
                 "uploaded_file_count": self._uploaded_resource_count,
                 "uploaded_message_count": len(self._uploaded_message_ids),
                 "upload_warning_counts": dict(sorted(self._uploaded_warnings.items())),
@@ -1466,6 +1757,8 @@ def build_mail_human_uat_http_handler(
                 return
             try:
                 if route == "/api/upload":
+                    if service._document_first:
+                        service.upload_mail_files(())
                     files = self._read_upload_files()
                     response = service.upload_mail_files(files)
                     self._send_json(HTTPStatus.CREATED, response)
@@ -1844,21 +2137,69 @@ def _validated_diagnostic_mcp_timeout(value: float) -> float:
     return float(value)
 
 
+def _validated_document_mcp_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, Mapping) or payload.get("document_payload_projection") is not None:
+        raise ContractValidationError("document MCP payload is invalid")
+    return validate_document_uat_payload(payload)
+
+
+def _validated_evidence_tool_request(value: Any) -> _NormalizedEvidenceToolRequest:
+    if isinstance(value, Mapping):
+        raise ContractValidationError("UAT evidence tool request is invalid")
+    try:
+        query_text = value.query_text
+        required_terms = value.required_terms
+        sort = value.sort
+        limit = value.limit
+    except AttributeError as exc:
+        raise ContractValidationError("UAT evidence tool request is invalid") from exc
+    if (
+        not isinstance(query_text, str)
+        or not query_text.strip()
+        or len(query_text) > _MAX_QUERY_CHARS
+    ):
+        raise ContractValidationError("UAT evidence tool query is invalid")
+    if sort not in _SORT_OPTIONS:
+        raise ContractValidationError("UAT evidence tool sort is invalid")
+    if (
+        not isinstance(limit, int)
+        or isinstance(limit, bool)
+        or limit < 1
+        or limit > _MAX_RESULT_LIMIT
+    ):
+        raise ContractValidationError("UAT evidence tool limit is invalid")
+    if (
+        not isinstance(required_terms, Sequence)
+        or isinstance(required_terms, (str, bytes, bytearray))
+        or len(required_terms) > 12
+    ):
+        raise ContractValidationError("UAT evidence required terms are invalid")
+    normalized_terms: list[str] = []
+    seen_terms: set[str] = set()
+    for term in required_terms:
+        if not isinstance(term, str) or not term.strip() or len(term) > 120:
+            raise ContractValidationError("UAT evidence required term is invalid")
+        folded = term.casefold()
+        if folded in seen_terms:
+            raise ContractValidationError("UAT evidence required terms must be unique")
+        seen_terms.add(folded)
+        normalized_terms.append(term)
+    return _NormalizedEvidenceToolRequest(
+        query_text=query_text,
+        required_terms=tuple(normalized_terms),
+        sort=sort,
+        limit=limit,
+    )
+
+
 def _tool_request_event_metadata(
-    tool_request: UatEvidenceToolRequest | Mapping[str, Any] | None,
+    tool_request: Any,
 ) -> dict[str, Any]:
     if tool_request is None:
         return {
             "tool_name": None,
             "tool_query_hash": None,
             "required_term_hashes": [],
-            "semantic_request_hash": None,
-        }
-    if isinstance(tool_request, UatEvidenceToolRequest):
-        return {
-            "tool_name": "search_formowl_evidence",
-            "tool_query_hash": sha256_json(tool_request.query_text),
-            "required_term_hashes": [sha256_json(term) for term in tool_request.required_terms],
             "semantic_request_hash": None,
         }
     if isinstance(tool_request, Mapping):
@@ -1869,7 +2210,13 @@ def _tool_request_event_metadata(
             "required_term_hashes": [],
             "semantic_request_hash": sha256_json(normalized),
         }
-    raise ContractValidationError("UAT tool request is invalid")
+    normalized = _validated_evidence_tool_request(tool_request)
+    return {
+        "tool_name": "search_formowl_evidence",
+        "tool_query_hash": sha256_json(normalized.query_text),
+        "required_term_hashes": [sha256_json(term) for term in normalized.required_terms],
+        "semantic_request_hash": None,
+    }
 
 
 def _semantic_mcp_payload_to_uat_response(
@@ -3227,6 +3574,13 @@ _CHAT_UAT_HTML = """<!doctype html>
       sourcesPanel.hidden = true;
       let sourcesExpanded = false;
       let sourcesRendered = false;
+      const resultSummary = (item) => {
+        if (typeof item.snippet === "string") return item.snippet;
+        if (item.source_kind !== "authorized_document_export") return "";
+        return [item.source_label, item.segment_label, item.content_sha256]
+          .filter((value) => typeof value === "string" && value)
+          .join(" · ");
+      };
 
       const renderSources = () => {
         if (sourcesRendered) return;
@@ -3263,7 +3617,7 @@ _CHAT_UAT_HTML = """<!doctype html>
             order.textContent = String(index + 1);
             const content = document.createElement("td");
             content.setAttribute("data-label", "內容");
-            content.textContent = typeof item.snippet === "string" ? item.snippet : "";
+            content.textContent = resultSummary(item);
             if (Array.isArray(item.supporting_evidence)) {
               const supportList = document.createElement("ul");
               supportList.className = "supporting-list";
@@ -3308,8 +3662,7 @@ _CHAT_UAT_HTML = """<!doctype html>
             order.className = "source-order";
             order.textContent = String(index + 1);
             const contentText = document.createElement("span");
-            contentText.textContent =
-              typeof item.snippet === "string" ? item.snippet : "";
+            contentText.textContent = resultSummary(item);
             snippet.append(order, contentText);
             const subject = document.createElement("h3");
             const subjectLabel = document.createElement("span");

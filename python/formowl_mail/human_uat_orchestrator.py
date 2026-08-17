@@ -24,7 +24,13 @@ from formowl_contract import (
     SemanticSchemaAliasMap,
     SemanticTaskSkeleton,
     semantic_request_json_schema,
+    sha256_json,
     validate_semantic_request,
+)
+
+from .document_uat_mcp import (
+    project_document_uat_payload_public,
+    validate_document_uat_payload,
 )
 
 
@@ -509,6 +515,11 @@ class UatConversationOutcome:
     tool_result: Mapping[str, Any] | None = None
     fallback_reason: str | None = None
     semantic_telemetry: tuple[SemanticStageTelemetry, ...] = ()
+    mcp_attempted_call_count: int = 0
+    mcp_successful_call_count: int = 0
+    mcp_response_commitment: str | None = None
+    tool_result_reinject_commitment: str | None = None
+    final_response_commitment: str | None = None
 
     def __post_init__(self) -> None:
         if self.response_kind not in _RESPONSE_KINDS:
@@ -538,6 +549,30 @@ class UatConversationOutcome:
             not isinstance(record, SemanticStageTelemetry) for record in self.semantic_telemetry
         ):
             raise ContractValidationError("UAT semantic telemetry is invalid")
+        if (
+            not isinstance(self.mcp_attempted_call_count, int)
+            or isinstance(self.mcp_attempted_call_count, bool)
+            or not isinstance(self.mcp_successful_call_count, int)
+            or isinstance(self.mcp_successful_call_count, bool)
+            or self.mcp_attempted_call_count < 0
+            or self.mcp_successful_call_count < 0
+            or self.mcp_successful_call_count > self.mcp_attempted_call_count
+        ):
+            raise ContractValidationError("UAT MCP call counts are invalid")
+        for field_name, commitment in (
+            ("MCP response", self.mcp_response_commitment),
+            ("tool-result reinjection", self.tool_result_reinject_commitment),
+            ("final response", self.final_response_commitment),
+        ):
+            if (
+                commitment is not None
+                and re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    commitment,
+                )
+                is None
+            ):
+                raise ContractValidationError(f"UAT {field_name} commitment is invalid")
 
 
 class _CodexToolExecutionError(RuntimeError):
@@ -1790,11 +1825,19 @@ class CodexAppServerConversationModel:
                     self._transport.delete_thread(expired_thread.thread_id)
                 evidence_records: list[tuple[UatEvidenceToolRequest, dict[str, Any]]] = []
                 evidence_lock = threading.Lock()
+                mcp_attempted_call_count = 0
+                mcp_successful_call_count = 0
+                mcp_response_commitment: str | None = None
+                tool_result_reinject_commitment: str | None = None
 
                 def handle_tool(
                     tool_name: str,
                     arguments: Mapping[str, Any],
                 ) -> Mapping[str, Any]:
+                    nonlocal mcp_attempted_call_count
+                    nonlocal mcp_response_commitment
+                    nonlocal mcp_successful_call_count
+                    nonlocal tool_result_reinject_commitment
                     if tool_name != _TOOL_NAME:
                         raise RuntimeError("Codex requested an unknown UAT tool")
                     request = _parse_tool_request(arguments)
@@ -1809,11 +1852,22 @@ class CodexAppServerConversationModel:
                             ),
                             None,
                         )
-                        result = (
-                            dict(cached) if cached is not None else dict(evidence_tool(request))
-                        )
+                        if cached is not None:
+                            result = dict(cached)
+                        else:
+                            mcp_attempted_call_count += 1
+                            raw_result = evidence_tool(request)
+                            if not isinstance(raw_result, Mapping):
+                                raise RuntimeError("FormOwl MCP returned an invalid result")
+                            result = dict(raw_result)
+                            mcp_successful_call_count += 1
                         evidence_records.append((request, result))
-                    return _compact_evidence_for_model(result)
+                    reinjected_result, response_commitment = _legacy_tool_result_for_model(result)
+                    mcp_response_commitment = response_commitment
+                    tool_result_reinject_commitment = _legacy_tool_result_reinject_commitment(
+                        reinjected_result
+                    )
+                    return reinjected_result
 
                 additional_context: dict[str, Mapping[str, str]] = {}
                 if latest_evidence is not None:
@@ -1864,7 +1918,9 @@ class CodexAppServerConversationModel:
                     raise
                 except Exception as exc:
                     self._discard_thread(safety_identifier, thread.thread_id)
-                    if _can_fallback_after_turn_error(exc):
+                    if _can_fallback_after_turn_error(exc) and not _has_document_first_evidence(
+                        evidence_records
+                    ):
                         fallback = _evidence_fallback_outcome(
                             evidence_records,
                             model_name=f"codex:{thread.model_name}",
@@ -1875,27 +1931,54 @@ class CodexAppServerConversationModel:
                 if len(turn.tool_invocations) != len(evidence_records):
                     self._discard_thread(safety_identifier, thread.thread_id)
                     raise RuntimeError("Codex tool execution record is inconsistent")
+                if (
+                    mcp_attempted_call_count != mcp_successful_call_count
+                    or mcp_successful_call_count != len(evidence_records)
+                ):
+                    self._discard_thread(safety_identifier, thread.thread_id)
+                    raise RuntimeError("FormOwl MCP call counts are inconsistent")
+                if turn.tool_invocations:
+                    actual_reinject_commitment = _legacy_tool_result_reinject_commitment(
+                        turn.tool_invocations[0].result
+                    )
+                    if actual_reinject_commitment != tool_result_reinject_commitment:
+                        self._discard_thread(safety_identifier, thread.thread_id)
+                        raise RuntimeError(
+                            "Codex tool-result reinjection commitment is inconsistent"
+                        )
                 try:
                     decision = _parse_decision(turn.final_message)
                 except Exception:
                     self._discard_thread(safety_identifier, thread.thread_id)
-                    fallback = _evidence_fallback_outcome(
-                        evidence_records,
-                        model_name=f"codex:{thread.model_name}",
-                    )
-                    if fallback is not None:
-                        return fallback
+                    if not _has_document_first_evidence(evidence_records):
+                        fallback = _evidence_fallback_outcome(
+                            evidence_records,
+                            model_name=f"codex:{thread.model_name}",
+                        )
+                        if fallback is not None:
+                            return fallback
                     raise
                 # A later bounded call is a refinement of the earlier search.
                 # Project the latest governed result while the model may use
                 # all successful tool responses when composing its answer.
                 tool_request = evidence_records[-1][0] if evidence_records else None
-                tool_result = evidence_records[-1][1] if evidence_records else None
+                raw_tool_result = evidence_records[-1][1] if evidence_records else None
+                tool_result = raw_tool_result
+                if (
+                    raw_tool_result is not None
+                    and _document_mcp_content_commitment(raw_tool_result) is not None
+                ):
+                    tool_result = project_document_uat_payload_public(raw_tool_result)
                 return UatConversationOutcome(
                     **decision,
                     model_name=f"codex:{thread.model_name}",
                     tool_request=tool_request,
                     tool_result=tool_result,
+                    mcp_attempted_call_count=mcp_attempted_call_count,
+                    mcp_successful_call_count=mcp_successful_call_count,
+                    mcp_response_commitment=mcp_response_commitment,
+                    tool_result_reinject_commitment=tool_result_reinject_commitment,
+                    final_response_commitment=sha256_json(decision),
                 )
             finally:
                 with self._lock:
@@ -3443,6 +3526,47 @@ def _compact_evidence_for_model(
         "coverage": result.get("coverage"),
         "results": compact_items,
     }
+
+
+def _legacy_tool_result_for_model(
+    result: Mapping[str, Any],
+) -> tuple[dict[str, Any], str | None]:
+    """Preserve a hash-bound document MCP result for same-turn synthesis."""
+
+    response_commitment = _document_mcp_content_commitment(result)
+    if response_commitment is None:
+        return _compact_evidence_for_model(result), None
+    return validate_document_uat_payload(result), response_commitment
+
+def _legacy_tool_result_reinject_commitment(result: Mapping[str, Any]) -> str:
+    """Bind reinjection to the same canonical document content as the MCP."""
+
+    response_commitment = _document_mcp_content_commitment(result)
+    if response_commitment is not None:
+        return response_commitment
+    return sha256_json(result)
+
+def _document_mcp_content_commitment(result: Mapping[str, Any]) -> str | None:
+    response_commitment = result.get("mcp_response_commitment")
+    claim_boundary = result.get("claim_boundary")
+    document_first = (
+        isinstance(claim_boundary, Mapping) and claim_boundary.get("document_first") is True
+    )
+    if response_commitment is None and not document_first:
+        return None
+    if not document_first:
+        raise ContractValidationError("document MCP response commitment is invalid")
+    validated = validate_document_uat_payload(result)
+    return str(validated["mcp_response_commitment"])
+
+def _has_document_first_evidence(
+    evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
+) -> bool:
+    return any(
+        isinstance(result.get("claim_boundary"), Mapping)
+        and result["claim_boundary"].get("document_first") is True
+        for _, result in evidence_records
+    )
 
 
 __all__ = [

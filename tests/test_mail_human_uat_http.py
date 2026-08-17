@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -28,7 +29,16 @@ from formowl_mail.human_uat_http import (
     MailHumanUatService,
     create_mail_human_uat_http_server,
 )
+from formowl_mail.document_uat_mcp import (
+    AuthorizedDocumentMcpService,
+    AuthorizedDocumentSnapshot,
+    create_authorized_document_mcp_http_server,
+)
 from formowl_mail.human_uat_orchestrator import (
+    CodexAppServerConversationModel,
+    CodexAppServerThread,
+    CodexAppServerTurn,
+    CodexDynamicToolInvocation,
     UatConversationMessage,
     UatConversationOutcome,
     UatEvidenceToolRequest,
@@ -40,6 +50,73 @@ NOW = "2026-07-18T12:00:00+00:00"
 VISITOR_ID = "uatvisitor_" + "1" * 32
 SESSION_ID = "uatsession_" + "2" * 32
 
+
+def _all_mapping_keys(value: object) -> set[str]:
+    if isinstance(value, dict):
+        return set(value).union(*(map(_all_mapping_keys, value.values())))
+    if isinstance(value, (list, tuple)):
+        return set().union(*(map(_all_mapping_keys, value)))
+    return set()
+def _document_payload(content: str) -> dict[str, object]:
+    encoded = content.encode("utf-8")
+    result = {
+        "source_label": "authorized-document-0001",
+        "segment_label": "table-0001-rows-0001-0001",
+        "subject": "Authorized document table 1",
+        "snippet": content,
+        "content": content,
+        "content_char_count": len(content),
+        "content_utf8_bytes": len(encoded),
+        "content_sha256": "sha256:" + hashlib.sha256(encoded).hexdigest(),
+        "sent_at": None,
+        "source_kind": "authorized_document_export",
+    }
+    without_commitment = {
+        "status": "ok",
+        "query_hash": sha256_json("synthetic document query"),
+        "source_commitment": "sha256:" + ("1" * 64),
+        "result_count": 1,
+        "total_result_count": 1,
+        "displayed_result_count": 1,
+        "results": [result],
+        "warnings": [],
+        "notice": "Authorized document/table segments were read for model synthesis.",
+        "coverage": {
+            "cardinality_mode": "bounded_document_segments",
+            "total_source_item_count": 1,
+            "returned_source_item_count": 1,
+            "displayed_source_item_count": 1,
+            "is_exhaustive": True,
+            "has_more": False,
+        },
+        "answerability": {
+            "status": "sufficient_evidence",
+            "reason_codes": ["authorized_document_segments_available"],
+        },
+        "projection": {
+            "output_format": "narrative",
+            "primary_fields": ["content"],
+            "secondary_fields": ["source_label", "segment_label"],
+            "page_size": 5,
+            "page_offset": 0,
+            "has_more": False,
+        },
+        "timings_ms": {"document_read": 1.0},
+        "claim_boundary": {
+            "existing_export_only": True,
+            "document_first": True,
+            "read_only": True,
+            "pst_or_extractor_invoked": False,
+            "kg_or_ontology_invoked": False,
+            "oracle_or_expected_answer_used": False,
+            "canonical_graph_write_performed": False,
+            "production_ready": False,
+        },
+    }
+    return {
+        **without_commitment,
+        "mcp_response_commitment": sha256_json(without_commitment),
+    }
 
 def _conversation_id(visitor_id: str, session_id: str) -> str:
     digest = sha256_json(
@@ -98,6 +175,272 @@ class _ScriptedConversationModel:
 
 
 class MailHumanUatHttpTests(unittest.TestCase):
+    def test_document_first_component_e2e_calls_one_mcp_and_synthesizes_in_same_thread(
+        self,
+    ) -> None:
+        raw_content_sentinel = "SYNTHETIC_RAW_DOCUMENT_SENTINEL_C_94d8b2"
+        root = _paths.fresh_test_dir("mail-human-uat-document-first-component")
+        snapshot_path = root / "authorized-export.json"
+        snapshot_payload = {
+            "artifact_type": "formowl_diagnostic_current_export_table_snapshot_v2",
+            "schema_version": 2,
+            "record_count": 1,
+            "records": [
+                {
+                    "structural_observation": {
+                        "columns": [
+                            {
+                                "column_ordinal": 1,
+                                "original_header": "Task",
+                            },
+                            {
+                                "column_ordinal": 2,
+                                "original_header": "Status",
+                            },
+                        ],
+                        "rows": [
+                            {
+                                "row_ordinal": 1,
+                                "cells": [
+                                    {
+                                        "column_ordinal": 1,
+                                        "cell_state": "populated",
+                                        "value": (
+                                            "Synthetic acceptance task " + raw_content_sentinel
+                                        ),
+                                    },
+                                    {
+                                        "column_ordinal": 2,
+                                        "cell_state": "populated",
+                                        "value": "Complete",
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                }
+            ],
+        }
+        snapshot_path.write_text(
+            json.dumps(snapshot_payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        expected_sha256 = (
+            "sha256:" + __import__("hashlib").sha256(snapshot_path.read_bytes()).hexdigest()
+        )
+        document_service = AuthorizedDocumentMcpService(
+            AuthorizedDocumentSnapshot.load(
+                snapshot_path,
+                expected_sha256=expected_sha256,
+            )
+        )
+        document_server = create_authorized_document_mcp_http_server(
+            "127.0.0.1",
+            0,
+            document_service,
+        )
+        document_thread = threading.Thread(
+            target=document_server.serve_forever,
+            daemon=True,
+        )
+        document_thread.start()
+        observed: dict[str, object] = {"thread_ids": [], "reinjected": []}
+
+        class _SameThreadTransport:
+            def start_thread(self, **_kwargs):
+                return CodexAppServerThread(
+                    thread_id="thread_document_e2e",
+                    model_name="gpt-document-e2e",
+                )
+
+            def run_turn(self, *, thread_id, tool_handler, **_kwargs):
+                observed["thread_ids"].append(thread_id)
+                result = dict(
+                    tool_handler(
+                        "search_formowl_evidence",
+                        {
+                            "query_text": "Synthetic acceptance task status",
+                            "required_terms": ["Synthetic acceptance task"],
+                            "sort": "relevance",
+                            "limit": 5,
+                        },
+                    )
+                )
+                observed["reinjected"].append(result)
+                self.assertions(result)
+                return CodexAppServerTurn(
+                    thread_id=thread_id,
+                    turn_id="turn_document_e2e",
+                    final_message=json.dumps(
+                        {
+                            "response_kind": "answer",
+                            "answer_text": (
+                                "The authorized export reports that the "
+                                "synthetic acceptance task is complete."
+                            ),
+                            "display_format": "narrative",
+                        },
+                        separators=(",", ":"),
+                    ),
+                    tool_invocations=(
+                        CodexDynamicToolInvocation(
+                            thread_id=thread_id,
+                            turn_id="turn_document_e2e",
+                            call_id="call_document_e2e",
+                            tool_name="search_formowl_evidence",
+                            arguments={},
+                            result=result,
+                        ),
+                    ),
+                )
+
+            @staticmethod
+            def assertions(result):
+                assert result["claim_boundary"]["document_first"] is True
+                assert "complete_projection" not in result
+                assert "answer_items" not in result
+                assert "oracle" not in result
+                assert result["results"][0]["snippet"]
+
+            def delete_thread(self, _thread_id):
+                return None
+
+            def close(self):
+                return None
+
+        model = CodexAppServerConversationModel(
+            _SameThreadTransport(),
+            workspace_dir=root / "workspace",
+        )
+        service = MailHumanUatService(
+            MailHumanUatHttpConfig(
+                bundle=None,
+                state_dir=root / "state",
+                conversation_model=model,
+                document_mcp_url=(f"http://127.0.0.1:{document_server.server_address[1]}/mcp"),
+                fixed_now=NOW,
+            )
+        )
+        try:
+            with _RunningSurface(service) as surface:
+                response, body = surface.request_json(
+                    "/api/chat",
+                    {
+                        "query_text": "Read the task status and answer.",
+                        "visitor_id": VISITOR_ID,
+                        "session_id": SESSION_ID,
+                        "sequence": 1,
+                        "source": "composer",
+                    },
+                )
+                summary_response, summary_body = surface.request(
+                    "GET",
+                    "/api/session-summary",
+                )
+        finally:
+            document_server.shutdown()
+            document_server.server_close()
+            document_thread.join(timeout=2)
+            model.close()
+
+        payload = json.loads(body)
+        summary = json.loads(summary_body)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(summary_response.status, 200)
+        self.assertEqual(
+            payload["assistant_text"],
+            "The authorized export reports that the synthetic acceptance task is complete.",
+        )
+        self.assertTrue(
+            {"content", "snippet"}.isdisjoint(_all_mapping_keys(payload)),
+        )
+        self.assertNotIn(raw_content_sentinel.encode("utf-8"), body)
+        self.assertIn(
+            raw_content_sentinel,
+            observed["reinjected"][0]["results"][0]["content"],
+        )
+        conversation_id = _conversation_id(VISITOR_ID, SESSION_ID)
+        self.assertIsNone(
+            service._conversation_states_by_conversation_id[conversation_id].latest_evidence
+        )
+        self.assertEqual(observed["thread_ids"], ["thread_document_e2e"])
+        self.assertEqual(document_service.successful_call_count, 1)
+        self.assertEqual(summary["mcp_attempted_call_count"], 1)
+        self.assertEqual(summary["mcp_successful_call_count"], 1)
+        self.assertEqual(
+            summary["mcp_response_commitment"],
+            observed["reinjected"][0]["mcp_response_commitment"],
+        )
+        self.assertEqual(
+            summary["tool_result_reinject_commitment"],
+            observed["reinjected"][0]["mcp_response_commitment"],
+        )
+        canonical_reinjected_content = dict(observed["reinjected"][0])
+        canonical_reinjected_content.pop("mcp_response_commitment")
+        self.assertEqual(
+            summary["mcp_response_commitment"],
+            summary["tool_result_reinject_commitment"],
+        )
+        self.assertEqual(
+            summary["tool_result_reinject_commitment"],
+            sha256_json(canonical_reinjected_content),
+        )
+        self.assertEqual(
+            summary["final_response_commitment"],
+            payload["orchestration"]["final_response_commitment"],
+        )
+    def test_document_first_rejects_codex_fallback_instead_of_returning_fake_synthesis(
+        self,
+    ) -> None:
+        class _DocumentMcp:
+            def read_authorized_documents(self, *, request):
+                return _document_payload("bounded authorized content")
+
+        model = _ScriptedConversationModel(
+            [
+                {
+                    "response_kind": "answer",
+                    "answer_text": "Server-generated evidence fallback.",
+                    "display_format": "narrative",
+                    "fallback_reason": "codex_answer_generation_failed_after_evidence",
+                    "tool_request": UatEvidenceToolRequest(
+                        query_text="read authorized content",
+                        required_terms=(),
+                        sort="relevance",
+                        limit=5,
+                    ),
+                }
+            ]
+        )
+        service = MailHumanUatService(
+            MailHumanUatHttpConfig(
+                bundle=None,
+                state_dir=_paths.fresh_test_dir("mail-human-uat-document-first-reject-fallback"),
+                conversation_model=model,
+                fixed_now=NOW,
+            ),
+            document_mcp_client=_DocumentMcp(),
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "requires a valid Codex synthesis",
+        ):
+            service.chat(
+                {
+                    "query_text": "Read the document and answer.",
+                    "visitor_id": VISITOR_ID,
+                    "session_id": SESSION_ID,
+                    "sequence": 1,
+                    "source": "composer",
+                }
+            )
+
+        self.assertEqual(
+            model.discarded_identifiers,
+            [_conversation_id(VISITOR_ID, SESSION_ID)],
+        )
+
     def test_page_is_shared_chat_ui_without_login_gate(self) -> None:
         service = _service("mail-human-uat-page")
         with _RunningSurface(service) as surface:

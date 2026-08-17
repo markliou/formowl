@@ -10,6 +10,39 @@ the first question, and a same-origin upload iframe opened from the composer.
 The landing page intentionally has no starter prompts so the UAT log captures
 how colleagues word their own requests.
 
+## Active document-first request-to-DOM trace
+
+The recovery deployment in
+`docs/recovery/2026-08-10/uat-mcp-r8-deploy.sh` has one authoritative
+request path:
+
+1. The browser submits one same-origin `POST /api/chat` from `ask()` in the
+   embedded page JavaScript.
+2. `MailHumanUatHttpHandler.do_POST()` validates the origin and JSON body, then
+   calls `MailHumanUatService.chat()`.
+3. The service passes the turn to the persistent
+   `CodexAppServerConversationModel` thread. Its active document-first path
+   still uses `_respond_legacy()`; that method must not be removed merely
+   because its name predates document-first UAT.
+4. When source evidence is required, Codex invokes the single dynamic
+   `search_formowl_evidence` tool. The HTTP service callback translates that
+   request into exactly one `read_authorized_documents` call to the read-only
+   Document MCP.
+5. The Document MCP reads bounded segments from the already-authorized frozen
+   document snapshot. Its full validated `content` is private and is reinjected
+   only into the same Codex turn for synthesis.
+6. After Codex produces the final synthesis, the public projection removes
+   every document `content` and `snippet` field. The HTTP response contains the
+   synthesized `assistant_text` plus safe metadata and commitments.
+7. `renderAssistantResult()` writes the answer with
+   `answer.textContent = payload.assistant_text`; raw document values are not
+   rendered into the DOM.
+
+This active route does not invoke KG retrieval, ontology processing, PST
+parsing, raw-mail indexing, public search, or a second Codex sidecar. Those
+legacy compatibility components remain in the repository for their separately
+tested APIs and are not part of the document-first deployment above.
+
 ## Behavior
 
 - Uses one server-loaded `MailEvidenceBundle` plus private UAT-upload bundles.

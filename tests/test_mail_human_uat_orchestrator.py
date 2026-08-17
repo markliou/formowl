@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,8 @@ import unittest
 from unittest import mock
 
 import _paths  # noqa: F401
+from formowl_contract import ContractValidationError, sha256_json
+from formowl_mail._guards import assert_public_payload_safe
 from formowl_mail.human_uat_orchestrator import (
     CodexAppServerConversationModel,
     CodexAppServerStdioTransport,
@@ -27,6 +30,7 @@ from formowl_mail.human_uat_orchestrator import (
     prepare_codex_runtime_state_from_auth_cache,
     validate_codex_runtime_state,
 )
+from formowl_mail.document_uat_mcp import validate_document_uat_payload
 
 
 def _decision(
@@ -44,6 +48,78 @@ def _decision(
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _document_payload(content: str) -> dict[str, object]:
+    encoded = content.encode("utf-8")
+    result = {
+        "source_label": "authorized-document-0001",
+        "segment_label": "table-0001-rows-0001-0001",
+        "subject": "Authorized document table 1",
+        "snippet": content,
+        "content": content,
+        "content_char_count": len(content),
+        "content_utf8_bytes": len(encoded),
+        "content_sha256": "sha256:" + hashlib.sha256(encoded).hexdigest(),
+        "sent_at": None,
+        "source_kind": "authorized_document_export",
+    }
+    without_commitment = {
+        "status": "ok",
+        "query_hash": sha256_json("synthetic document query"),
+        "source_commitment": "sha256:" + ("1" * 64),
+        "result_count": 1,
+        "total_result_count": 1,
+        "displayed_result_count": 1,
+        "results": [result],
+        "warnings": [],
+        "notice": "Authorized document/table segments were read for model synthesis.",
+        "coverage": {
+            "cardinality_mode": "bounded_document_segments",
+            "total_source_item_count": 1,
+            "returned_source_item_count": 1,
+            "displayed_source_item_count": 1,
+            "is_exhaustive": True,
+            "has_more": False,
+        },
+        "answerability": {
+            "status": "sufficient_evidence",
+            "reason_codes": ["authorized_document_segments_available"],
+        },
+        "projection": {
+            "output_format": "narrative",
+            "primary_fields": ["content"],
+            "secondary_fields": ["source_label", "segment_label"],
+            "page_size": 5,
+            "page_offset": 0,
+            "has_more": False,
+        },
+        "timings_ms": {"document_read": 1.0},
+        "claim_boundary": {
+            "existing_export_only": True,
+            "document_first": True,
+            "read_only": True,
+            "pst_or_extractor_invoked": False,
+            "kg_or_ontology_invoked": False,
+            "oracle_or_expected_answer_used": False,
+            "canonical_graph_write_performed": False,
+            "production_ready": False,
+        },
+    }
+    return {
+        **without_commitment,
+        "mcp_response_commitment": sha256_json(without_commitment),
+    }
+
+
+def _all_mapping_keys(value: object) -> set[str]:
+    if isinstance(value, dict):
+        return set(value).union(
+            *(map(_all_mapping_keys, value.values())),
+        )
+    if isinstance(value, (list, tuple)):
+        return set().union(*(map(_all_mapping_keys, value)))
+    return set()
 
 
 class _RecordingCodexTransport:
@@ -592,6 +668,201 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         self.assertEqual(outcome.answer_text, "來源證據已整理完成。")
         self.assertEqual(outcome.display_format, "table")
         self.assertEqual(outcome.tool_result, evidence_result)
+
+    def test_document_mcp_result_is_reinjected_unchanged_for_same_thread_synthesis(
+        self,
+    ) -> None:
+        raw_content_sentinel = "SYNTHETIC_RAW_DOCUMENT_SENTINEL_A_7f8c1d"
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "tool_name": "search_formowl_evidence",
+                            "arguments": {
+                                "query_text": "read the authorized table",
+                                "required_terms": [],
+                                "sort": "relevance",
+                                "limit": 5,
+                            },
+                        }
+                    ],
+                    "final_message": _decision(
+                        answer_text="The authorized table says the task is complete.",
+                    ),
+                }
+            ]
+        )
+        evidence_result = _document_payload(raw_content_sentinel)
+        self.assertEqual(validate_document_uat_payload(evidence_result), evidence_result)
+        observed_reinjection: list[dict[str, object]] = []
+        original_run_turn = transport.run_turn
+
+        def run_turn_and_capture(**kwargs):
+            original_handler = kwargs["tool_handler"]
+
+            def capture(tool_name, arguments):
+                result = dict(original_handler(tool_name, arguments))
+                observed_reinjection.append(result)
+                return result
+
+            return original_run_turn(**{**kwargs, "tool_handler": capture})
+
+        transport.run_turn = run_turn_and_capture
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            outcome = model.respond(
+                history=(),
+                user_text="Read the table and answer the task.",
+                latest_evidence=None,
+                safety_identifier="formowl_uat_" + "d" * 48,
+                evidence_tool=lambda _request: evidence_result,
+            )
+
+        self.assertEqual(observed_reinjection, [evidence_result])
+        self.assertEqual(
+            observed_reinjection[0]["results"][0]["content"],
+            raw_content_sentinel,
+        )
+        self.assertTrue({"content", "snippet"}.isdisjoint(_all_mapping_keys(outcome.tool_result)))
+        self.assertEqual(outcome.mcp_attempted_call_count, 1)
+        self.assertEqual(outcome.mcp_successful_call_count, 1)
+        self.assertEqual(
+            outcome.mcp_response_commitment,
+            evidence_result["mcp_response_commitment"],
+        )
+        self.assertEqual(
+            outcome.tool_result_reinject_commitment,
+            evidence_result["mcp_response_commitment"],
+        )
+        canonical_reinjected_content = dict(observed_reinjection[0])
+        canonical_reinjected_content.pop("mcp_response_commitment")
+        self.assertEqual(
+            outcome.mcp_response_commitment,
+            outcome.tool_result_reinject_commitment,
+        )
+        self.assertEqual(
+            outcome.tool_result_reinject_commitment,
+            sha256_json(canonical_reinjected_content),
+        )
+        self.assertEqual(
+            outcome.final_response_commitment,
+            sha256_json(
+                {
+                    "response_kind": "answer",
+                    "answer_text": "The authorized table says the task is complete.",
+                    "display_format": "narrative",
+                }
+            ),
+        )
+        self.assertEqual(
+            outcome.answer_text,
+            "The authorized table says the task is complete.",
+        )
+
+    def test_document_unsafe_content_fails_before_codex_reinjection(self) -> None:
+        for raw_path in ("/etc/passwd", "/mnt/private/export.json"):
+            with self.assertRaises(ContractValidationError):
+                assert_public_payload_safe({"content": raw_path})
+        for unsafe_content in (
+            "read /etc/passwd",
+            "read /mnt/private/export.json",
+            "source formowl://object/private/export",
+            "credential=synthetic-placeholder",
+            "SELECT private_value FROM internal_table",
+            "Traceback (most recent call last):\n  synthetic failure",
+        ):
+            with self.subTest(unsafe_content=unsafe_content):
+                transport = _RecordingCodexTransport(
+                    [
+                        {
+                            "tool_calls": [
+                                {
+                                    "tool_name": "search_formowl_evidence",
+                                    "arguments": {
+                                        "query_text": "read authorized content",
+                                        "required_terms": [],
+                                        "sort": "relevance",
+                                        "limit": 5,
+                                    },
+                                }
+                            ],
+                            "final_message": _decision(),
+                        }
+                    ]
+                )
+                observed_reinjection: list[dict[str, object]] = []
+                original_run_turn = transport.run_turn
+
+                def run_turn_and_capture(**kwargs):
+                    original_handler = kwargs["tool_handler"]
+
+                    def capture(tool_name, arguments):
+                        result = dict(original_handler(tool_name, arguments))
+                        observed_reinjection.append(result)
+                        return result
+
+                    return original_run_turn(**{**kwargs, "tool_handler": capture})
+
+                transport.run_turn = run_turn_and_capture
+                with tempfile.TemporaryDirectory() as workspace:
+                    model = CodexAppServerConversationModel(
+                        transport,
+                        workspace_dir=workspace,
+                    )
+                    with self.assertRaises(ContractValidationError):
+                        model.respond(
+                            history=(),
+                            user_text="Read the document.",
+                            latest_evidence=None,
+                            safety_identifier="formowl_uat_" + "f" * 48,
+                            evidence_tool=lambda _request, value=unsafe_content: (
+                                _document_payload(value)
+                            ),
+                        )
+                self.assertEqual(observed_reinjection, [])
+
+    def test_document_first_invalid_final_message_fails_closed_without_evidence_fallback(
+        self,
+    ) -> None:
+        evidence_result = _document_payload("bounded authorized document content")
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "tool_name": "search_formowl_evidence",
+                            "arguments": {
+                                "query_text": "read authorized content",
+                                "required_terms": [],
+                                "sort": "relevance",
+                                "limit": 5,
+                            },
+                        }
+                    ],
+                    "final_message": "not-json",
+                }
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            with self.assertRaisesRegex(RuntimeError, "invalid UAT answer"):
+                model.respond(
+                    history=(),
+                    user_text="Read the document and synthesize.",
+                    latest_evidence=None,
+                    safety_identifier="formowl_uat_" + "e" * 48,
+                    evidence_tool=lambda _request: evidence_result,
+                )
+
+        self.assertEqual(transport.deleted_threads, ["thread_1"])
 
     def test_successful_evidence_survives_codex_answer_generation_failures(self) -> None:
         tool_call = {

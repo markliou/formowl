@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+import textwrap
 import types
 import unittest
 from unittest import mock
@@ -16,26 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_launcher_module() -> types.ModuleType:
-    """Load the launcher with its expensive runtime dependencies replaced."""
-
-    import formowl_mail  # noqa: F401
-
-    evaluator = types.ModuleType("formowl_evaluator")
-    evaluator.load_or_rebuild_may_mail_evidence_bundle = object()
-
-    http = types.ModuleType("formowl_mail.human_uat_http")
-    http.MailHumanUatHttpConfig = object()
-    http.MailHumanUatService = object()
-    http.create_mail_human_uat_http_server = object()
-
-    orchestrator = types.ModuleType("formowl_mail.human_uat_orchestrator")
-    orchestrator.CodexAppServerConversationModel = object()
-    orchestrator.CodexAppServerStdioTransport = object()
-    orchestrator.build_codex_app_server_proxy_command = object()
-    orchestrator.load_semantic_ontology_context = object()
-
-    query = types.ModuleType("formowl_mail.query")
-    query.MailEvidenceQueryGateway = object()
+    """Load the launcher without importing any FormOwl runtime dependency."""
 
     module_name = "_mail_human_uat_launcher_test"
     spec = importlib.util.spec_from_file_location(
@@ -44,16 +28,7 @@ def _load_launcher_module() -> types.ModuleType:
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    with mock.patch.dict(
-        sys.modules,
-        {
-            "formowl_evaluator": evaluator,
-            "formowl_mail.human_uat_http": http,
-            "formowl_mail.human_uat_orchestrator": orchestrator,
-            "formowl_mail.query": query,
-        },
-    ):
-        spec.loader.exec_module(module)
+    spec.loader.exec_module(module)
     return module
 
 
@@ -85,6 +60,295 @@ def _launcher_args(**overrides: Path) -> argparse.Namespace:
 
 
 class MailHumanUatLauncherTests(unittest.TestCase):
+    def test_document_first_launcher_wires_one_private_sidecar_and_one_mcp(
+        self,
+    ) -> None:
+        launcher = _load_launcher_module()
+        observed: dict[str, object] = {}
+
+        class _Transport:
+            def __init__(self, **kwargs):
+                observed["transport"] = kwargs
+
+        class _ConversationModel:
+            model_name = "codex:test"
+
+            def __init__(self, transport, **kwargs):
+                observed["conversation"] = (transport, kwargs)
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class _Config:
+            def __init__(self, **kwargs):
+                observed["config"] = kwargs
+
+        class _Service:
+            def __init__(self, config):
+                observed["service"] = config
+
+        class _Server:
+            server_address = ("127.0.0.1", 8088)
+
+            def serve_forever(self):
+                raise KeyboardInterrupt()
+
+            def server_close(self):
+                observed["server_closed"] = True
+
+        dependencies = types.SimpleNamespace(
+            CodexAppServerStdioTransport=_Transport,
+            CodexAppServerConversationModel=_ConversationModel,
+            MailHumanUatHttpConfig=_Config,
+            MailHumanUatService=_Service,
+            create_mail_human_uat_http_server=lambda *_args: _Server(),
+            build_codex_app_server_proxy_command=(
+                lambda *, socket_path: ("proxy", str(socket_path))
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with (
+                mock.patch.object(
+                    launcher.sys,
+                    "argv",
+                    [
+                        "mail_human_uat.py",
+                        "--document-first",
+                        "--document-mcp-url",
+                        "http://127.0.0.1:8091/mcp",
+                        "--state-dir",
+                        str(root / "uat-state"),
+                        "--private-codex-socket",
+                        str(root / "run" / "private.sock"),
+                        "--private-codex-runtime-state-dir",
+                        str(root / "private-codex-state"),
+                    ],
+                ),
+                mock.patch.object(
+                    launcher,
+                    "_load_document_first_dependencies",
+                    return_value=dependencies,
+                ),
+                mock.patch.object(
+                    launcher,
+                    "_load_legacy_dependencies",
+                    side_effect=AssertionError("document-first must not load legacy runtime"),
+                ),
+            ):
+                self.assertEqual(launcher.main(), 0)
+
+        self.assertFalse(observed["transport"]["allow_public_web_search"])
+        self.assertEqual(
+            observed["transport"]["runtime_workspace"],
+            root / "private-codex-state" / "codex-workspace",
+        )
+        self.assertEqual(observed["config"]["bundle"], None)
+        self.assertEqual(
+            observed["config"]["document_mcp_url"],
+            "http://127.0.0.1:8091/mcp",
+        )
+        self.assertNotIn("diagnostic_mcp_url", observed["config"])
+        self.assertTrue(observed["server_closed"])
+
+    def test_launcher_help_fresh_subprocess_imports_no_formowl_runtime(self) -> None:
+        script = textwrap.dedent(
+            f"""
+            import builtins
+            import runpy
+            import sys
+
+            forbidden = (
+                "formowl_evaluator",
+                "formowl_graph",
+                "formowl_mail.evidence",
+                "formowl_mail.human_uat_orchestrator",
+                "formowl_mail.human_uat_upload",
+                "formowl_mail.public_search_adapter",
+                "formowl_mail.query",
+                "formowl_ingestion.extractors.mail.pst",
+            )
+            original_import = builtins.__import__
+
+            def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+                if name in forbidden or name.startswith(
+                    tuple(prefix + "." for prefix in forbidden)
+                ):
+                    raise AssertionError("forbidden launcher import: " + name)
+                return original_import(name, globals, locals, fromlist, level)
+
+            builtins.__import__ = guarded_import
+            sys.argv = ["mail_human_uat.py", "--help"]
+            try:
+                runpy.run_path(
+                    {str(ROOT / "scripts" / "mail_human_uat.py")!r},
+                    run_name="__main__",
+                )
+            except SystemExit as exc:
+                if exc.code not in (None, 0):
+                    raise
+            loaded = sorted(
+                name
+                for name in sys.modules
+                if name in forbidden
+                or name.startswith(tuple(prefix + "." for prefix in forbidden))
+            )
+            if loaded:
+                raise AssertionError("forbidden launcher modules loaded: " + repr(loaded))
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--document-first", completed.stdout)
+        self.assertIn("--document-mcp-url", completed.stdout)
+
+    def test_document_first_http_runtime_fresh_subprocess_imports_no_legacy_stack(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temporary = Path(temp_dir)
+            state_dir = temporary / "state"
+            script = textwrap.dedent(
+                f"""
+                import builtins
+                import importlib.util
+                import sys
+
+                forbidden = (
+                    "formowl_evaluator",
+                    "formowl_graph",
+                    "formowl_mail.evidence",
+                    "formowl_mail.human_uat_orchestrator",
+                    "formowl_mail.human_uat_upload",
+                    "formowl_mail.public_search_adapter",
+                    "formowl_mail.query",
+                    "formowl_ingestion.extractors.mail.pst",
+                )
+                original_import = builtins.__import__
+
+                def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+                    if name in forbidden or name.startswith(
+                        tuple(prefix + "." for prefix in forbidden)
+                    ):
+                        raise AssertionError("forbidden document-first import: " + name)
+                    return original_import(name, globals, locals, fromlist, level)
+
+                builtins.__import__ = guarded_import
+                launcher_spec = importlib.util.spec_from_file_location(
+                    "_document_first_import_audit_launcher",
+                    {str(ROOT / "scripts" / "mail_human_uat.py")!r},
+                )
+                if launcher_spec is None or launcher_spec.loader is None:
+                    raise AssertionError("launcher import spec is unavailable")
+                launcher = importlib.util.module_from_spec(launcher_spec)
+                launcher_spec.loader.exec_module(launcher)
+                launcher._install_document_first_package_namespace()
+                from formowl_mail.human_uat_http import (
+                    MailHumanUatHttpConfig,
+                    MailHumanUatService,
+                )
+
+                class DocumentClient:
+                    def read_authorized_documents(self, *, request):
+                        raise AssertionError("import audit must not call the MCP")
+
+                service = MailHumanUatService(
+                    MailHumanUatHttpConfig(
+                        bundle=None,
+                        state_dir={str(state_dir)!r},
+                    ),
+                    document_mcp_client=DocumentClient(),
+                )
+                health = service.health()
+                if health["surface"] != "document_first_human_uat":
+                    raise AssertionError("document-first service did not initialize")
+                loaded = sorted(
+                    name
+                    for name in sys.modules
+                    if name in forbidden
+                    or name.startswith(tuple(prefix + "." for prefix in forbidden))
+                )
+                if loaded:
+                    raise AssertionError(
+                        "forbidden document-first modules loaded: " + repr(loaded)
+                    )
+                """
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                    "PYTHONPATH": str(ROOT / "python"),
+                },
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_document_first_dependency_loader_uses_minimal_namespace_without_legacy_modules(
+        self,
+    ) -> None:
+        script = textwrap.dedent(
+            f"""
+            import importlib.util
+            import sys
+
+            launcher_spec = importlib.util.spec_from_file_location(
+                "_document_first_dependency_import_audit",
+                {str(ROOT / "scripts" / "mail_human_uat.py")!r},
+            )
+            if launcher_spec is None or launcher_spec.loader is None:
+                raise AssertionError("launcher import spec is unavailable")
+            launcher = importlib.util.module_from_spec(launcher_spec)
+            launcher_spec.loader.exec_module(launcher)
+            dependencies = launcher._load_document_first_dependencies()
+            if not hasattr(dependencies, "CodexAppServerConversationModel"):
+                raise AssertionError("document-first dependencies did not load")
+            package = sys.modules.get("formowl_mail")
+            if package is None or getattr(package, "__file__", None) is not None:
+                raise AssertionError("document-first executed a package initializer")
+            forbidden = (
+                "formowl_mail.bundle",
+                "formowl_mail.evidence",
+                "formowl_mail.human_uat_upload",
+                "formowl_mail.public_search_adapter",
+                "formowl_mail.query",
+            )
+            loaded = sorted(name for name in forbidden if name in sys.modules)
+            if loaded:
+                raise AssertionError(
+                    "document-first loaded legacy modules: " + repr(loaded)
+                )
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env={
+                **os.environ,
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONPATH": str(ROOT / "python"),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_dual_runtime_isolation_derives_distinct_attested_workspaces(self) -> None:
         launcher = _load_launcher_module()
 
@@ -202,6 +466,20 @@ class MailHumanUatLauncherTests(unittest.TestCase):
             server = _Server()
             bundle = types.SimpleNamespace(messages=())
             ontology_context = object()
+            load_ontology = mock.Mock(return_value=ontology_context)
+            dependencies = types.SimpleNamespace(
+                CodexAppServerStdioTransport=_Transport,
+                CodexAppServerConversationModel=_ConversationModel,
+                MailEvidenceQueryGateway=_Gateway,
+                MailHumanUatHttpConfig=_Config,
+                MailHumanUatService=_Service,
+                build_codex_app_server_proxy_command=(
+                    lambda *, socket_path: ("proxy", str(socket_path))
+                ),
+                create_mail_human_uat_http_server=lambda *_args: server,
+                load_or_rebuild_may_mail_evidence_bundle=lambda *_args, **_kwargs: bundle,
+                load_semantic_ontology_context=load_ontology,
+            )
 
             with (
                 mock.patch.object(
@@ -233,34 +511,15 @@ class MailHumanUatLauncherTests(unittest.TestCase):
                 ),
                 mock.patch.object(
                     launcher,
-                    "load_semantic_ontology_context",
-                    return_value=ontology_context,
-                ) as load_ontology,
+                    "_load_legacy_dependencies",
+                    return_value=dependencies,
+                ),
+                mock.patch.object(
+                    launcher,
+                    "_load_document_first_dependencies",
+                    side_effect=AssertionError("legacy mode must not load document-only deps"),
+                ),
                 mock.patch.object(launcher, "_require_semantic_dual_runtime_api"),
-                mock.patch.object(
-                    launcher,
-                    "load_or_rebuild_may_mail_evidence_bundle",
-                    return_value=bundle,
-                ),
-                mock.patch.object(launcher, "MailEvidenceQueryGateway", _Gateway),
-                mock.patch.object(launcher, "CodexAppServerStdioTransport", _Transport),
-                mock.patch.object(
-                    launcher,
-                    "CodexAppServerConversationModel",
-                    _ConversationModel,
-                ),
-                mock.patch.object(launcher, "MailHumanUatHttpConfig", _Config),
-                mock.patch.object(launcher, "MailHumanUatService", _Service),
-                mock.patch.object(
-                    launcher,
-                    "create_mail_human_uat_http_server",
-                    return_value=server,
-                ),
-                mock.patch.object(
-                    launcher,
-                    "build_codex_app_server_proxy_command",
-                    side_effect=lambda *, socket_path: ("proxy", str(socket_path)),
-                ),
             ):
                 self.assertEqual(launcher.main(), 0)
 
@@ -271,7 +530,10 @@ class MailHumanUatLauncherTests(unittest.TestCase):
             private_transport.kwargs["allow_public_web_search"],
             False,
         )
-        self.assertTrue(web_transport.kwargs["allow_public_web_search"])
+        self.assertIs(
+            web_transport.kwargs["allow_public_web_search"],
+            True,
+        )
         self.assertEqual(
             private_transport.kwargs["cwd"],
             root / "uat-state" / "codex-proxy-workspace",
