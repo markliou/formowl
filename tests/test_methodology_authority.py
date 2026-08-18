@@ -648,6 +648,8 @@ class MethodologyAuthorityTests(unittest.TestCase):
             Path("SPEC.md"),
             Path("docs/methodology-authority.json"),
             Path("docs/agent-goals/kg-research-agent.md"),
+            Path("docs/kg-ontology-v2-runtime-evaluation-plan.md"),
+            Path("docs/kg-research-method.md"),
             Path(
                 "experiments/kg_ontology_v2_coordination/results/"
                 "procurement_full_pst_domain_hard_summary_2026-07-09.json"

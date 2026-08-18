@@ -1,237 +1,417 @@
 # Architecture
 
-<!-- Future agents: continue building the system architecture documentation in this file. Do not create another architecture document unless SPEC.md is updated first. -->
+FormOwl uses one container-first, source-preserving architecture for
+heterogeneous evidence integration. This file is the active architecture view;
+historical snapshots are not implementation instructions.
 
-FormOwl uses a container-first architecture and a graph-governed knowledge pipeline.
+## 1. Architectural Objective
 
-The canonical development, test, and deployment environment is a container. Host-installed runtimes are optional conveniences, not required assumptions.
+FormOwl must make a governed graph useful for heterogeneous integration while
+retaining a strong evidence-retrieval path.
 
-## Implementation Ownership
+Knowledge construction:
 
-FormOwl development is split between the Knowledge Graph Research Agent and the
-FormOwl System Backbone Agent. The durable role definition, current session
-assignment, ownership boundaries, and handoff rules live in
-`docs/agent-roles.md`.
+```text
+heterogeneous source adapters
+  -> Asset / EvidenceSnapshot
+  -> ExtractorRun
+  -> Observation
+  -> candidate mentions/entities/claims/relations/frames
+  -> review and canonical graph commit
+  -> scoped ontology revision
+  -> permission-filtered EffectiveGraphView
+```
 
-Architecture changes should preserve that split: graph and ontology research
-work defines source-preserving KG behavior and research evidence, while system
-backbone work provides safe service, storage, transport, and runtime boundaries
-for that research layer.
+Query execution:
+
+```text
+query
+  -> typed router
+  -> validated SemanticQueryPlan
+  -> lexical + dense evidence retrieval
+  -> conservative entity linking
+  -> bounded source-backed graph traversal
+  -> temporal/provenance/coverage filtering
+  -> capped soft ontology scoring
+  -> evidence-bundle reranking
+  -> deterministic executor or cited LLM answer
+```
+
+The graph does not replace evidence retrieval. It adds identity, cross-source
+joins, topology, time, contradiction, provenance, and reusable governed
+semantics. Ontology is a scoped and versioned aid, not a default hard filter on
+otherwise valid evidence.
+
+## 2. Ownership Boundary
+
+The Knowledge Graph Research Agent owns semantic contracts, graph/ontology
+behavior, query planning, evaluation, and research claim limits.
+
+The FormOwl System Backbone Agent owns transport, identity, storage,
+persistence, deployment, worker, and adapter plumbing behind those contracts.
+
+The durable role split is in `docs/agent-roles.md`. A cross-track change uses a
+contract-first handoff rather than creating a parallel implementation.
+
+## 3. Logical Layers
+
+### 3.1 Connected user boundary
+
+```text
+User / ChatGPT
+  -> public HTTPS FormOwl origin
+  -> FormOwl OAuth 2.1 and Google OIDC
+  -> exact protected /mcp resource
+  -> fresh gateway-controlled ActorContext
+  -> governed semantic tools
+```
+
+The MCP Gateway is the only formal ChatGPT-facing service. Project MCP, Wiki
+MCP, JSON-line, and hand-built JSON-RPC/stdio runners remain internal or local
+compatibility surfaces.
+
+### 3.2 Source and asset boundary
+
+Every source that participates in extraction, retrieval, graph construction,
+or projection is registered as an Asset or governed external evidence capture.
+
+```text
+source occurrence
+  -> Asset / EvidenceSnapshot
+  -> permission and retention metadata
+  -> stable FormOwl locator
+  -> IngestionJob or governed capture workflow
+```
+
+Byte identity, source occurrence, ownership, permission, entity identity, and
+canonical merge are separate.
+
+### 3.3 Extraction boundary
+
+Workers run source-family adapters and write versioned ExtractorRuns,
+Observations, warnings, and candidate-only semantic output.
+
+```text
+registered source
+  -> deterministic technical/structural extraction
+  -> source-native Observations
+  -> optional semantic candidate extraction
+```
+
+Extraction cannot commit canonical graph/type state, user graph revisions, wiki
+revisions, or external writes.
+
+### 3.4 Graph-governance boundary
+
+Graph governance owns:
+
+```text
+candidate preview and review
+entity and relation resolution
+source occurrence preservation
+contradiction and supersession
+atom granularity
+scoped ontology mappings
+canonical commits and lifecycle events
+```
+
+Entity matching creates proposals. It does not grant access or authorize merge.
+
+### 3.5 Effective-view boundary
+
+`EffectiveGraphView` combines only graph fragments currently visible to the
+actor and task.
+
+```text
+canonical/user/workspace/project graph revisions
++ active grants
++ task/user assembly policy
+- denied or redacted content
+= EffectiveGraphView
+```
+
+Visibility of a graph assertion does not imply visibility of its evidence or
+raw asset. Those are independently checked.
+
+### 3.6 Query-execution boundary
+
+The query engine owns:
+
+```text
+query class routing
+SemanticQueryPlan validation
+strong RAG retrieval
+entity-aware grouping
+bounded graph traversal
+temporal/provenance/coverage checks
+capped ontology scoring
+evidence-bundle reranking
+deterministic exact execution
+answer claim limits
+```
+
+A planner LLM may propose a plan, but deterministic validation controls scope,
+revisions, paths, budgets, coverage, and maximum claim strength.
+
+### 3.7 Projection boundary
+
+Answers, reports, dashboards, wiki drafts, and action proposals are derived
+artifacts. They preserve evidence and execution lineage and never become
+canonical graph state by implication.
+
+## 4. Component View
+
+```mermaid
+flowchart TB
+  user["User / ChatGPT"]
+  edge["FormOwl OAuth + connected MCP Gateway"]
+  actor["Fresh ActorContext"]
+  router["Typed Router + Plan Validator"]
+  executor["Hybrid Query Executor"]
+  exact["Deterministic Exact Executor"]
+  answer["Citation-Grounded Answer / Projection"]
+
+  subgraph sources["Heterogeneous Sources"]
+    mail["Mail"]
+    cal["Calendar"]
+    tickets["Tickets / Project"]
+    docs["Documents / Drive"]
+    db["Database / ERP / Other"]
+  end
+
+  subgraph evidence["Evidence and Extraction"]
+    assets["Asset / EvidenceSnapshot"]
+    workers["Extractor Workers"]
+    observations["Observation Store"]
+    lexical["Lexical Index"]
+    dense["Dense Index"]
+  end
+
+  subgraph knowledge["Governed Knowledge"]
+    candidates["Candidate Stores"]
+    review["Review / Resolution"]
+    graph["Canonical KG Revisions"]
+    ontology["Scoped Ontology Revisions"]
+    view["EffectiveGraphView"]
+  end
+
+  subgraph storage["Canonical Internal State"]
+    postgres["PostgreSQL + pgvector"]
+    objects["Object Store"]
+    audit["Permission / Review / Audit"]
+  end
+
+  user --> edge --> actor --> router
+  sources --> assets --> workers --> observations
+  observations --> lexical
+  observations --> dense
+  observations --> candidates --> review --> graph
+  review --> ontology
+  graph --> view
+  ontology --> view
+  actor --> view
+  router --> executor
+  lexical --> executor
+  dense --> executor
+  view --> executor
+  router --> exact
+  observations --> exact
+  executor --> answer
+  exact --> answer
+  assets --> objects
+  assets --> postgres
+  observations --> postgres
+  candidates --> postgres
+  graph --> postgres
+  ontology --> postgres
+  view --> postgres
+  actor --> audit
+  executor --> audit
+  exact --> audit
+```
+
+## 5. Strong RAG and Graph-Guided Retrieval
+
+Strong RAG is a first-class runtime component:
+
+```text
+BM25 or equivalent lexical retrieval
++ dense retrieval
++ deterministic fusion
++ evidence reranking
+```
+
+The graph-guided path uses the same authorized Observation snapshot. It may add:
+
+```text
+reviewed entity grouping
+cross-source relation expansion
+current/historical state selection
+contradiction and supersession links
+source coverage constraints
+capped ontology bonus
+```
+
+All graph hops require authorized Observation evidence. Traversal depth,
+fan-out, relation kinds, candidate count, evidence count, time, and token budget
+are capped.
+
+The runtime reranks evidence bundles rather than isolated chunks. A bundle may
+contain the source observations, entity links, path proof, temporal state,
+coverage status, and citations needed for one answer claim.
+
+## 6. Deterministic Exact Execution
+
+Queries for all members, total counts, inventories, duplicates, missing items,
+aggregations, complete sets, or definitive absence cannot be answered from
+ranked top-k evidence.
+
+A validated exact executor operates over an explicitly bounded source or
+effective view and returns:
+
+```text
+enumerated records
+stable ordering
+duplicate policy
+coverage state
+policy-redacted and unsupported counts
+evidence lineage for every item
+partial status when completeness is not proven
+```
+
+The final LLM may render this structured result, but it cannot change its
+membership or coverage claim.
+
+## 7. Ontology Architecture
+
+The ontology has four layers:
+
+```text
+small stable cross-domain core
+source-specific mappings
+scoped domain packs
+reviewed aliases/type/frame/relation mappings
+```
+
+All are versioned through `OntologyRevision` and preserve provenance.
+
+Hard checks apply to permission, schema/arity, lineage, revision pins,
+canonical-write preconditions, and exact-set coverage. Inferred type, frame,
+alias, relation, or preferred path is a soft candidate signal. An inferred
+mismatch removes only the ontology bonus, not the evidence candidate.
+
+## 8. Model Runtime Boundary
+
+There is no single KG model service. Runtime roles are independently
+configurable and fingerprinted:
+
+```text
+planner
+semantic extractor or entity linker
+embedding model
+reranker
+final answer model
+```
+
+Every paired comparison uses the same final answer model, prompt, reasoning
+effort, output schema, context budget, and generation settings.
+
+Embedding and LLM workers write derived candidates or index projections. They
+do not write canonical graph/type state or grant access.
+
+## 9. Storage Architecture
 
 The central identity rule is:
 
 ```text
 Physical storage may be distributed.
-Knowledge identity must be centralized.
+Knowledge, authorization, and revision identity are centralized.
 ```
 
-## ChatGPT to Storage Boundary
-
-ChatGPT does not connect to FormOwl storage directly. ChatGPT reaches FormOwl through MCP tools, and those tools call governed FormOwl services. Storage backends remain internal-only.
-
-The current prototype uses file-backed stores under `FORMOWL_DATA_DIR`, defaulting to `.formowl/data`. The target deployment keeps the same logical boundaries while moving metadata, governance, graph state, jobs, and audit to PostgreSQL, and raw or large payloads to an object-store abstraction such as MinIO or another S3-compatible backend.
-
-The user-facing architecture should minimize interface switching. ChatGPT remains the primary task surface, with structured task cards, inline actions, or embedded FormOwl widgets. Any Phase 0 upload page is a session-bound continuation of the current task, not a backend console or storage browser.
-
-```mermaid
-flowchart LR
-  user["User / Browser"]
-  chatgpt["ChatGPT / LLM Host"]
-  mcp_host["MCP Host / Connector"]
-  gateway["FormOwl MCP Gateway\nTarget governed entrypoint"]
-
-  user --> chatgpt
-  chatgpt --> mcp_host
-  mcp_host --> gateway
-
-  subgraph mcp_services["MCP Service Boundary"]
-    project_mcp["Project MCP"]
-    wiki_mcp["Wiki MCP"]
-    contract["formowl_contract\nSourceRef / EvidenceSnapshot / ContextPackage / WikiRevision"]
-  end
-
-  gateway --> project_mcp
-  gateway --> wiki_mcp
-  project_mcp <--> contract
-  wiki_mcp <--> contract
-
-  subgraph external_sources["External Source Systems"]
-    openproject["OpenProject\nProject execution state"]
-    future_wiki["Wiki systems\nFuture publishing targets"]
-  end
-
-  project_mcp --> openproject
-  wiki_mcp --> future_wiki
-
-  subgraph guided_upload["Guided Upload Boundary"]
-    upload_session["UploadSession\nintent / scope / profile / visibility"]
-    upload_card["Upload task card\nChatGPT-visible"]
-    upload_surface["Embedded upload surface\nor portal fallback"]
-    storage_router["Storage Routing Policy\nbackend selected by FormOwl"]
-    chatgpt_capture["ChatGPT session capture shortcut\nsave current conversation"]
-  end
-
-  gateway --> upload_session
-  upload_session --> upload_card
-  upload_card --> chatgpt
-  chatgpt -->|"save current conversation"| chatgpt_capture
-  chatgpt_capture --> gateway
-  user -->|"session-bound file upload"| upload_surface
-  upload_session --> upload_surface
-  upload_surface --> storage_router
-
-  subgraph prototype_storage["Current Prototype Storage"]
-    data_dir["FORMOWL_DATA_DIR\n.formowl/data"]
-    evidence_files["EvidenceSnapshot files"]
-    draft_files["Draft / WikiSnapshot files"]
-    jsonl_logs["MCP JSONL tool-call logs"]
-  end
-
-  project_mcp --> evidence_files
-  project_mcp --> jsonl_logs
-  wiki_mcp --> draft_files
-  wiki_mcp --> jsonl_logs
-  evidence_files --> data_dir
-  draft_files --> data_dir
-  jsonl_logs --> data_dir
-
-  subgraph target_storage["Target Internal Storage"]
-    postgres["PostgreSQL + pgvector\nmetadata / permissions / graph / jobs / audit"]
-    object_store["ObjectStore abstraction\nMinIO / S3-compatible / controlled NAS adapter"]
-    workers["Worker services\nextraction / embedding / projection rebuilds"]
-  end
-
-  gateway --> postgres
-  project_mcp --> postgres
-  wiki_mcp --> postgres
-  upload_session --> postgres
-  chatgpt_capture -->|"capture metadata / audit"| postgres
-  upload_surface -->|"asset / job / audit metadata"| postgres
-  project_mcp --> object_store
-  wiki_mcp --> object_store
-  chatgpt_capture -->|"session dump as source artifact"| object_store
-  storage_router --> object_store
-  workers --> postgres
-  workers --> object_store
-
-  chatgpt -.->|"No direct storage access"| postgres
-  chatgpt -.->|"No direct object or NAS access"| object_store
-  user -.->|"No backend UI or storage choices"| object_store
-```
-
-### Project Context to Wiki Draft Flow
-
-```mermaid
-sequenceDiagram
-  actor User
-  participant ChatGPT as "ChatGPT / LLM Host"
-  participant Gateway as "FormOwl MCP Gateway"
-  participant ProjectMCP as "Project MCP"
-  participant WikiMCP as "Wiki MCP"
-  participant OpenProject as "OpenProject"
-  participant FileStore as "FORMOWL_DATA_DIR prototype store"
-  participant Postgres as "PostgreSQL target store"
-  participant ObjectStore as "ObjectStore target store"
-
-  User->>ChatGPT: Ask for a wiki draft from project context
-  ChatGPT->>Gateway: Call get_work_item_context
-  Gateway->>ProjectMCP: Forward permission-checked tool call
-  ProjectMCP->>OpenProject: Retrieve work item context
-  ProjectMCP->>FileStore: Persist EvidenceSnapshot and tool log in prototype
-  ProjectMCP->>Postgres: Store metadata, permission, and audit in target
-  ProjectMCP->>ObjectStore: Store large snapshot payloads in target
-  ProjectMCP-->>Gateway: Return ContextPackage with SourceRefs and EvidenceSnapshot IDs
-  Gateway-->>ChatGPT: Return governed context package
-  ChatGPT->>Gateway: Call generate_wiki_draft with ContextPackage
-  Gateway->>WikiMCP: Forward draft generation request
-  WikiMCP->>FileStore: Persist draft, WikiSnapshot, and tool log in prototype
-  WikiMCP->>Postgres: Store WikiRevision metadata and audit in target
-  WikiMCP->>ObjectStore: Store large draft artifacts or snapshots in target
-  WikiMCP-->>Gateway: Return draft or publish proposal
-  Gateway-->>ChatGPT: Return markdown draft with provenance
-```
-
-Raw bytes may live on multiple internal storage backends, including Synology volumes, NAS shares, S3-compatible object storage, MinIO, or controlled ingress folders. Any file that participates in extraction, graph construction, search, or wiki projection must first be registered in the central FormOwl asset catalog. The knowledge graph references stable FormOwl identifiers, not raw storage paths.
-
-## Target Knowledge Pipeline
+PostgreSQL is canonical for:
 
 ```text
-Raw Resources
-  -> Resource Extraction Layer
-  -> Observation Store
-  -> Candidate Graph
-  -> Governed Canonical Graph
-  -> User Knowledge Graph
-  -> Wiki Projection Layer
-  -> WikiRevision
+assets and source occurrences
+observations and index revisions
+candidate and canonical graph state
+ontology and policy revisions
+permissions, grants, reviews, jobs, and audit
+query plans, execution manifests, and projection metadata
 ```
 
-Raw resources include project system records, wiki pages, ChatGPT conversations, markdown, PDFs, office documents, images, audio, video, screenshots, and other captured files.
+pgvector is the dense-retrieval baseline. Raw and large binary content lives in
+an object-store abstraction.
 
-The pipeline rule is strict: raw resources do not directly become final wiki pages. They first become observations and semantic metadata, then candidate graph objects, then governed canonical graph state, then user-specific graph views, and only then projected wiki revisions.
+A graph data model does not require a graph database. Dedicated graph or search
+engines, if ever justified, are rebuildable projections and cannot replace
+PostgreSQL governance authority.
 
-## Governance Layer
+The current file-backed `FORMOWL_DATA_DIR` stores are local compatibility
+implementations of the same logical interfaces, not production authority.
 
-Governance crosses every stage of the pipeline.
+## 10. Identity and Permission Architecture
 
-Policy objects should include:
+The connected closed beta uses one predefined OAuth client. Its client ID is a
+stable non-secret selected and recorded by the deployment operator before
+discovery. ChatGPT supplies and displays only the production callback
+`https://chatgpt.com/connector/oauth/{callback_id}`. If the UI cannot use the
+predefined client, the campaign stops as an external live blocker.
+
+Google authenticates the human. FormOwl remains authoritative for users,
+invitations, memberships, clients, token sessions, workspaces, grants,
+revocation, and audit. Every protected call reloads current PostgreSQL state and
+builds a fresh `ActorContext`.
+
+Permission checks occur:
+
+1. before source/effective-view selection;
+2. before retrieval candidate materialization;
+3. at every graph hop;
+4. before evidence resolution;
+5. before raw asset access; and
+6. before review, canonical commit, projection, or external write.
+
+Unknown scope fails closed.
+
+## 11. Compatibility Services
+
+Project MCP and Wiki MCP remain decoupled compatibility services behind the
+connected gateway when configured.
+
+Project MCP owns project evidence capture and proposal-only project writes.
+Wiki MCP owns governed wiki draft/revision behavior and proposal-only
+publishing. Both exchange portable `formowl_contract` objects and preserve
+source/evidence lineage.
+
+Their local JSON-line and JSON-RPC/stdio runners are not alternate ChatGPT
+identity or authorization paths.
+
+## 12. Deployment and Verification
+
+Containers are the canonical development, test, and deployment boundary.
+Workers process registered sources by stable identifiers and use internal
+scratch space without exposing it publicly.
+
+The active methodology target is:
 
 ```text
-ExtractionPolicy
-AtomGranularityPolicy
-OntologyPolicy
-EntityResolutionPolicy
-RelationResolutionPolicy
-LifecyclePolicy
-UserGraphAssemblyPolicy
-WikiProjectionPolicy
+evidence_to_knowledge_kg_ontology_v2_hybrid_v1
+jieba_sentencepiece_frozen_profile_candidate_admission_v1
 ```
 
-The current contract layer includes versioned policy records for extraction,
-atom granularity, entity resolution, relation resolution, lifecycle, and wiki
-projection. Ontology policy and user graph assembly policy remain separate
-future slices so type governance and user graph assembly stay decoupled.
+The current runtime remains blocked on the older method/tokenizer. Before any
+methodology-quality UAT or comparison claim:
 
-External extractors and LLM graph tools may create observations, candidate atoms, candidate relations, or external graph imports. They must not directly mutate canonical graph state.
-
-## Store Boundaries
-
-```text
-AssetStore -> raw resource metadata
-ObjectStore -> raw binary files
-ObservationStore -> extracted observations
-CandidateAtomStore -> uncommitted candidate atoms and relations
-CanonicalGraphStore -> canonical atoms, entities, relations, lifecycle events, and graph revisions
-UserGraphStore -> user-specific graph revisions
-WikiStore -> wiki drafts, revisions, snapshots, and publish proposals
-VectorStore -> embeddings for similarity search
-JobStore -> ingestion and extraction job status
+```sh
+python3 scripts/methodology_authority_check.py --require-ready
 ```
 
-Project MCP and Wiki MCP are current service boundaries inside this larger architecture. Future ingestion and graph services should share contracts with them instead of depending on their internals.
+A nonzero result blocks the claim. It does not authorize another architecture
+or a question-specific shortcut.
 
-## Internal Storage and Deployment Boundary
+Canonical repository verification is:
 
-The first deployment target is an internal company or lab environment. Raw data should remain inside the trusted network. Synology NAS, PostgreSQL, MinIO or other object storage, worker scratch directories, and raw file paths must not be exposed directly to ChatGPT or the public internet.
-
-PostgreSQL is the source of truth for metadata, governance, job state, permissions, audit, and graph state. It should run on local SSD, NVMe, or reliable block storage, not ordinary NAS or NFS-mounted storage. NAS and object storage are appropriate for raw files, large derived artifacts, backups, snapshots, and retention.
-
-Workers should process registered assets by `asset_id` and `object_uri`. Large files should be copied to local scratch before parsing. Worker scheduling may be storage-aware, but storage locality is a performance concern; it must not fragment knowledge identity.
-
-## Identity and Collaborative Graphs
-
-For the internal closed beta, FormOwl may use a manual trusted internal identity mode: a user selects their FormOwl identity at MCP session start, and the selected identity becomes the `actor_user_id` for tool calls and audit records. This is a temporary identity facade, not a production authentication model.
-
-Stable `user_id`, `workspace_id`, asset ownership, access requests, grants, and audit logs must exist from the beginning so the authentication provider can later be replaced by company SSO, OIDC, SAML, or another provider without replacing authorization and provenance.
-
-Cross-user graph collaboration should use permissioned overlays and grants. Another user's private graph must not be silently merged into the requester graph. Shared answers, graph snippets, evidence snippets, and raw asset access should each have explicit scope, provenance, and audit records.
-
-## Language Boundary
-
-Python is the implementation language for Phase 0. It owns MCP orchestration, adapters, workflow glue, review flows, test fixtures, hashing helpers, diff helpers, validation glue, and day-to-day debugging.
-
-Additional runtime languages must not be introduced unless a concrete parser, validator, large-data transform, or safety boundary requires them and `SPEC.md` is updated first.
-
-## Syntax Shielding
-
-When Python code would require unusual metaprogramming, deeply nested decorators, generated code, fragile regular expressions, complex DSLs, or unsafe dynamic evaluation, the complexity belongs behind a clear Python API boundary. A systems-language backend can be introduced later only with a concrete need and a specification update.
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
+  python -m unittest discover -s tests
+```

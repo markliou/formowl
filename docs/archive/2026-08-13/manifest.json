@@ -1,0 +1,12 @@
+{
+  "archive_date": "2026-08-13",
+  "files": [
+    {
+      "source": "docs/agent-goals/dual-track-uat-kg-coordinator.md",
+      "archive": "docs/archive/2026-08-13/dual-track-uat-kg-coordinator.md",
+      "bytes": 11246,
+      "lines": 244,
+      "sha256": "1031e2682450619ca90e4b807d0ed69794e8c683ce9d9c10c4ad1ce26314c0af"
+    }
+  ]
+}

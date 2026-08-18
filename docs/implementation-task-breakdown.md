@@ -1,124 +1,124 @@
 # Implementation Task Breakdown
 
-This is the bounded active work board. The lossless board before issue #40
-archival is preserved at
-`docs/archive/2026-07-11/implementation-task-breakdown.md`.
+This is the bounded active work board. Lossless history is indexed in
+`docs/archive/README.md`; archived files are not current instructions.
 
 ## Retention Rule
 
-- Keep every unchecked checklist item, current phase summaries, and at most five
-  concise recent-completion summaries in this active file.
-- Keep this file at or below 400 lines; archive before it exceeds 500 lines.
-- Move older completed detail into a new dated immutable snapshot under
-  `docs/archive/`; never delete or rewrite archived history.
-- Preserve existing checklist states mechanically during archival. Historical
-  `[x]` and `[ ]` states change only through the normal completion workflow.
+- Keep every unchecked checklist item.
+- Keep current phase summaries and at most five concise recent completions.
+- Keep this file at or below 400 lines; archive before 500.
+- Never edit an existing dated archive.
 
 ## Status Legend
 
-- `[x]` complete in the current repository.
-- `[ ]` not started or not verified.
+- `[x]` complete and verified for its stated scope.
+- `[ ]` incomplete, blocked, or not verified.
 - Goal files hold durable role state; this board holds task completion.
-- Archived proof remains authoritative for historical completed details.
 
-## Current Phase Summary
+## Current Phase Summary — 2026-08-18
 
-- Phase 0 and the resource-extraction small core are complete.
-- Identity, upload/session capture, extractor adapters, semantic candidates,
-  graph governance, user graph, wiki projection, infrastructure, mail evidence,
-  and completed-slice test hardening have completed tracked slices.
-- One pre-existing broad objective remains unchecked: full KG real-evidence
-  acceptance. Its complete historical proof requirements remain in the archive.
-- Issue #38 authority state isolation and clean-clone reproducibility are
-  complete; four explicit real-evidence gates remain blocked by missing
-  accepted evidence rather than harness drift.
-- Issue #39 MCP protocol and shadow-workflow consolidation is complete in this
-  working tree.
-- Issue #40 archival maintenance is complete in this working tree.
-- Pre-feature production cleanup is complete: test-only gateway scenarios no
-  longer ship as public production APIs, mail evidence permission helpers are
-  shared, and deprecated Python import/query surfaces retain explicit
-  compatibility boundaries.
-- Pre-feature structural cleanup is complete: repeated evaluator validation,
-  HTTP smoke orchestration, PostgreSQL smoke lifecycle, mail payload
-  validation, and atomic JSON persistence now use shared implementations.
+- The active KG program is GitHub issue #56, not the historical issue #33 plan
+  or issue #55 document-first POC.
+- Frozen method and tokenizer remain
+  `evidence_to_knowledge_kg_ontology_v2_hybrid_v1` and
+  `jieba_sentencepiece_frozen_profile_candidate_admission_v1`.
+- Methodology authority is valid but blocked. Current runtime still uses
+  `mail_candidate_kg_broad_ontology_diagnostic_v1` and
+  `ascii_identifier_regex_v1` without CJK support.
+- Strong RAG is a required component/control. KG adds heterogeneous identity,
+  joins, bounded topology, time, contradiction, provenance, and coverage.
+  Ontology is scoped/data-first/capped soft scoring. Exact sets use a
+  deterministic executor.
+- PostgreSQL/pgvector remains canonical. Neo4j work is not active.
+- Pre-rewrite KG/methodology/coordination documents were preserved losslessly
+  under `docs/archive/2026-08-18/` before active documents were rewritten.
 
 ## Current Unchecked Work
 
+- [ ] Implement issue #20 Google-backed ChatGPT MCP OAuth identity mapping and
+  gateway-controlled `ActorContext`.
+  - Owner: System Backbone Agent.
+  - Repository implementation and local harness slices are extensive, but
+    validator blockers; seven external layers remain `not_supplied`, so #20
+  stays open.
+  - This bounded batch reviewer
+    gate is not the Issue #20-wide reviewer external layer, which remains
+    `not_supplied`.
+  - Remaining state: issue #20 stays unchecked and open. Repository authority is
+    the existing Issue #20 runbook, evidence packet, and completion transition.
+  - External state: `live_postgresql`, `operator_cli_postgresql`,
+    `production_container_lifecycle`, `mcp_inspector`, `live_chatgpt_google`,
+    `reviewer_gate`, and `completion_audit` remain `not_supplied`.
+  - Next: freeze docs/local harness, run all seven external layers, and keep #20 unchecked.
+
+- [ ] Implement issue #41 generic Core Asset Storage identity binding, tenant
+  isolation, lifecycle, retention, and authorization.
+  - Owner: System Backbone Agent.
+  - Preserve one generic Asset/Occurrence/permission boundary across every
+    source family; duplicate bytes must not merge authorization.
+  - Completion requires cross-tenant denial, upload/rollback/orphan/transfer/
+    redaction/purge/retention proof in the canonical dev container.
+
 - [ ] Complete the full KG real-evidence objective across sessions.
-  - Owner paths: `docs/agent-goals/`, `.formowl/kg-eval/`, KG-owned graph,
-    ontology, evaluation, and test files.
-  - Current state: blocked on four real-evidence gates. The state-independent
-    authority harness now reports that blocked state consistently; do not
-    reinterpret harness completion as KG objective completion.
-  - Completion proof: canonical authority reports must agree on 12 passed gates,
-    zero failed gates, zero remaining gates, and a complete objective audit;
-    canonical dev-container checks and the required reviewer gate must pass.
-  - Full historical requirements and checkpoint evidence:
+  - Owner: Knowledge Graph Research Agent.
+  - Historical broad-objective requirements remain at
     `docs/archive/2026-07-11/implementation-task-breakdown.md`.
+  - This objective now closes only through issue #56's strong-RAG comparison,
+    independent holdout, transfer domain, final-answer review, executable
+    authority, and reviewer gate.
+
+- [ ] Align the real runtime with the active methodology authority before any further methodology-quality UAT or KG-versus-ontology claim.
+  - Implement the frozen tokenizer/profile and same-profile query/evidence
+    index without fallback.
+  - Prove raw/source-system-to-Observation completeness.
+  - Bind source, index, graph, ontology, model, prompt, evaluator, code, image,
+    and authority revisions into one execution fingerprint.
+  - Keep `python3 scripts/methodology_authority_check.py --require-ready`
+    fail-closed until all five gates pass.
+
+- [ ] Implement GitHub issue #56 graph-guided Hybrid KG + Ontology v2 and make it earn a measurable win over strong RAG.
+  - Work A: immutable Jieba + SentencePiece profile and re-index.
+  - Work B: source-complete, source-preserving graph input.
+  - Work C: small-core scoped ontology with capped soft scoring.
+  - Work D: typed router, validated plan, bounded traversal, evidence bundles,
+    and deterministic exact execution.
+  - Work E: controlled, citation-grounded LLM roles with the same answer model
+    across arms.
+  - Work F: strong RAG control, anti-fitting split, diagnostic evaluation,
+    independent holdout, and transfer-domain final-answer evaluation.
+  - Implementation completion is not comparative close. Keep the issue open
+    until the pre-registered quality/safety/cost gates and executable authority
+    pass.
 
 ## Recent Completions
 
-- [x] Issue #36 evidence-grounded ChatGPT × FormOwl MCP evaluation completed
-  with its documented deterministic offline claim boundary and reviewer gate.
-- [x] Issue #21 governed mail evidence reading milestones completed through the
-  tracked local deterministic checkpoints; no production-readiness claim.
-- [x] Candidate KG, ontology-guided comparison, and governed effective graph
-  query slices completed without canonical graph/type writes.
-- [x] Remaining backbone storage, worker, folder-ingestion, and readiness-smoke
-  slices completed with their historical verification evidence archived.
-- [x] Completed-slice test hardening and required reviewer gates completed.
-
-## Issues #38-#40 Maintenance Completion
-
-- [x] Complete issues #38, #39, and #40 without weakening authority, MCP, or
-  durable-history boundaries.
-  - Proof: state-independent KG authority fixtures pass in operator and clean
-    layouts, including a read-only repository mount for enterprise/preflight.
-  - Proof: one shared MCP protocol engine and JSONL runner preserve entrypoints,
-    fail closed on missing identity, reject identity forgery, and require
-    injected semantic handlers.
-  - Proof: byte-identical snapshots and SHA-256 manifest under
-    `docs/archive/2026-07-11/`.
-  - Proof: active-file retention rules, archive-integrity tests, canonical
-    dev-container suites, and a 3/3 read-only reviewer gate pass.
+- [x] Methodology authority guard and runtime tokenizer probe were installed;
+  current state is valid but blocked.
+- [x] Candidate graph, canonical graph, lifecycle, user/effective graph, scoped
+  ontology, and graph-derived projection contract slices exist.
+- [x] Source/Asset/Observation, mail evidence, Project MCP, Wiki MCP, connected
+  gateway, and container-first backbone slices exist within their documented
+  claim boundaries.
+- [x] Historical issue #55 document-first POC completed as a bounded non-KG
+  smoke; it is no longer an active methodology direction.
+- [x] Active KG/methodology documentation was losslessly archived and rewritten
+  around issue #56 on 2026-08-18.
 
 ## Pre-Feature Production Cleanup
 
-- [x] Remove high-confidence dead and duplicate production code without
-  changing KG, MCP, permission, or compatibility behavior.
-  - Production Python changed by 103 additions and 256 deletions: net `-153`
-    lines. Test scenarios moved out of `formowl_gateway`; mail bundle selection,
-    grant normalization, and grant expiry now have one shared implementation.
-  - Empty readiness markers and an unused JSON-RPC response helper were
-    removed. Retrieval uses one private implementation while preserving the
-    deprecated alias signature and canonical effective-view requirement.
-  - Project and Wiki servers use shared observability directly; legacy import
-    paths remain as documented deprecated re-exports.
-  - Proof: canonical dev-container suite 726 tests OK, full Ruff check passed,
-    325 files passed format check, and the 3/3 reviewer gate agreed.
+The completed production-cleanup record remains immutable history in
+`docs/archive/2026-08-18/active/docs/implementation-task-breakdown.md`. It is
+retained as a completion boundary for Issue #20 finalization tooling, not as a
+new KG task.
 
 ## Pre-Feature Structural Cleanup
 
-- [x] Consolidate high-cost duplicated validation and smoke harness behavior
-  before the next feature slice.
-  - Eleven evaluator and smoke entrypoints now delegate common exact-key,
-    SHA-256, privacy, HTTP, multipart, gateway-command, and report validation to
-    shared evaluator modules while preserving their CLI and output contracts.
-  - PostgreSQL live-smoke entrypoints share one startup, readiness, migration,
-    and cleanup harness. Mail workflow payload checks and atomic JSON file
-    persistence also have one implementation per architectural layer.
-  - Real adapters, interfaces, and migrations are the primary tested surfaces.
-    Previously exported name-list helpers remain thin compatibility wrappers so
-    this maintenance pass does not introduce an unannounced package API break.
-  - Total change: 1,334 additions and 1,514 deletions, net `-180` lines. Script
-    and experiment entrypoints are net `-893` lines; the added production code
-    is shared infrastructure replacing those repeated implementations.
-  - Proof: canonical dev-container suite 730 tests OK, full Ruff check passed,
-    331 files passed format check, `git diff --check`, and 3/3 reviewer gate passed.
+The completed structural-cleanup record is preserved in the same archive. No
+historical cleanup item is reopened by the issue #56 documentation rewrite.
 
-## Agent Dispatch Notes
+## Dispatch
 
-Choose the current unchecked task only when it belongs to the active role,
-unless the user explicitly assigns cross-role work. Read dated archives only
-when historical implementation detail or proof is needed.
+Choose an unchecked item owned by the active role unless the user explicitly
+assigns cross-role work. Do not use archived or historical-pointer documents as
+next-action authority.

@@ -1,624 +1,451 @@
 # Workflows
 
-<!-- Future agents: continue building workflow documentation in this file. Do not create another workflow document unless SPEC.md is updated first. -->
+FormOwl workflows are task-oriented and source-neutral. Users should work in
+natural language through ChatGPT or a narrow FormOwl task surface, not through
+storage browsers, parser controls, SQL consoles, or graph-maintenance UIs.
 
-FormOwl workflows must be natural-language-first and usable by non-technical project, administrative, and process owners.
-
-Technical systems such as Git, object storage, schema validation, source hashes, and external wiki revision APIs may support the workflow, but they must not be required concepts in the normal user interface.
-
-The preferred user experience is a single conversational task surface. Users should stay in ChatGPT or an embedded FormOwl task surface whenever possible. If Phase 0 requires a separate upload page, that page is a narrow continuation of the current task, not a backend console, storage browser, or generic file manager.
-
-Hiding backend operations is both a usability rule and a safety rule. The fewer backend controls exposed to the user, the less likely the system is to receive unstable paths, wrong storage choices, mismatched parser settings, accidental permission leaks, or unaudited source files.
-
-Engineering workflows should also preserve readability. Python is the first debugging layer for MCP behavior, hashing helpers, diff helpers, validation glue, and service orchestration.
-
-The target workflow is pipeline-first:
+The active workflow is:
 
 ```text
-Raw resource
-  -> Observation
-  -> Candidate graph
-  -> Governed canonical graph
-  -> User knowledge graph
-  -> Wiki projection
+source intent
+  -> governed source capture
+  -> source-preserving Observations
+  -> reviewable candidate knowledge
+  -> governed canonical KG + scoped ontology
+  -> permission-filtered EffectiveGraphView
+  -> strong-RAG + graph-guided execution
+  -> cited answer, projection, or reviewed action proposal
 ```
 
-Users should experience this as task-oriented review work, not as manual graph maintenance.
+Mail is the first large example. Other sources follow the same stages.
 
-## Minimal Local Ingestion Workflow
+## 1. Workflow Rules
 
-The current Slice 1 workflow is a deterministic internal path for trusted local
-tests. It proves the resource extraction spine before real upload sessions,
-workers, OCR, audio, video, graph fusion, or external storage adapters exist.
+Every workflow must preserve these boundaries:
+
+- source evidence is not canonical knowledge;
+- Observation is not a canonical fact;
+- matching does not grant access;
+- access does not authorize canonical merge;
+- graph visibility does not grant evidence or raw asset access;
+- inferred ontology mismatch does not delete admitted evidence;
+- top-k retrieval does not prove a complete set or total count;
+- LLM output is a proposal or rendering, not hidden authority;
+- external writes are proposal-first; and
+- public results do not expose paths, SQL, credentials, parser, storage,
+  worker, oracle, or unrelated private content.
+
+## 2. Connected Sign-In and ActorContext
+
+The connected closed-beta journey is:
 
 ```text
-trusted local file or text payload
-  -> register_asset_from_local_file
-  -> FileObjectStore copy under a registered local backend
-  -> AssetStore record with FormOwl object locator, hash, source ref, and permission scope
-  -> create_ingestion_job
-  -> run_ingestion_job
-  -> PlainTextObservationExtractor
-  -> ExtractorRunStore and ObservationStore records
-  -> build_context_package_from_text_observations
-  -> existing Wiki MCP generate_wiki_draft
+operator creates a time-limited FormOwl invitation
+  -> user connects FormOwl in ChatGPT
+  -> ChatGPT follows the OAuth challenge for exact public HTTPS /mcp
+  -> FormOwl validates predefined client, exact callback/resource, and PKCE S256
+  -> user signs in through Google OIDC
+  -> FormOwl verifies issuer, subject, and email
+  -> FormOwl maps the identity through the invitation
+  -> FormOwl issues its own resource-bound access token
+  -> every protected call reloads current state and builds a fresh ActorContext
 ```
 
-This path is intentionally narrow:
+The predefined client ID is a stable non-secret selected and recorded by the
+deployment operator before discovery. ChatGPT app management must use that
+same client ID when its current predefined-client UI supports entry or
+selection. ChatGPT supplies and displays only the production callback
+`https://chatgpt.com/connector/oauth/{callback_id}`. The client ID must not be
+invented or described as generated or displayed by ChatGPT. If the UI cannot
+use it, stop and record an external live blocker.
 
-- It supports deterministic plain text and markdown extraction only.
-- It uses FormOwl locators such as `formowl://object/...` in records and does not expose raw local paths through generated context or wiki drafts.
-- It creates observations and citation locators with asset, extractor run, and observation IDs.
-- It does not create semantic metadata, candidate atoms, canonical graph records, user graph revisions, or wiki revisions.
-- Failed local extractor runs leave the ingestion job in `failed` status with an error and without observation records.
+Google tokens are never FormOwl MCP bearer tokens. FormOwl remains authoritative
+for users, invitations, memberships, client authorization, token sessions,
+workspaces, grants, revocation, and audit.
 
-## Phase 0 Identity and Audit Helpers
-
-The current Phase 0 implementation includes `ManualTrustedInternalAuthProvider`
-for trusted internal tests. It selects a pre-seeded active `User`, creates a
-`SessionIdentity`, and returns actor context with workspace memberships, active
-grants, and pending access requests. This provider is explicitly not production
-authentication and does not validate SSO, OIDC, passwords, cookies, or external
-identity assertions.
-
-File-backed audit logging records reviewable `AuditLog` records for actor
-selection, asset registration, ingestion job creation, evidence snapshot fetches,
-permission denials, and upload session creation. User-facing gateway flows should
-pass actor, session, workspace, target, status, and timestamp fields so these
-events remain traceable.
-
-## Guided Upload and Source Preparation Flow
-
-FormOwl users normally interact with the system through ChatGPT and the FormOwl MCP server. Users must not be required to switch into backend tools or manually choose NAS folders, storage backends, buckets, volumes, queues, parser-specific paths, or extractor settings during normal usage.
-
-All user-initiated uploads must begin with an `UploadSession`. The session captures intent before file transfer begins:
+Failure behavior is fail-closed:
 
 ```text
-selected user
-owner scope
-workspace scope
-project scope
-customer scope
-intended asset type
+missing, expired, or email-mismatched invitation -> no user or token state
+revoked or expired token session -> protected call denied immediately
+disabled user or external identity -> denied
+removed workspace membership -> no fresh ActorContext for that workspace
+successful reconnect -> new token session; old session stays unusable
+```
+
+Issue #20 remains open until live PostgreSQL, operator CLI, production container
+lifecycle, MCP Inspector, live ChatGPT/Google, reviewer, and completion-audit
+evidence passes. Local compatibility tests do not close those external gates.
+
+## 3. Governed Source Capture
+
+### 3.1 UploadSession
+
+A user begins with intent, not a file path:
+
+```text
+User: Add this source to FormOwl for project X.
+ChatGPT -> MCP Gateway: open_upload_session(intent, source family, scope, visibility)
+Gateway -> backend: create audited UploadSession under fresh ActorContext
+Gateway -> ChatGPT: task card with a session-bound upload action
+User -> controlled upload surface: transfer bytes for that UploadSession
+Backend: register Asset and occurrence, apply retention, create IngestionJob
+```
+
+The upload task captures:
+
+```text
+actor
+owner/workspace/project/customer scope
+source family
 ingestion profile
-visibility scope
-upload expiration
-source preparation state
-processing status
+visibility and permission scope
+retention policy
+expiration
+processing state
 ```
 
-The current file-backed `UploadSessionStore` and `create_upload_session()` helper
-enforce that normal upload sessions include intent, actor identity, permission
-scope, and a linked audit log before the session is persisted.
+Users do not choose NAS paths, buckets, object-store keys, parser binaries,
+worker queues, database tables, or index implementations.
 
-Controlled backend imports use `upload_asset_reference()`. This helper is
-reserved for migrations, trusted backend references, and other controlled import
-paths; it still registers an `Asset`, records permission scope, requires source
-provenance and an import reason, and writes audit records. It is not the normal
-user upload path.
+Issue #41 owns generic Asset tenant, owner, byte storage, occurrence, recovery,
+retention, purge, transfer, and authorization. Source adapters consume that
+boundary rather than creating parallel storage or permission systems.
 
-The physical storage backend is selected by FormOwl according to storage routing policy. Users see the business and knowledge scope of the upload, not the physical storage placement.
+### 3.2 External source capture
 
-### Upload UX
-
-FormOwl should provide a task-oriented upload experience that keeps the user inside the current conversational workflow as much as possible.
-
-In Phase 0, the MCP server may return a structured upload task card and an internal FormOwl upload surface link. In later phases, the upload task should be represented as an embedded ChatGPT app or widget. The link or widget is not a separate backend interface; it is a session-bound continuation of the current task.
-
-The upload card should show:
+For APIs, project systems, calendars, databases, and other external systems:
 
 ```text
-upload session ID
-current user
-owner scope
-workspace / project / customer scope
-asset type
-ingestion profile
-visibility scope
-status
-inline upload action or session-bound upload link
+authorized connector call
+  -> SourceRef and request/response hash
+  -> EvidenceSnapshot or governed Asset occurrence
+  -> permission and capture metadata
+  -> extraction or normalization job
 ```
 
-The upload surface must not behave as a generic file manager. It must be bound to a single `UploadSession` and should only allow files compatible with the declared ingestion profile.
+The capture stores stable FormOwl identifiers and safe source metadata. Raw
+credentials, endpoints, queries, and provider payload internals remain private.
 
-### Source Preparation Guidance
+### 3.3 ChatGPT session capture
 
-Some source artifacts require user preparation before upload. For example, mail ingestion may require the user to export a PST, OST, MSG, or EML file from an email client.
-
-When a user wants to upload data but does not know how to produce the required source artifact, FormOwl should guide the user through a source-specific preparation flow.
-
-For mail ingestion, FormOwl should support guided PST preparation. The assistant may ask which mail client or account type the user is using, then provide step-by-step instructions. The guidance must remain attached to the `UploadSession` so the exported file has a known owner, scope, ingestion profile, and visibility policy before upload.
-
-The assistant must not give generic instructions that leave the user with an untracked local file and no corresponding FormOwl upload task.
-
-For #21 Phase 1, ordinary users should not be required to install a Local
-Companion, split PST files, choose a NAS or object-store location, or run local
-dedup/preprocessing. The baseline mail path is a full PST upload through a
-session-bound FormOwl upload surface / iframe. Local Companion remains an
-optional or policy-triggered advanced path for rolling repeated PST imports,
-privacy-sensitive imports, bandwidth-limited sites, or manifest-first workspace
-policy.
-
-### Required Principle
+A convenience action may save the current conversation:
 
 ```text
-Source preparation produces a file.
-UploadSession determines where and how that file enters FormOwl.
-Storage routing, parser execution, asset registration, and graph integration are handled by FormOwl, not by the user.
+User: Save this conversation.
+  -> capture current session under fresh ActorContext
+  -> register the source artifact and occurrence
+  -> create normal ingestion/extraction work
+  -> return task status
 ```
 
-### Phase 1 Mail Archive Upload
+This shortcut does not turn ChatGPT memory into truth and does not skip source
+account attribution, Asset registration, permission, retention, or audit.
 
-The Phase 1 mail evidence path is:
-
-```text
-UploadSession
-  -> session-bound PST upload surface / iframe
-  -> ingest staging
-  -> server-side incremental parser worker
-  -> MailEvidenceBundle
-  -> PostgreSQL normalized mail evidence
-  -> governed MCP / JSON-RPC evidence query
-```
-
-The raw PST is an import carrier, not permanent default evidence storage. After
-successful extraction, FormOwl should delete it or retain it only under a short
-configured retention / legal-audit policy. PostgreSQL stores normalized mail
-evidence, parse runs, warnings, fingerprints, and occurrence lineage; raw PST
-and attachment bytes stay in ObjectStore / staging / retention-controlled
-storage.
-
-The optional Local Companion path must emit the same `MailEvidenceBundle` as
-the server-side parser. It may optimize repeated rolling PST imports or
-manifest-first privacy workflows, but it must not create a second mail evidence
-model.
-
-The current internal checkpoint for this path is a synthetic
-UploadSession-bound import helper: an existing mail `UploadSession` is validated
-before side effects, the staged archive is registered as an `Asset`, an
-`IngestionJob` runs through `FixtureMailArchiveExtractor`, a server-side
-`MailEvidenceBundle` with `upload_session_id` is written through the PostgreSQL
-mail evidence store contract, and a store-backed JSON-RPC `query_mail_evidence`
-owner query is verified. This is still not a real PST parser, upload UI /
-iframe, live PostgreSQL readiness, production worker leasing, KG write, wiki
-projection, or production readiness claim.
-
-The current ChatGPT-facing checkpoint can return a session-bound mail upload
-task card through `open_upload_session`. The card uses a
-`formowl_upload_session:<upload_id>` public locator, attaches mail archive
-source-preparation guidance, accepts PST/OST/MSG/EML/MBOX profiles, and creates
-an audited `UploadSession` without exposing storage backends, parser controls,
-worker queues, raw paths, SQL-like values, or object-store internals. This is
-only the task/session entrypoint for a later upload surface; it is not the real
-iframe implementation, real mail parser, live PostgreSQL readiness, production
-worker leasing, ChatGPT smoke completion, or production readiness claim.
-
-The configured runtime command for the ChatGPT MCP path is
-`formowl-semantic-mcp-jsonrpc`. The current command preflight launches that
-console command as a subprocess, performs JSON-RPC `initialize`, `tools/list`,
-and `tools/call open_upload_session`, verifies the returned upload task card,
-and checks that the task-card upload id and locator resolve to the persisted
-`UploadSession`. This still only opens the governed upload task and does not
-perform actual ChatGPT connection, file transfer, upload iframe handling, or
-mail parsing.
-
-The current backend upload-intake checkpoint adds
-`formowl_mail.receive_mail_archive_upload()`. A trusted server upload surface
-can pass a server-staged PST/OST/MSG/EML/MBOX upload to this helper with the
-existing `UploadSession`, actor, and MCP session identity. The helper rejects
-mismatched sessions, unsupported filenames, content-hash mismatch, and
-user-supplied infrastructure-control form fields before side effects; registers
-the upload as a governed `Asset` and ObjectStore payload; writes asset and
-upload-receipt audit events; binds `UploadSession.asset_id`; reuses duplicate
-object payloads for repeated rolling exports; and returns only a
-hash/status/count public receipt. This is backend file-transfer receipt only:
-it is not the actual iframe UI, actual ChatGPT connected upload, real mail
-parser, live PostgreSQL readiness, production worker leasing, KG write, wiki
-projection, or production readiness.
-
-The current local HTTP upload-surface contract checkpoint adds
-`formowl_mail.create_mail_upload_http_surface_server()` and
-`formowl_mail.receive_mail_archive_http_multipart()`. The harness uses only the
-Python standard library HTTP server and multipart parser path in tests. `GET
-/mail/upload/<upload_session_id>` renders a single-session mail archive form,
-and `POST /mail/upload/<upload_session_id>` accepts one multipart
-`mail_archive` file plus session-bound public fields, writes a temporary
-server-staged body, calls the backend upload-intake helper, removes the
-temporary staged body after intake, and returns a safe JSON receipt. The
-surface rejects missing or mismatched session fields, unsupported filenames,
-malformed multipart bodies, oversized requests, wrong actor/session/status, and
-user-supplied storage/parser/worker fields before durable side effects. This is
-a local HTTP contract harness for the future iframe/portal integration; it is
-not an actual ChatGPT connected upload, production iframe, real mail parser,
-live PostgreSQL deployment, production worker leasing, KG write, wiki
-projection, or production readiness claim.
-
-The current MCP-command-to-local-HTTP smoke connects those two surfaces without
-claiming production integration. It launches the configured
-`formowl-semantic-mcp-jsonrpc` command, opens a mail upload task through
-JSON-RPC `open_upload_session`, resolves the persisted `UploadSession`, starts
-the local HTTP upload surface with the same trusted session identity and
-stores, posts synthetic multipart PST bytes to
-`/mail/upload/<upload_session_id>`, and verifies that the session is bound to a
-governed `Asset`, ObjectStore payload, and upload audit trail while temporary
-staging is cleaned. Negative probes cover wrong route/session/workspace,
-user-supplied infrastructure controls, duplicate multipart files, malformed
-multipart, oversized bodies, and safe startup/surface errors with no durable
-side effects. This is still a local contract smoke only; actual ChatGPT
-connected upload, production iframe readiness, real mail parsing, live
-PostgreSQL deployment, production worker leasing, KG write, wiki projection,
-and production readiness remain open.
-
-The current local upload-to-import-and-query smoke extends that contract one
-step closer to the Phase 1 evidence path. It opens a mail upload task through
-the configured MCP command, uploads a synthetic JSON-backed mail fixture through
-the local HTTP surface using the same `UploadSession`, runs
-`run_upload_session_mail_import()` against the asset already bound by the upload
-surface, writes normalized mail evidence through the PostgreSQL adapter
-contract, and verifies store-backed JSON-RPC `query_mail_evidence` owner and
-denied paths. It also probes missing asset, wrong asset source ref, parser
-failure, evidence-store failure, and query failure behavior without marking the
-session successful. This remains a local synthetic smoke only; actual ChatGPT
-connected upload, production iframe readiness, real PST/OST/MSG/EML/MBOX
-parsing, live PostgreSQL deployment, production worker leasing, KG write, wiki
-projection, and production readiness remain open.
-
-The current ChatGPT connection preflight is the next narrow bridge before a
-manual ChatGPT test. It wraps the configured
-`formowl-semantic-mcp-jsonrpc` command smoke, builds a bounded MCP attach
-package shape, and publishes only hashes, statuses, and counts for the required
-environment names, required tools, expected JSON-RPC sequence, task-card shape,
-and session shape. It rejects package variants that include concrete
-environment values, concrete upload locators, raw command paths, or an actual
-ChatGPT-connected upload claim. This lets an operator configure ChatGPT with
-the stdio command and local session context values while keeping storage,
-parser, worker, and backend details out of the public preflight report.
-Actual ChatGPT-connected upload, production iframe readiness, real parser
-readiness, live PostgreSQL deployment, production worker leasing, KG write,
-wiki projection, and production readiness remain open until separately tested.
-
-The current ChatGPT result intake checkpoint is the return path for that manual
-test. After an operator connects ChatGPT to the MCP server and calls
-`open_upload_session`, `scripts/mail_upload_chatgpt_result_intake.py` validates
-a bounded result packet containing only hashes, statuses, counts, expected
-sequence binding, tool availability, task-card shape hashes, and operator
-attestation. The intake rejects environment values, concrete upload locators,
-mail payload fields, raw command paths, static contract hash tampering, and
-claims that a file upload or production path has already been proven. This is
-operator-supplied result-packet validation only; it is not direct ChatGPT
-control by Codex, file transfer proof, production iframe readiness, real parser
-readiness, live PostgreSQL readiness, or #21 completion.
-
-The scoped #21 local Phase 1 Mail Evidence Reading proof is now complete for
-synthetic evidence and ChatGPT testing readiness. The governed MCP / JSON-RPC
-surface supports `query_mail_evidence` and `answer_mail_case_progress` over
-normalized `MailEvidenceBundle` records, with owner/denied/forged-grant/
-trusted-grant and bundle-id probes in the ChatGPT-free smoke. Case-progress
-answers preserve citations to mail observations, denied and not-found paths
-return no evidence content, JSON-RPC transcripts stay hash-only, and public
-reports carry only hashes, statuses, counts, and explicit false claim
-boundaries. This completion does not claim actual ChatGPT connected upload or
-file transfer, production iframe readiness, real PST/OST/MSG/EML/MBOX parser
-readiness, live PostgreSQL deployment readiness, production worker leasing,
-KG write, wiki projection, or production readiness.
-
-The current mail evidence ChatGPT result-intake checkpoint is the bounded
-return path for a manual fixture-backed ChatGPT MCP evidence-reading smoke.
-After an operator connects ChatGPT to the MCP server and calls
-`query_mail_evidence` plus `answer_mail_case_progress` for owner and denied
-fixture paths, `scripts/mail_evidence_chatgpt_result_intake.py` validates a
-result packet containing only hashes, statuses, counts, fixture-smoke contract
-binding, owner citation counts, denied redaction counts, and operator
-attestation. The intake rejects raw ChatGPT transcripts, raw tool payloads,
-mail body/snippet/text fields, concrete mail identifiers, upload locators,
-environment values, paths, SQL, parser/storage/worker internals, bool counts,
-duplicate response hashes, static-contract tampering, permission-bypass
-claims, KG/wiki claims, and production overclaims. This is operator-supplied
-result-packet validation only; it is not direct Codex-controlled ChatGPT
-verification, cryptographic proof of a ChatGPT session, raw file transfer, raw
-mail access, production iframe readiness, real parser readiness, live
-PostgreSQL readiness, or production readiness.
-
-The current real PST parser checkpoint proves only a sampled parser path for
-the operator-provided `tests/pst-exm/archive.pst` fixture. The dev container
-installs `pst-utils`, and `PstMailArchiveExtractor` shells out to `readpst` in
-an internal scratch directory, parses exported RFC822 messages, and emits the
-same mail observation shapes consumed by `MailEvidenceBundle`. The sampled
-smoke then runs:
+## 4. Extraction and Source-Completeness Workflow
 
 ```text
-operator-provided PST fixture
-  -> UploadSession
-  -> Asset/ObjectStore
+registered source
   -> IngestionJob
-  -> PstMailArchiveExtractor / ExtractorRun
-  -> ObservationStore
-  -> MailEvidenceBundle
-  -> PostgreSQLMailEvidenceStore contract
-  -> JSON-RPC query_mail_evidence owner and denied probes
+  -> policy-selected ExtractorAdapter
+  -> immutable ExtractorRun
+  -> source-native Observations
+  -> Observation manifest
+  -> source-completeness reconciliation
 ```
 
-The public report from `scripts/mail_real_pst_smoke.py` contains only hashes,
-statuses, counts, and explicit claim-boundary booleans. It must not expose the
-fixture path, parser command line, parser scratch directory, object-store
-locator, concrete message id, header, subject, sender, attachment filename,
-body/snippet text, SQL, environment value, or traceback. The current sampled
-report may claim `supports_real_pst_sampled_parser_claim=true` only after
-validation passes. It must keep full-parser, actual ChatGPT upload or file
-transfer, production iframe, live PostgreSQL, worker leasing, raw-mail-access,
-KG, wiki, and production-readiness claims false. The raw PST ObjectStore asset
-is currently recorded as `retained_by_policy` under `retain_7_days`; deletion
-after extraction remains a future retention-policy implementation slice.
+Deterministic extraction produces hashes, identifiers, structure, locators, and
+unambiguous normalization. Semantic extraction may propose entities, claims,
+relations, states, events, frames, or descriptions.
 
-### Upload Flow
+Before methodology-quality evaluation, compare the authorized Observation
+manifest with an independent raw-source or source-system inventory. Classify
+missing units as policy redaction, unsupported feature, extractor failure,
+normalization loss, occurrence loss, or unexplained loss. Unexplained loss
+blocks the comparison.
 
-```mermaid
-sequenceDiagram
-  actor User
-  participant ChatGPT as "ChatGPT / LLM Host"
-  participant Gateway as "FormOwl MCP Gateway"
-  participant UploadSurface as "Embedded upload surface or portal"
-  participant Router as "Storage Routing Policy"
-  participant AssetStore as "AssetStore"
-  participant ObjectStore as "ObjectStore"
-  participant JobStore as "JobStore"
+Re-extraction creates a new ExtractorRun. Tokenizer or embedding changes rebuild
+indexes from authorized Observations without reparsing or rewriting source
+evidence.
 
-  User->>ChatGPT: I want to upload source material
-  ChatGPT->>Gateway: create_upload_session(intent and scope)
-  Gateway-->>ChatGPT: Upload task card with inline action or session-bound link
-  ChatGPT-->>User: Show upload task and preparation guidance
-  User->>UploadSurface: Upload prepared file for this UploadSession
-  UploadSurface->>Router: Select storage backend from policy
-  UploadSurface->>ObjectStore: Store bytes through FormOwl-controlled backend
-  UploadSurface->>AssetStore: Register asset and source occurrence
-  UploadSurface->>JobStore: Create ingestion or extraction job
-  UploadSurface-->>ChatGPT: Return upload and processing status
-  ChatGPT-->>User: Show task status in the same conversation
-```
-
-## ChatGPT Session Capture Shortcut
-
-Because ChatGPT is the primary discussion surface, FormOwl should provide a small convenience shortcut for saving the current conversation as a source artifact. This is a frequent workflow shortcut, not a separate ingestion backbone.
-
-The user experience should be:
+## 5. Candidate and Canonical Graph Workflow
 
 ```text
-User: Save this conversation into FormOwl.
-ChatGPT -> MCP Gateway: capture_current_chatgpt_session(scope and visibility)
-MCP Gateway -> FormOwl backend: create capture record, store session dump, register asset, create ingestion job
-ChatGPT: shows a capture task card and processing status
+Observations
+  -> candidate mentions/business objects/assertions/relations/frames
+  -> permission and evidence validation
+  -> entity and relation resolution proposals
+  -> type/ontology alignment candidates
+  -> human or authorized policy review
+  -> canonical graph commit inside an explicit scope
+  -> lifecycle and audit events
 ```
 
-The shortcut may avoid a visible upload page because the source artifact is the current ChatGPT session. It must still record selected user, workspace or project scope, source account metadata, visibility, capture method, storage locator, asset registration, ingestion job, and audit event.
+Candidate review may accept, reject, correct, split, merge, defer, or mark an
+item ambiguous. Uncertain entity matches remain candidates.
 
-The current `capture_current_chatgpt_session()` helper follows that path by
-rendering the conversation into a source artifact, copying it through the
-registered object store, creating an `Asset`, creating an `IngestionJob`, saving
-a capture record, and writing audit records. The temporary scratch file remains
-inside the selected FormOwl storage backend and is not exposed to MCP callers.
+Canonical commit records source observations and occurrences, permission scope,
+review decisions, policy and ontology revisions, previous/new graph revisions,
+and audit lineage.
 
-The capture task card should show:
+Lifecycle changes preserve old identifiers through split, merge, supersession,
+deprecation, equivalence, derivation, and archive mappings.
+
+## 6. Ontology Workflow
+
+Ontology construction uses calibration and development evidence only:
 
 ```text
-capture ID
-selected user
-workspace / project / customer scope
-visibility scope
-source account status
-capture method
-processing status
+source/domain vocabulary candidates
+  -> map to small stable core
+  -> retain source-local types and occurrences
+  -> review aliases, types, frames, and relations
+  -> publish scoped OntologyRevision
+  -> evaluate transfer and retrieval contribution
 ```
 
-## Technical Metadata Extraction
+Hard validation is reserved for permission, schema/arity, evidence lineage,
+revision pins, canonical-write preconditions, and exact-set coverage.
 
-The current deterministic metadata adapter is `FileTechnicalMetadataExtractor`.
-It runs against registered assets and creates a `technical_metadata` observation
-with file size, MIME type, content hash, original filename, source ref, and
-FormOwl object locator. It does not call ExifTool, MediaInfo, FFmpeg, OCR, ASR,
-LLMs, or graph tooling yet.
+Inferred type, frame, alias, relation, and preferred path are soft. The runtime
+adds only a capped ontology bonus. Mismatch removes the bonus, not the evidence
+candidate. Hard type/frame pruning is used only in an explicitly named negative
+ablation.
 
-## Deterministic Fixture Extractors
+The independent holdout is never used to add ontology terms, aliases, or
+mappings.
 
-The current real-adapter boundary includes deterministic fixture adapters for
-document structure, OCR text, audio transcripts, video scenes/keyframes, and
-mail archives.
-These adapters are deliberately narrow: they prove `ExtractorRun`,
-`Observation`, locator metadata, permission scope, and source provenance for each
-modality without introducing external parser or model dependencies.
+## 7. Query Workflow
 
-Supported fixture adapters:
-
-- `FixtureDocumentParserExtractor` reads text-backed document fixtures and emits
-  heading, paragraph, table, and list-item observations with page and block
-  locators.
-- `FixtureOcrExtractor` reads text-backed image/PDF OCR fixtures and emits
-  `ocr_line` observations with page, image, line, and bounding-box locators.
-- `FixtureAudioTranscriptExtractor` reads text-backed transcript fixtures and
-  emits `transcript_segment` observations with start/end timestamps and speaker
-  locators.
-- `FixtureVideoSceneExtractor` reads text-backed video fixtures and emits
-  `video_scene` and `keyframe` observations with time, frame, and scene locators.
-- `FixtureMailArchiveExtractor` reads JSON-backed mail archive fixtures and
-  emits `email_thread`, `email_header`, `email_message`,
-  `email_body_segment`, `email_attachment_occurrence`, and
-  `mail_folder_occurrence` observations. Archive, mailbox, folder, message,
-  thread, body, and attachment occurrence identities remain separate.
-
-These are not replacements for Docling, Tesseract, Whisper, FFmpeg, or
-PySceneDetect, nor are they a PST/OST/MSG/EML parser. Later adapters can use
-those tools behind the same `ExtractorAdapter` boundary and write to the same
-stores.
-
-### FormOwl Mail Evidence Adapter Boundary
-
-The official mail adapter boundary is defined in
-`RESOURCE_EXTRACTION_SPEC.md#47-mail-and-pst-ingestion`. Mail parsing starts
-only after an upload, trusted folder scan, or controlled import has registered a
-mail source as an `Asset` and created an `IngestionJob`. A mail adapter writes
-`ExtractorRun` and `Observation` records through the normal stores; it does not
-watch mail folders directly, expose parser-local paths, create graph
-candidates, answer case-progress questions, publish wiki pages, or mutate
-canonical graph state.
-
-The JSON-backed `FixtureMailArchiveExtractor` is the current synthetic
-conformance baseline for that boundary. It is enough to prove deterministic
-archive/message/occurrence identity and raw-path non-exposure for fixtures. It
-still only parses observations; the completed synthetic workflow below adds
-separate evidence/search, candidate bridge, case-progress QA, and preflight
-helpers for JSON fixtures. This is not a production PST/OST/MSG/EML parser or
-real mailbox retrieval/index readiness claim.
-
-The completed synthetic mail workflow is:
+### 7.1 Common entry
 
 ```text
-JSON mail archive fixture
-  -> Asset / IngestionJob
-  -> FixtureMailArchiveExtractor
-  -> email_thread / email_header / email_message / email_body_segment /
-     email_attachment_occurrence / mail_folder_occurrence Observations
-  -> MailEvidencePackStore and deterministic mail search index
-  -> reviewable SemanticMetadata, CandidateAtom, and CandidateRelation proposals
-  -> case-progress answer with observation citations
-  -> synthetic-phase preflight readiness artifact
+user query under fresh ActorContext
+  -> choose permission-filtered EffectiveGraphView and source bounds
+  -> classify query
+  -> create and validate SemanticQueryPlan
+  -> execute under frozen revisions and budgets
+  -> return structured evidence/result plus citations
 ```
 
-This workflow keeps the layers separate. The evidence pack reads persisted
-observations and exposes safe snippets; the candidate bridge writes only
-proposal records; the case-progress answer is a cited read model; and the
-preflight artifact records that real PST/OST/MSG/EML parser readiness remains a
-future assignment.
+A planner model may propose a plan. Deterministic validation enforces actor,
+workspace, source, permission, graph, ontology, policy, model, budget, path,
+coverage, output schema, and maximum claim strength.
 
-## Candidate Graph Contracts
+One bounded repair pass may fill unresolved required slots only inside the
+original source and permission scope.
 
-The current candidate graph layer has contract models for `CandidateAtom`,
-`CandidateRelation`, and `ExternalGraphImport`. These records are proposals:
-they preserve source observation IDs, optional semantic metadata IDs, extractor
-run provenance, confidence, and review status. They do not create canonical graph
-state, user graph revisions, wiki revisions, or merge decisions.
-
-The shortcut must not expose raw storage folders, object-store paths, or backend controls. After capture, the session follows the normal pipeline:
+### 7.2 Evidence lookup
 
 ```text
-ChatGPT session dump
-  -> Asset / RawResource
-  -> IngestionJob / ExtractorRun
-  -> Observations
-  -> CandidateGraph
-  -> governed graph / wiki projection
+query
+  -> BM25 lexical retrieval
+  -> dense retrieval
+  -> deterministic fusion
+  -> optional entity-aware grouping and bounded graph expansion
+  -> temporal/provenance filtering
+  -> capped ontology scoring
+  -> evidence-bundle reranking
+  -> cited answer
 ```
 
-## Project Context to Wiki Revision
+Strong RAG is not a weak fallback. It is the evidence-retrieval component and
+comparison baseline. Graph expansion is used only when it can add reviewed
+identity, joins, topology, time, contradiction, provenance, or coverage.
+
+### 7.3 Relation reasoning
 
 ```text
-User asks for a wiki update in natural language
-  -> Project MCP retrieves source context
-  -> Project MCP stores evidence snapshots when needed
-  -> Wiki MCP generates or refreshes a draft revision
-  -> Wiki MCP shows a human-readable diff and citations
-  -> Reviewer approves or requests changes
-  -> Wiki MCP records an immutable reviewed revision
-  -> Wiki MCP prepares a publish proposal
-  -> Publish adapter writes to the target wiki if approved
+entity-linked query
+  -> allowlisted relation/direction plan
+  -> bounded traversal
+  -> resolve each node/edge/hop to authorized Observations
+  -> reject unsupported hops
+  -> rerank complete evidence bundles
+  -> cited path answer
 ```
 
-The current backend-specific publish adapter slice implements the proposal
-preparation step for OpenProject Wiki. `publish_wiki_page` returns a safe
-backend proposal with `publish_mode: proposal_only` and
-`external_write_performed: false`; it does not perform the final adapter write.
-Automatic publishing must remain off unless a later approved backend
-configuration explicitly enables it.
+Hidden nodes are never materialized or used as score signals. A graph label
+without source evidence cannot support an answer claim.
 
-## User-Facing Actions
+### 7.4 Exact set, count, inventory, and aggregation
 
 ```text
-save draft
-submit for review
-compare changes
-approve
-publish
-refresh from sources
-restore previous version
+exact-set language
+  -> deterministic exact_set_or_inventory route
+  -> schema-validated enumeration over an explicit source/effective-view scope
+  -> duplicate and redaction policy
+  -> coverage calculation
+  -> structured result with evidence per item
+  -> optional LLM rendering without membership changes
 ```
 
-## Hidden Backend Actions
+If coverage is incomplete, return `partial` or equivalent bounded status. Never
+infer a complete set, total count, missing item, or definitive absence from
+top-k retrieval.
+
+### 7.5 Global summarization
+
+Global summaries operate over an explicitly bounded, permission-filtered source
+or evidence set. The response discloses the boundary, policy redactions,
+unsupported content, conflicts, and incompleteness.
+
+## 8. Evidence Bundle and Answer Workflow
+
+An evidence bundle contains the material needed to support a claim:
 
 ```text
-create WikiRevision records
-persist raw evidence snapshots
-calculate markdown and response hashes
-record backend revision IDs
-optionally mirror reviewed or published revisions to Git
-call Python helper APIs for validation, hashing, diffing, or syntax-shielded logic
+source Observations and citations
+entity links and review state
+bounded graph path proof
+temporal/current-state selection
+contradiction or supersession context
+coverage and redaction status
+score components
+pinned revisions and execution fingerprint
 ```
 
-## Multimodal Resource to Wiki Projection
+The final answer model receives only the validated plan and authorized bundle.
+It uses the same model, reasoning effort, prompt, output schema, context budget,
+and decoding settings across comparison arms.
+
+The answer must cite evidence and disclose unresolved, conflicting, historical,
+policy-redacted, or incomplete state. It must not fill missing graph slots from
+pretrained knowledge.
+
+## 9. Access Request and Shared Graph Workflow
 
 ```text
-User asks for a meeting page, project hub update, or decision page from mixed resources
-  -> FormOwl registers files, project records, wiki pages, and conversations as assets
-  -> FormOwl creates ingestion jobs
-  -> Extractors produce observations such as transcript segments, document blocks, OCR spans, scenes, and issue comments
-  -> Semantic metadata extraction proposes decisions, action items, risks, entities, relations, topics, and requirements
-  -> Candidate graph preview is shown for review
-  -> Reviewers approve, reject, split, merge, or defer candidate atoms and relations
-  -> Entity and relation resolution commits approved graph changes
-  -> User graph assembly selects the role/task-specific view
-  -> WikiProjectionSpec generates a draft WikiRevision with citations and graph lineage
-  -> Reviewer compares, edits, approves, and publishes through the normal wiki workflow
+query requires another scope
+  -> match or path candidate indicates unavailable evidence
+  -> return access_required without private content
+  -> create scoped AccessRequest when requested
+  -> owner or authorized reviewer approves, narrows, denies, expires, or revokes
+  -> Grant changes future EffectiveGraphViews
 ```
 
-## Candidate Graph Review
+Access levels may include answer-only, graph snippet, evidence snippet, and
+controlled raw asset reference. Raw access always uses a separate grant and a
+governed locator.
+
+Revocation changes future effective views. It does not rewrite source evidence,
+canonical history, or prior audited decisions.
+
+## 10. Projection and External Action Workflow
+
+### 10.1 Cited answer or report
 
 ```text
-preview graph candidates
-adjust atom granularity
-resolve entity aliases
-resolve relation conflicts
-commit approved candidates
-record lifecycle events
-generate or refresh a user graph revision
-project a wiki draft from that graph revision
+validated query result
+  -> projection spec
+  -> cited answer/report/dashboard draft
+  -> review and revision
 ```
 
-External tools and LLMs can help create candidates, but they do not approve canonical graph changes on their own.
-
-## Scope-Aware Graph Fusion
+### 10.2 Wiki projection
 
 ```text
-candidate matching proposes same-as or related-to candidates
-  -> access overlay decides whether the requester may inspect another scope's graph/evidence/raw data
-  -> governance review decides whether a canonical merge should happen inside a target scope
-  -> merge decisions record target scope, evidence, approver, conflict notes, and audit events
+EvidenceBundle or EffectiveGraphView
+  -> WikiProjectionSpec pins source/graph/ontology/permission revisions
+  -> Wiki MCP creates a draft with citations and frontmatter
+  -> reviewer compares and edits
+  -> reviewed revision becomes immutable
+  -> publish remains a proposal until separately authorized
 ```
 
-Matching does not grant access. Access does not merge graph state. Canonical merge does not grant raw asset access.
-
-## KG-First Cross-Resource Retrieval
-
-The ChatGPT-facing retrieval path uses the effective graph as the primary
-cross-resource integration layer while preserving observations and raw assets
-as evidence and source of truth:
+### 10.3 External write
 
 ```text
-query_effective_graph_view
-  -> query-score permission-visible graph nodes and edges
-  -> resolve graph-hit source_observation_ids
-  -> return governed observation snippets and modality locators
-  -> evaluate graph confidence and evidence coverage
-  -> use vector/metadata fallback only when the graph path is insufficient
-  -> emit review-required Candidate KG proposal seeds from fallback evidence
+cited result or approved graph state
+  -> target-specific action proposal
+  -> explicit review and authorization
+  -> validated no-partial-write execution path
+  -> audit and external revision reference
 ```
 
-The evidence resolver exposes only allowlisted modality location fields and
-`formowl://observation/{observation_id}` references. Raw asset references remain
-separate and require an explicit asset-scoped grant. Fallback seeds are DTOs for
-later candidate extraction/review; the query performs no candidate-store or
-canonical-graph write.
+No query or extractor performs an external write implicitly.
 
-The deterministic synthetic conformance fixture is
-`scripts/kg_first_cross_resource_smoke.py`. It proves one Optoma quotation
-decision can be matched through a candidate graph object and resolved to mail,
-slide, and project observations. A second query proves incomplete graph
-evidence triggers fallback and produces a review-required seed without a
-canonical artifact. This fixture is not real enterprise-data or production
-readiness evidence.
+## 11. Mail-First Example
+
+Mail validates the generic workflow:
+
+```text
+UploadSession or governed mailbox capture
+  -> archive/message/attachment Assets and occurrences
+  -> mail ExtractorRun
+  -> thread/header/message/body/attachment Observations
+  -> normalized mail evidence
+  -> strong RAG index
+  -> candidate entities/claims/relations/frames
+  -> reviewed cross-message and cross-source graph
+  -> Hybrid v2 query execution
+```
+
+The adapter preserves archive, mailbox, folder, message, thread, quoted,
+forwarded, embedded, attachment, and table occurrences. Parsing does not answer
+case-progress questions or commit graph state as a side effect.
+
+The repository contains synthetic and bounded PST diagnostics. Those paths are
+implementation evidence for their stated fixtures, not universal parser,
+source-completeness, production, or KG-superiority evidence.
+
+After mail-first validation, issue #56 requires a materially different transfer
+source such as calendar, ticket/project, or document-section evidence without
+adding question-specific core types or aliases.
+
+## 12. Comparative Evaluation Workflow
+
+```text
+freeze source, Observation, permission, tokenizer, index, model, prompt,
+budget, evaluator, code, image, and hardware manifests
+  -> run strong RAG
+  -> run RAG + entity linking
+  -> run RAG + bounded candidate KG
+  -> run RAG + KG + capped soft ontology
+  -> run hard ontology negative ablation
+  -> run deterministic exact executor where mandated
+  -> compare final answers by pre-registered stratum
+  -> seal diagnostic artifacts
+  -> run one independent holdout
+  -> run transfer-domain holdout
+```
+
+Calibration, development, evaluation, independent holdout, and transfer data
+remain separate. Holdout content cannot tune tokenizer, aliases, ontology,
+thresholds, routing, paths, prompts, models, or grading.
+
+Before methodology-quality execution or a comparative claim:
+
+```sh
+python3 scripts/methodology_authority_check.py --require-ready
+```
+
+A nonzero exit blocks the claim. It does not justify question-specific fitting
+or another unregistered pipeline.
+
+## 13. Local Compatibility Workflows
+
+File-backed stores, deterministic fixtures, Project/Wiki JSON-line runners,
+and the hand-built semantic JSON-RPC runner remain useful for local tests.
+They are not alternate connected identity paths and do not replace public HTTPS
+`/mcp`, OAuth, Google OIDC, or fresh `ActorContext` resolution.
+
+Public compatibility reports remain hash/status/count oriented and exclude raw
+source content, local paths, environment values, SQL, parser/storage/worker
+internals, credentials, and hidden oracle values.
+
+## 14. Verification
+
+Canonical verification runs in the dev container:
+
+```sh
+docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \
+  python -m unittest discover -s tests
+```
+
+Methodology authority is checked separately:
+
+```sh
+python3 scripts/methodology_authority_check.py --check
+python3 scripts/methodology_authority_check.py --require-ready
+```

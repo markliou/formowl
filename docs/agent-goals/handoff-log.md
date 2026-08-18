@@ -1,187 +1,69 @@
 # Agent Handoff Log
 
-This active log is a bounded recent window. Lossless prior history is preserved
-at `../archive/2026-07-11/handoff-log.md`.
-
 Lifecycle label: `active`.
+
+This is a bounded active window. Earlier entries are immutable history under
+`docs/archive/`, including the complete pre-rewrite log at
+`../archive/2026-08-18/active/docs/agent-goals/handoff-log.md`.
 
 ## Retention Rule
 
-- Keep entries from the latest 14 calendar days, with a hard cap of 300 lines.
-- If either limit is exceeded, archive the oldest complete dated entries into a
-  new immutable dated snapshot before appending more.
-- Never split a dated entry, discard content, or rewrite archive history.
-- Append only concise cross-agent facts, blockers, verification, and next action.
+- Keep the latest 14 calendar days and at most 300 lines.
+- Archive a complete dated entry before trimming it.
+- Record only current facts, blockers, verification, and next action.
+- Historical pointers are not restart instructions.
 
-## 2026-07-10
+## 2026-08-18 — Issue #56 becomes the sole active KG methodology program
 
-- Issue #33 Work Package A completed on `issue-33-work-package-a` from merged
-  Ontology v2 PR #31. The EXM evaluator now uses candidate-admission arm names,
-  declares KG/type/frame stage boundaries, uses development/evaluation labels
-  instead of same-corpus holdout language, excludes permission-denied
-  auto-passes from primary retrieval accuracy, and emits eight closed-schema
-  report sections. Reviewer fixes removed unsupported private-row recomputation
-  and ontology/frame-semantic claims, bound frame/type/evidence/topology fields
-  to exact derived values, and reject coherent permission-case reclassification
-  that changes the configured evaluation mix. Canonical dev-container
-  verification passes: focused evaluator tests 29 OK, full unittest 638 OK,
-  full Ruff check passed, 303 files pass format-check, and `git diff --check`
-  passed. The 3/3 read-only gate passed with explicit `RELEASE_DECISION: AGREE`
-  from `Dalton` (engineering), `Kepler` (governance/safety), and `Faraday`
-  (research method); no blocking findings remain.
+- GitHub issue #56 defines the active objective: graph-guided Hybrid KG +
+  Ontology v2 must earn a measurable final-answer win over strong RAG on
+  heterogeneous integration tasks.
+- Frozen target remains
+  `evidence_to_knowledge_kg_ontology_v2_hybrid_v1` with
+  `jieba_sentencepiece_frozen_profile_candidate_admission_v1`; no v3 was
+  created.
+- Architecture is strong RAG retrieval plus reviewed entity links, bounded
+  graph traversal, temporal/provenance/coverage filtering, capped soft ontology
+  scoring, evidence-bundle reranking, and deterministic exact-set execution.
+- Inferred ontology mismatch no longer prunes admitted evidence. The old hard
+  gate is a negative ablation only.
+- The final answer model is not an architectural shortcut: every arm must pin
+  and share the same model, prompt, reasoning effort, schema, and budget.
+- Independent holdout questions cannot influence tokenizer, aliases, ontology,
+  graph rules, thresholds, prompts, or model choice.
+- PostgreSQL/pgvector remains canonical. Do not resume Neo4j benchmarks,
+  migration, projection, or dual-write work.
+- Issue #55's document-first exactly-one-call POC and issue #33 plans are
+  historical only. Their complete active-file state before this rewrite is
+  preserved under `docs/archive/2026-08-18/`.
+- Methodology authority check is valid but blocked. Runtime remains
+  `ascii_identifier_regex_v1` with CJK support false, and all five readiness
+  gates remain unresolved.
+- Next KG action: implement the immutable target tokenizer/profile and
+  same-profile query/evidence binding, then source-completeness reconciliation
+  and a strong RAG control. No methodology-quality comparison may start while
+  `--require-ready` exits nonzero.
+- The Issue #20 operator helper now derives or validates one safe non-secret predefined client ID; app configuration replaces only the ChatGPT-displayed callback; if the same client ID cannot be used, the live campaign stops as an external blocker.
+- Issue #20 remains open and unchecked; this KG documentation rewrite does not change its external evidence state.
 
-- No-training candidate-admission ablation completed for the accepted active
-  goal. The EXM/PST 50,000-case evaluator compared regex, raw
-  `jieba + SentencePiece`, frequency-rule admission, frozen-profile admission,
-  and the prior weak-label MLP admission policy in
-  one run over the same generated benchmark shape. Safe tracked aggregate:
-  `experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json`.
-  Result: regex admission 10,000/50,000; raw `jieba + SentencePiece`
-  admission 18,176/50,000 with 0/5,000 no-match guards; frequency-rule
-  admission 33,277/50,000 with all guards passing; frozen-profile admission
-  43,976/50,000 with 33,976/40,000 positive cases,
-  5,000/5,000 no-match guards, and 5,000/5,000 denied guards; weak-label MLP
-  weak-label MLP admission 43,369/50,000 with 33,369/40,000 positives and all
-  guards passing. Current method judgment: the bundled candidate-admission and
-  graph-construction policy is effective on this generated benchmark, but this
-  does not establish a type-compatibility or frame-semantic effect. The self-trained MLP is not
-  justified as the stable default because the zero-training frozen profile is
-  +607 passed cases better in this run. Engineering reviewer `Meitner` blocked
-  once because the frozen profile model hash did not include the actual
-  scoring coefficients; the blocker was fixed by data-binding
-  `_FROZEN_PROFILE_SCORE_RULES` into both scoring and `model_hash`, then
-  rerunning the 50,000-case evaluation. Verification after the fix:
-  dev-container focused lexical ontology tests 21 OK, full 50,000-case
-  evaluation completed, saved public report validation blockers=[], full
-  unittest 630 OK, Ruff check/format-check passed, KG acceptance
-  `passed_with_explicit_limits`, tracked summary JSON parse passed, and
-  `git diff --check` passed. Reviewer gate passed 3/3: `Meitner`
-  engineering agreed after the hash-binding fix, `Singer` governance/safety
-  agreed, and `Gibbs` research method agreed. BGE-M3 through FlagEmbedding is
-  documented as the preferred future optional true frozen neural adapter, but
-  it was not executed in this default-dev-container slice. Claim remains
-  candidate-only and excludes raw mail content, query payloads, private rows or
-  paths, canonical graph/type/user-graph/wiki mutation, BGE execution evidence,
-  parser readiness, business answer generation, and production readiness.
+## 2026-08-18 — Active-document rewrite verification
 
-# 2026-07-10 — KG Research Agent — issue #36 release gate passed
-
-- Completed the evidence-grounded MAY ChatGPT × FormOwl MCP evaluation with
-  100 unique reviewer-grounded evidence cases and 50,000 rendered interaction
-  variants. Production v4 and the standalone source-rebuild validator both
-  passed with `blockers=[]`.
-- The evaluator now binds closed `tools/list` schemas, recursively rejects
-  caller-controlled identity/session/grant keys, separates expected outcomes
-  from actual MCP semantics, executes same-session response-derived follow-ups,
-  and validates private replay roots against an external trust anchor.
-- Structured-answer gold and prediction use methodologically independent
-  lifecycle/action/deadline/dependency extraction. Answerable false negatives
-  score case/thread scope as an applicable zero, and standalone validation
-  rebuilds grounded rows from the private manifest, trusted replay, and evidence
-  bundle so coherent rehashing cannot pass.
-- Safe results: governed mail retrieval 11/100, candidate KG 19/100, ontology
-  KG 19/100; 326 retrieval-only factorial arms produced zero better than
-  KG-only, two equal, and 324 worse. The replay exposed 10 expected no-match
-  false positives while enforcing all 10 expected permission denials.
-- Response-conditioned trajectory accounting records 60,000 tool calls per
-  FormOwl arm. Non-triggered correction/refinement/permission conditions do not
-  add a second call, turn, or simulated cost.
-- Canonical final verification passed 713 dev-container tests, full Ruff check,
-  316-file format check, and `git diff --check`. Reviewer gate passed 3/3 with
-  explicit `RELEASE_DECISION: AGREE` from the product-usefulness,
-  evidence/citation, and engineering/governance reviewers.
-- Claim boundary remains deterministic offline replay/usefulness evaluation:
-  no live ChatGPT execution, production-readiness claim, autonomous business
-  judgment, raw-mail MCP access, or canonical KG/type/user-graph/wiki writes.
-
-## 2026-07-11
-
-- Completed a user-requested whole-repository maintenance review across
-  production Python, tests/scripts, research harnesses, containers, MCP
-  boundaries, and durable documentation. Static import analysis found no
-  orphan production module; canonical root verification passed 713 tests plus
-  Ruff check and format check.
-- Removed four unused projection acceptance markers, one unused OpenProject
-  mapper wrapper, and one unreferenced incomplete benchmark. The older Wiki
-  projection builder and forbidden-tool marker exports were reviewed but kept
-  as public compatibility surfaces. Consolidated identical Project and Wiki
-  JSONL logger implementations and identical CPU/GPU neural dependency files
-  while preserving compatibility imports and container entrypoints.
-- Deleted the obsolete MCP abstract after moving current service/tool truth into
-  `docs/mcp-boundaries.md`, and labeled ontology/mail documents by lifecycle.
-  The duplicate KG restart history remains unchanged in this patch; issue #40
-  tracks its safe archival together with the canonical durable registry.
-- The independent `.formowl/kg-eval` suite is currently not state-independent:
-  a clean archive lacks ignored result snapshots, while the operator workspace
-  contains ignored evidence that rebuilds validator output to 12/12 although
-  tracked tests/checklists and the durable goal still assert the historical
-  8/12 state. Do not report that harness as passing until issue #38 resolves the
-  state-drift and clean-clone reproducibility contract.
-- Follow-up issues: #38 for KG authority state-independent tests, #39 for MCP
-  protocol/shadow-workflow consolidation, and #40 for durable history archival.
-- Final cleanup reviewer gate passed 3/3 after compatibility and documentation
-  blockers were fixed: dead-code/evidence, runtime compatibility, and
-  docs/governance reviewers all returned `RELEASE_DECISION: AGREE`. Public Wiki
-  projection and forbidden-tool marker surfaces were retained; the authority
-  harness state-drift remains isolated to #38 and is not claimed as passing.
-
-## 2026-07-11 — Issues #38–#40 completion update
-
-- Issue #38 now isolates blocked and completed authority fixtures, cleans up
-  partial fixture setup failures, avoids writes to operator-controlled ignored
-  state, and passes the authority suite from both operator and clean-clone
-  layouts. The four broad real-evidence gates remain intentionally blocked;
-  harness reproducibility does not complete those evidence requirements.
-- Issue #39 now uses one shared MCP JSON-RPC engine and JSONL compatibility
-  runner, fails closed without authenticated session identity, binds Project,
-  Wiki, and semantic calls to gateway-controlled identity, records rejected and
-  denied transcript status, delegates semantic work only to injected handlers,
-  and exposes the effective-graph alias deprecation policy.
-- Issue #40 moved prior board, role-goal, and handoff history into immutable
-  dated snapshots with manifest hashes and bounded active startup files. A
-  deterministic archive-integrity test enforces hashes, links, retention limits,
-  checklist preservation, and current-versus-archive authority boundaries.
-- Final issues #38-#40 reviewer gate passed 3/3. Franklin verified shared
-  protocol and fixture cleanup correctness; Carver verified identity,
-  transcript, alias, and no-new-capability governance; Helmholtz verified
-  clean-state authority, completed fixture coherence, archive integrity, and
-  status honesty. All returned `RELEASE_DECISION: AGREE` with no blockers.
-- Final canonical evidence before publication: root suite 725 tests OK, KG
-  authority suite 589 tests OK, MCP focused 132 tests OK, read-only repository
-  enterprise/preflight 60 tests OK, archive integrity 4 tests OK, and full Ruff
-  check/format check passed for 323 files.
-
-## 2026-07-11 — Pre-feature production cleanup
-
-- Removed test-only MCP gateway scenarios and assertion markers from production,
-  deleted unused retrieval/JSON-RPC marker helpers, and centralized mail bundle
-  selection, grant normalization, and grant-expiry behavior in one private mail
-  access helper. Production Python is net 153 lines smaller.
-- Retrieval now has one private implementation while the deprecated
-  `query_effective_graph` alias retains its full keyword-only signature and the
-  canonical `query_effective_graph_view` still requires an effective graph
-  view. Shared observability is canonical; Project/Wiki legacy imports remain
-  deprecated compatibility re-exports and `SPEC.md` documents that boundary.
-- Canonical dev-container verification passed 726 tests, full Ruff check, and
-  325-file format check. Engineering, governance/safety, and maintainability
-  reviewers returned 3/3 `RELEASE_DECISION: AGREE` after signature and
-  specification compatibility blockers were fixed.
-
-## 2026-07-11 — Pre-feature structural cleanup
-
-- Consolidated duplicated evaluator validation, ChatGPT intake validation,
-  HTTP smoke orchestration, PostgreSQL container lifecycle, mail payload
-  validation, and atomic JSON persistence. Eleven evaluation/smoke entrypoints
-  are thinner while retaining their CLI, report schema, error, privacy, and
-  claim-boundary contracts.
-- Tests now validate real adapters, interfaces, and migration content as the
-  primary surfaces. Previously exported name-list helpers remain thin
-  compatibility wrappers to avoid an unannounced API break. A private
-  graph-storage write seam remains as an alias to the shared atomic writer so
-  rollback failure injection stays testable without restoring duplicate
-  persistence code.
-- The second cleanup phase changes 1,334 lines added and 1,514 deleted, net
-  `-180`; scripts and experiment entrypoints are net `-893`. Canonical
-  dev-container verification passed 730 tests, full Ruff check, 331-file format
-  check, and `git diff --check`. Production/API, evaluator/privacy, and
-  shell/safety reviewers returned 3/3 `RELEASE_DECISION: AGREE`.
+- Active KG, architecture, workflow, provenance, infrastructure, evaluation,
+  role, goal, and startup documents now point to issue #56 and the frozen
+  Hybrid-v2 target. Superseded mail-only, issue #33, and issue #55 files are
+  explicit historical pointers; their pre-rewrite content remains immutable
+  under `docs/archive/2026-08-18/`.
+- `python3 scripts/methodology_authority_check.py --check` passes with 53 bound
+  sources. Authority remains valid but blocked; all five readiness gates remain
+  unresolved and `--require-ready` must continue to exit nonzero.
+- The focused documentation/methodology/container suite passed 150 tests with
+  one skip. The canonical full suite ran 1,558 tests and is not green:
+  11 failures and one error remain in legacy coordination-frame metrics,
+  Issue #20 function-onboarding state, and an unrelated PST extractor test.
+  Those failures are outside this documentation rewrite's write set and were
+  not hidden or broadly repaired.
+- Issue #20 remains open and unchecked; this documentation-only verification
+  does not change its external evidence or closure state.
+- Next KG action remains Work Package A: immutable Jieba + SentencePiece
+  profile packaging and same-profile query/evidence indexing, followed by
+  source-completeness reconciliation and the strong RAG control.

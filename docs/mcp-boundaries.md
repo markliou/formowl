@@ -1,47 +1,141 @@
 # MCP Boundaries
 
-<!-- Future agents: continue defining MCP boundaries in this file. Do not create another MCP boundary document unless SPEC.md is updated first. -->
+MCP is FormOwl's governed orchestration and review boundary. It is not the
+source parser, database console, graph engine, model runtime, or infrastructure
+control plane.
 
-MCP is an orchestration boundary, not the core data processing engine.
+The connected FormOwl MCP Gateway is the only formal ChatGPT-facing service.
+Project MCP, Wiki MCP, JSON-line commands, and the hand-built semantic
+JSON-RPC/stdio runner are internal or local compatibility surfaces.
 
-The Semantic MCP Gateway is the current ChatGPT-facing service. Project MCP
-and Wiki MCP remain compatibility services for their bounded project-context
-and wiki-draft workflows. Heavy extraction, graph resolution, indexing, and
-storage work runs in FormOwl backend services.
-
-For ChatGPT-facing deployments, MCP should expose semantic and governed operations, not infrastructure. The public or tunnel-exposed service is a FormOwl MCP Gateway. Synology NAS, PostgreSQL, MinIO or other object storage, worker services, raw file paths, and scratch directories remain internal-only.
-
-## Single Task Surface Rule
-
-ChatGPT-facing MCP tools should keep users in one task-oriented surface. The preferred surface is the ChatGPT conversation with structured task cards, inline actions, or embedded FormOwl widgets. If a separate page is required in Phase 0, it must be a narrow session-bound continuation of the current MCP task.
-
-MCP tools should hide backend operation choices from normal users. They should not ask users to select storage backends, buckets, NAS paths, parser paths, worker queues, extractor implementations, database records, or job internals. The gateway and backend policies choose those details and record the decision for audit.
-
-This boundary improves security and stability by reducing unvalidated inputs, accidental data exposure, path confusion, parser mismatch, and unaudited local files.
-
-## Current Services
+## 1. Public Service Boundary
 
 ```text
-LLM host
-  -> Semantic MCP Gateway for governed upload, evidence, graph, access, and projection workflows
-  -> Project MCP compatibility service for project execution context
-  -> Wiki MCP compatibility service for wiki draft, revision, snapshot, and publish proposals
-  -> formowl-contract for portable exchange objects
+ChatGPT or another approved OAuth client
+  -> one canonical public HTTPS FormOwl origin
+       -> /.well-known/oauth-protected-resource
+       -> /.well-known/oauth-authorization-server
+       -> /oauth/authorize
+       -> /oauth/google/callback
+       -> /oauth/token
+       -> JWKS
+       -> /healthz and /readyz
+       -> exact protected /mcp resource
+  -> governed FormOwl services
+  -> internal PostgreSQL, object storage, workers, and compatibility services
 ```
 
-Project MCP must not generate wiki pages. Wiki MCP must not depend on project-system internals.
+ChatGPT never connects directly to PostgreSQL, object storage, NAS, parser
+workers, model workers, graph stores, or private source systems.
 
-## Current Public Semantic Tools
+## 2. Single Task Surface
 
-`python/formowl_gateway/semantic.py` is the source of truth for the public tool
-schema. The current tools are:
+User-facing tools expose business and knowledge operations:
 
 ```text
+capture or upload a source
+inspect processing status
+search or answer from authorized evidence
+preview and review graph candidates
+request access
+inspect a governed graph view
+create a cited projection or action proposal
+```
+
+They do not ask normal users to select:
+
+```text
+NAS folder or local path
+bucket or object-store key
+parser binary or command
+worker queue
+embedding service
+vector or graph database
+SQL table or query
+model cache or scratch directory
+```
+
+A separate upload page or widget, when required, is bound to one
+`UploadSession` and continues the current task. It is not a generic file
+manager or backend console.
+
+## 3. Connected OAuth and ActorContext
+
+The connected identity flow is:
+
+```text
+public HTTPS /mcp request
+  -> OAuth challenge and protected-resource metadata
+  -> FormOwl authorization for the predefined client
+  -> exact callback/resource and PKCE S256 validation
+  -> Google OIDC login
+  -> verified Google issuer, subject, and email
+  -> FormOwl invitation and external-identity mapping
+  -> FormOwl authorization code and resource-bound token
+  -> current PostgreSQL authorization and revocation checks
+  -> fresh gateway-controlled ActorContext
+  -> governed tool
+```
+
+The predefined client ID is a stable non-secret selected and recorded by the
+deployment operator before discovery. ChatGPT app management must use that
+same client ID when its predefined-client UI supports it. ChatGPT supplies and
+displays only the production callback
+`https://chatgpt.com/connector/oauth/{callback_id}`. FormOwl must not invent the
+client ID or claim ChatGPT generated or displayed it. Missing UI support is an
+external live blocker.
+
+Google access and ID tokens are upstream identity evidence only. They are never
+accepted as FormOwl MCP bearer tokens. FormOwl remains the authority for users,
+invitations, memberships, OAuth clients, token sessions, workspaces, grants,
+revocation, and audit.
+
+Every protected call rebuilds `ActorContext` from current server-side state.
+The gateway rejects or overwrites caller-controlled actor, workspace, session,
+membership, reviewer, grant, storage, parser, worker, and model-routing fields
+before a semantic handler executes.
+
+`whoami` reports the current FormOwl identity and authorized workspace. It does
+not select identity.
+
+## 4. Discovery-Only Boundary
+
+The exact reserved callback
+`https://invalid.example.invalid/formowl-discovery-only` selects the
+`discovery_only` state. It exists only so a client can discover the public MCP
+shape before the production callback is known.
+
+In `discovery_only`:
+
+- only `initialize` and `tools/list` are available as public discovery;
+- every protected tool returns the standard OAuth challenge;
+- bearer credentials are not treated as an authenticated session;
+- bootstrap, invitations, OAuth completion, token exchange, operator mutation,
+  and protected semantic execution are blocked;
+- no authorization audit is created for a protected tool because no identity
+  or authorization decision is permitted;
+- `/readyz` remains 503 while `/healthz` may keep the process health-visible;
+- CLI preflight exits nonzero with `status: discovery_only`; and
+- the deployment must be stopped, configured with the production callback, and
+  restarted before identity or protected tool state is created.
+
+The discovery sentinel is not a second authentication mode and must never be
+used as a production callback or client ID.
+
+## 5. Current Public Semantic Surface
+
+`python/formowl_gateway/remote.py` is the connected tool-descriptor authority.
+`python/formowl_gateway/semantic.py` defines governed schemas for configured
+handlers.
+
+The current connected runtime may expose:
+
+```text
+whoami
 open_upload_session
 create_ingestion_job
 list_observations
 preview_graph_candidates
-query_effective_graph
 query_effective_graph_view
 query_mail_evidence
 answer_mail_case_progress
@@ -50,185 +144,262 @@ submit_graph_review_decision
 generate_wiki_draft_from_graph_view
 ```
 
-These tools should expose reviewable operations. They should not let a client or external extractor directly mutate canonical graph state.
+`query_effective_graph` is a deprecated compatibility alias when present.
+`select_actor` is never a connected tool.
 
-There is currently no public raw attachment reader, raw filesystem reader,
-raw database query tool, or direct canonical mutation tool. Attachments must be
-registered and extracted into governed observations or mail evidence before
-they can support an answer.
+Tools without a configured safe backend handler remain absent or return a
+review/pending boundary. They must not be presented as fully implemented.
 
-## Planned Tools
+## 6. Hybrid Query Tool Boundary
 
-The following capabilities remain planned and must not be described as current:
+A current or future general query tool must execute this architecture:
 
 ```text
-select_actor
-whoami
-capture_current_chatgpt_session
-get_upload_session
-complete_upload_session
-get_ingestion_job
-resolve_entity_candidate
-commit_candidates_to_graph
-list_types
-get_type
-propose_type
-resolve_type_candidate
-commit_types
-search_assets
-fetch_email_thread
-fetch_evidence_snippet
-approve_access_request
-deny_access_request
-revoke_grant
+fresh ActorContext
+  -> permission-filtered source bounds and EffectiveGraphView
+  -> typed query class
+  -> validated SemanticQueryPlan
+  -> BM25 + dense evidence retrieval
+  -> conservative entity linking and bounded graph traversal
+  -> temporal/provenance/coverage filtering
+  -> capped soft ontology scoring
+  -> evidence-bundle reranking
+  -> deterministic exact result or cited answer
 ```
 
-Internal `upload_asset_reference` flows must not bypass `UploadSession` intent
-capture for normal user uploads. They are reserved for controlled imports,
-migration adapters, or trusted backend references that still create asset,
-permission, and audit records.
+The public schema should express business intent, source/task scope, requested
+claim type, and safe output preferences. It must not expose internal SQL,
+index, graph-engine, model-server, parser, or worker controls.
 
-`capture_current_chatgpt_session` is a convenience shortcut for the current ChatGPT conversation. It may skip the visible upload surface, but it must not skip identity, permission scope, source account metadata, asset registration, ingestion job creation, or audit.
+### 6.1 Plan validation
 
-## Upload Session Boundary
-
-User-initiated uploads must be represented as task-oriented `UploadSession` workflows, not infrastructure browsing workflows.
-
-ChatGPT-facing MCP tools may:
+A planner model may propose a plan. The backend validates:
 
 ```text
-create an UploadSession from user intent and scope
-return a structured upload task card
-return an inline upload action, embedded widget, or internal upload link bound to exactly one UploadSession
-guide source preparation for a declared ingestion profile
+query class
+actor/workspace/source/permission scope
+effective-view, graph, ontology, policy, tokenizer, and model revisions
+entity and relation slots
+allowed paths and directions
+hop, fan-out, candidate, evidence, time, token, and repair budgets
+coverage requirement
+output schema and maximum claim strength
+```
+
+Invalid, scope-widening, or unpinned plans fail closed. A bounded repair pass
+cannot broaden permissions or source scope.
+
+### 6.2 Evidence lookup and relation reasoning
+
+The query tool may return:
+
+```text
+safe answer or structured result
+citations and governed observation locators
+source/evidence coverage status
+conflict, historical, superseded, or incomplete warnings
+redaction counts
+safe execution and revision identifiers
+```
+
+Every answer-relevant graph hop resolves to authorized Observations. Graph
+labels, inferred types, or model memory alone cannot support a high-trust claim.
+
+### 6.3 Exact queries
+
+Queries for all, every, count, inventory, duplicates, missing items,
+aggregation, completeness, or definitive absence route to a deterministic
+executor. The result includes scope, coverage, redaction, unresolved counts,
+stable ordering, and evidence per item.
+
+Top-k retrieval cannot be labeled complete.
+
+### 6.4 Query side effects
+
+Retrieval, traversal, plan repair, and answer generation do not create hidden
+candidate, canonical, ontology, user-graph, wiki, or external-system writes.
+A query may return a separate review-required proposal seed only when the
+public contract says so.
+
+## 7. Upload and Source-Capture Boundary
+
+ChatGPT-facing tools may:
+
+```text
+create an audited UploadSession from intent and scope
+return a session-bound upload task card or widget
+provide source-preparation guidance attached to that session
 inspect upload and processing status
-create ingestion jobs after FormOwl registers the uploaded asset
+create ingestion work after FormOwl registers the source
+capture the current ChatGPT session under the same Asset/permission rules
 ```
 
-ChatGPT-facing MCP tools must not:
+They must not:
 
 ```text
-ask the user to choose NAS folders, buckets, volumes, or parser paths
-ask the user to choose worker queues, parser implementations, or object-store locations
-expose raw storage backend names unless needed for operator diagnostics
-turn the upload surface into a generic file manager
-accept arbitrary file paths from the user's machine as source-of-truth locators
-give source preparation instructions that are detached from an UploadSession
+accept arbitrary local/NAS paths as public source identity
+ask the user to choose storage, parser, worker, or database controls
+turn an upload surface into a file manager
+skip Asset registration, occurrence lineage, permission, retention, or audit
 ```
 
-The upload surface is a controlled FormOwl surface. It may receive bytes from the user, but storage routing, object placement, asset registration, parser selection, ingestion job creation, and graph integration remain backend responsibilities.
+Authentication of `open_upload_session` identifies the requester. It does not
+by itself complete Issue #41's generic Asset authorization and lifecycle rules.
 
-## ChatGPT Session Capture Shortcut Boundary
+## 8. Candidate, Review, and Canonical-Write Boundary
 
-ChatGPT-facing MCP tools may provide a one-step "save this conversation" action for frequent use. This action is modeled as a capture shortcut over the same governed ingestion pipeline.
-
-The shortcut may:
-
-```text
-capture the current ChatGPT session
-return a capture task card
-store the session dump as an internal source artifact
-register the source artifact as an Asset / RawResource
-create the normal ingestion or extraction job
-show processing status in the current conversation
-```
-
-The shortcut must not:
+External tools, extractors, and LLMs may write only reviewable intermediate
+records through governed handlers:
 
 ```text
-create an untracked local export
-ask the user to choose a raw_folder or resource folder
-expose object-store or filesystem paths
-turn ChatGPT memory into the source of truth
-skip source account and actor attribution
-skip asset registration, permission scope, or audit
-```
-
-## Phase 0 Identity Boundary
-
-For the internal closed beta, FormOwl may use manual trusted identity selection. At MCP session start, the human selects a FormOwl user identity:
-
-```text
-select_actor(display_name_or_user_id)
-```
-
-The MCP Gateway returns the selected user, workspace memberships, active grants, and pending requests assigned to that user. The selected identity becomes `actor_user_id` for subsequent MCP calls and audit logs.
-
-This is not production authentication. It is acceptable only for trusted internal users on the company or lab network, and it must sit behind an `AuthProvider` interface so company SSO, OIDC, SAML, or another provider can replace it later.
-
-## Collaborative Graph Access
-
-The effective graph for a request may include:
-
-```text
-user-owned graph
-workspace graph
-graph fragments currently granted to the selected user
-```
-
-If User A asks about User B's private data and no grant exists, the MCP Gateway must not leak B's content. It should return an access-required response and create an explicit request when asked:
-
-```text
-access_required: true
-owner_user_id
-requestable_scope
-recommended_access_level: answer_only | graph_snippet | evidence_snippet | raw_asset
-```
-
-Owner approval tools may then approve, deny, narrow, expire, or revoke the request. Grant types should be scoped, such as answer-only, graph snippet, evidence snippet, one-time raw asset access, session access, asset-scoped access, query-scoped access, or project-scoped access.
-
-Raw access must go through FormOwl locators and permission checks:
-
-```text
-formowl://asset/{asset_id}
-formowl://evidence/{evidence_id}
-formowl://message/{message_id}
-```
-
-The MCP Gateway and Retrieval Gateway must check selected user identity, grant validity, scope match, expiration, access count, workspace membership, and audit policy before returning a redacted snippet, rendered preview, controlled stream, metadata, or permission denial.
-
-Entity matching, access overlay, and canonical merge must remain separate MCP-level workflows:
-
-```text
-match proposal does not imply data access
-data access does not imply canonical merge
-canonical merge does not grant raw asset access
-```
-
-MCP tools may return match candidates, request access to another scope, or submit a merge decision for review, but no MCP query should silently merge another user's private graph into the requester graph.
-
-## Tool Boundary Rule
-
-External tools may write to:
-
-```text
-ObservationStore
-CandidateAtomStore
+Observation
+SemanticMetadata
+CandidateMention
+CandidateBusinessObject
+CandidateAtom
+CandidateRelation
+CandidateFrame
 ExternalGraphImport
 ```
 
-Only FormOwl graph assembly may create canonical graph commits:
+Only the graph-governance backend may create a canonical commit:
 
 ```text
-CandidateGraph
-  -> GranularityPolicyEngine
-  -> EntityResolver
-  -> RelationResolver
-  -> CanonicalGraphCommit
+reviewed candidate set
+  -> evidence and permission validation
+  -> entity/relation/type resolution
+  -> canonical-write precondition validation
+  -> atomic CanonicalGraphCommit
+  -> lifecycle and audit events
 ```
 
-MCP tools may request or approve these operations according to permission and review policy, but the canonical commit remains a governed backend operation.
+An MCP tool may submit or approve a proposal according to policy, but the
+client does not directly write graph tables or choose a merge implementation.
 
-MCP tools must not expose raw infrastructure operations:
+Ontology term, alias, mapping, and promotion operations follow the same
+candidate/review/revision model.
+
+## 9. Collaborative Graph and Access Boundary
+
+An effective view may combine:
+
+```text
+actor-owned graph
+workspace/project graph
+currently granted graph fragments
+```
+
+If required evidence belongs to another scope and no grant exists, return an
+access-required response without private content. A separate request workflow
+may create, approve, narrow, deny, expire, or revoke access.
+
+Possible access levels include:
+
+```text
+answer_only
+graph_snippet
+evidence_snippet
+controlled raw_asset reference
+```
+
+Raw access requires an explicit grant and a governed locator such as
+`formowl://asset/{asset_id}`. It never returns a filesystem or object-store
+administration path.
+
+Entity matching, access overlay, canonical merge, and raw access remain
+separate workflows.
+
+## 10. Projection and External Writes
+
+MCP tools may create cited drafts and reviewable proposals:
+
+```text
+answer/report/dashboard draft
+wiki draft or refresh proposal
+project comment proposal
+work-item update proposal
+access decision proposal
+canonical graph commit proposal
+```
+
+External execution requires explicit authorization, current permission, a
+validated target, audit, and no-partial-write behavior. Automatic publishing or
+business-system mutation is disabled unless a separately approved workflow
+makes it explicit.
+
+## 11. Forbidden Tool Shapes
+
+ChatGPT-facing MCP must not expose:
 
 ```text
 list_nas_folder(path)
 read_file(path)
 open_smb_path(path)
-download_raw_pst(path)
+download_raw_archive(path)
 mount_share()
 run_parser_on_path(path)
 query_postgres_raw(sql)
+choose_storage_backend(name)
+choose_parser_path(path)
+choose_worker_queue(name)
+select_embedding_server(name)
+execute_graph_query_raw(query)
+read_private_oracle(case_id)
 ```
 
-Every governance-relevant operation should be audited, including actor selection, shared graph queries, access request creation, approval, denial, grant creation, grant revocation, evidence fetch, raw asset fetch, ingestion job submission, and graph commit requests.
+Public errors and tool results must not contain credentials, tokens, private
+keys, raw source payloads, raw paths, SQL, parser commands, worker scratch,
+model-cache paths, hidden oracle values, or unrelated private identifiers.
+
+## 12. Audit Boundary
+
+Audit covers:
+
+```text
+OAuth authorization and identity mapping
+invitation, bootstrap, token issue, expiry, and revocation
+HTTP and MCP authentication/authorization decisions
+source capture, upload, ingestion, and evidence access
+query-plan validation and repair
+graph traversal and deterministic exact execution
+access requests and grants
+candidate review and canonical commits
+projection and external write proposals
+```
+
+Audit records use safe identifiers, reason codes, hashes, timestamps, and
+revision lineage. Raw bearer tokens, authorization codes, PKCE verifiers,
+Google tokens, secrets, raw request bodies, private source text, paths, SQL, and
+full third-party responses are forbidden.
+
+Audit failure cannot yield an unaudited success or partial mutation.
+
+## 13. Local Compatibility Boundary
+
+`ManualTrustedInternalAuthProvider`, JSON-line commands, the hand-built
+JSON-RPC runner, stdio session variables, fixture stores, and local HTTP upload
+harnesses are test/local compatibility only. They are never documented as
+connected ChatGPT authentication or identity-selection paths.
+
+Safe compatibility reports use hashes, statuses, counts, and explicit claim
+boundaries. They do not prove live ChatGPT, OAuth, public TLS, production
+PostgreSQL, source completeness, KG superiority, or production readiness.
+
+## 14. Issue and Methodology Boundary
+
+Issue #20 owns the connected Google-backed OAuth bridge and fresh
+`ActorContext`. Its repository implementation does not prove the remaining
+external deployment and reviewer gates, so Issue #20 remains open.
+
+Issue #41 owns generic Asset tenant/owner binding, byte storage, occurrence,
+recovery, retention, purge, transfer, and authorization.
+
+GitHub issue #56 owns the graph-guided Hybrid KG + Ontology v2 methodology.
+Before methodology-quality UAT, comparison, or completion:
+
+```sh
+python3 scripts/methodology_authority_check.py --require-ready
+```
+
+A nonzero result blocks the claim. MCP tools may expose a safe blocked status,
+but they may not reinterpret it as readiness or route around it.

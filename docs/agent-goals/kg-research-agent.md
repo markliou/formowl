@@ -3,58 +3,128 @@
 ## Lifecycle
 
 - Label: `active-blocked`
-- Lossless history: `../archive/2026-07-11/kg-research-agent.md`
-- Retention: keep role, current objective, status, blockers, and next action only;
-  target at most 180 lines and archive before 250 lines.
+- Active program: GitHub issue #56
+- Historical pre-rewrite state:
+  `../archive/2026-08-18/active/docs/agent-goals/kg-research-agent.md`
+- Retention: keep this file at or below 180 lines.
 
 ## Role
 
-Knowledge Graph Research Agent.
+Knowledge Graph Research Agent. Durable role definition:
+`../agent-roles.md`.
 
-Durable role definition: `../agent-roles.md`.
+## Objective
 
-## Current Objective
+Implement and fairly evaluate
+`evidence_to_knowledge_kg_ontology_v2_hybrid_v1` so FormOwl can use a governed
+graph for heterogeneous-data integration and demonstrate a measurable
+final-answer advantage over strong RAG on graph-required tasks.
 
-Complete the FormOwl Knowledge Graph method exploration and acceptance work:
-fill in external recent literature comparison, ontology integration method,
-multi-user KG and KG fusion experiments, multimodal enterprise-data validation,
-annotation/adjudication workflow through either legacy human evidence or a
-four-professional-specialist LLM subagent panel, production adapter gate, and a
-total acceptance suite that clearly marks passed and failed items.
+The intended path is:
 
-Historical source: Codex session `019eda5f-7dd6-74a2-ac56-4f84e5d58560`.
+```text
+source-complete authorized Observations
+  -> strong RAG control
+  -> conservative entity linking
+  -> reviewed candidate/canonical graph topology
+  -> temporal/provenance/coverage constraints
+  -> scoped ontology with capped soft scoring
+  -> deterministic exact executor or cited answer
+```
 
-Status: `blocked` for the broad KG real-evidence acceptance objective. Current
-repo-side tooling is synchronized, but four broad real-evidence gates still
-require operator-supplied or public reproducible evidence before completion can
-be claimed. Product-level production readiness, top-tier scientific validation,
-raw access, canonical graph writes, autonomous business judgment, and
-enterprise-scale latency/scalability remain outside any future completion
-claim.
+Mail is the first source fixture. The method must transfer to a materially
+different source family without question-specific core types or aliases.
 
 ## Status
 
-`blocked`
+`blocked` for methodology-quality UAT, comparative superiority, default-path
+replacement, and objective completion. Diagnostic implementation may proceed.
 
-## Current Acceptance State
+The methodology authority guard is valid and must remain fail-closed. Current
+runtime still reports:
 
-Do not treat the broad KG real-evidence acceptance objective as complete in the
-current authority state. The stricter current state is blocked, and no broad
-completion claim is supported until the four remaining gates have accepted
-canonical packets and all authority reports are synchronized and passing.
+```text
+method: mail_candidate_kg_broad_ontology_diagnostic_v1
+tokenizer: ascii_identifier_regex_v1
+CJK support: false
+```
 
-## Blockers
+Frozen target:
 
-- The broad KG real-evidence objective remains unchecked on the active board.
-- Issue #38's authority harness is state-independent and clean-clone
-  reproducible. Its explicit blocked fixture still correctly reports the four
-  unresolved real-evidence gates; that blocked evidence state is not harness
-  drift.
-- No canonical completion claim is valid until the required packets, reports,
-  dev-container checks, and reviewer gate agree.
+```text
+method: evidence_to_knowledge_kg_ontology_v2_hybrid_v1
+tokenizer: jieba_sentencepiece_frozen_profile_candidate_admission_v1
+```
+
+## Non-Negotiable Method
+
+- Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence
+  reranking over the same Observations.
+- KG adds reviewed identity, cross-source joins, bounded traversal, temporal
+  state, contradiction, provenance, and coverage.
+- Ontology is small-core, scoped, data-first, versioned, and capped additive.
+  Inferred mismatch cannot prune admitted evidence.
+- Permission, schema/arity, lineage, revision pins, canonical-write
+  preconditions, and exact-set coverage remain hard invariants.
+- Exact set/count/inventory/aggregation/definitive-negative queries use a
+  deterministic executor, not top-k inference.
+- The final answer model, prompt, reasoning effort, schema, and context budget
+  are identical across comparison arms.
+- Independent holdout content cannot tune tokenizer, aliases, ontology,
+  graph rules, thresholds, prompts, or models.
+- PostgreSQL/pgvector remains canonical; no Neo4j work is authorized.
+
+## Current Blockers
+
+The executable authority still blocks:
+
+1. runtime pipeline matching the frozen method/tokenizer;
+2. source completeness against a raw/source-system oracle;
+3. evaluation reports bound to one execution fingerprint;
+4. same-pipeline real-source strong-RAG versus Hybrid-v2 ablation;
+5. real-user final-answer acceptance.
+
+Historical regex, candidate-only, synthetic, issue #33, and issue #55 results
+cannot satisfy these gates.
+
+## Current Work Sequence
+
+1. Package the immutable target tokenizer/profile and enforce same-profile
+   query/evidence indexing without fallback.
+2. Reconcile the authorized Observation snapshot against a source oracle and
+   classify every loss.
+3. Build the strong RAG control over that same snapshot.
+4. Add typed routing and deterministic exact execution.
+5. Add conservative entity linking, bounded source-backed traversal, and
+   evidence-bundle reranking.
+6. Add scoped ontology mappings and capped soft scoring; retain hard pruning
+   only as a negative ablation.
+7. Freeze model/prompt/budget/fingerprint manifests and run diagnostic arms.
+8. Run independent holdout and transfer-domain final-answer evaluation only
+   after the authority permits it.
+
+## Acceptance Boundary
+
+Implementation completion and comparative close are distinct.
+
+Implementation completion requires target runtime, source-complete graph input,
+strong RAG, typed plans, deterministic exact execution, graph/ontology path,
+generalized tests, frozen diagnostic artifacts, synchronized docs, canonical
+container verification, and 3/3 reviewer agreement.
+
+Comparative close additionally requires the independent holdout and transfer
+domain to pass pre-registered correctness, citation, no-answer, privacy,
+latency, and cost gates, plus:
+
+```sh
+python3 scripts/methodology_authority_check.py --require-ready
+```
+
+exiting zero.
 
 ## Next Action
 
-Resume the single unchecked KG real-evidence board item from its archived proof
-requirements by collecting or selecting accepted evidence for the four blocked
-gates. Keep candidate-before-canonical and no-raw-path boundaries intact.
+Start issue #56 Work Package A with the smallest implementation slice: package
+and hash the immutable Jieba + SentencePiece profile, bind query and evidence
+to the same profile, add mixed-CJK/protected-identifier and no-fallback tests,
+and keep every output diagnostic until the authority gate is ready.

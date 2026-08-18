@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "authority_id": "formowl_methodology_authority_v1",
-  "updated_at": "2026-07-22",
+  "updated_at": "2026-08-18",
   "status": "blocked",
   "target_pipeline": {
     "method_id": "evidence_to_knowledge_kg_ontology_v2_hybrid_v1",
@@ -20,42 +20,47 @@
     {
       "gate_id": "runtime_pipeline_matches_target_method",
       "status": "blocked",
-      "reason_code": "runtime_method_and_tokenizer_not_migrated",
+      "reason_code": "runtime_method_and_tokenizer_not_migrated_to_issue56_target",
       "evidence": [
         "python/formowl_mail/query.py",
-        "python/formowl_mail/evidence.py"
+        "python/formowl_mail/evidence.py",
+        "docs/kg-ontology-v2-runtime-evaluation-plan.md"
       ]
     },
     {
       "gate_id": "source_completeness_compared_with_raw_oracle",
       "status": "blocked",
-      "reason_code": "raw_source_to_observation_loss_not_measured",
+      "reason_code": "source_complete_observation_snapshot_not_yet_validated",
       "evidence": [
-        "RESOURCE_EXTRACTION_SPEC.md"
+        "RESOURCE_EXTRACTION_SPEC.md",
+        "docs/kg-ontology-v2-runtime-evaluation-plan.md"
       ]
     },
     {
       "gate_id": "evaluation_reports_bind_execution_fingerprint",
       "status": "blocked",
-      "reason_code": "historical_reports_do_not_bind_one_runtime_pipeline",
+      "reason_code": "issue56_reports_not_yet_bound_to_one_accepted_execution_fingerprint",
       "evidence": [
-        "experiments/kg_ontology_v2_coordination/results/procurement_full_pst_domain_hard_summary_2026-07-09.json"
+        "docs/kg-research-method.md",
+        "docs/kg-ontology-v2-runtime-evaluation-plan.md"
       ]
     },
     {
       "gate_id": "same_pipeline_real_source_ablation",
       "status": "blocked",
-      "reason_code": "hybrid_v2_not_rerun_on_same_real_source_pipeline",
+      "reason_code": "strong_rag_and_hybrid_v2_not_yet_run_on_one_source_complete_pipeline",
       "evidence": [
-        "experiments/kg_ontology_v2_coordination/results/procurement_full_pst_domain_hard_summary_2026-07-09.json"
+        "docs/kg-research-method.md",
+        "docs/kg-ontology-v2-runtime-evaluation-plan.md"
       ]
     },
     {
       "gate_id": "real_user_end_answer_acceptance",
       "status": "blocked",
-      "reason_code": "retrieval_scores_do_not_establish_final_answer_correctness",
+      "reason_code": "independent_holdout_and_transfer_final_answer_acceptance_missing",
       "evidence": [
-        "docs/agent-goals/kg-research-agent.md"
+        "docs/agent-goals/kg-research-agent.md",
+        "docs/kg-research-method.md"
       ]
     }
   ],
