@@ -33,7 +33,8 @@ from formowl_gateway.issue56_diagnostic import (  # noqa: E402
     ISSUE56_DIAGNOSTIC_USER_ID,
     ISSUE56_DIAGNOSTIC_WORKSPACE_ID,
     ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
-    ISSUE56_REAL_PROMPT_SEALED_SOURCE_LOADER_CONTRACT_ID,
+    ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
+    ISSUE56_RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_ID,
     ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
     ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V1_MODE_ID,
     ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V2_MODE_ID,
@@ -41,11 +42,16 @@ from formowl_gateway.issue56_diagnostic import (  # noqa: E402
     Issue56DiagnosticComposition,
     Issue56SealedSourceDiagnosticInput,
     build_issue56_diagnostic_composition,
+    build_issue56_relation_projection_equivalence_compositions,
     build_safe_diagnostic_report,
+    build_safe_relation_projection_equivalence_arm,
+    build_safe_relation_projection_equivalence_report,
     mcp_headers,
     mcp_initialize_request,
     mcp_list_tools_request,
     mcp_query_request,
+    relation_projection_cache_containers_are_isolated,
+    relation_projection_cache_evidence,
     safe_blocked_report,
 )
 from starlette.testclient import TestClient  # noqa: E402
@@ -55,6 +61,10 @@ _REAL_PROMPT_CONSUMED_CLAIM_ARTIFACT_ID = (
     "formowl_issue56_real_prompt_sealed_source_diagnostic_consumed_claim_v4"
 )
 _REAL_PROMPT_CONSUMED_CLAIM_SCHEMA_VERSION = 4
+_RELATION_PROJECTION_EQUIVALENCE_CONSUMED_CLAIM_ARTIFACT_ID = (
+    "formowl_issue56_relation_projection_equivalence_consumed_claim_v5"
+)
+_RELATION_PROJECTION_EQUIVALENCE_CONSUMED_CLAIM_SCHEMA_VERSION = 5
 _LOADER_SPEC_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$")
 _SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -64,6 +74,32 @@ class _ConsumedClaimReceipt:
     claim_fingerprint: str
     byte_sha256: str
     execution_binding_fingerprint: str
+
+
+@dataclass(frozen=True)
+class _RelationProjectionEquivalenceVersionContract:
+    diagnostic_mode_id: str
+    loader_contract_id: str
+    claim_artifact_id: str
+    claim_schema_version: int
+    enforce_repository_state_root: bool
+
+
+@dataclass(frozen=True)
+class _DiagnosticHttpExchange:
+    initialize_response: Mapping[str, Any]
+    list_response: Mapping[str, Any]
+    query_response: Mapping[str, Any]
+    elapsed_ms: float
+
+
+_RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT = _RelationProjectionEquivalenceVersionContract(
+    diagnostic_mode_id=(ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID),
+    loader_contract_id=(ISSUE56_RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_ID),
+    claim_artifact_id=(_RELATION_PROJECTION_EQUIVALENCE_CONSUMED_CLAIM_ARTIFACT_ID),
+    claim_schema_version=(_RELATION_PROJECTION_EQUIVALENCE_CONSUMED_CLAIM_SCHEMA_VERSION),
+    enforce_repository_state_root=True,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -76,6 +112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V2_MODE_ID,
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
             ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
+            ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
         ),
         default=ISSUE56_SYNTHETIC_DIAGNOSTIC_MODE_ID,
     )
@@ -107,11 +144,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V1_MODE_ID,
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V2_MODE_ID,
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
+            ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
         }:
             raise ContractValidationError(
                 "sealed diagnostic version is immutable and already consumed"
             )
-        if args.mode == ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID:
+        if args.mode == ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID:
             if args.prompt is not None:
                 raise ContractValidationError(
                     "sealed diagnostic prompt is repository-owned and immutable"
@@ -121,12 +159,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "sealed diagnostic loader and state root are required"
                 )
             loader = resolve_sealed_source_loader(args.sealed_source_loader)
-            report = run_real_prompt_sealed_source_diagnostic_once(
+            report = run_relation_projection_equivalence_diagnostic_once(
                 loader=loader,
                 loader_spec_fingerprint=sha256_json(
                     {
                         "loader_contract_id": (
-                            ISSUE56_REAL_PROMPT_SEALED_SOURCE_LOADER_CONTRACT_ID
+                            ISSUE56_RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_ID
                         ),
                         "loader_spec": args.sealed_source_loader,
                     }
@@ -140,8 +178,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             report = run_diagnostic(args.prompt or ISSUE56_DIAGNOSTIC_DEFAULT_PROMPT)
     except DenseEmbeddingUnavailableError as exc:
-        if args.mode == ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID:
-            version_consumed = _real_prompt_sealed_claim_exists(args.state_root)
+        if args.mode == ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID:
+            version_consumed = _relation_projection_equivalence_claim_exists(
+                args.state_root,
+                contract=_RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT,
+            )
         report = safe_blocked_report(
             exc.reason_code,
             diagnostic_mode_id=args.mode,
@@ -152,10 +193,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V1_MODE_ID,
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V2_MODE_ID,
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
+            ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
         }:
             version_consumed = True
-        elif args.mode == ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID:
-            version_consumed = _real_prompt_sealed_claim_exists(args.state_root)
+        elif args.mode == ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID:
+            version_consumed = _relation_projection_equivalence_claim_exists(
+                args.state_root,
+                contract=_RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT,
+            )
         report = safe_blocked_report(
             type(exc).__name__,
             diagnostic_mode_id=args.mode,
@@ -193,13 +238,55 @@ def run_real_prompt_sealed_source_diagnostic_once(
     loader_spec_fingerprint: str,
     state_root: Path,
 ) -> dict[str, Any]:
-    """Load/select safely, consume the v4 claim, execute once, and publish once."""
+    """Reject the immutable, already-consumed v4 execution boundary."""
+
+    del loader, loader_spec_fingerprint, state_root
+    raise ContractValidationError("sealed diagnostic version is immutable and already consumed")
+
+
+def run_relation_projection_equivalence_diagnostic_once(
+    *,
+    loader: Callable[[], Issue56SealedSourceDiagnosticInput],
+    loader_spec_fingerprint: str,
+    state_root: Path,
+) -> dict[str, Any]:
+    """Execute the official v5 contract once at its canonical state root."""
+
+    return _run_relation_projection_equivalence_diagnostic_once(
+        loader=loader,
+        loader_spec_fingerprint=loader_spec_fingerprint,
+        state_root=state_root,
+        contract=_RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT,
+    )
+
+
+def _run_relation_projection_equivalence_diagnostic_once(
+    *,
+    loader: Callable[[], Issue56SealedSourceDiagnosticInput],
+    loader_spec_fingerprint: str,
+    state_root: Path,
+    contract: _RelationProjectionEquivalenceVersionContract,
+) -> dict[str, Any]:
+    """Preflight both arms, consume once, execute both HTTP paths, publish once."""
 
     if not callable(loader):
         raise ContractValidationError("sealed diagnostic loader is not callable")
-    _require_sha256(loader_spec_fingerprint, "sealed diagnostic loader spec fingerprint")
+    _require_sha256(
+        loader_spec_fingerprint,
+        "sealed diagnostic loader spec fingerprint",
+    )
+    _validate_relation_projection_equivalence_version_contract(contract)
+    if contract.enforce_repository_state_root:
+        expected_state_root = (
+            ROOT / ".test-tmp" / f"{contract.diagnostic_mode_id}-state"
+        ).resolve()
+        if state_root.resolve() != expected_state_root:
+            raise ContractValidationError("relation projection diagnostic state root mismatch")
     state_root = _prepare_state_root(state_root)
-    claim_path, output_path = _real_prompt_sealed_paths(state_root)
+    claim_path, output_path = _relation_projection_equivalence_paths(
+        state_root,
+        contract=contract,
+    )
     if claim_path.exists() or claim_path.is_symlink():
         raise ContractValidationError("sealed diagnostic version is already consumed")
     if output_path.exists() or output_path.is_symlink():
@@ -211,42 +298,62 @@ def run_real_prompt_sealed_source_diagnostic_once(
     if not isinstance(source, Issue56SealedSourceDiagnosticInput):
         raise ContractValidationError("sealed diagnostic loader returned an unsupported contract")
     if (
-        source.diagnostic_mode_id != ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID
+        source.diagnostic_mode_id != contract.diagnostic_mode_id
         or source.private_prompt is None
         or source.prompt_selection is None
     ):
-        raise ContractValidationError("real-prompt sealed diagnostic loader contract mismatch")
-    composition = build_issue56_diagnostic_composition(
-        diagnostic_mode_id=ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
-        sealed_source=source,
-    )
+        raise ContractValidationError("relation projection diagnostic loader contract mismatch")
+    before, after = build_issue56_relation_projection_equivalence_compositions(source)
     prompt_hash = sha256_json(source.private_prompt)
     if prompt_hash != source.prompt_selection.prompt_hash:
-        raise ContractValidationError("real-prompt sealed diagnostic prompt binding mismatch")
+        raise ContractValidationError("relation projection diagnostic prompt binding mismatch")
+    cache_containers_isolated = relation_projection_cache_containers_are_isolated(before, after)
+    before_cache_before = relation_projection_cache_evidence(before)
+    after_cache_before = relation_projection_cache_evidence(after)
+    if (
+        not cache_containers_isolated
+        or before_cache_before["entry_count"] != 0
+        or before_cache_before["expected_binding_present"]
+        or after_cache_before["entry_count"] != 1
+        or not after_cache_before["expected_binding_present"]
+    ):
+        raise ContractValidationError("relation projection diagnostic cache preflight mismatch")
     execution_binding_fingerprint = sha256_json(
         {
-            "schema_version": 4,
+            "schema_version": contract.claim_schema_version,
             "artifact_id": ISSUE56_DIAGNOSTIC_ARTIFACT_ID,
-            "diagnostic_mode_id": (ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID),
+            "diagnostic_mode_id": contract.diagnostic_mode_id,
             "prompt_hash": prompt_hash,
             "selection_proof_fingerprint": (source.prompt_selection.selection_proof_fingerprint),
             "source_binding_fingerprint": source.source_binding_fingerprint,
+            "permission_lineage_fingerprint": (source.permission_lineage_fingerprint),
+            "effective_graph_view_fingerprint": (source.effective_graph_view_fingerprint),
+            "graph_revision_fingerprint": source.graph_revision_fingerprint,
+            "index_fingerprint": source.session.index.index_fingerprint,
+            "relation_projection_base_precompute_fingerprint": (
+                source.relation_projection_base_precompute.precompute_fingerprint
+            ),
+            "relation_projection_cache_binding_fingerprint": (
+                source.relation_projection_base_precompute.cache_binding_fingerprint
+            ),
             "identity_scope_mode": ISSUE56_DIAGNOSTIC_IDENTITY_SCOPE_MODE,
             "workspace_id": ISSUE56_DIAGNOSTIC_WORKSPACE_ID,
             "approver_user_id": ISSUE56_DIAGNOSTIC_USER_ID,
-            "loader_contract_id": (ISSUE56_REAL_PROMPT_SEALED_SOURCE_LOADER_CONTRACT_ID),
+            "loader_contract_id": contract.loader_contract_id,
             "loader_spec_fingerprint": loader_spec_fingerprint,
+            "arm_order": ["before_cold", "after_precomputed"],
         }
     )
     claim = {
-        "artifact_id": _REAL_PROMPT_CONSUMED_CLAIM_ARTIFACT_ID,
-        "schema_version": _REAL_PROMPT_CONSUMED_CLAIM_SCHEMA_VERSION,
+        "artifact_id": contract.claim_artifact_id,
+        "schema_version": contract.claim_schema_version,
         "status": "consumed",
-        "claim_boundary": "diagnostic_only_not_quality_or_methodology_evidence",
-        "diagnostic_mode_id": (ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID),
+        "claim_boundary": ("diagnostic_only_not_quality_or_methodology_evidence"),
+        "diagnostic_mode_id": contract.diagnostic_mode_id,
         "prompt_hash": prompt_hash,
         "selection_proof_fingerprint": (source.prompt_selection.selection_proof_fingerprint),
         "source_binding_fingerprint": source.source_binding_fingerprint,
+        "permission_lineage_fingerprint": (source.permission_lineage_fingerprint),
         "identity_scope_mode": ISSUE56_DIAGNOSTIC_IDENTITY_SCOPE_MODE,
         "identity_scope_fingerprint": sha256_json(
             {
@@ -255,15 +362,13 @@ def run_real_prompt_sealed_source_diagnostic_once(
                 "approver_user_id": ISSUE56_DIAGNOSTIC_USER_ID,
             }
         ),
-        "loader_contract_id": (ISSUE56_REAL_PROMPT_SEALED_SOURCE_LOADER_CONTRACT_ID),
+        "loader_contract_id": contract.loader_contract_id,
         "loader_spec_fingerprint": loader_spec_fingerprint,
         "execution_binding_fingerprint": execution_binding_fingerprint,
+        "arm_count": 2,
     }
     claim["claim_fingerprint"] = sha256_json(claim)
-    assert_no_public_raw_references(
-        claim,
-        _REAL_PROMPT_CONSUMED_CLAIM_ARTIFACT_ID,
-    )
+    assert_no_public_raw_references(claim, contract.claim_artifact_id)
     _assert_no_legacy_identity_fields(claim)
     claim_byte_sha256 = _atomic_publish_json_once(claim_path, claim)
     receipt = _ConsumedClaimReceipt(
@@ -271,11 +376,52 @@ def run_real_prompt_sealed_source_diagnostic_once(
         byte_sha256=claim_byte_sha256,
         execution_binding_fingerprint=execution_binding_fingerprint,
     )
-    report = _run_http_diagnostic(
-        composition=composition,
+
+    before_exchange = _execute_http_diagnostic_exchange(
+        composition=before,
         prompt=source.private_prompt,
+    )
+    before_cache_after = relation_projection_cache_evidence(before)
+    before_arm = build_safe_relation_projection_equivalence_arm(
+        arm_id="before_cold",
+        composition=before,
+        prompt=source.private_prompt,
+        initialize_response=before_exchange.initialize_response,
+        list_response=before_exchange.list_response,
+        query_response=before_exchange.query_response,
+        http_elapsed_ms=before_exchange.elapsed_ms,
+        cache_before=before_cache_before,
+        cache_after=before_cache_after,
+    )
+
+    after_exchange = _execute_http_diagnostic_exchange(
+        composition=after,
+        prompt=source.private_prompt,
+    )
+    after_cache_after = relation_projection_cache_evidence(after)
+    after_arm = build_safe_relation_projection_equivalence_arm(
+        arm_id="after_precomputed",
+        composition=after,
+        prompt=source.private_prompt,
+        initialize_response=after_exchange.initialize_response,
+        list_response=after_exchange.list_response,
+        query_response=after_exchange.query_response,
+        http_elapsed_ms=after_exchange.elapsed_ms,
+        cache_before=after_cache_before,
+        cache_after=after_cache_after,
+    )
+    report = build_safe_relation_projection_equivalence_report(
+        source=source,
+        prompt=source.private_prompt,
+        before_arm=before_arm,
+        after_arm=after_arm,
         source_loader_elapsed_ms=source_loader_elapsed_ms,
-        consumed_claim=receipt,
+        consumed_claim_fingerprint=receipt.claim_fingerprint,
+        consumed_claim_byte_sha256=receipt.byte_sha256,
+        execution_binding_fingerprint=(receipt.execution_binding_fingerprint),
+        cache_containers_isolated=(
+            relation_projection_cache_containers_are_isolated(before, after)
+        ),
     )
     _atomic_publish_json_once(output_path, report)
     return report
@@ -303,6 +449,35 @@ def _run_http_diagnostic(
     source_loader_elapsed_ms: float | None = None,
     consumed_claim: _ConsumedClaimReceipt | None = None,
 ) -> dict[str, Any]:
+    exchange = _execute_http_diagnostic_exchange(
+        composition=composition,
+        prompt=prompt,
+    )
+    return build_safe_diagnostic_report(
+        composition=composition,
+        prompt=prompt,
+        initialize_response=exchange.initialize_response,
+        list_response=exchange.list_response,
+        query_response=exchange.query_response,
+        http_elapsed_ms=exchange.elapsed_ms,
+        source_loader_elapsed_ms=source_loader_elapsed_ms,
+        consumed_claim_fingerprint=(
+            consumed_claim.claim_fingerprint if consumed_claim is not None else None
+        ),
+        consumed_claim_byte_sha256=(
+            consumed_claim.byte_sha256 if consumed_claim is not None else None
+        ),
+        execution_binding_fingerprint=(
+            consumed_claim.execution_binding_fingerprint if consumed_claim is not None else None
+        ),
+    )
+
+
+def _execute_http_diagnostic_exchange(
+    *,
+    composition: Issue56DiagnosticComposition,
+    prompt: str,
+) -> _DiagnosticHttpExchange:
     started_at = time.perf_counter()
     with TestClient(
         composition.application.app,
@@ -330,23 +505,11 @@ def _run_http_diagnostic(
         raise RuntimeError("diagnostic_list_http_failed")
     if queried.status_code != 200:
         raise RuntimeError("diagnostic_query_http_failed")
-    return build_safe_diagnostic_report(
-        composition=composition,
-        prompt=prompt,
+    return _DiagnosticHttpExchange(
         initialize_response=initialized.json(),
         list_response=listed.json(),
         query_response=queried.json(),
-        http_elapsed_ms=elapsed_ms,
-        source_loader_elapsed_ms=source_loader_elapsed_ms,
-        consumed_claim_fingerprint=(
-            consumed_claim.claim_fingerprint if consumed_claim is not None else None
-        ),
-        consumed_claim_byte_sha256=(
-            consumed_claim.byte_sha256 if consumed_claim is not None else None
-        ),
-        execution_binding_fingerprint=(
-            consumed_claim.execution_binding_fingerprint if consumed_claim is not None else None
-        ),
+        elapsed_ms=elapsed_ms,
     )
 
 
@@ -375,6 +538,20 @@ def _real_prompt_sealed_paths(state_root: Path) -> tuple[Path, Path]:
     )
 
 
+def _relation_projection_equivalence_paths(
+    state_root: Path,
+    *,
+    contract: _RelationProjectionEquivalenceVersionContract = (
+        _RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT
+    ),
+) -> tuple[Path, Path]:
+    stem = contract.diagnostic_mode_id
+    return (
+        state_root / f"{stem}.consumed.safe.json",
+        state_root / f"{stem}.safe.json",
+    )
+
+
 def _sealed_claim_exists(state_root: Path | None) -> bool:
     if state_root is None or not isinstance(state_root, Path):
         return False
@@ -387,6 +564,41 @@ def _real_prompt_sealed_claim_exists(state_root: Path | None) -> bool:
         return False
     claim_path, _ = _real_prompt_sealed_paths(state_root)
     return claim_path.exists() or claim_path.is_symlink()
+
+
+def _relation_projection_equivalence_claim_exists(
+    state_root: Path | None,
+    *,
+    contract: _RelationProjectionEquivalenceVersionContract,
+) -> bool:
+    if state_root is None or not isinstance(state_root, Path):
+        return False
+    claim_path, _ = _relation_projection_equivalence_paths(
+        state_root,
+        contract=contract,
+    )
+    return claim_path.exists() or claim_path.is_symlink()
+
+
+def _validate_relation_projection_equivalence_version_contract(
+    contract: _RelationProjectionEquivalenceVersionContract,
+) -> None:
+    if (
+        not isinstance(contract, _RelationProjectionEquivalenceVersionContract)
+        or not isinstance(contract.diagnostic_mode_id, str)
+        or not contract.diagnostic_mode_id
+        or not isinstance(contract.loader_contract_id, str)
+        or not contract.loader_contract_id
+        or not isinstance(contract.claim_artifact_id, str)
+        or not contract.claim_artifact_id
+        or type(contract.claim_schema_version) is not int
+        or contract.claim_schema_version <= 0
+    ):
+        raise ContractValidationError("relation projection diagnostic version contract is invalid")
+    if contract.enforce_repository_state_root and (
+        contract != _RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT
+    ):
+        raise ContractValidationError("relation projection diagnostic production contract mismatch")
 
 
 def _atomic_publish_json_once(path: Path, payload: Mapping[str, Any]) -> str:

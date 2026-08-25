@@ -25,6 +25,8 @@ from formowl_mail.issue56_sealed_source import (
 from .issue56_diagnostic import (
     ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
     ISSUE56_REAL_PROMPT_SEALED_SOURCE_LOADER_CONTRACT_ID,
+    ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
+    ISSUE56_RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_ID,
     ISSUE56_SEALED_SOURCE_LOADER_CONTRACT_ID,
     Issue56SealedSourceDiagnosticInput,
     build_issue56_sealed_source_diagnostic_input,
@@ -37,6 +39,10 @@ LOADER_SPEC: Final[str] = (
 REAL_PROMPT_LOADER_SPEC: Final[str] = (
     "formowl_gateway.issue56_sealed_source_loader:"
     "load_issue56_real_prompt_sealed_source_diagnostic_input"
+)
+RELATION_PROJECTION_EQUIVALENCE_LOADER_SPEC: Final[str] = (
+    "formowl_gateway.issue56_sealed_source_loader:"
+    "load_issue56_relation_projection_equivalence_diagnostic_input"
 )
 LOADER_CONTRACT_FINGERPRINT: Final[str] = sha256_json(
     {
@@ -72,6 +78,23 @@ REAL_PROMPT_LOADER_CONTRACT_FINGERPRINT: Final[str] = sha256_json(
         "selector_invocation_count": 1,
         "selector_input": "Issue56SealedSourceLoad",
         "selector_output": ("private_prompt_plus_hash_count_only_safe_selection_proof_v1"),
+        "identity_scope_mode": IDENTITY_SCOPE_MODE,
+        "workspace_id": WORKSPACE_ID,
+        "approver_actor": APPROVER_ACTOR,
+        "tenant_id_allowed": False,
+        "uat_or_holdout_manifest_input_allowed": False,
+        "canonical_write_allowed": False,
+    }
+)
+RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_FINGERPRINT: Final[str] = sha256_json(
+    {
+        "loader_contract_id": (ISSUE56_RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_ID),
+        "base_real_prompt_loader_contract_fingerprint": (REAL_PROMPT_LOADER_CONTRACT_FINGERPRINT),
+        "source_view_policy": ("one_owner_precomputed_view_plus_gateway_isolated_cold_copy_v1"),
+        "relation_projection_base_precompute_invocation_count": 1,
+        "relation_projection_base_precompute_invocation_owner": (
+            "formowl_mail.issue56_sealed_source"
+        ),
         "identity_scope_mode": IDENTITY_SCOPE_MODE,
         "workspace_id": WORKSPACE_ID,
         "approver_actor": APPROVER_ACTOR,
@@ -178,6 +201,45 @@ def load_issue56_real_prompt_sealed_source_diagnostic_input(
         loaded,
         loader_contract_fingerprint=(REAL_PROMPT_LOADER_CONTRACT_FINGERPRINT),
         diagnostic_mode_id=(ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID),
+        private_prompt=private_prompt,
+        prompt_selection=safe_selection_proof,
+    )
+
+
+def load_issue56_relation_projection_equivalence_diagnostic_input(
+    *,
+    selector: Callable[[Any], Any] | None = None,
+) -> Issue56SealedSourceDiagnosticInput:
+    """Load one owner-precomputed source for the paired v5 diagnostic."""
+
+    loaded = _load_approved_sealed_source()
+    if selector is None:
+        from formowl_mail.issue56_real_prompt import (
+            select_source_backed_connected_identifier_prompt,
+        )
+
+        selector = select_source_backed_connected_identifier_prompt
+    relation_types = tuple(
+        sorted({edge.relation_type for edge in loaded.effective_graph_view.visible_edges})
+    )
+    selected = selector(
+        session=loaded.session,
+        effective_graph_view=loaded.effective_graph_view,
+        candidate_inventory=loaded.identifier_mention_batch,
+        allowed_relation_types=relation_types,
+    )
+    private_prompt, owner_selection_proof = _normalize_prompt_selection(selected)
+    safe_binding = _validated_owner_safe_binding(loaded.safe_binding)
+    safe_selection_proof = _gateway_prompt_selection_binding(
+        private_prompt=private_prompt,
+        owner_selection_proof=owner_selection_proof,
+        source_loader_binding_fingerprint=str(safe_binding["binding_fingerprint"]),
+        permission_fingerprint=str(safe_binding["permission_fingerprint"]),
+    )
+    return _build_gateway_input(
+        loaded,
+        loader_contract_fingerprint=(RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_FINGERPRINT),
+        diagnostic_mode_id=(ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID),
         private_prompt=private_prompt,
         prompt_selection=safe_selection_proof,
     )
@@ -370,6 +432,9 @@ __all__ = [
     "LOADER_SPEC",
     "REAL_PROMPT_LOADER_CONTRACT_FINGERPRINT",
     "REAL_PROMPT_LOADER_SPEC",
+    "RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_FINGERPRINT",
+    "RELATION_PROJECTION_EQUIVALENCE_LOADER_SPEC",
     "load_issue56_sealed_source_diagnostic_input",
     "load_issue56_real_prompt_sealed_source_diagnostic_input",
+    "load_issue56_relation_projection_equivalence_diagnostic_input",
 ]
