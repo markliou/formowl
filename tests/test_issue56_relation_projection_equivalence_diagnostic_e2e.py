@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 import json
+import os
 from pathlib import Path
+import stat
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -33,17 +36,80 @@ _OFFICIAL_STATE_ROOT = (
 )
 
 
-class Issue56RelationProjectionEquivalenceDiagnosticEndToEndTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.assertFalse(
-            _OFFICIAL_STATE_ROOT.exists(),
-            "focused tests must never consume the official v5 state root",
+def _snapshot_formal_state_root(
+    root: Path,
+) -> tuple[str, str | None, int | None, str | None, tuple[tuple[str, str, int, str | None], ...]]:
+    """Capture hash-only immutable state without following links."""
+
+    try:
+        root.lstat()
+    except FileNotFoundError:
+        return ("absent", None, None, None, ())
+
+    def file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return f"sha256:{digest.hexdigest()}"
+
+    def entry_metadata(
+        path: Path,
+        relative_path: str,
+    ) -> tuple[str, str, int, str | None]:
+        metadata = path.lstat()
+        if stat.S_ISREG(metadata.st_mode):
+            entry_type = "regular_file"
+            byte_sha256 = file_sha256(path)
+        elif stat.S_ISDIR(metadata.st_mode):
+            entry_type = "directory"
+            byte_sha256 = None
+        elif stat.S_ISLNK(metadata.st_mode):
+            entry_type = "symlink"
+            byte_sha256 = "sha256:" + hashlib.sha256(os.fsencode(os.readlink(path))).hexdigest()
+        else:
+            entry_type = "other"
+            byte_sha256 = None
+        return (
+            relative_path,
+            entry_type,
+            metadata.st_size,
+            byte_sha256,
         )
 
+    root_entry = entry_metadata(root, ".")
+    inventory: list[tuple[str, str, int, str | None]] = []
+
+    def visit(directory: Path) -> None:
+        with os.scandir(directory) as iterator:
+            entries = sorted(iterator, key=lambda entry: entry.name)
+        for entry in entries:
+            path = Path(entry.path)
+            relative_path = path.relative_to(root).as_posix()
+            inventory.append(entry_metadata(path, relative_path))
+            if entry.is_dir(follow_symlinks=False):
+                visit(path)
+
+    if root_entry[1] == "directory":
+        visit(root)
+    return (
+        "present",
+        root_entry[1],
+        root_entry[2],
+        root_entry[3],
+        tuple(inventory),
+    )
+
+
+class Issue56RelationProjectionEquivalenceDiagnosticEndToEndTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._official_state_root_snapshot = _snapshot_formal_state_root(_OFFICIAL_STATE_ROOT)
+
     def tearDown(self) -> None:
-        self.assertFalse(
-            _OFFICIAL_STATE_ROOT.exists(),
-            "focused tests must leave the official v5 state root absent",
+        self.assertEqual(
+            _snapshot_formal_state_root(_OFFICIAL_STATE_ROOT),
+            self._official_state_root_snapshot,
+            "focused tests must preserve the official v5 state root byte-for-byte",
         )
 
     def test_two_full_http_arms_are_semantically_equal_and_cache_isolated(

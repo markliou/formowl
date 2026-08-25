@@ -17,6 +17,9 @@ from formowl_graph import EffectiveGraphView
 import formowl_mail
 from formowl_mail import hybrid as hybrid_module
 from scripts import issue56_prompt_mcp_hybrid_diagnostic as diagnostic_cli
+from test_issue56_relation_projection_equivalence_diagnostic_e2e import (
+    _snapshot_formal_state_root,
+)
 import test_issue56_real_prompt_mcp_phase_trace_e2e as real_prompt_fixture
 
 
@@ -31,6 +34,11 @@ _TEST_CONTRACT = diagnostic_cli._RelationProjectionEquivalenceVersionContract(
 )
 _PRIVATE_PROMPT = "PO470002002 與 ORIGIN-TAIWAN-01 的關係"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+_FORMAL_V5_STATE_ROOT = (
+    _REPOSITORY_ROOT
+    / ".test-tmp"
+    / (f"{diagnostic.ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID}" "-state")
+)
 _FORMAL_V6_STATE_ROOT = (
     _REPOSITORY_ROOT
     / ".test-tmp"
@@ -40,15 +48,19 @@ _FORMAL_V6_STATE_ROOT = (
 
 class Issue56RelationProjectionEquivalenceV6EndToEndTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.assertFalse(
-            _FORMAL_V6_STATE_ROOT.exists(),
-            "focused tests must not create the formal v6 state root",
-        )
+        self._formal_state_root_snapshots = {
+            "v5": _snapshot_formal_state_root(_FORMAL_V5_STATE_ROOT),
+            "v6": _snapshot_formal_state_root(_FORMAL_V6_STATE_ROOT),
+        }
 
     def tearDown(self) -> None:
-        self.assertFalse(
-            _FORMAL_V6_STATE_ROOT.exists(),
-            "focused tests must leave the formal v6 state root absent",
+        self.assertEqual(
+            {
+                "v5": _snapshot_formal_state_root(_FORMAL_V5_STATE_ROOT),
+                "v6": _snapshot_formal_state_root(_FORMAL_V6_STATE_ROOT),
+            },
+            self._formal_state_root_snapshots,
+            "focused tests must preserve formal v5/v6 state roots byte-for-byte",
         )
 
     def test_presealed_cold_and_primed_arms_are_equivalent_over_full_http(
@@ -426,11 +438,6 @@ class Issue56RelationProjectionEquivalenceV6EndToEndTests(unittest.TestCase):
                 )
         loader.assert_not_called()
 
-        formal_v5_root = (
-            _REPOSITORY_ROOT
-            / ".test-tmp"
-            / (f"{diagnostic.ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID}" "-state")
-        )
         with self.assertRaisesRegex(
             ContractValidationError,
             "immutable and already consumed",
@@ -438,7 +445,7 @@ class Issue56RelationProjectionEquivalenceV6EndToEndTests(unittest.TestCase):
             diagnostic_cli.run_relation_projection_equivalence_diagnostic_once(
                 loader=loader,
                 loader_spec_fingerprint=sha256_json("formal v5 loader"),
-                state_root=formal_v5_root,
+                state_root=_FORMAL_V5_STATE_ROOT,
             )
         for runner in (
             diagnostic_cli.run_sealed_source_diagnostic_once,

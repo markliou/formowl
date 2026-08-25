@@ -17,6 +17,9 @@ from formowl_graph import EffectiveGraphView
 import formowl_mail
 from formowl_mail import hybrid as hybrid_module
 from scripts import issue56_prompt_mcp_hybrid_diagnostic as diagnostic_cli
+from test_issue56_relation_projection_equivalence_diagnostic_e2e import (
+    _snapshot_formal_state_root,
+)
 import test_issue56_real_prompt_mcp_phase_trace_e2e as real_prompt_fixture
 
 
@@ -32,6 +35,16 @@ _TEST_CONTRACT = diagnostic_cli._RelationProjectionEquivalenceVersionContract(
 )
 _PRIVATE_PROMPT = "PO470002002 與 ORIGIN-TAIWAN-01 的關係"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+_FORMAL_V5_STATE_ROOT = (
+    _REPOSITORY_ROOT
+    / ".test-tmp"
+    / (f"{diagnostic.ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID}" "-state")
+)
+_FORMAL_V6_STATE_ROOT = (
+    _REPOSITORY_ROOT
+    / ".test-tmp"
+    / (f"{diagnostic.ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID}" "-state")
+)
 _FORMAL_V7_STATE_ROOT = (
     _REPOSITORY_ROOT
     / ".test-tmp"
@@ -44,15 +57,21 @@ _FORMAL_V7_STATE_ROOT = (
 
 class Issue56RelationProjectionOfflineEquivalenceV7EndToEndTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.assertFalse(
-            _FORMAL_V7_STATE_ROOT.exists(),
-            "focused tests must not create the formal v7 state root",
-        )
+        self._formal_state_root_snapshots = {
+            "v5": _snapshot_formal_state_root(_FORMAL_V5_STATE_ROOT),
+            "v6": _snapshot_formal_state_root(_FORMAL_V6_STATE_ROOT),
+            "v7": _snapshot_formal_state_root(_FORMAL_V7_STATE_ROOT),
+        }
 
     def tearDown(self) -> None:
-        self.assertFalse(
-            _FORMAL_V7_STATE_ROOT.exists(),
-            "focused tests must leave the formal v7 state root absent",
+        self.assertEqual(
+            {
+                "v5": _snapshot_formal_state_root(_FORMAL_V5_STATE_ROOT),
+                "v6": _snapshot_formal_state_root(_FORMAL_V6_STATE_ROOT),
+                "v7": _snapshot_formal_state_root(_FORMAL_V7_STATE_ROOT),
+            },
+            self._formal_state_root_snapshots,
+            "focused tests must preserve formal v5-v7 state roots byte-for-byte",
         )
 
     def test_offline_cold_prime_then_two_normal_http_queries_are_equivalent(
@@ -344,14 +363,16 @@ class Issue56RelationProjectionOfflineEquivalenceV7EndToEndTests(unittest.TestCa
 
         formal_roots = {
             diagnostic_cli.run_relation_projection_equivalence_diagnostic_once: (
-                diagnostic.ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID
+                diagnostic.ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
+                _FORMAL_V5_STATE_ROOT,
             ),
             diagnostic_cli.run_relation_projection_equivalence_v6_diagnostic_once: (
-                diagnostic.ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID
+                diagnostic.ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
+                _FORMAL_V6_STATE_ROOT,
             ),
         }
         loader = mock.Mock()
-        for runner, mode in formal_roots.items():
+        for runner, (mode, state_root) in formal_roots.items():
             with self.subTest(mode=mode):
                 with self.assertRaisesRegex(
                     ContractValidationError,
@@ -360,7 +381,7 @@ class Issue56RelationProjectionOfflineEquivalenceV7EndToEndTests(unittest.TestCa
                     runner(
                         loader=loader,
                         loader_spec_fingerprint=sha256_json("legacy loader"),
-                        state_root=(_REPOSITORY_ROOT / ".test-tmp" / f"{mode}-state"),
+                        state_root=state_root,
                     )
         for runner in (
             diagnostic_cli.run_sealed_source_diagnostic_once,
