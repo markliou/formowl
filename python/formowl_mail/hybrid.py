@@ -941,6 +941,67 @@ class EvidenceIdentityLineageCrosswalk:
 
 
 @dataclass(frozen=True)
+class EffectiveGraphContentSnapshotPrecompute:
+    """Safe evidence that one immutable graph snapshot is materialized cold."""
+
+    graph_revision_fingerprint: str
+    graph_content_fingerprint: str
+    effective_graph_view_fingerprint: str
+    source_session_binding_fingerprint: str
+    source_access_fingerprint: str
+    permission_lineage_fingerprint: str
+    index_fingerprint: str
+    candidate_admission_profile_fingerprint: str
+    authorized_observation_set_fingerprint: str
+    authorized_observation_count: int
+    source_scope_count: int
+    node_count: int
+    edge_count: int
+    access_required_count: int
+    applied_grant_count: int
+    relation_projection_cache_binding_entry_count: int
+    relation_projection_base_entry_count: int
+    precompute_fingerprint: str
+
+    def to_safe_dict(self) -> dict[str, Any]:
+        payload = {
+            "artifact_id": "formowl_issue56_effective_graph_content_snapshot_precompute_v1",
+            "schema_version": 1,
+            "status": "passed",
+            "snapshot_status": "materialized_relation_projection_caches_cold",
+            "graph_revision_fingerprint": self.graph_revision_fingerprint,
+            "graph_content_fingerprint": self.graph_content_fingerprint,
+            "effective_graph_view_fingerprint": self.effective_graph_view_fingerprint,
+            "source_session_binding_fingerprint": self.source_session_binding_fingerprint,
+            "source_access_fingerprint": self.source_access_fingerprint,
+            "permission_lineage_fingerprint": self.permission_lineage_fingerprint,
+            "index_fingerprint": self.index_fingerprint,
+            "candidate_admission_profile_fingerprint": (
+                self.candidate_admission_profile_fingerprint
+            ),
+            "authorized_observation_set_fingerprint": (self.authorized_observation_set_fingerprint),
+            "counts": {
+                "authorized_observation_count": self.authorized_observation_count,
+                "source_scope_count": self.source_scope_count,
+                "node_count": self.node_count,
+                "edge_count": self.edge_count,
+                "access_required_count": self.access_required_count,
+                "applied_grant_count": self.applied_grant_count,
+                "relation_projection_cache_binding_entry_count": (
+                    self.relation_projection_cache_binding_entry_count
+                ),
+                "relation_projection_base_entry_count": (self.relation_projection_base_entry_count),
+            },
+            "precompute_fingerprint": self.precompute_fingerprint,
+        }
+        assert_public_payload_safe(
+            payload,
+            "issue56_effective_graph_content_snapshot_precompute",
+        )
+        return payload
+
+
+@dataclass(frozen=True)
 class RelationProjectionBasePrecompute:
     """Safe evidence that one immutable relation projection base is primed."""
 
@@ -3349,6 +3410,169 @@ def precompute_evidence_identity_lineage_crosswalk(
     return crosswalk
 
 
+def precompute_effective_graph_content_snapshot(
+    *,
+    session: AuthorizedSemanticObservationSession,
+    effective_graph_view: EffectiveGraphView,
+    expected_graph_revision_fingerprint: str,
+    expected_effective_graph_view_fingerprint: str,
+) -> EffectiveGraphContentSnapshotPrecompute:
+    """Materialize only the immutable graph-content snapshot before a query.
+
+    This owner helper validates the complete source-neutral session, index,
+    tokenizer, Observation, permission, and expected graph/view bindings.  It
+    deliberately does not build a relation-projection cache binding or base.
+    Repeated calls over the same sealed view reuse its content snapshot and
+    require both relation-projection cache containers to remain empty.
+    """
+
+    if not isinstance(session, AuthorizedSemanticObservationSession):
+        raise ContractValidationError(
+            "graph snapshot precompute requires a source-neutral semantic session"
+        )
+    if not isinstance(effective_graph_view, EffectiveGraphView):
+        raise ContractValidationError("graph snapshot precompute effective graph view is invalid")
+    _source_graph_require_sha256(
+        expected_graph_revision_fingerprint,
+        "expected graph revision fingerprint",
+    )
+    _source_graph_require_sha256(
+        expected_effective_graph_view_fingerprint,
+        "expected effective graph view fingerprint",
+    )
+    _validate_hybrid_index_runtime(session.index)
+    if effective_graph_view.requester_user_id != session.requester_user_id:
+        raise ContractValidationError("effective graph requester mismatch")
+    _validate_source_neutral_semantic_session(
+        session=session,
+        effective_graph_view=effective_graph_view,
+    )
+
+    authorized_source = session.authorized_source
+    if (
+        authorized_source is None
+        or authorized_source.workspace_id != session.workspace_id
+        or authorized_source.source_scope_ids != session.authorized_source_scope_ids
+        or session.selected_source_scope_ids != session.authorized_source_scope_ids
+        or session.index.selected_bundle_count != len(session.selected_source_scope_ids)
+        or session.index.authorized_bundle_count != len(session.authorized_source_scope_ids)
+        or session.index.denied_bundle_count != 0
+    ):
+        raise ContractValidationError("graph snapshot precompute source scope binding mismatch")
+    source_access_fingerprint = _source_graph_require_sha256(
+        authorized_source.authorization_fingerprint,
+        "source authorization fingerprint",
+    )
+    source_session_binding_fingerprint = _source_graph_require_sha256(
+        session.source_session_binding_fingerprint,
+        "source session binding fingerprint",
+    )
+
+    actual_authorized_observation_hashes = tuple(
+        sorted(
+            (
+                observation.observation_id,
+                sha256_json(observation.to_dict()),
+            )
+            for observation in session.authorized_observations
+        )
+    )
+    if (
+        not actual_authorized_observation_hashes
+        or actual_authorized_observation_hashes != session.authorized_observation_hashes
+    ):
+        raise ContractValidationError("graph snapshot precompute Observation binding mismatch")
+    authorized_observation_set_fingerprint = sha256_json(list(actual_authorized_observation_hashes))
+
+    tokenizer_profile = session.index._runtime_components.tokenizer_profile
+    if (
+        tokenizer_profile.tokenizer_id != session.index.tokenizer_id
+        or tokenizer_profile.profile_fingerprint != session.index.profile_fingerprint
+    ):
+        raise ContractValidationError("graph snapshot precompute tokenizer/index mismatch")
+    _source_graph_require_sha256(
+        session.index.index_fingerprint,
+        "graph snapshot precompute index fingerprint",
+    )
+    _source_graph_require_sha256(
+        tokenizer_profile.profile_fingerprint,
+        "graph snapshot precompute tokenizer profile fingerprint",
+    )
+
+    effective_graph_view_fingerprint = sha256_json(effective_graph_view.to_dict())
+    if effective_graph_view_fingerprint != expected_effective_graph_view_fingerprint:
+        raise ContractValidationError("graph snapshot precompute effective graph binding mismatch")
+    permission_lineage_fingerprint = _effective_graph_permission_lineage_fingerprint(
+        session=session,
+        effective_graph_view=effective_graph_view,
+    )
+    graph_content_fingerprint = _effective_graph_content_fingerprint(effective_graph_view)
+
+    graph_snapshot = _build_query_graph_snapshot(effective_graph_view)
+    graph_revision_fingerprint = _require_query_graph_snapshot(
+        effective_graph_view=effective_graph_view,
+        graph_snapshot=graph_snapshot,
+    )
+    if graph_revision_fingerprint != expected_graph_revision_fingerprint:
+        raise ContractValidationError("graph snapshot precompute graph revision binding mismatch")
+    if (
+        sha256_json(effective_graph_view.to_dict()) != effective_graph_view_fingerprint
+        or _effective_graph_content_fingerprint(effective_graph_view) != graph_content_fingerprint
+    ):
+        raise ContractValidationError("graph snapshot precompute content changed during sealing")
+
+    content_snapshot = graph_snapshot.content_snapshot
+    with content_snapshot.relation_projection_base_lock:
+        binding_entry_count = len(content_snapshot.relation_projection_cache_binding_snapshots)
+        base_entry_count = len(content_snapshot.relation_projection_bases)
+        if binding_entry_count != 0 or base_entry_count != 0:
+            raise ContractValidationError(
+                "graph snapshot precompute relation projection caches are not cold"
+            )
+        safe_payload = {
+            "artifact_id": "formowl_issue56_effective_graph_content_snapshot_precompute_v1",
+            "graph_revision_fingerprint": graph_revision_fingerprint,
+            "graph_content_fingerprint": graph_content_fingerprint,
+            "effective_graph_view_fingerprint": effective_graph_view_fingerprint,
+            "source_session_binding_fingerprint": source_session_binding_fingerprint,
+            "source_access_fingerprint": source_access_fingerprint,
+            "permission_lineage_fingerprint": permission_lineage_fingerprint,
+            "index_fingerprint": session.index.index_fingerprint,
+            "candidate_admission_profile_fingerprint": (tokenizer_profile.profile_fingerprint),
+            "authorized_observation_set_fingerprint": (authorized_observation_set_fingerprint),
+            "authorized_observation_count": len(actual_authorized_observation_hashes),
+            "source_scope_count": len(authorized_source.source_scope_ids),
+            "node_count": len(effective_graph_view.visible_nodes),
+            "edge_count": len(effective_graph_view.visible_edges),
+            "access_required_count": len(effective_graph_view.access_required),
+            "applied_grant_count": len(effective_graph_view.applied_grant_ids),
+            "relation_projection_cache_binding_entry_count": binding_entry_count,
+            "relation_projection_base_entry_count": base_entry_count,
+        }
+        precompute = EffectiveGraphContentSnapshotPrecompute(
+            graph_revision_fingerprint=graph_revision_fingerprint,
+            graph_content_fingerprint=graph_content_fingerprint,
+            effective_graph_view_fingerprint=effective_graph_view_fingerprint,
+            source_session_binding_fingerprint=source_session_binding_fingerprint,
+            source_access_fingerprint=source_access_fingerprint,
+            permission_lineage_fingerprint=permission_lineage_fingerprint,
+            index_fingerprint=session.index.index_fingerprint,
+            candidate_admission_profile_fingerprint=(tokenizer_profile.profile_fingerprint),
+            authorized_observation_set_fingerprint=(authorized_observation_set_fingerprint),
+            authorized_observation_count=len(actual_authorized_observation_hashes),
+            source_scope_count=len(authorized_source.source_scope_ids),
+            node_count=len(effective_graph_view.visible_nodes),
+            edge_count=len(effective_graph_view.visible_edges),
+            access_required_count=len(effective_graph_view.access_required),
+            applied_grant_count=len(effective_graph_view.applied_grant_ids),
+            relation_projection_cache_binding_entry_count=binding_entry_count,
+            relation_projection_base_entry_count=base_entry_count,
+            precompute_fingerprint=sha256_json(safe_payload),
+        )
+    precompute.to_safe_dict()
+    return precompute
+
+
 def precompute_relation_projection_base(
     *,
     session: AuthorizedSemanticMailSession,
@@ -3891,6 +4115,108 @@ def _source_neutral_session_binding_fingerprint(
             "occurrence_lineage_fingerprints": sorted(
                 lineage.lineage_fingerprint for lineage in occurrence_lineages
             ),
+        }
+    )
+
+
+def _effective_graph_permission_lineage_fingerprint(
+    *,
+    session: AuthorizedSemanticObservationSession,
+    effective_graph_view: EffectiveGraphView,
+) -> str:
+    permission_fingerprint_by_observation_id: dict[str, str] = {}
+    for observation in session.authorized_observations:
+        permission_scope = to_plain(observation.permission_scope)
+        if not isinstance(permission_scope, dict):
+            raise ContractValidationError(
+                "graph snapshot precompute Observation permission scope is invalid"
+            )
+        permission_fingerprint_by_observation_id[observation.observation_id] = sha256_json(
+            permission_scope
+        )
+
+    for label, items in (
+        ("node", effective_graph_view.visible_nodes),
+        ("edge", effective_graph_view.visible_edges),
+    ):
+        for item in items:
+            source_observation_ids = item.properties.get("source_observation_ids")
+            item_permission_scope = to_plain(item.permission_scope)
+            if (
+                not isinstance(source_observation_ids, (list, tuple))
+                or not source_observation_ids
+                or len(set(source_observation_ids)) != len(source_observation_ids)
+                or any(
+                    not isinstance(observation_id, str)
+                    or observation_id not in permission_fingerprint_by_observation_id
+                    for observation_id in source_observation_ids
+                )
+                or not isinstance(item_permission_scope, dict)
+            ):
+                raise ContractValidationError(
+                    f"graph snapshot precompute {label} permission lineage is invalid"
+                )
+            item_permission_fingerprint = sha256_json(item_permission_scope)
+            if any(
+                permission_fingerprint_by_observation_id[observation_id]
+                != item_permission_fingerprint
+                for observation_id in source_observation_ids
+            ):
+                raise ContractValidationError(
+                    f"graph snapshot precompute {label} permission lineage mismatch"
+                )
+
+    return sha256_json(
+        {
+            "schema_version": 1,
+            "observation_permission_bindings": [
+                {
+                    "observation_hash": sha256_json(observation.to_dict()),
+                    "permission_scope_fingerprint": sha256_json(
+                        to_plain(observation.permission_scope)
+                    ),
+                }
+                for observation in sorted(
+                    session.authorized_observations,
+                    key=lambda item: item.observation_id,
+                )
+            ],
+            "graph_node_permission_bindings": [
+                {
+                    "node_hash": sha256_json(node.to_dict()),
+                    "permission_scope_fingerprint": sha256_json(to_plain(node.permission_scope)),
+                    "source_observation_hashes": sorted(
+                        sha256_json(source_id)
+                        for source_id in node.properties.get(
+                            "source_observation_ids",
+                            (),
+                        )
+                        if isinstance(source_id, str)
+                    ),
+                }
+                for node in sorted(
+                    effective_graph_view.visible_nodes,
+                    key=lambda item: item.node_id,
+                )
+            ],
+            "graph_edge_permission_bindings": [
+                {
+                    "edge_hash": sha256_json(edge.to_dict()),
+                    "permission_scope_fingerprint": sha256_json(to_plain(edge.permission_scope)),
+                    "source_observation_hashes": sorted(
+                        sha256_json(source_id)
+                        for source_id in edge.properties.get(
+                            "source_observation_ids",
+                            (),
+                        )
+                        if isinstance(source_id, str)
+                    ),
+                }
+                for edge in sorted(
+                    effective_graph_view.visible_edges,
+                    key=lambda item: item.edge_id,
+                )
+            ],
         }
     )
 
@@ -8414,6 +8740,28 @@ def _effective_graph_content_view_binding(
     )
 
 
+def _effective_graph_content_fingerprint(
+    effective_graph_view: EffectiveGraphView,
+) -> str:
+    return sha256_json(
+        {
+            "schema_version": 1,
+            "visible_node_hashes": sorted(
+                sha256_json(node.to_dict()) for node in effective_graph_view.visible_nodes
+            ),
+            "visible_edge_hashes": sorted(
+                sha256_json(edge.to_dict()) for edge in effective_graph_view.visible_edges
+            ),
+            "access_required_hashes": sorted(
+                sha256_json(scope.to_dict()) for scope in effective_graph_view.access_required
+            ),
+            "applied_grant_hashes": sorted(
+                sha256_json(grant_id) for grant_id in effective_graph_view.applied_grant_ids
+            ),
+        }
+    )
+
+
 def _require_effective_graph_content_snapshot(
     effective_graph_view: EffectiveGraphView,
 ) -> _EffectiveGraphContentSnapshot:
@@ -8949,6 +9297,7 @@ __all__ = [
     "EvidenceIdentityLineageAudit",
     "EvidenceIdentityLineageCrosswalk",
     "EvidenceIdentityLineageEntry",
+    "EffectiveGraphContentSnapshotPrecompute",
     "GovernedHybridRagResult",
     "GovernedSemanticExecutionResult",
     "GraphTraversalHop",
@@ -8964,6 +9313,7 @@ __all__ = [
     "build_authorized_semantic_observation_session",
     "build_authorized_source_backed_effective_graph_view",
     "build_evidence_identity_lineage_crosswalk",
+    "precompute_effective_graph_content_snapshot",
     "precompute_evidence_identity_lineage_crosswalk",
     "precompute_relation_projection_base",
     "run_authorized_hybrid_mail_query",
