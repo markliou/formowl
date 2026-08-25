@@ -131,6 +131,12 @@ from .public_safety import (
     redact_public_raw_references,
     safe_public_string,
 )
+from .evidence_coverage import (
+    SourceInventory,
+    SourceInventoryItem,
+    SourceInventoryProcessingState,
+    SourceInventoryRawRetentionState,
+)
 
 __all__ = [
     "AccessRequest",
@@ -168,6 +174,10 @@ __all__ = [
     "SemanticMetadata",
     "SessionIdentity",
     "SourceRef",
+    "SourceInventory",
+    "SourceInventoryItem",
+    "SourceInventoryProcessingState",
+    "SourceInventoryRawRetentionState",
     "StorageBackend",
     "Grant",
     "COORDINATION_FRAME_TYPES",

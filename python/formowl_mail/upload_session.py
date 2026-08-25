@@ -168,15 +168,22 @@ def build_mail_upload_session_handler(
     *,
     upload_session_store: UploadSessionRecordStore,
     audit_store: FileAuditLogStore,
-    expires_at: str,
+    expires_at: str | None = None,
+    expires_at_provider: Callable[[], str] | None = None,
     created_at: str | None = None,
 ) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    if (expires_at is None) == (expires_at_provider is None):
+        raise ContractValidationError("exactly one upload session expiry source must be configured")
+
     def handler(input_data: dict[str, Any]) -> dict[str, Any]:
+        resolved_expires_at = (
+            expires_at_provider() if expires_at_provider is not None else expires_at
+        )
         result = open_mail_upload_session(
             input_data,
             upload_session_store=upload_session_store,
             audit_store=audit_store,
-            expires_at=expires_at,
+            expires_at=_required_public_string(resolved_expires_at, "expires_at"),
             created_at=created_at,
         )
         return result.to_public_dict()

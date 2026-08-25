@@ -50,3 +50,7 @@ __pycache__/
 .coverage
 coverage.xml
 htmlcov/
+deploy/connected/secrets/*
+!deploy/connected/secrets/README.md
+deploy/connected/Caddyfile
+deploy/connected/compose.env

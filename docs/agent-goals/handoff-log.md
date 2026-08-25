@@ -1,187 +1,300 @@
 # Agent Handoff Log
-
-This active log is a bounded recent window. Lossless prior history is preserved
-at `../archive/2026-07-11/handoff-log.md`.
-
 Lifecycle label: `active`.
 
+This is a bounded active window. Earlier entries are immutable history under
+`docs/archive/`, including the complete pre-rewrite log at
+`../archive/2026-08-18/active/docs/agent-goals/handoff-log.md`.
+
 ## Retention Rule
+- Keep the latest 14 calendar days and at most 300 lines.
+- Archive a complete dated entry before trimming it.
+- Record only current facts, blockers, verification, and next action.
+- Historical pointers are not restart instructions.
+## 2026-08-23 — Source-backed real-prompt v4 diagnostic passed
+- Read-only source tracing found both old synthetic fixed-prompt terms at count
+  `0` in raw/parser/retrieval; the cause was prompt-to-approved-source mismatch.
+- The deterministic
+  `issue56_source_backed_connected_identifier_prompt_selection_v1` selector
+  requires authorized exact-term/lexical lineage and an allowed source-backed
+  connected path. Its combined focused E2E passed `11/11`.
+- Immutable mode
+  `issue56-sealed-source-real-prompt-phase-traced-diagnostic-20260823-v4`
+  consumed one claim over `456` Observations as `workspace_only_v1` for
+  `workspace_formowl`, actor/approver
+  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
+- The bounded real-source path passed with `2` anchors, `10` graph paths, and
+  `1` citation. Query/gateway/HTTP were `951.148333`, `953.544449`, and
+  `982.203990 ms`; `relation_projection` was largest at `717.357210 ms`;
+  `deadline_exhausted_phase` was null. Loader `678625.866681 ms` was one-time
+  source load/selection outside request latency.
+- Claim/claim-byte/report-byte hashes are
+  `sha256:2b092814194dd90d597161dfcd04822be75c97fc5c5364478bbc8b52307098cb`,
+  `sha256:76dda5b18801a7587b212631b0d4d7ae0544646910e143ced0883f14e5db69b8`,
+  `sha256:40f48fea0145d523f5d14e2943b41750a48923e111cdf6e6c5e3cd265903a458`.
+- Trace/execution/source, gateway/owner selection, and result/answer hashes are
+  `sha256:4b518dd33bc406027f2fe0104559ead2cdb27a096b3357d9470acdac34e09ef4`,
+  `sha256:031cfe6f04c9b595bed6fd24375590a78df18dd03e07b68821c955bc03ad0b94`,
+  `sha256:b3959bba1267879ba3bcc6889fd063363f899987722b2447685aad844f6b53ae`,
+  `sha256:5c6bbbac6df98afb061d5aa4b21a7802fdcab7d9d09d32dadaec2f1ac0ab3c1a`,
+  `sha256:84857528eb34f4e03e343c078f5a9f89e6c8278a6807a6d84cc72fdc2d59b543`,
+  `sha256:cd4791354b612ae652da2f76d9733c28946bc18c63856b2a08f6e0a9bab63670`,
+  `sha256:025d02916a7c0c1a816fba06754d9578a327a7e442ff9d1e34b2f273d2af20f7`.
+- V1-v4 cannot be rerun/tuned; authority remains blocked on four gates and Work
+  D remains in progress.
+- Full regression `1873` total / `1781` passed / `54` failures / `23` errors /
+  `15` skips was blocked by `formowl-dev` Python 3.13 versus pinned E5 and
+  Issue #20/#33/authority drift. The sole related stale v3 expectation passed
+  pinned E5 `11/11`; full regression was not rerun and remains non-green.
+  V4 POC passed, but no repository-wide completion or quality claim is earned.
+- Next: separately approved `relation_projection` latency POC, then four gates.
+## 2026-08-21 — Sealed-source v3 diagnostic consumed and blocked
 
-- Keep entries from the latest 14 calendar days, with a hard cap of 300 lines.
-- If either limit is exceeded, archive the oldest complete dated entries into a
-  new immutable dated snapshot before appending more.
-- Never split a dated entry, discard content, or rewrite archive history.
-- Append only concise cross-agent facts, blockers, verification, and next action.
+- Mode `issue56-sealed-source-phase-traced-diagnostic-20260821-v3` consumed its
+  claim exactly once over `456` Observations as `workspace_only_v1` for
+  `workspace_formowl` and approved actor
+  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
+- Cold lineage-crosswalk and relation-base precomputes completed outside the
+  query in `1814.676079` and `5742.217351 ms`. The query crosswalk cache hit,
+  Strong RAG, and relation projection completed in `0.039415`, `78.995342`, and
+  `755.393432 ms`.
+- The query completed in `935.503846 ms`, HTTP in `999.641434 ms`, and loading
+  in `616997.490158 ms`. No deadline was exhausted; every semantic phase
+  completed except skipped deterministic exact execution.
+- The safe cited response remained blocked with `0` citations and `0` graph
+  paths. Relation-base precompute succeeded, but relation projection remains
+  the largest query phase and no cited graph proof was produced.
+- Immutable bindings: claim
+  `sha256:31e2c3dd9d401790ca202ed8d9caa35a30195880e4007cb6813b7b13852ecb47`
+  (`916` bytes; byte seal
+  `sha256:793a801d7786413211979c13218c4795cb71210c65dd36024c37fa3b1dfd6946`);
+  report `10144` bytes,
+  `sha256:29ebb91fed63f288a88eae6f966d30fa5b125c5da5b70cf35f5940b810dd0f57`;
+  safe trace `sha256:c71ca6d55b1f911043ce50e9fb5c7fcceefd7965a6495eb1e6cce81f9f108dc8`;
+  source binding
+  `sha256:eb384e63374c72ee18509f5f396ca9a134b7a667447308effbf906409ee35249`.
+- V3 must never be rerun, retried, or tuned. It is diagnostic-only evidence:
+  no quality, holdout, transfer, readiness, completion, or superiority claim is
+  earned. Issue #56 Work D and plan step 4 remain incomplete/in progress.
+- Canonical authority remains valid but blocked on source completeness,
+  accepted execution-fingerprint binding, same-pipeline real-source ablation,
+  and independent final-answer acceptance.
+- Next: stay in step 4; diagnose the generalized zero-path/zero-citation result
+  and remaining relation-projection cost only under separate approval.
 
-## 2026-07-10
+## 2026-08-21 — Sealed-source v2 diagnostic consumed and blocked
 
-- Issue #33 Work Package A completed on `issue-33-work-package-a` from merged
-  Ontology v2 PR #31. The EXM evaluator now uses candidate-admission arm names,
-  declares KG/type/frame stage boundaries, uses development/evaluation labels
-  instead of same-corpus holdout language, excludes permission-denied
-  auto-passes from primary retrieval accuracy, and emits eight closed-schema
-  report sections. Reviewer fixes removed unsupported private-row recomputation
-  and ontology/frame-semantic claims, bound frame/type/evidence/topology fields
-  to exact derived values, and reject coherent permission-case reclassification
-  that changes the configured evaluation mix. Canonical dev-container
-  verification passes: focused evaluator tests 29 OK, full unittest 638 OK,
-  full Ruff check passed, 303 files pass format-check, and `git diff --check`
-  passed. The 3/3 read-only gate passed with explicit `RELEASE_DECISION: AGREE`
-  from `Dalton` (engineering), `Kepler` (governance/safety), and `Faraday`
-  (research method); no blocking findings remain.
+- Mode `issue56-sealed-source-phase-traced-diagnostic-20260821-v2` consumed its
+  claim exactly once over `456` Observations. It ran as `workspace_only_v1` for
+  `workspace_formowl`, approved actor
+  `user_full_pst_domain_hard_case_eval_owner`, with no tenant dimension.
+- Cold lineage crosswalk precompute completed outside the query in
+  `1806.696423 ms`; the query cache hit took `0.027371 ms`. Strong RAG completed
+  in `75.098477 ms`. `relation_projection` then exhausted the `1500 ms` budget
+  after `1421.788584 ms`.
+- Query, HTTP, and loader totals were `1508.602094`, `1536.543591`, and
+  `612559.303406 ms`. The blocked result had `0` citations and `0` graph paths;
+  traversal, scoring, proof/citation, fallback, lineage audit, and result
+  projection were skipped.
+- Safe bindings: claim
+  `sha256:6f88dc0c21ba3323fa17e015f014a79603351d4ed52b5dbedb98b5f63a97e1a1`;
+  claim bytes
+  `sha256:24c81028643d8e959f2b3897a78ce70fdf702767a4ff7b4cdf842511718c94ab`;
+  report bytes
+  `sha256:13b8fa56d803c055c861ad029619fa822da4e5746d471d0570336f61053c3399`;
+  safe trace
+  `sha256:c0427da8cf969fe2d46cdbef4c2f971026334cf13cc3095beed6a33fc6123fbb`;
+  source binding
+  `sha256:362ed66da7ba3a8a3b9ebc4fd46d3b0c29ebf0340851961b108a8544f2fd6379`.
+- Crosswalk optimization succeeded for this diagnostic and exposed
+  `relation_projection` as the next bottleneck. It does not retroactively prove
+  the earlier one-shot's `1510.841 ms` p95 cause.
+- V2 is consumed and must never be rerun, retried, or tuned. This is diagnostic
+  evidence only: no checkbox, readiness, completion, or superiority claim is
+  earned. Authority remains valid but blocked on four gates; holdouts and
+  transfer remain unexecuted.
+- Next: stay in step 4 and require separate approval for any generalized
+  relation-projection optimization/diagnostic version.
 
-- No-training candidate-admission ablation completed for the accepted active
-  goal. The EXM/PST 50,000-case evaluator compared regex, raw
-  `jieba + SentencePiece`, frequency-rule admission, frozen-profile admission,
-  and the prior weak-label MLP admission policy in
-  one run over the same generated benchmark shape. Safe tracked aggregate:
-  `experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json`.
-  Result: regex admission 10,000/50,000; raw `jieba + SentencePiece`
-  admission 18,176/50,000 with 0/5,000 no-match guards; frequency-rule
-  admission 33,277/50,000 with all guards passing; frozen-profile admission
-  43,976/50,000 with 33,976/40,000 positive cases,
-  5,000/5,000 no-match guards, and 5,000/5,000 denied guards; weak-label MLP
-  weak-label MLP admission 43,369/50,000 with 33,369/40,000 positives and all
-  guards passing. Current method judgment: the bundled candidate-admission and
-  graph-construction policy is effective on this generated benchmark, but this
-  does not establish a type-compatibility or frame-semantic effect. The self-trained MLP is not
-  justified as the stable default because the zero-training frozen profile is
-  +607 passed cases better in this run. Engineering reviewer `Meitner` blocked
-  once because the frozen profile model hash did not include the actual
-  scoring coefficients; the blocker was fixed by data-binding
-  `_FROZEN_PROFILE_SCORE_RULES` into both scoring and `model_hash`, then
-  rerunning the 50,000-case evaluation. Verification after the fix:
-  dev-container focused lexical ontology tests 21 OK, full 50,000-case
-  evaluation completed, saved public report validation blockers=[], full
-  unittest 630 OK, Ruff check/format-check passed, KG acceptance
-  `passed_with_explicit_limits`, tracked summary JSON parse passed, and
-  `git diff --check` passed. Reviewer gate passed 3/3: `Meitner`
-  engineering agreed after the hash-binding fix, `Singer` governance/safety
-  agreed, and `Gibbs` research method agreed. BGE-M3 through FlagEmbedding is
-  documented as the preferred future optional true frozen neural adapter, but
-  it was not executed in this default-dev-container slice. Claim remains
-  candidate-only and excludes raw mail content, query payloads, private rows or
-  paths, canonical graph/type/user-graph/wiki mutation, BGE execution evidence,
-  parser readiness, business answer generation, and production readiness.
+## 2026-08-20 — Versioned minimum MCP-to-Hybrid diagnostic passed
 
-# 2026-07-10 — KG Research Agent — issue #36 release gate passed
+- The user approved a versioned, non-claim-bearing minimum E2E plus
+  phase-tracing diagnostic slice. It used only a `synthetic_non_sealed`
+  workspace-only fixture.
+- The passing path was prompt -> Starlette/ASGI HTTP POST `/mcp` -> synthetic
+  preverified principal -> `RemoteMcpDispatcher` actor-context injection ->
+  `SemanticMcpGateway` -> `AuthorizedSemanticMailSession` -> deterministic
+  safe cited response. It returned `2` citations and `2` graph paths.
+- Canonical focused evidence records the existing `25` tests plus the new `5`
+  tests passing. The safe phase trace can identify
+  `deadline_exhausted_phase` for a new execution.
+- This evidence does not retroactively identify the exact phase behind the
+  consumed one-shot's `1510.841 ms` p95, and that 100-case execution remains
+  consumed and prohibited from rerun, retry, or result-driven tuning.
+- Sealed source assets, external Google OAuth exchange, browser UI, production
+  store, production connected-tool policy, and a real LLM were not exercised.
+- Methodology authority remains valid but blocked on source completeness,
+  accepted execution-fingerprint binding, same-pipeline real-source ablation,
+  and independent final-answer acceptance. No issue #56 checkbox, production
+  readiness, methodology readiness, or superiority claim is earned.
 
-- Completed the evidence-grounded MAY ChatGPT × FormOwl MCP evaluation with
-  100 unique reviewer-grounded evidence cases and 50,000 rendered interaction
-  variants. Production v4 and the standalone source-rebuild validator both
-  passed with `blockers=[]`.
-- The evaluator now binds closed `tools/list` schemas, recursively rejects
-  caller-controlled identity/session/grant keys, separates expected outcomes
-  from actual MCP semantics, executes same-session response-derived follow-ups,
-  and validates private replay roots against an external trust anchor.
-- Structured-answer gold and prediction use methodologically independent
-  lifecycle/action/deadline/dependency extraction. Answerable false negatives
-  score case/thread scope as an applicable zero, and standalone validation
-  rebuilds grounded rows from the private manifest, trusted replay, and evidence
-  bundle so coherent rehashing cannot pass.
-- Safe results: governed mail retrieval 11/100, candidate KG 19/100, ontology
-  KG 19/100; 326 retrieval-only factorial arms produced zero better than
-  KG-only, two equal, and 324 worse. The replay exposed 10 expected no-match
-  false positives while enforcing all 10 expected permission denials.
-- Response-conditioned trajectory accounting records 60,000 tool calls per
-  FormOwl arm. Non-triggered correction/refinement/permission conditions do not
-  add a second call, turn, or simulated cost.
-- Canonical final verification passed 713 dev-container tests, full Ruff check,
-  316-file format check, and `git diff --check`. Reviewer gate passed 3/3 with
-  explicit `RELEASE_DECISION: AGREE` from the product-usefulness,
-  evidence/citation, and engineering/governance reviewers.
-- Claim boundary remains deterministic offline replay/usefulness evaluation:
-  no live ChatGPT execution, production-readiness claim, autonomous business
-  judgment, raw-mail MCP access, or canonical KG/type/user-graph/wiki writes.
+## 2026-08-20 — Workspace-only development one-shot consumed and blocked
 
-## 2026-07-11
+- The sealed development work root
+  `.test-tmp/issue56-development-uat-v2-workspace-only-work` passed its exact
+  `456`-Observation artifact and identity-scope contract.
+- Identity scope is `workspace_only_v1` for `workspace_formowl`. No
+  `tenant_id` field or key exists; none may be inferred or fabricated.
+- The development diagnostic claim
+  `issue56-development-workspace-only-diagnostic-one-shot-20260820-v1` has been
+  consumed. It is exactly-once state and must not be rerun, retried, or tuned.
+- Its safe report is blocked: Hybrid `0/100`, graph paired CI `[0,0]`, citation
+  support `0%`, no-answer false positives `100`, p95 latency `1510.841 ms`,
+  and permission leakage `0`.
+- This execution was a development diagnostic, not an independent holdout. It
+  cannot support authority promotion, KG/ontology superiority, methodology
+  readiness, or completion.
+- The methodology authority remains valid but blocked on source completeness,
+  accepted execution-fingerprint binding, same-pipeline real-source ablation,
+  and real-user final-answer acceptance.
+- The production v3 gate-evidence/atomic-promotion contract blocker is fixed
+  and focused tests pass. No passed gate evidence currently exists to promote.
+- The sealed 41-case and additive 59-case independent mail holdouts and the
+  GitHub transfer holdout have not executed.
+- Plan step 4 and all corresponding board tasks remain unchecked. The sole next
+  action is a governance/specification decision plus a read-only postmortem;
+  another execution is prohibited.
 
-- Completed a user-requested whole-repository maintenance review across
-  production Python, tests/scripts, research harnesses, containers, MCP
-  boundaries, and durable documentation. Static import analysis found no
-  orphan production module; canonical root verification passed 713 tests plus
-  Ruff check and format check.
-- Removed four unused projection acceptance markers, one unused OpenProject
-  mapper wrapper, and one unreferenced incomplete benchmark. The older Wiki
-  projection builder and forbidden-tool marker exports were reviewed but kept
-  as public compatibility surfaces. Consolidated identical Project and Wiki
-  JSONL logger implementations and identical CPU/GPU neural dependency files
-  while preserving compatibility imports and container entrypoints.
-- Deleted the obsolete MCP abstract after moving current service/tool truth into
-  `docs/mcp-boundaries.md`, and labeled ontology/mail documents by lifecycle.
-  The duplicate KG restart history remains unchanged in this patch; issue #40
-  tracks its safe archival together with the canonical durable registry.
-- The independent `.formowl/kg-eval` suite is currently not state-independent:
-  a clean archive lacks ignored result snapshots, while the operator workspace
-  contains ignored evidence that rebuilds validator output to 12/12 although
-  tracked tests/checklists and the durable goal still assert the historical
-  8/12 state. Do not report that harness as passing until issue #38 resolves the
-  state-drift and clean-clone reproducibility contract.
-- Follow-up issues: #38 for KG authority state-independent tests, #39 for MCP
-  protocol/shadow-workflow consolidation, and #40 for durable history archival.
-- Final cleanup reviewer gate passed 3/3 after compatibility and documentation
-  blockers were fixed: dead-code/evidence, runtime compatibility, and
-  docs/governance reviewers all returned `RELEASE_DECISION: AGREE`. Public Wiki
-  projection and forbidden-tool marker surfaces were retained; the authority
-  harness state-drift remains isolated to #38 and is not claimed as passing.
+## 2026-08-19 — Issue #56 step-4 development diagnostic status
 
-## 2026-07-11 — Issues #38–#40 completion update
+- The pinned methodology authority is valid but blocked. The normal
+  runtime-method gate is passed; four gates remain blocked: source
+  completeness, accepted execution-fingerprint binding, same-pipeline
+  real-source ablation, and independent final-answer acceptance.
+- The `node-term-lineage-v3` development run remains diagnostic:
+  Hybrid `60/100`, graph-required paired gain `+60` percentage points with the
+  paired-CI check passing, citation precision `98.74%`, and authorized hop
+  evidence `4083/4083`.
+- Acceptance is still blocked by positive-case no-answer false positives
+  `3 > 1` and Hybrid p95 latency `4036.462 ms > 3000 ms`. Hybrid p50 was
+  `2782.821 ms`.
+- Phase timing was strict projection p50/p95 `33.084/33.823 ms`, fallback
+  repair p50/p95 `0/1287.977 ms`, and graph traversal p50/p95
+  `2126.683/2155.965 ms`. Strict proof passed `62` cases and failed `38`;
+  fallback ran `38` times and targeted retraversal ran `4` times.
+- The behavior-neutral three-case `v5` diagnostic preserved the corresponding
+  `v3` runtime results. Across 30 paths, rejection counts were
+  `path_term_support_missing=29` and
+  `support_only_on_connected_off_path_node=1`; evidence-budget rejection was
+  zero. This localizes the remaining family to incomplete selected-path
+  projection of source-bound required-slot support, not a budget rejection.
+- Safe artifacts:
+  `issue56-node-term-lineage-v5.diagnostic.safe.json`
+  (`sha256:a053bf9252fa642373fba326474b08aab51e4090b5df6471359f42186de720c7`)
+  and `issue56-node-term-lineage-v5.trace.safe.json`
+  (`sha256:2d3a3952005dbac94c5b434bf818aa70d2dab3d0a30077064d4d654e2ab75490`).
+  They are diagnostic-only and cannot support quality, budget, completion, or
+  methodology claims.
+- Copernicus dispatch as the required `gpt-5.6-sol`,
+  `reasoning_effort=ultra` second worker failed twice with the platform
+  `prompt_cache_retention` error. The team did not substitute a model, add a
+  worker, or let the Master implement.
+- Plan step 4 remains `in-progress`; the existing five-step wording is
+  unchanged. Next, after restoring the second-worker slot, split disjoint work
+  into a per-query projection cache and bounded source-backed proof-completion
+  E2E. Do not execute a sealed independent holdout yet.
 
-- Issue #38 now isolates blocked and completed authority fixtures, cleans up
-  partial fixture setup failures, avoids writes to operator-controlled ignored
-  state, and passes the authority suite from both operator and clean-clone
-  layouts. The four broad real-evidence gates remain intentionally blocked;
-  harness reproducibility does not complete those evidence requirements.
-- Issue #39 now uses one shared MCP JSON-RPC engine and JSONL compatibility
-  runner, fails closed without authenticated session identity, binds Project,
-  Wiki, and semantic calls to gateway-controlled identity, records rejected and
-  denied transcript status, delegates semantic work only to injected handlers,
-  and exposes the effective-graph alias deprecation policy.
-- Issue #40 moved prior board, role-goal, and handoff history into immutable
-  dated snapshots with manifest hashes and bounded active startup files. A
-  deterministic archive-integrity test enforces hashes, links, retention limits,
-  checklist preservation, and current-versus-archive authority boundaries.
-- Final issues #38-#40 reviewer gate passed 3/3. Franklin verified shared
-  protocol and fixture cleanup correctness; Carver verified identity,
-  transcript, alias, and no-new-capability governance; Helmholtz verified
-  clean-state authority, completed fixture coherence, archive integrity, and
-  status honesty. All returned `RELEASE_DECISION: AGREE` with no blockers.
-- Final canonical evidence before publication: root suite 725 tests OK, KG
-  authority suite 589 tests OK, MCP focused 132 tests OK, read-only repository
-  enterprise/preflight 60 tests OK, archive integrity 4 tests OK, and full Ruff
-  check/format check passed for 323 files.
+## 2026-08-18 — Master plus two-worker, POC-first operating mode
 
-## 2026-07-11 — Pre-feature production cleanup
+- The user set the issue #56 execution topology to one Master plus exactly two
+  implementation subagents. Both workers use `gpt-5.6-sol` with
+  `reasoning_effort=ultra`.
+- The Master owns a global plan capped at five steps, non-overlapping work
+  assignment, progress monitoring, duplicate/loop prevention, integration
+  review, and final acceptance. The Master does not implement code; all
+  implementation is delegated to the two workers.
+- Worker write sets must not overlap. If the same blocker or method fails
+  repeatedly, the Master must change the decomposition, owner, or validation
+  route rather than continue an unlimited retry loop.
+- POC acceptance requires a real source/Observation-to-result end-to-end path.
+  API, contract, schema, mock, or unit wiring by itself is insufficient.
+- The operator reported an approximately six-hour window before a power outage
+  on 2026-08-18. The immediate decision is therefore fast E2E POC first;
+  optional hardening, onboarding, and broad suites may wait until feasibility
+  is shown.
+- The time box does not relax permission, privacy, provenance,
+  candidate-before-canonical, no-secret, no-raw-path, redaction, audit, or
+  fail-closed methodology authority. A POC is not production readiness,
+  implementation completion, comparative superiority, or methodology
+  completion.
+- Two-worker E2E evidence may support rapid POC continuation after Master
+  integration review. Formal implementation completion, release, and
+  production hardening still require the existing three independent read-only
+  Codex/GPT reviewer decisions unless the user explicitly changes that count.
+- Issue #56 remains `active-blocked`. The frozen method is
+  `evidence_to_knowledge_kg_ontology_v2_hybrid_v1`; the frozen tokenizer is
+  `jieba_sentencepiece_frozen_profile_candidate_admission_v1`. No checklist
+  item was completed or checked by this operating-mode update.
 
-- Removed test-only MCP gateway scenarios and assertion markers from production,
-  deleted unused retrieval/JSON-RPC marker helpers, and centralized mail bundle
-  selection, grant normalization, and grant-expiry behavior in one private mail
-  access helper. Production Python is net 153 lines smaller.
-- Retrieval now has one private implementation while the deprecated
-  `query_effective_graph` alias retains its full keyword-only signature and the
-  canonical `query_effective_graph_view` still requires an effective graph
-  view. Shared observability is canonical; Project/Wiki legacy imports remain
-  deprecated compatibility re-exports and `SPEC.md` documents that boundary.
-- Canonical dev-container verification passed 726 tests, full Ruff check, and
-  325-file format check. Engineering, governance/safety, and maintainability
-  reviewers returned 3/3 `RELEASE_DECISION: AGREE` after signature and
-  specification compatibility blockers were fixed.
+## 2026-08-18 — Issue #56 becomes the sole active KG methodology program
 
-## 2026-07-11 — Pre-feature structural cleanup
+- GitHub issue #56 defines the active objective: graph-guided Hybrid KG +
+  Ontology v2 must earn a measurable final-answer win over strong RAG on
+  heterogeneous integration tasks.
+- Frozen target remains
+  `evidence_to_knowledge_kg_ontology_v2_hybrid_v1` with
+  `jieba_sentencepiece_frozen_profile_candidate_admission_v1`; no v3 was
+  created.
+- Architecture is strong RAG retrieval plus reviewed entity links, bounded
+  graph traversal, temporal/provenance/coverage filtering, capped soft ontology
+  scoring, evidence-bundle reranking, and deterministic exact-set execution.
+- Inferred ontology mismatch no longer prunes admitted evidence. The old hard
+  gate is a negative ablation only.
+- The final answer model is not an architectural shortcut: every arm must pin
+  and share the same model, prompt, reasoning effort, schema, and budget.
+- Independent holdout questions cannot influence tokenizer, aliases, ontology,
+  graph rules, thresholds, prompts, or model choice.
+- PostgreSQL/pgvector remains canonical. Do not resume Neo4j benchmarks,
+  migration, projection, or dual-write work.
+- Issue #55's document-first exactly-one-call POC and issue #33 plans are
+  historical only. Their complete active-file state before this rewrite is
+  preserved under `docs/archive/2026-08-18/`.
+- Methodology authority check is valid but blocked. Runtime remains
+  `ascii_identifier_regex_v1` with CJK support false, and all five readiness
+  gates remain unresolved.
+- Next KG action: implement the immutable target tokenizer/profile and
+  same-profile query/evidence binding, then source-completeness reconciliation
+  and a strong RAG control. No methodology-quality comparison may start while
+  `--require-ready` exits nonzero.
+- The Issue #20 operator helper now derives or validates one safe non-secret predefined client ID; app configuration replaces only the ChatGPT-displayed callback; if the same client ID cannot be used, the live campaign stops as an external blocker.
+- Issue #20 remains open and unchecked; this KG documentation rewrite does not change its external evidence state.
 
-- Consolidated duplicated evaluator validation, ChatGPT intake validation,
-  HTTP smoke orchestration, PostgreSQL container lifecycle, mail payload
-  validation, and atomic JSON persistence. Eleven evaluation/smoke entrypoints
-  are thinner while retaining their CLI, report schema, error, privacy, and
-  claim-boundary contracts.
-- Tests now validate real adapters, interfaces, and migration content as the
-  primary surfaces. Previously exported name-list helpers remain thin
-  compatibility wrappers to avoid an unannounced API break. A private
-  graph-storage write seam remains as an alias to the shared atomic writer so
-  rollback failure injection stays testable without restoring duplicate
-  persistence code.
-- The second cleanup phase changes 1,334 lines added and 1,514 deleted, net
-  `-180`; scripts and experiment entrypoints are net `-893`. Canonical
-  dev-container verification passed 730 tests, full Ruff check, 331-file format
-  check, and `git diff --check`. Production/API, evaluator/privacy, and
-  shell/safety reviewers returned 3/3 `RELEASE_DECISION: AGREE`.
+## 2026-08-18 — Active-document rewrite verification
+
+- Active KG, architecture, workflow, provenance, infrastructure, evaluation,
+  role, goal, and startup documents now point to issue #56 and the frozen
+  Hybrid-v2 target. Superseded mail-only, issue #33, and issue #55 files are
+  explicit historical pointers; their pre-rewrite content remains immutable
+  under `docs/archive/2026-08-18/`.
+- `python3 scripts/methodology_authority_check.py --check` passes with 56 bound
+  sources. Authority remains valid but blocked; all five readiness gates remain
+  unresolved and `--require-ready` must continue to exit nonzero.
+- The focused documentation/methodology/container suite passed 150 tests with
+  one skip. The canonical full suite ran 1,558 tests and is not green:
+  11 failures and one error remain in legacy coordination-frame metrics,
+  Issue #20 function-onboarding state, and an unrelated PST extractor test.
+  Those failures are outside this documentation rewrite's write set and were
+  not hidden or broadly repaired.
+- Issue #20 remains open and unchecked; this documentation-only verification
+  does not change its external evidence or closure state.
+- Next KG action remains Work Package A: immutable Jieba + SentencePiece
+  profile packaging and same-profile query/evidence indexing, followed by
+  source-completeness reconciliation and the strong RAG control.
+
+## 2026-08-20 — Sealed-source loader verification boundary
+
+- The full `formowl-dev:local` suite ran `1,849` tests with `20` failures,
+  `19` errors, and `15` skips. In that image, the same focused `26`-test slice
+  had `15` `DenseEmbeddingUnavailableError:
+  python_runtime_version_mismatch` errors; the pinned E5 image passed all
+  `26`. The full canonical suite is therefore not green, and this slice remains
+  non-complete and non-release.

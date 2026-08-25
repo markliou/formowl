@@ -1,14 +1,15 @@
 """Frozen mail candidate-admission tokenizer profiles.
 
-The default profile is created once when this module is imported.  With no
-profile configuration it remains the explicitly limited ASCII fallback.  A
-Jieba plus SentencePiece profile is admitted only when its model is supplied
-and pinned by SHA-256 before process startup.
+The process default remains the explicitly limited ASCII diagnostic unless an
+older environment-supplied experiment is configured.  Issue #56 uses a
+separate fail-closed loader for one tracked, packaged Jieba plus SentencePiece
+profile; it never falls back to ASCII when an artifact or dependency drifts.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 import hashlib
 import importlib
 import importlib.metadata
@@ -24,11 +25,50 @@ ASCII_IDENTIFIER_REGEX_TOKENIZER_ID = "ascii_identifier_regex_v1"
 JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID = (
     "jieba_sentencepiece_frozen_profile_candidate_admission_v1"
 )
+ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT = (
+    "sha256:aafd7dbf4583cc2cd28e679f9090b518e74da3eee9146fa578d9b257d71e1f1d"
+)
 
 _MODEL_PATH_ENV = "FORMOWL_MAIL_SENTENCEPIECE_MODEL"
 _MODEL_SHA256_ENV = "FORMOWL_MAIL_SENTENCEPIECE_MODEL_SHA256"
 _MAX_MODEL_BYTES = 16 * 1024 * 1024
+_MAX_MANIFEST_BYTES = 64 * 1024
+_MAX_CALIBRATION_CORPUS_BYTES = 1024 * 1024
+_MAX_USER_DICTIONARY_BYTES = 1024 * 1024
+_MAX_VOCABULARY_BYTES = 4 * 1024 * 1024
 _PROFILE_CONTRACT_ID = "formowl_mail_candidate_admission_profile_v2"
+_ISSUE56_PACKAGED_PROFILE_CONTRACT_ID = "formowl_issue56_packaged_tokenizer_profile_v1"
+_ISSUE56_TARGET_MANIFEST_SHA256 = (
+    "sha256:f20e592ec1a492c07f6d74456eb548978ed1cc80fb6b28ec673d170b1559fa2b"
+)
+_FORMOWL_PACKAGE_NAME = "formowl"
+_FORMOWL_PACKAGE_VERSION = "0.1.0"
+_DEPENDENCY_REQUIREMENTS = {
+    "formowl": "formowl==0.1.0",
+    "jieba": "jieba>=0.42.1,<0.43",
+    "sentencepiece": "sentencepiece>=0.2,<0.3",
+}
+_ISSUE56_SOURCE_POLICY = {
+    "content_kind": "tracked_synthetic_cross_domain_calibration_text",
+    "contains_private_source": False,
+    "contains_oracle": False,
+    "contains_uat_or_holdout_questions": False,
+}
+_ISSUE56_POLICY_BINDINGS = {
+    "candidate_admission_policy_id": "formowl_mail_frozen_candidate_admission_v1",
+    "normalization_id": "unicode_nfkc_casefold_v1",
+    "protected_identifier_policy_id": "formowl_mail_protected_identifier_policy_v1",
+}
+_ISSUE56_TRAINING_CONFIGURATION = {
+    "character_coverage": 1.0,
+    "hard_vocab_limit": False,
+    "model_type": "bpe",
+    "normalization_rule_name": "nmt_nfkc",
+    "num_threads": 1,
+    "shuffle_input_sentence": False,
+    "trainer": "sentencepiece.SentencePieceTrainer",
+    "vocab_size": 192,
+}
 _ASCII_NORMALIZATION_ID = "ascii_lowercase_v1"
 _FROZEN_NORMALIZATION_ID = "unicode_nfkc_casefold_v1"
 _PROTECTED_IDENTIFIER_POLICY_ID = "formowl_mail_protected_identifier_policy_v1"
@@ -76,7 +116,10 @@ _STOPWORDS = frozenset(
 _PROTECTED_IDENTIFIER_PATTERNS = (
     (
         "url",
-        re.compile(r"(?i)\bhttps?://[^\s<>{}\[\]\"']+"),
+        re.compile(
+            r"(?i)\b(?:https?://[^\s<>{}\[\]\"']+|"
+            r"www\.[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[^\s<>{}\[\]\"']*)"
+        ),
     ),
     (
         "email",
@@ -131,6 +174,14 @@ _NORMALIZATION_POLICY_PAYLOADS = {
 }
 _PROTECTED_IDENTIFIER_POLICY_PAYLOAD = {
     "precedence": [name for name, _pattern in _PROTECTED_IDENTIFIER_PATTERNS],
+    "patterns": [
+        {
+            "identifier_kind": name,
+            "pattern": pattern.pattern,
+            "flags": pattern.flags,
+        }
+        for name, pattern in _PROTECTED_IDENTIFIER_PATTERNS
+    ],
     "segmentation_behavior": "replace_protected_spans_with_spaces",
     "span_offsets": "original_python_codepoint_offsets",
     "exact_token_normalization": _FROZEN_NORMALIZATION_ID,
@@ -141,6 +192,8 @@ _CANDIDATE_ADMISSION_POLICY_PAYLOAD = {
     "protected_identifiers": "always_admit_exact_token",
     "sentencepiece_ascii_fragments": "reject",
     "stopword_policy": "closed_static_v1",
+    "stopwords": sorted(_STOPWORDS),
+    "cjk_boundary_stop_characters": sorted(_CJK_BOUNDARY_STOP_CHARACTERS),
 }
 
 
@@ -183,6 +236,13 @@ class MailCandidateAdmissionTokenizerProfile:
     candidate_admission_policy_id: str
     candidate_admission_policy_sha256: str
     candidate_schema_version: int
+    artifact_manifest_sha256: str | None = None
+    calibration_corpus_sha256: str | None = None
+    sentencepiece_vocabulary_artifact_sha256: str | None = None
+    package_name: str | None = None
+    package_version: str | None = None
+    dependency_requirements_sha256: str | None = None
+    dependency_versions_sha256: str | None = None
     _jieba_module: Any | None = field(repr=False, compare=False, default=None)
     _sentencepiece_processor: Any | None = field(repr=False, compare=False, default=None)
 
@@ -248,11 +308,99 @@ class MailCandidateAdmissionTokenizerProfile:
             "candidate_admission_policy_id": self.candidate_admission_policy_id,
             "candidate_admission_policy_sha256": self.candidate_admission_policy_sha256,
             "candidate_schema_version": self.candidate_schema_version,
+            "artifact_manifest_sha256": self.artifact_manifest_sha256,
+            "calibration_corpus_sha256": self.calibration_corpus_sha256,
+            "sentencepiece_vocabulary_artifact_sha256": (
+                self.sentencepiece_vocabulary_artifact_sha256
+            ),
+            "package_name": self.package_name,
+            "package_version": self.package_version,
+            "dependency_requirements_sha256": self.dependency_requirements_sha256,
+            "dependency_versions_sha256": self.dependency_versions_sha256,
         }
 
 
+def load_issue56_target_mail_tokenizer_profile(
+    *,
+    artifact_directory: str | Path | None = None,
+) -> MailCandidateAdmissionTokenizerProfile:
+    """Load the tracked Issue #56 target profile or fail closed."""
+
+    profile_root = (
+        Path(artifact_directory)
+        if artifact_directory is not None
+        else Path(__file__).resolve().parent
+        / "tokenizer_profiles"
+        / JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID
+    )
+    manifest_path = profile_root / "manifest.json"
+    manifest, manifest_sha256 = _read_verified_json_object(
+        manifest_path,
+        expected_sha256=_ISSUE56_TARGET_MANIFEST_SHA256,
+        maximum_bytes=_MAX_MANIFEST_BYTES,
+    )
+    artifacts, dependency_versions = _validate_issue56_target_manifest(manifest)
+    _calibration_path, calibration_sha256 = _verified_manifest_artifact(
+        profile_root,
+        artifacts,
+        "calibration_corpus",
+        maximum_bytes=_MAX_CALIBRATION_CORPUS_BYTES,
+    )
+    user_dictionary_path, user_dictionary_sha256 = _verified_manifest_artifact(
+        profile_root,
+        artifacts,
+        "jieba_user_dictionary",
+        maximum_bytes=_MAX_USER_DICTIONARY_BYTES,
+    )
+    model_path, model_sha256 = _verified_manifest_artifact(
+        profile_root,
+        artifacts,
+        "sentencepiece_model",
+        maximum_bytes=_MAX_MODEL_BYTES,
+    )
+    _vocabulary_path, vocabulary_artifact_sha256 = _verified_manifest_artifact(
+        profile_root,
+        artifacts,
+        "sentencepiece_vocabulary",
+        maximum_bytes=_MAX_VOCABULARY_BYTES,
+    )
+
+    profile = build_frozen_jieba_sentencepiece_tokenizer_profile(
+        model_path=model_path,
+        model_sha256=model_sha256,
+        user_dictionary_path=user_dictionary_path,
+        user_dictionary_sha256=user_dictionary_sha256,
+        expected_jieba_dictionary_sha256=str(
+            manifest["dependencies"]["jieba"]["dictionary_sha256"]
+        ),
+        expected_jieba_version=dependency_versions["jieba"],
+        expected_sentencepiece_version=dependency_versions["sentencepiece"],
+        artifact_manifest_sha256=manifest_sha256,
+        calibration_corpus_sha256=calibration_sha256,
+        sentencepiece_vocabulary_artifact_sha256=vocabulary_artifact_sha256,
+    )
+    if profile.profile_fingerprint != ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT:
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    return profile
+
+
+@lru_cache(maxsize=1)
+def load_default_mail_candidate_admission_tokenizer_profile(
+    *,
+    artifact_directory: str | Path | None = None,
+) -> MailCandidateAdmissionTokenizerProfile:
+    """Load the only normal target-runtime tokenizer profile.
+
+    The older environment-configured/ASCII builder remains an explicit legacy
+    diagnostic compatibility surface until its mail callers are migrated by
+    their owning worker.
+    """
+
+    return load_issue56_target_mail_tokenizer_profile(artifact_directory=artifact_directory)
+
+
 def build_mail_candidate_admission_tokenizer_profile() -> MailCandidateAdmissionTokenizerProfile:
-    """Build one profile from complete process configuration or fail closed."""
+    """Build the legacy environment-configured diagnostic compatibility profile."""
 
     model_path = os.environ.get(_MODEL_PATH_ENV)
     model_sha256 = os.environ.get(_MODEL_SHA256_ENV)
@@ -298,6 +446,13 @@ def build_ascii_identifier_regex_tokenizer_profile() -> MailCandidateAdmissionTo
         candidate_admission_policy_id=_CANDIDATE_ADMISSION_POLICY_ID,
         candidate_admission_policy_sha256=payload["candidate_admission_policy_sha256"],
         candidate_schema_version=_CANDIDATE_SCHEMA_VERSION,
+        artifact_manifest_sha256=None,
+        calibration_corpus_sha256=None,
+        sentencepiece_vocabulary_artifact_sha256=None,
+        package_name=None,
+        package_version=None,
+        dependency_requirements_sha256=None,
+        dependency_versions_sha256=None,
     )
 
 
@@ -305,6 +460,14 @@ def build_frozen_jieba_sentencepiece_tokenizer_profile(
     *,
     model_path: str | Path,
     model_sha256: str,
+    user_dictionary_path: str | Path | None = None,
+    user_dictionary_sha256: str | None = None,
+    expected_jieba_dictionary_sha256: str | None = None,
+    expected_jieba_version: str | None = None,
+    expected_sentencepiece_version: str | None = None,
+    artifact_manifest_sha256: str | None = None,
+    calibration_corpus_sha256: str | None = None,
+    sentencepiece_vocabulary_artifact_sha256: str | None = None,
 ) -> MailCandidateAdmissionTokenizerProfile:
     """Build one explicitly pinned frozen Jieba + SentencePiece profile."""
 
@@ -313,18 +476,47 @@ def build_frozen_jieba_sentencepiece_tokenizer_profile(
     if configured_path is None or configured_sha256 is None:
         raise RuntimeError("frozen tokenizer profile is unavailable")
     processor = _load_sentencepiece_processor(configured_path, configured_sha256)
-    jieba_tokenizer, jieba_version, jieba_dictionary_sha256 = _frozen_jieba_tokenizer()
+    (
+        jieba_tokenizer,
+        jieba_version,
+        jieba_dictionary_sha256,
+        resolved_user_dictionary_sha256,
+    ) = _frozen_jieba_tokenizer(
+        user_dictionary_path=user_dictionary_path,
+        expected_user_dictionary_sha256=user_dictionary_sha256,
+        expected_dictionary_sha256=expected_jieba_dictionary_sha256,
+    )
     sentencepiece_version = _package_version("sentencepiece")
+    if expected_jieba_version is not None and jieba_version != expected_jieba_version:
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    if (
+        expected_sentencepiece_version is not None
+        and sentencepiece_version != expected_sentencepiece_version
+    ):
+        raise RuntimeError("frozen tokenizer profile is unavailable")
     vocabulary_sha256 = _sentencepiece_vocabulary_sha256(processor)
+    dependency_versions_sha256 = _canonical_sha256(
+        {
+            "jieba": jieba_version,
+            "sentencepiece": sentencepiece_version,
+        }
+    )
     payload = _profile_payload(
         tokenizer_id=JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
         normalization_id=_FROZEN_NORMALIZATION_ID,
         jieba_version=jieba_version,
         jieba_dictionary_sha256=jieba_dictionary_sha256,
-        jieba_user_dictionary_sha256=_sha256_bytes(b""),
+        jieba_user_dictionary_sha256=resolved_user_dictionary_sha256,
         sentencepiece_version=sentencepiece_version,
         model_sha256=configured_sha256,
         sentencepiece_vocabulary_sha256=vocabulary_sha256,
+        artifact_manifest_sha256=artifact_manifest_sha256,
+        calibration_corpus_sha256=calibration_corpus_sha256,
+        sentencepiece_vocabulary_artifact_sha256=(sentencepiece_vocabulary_artifact_sha256),
+        package_name=_FORMOWL_PACKAGE_NAME,
+        package_version=_FORMOWL_PACKAGE_VERSION,
+        dependency_requirements_sha256=_canonical_sha256(_DEPENDENCY_REQUIREMENTS),
+        dependency_versions_sha256=dependency_versions_sha256,
     )
     return MailCandidateAdmissionTokenizerProfile(
         tokenizer_id=JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
@@ -342,13 +534,20 @@ def build_frozen_jieba_sentencepiece_tokenizer_profile(
         candidate_admission_policy_id=_CANDIDATE_ADMISSION_POLICY_ID,
         candidate_admission_policy_sha256=payload["candidate_admission_policy_sha256"],
         candidate_schema_version=_CANDIDATE_SCHEMA_VERSION,
+        artifact_manifest_sha256=artifact_manifest_sha256,
+        calibration_corpus_sha256=calibration_corpus_sha256,
+        sentencepiece_vocabulary_artifact_sha256=(sentencepiece_vocabulary_artifact_sha256),
+        package_name=_FORMOWL_PACKAGE_NAME,
+        package_version=_FORMOWL_PACKAGE_VERSION,
+        dependency_requirements_sha256=payload["dependency_requirements_sha256"],
+        dependency_versions_sha256=dependency_versions_sha256,
         _jieba_module=jieba_tokenizer,
         _sentencepiece_processor=processor,
     )
 
 
 def ascii_identifier_regex_tokens(value: str) -> set[str]:
-    """Tokenize under the process-frozen profile, with honest ASCII fallback."""
+    """Tokenize with the explicit legacy ASCII diagnostic baseline."""
 
     return DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE.tokenize(value)
 
@@ -366,12 +565,9 @@ def configured_mail_candidate_admission_tokens(value: str) -> set[str]:
 
 
 def jieba_sentencepiece_frozen_profile_candidate_admission_tokens(value: str) -> set[str]:
-    """Tokenize only when a complete, pinned frozen profile is configured."""
+    """Tokenize with the packaged Issue #56 target profile or fail closed."""
 
-    profile = build_mail_candidate_admission_tokenizer_profile()
-    if profile.tokenizer_id != JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID:
-        raise RuntimeError("frozen tokenizer profile is unavailable")
-    return profile.tokenize(value)
+    return load_default_mail_candidate_admission_tokenizer_profile().tokenize(value)
 
 
 def _legacy_ascii_identifier_regex_tokens(value: str) -> set[str]:
@@ -396,6 +592,13 @@ def _profile_payload(
     sentencepiece_version: str | None,
     model_sha256: str | None,
     sentencepiece_vocabulary_sha256: str | None,
+    artifact_manifest_sha256: str | None = None,
+    calibration_corpus_sha256: str | None = None,
+    sentencepiece_vocabulary_artifact_sha256: str | None = None,
+    package_name: str | None = None,
+    package_version: str | None = None,
+    dependency_requirements_sha256: str | None = None,
+    dependency_versions_sha256: str | None = None,
 ) -> dict[str, Any]:
     return {
         "profile_contract": _PROFILE_CONTRACT_ID,
@@ -415,6 +618,13 @@ def _profile_payload(
         "candidate_admission_policy_id": _CANDIDATE_ADMISSION_POLICY_ID,
         "candidate_admission_policy_sha256": _canonical_sha256(_CANDIDATE_ADMISSION_POLICY_PAYLOAD),
         "candidate_schema_version": _CANDIDATE_SCHEMA_VERSION,
+        "artifact_manifest_sha256": artifact_manifest_sha256,
+        "calibration_corpus_sha256": calibration_corpus_sha256,
+        "sentencepiece_vocabulary_artifact_sha256": (sentencepiece_vocabulary_artifact_sha256),
+        "package_name": package_name,
+        "package_version": package_version,
+        "dependency_requirements_sha256": dependency_requirements_sha256,
+        "dependency_versions_sha256": dependency_versions_sha256,
     }
 
 
@@ -425,6 +635,128 @@ def _profile_fingerprint(payload: dict[str, Any]) -> str:
 def _canonical_sha256(payload: Any) -> str:
     encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _read_verified_json_object(
+    path: Path,
+    *,
+    expected_sha256: str,
+    maximum_bytes: int,
+) -> tuple[dict[str, Any], str]:
+    before = _regular_file_metadata(path, maximum_bytes=maximum_bytes)
+    try:
+        payload_bytes = path.read_bytes()
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("frozen tokenizer profile is unavailable") from exc
+    actual_sha256 = _sha256_bytes(payload_bytes)
+    if (
+        actual_sha256 != expected_sha256
+        or _regular_file_metadata(path, maximum_bytes=maximum_bytes) != before
+        or _sha256(path) != actual_sha256
+        or not isinstance(payload, dict)
+    ):
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    return payload, actual_sha256
+
+
+def _validate_issue56_target_manifest(
+    manifest: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    try:
+        if manifest["schema_version"] != 1:
+            raise ValueError
+        if manifest["profile_contract"] != _ISSUE56_PACKAGED_PROFILE_CONTRACT_ID:
+            raise ValueError
+        if manifest["tokenizer_id"] != JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID:
+            raise ValueError
+        if manifest["source_partition"] != "calibration":
+            raise ValueError
+        if manifest["source_policy"] != _ISSUE56_SOURCE_POLICY:
+            raise ValueError
+        if manifest["policies"] != _ISSUE56_POLICY_BINDINGS:
+            raise ValueError
+        if manifest["training"] != _ISSUE56_TRAINING_CONFIGURATION:
+            raise ValueError
+        artifacts = manifest["artifacts"]
+        if not isinstance(artifacts, dict) or set(artifacts) != {
+            "calibration_corpus",
+            "jieba_user_dictionary",
+            "sentencepiece_model",
+            "sentencepiece_vocabulary",
+        }:
+            raise ValueError
+        dependencies = manifest["dependencies"]
+        if not isinstance(dependencies, dict) or set(dependencies) != set(_DEPENDENCY_REQUIREMENTS):
+            raise ValueError
+        dependency_versions: dict[str, str] = {}
+        for package_name, requirement in _DEPENDENCY_REQUIREMENTS.items():
+            dependency = dependencies[package_name]
+            if (
+                not isinstance(dependency, dict)
+                or dependency.get("requirement") != requirement
+                or not isinstance(dependency.get("version"), str)
+            ):
+                raise ValueError
+            installed_version = _package_version(package_name)
+            if dependency["version"] != installed_version:
+                raise ValueError
+            dependency_versions[package_name] = installed_version
+        dictionary_sha256 = dependencies["jieba"].get("dictionary_sha256")
+        if not isinstance(dictionary_sha256, str) or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            dictionary_sha256,
+        ):
+            raise ValueError
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("frozen tokenizer profile is unavailable") from exc
+    return artifacts, dependency_versions
+
+
+def _verified_manifest_artifact(
+    profile_root: Path,
+    artifacts: dict[str, Any],
+    artifact_name: str,
+    *,
+    maximum_bytes: int,
+) -> tuple[Path, str]:
+    try:
+        artifact = artifacts[artifact_name]
+        relative_path = artifact["path"]
+        expected_sha256 = artifact["sha256"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError("frozen tokenizer profile is unavailable") from exc
+    if (
+        not isinstance(relative_path, str)
+        or Path(relative_path).name != relative_path
+        or not isinstance(expected_sha256, str)
+    ):
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    path = profile_root / relative_path
+    return path, _verified_file_sha256(
+        path,
+        expected_sha256=expected_sha256,
+        maximum_bytes=maximum_bytes,
+    )
+
+
+def _verified_file_sha256(
+    path: Path,
+    *,
+    expected_sha256: str,
+    maximum_bytes: int,
+) -> str:
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256):
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    before = _regular_file_metadata(path, maximum_bytes=maximum_bytes)
+    actual_sha256 = _sha256(path)
+    if (
+        actual_sha256 != expected_sha256
+        or _regular_file_metadata(path, maximum_bytes=maximum_bytes) != before
+        or _sha256(path) != actual_sha256
+    ):
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    return actual_sha256
 
 
 def _admitted_piece_tokens(value: Any) -> set[str]:
@@ -458,7 +790,12 @@ def _admitted_cjk_tokens(value: str) -> set[str]:
     return admitted
 
 
-def _frozen_jieba_tokenizer() -> tuple[Any, str, str]:
+def _frozen_jieba_tokenizer(
+    *,
+    user_dictionary_path: str | Path | None = None,
+    expected_user_dictionary_sha256: str | None = None,
+    expected_dictionary_sha256: str | None = None,
+) -> tuple[Any, str, str, str]:
     try:
         module = importlib.import_module("jieba")
     except ImportError as exc:
@@ -470,9 +807,29 @@ def _frozen_jieba_tokenizer() -> tuple[Any, str, str]:
     dictionary_path = module_path.parent / "dict.txt"
     before = _regular_file_metadata(dictionary_path, maximum_bytes=32 * 1024 * 1024)
     dictionary_sha256 = _sha256(dictionary_path)
+    if expected_dictionary_sha256 is not None and dictionary_sha256 != expected_dictionary_sha256:
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    configured_user_dictionary = (
+        Path(user_dictionary_path) if user_dictionary_path is not None else None
+    )
+    if (configured_user_dictionary is None) != (expected_user_dictionary_sha256 is None):
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    user_dictionary_before: tuple[int, int, int, int] | None = None
+    user_dictionary_sha256 = _sha256_bytes(b"")
+    if configured_user_dictionary is not None:
+        user_dictionary_before = _regular_file_metadata(
+            configured_user_dictionary,
+            maximum_bytes=_MAX_USER_DICTIONARY_BYTES,
+        )
+        user_dictionary_sha256 = _sha256(configured_user_dictionary)
+        if user_dictionary_sha256 != expected_user_dictionary_sha256:
+            raise RuntimeError("frozen tokenizer profile is unavailable")
     try:
         tokenizer = module.Tokenizer(dictionary=str(dictionary_path))
         tokenizer.initialize()
+        if configured_user_dictionary is not None:
+            with configured_user_dictionary.open("rb") as user_dictionary:
+                tokenizer.load_userdict(user_dictionary)
     except (OSError, RuntimeError, ValueError) as exc:
         raise RuntimeError("frozen tokenizer profile is unavailable") from exc
     if (
@@ -480,7 +837,21 @@ def _frozen_jieba_tokenizer() -> tuple[Any, str, str]:
         or _sha256(dictionary_path) != dictionary_sha256
     ):
         raise RuntimeError("frozen tokenizer profile is unavailable")
-    return tokenizer, _package_version("jieba"), dictionary_sha256
+    if configured_user_dictionary is not None and (
+        _regular_file_metadata(
+            configured_user_dictionary,
+            maximum_bytes=_MAX_USER_DICTIONARY_BYTES,
+        )
+        != user_dictionary_before
+        or _sha256(configured_user_dictionary) != user_dictionary_sha256
+    ):
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    return (
+        tokenizer,
+        _package_version("jieba"),
+        dictionary_sha256,
+        user_dictionary_sha256,
+    )
 
 
 def _load_sentencepiece_processor(model_path: str, expected_sha256: str) -> Any:
@@ -628,16 +999,19 @@ def _require_text(value: Any) -> None:
         raise TypeError("tokenizer input must be text")
 
 
-# Query and evidence import this single object.  Changes to environment values
-# after import cannot silently change their candidate-admission behavior.
+# This compatibility object is intentionally the explicit ASCII diagnostic
+# baseline. Environment-configured experiments remain available only through
+# ``build_mail_candidate_admission_tokenizer_profile``; they cannot interfere
+# with the packaged Issue #56 target runtime at import time.
 DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE = (
-    build_mail_candidate_admission_tokenizer_profile()
+    build_ascii_identifier_regex_tokenizer_profile()
 )
 
 
 __all__ = [
     "ASCII_IDENTIFIER_REGEX_TOKENIZER_ID",
     "DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE",
+    "ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT",
     "JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID",
     "MailCandidateAdmissionTokenization",
     "MailCandidateAdmissionTokenizerProfile",
@@ -649,4 +1023,6 @@ __all__ = [
     "configured_mail_candidate_admission_tokens",
     "configured_mail_tokenizer_id",
     "jieba_sentencepiece_frozen_profile_candidate_admission_tokens",
+    "load_default_mail_candidate_admission_tokenizer_profile",
+    "load_issue56_target_mail_tokenizer_profile",
 ]

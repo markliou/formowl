@@ -52,7 +52,42 @@ McpResultStatus = Literal[
 JOB_STATUS_VALUES = ("pending", "running", "succeeded", "failed", "cancelled")
 EXTRACTOR_RUN_STATUS_VALUES = JOB_STATUS_VALUES
 USER_STATUS_VALUES = ("active", "disabled")
-SESSION_SELECTION_METHOD_VALUES = ("manual_trusted_internal",)
+SESSION_SELECTION_METHOD_VALUES = ("manual_trusted_internal", "google_oidc_oauth")
+AUDIT_ACTOR_TYPE_VALUES = ("user", "service", "external_unauthenticated")
+_AUDIT_SECRET_KEYS = {
+    "access_token",
+    "authorization_code",
+    "bearer_token",
+    "client_secret",
+    "code_verifier",
+    "google_code",
+    "id_token",
+    "nonce",
+    "private_key",
+    "refresh_token",
+    "state",
+    "token",
+}
+_AUDIT_SECRET_VALUE_PATTERN = re.compile(
+    r"(?<!\w)(?:"
+    r"bearer\s+\S+|"
+    r"(?:access[_-]?token|authorization[_-]?code|bearer[_-]?token|client[_-]?secret|"
+    r"code[_-]?verifier|google[_-]?code|id[_-]?token|nonce|private[_-]?key|"
+    r"refresh[_-]?token|state|token|secret)\s*[\"']?\s*[:=]\s*[\"']?\S+"
+    r")",
+    re.IGNORECASE,
+)
+_AUDIT_SECRET_IDENTIFIER_PATTERN = re.compile(
+    r"(?:^|[._-])(?:"
+    r"access[._-]token|authorization[._-]code|bearer[._-]token|client[._-]secret|"
+    r"code[._-]verifier|google[._-]code|id[._-]token|nonce|private[._-]key|"
+    r"refresh[._-]token|state|token"
+    r")(?:$|[._-])",
+    re.IGNORECASE,
+)
+_AUDIT_SAFE_COMPOUND_SECRET_COUNT_KEYS = frozenset({"revoked_token_session_count"})
+_AUDIT_MEMBERSHIP_STATE_VALUES = frozenset({"active", "removed"})
+_TOKEN_SESSION_AUDIT_STATUS_VALUES = frozenset({"active", "expired", "revoked"})
 WORKSPACE_MEMBER_ROLE_VALUES = ("owner", "member", "viewer")
 ACCESS_REQUEST_STATUS_VALUES = ("pending", "approved", "denied", "expired")
 UPLOAD_SESSION_STATUS_VALUES = (
@@ -2162,15 +2197,23 @@ class Grant:
 @dataclass(frozen=True)
 class AuditLog:
     audit_log_id: str
-    actor_user_id: str
+    actor_user_id: str | None
     action: str
     target_type: str
     target_id: str
     session_id: str
     timestamp: str
+    actor_type: str = "user"
+    actor_service_id: str | None = None
     grant_id: str | None = None
     workspace_id: str | None = None
     status: str | None = None
+    external_identity_id: str | None = None
+    oauth_client_id: str | None = None
+    oauth_token_session_id: str | None = None
+    request_id: str | None = None
+    tool_call_id: str | None = None
+    reason_code: str | None = None
     metadata: dict[str, JsonValue] | None = None
 
     @classmethod
@@ -2178,15 +2221,34 @@ class AuditLog:
         audit_log = validate_audit_log(value)
         return cls(
             audit_log_id=str(audit_log["audit_log_id"]),
-            actor_user_id=str(audit_log["actor_user_id"]),
+            actor_user_id=(
+                str(audit_log["actor_user_id"])
+                if audit_log.get("actor_user_id") is not None
+                else None
+            ),
             action=str(audit_log["action"]),
             target_type=str(audit_log["target_type"]),
             target_id=str(audit_log["target_id"]),
             session_id=str(audit_log["session_id"]),
             timestamp=str(audit_log["timestamp"]),
+            actor_type=str(
+                audit_log.get(
+                    "actor_type",
+                    "user"
+                    if audit_log.get("actor_user_id") is not None
+                    else "external_unauthenticated",
+                )
+            ),
+            actor_service_id=audit_log.get("actor_service_id"),
             grant_id=audit_log.get("grant_id"),
             workspace_id=audit_log.get("workspace_id"),
             status=audit_log.get("status"),
+            external_identity_id=audit_log.get("external_identity_id"),
+            oauth_client_id=audit_log.get("oauth_client_id"),
+            oauth_token_session_id=audit_log.get("oauth_token_session_id"),
+            request_id=audit_log.get("request_id"),
+            tool_call_id=audit_log.get("tool_call_id"),
+            reason_code=audit_log.get("reason_code"),
             metadata=audit_log.get("metadata"),
         )
 
@@ -4561,11 +4623,33 @@ def validate_grant(value: Any) -> dict[str, Any]:
 
 def validate_audit_log(value: Any) -> dict[str, Any]:
     audit_log = _require_mapping(value, "AuditLog")
+    allowed_fields = {
+        "audit_log_id",
+        "actor_user_id",
+        "action",
+        "target_type",
+        "target_id",
+        "session_id",
+        "timestamp",
+        "actor_type",
+        "actor_service_id",
+        "grant_id",
+        "workspace_id",
+        "status",
+        "external_identity_id",
+        "oauth_client_id",
+        "oauth_token_session_id",
+        "request_id",
+        "tool_call_id",
+        "reason_code",
+        "metadata",
+    }
+    if any(not isinstance(key, str) or key not in allowed_fields for key in audit_log):
+        raise ContractValidationError("AuditLog contains unsupported fields")
     _require_fields(
         audit_log,
         (
             "audit_log_id",
-            "actor_user_id",
             "action",
             "target_type",
             "target_id",
@@ -4578,7 +4662,6 @@ def validate_audit_log(value: Any) -> dict[str, Any]:
         audit_log,
         (
             "audit_log_id",
-            "actor_user_id",
             "action",
             "target_type",
             "target_id",
@@ -4589,12 +4672,142 @@ def validate_audit_log(value: Any) -> dict[str, Any]:
     )
     _validate_optional_string_fields(
         audit_log,
-        ("grant_id", "workspace_id", "status"),
+        (
+            "actor_user_id",
+            "actor_service_id",
+            "grant_id",
+            "workspace_id",
+            "status",
+            "external_identity_id",
+            "oauth_client_id",
+            "oauth_token_session_id",
+            "request_id",
+            "tool_call_id",
+            "reason_code",
+        ),
         "AuditLog",
     )
+    _validate_iso_timestamp(audit_log["timestamp"], "AuditLog.timestamp")
+    for field_name in (
+        "audit_log_id",
+        "actor_user_id",
+        "action",
+        "target_type",
+        "target_id",
+        "session_id",
+        "actor_service_id",
+        "grant_id",
+        "workspace_id",
+        "status",
+        "external_identity_id",
+        "oauth_client_id",
+        "oauth_token_session_id",
+        "request_id",
+        "tool_call_id",
+        "reason_code",
+    ):
+        field_value = audit_log.get(field_name)
+        if field_value is None:
+            continue
+        _validate_no_raw_public_reference(field_value, f"AuditLog.{field_name}")
+        if _AUDIT_SECRET_VALUE_PATTERN.search(field_value):
+            raise ContractValidationError(f"AuditLog.{field_name} must not contain secret material")
+        if field_name not in {"action", "target_type", "status", "reason_code"} and (
+            _AUDIT_SECRET_IDENTIFIER_PATTERN.search(field_value)
+        ):
+            raise ContractValidationError(f"AuditLog.{field_name} must not contain secret material")
+    actor_type = audit_log.get(
+        "actor_type",
+        "user" if audit_log.get("actor_user_id") is not None else "external_unauthenticated",
+    )
+    if not isinstance(actor_type, str) or actor_type not in AUDIT_ACTOR_TYPE_VALUES:
+        raise ContractValidationError("AuditLog.actor_type is not supported")
+    if actor_type == "user" and audit_log.get("actor_user_id") is None:
+        raise ContractValidationError("AuditLog user actor requires actor_user_id")
+    if actor_type == "user" and audit_log.get("actor_service_id") is not None:
+        raise ContractValidationError("AuditLog user actor must not claim actor_service_id")
+    if actor_type == "service" and audit_log.get("actor_service_id") is None:
+        raise ContractValidationError("AuditLog service actor requires actor_service_id")
+    if actor_type == "service" and audit_log.get("actor_user_id") is not None:
+        raise ContractValidationError("AuditLog service actor must not claim actor_user_id")
+    if actor_type == "external_unauthenticated" and (
+        audit_log.get("actor_user_id") is not None or audit_log.get("actor_service_id") is not None
+    ):
+        raise ContractValidationError(
+            "AuditLog external actor must not claim user or service identity"
+        )
     if "metadata" in audit_log and not isinstance(audit_log["metadata"], dict):
         raise ContractValidationError("AuditLog.metadata must be an object")
+    if isinstance(audit_log.get("metadata"), dict):
+        _validate_audit_metadata(audit_log["metadata"])
     return audit_log
+
+
+def _validate_audit_metadata(value: Any) -> None:
+    if isinstance(value, str):
+        _validate_no_raw_public_reference(value, "AuditLog.metadata")
+        if _AUDIT_SECRET_VALUE_PATTERN.search(value):
+            raise ContractValidationError("AuditLog.metadata contains secret material")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = re.sub(
+                r"([A-Z]+)([A-Z][a-z])",
+                r"\1_\2",
+                str(key),
+            )
+            normalized_key = re.sub(
+                r"([a-z0-9])([A-Z])",
+                r"\1_\2",
+                normalized_key,
+            )
+            normalized_key = (
+                re.sub(
+                    r"[^A-Za-z0-9]+",
+                    "_",
+                    normalized_key,
+                )
+                .strip("_")
+                .lower()
+            )
+            secret_identifier_match = _AUDIT_SECRET_IDENTIFIER_PATTERN.search(normalized_key)
+            safe_secret_count = (
+                secret_identifier_match is not None
+                and (
+                    normalized_key[secret_identifier_match.end() :] == "count"
+                    or normalized_key in _AUDIT_SAFE_COMPOUND_SECRET_COUNT_KEYS
+                )
+                and isinstance(item, int)
+                and not isinstance(item, bool)
+                and item >= 0
+            )
+            safe_token_session_issued = normalized_key == "token_session_issued" and isinstance(
+                item, bool
+            )
+            safe_token_session_status = (
+                normalized_key == "token_session_status"
+                and isinstance(item, str)
+                and item in _TOKEN_SESSION_AUDIT_STATUS_VALUES
+            )
+            safe_membership_state = (
+                normalized_key == "membership_state"
+                and isinstance(item, str)
+                and item in _AUDIT_MEMBERSHIP_STATE_VALUES
+            )
+            if normalized_key in _AUDIT_SECRET_KEYS or (
+                secret_identifier_match is not None
+                and not (
+                    safe_secret_count
+                    or safe_token_session_issued
+                    or safe_token_session_status
+                    or safe_membership_state
+                )
+            ):
+                raise ContractValidationError("AuditLog.metadata contains a secret field")
+            _validate_audit_metadata(item)
+        _validate_no_raw_public_reference(value, "AuditLog.metadata")
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _validate_audit_metadata(item)
 
 
 def validate_upload_session(value: Any) -> dict[str, Any]:

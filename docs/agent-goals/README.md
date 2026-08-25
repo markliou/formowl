@@ -1,100 +1,100 @@
 # Agent Goal Registry
 
-This directory is the durable goal registry for long-running FormOwl agents.
-Session-local goal state is useful while an agent is running, but it does not
-travel across machines, sessions, or tools. Repo goal files do.
+This directory is the durable active-goal registry. Session-local goal state
+does not survive machines or context resets; these files do.
 
 ## Startup Rule
 
-Every agent should read these files after `AGENTS.md`, the work board, and
-`docs/agent-roles.md`:
+After `AGENTS.md`, the work board, methodology authority, and role partition,
+read:
 
-1. This file.
-2. The goal file for its assigned role.
-3. `docs/agent-goals/handoff-log.md` for recent cross-agent notes.
-4. `docs/agent-goals/reviewer-gate.md` before marking reviewed work complete.
+1. this file;
+2. the active role goal;
+3. `handoff-log.md`;
+4. `reviewer-gate.md` before completion claims.
 
-Do not add `docs/archive/` to the normal startup sequence. Open the archive only
-when older proof or handoff history is required.
+Do not add `docs/archive/` to normal startup. Archived files are immutable
+history, not current instructions. A file explicitly marked “Historical” or
+“Not Current Instructions” is a pointer only.
 
-The goal file records the durable objective. The work board records task
-completion. Git records the mergeable engineering state.
+## Active Goal Files
 
-## Goal Files
+- `kg-research-agent.md` — active-blocked issue #56 objective for the Knowledge
+  Graph Research Agent.
+- `system-backbone-agent.md` — active backbone objective and Issue #20/#41
+  authority.
+- `handoff-log.md` — bounded recent cross-session facts and next actions.
+- `reviewer-gate.md` — default 3-reviewer rule.
 
-- `kg-research-agent.md` - durable objective and acceptance gates for the
-  Knowledge Graph Research Agent.
-- `system-backbone-agent.md` - durable objective and handoff placeholder for
-  the FormOwl System Backbone Agent.
-- `handoff-log.md` - short chronological notes for cross-session and
-  cross-machine handoffs.
-- `reviewer-gate.md` - default 3-reviewer gate with Codex/GPT reviewers.
-  Antigravity/Gemini through `agy` is disabled by default unless the user
-  explicitly re-enables it after the local policy or platform state changes.
+`dual-track-uat-kg-coordinator.md` is a retired historical pointer. It is not an
+active goal and must not be selected for restart.
+
+## Issue #56 Operating Mode — 2026-08-18
+
+- Use one Master with exactly two implementation subagents. Both subagents use
+  `gpt-5.6-sol` with `reasoning_effort=ultra`.
+- The Master owns global planning, work decomposition, non-overlapping write-set
+  assignment, progress monitoring, loop detection, integration review, and
+  final acceptance. The Master does not implement code or take over a worker's
+  assigned edits; implementation work belongs to the two subagents.
+- A plan has at most five steps. After it is established, update status rather
+  than repeatedly rewriting scope. Change the plan only for a new blocker
+  supported by evidence.
+- The two workers must have disjoint write sets. If the same blocker or method
+  fails repeatedly, the Master changes the decomposition, owner, or validation
+  route instead of authorizing an unbounded retry loop.
+- POC proof requires a real end-to-end path. API, contract, schema, or unit
+  wiring by itself is not proof that the path works.
+- The approximately six-hour pre-outage window on 2026-08-18 is POC-first:
+  prioritize the narrowest useful end-to-end proof and defer optional
+  hardening, onboarding, and broad suites until feasibility is established.
+  Permission, privacy, provenance, no-secret, no-raw-path, fail-closed
+  methodology authority, and honest claim boundaries are never deferred.
+- See `reviewer-gate.md` for the distinction between fast POC evidence and the
+  unchanged three-reviewer completion/release gate.
 
 ## Lifecycle Labels
 
-- `active` - current operational objective can proceed.
-- `active-blocked` - current operational objective exists but cannot proceed or
-  cannot be claimed complete until listed blockers clear.
-- `complete` - objective is achieved and verified; move detailed history to a
-  dated archive during the next archival cycle.
-- `immutable-history` - archived evidence only; never treat it as current
-  instructions or edit it in place.
+- `active` — current objective can proceed.
+- `active-blocked` — implementation may proceed, but listed gates block the
+  claim or completion.
+- `complete` — achieved and verified.
+- `immutable-history` — archived evidence only.
+- `complete-historical-pointer` — active-path filename retained only to point
+  to immutable history.
 
-## Size And Retention Policy
+## Retention
 
-- Each role goal file contains only role, current objective, status, blockers,
-  and next action. Target 180 lines; archive before 250 lines.
-- `handoff-log.md` keeps the latest 14 calendar days and at most 300 lines.
-  Archive the oldest complete dated entries before either limit is exceeded.
-- The active work board keeps all unchecked work, current phase summaries, and
-  at most five concise recent-completion summaries. Target 400 lines; archive
-  before 500 lines.
-- Every archival cycle creates a new dated snapshot plus hashes under
-  `docs/archive/`. Existing dated snapshots are immutable.
+- Role goals: target at most 180 lines; archive before 250.
+- Handoff log: latest 14 calendar days and at most 300 lines.
+- Work board: every unchecked item, current summary, at most five concise recent
+  completions; target at most 400 lines, archive before 500.
+- Every archive cycle creates a new dated snapshot and hash manifest. Existing
+  dated archives are never edited.
 
 ## Update Protocol
 
-Update the relevant goal file when:
+Update the active role goal when objective, scope, blocker, next action, or
+status changes. Append a concise handoff when another agent or future session
+must know the change.
 
-- Starting or resuming a long-running goal in a new session.
-- Changing objective, scope, owner paths, acceptance criteria, or status.
-- Hitting a blocker that another agent or user must understand.
-- Finishing a meaningful slice and before pausing for token limits,
-  compaction, machine changes, or manual merge.
+For issue #56, plan edits follow the five-step and evidence-backed blocker rule
+above. Do not use goal-file churn to create new scope or conceal repeated
+failure.
 
-Append a short entry to `handoff-log.md` when the update affects another agent
-or future session.
-
-## Status Vocabulary
-
-Use these statuses consistently:
-
-- `active` - work is in progress and not complete.
-- `waiting-for-owner` - the owning agent or user must fill in missing details.
-- `blocked` - progress requires external input, access, tooling, or a merge.
-- `complete` - objective is achieved and verified.
-
-Lifecycle labels describe document use; status values describe objective state.
-For example, a blocked current objective uses lifecycle `active-blocked` and
-status `blocked`.
-
-Do not mark a goal `complete` unless code, tests, relevant docs, work-board
-state, and canonical dev-container verification are aligned.
+Do not mark complete unless code, tests, docs, work-board state, executable
+authority, and canonical dev-container verification agree for the claimed
+scope.
 
 ## Reviewer Gate
 
-Use `docs/agent-goals/reviewer-gate.md` as the default review rule for future
-completed slices. The current default is 3 effective read-only Codex/GPT
-reviewers. `agy` is not part of the default gate because repeated bounded
-FormOwl KG packets were rejected before execution, and a 2026-06-28 MCP route
-probe found no Codex-exposed Antigravity/agy MCP tool or configured
-Antigravity MCP server.
+Use `reviewer-gate.md`. The default is three effective read-only Codex/GPT
+reviewers across engineering, governance/safety, and research methodology.
+Antigravity/`agy` remains unavailable while the recorded quota suspension is
+active; do not count or invoke it until the user explicitly re-enables it.
 
-## Safety Rules
+## Safety
 
-Do not put secrets, credentials, raw backend paths, raw SQL, NAS paths,
-object-store admin endpoints, worker scratch paths, or private source payloads
-in goal files. Use stable FormOwl identifiers, commit ids, task names, and
-summaries instead.
+Goal files contain stable ids, repo-relative paths, status, blockers, and safe
+summaries only. Do not store secrets, private source payloads, raw paths, SQL,
+backend endpoints, oracle answers, or worker/parser internals.

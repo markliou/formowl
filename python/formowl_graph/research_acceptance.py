@@ -14,6 +14,7 @@ from formowl_contract import (
     TypeDefinition,
     stable_type_definition_id,
 )
+from formowl_core.methodology_authority import check_methodology_authority
 from formowl_graph.ontology import (
     core_supertypes_compatible,
     propose_type_alignment_candidate,
@@ -29,6 +30,7 @@ from formowl_graph.resolution import (
 AcceptanceStatus = Literal["passed", "failed", "blocked"]
 _EXPECTED_FAILED_REQUIREMENT_IDS = ("production_adapter_readiness",)
 _EXPECTED_BLOCKED_REQUIREMENT_IDS = ("latency_scalability_enterprise_claims",)
+_REQUIRED_GATE_REQUIREMENT_IDS = ("methodology_runtime_alignment",)
 
 _FORBIDDEN_PUBLIC_TEXT = (
     "/home/",
@@ -76,6 +78,8 @@ class KGResearchAcceptanceReport:
     unexpected_failed_requirement_ids: list[str]
     unexpected_blocked_requirement_ids: list[str]
     missing_expected_limit_requirement_ids: list[str]
+    required_gate_requirement_ids: list[str]
+    blocking_required_gate_requirement_ids: list[str]
 
     def to_dict(self) -> dict[str, Any]:
         data = {
@@ -91,6 +95,10 @@ class KGResearchAcceptanceReport:
             "unexpected_blocked_requirement_ids": list(self.unexpected_blocked_requirement_ids),
             "missing_expected_limit_requirement_ids": list(
                 self.missing_expected_limit_requirement_ids
+            ),
+            "required_gate_requirement_ids": list(self.required_gate_requirement_ids),
+            "blocking_required_gate_requirement_ids": list(
+                self.blocking_required_gate_requirement_ids
             ),
         }
         _assert_no_forbidden_public_text(data)
@@ -111,19 +119,35 @@ def run_kg_research_acceptance_suite(
         _production_adapter_boundary_item(),
         _production_adapter_readiness_item(),
         _metrics_and_ablations_item(),
+        _methodology_runtime_alignment_item(root),
         _latency_scalability_item(),
     ]
     failed = [item.requirement_id for item in items if item.status == "failed"]
     blocked = [item.requirement_id for item in items if item.status == "blocked"]
     expected_failed = list(_EXPECTED_FAILED_REQUIREMENT_IDS)
     expected_blocked = list(_EXPECTED_BLOCKED_REQUIREMENT_IDS)
-    unexpected_failed = [item for item in failed if item not in expected_failed]
-    unexpected_blocked = [item for item in blocked if item not in expected_blocked]
+    required_gates = list(_REQUIRED_GATE_REQUIREMENT_IDS)
+    unexpected_failed = [
+        item for item in failed if item not in expected_failed and item not in required_gates
+    ]
+    unexpected_blocked = [
+        item for item in blocked if item not in expected_blocked and item not in required_gates
+    ]
     missing_expected_limits = [item for item in expected_failed if item not in failed] + [
         item for item in expected_blocked if item not in blocked
     ]
+    item_statuses = {item.requirement_id: item.status for item in items}
+    blocking_required_gates = [
+        item for item in required_gates if item_statuses.get(item) != "passed"
+    ]
     if unexpected_failed or unexpected_blocked or missing_expected_limits:
         overall_status = "failed"
+    elif blocking_required_gates:
+        overall_status = (
+            "failed"
+            if any(item_statuses.get(item) == "failed" for item in blocking_required_gates)
+            else "blocked"
+        )
     elif failed or blocked:
         overall_status = "passed_with_explicit_limits"
     else:
@@ -140,6 +164,8 @@ def run_kg_research_acceptance_suite(
         unexpected_failed_requirement_ids=unexpected_failed,
         unexpected_blocked_requirement_ids=unexpected_blocked,
         missing_expected_limit_requirement_ids=missing_expected_limits,
+        required_gate_requirement_ids=required_gates,
+        blocking_required_gate_requirement_ids=blocking_required_gates,
     )
 
 
@@ -441,9 +467,55 @@ def _metrics_and_ablations_item() -> AcceptanceItem:
     return AcceptanceItem(
         requirement_id="metrics_ablations_error_analysis",
         status="passed",
-        summary="Suite records deterministic quality, governance, provenance, permission-safety metrics, ablations, and concrete error cases.",
+        summary=(
+            "Suite records contract-level deterministic diagnostics, governance, "
+            "provenance, permission-safety checks, and concrete error cases; it is "
+            "not a real-source methodology ablation."
+        ),
         evidence=["python/formowl_graph/research_acceptance.py", "docs/kg-research-method.md"],
-        metrics=metrics,
+        metrics={
+            **metrics,
+            "evidence_level": "contract_diagnostic",
+            "real_source_methodology_ablation_complete": False,
+        },
+    )
+
+
+def _methodology_runtime_alignment_item(root: Path) -> AcceptanceItem:
+    authority = check_methodology_authority(repository_root=root)
+    if not authority.authority_valid:
+        return AcceptanceItem(
+            requirement_id="methodology_runtime_alignment",
+            status="failed",
+            summary="The active methodology authority is invalid or has drifted from runtime behavior.",
+            evidence=["docs/methodology-authority.json"],
+            metrics={
+                "authority_valid": False,
+                "methodology_ready": False,
+                "error_count": len(authority.errors),
+            },
+        )
+    return AcceptanceItem(
+        requirement_id="methodology_runtime_alignment",
+        status="passed" if authority.methodology_ready else "blocked",
+        summary=(
+            "The real runtime, source-completeness oracle, pipeline-bound reports, "
+            "same-pipeline real-source ablation, and end-answer acceptance must agree."
+        ),
+        evidence=[
+            "docs/methodology-authority.json",
+            "scripts/methodology_authority_check.py",
+        ],
+        metrics={
+            "authority_valid": True,
+            "methodology_ready": authority.methodology_ready,
+            "blocking_gate_count": len(authority.blocking_gate_ids),
+            "current_tokenizer_id": authority.current_tokenizer_id,
+            "target_tokenizer_id": authority.target_tokenizer_id,
+            "runtime_cjk_support": authority.tokenizer_probe.cjk_support,
+            "execution_fingerprint": authority.execution_fingerprint,
+            "authority_state_fingerprint": authority.authority_state_fingerprint,
+        },
     )
 
 

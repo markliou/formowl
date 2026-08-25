@@ -12,19 +12,70 @@ Reviewer composition:
 
 - 3 Codex/GPT reviewers.
 
-Antigravity/Gemini reviewer calls through `agy` are no longer part of the
-default FormOwl reviewer gate. They repeatedly fail before execution under the
-current tenant policy because even bounded FormOwl repository-derived review
-packets are treated as disclosure to an untrusted external reviewer service.
-The MCP route was also checked on 2026-06-28 and is not currently available
-from Codex. Do not spend time attempting `agy` for FormOwl KG reviewer gates
-unless the user explicitly re-enables it after confirming the policy, platform,
-or MCP configuration state has changed.
+## Issue #56 Time-Boxed POC Proof — 2026-08-18
+
+The current issue #56 operating team is one Master plus exactly two
+implementation subagents. Both workers use `gpt-5.6-sol` with
+`reasoning_effort=ultra`; they are implementers, not substitutes for the
+independent release reviewers below.
+
+During the approximately six-hour pre-outage window, the Master may advance a
+bounded POC after both workers provide inspectable evidence for their
+non-overlapping write sets and the integrated real end-to-end path succeeds.
+The proof must traverse the intended source/Observation, retrieval or execution,
+and result/answer boundary. API, contract, schema, mock, or isolated unit wiring
+alone does not count as a working POC.
+
+This fast POC proof:
+
+- may defer optional production hardening, onboarding tests, and broad suites;
+- does not satisfy or reduce the default three-reviewer gate;
+- does not mark an implementation/research slice complete or justify a release;
+- does not justify production, comparative-superiority, or methodology-
+  completion claims; and
+- does not relax permission, privacy, provenance, candidate-before-canonical,
+  no-secret, no-raw-path, audit, redaction, or fail-closed methodology gates.
+
+Formal implementation completion, release, and production hardening still
+require three effective independent read-only Codex/GPT reviewers across
+engineering, governance/safety, and research methodology unless the user later
+changes that reviewer count explicitly. Evidence produced by the two
+implementation workers remains implementation evidence and does not count as
+those three reviewer decisions.
+
+## Temporary Agy Quota Suspension
+
+As of 2026-08-11, the user temporarily removed Antigravity/`agy` from the
+worker, reviewer, implementation-subagent, UAT, and subagent-coordinator pool
+because its quota is exhausted. Do not invoke it, dispatch Herdr work to it,
+wait for it, or count it toward a reviewer gate. Use the default 3 effective
+Codex/GPT reviewers instead.
+
+This temporary suspension overrides the later historical 2026-08-05
+authorization text until the user explicitly confirms that quota is restored
+and re-enables `agy`.
+
+As of 2026-08-05, the user explicitly re-enabled Antigravity/`agy` as a normal
+FormOwl worker/subagent through the verified Herdr file bus. It may perform
+bounded review, diagnosis, implementation, UAT, or coordination of its own
+bounded subagents. Its descendants inherit the same evidence scope, write
+scope, claim boundary, and acceptance criteria.
+
+The default release count remains 3 effective read-only Codex/GPT reviewers
+unless the user changes the composition for a slice. An `agy` review may count
+when it was explicitly assigned as one of those reviewers, inspected the
+relevant packet, and returned the required decision. `agy` output never
+replaces local diff inspection and canonical verification.
 
 ## Cost Control And Staging
 
 Reviewer cost is part of the engineering budget. Do not spend reviewer calls to
 discover issues the implementing agent can find locally.
+
+For the time-boxed POC, first run the narrow real end-to-end path and only the
+focused safety checks needed to trust that proof. Defer broad hardening and
+onboarding campaigns until the POC works; then use the default completion
+sequence below.
 
 Default sequence:
 
@@ -53,10 +104,11 @@ whether the next agent can execute the plan without chat memory.
 
 Do not substitute Antigravity/Gemini reviewers with fake `agy` results,
 Codex `multi_agent_v1` agents labeled as Antigravity, GPT model overrides, or
-an "agy folder" substitute. Antigravity is simply disabled for the default
-gate unless explicitly re-enabled by the user.
+an "agy folder" substitute. Use the real Herdr-connected `agy` worker when an
+assignment calls for it, and do not duplicate the same implementation across
+agent systems.
 
-Historical command shape if the user later re-enables `agy`:
+Historical direct-CLI command shape when the Herdr relay is unavailable:
 
 ```sh
 agy --model "Gemini 3.5 Flash (High)" --print "<review prompt>" --print-timeout 5m
@@ -68,12 +120,12 @@ Observed CLI path:
 /home/markliou/.local/bin/agy
 ```
 
-## Historical Agy Authorization And Current Disablement
+## Historical Agy Blocker And Current Authorization
 
 The user authorized `agy` / Antigravity reviewer use on 2026-06-27, but later
-requested that the FormOwl KG workflow stop wasting time on `agy` if it cannot
-be used. As of 2026-06-28, `agy` is disabled for the default FormOwl KG
-reviewer gate.
+requested that the FormOwl KG workflow stop wasting time on a route that could
+not execute. That 2026-06-28 disablement is superseded by the explicit
+2026-08-05 authorization and verified Herdr file-bus route.
 
 Historical authorization covered sending bounded review packets, diffs, file
 excerpts, test summaries, and design claims to Antigravity Gemini reviewers
@@ -82,9 +134,10 @@ credentials, raw private source payloads, raw backend paths, raw SQL, NAS
 paths, object-store admin endpoints, worker scratch paths, or unrelated
 private data.
 
-Current rule: do not call `agy` for FormOwl KG reviewer gates or write
-delegation unless the user explicitly re-enables it after being told that prior
-attempts were rejected by tenant policy before execution.
+Current rule: `agy` may be used as a bounded reviewer, worker, implementation
+subagent, UAT agent, or coordinator of its own bounded subagents. Sandboxed
+Codex should communicate through atomic JSON files under
+`/tmp/herdr-bus/outbox/` rather than attempting the Herdr Unix socket.
 
 ### MCP Route Probe
 
@@ -125,20 +178,18 @@ raw private source payloads, raw backend paths, NAS or object-store admin
 endpoints, raw SQL, database dumps, worker scratch paths, local filesystem
 internals, or unrelated private data.
 
-This authorization is no longer active for default FormOwl KG reviewer gates.
-If the user later explicitly re-enables `agy`, then slow `agy` runs must still
-be monitored until completion; silence must not count as approval; and tenant
-policy rejection must not be bypassed through a broader packet, another
-external channel, Codex `multi_agent_v1`, a GPT model override, or an "agy
-folder" substitute.
+This authorization is active as of 2026-08-05. Slow `agy` runs must still be
+monitored until completion; silence does not count as approval. A delivery or
+tenant-policy rejection for one task must not be bypassed through a broader
+packet, another external channel, Codex `multi_agent_v1`, a GPT model override,
+or an "agy folder" substitute.
 
 ### Bounded Write Delegation
 
-The user previously permitted Codex to ask Antigravity to write code or docs
-for bounded implementation tasks when this saved Codex token budget. This path
-is also disabled by default for FormOwl KG work as of 2026-06-28 because
-repository-derived packets are rejected before execution. Do not use it unless
-the user explicitly re-enables `agy`.
+The user permits Codex to ask Antigravity to write code or docs for bounded
+implementation tasks. This path is active as of 2026-08-05. `agy` may further
+delegate to its own subagents only within the parent assignment's exact write
+scope, evidence scope, claim boundary, and acceptance criteria.
 
 Use `--new-project --add-dir <smallest-scope>` for bounded write delegation.
 Observed testing showed that plain one-shot `--add-dir` may not create an
@@ -146,14 +197,13 @@ active writable workspace, while `--new-project --add-dir` can write to the
 intended added workspace. Codex must verify the resulting local diff instead of
 trusting Antigravity's text summary alone.
 
-If the user later re-enables bounded write delegation, Codex remains
-responsible for inspecting Antigravity's diff, running the relevant canonical
-dev-container checks, updating durable FormOwl docs, and making the final
-commit. Antigravity must not promote canonical real-evidence packets, mutate
-canonical KG/type/user-graph/wiki state outside the assigned task, relax
-acceptance gates, change secrets, or broaden external disclosure. Do not use
-`--dangerously-skip-permissions` unless the user explicitly approves that exact
-command and write scope.
+Codex remains responsible for inspecting Antigravity's diff, running the
+relevant canonical dev-container checks, updating durable FormOwl docs, and
+making the final commit. Antigravity and any descendants must not promote
+canonical real-evidence packets, mutate canonical KG/type/user-graph/wiki state
+outside the assigned task, relax acceptance gates, change secrets, or broaden
+external disclosure. Do not use `--dangerously-skip-permissions` unless the
+user explicitly approves that exact command and write scope.
 
 Observed 2026-06-27 policy/write tests: `agy --version` returned `1.0.13`,
 and `agy models` listed `Gemini 3.5 Flash (High)`. A minimal bounded FormOwl KG
@@ -192,10 +242,10 @@ Forbidden without fresh approval:
   dumps, worker scratch paths, or local filesystem internals.
 - Unrelated private data.
 
-If the user later re-enables `agy` and approval review still rejects external
-data disclosure, record the rejection and stop using `agy`; do not bypass the
-gate by using a broader packet, a different external channel, Codex
-`multi_agent_v1`, a GPT model override, or an "agy folder" substitute.
+If approval review rejects external data disclosure for a specific `agy` task,
+record the rejection and stop that task; do not bypass the gate by using a
+broader packet, a different external channel, Codex `multi_agent_v1`, a GPT
+model override, or an "agy folder" substitute.
 
 ## Reviewer Output
 
@@ -238,6 +288,6 @@ risk surfaces when practical:
 - Research method: literature comparison, baseline validity, metrics,
   ablations, error analysis, and claim limits.
 
-Because Antigravity is disabled by default, distribute the 3 Codex/GPT
-reviewers across the highest-risk engineering, governance/safety, and research
-method surfaces for the slice.
+When `agy` is not assigned as one of the effective reviewers, distribute the 3
+Codex/GPT reviewers across the highest-risk engineering,
+governance/safety, and research-method surfaces for the slice.

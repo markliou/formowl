@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, TypeAlias
 
 from formowl_contract import (
     ContractValidationError,
@@ -12,19 +12,27 @@ from formowl_contract import (
     sha256_json,
     to_plain,
 )
-from formowl_core import ascii_identifier_regex_tokens
+from formowl_core import (
+    jieba_sentencepiece_frozen_profile_candidate_admission_tokens,
+    load_default_mail_candidate_admission_tokenizer_profile,
+)
 from formowl_core.tokenization import (
-    DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE,
+    ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT,
+    JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
     MailCandidateAdmissionTokenizerProfile,
 )
 
 from ._access import grant_expired, matching_bundles, normalize_grants
 from ._guards import assert_public_payload_safe, safe_public_string
 from .bundle import MailEvidenceBundle
+from .semantic_plan import (
+    AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
+    GITHUB_PROJECT_OBSERVATION_SOURCE_KIND,
+    AuthorizedSemanticSource,
+)
 
-MAIL_TOKENIZER_PROFILE = DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE
-MAIL_TOKENIZER_ID = MAIL_TOKENIZER_PROFILE.tokenizer_id
-MAIL_TOKENIZER_PROFILE_FINGERPRINT = MAIL_TOKENIZER_PROFILE.profile_fingerprint
+MAIL_TOKENIZER_ID = JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID
+MAIL_TOKENIZER_PROFILE_FINGERPRINT = ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT
 _MAIL_EVIDENCE_PERMISSIONS = {"read", "evidence_snippet", "mail_evidence_read"}
 _SEMANTIC_GATEWAY_TEXT_REDACTIONS = (
     re.compile(r"\bwith\s+.+\s+as\s*\(", re.IGNORECASE),
@@ -54,6 +62,7 @@ class _IndexedMailSnippet:
     mail_evidence_bundle_id: str
     searchable_tokens: set[str]
     payload: dict[str, Any]
+    dense_evidence_text: str = field(repr=False)
     source_observation_hash: str | None = None
     protected_identifier_tokens: frozenset[str] = frozenset()
 
@@ -67,6 +76,37 @@ class _MailSnippetIndex:
     candidate_manifest_fingerprint: str | None = None
     index_fingerprint: str | None = None
     protected_identifier_count: int = 0
+
+
+IndexedMailSnippet = _IndexedMailSnippet
+MailSnippetIndex = _MailSnippetIndex
+
+
+@dataclass(frozen=True)
+class _IndexedObservationSnippet:
+    source_access_fingerprint: str
+    searchable_tokens: set[str]
+    payload: dict[str, Any]
+    dense_evidence_text: str = field(repr=False)
+    source_observation_hash: str
+    protected_identifier_tokens: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class _ObservationSnippetIndex:
+    snippets: tuple[_IndexedObservationSnippet, ...]
+    snippet_indexes_by_token: dict[str, tuple[int, ...]]
+    profile_fingerprint: str
+    source_access_fingerprint: str
+    observation_snapshot_fingerprint: str
+    occurrence_lineage_fingerprint: str
+    candidate_manifest_fingerprint: str
+    index_fingerprint: str
+    protected_identifier_count: int = 0
+
+
+IndexedObservationSnippet = _IndexedObservationSnippet
+ObservationSnippetIndex = _ObservationSnippetIndex
 
 
 @dataclass(frozen=True)
@@ -97,6 +137,115 @@ class ExistingObservationIndexBuildManifest:
         return payload
 
 
+@dataclass(frozen=True)
+class MailMessageOccurrenceLineage:
+    source_observation_id: str
+    message_occurrence_id: str
+
+    @property
+    def source_kind(self) -> str:
+        return AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND
+
+    @property
+    def occurrence_kind(self) -> str:
+        return "mail_message"
+
+    @property
+    def occurrence_id(self) -> str:
+        return self.message_occurrence_id
+
+    @property
+    def parent_occurrence_id(self) -> None:
+        return None
+
+    @property
+    def lineage_fingerprint(self) -> str:
+        return sha256_json(
+            {
+                "schema_version": 1,
+                "source_kind": self.source_kind,
+                "occurrence_kind": self.occurrence_kind,
+                "source_observation_id": self.source_observation_id,
+                "message_occurrence_id": self.message_occurrence_id,
+            }
+        )
+
+
+@dataclass(frozen=True)
+class GitHubProjectOccurrenceLineage:
+    source_observation_id: str
+    record_kind: str
+    source_local_key: str
+    source_record_fingerprint: str
+    parent_source_local_key: str | None = None
+
+    @property
+    def source_kind(self) -> str:
+        return GITHUB_PROJECT_OBSERVATION_SOURCE_KIND
+
+    @property
+    def occurrence_kind(self) -> str:
+        return self.record_kind
+
+    @property
+    def occurrence_id(self) -> str:
+        return self.source_local_key
+
+    @property
+    def parent_occurrence_id(self) -> str | None:
+        return self.parent_source_local_key
+
+    @property
+    def lineage_fingerprint(self) -> str:
+        return sha256_json(
+            {
+                "schema_version": 1,
+                "source_kind": self.source_kind,
+                "occurrence_kind": self.occurrence_kind,
+                "source_observation_id": self.source_observation_id,
+                "source_local_key": self.source_local_key,
+                "source_record_fingerprint": self.source_record_fingerprint,
+                "parent_source_local_key": self.parent_source_local_key,
+            }
+        )
+
+
+SourceOccurrenceLineage: TypeAlias = MailMessageOccurrenceLineage | GitHubProjectOccurrenceLineage
+
+
+@dataclass(frozen=True)
+class AuthorizedObservationIndexBuildManifest:
+    """Public-safe binding for one source-neutral authorized Observation index."""
+
+    artifact_id: str
+    schema_version: int
+    input_kind: str
+    source_kind_hash: str
+    occurrence_schema_hash: str
+    source_access_fingerprint: str
+    permission_set_fingerprint: str
+    occurrence_lineage_fingerprint: str
+    observation_snapshot_fingerprint: str
+    observation_count: int
+    indexed_observation_count: int
+    indexed_snippet_count: int
+    admitted_candidate_count: int
+    protected_identifier_count: int
+    candidate_manifest_fingerprint: str
+    index_fingerprint: str
+    query_profile_fingerprint: str
+    evidence_profile_fingerprint: str
+    missing_lineage_count: int
+
+    def to_safe_dict(self) -> dict[str, Any]:
+        payload = to_plain(self)
+        assert_public_payload_safe(
+            payload,
+            "authorized_observation_index_build_manifest",
+        )
+        return payload
+
+
 class MailEvidenceQueryGateway:
     """Permission-checked query facade over normalized mail evidence bundles."""
 
@@ -108,8 +257,7 @@ class MailEvidenceQueryGateway:
         snippet_index_by_bundle_id: Mapping[str, _MailSnippetIndex] | None = None,
     ) -> None:
         self._bundles = list(bundles)
-        self._tokenizer_profile = tokenizer_profile or MAIL_TOKENIZER_PROFILE
-        self._tokenizer_profile_override = tokenizer_profile
+        self._tokenizer_profile = tokenizer_profile or _load_mail_tokenizer_profile()
         supplied_indexes = dict(snippet_index_by_bundle_id or {})
         known_bundle_ids = {bundle.mail_evidence_bundle_id for bundle in self._bundles}
         if set(supplied_indexes) - known_bundle_ids:
@@ -118,12 +266,12 @@ class MailEvidenceQueryGateway:
         for bundle in self._bundles:
             snippet_index = supplied_indexes.get(bundle.mail_evidence_bundle_id)
             if snippet_index is None:
-                if self._tokenizer_profile_override is None:
+                if tokenizer_profile is None:
                     snippet_index = _build_snippet_index(bundle)
                 else:
                     snippet_index = _build_snippet_index(
                         bundle,
-                        tokenizer_profile=self._tokenizer_profile_override,
+                        tokenizer_profile=self._tokenizer_profile,
                     )
             _require_matching_profile(snippet_index, self._tokenizer_profile)
             self._snippet_index_by_bundle_id[bundle.mail_evidence_bundle_id] = snippet_index
@@ -206,7 +354,7 @@ class MailEvidenceQueryGateway:
             query_text=query_text,
             limit=limit,
             snippet_index_by_bundle_id=self._snippet_index_by_bundle_id,
-            tokenizer_profile=self._tokenizer_profile_override,
+            tokenizer_profile=self._tokenizer_profile,
         )
         if not snippets:
             return MailEvidenceQueryResult(
@@ -269,15 +417,14 @@ def _search_visible_bundles(
     snippet_index_by_bundle_id: Mapping[str, _MailSnippetIndex] | None = None,
     tokenizer_profile: MailCandidateAdmissionTokenizerProfile | None = None,
 ) -> list[dict[str, Any]]:
-    profile = tokenizer_profile or MAIL_TOKENIZER_PROFILE
-    terms = _tokenize(query_text)
-    protected_query_tokens: set[str] = set()
-    if tokenizer_profile is not None:
-        query_tokenization = profile.analyze(query_text)
-        terms = set(query_tokenization.tokens)
-        protected_query_tokens = {
-            span.exact_token for span in query_tokenization.protected_identifiers
-        }
+    profile = tokenizer_profile or _load_mail_tokenizer_profile()
+    query_tokenization = profile.analyze(query_text)
+    terms = (
+        _tokenize(query_text)
+        if _is_target_mail_tokenizer_profile(profile)
+        else set(query_tokenization.tokens)
+    )
+    protected_query_tokens = {span.exact_token for span in query_tokenization.protected_identifiers}
     snippets: list[dict[str, Any]] = []
     for bundle in bundles:
         if snippet_index_by_bundle_id is None:
@@ -334,7 +481,7 @@ def _build_snippet_index(
     source_observation_hashes: Mapping[str, str] | None = None,
     observation_snapshot_fingerprint: str | None = None,
 ) -> _MailSnippetIndex:
-    profile = tokenizer_profile or MAIL_TOKENIZER_PROFILE
+    profile = tokenizer_profile or _load_mail_tokenizer_profile()
     messages_by_id = {message.email_message_id: message for message in bundle.messages}
     indexed: list[_IndexedMailSnippet] = []
     indexes_by_token: dict[str, list[int]] = {}
@@ -351,14 +498,15 @@ def _build_snippet_index(
             )
             if isinstance(item, str)
         )
-        tokens = _tokenize(searchable)
-        protected_tokens: frozenset[str] = frozenset()
-        if tokenizer_profile is not None:
-            tokenization = profile.analyze(searchable)
-            tokens = set(tokenization.tokens)
-            protected_tokens = frozenset(
-                span.exact_token for span in tokenization.protected_identifiers
-            )
+        tokenization = profile.analyze(searchable)
+        tokens = (
+            _tokenize(searchable)
+            if _is_target_mail_tokenizer_profile(profile)
+            else set(tokenization.tokens)
+        )
+        protected_tokens = frozenset(
+            span.exact_token for span in tokenization.protected_identifiers
+        )
         if not tokens:
             continue
         protected_identifier_count += len(protected_tokens)
@@ -367,6 +515,7 @@ def _build_snippet_index(
             _IndexedMailSnippet(
                 mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
                 searchable_tokens=tokens,
+                dense_evidence_text=searchable,
                 payload={
                     "source_type": "mail_body_segment",
                     "source_observation_id": segment.source_observation_id,
@@ -396,6 +545,7 @@ def _build_snippet_index(
                 "protected_identifier_token_hashes": sorted(
                     sha256_json(token) for token in snippet.protected_identifier_tokens
                 ),
+                "dense_evidence_text_hash": sha256_json(snippet.dense_evidence_text),
             }
             for snippet in indexed
         ]
@@ -424,12 +574,343 @@ def _build_snippet_index(
     )
 
 
+def source_occurrence_lineage_from_observation(
+    observation: Observation,
+    *,
+    authorized_source: AuthorizedSemanticSource,
+) -> SourceOccurrenceLineage:
+    """Derive typed occurrence lineage using only the validated source-kind schema."""
+
+    if not isinstance(observation, Observation):
+        raise ContractValidationError("source occurrence lineage requires an Observation")
+    validated = Observation.from_dict(observation.to_dict())
+    if not isinstance(authorized_source, AuthorizedSemanticSource):
+        raise ContractValidationError("authorized Observation source is invalid")
+    if authorized_source.source_kind == AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND:
+        if validated.modality != "mail":
+            raise ContractValidationError("mail source occurrence modality mismatch")
+        message_occurrence_id = validated.location.get("message_occurrence_id")
+        if not isinstance(message_occurrence_id, str) or not message_occurrence_id:
+            raise ContractValidationError("mail source occurrence lineage is missing")
+        safe_public_string(message_occurrence_id, "message_occurrence_id")
+        return MailMessageOccurrenceLineage(
+            source_observation_id=validated.observation_id,
+            message_occurrence_id=message_occurrence_id,
+        )
+    if authorized_source.source_kind == GITHUB_PROJECT_OBSERVATION_SOURCE_KIND:
+        if validated.modality != "project" or validated.observation_type not in {
+            "issue_record",
+            "top_level_issue_comment",
+        }:
+            raise ContractValidationError("GitHub source occurrence schema mismatch")
+        location = validated.location
+        payload = validated.payload or {}
+        source_local_key = location.get("source_local_key")
+        source_record_fingerprint = location.get("source_record_fingerprint")
+        record_kind = location.get("record_kind")
+        parent_source_local_key = location.get("parent_source_local_key")
+        if (
+            not isinstance(source_local_key, str)
+            or not source_local_key
+            or not isinstance(source_record_fingerprint, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", source_record_fingerprint) is None
+            or record_kind != validated.observation_type
+            or payload.get("source_local_key") != source_local_key
+            or payload.get("source_record_fingerprint") != source_record_fingerprint
+            or payload.get("record_kind") != record_kind
+        ):
+            raise ContractValidationError("GitHub source occurrence lineage is invalid")
+        if record_kind == "issue_record":
+            if parent_source_local_key not in {None, ""} or payload.get(
+                "parent_source_local_key"
+            ) not in {None, ""}:
+                raise ContractValidationError("GitHub issue occurrence parent is invalid")
+            parent_source_local_key = None
+        elif (
+            not isinstance(parent_source_local_key, str)
+            or not parent_source_local_key
+            or payload.get("parent_source_local_key") != parent_source_local_key
+        ):
+            raise ContractValidationError("GitHub comment parent lineage is missing")
+        for field_name, value in (
+            ("source_local_key", source_local_key),
+            ("record_kind", str(record_kind)),
+        ):
+            safe_public_string(value, field_name)
+        if parent_source_local_key is not None:
+            safe_public_string(parent_source_local_key, "parent_source_local_key")
+        return GitHubProjectOccurrenceLineage(
+            source_observation_id=validated.observation_id,
+            record_kind=str(record_kind),
+            source_local_key=source_local_key,
+            source_record_fingerprint=source_record_fingerprint,
+            parent_source_local_key=parent_source_local_key,
+        )
+    raise ContractValidationError("semantic query source kind is unsupported")
+
+
+def build_authorized_observation_snippet_index(
+    observations: Sequence[Observation],
+    *,
+    authorized_source: AuthorizedSemanticSource,
+    occurrence_lineages: Sequence[SourceOccurrenceLineage],
+    authorized_observation_hash_by_id: Mapping[str, str],
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+) -> tuple[ObservationSnippetIndex, AuthorizedObservationIndexBuildManifest]:
+    """Build a deterministic source-neutral index from authorized Observations."""
+
+    if not isinstance(authorized_source, AuthorizedSemanticSource):
+        raise ContractValidationError("authorized Observation source is invalid")
+    if not isinstance(tokenizer_profile, MailCandidateAdmissionTokenizerProfile):
+        raise ContractValidationError("Observation index tokenizer profile is invalid")
+    normalized_by_id: dict[str, Observation] = {}
+    observation_hash_by_id: dict[str, str] = {}
+    for observation in observations:
+        if not isinstance(observation, Observation):
+            raise ContractValidationError("Observation index requires Observation records")
+        validated = Observation.from_dict(observation.to_dict())
+        if validated.observation_id in normalized_by_id:
+            raise ContractValidationError("Observation index has duplicate observation ids")
+        normalized_by_id[validated.observation_id] = validated
+        observation_hash_by_id[validated.observation_id] = sha256_json(validated.to_dict())
+    if not normalized_by_id:
+        raise ContractValidationError("Observation index requires observations")
+    supplied_authorized_hashes = dict(authorized_observation_hash_by_id)
+    if (
+        set(supplied_authorized_hashes) != set(normalized_by_id)
+        or supplied_authorized_hashes != observation_hash_by_id
+    ):
+        raise ContractValidationError("Observation index authorization binding mismatch")
+
+    lineage_by_observation_id: dict[str, SourceOccurrenceLineage] = {}
+    for lineage in occurrence_lineages:
+        if not isinstance(
+            lineage,
+            MailMessageOccurrenceLineage | GitHubProjectOccurrenceLineage,
+        ):
+            raise ContractValidationError("Observation index occurrence lineage is invalid")
+        if lineage.source_observation_id in lineage_by_observation_id:
+            raise ContractValidationError("Observation index occurrence lineage is duplicate")
+        lineage_by_observation_id[lineage.source_observation_id] = lineage
+    if set(lineage_by_observation_id) != set(normalized_by_id):
+        raise ContractValidationError("Observation index occurrence lineage is incomplete")
+
+    indexed: list[_IndexedObservationSnippet] = []
+    indexes_by_token: dict[str, list[int]] = {}
+    ordered_observation_hashes: list[str] = []
+    ordered_lineage_fingerprints: list[str] = []
+    permission_fingerprints: list[str] = []
+    protected_identifier_count = 0
+    for observation_id in sorted(normalized_by_id):
+        observation = normalized_by_id[observation_id]
+        lineage = lineage_by_observation_id[observation_id]
+        _validate_observation_source_scope(
+            observation,
+            authorized_source=authorized_source,
+        )
+        expected_lineage = source_occurrence_lineage_from_observation(
+            observation,
+            authorized_source=authorized_source,
+        )
+        if lineage.source_kind != authorized_source.source_kind or lineage != expected_lineage:
+            raise ContractValidationError("Observation index source occurrence mismatch")
+        searchable = _source_neutral_searchable_text(
+            observation,
+            source_kind=authorized_source.source_kind,
+        )
+        tokenization = tokenizer_profile.analyze(searchable)
+        tokens = (
+            _tokenize(searchable)
+            if _is_target_mail_tokenizer_profile(tokenizer_profile)
+            else set(tokenization.tokens)
+        )
+        if not tokens:
+            raise ContractValidationError("Observation index has no searchable evidence")
+        protected_tokens = frozenset(
+            span.exact_token for span in tokenization.protected_identifiers
+        )
+        snippet_index = len(indexed)
+        permission_fingerprint = sha256_json(to_plain(observation.permission_scope))
+        payload = {
+            "source_type": observation.observation_type,
+            "source_kind": authorized_source.source_kind,
+            "source_observation_id": observation.observation_id,
+            "source_occurrence_hash": sha256_json(lineage.occurrence_id),
+            "source_occurrence_kind": lineage.occurrence_kind,
+            "snippet": observation.text or observation.caption or "",
+        }
+        if lineage.parent_occurrence_id is not None:
+            payload["parent_source_occurrence_hash"] = sha256_json(lineage.parent_occurrence_id)
+        indexed.append(
+            _IndexedObservationSnippet(
+                source_access_fingerprint=authorized_source.authorization_fingerprint,
+                searchable_tokens=tokens,
+                dense_evidence_text=searchable,
+                payload=payload,
+                source_observation_hash=observation_hash_by_id[observation_id],
+                protected_identifier_tokens=protected_tokens,
+            )
+        )
+        for token in tokens:
+            indexes_by_token.setdefault(token, []).append(snippet_index)
+        ordered_observation_hashes.append(observation_hash_by_id[observation_id])
+        ordered_lineage_fingerprints.append(lineage.lineage_fingerprint)
+        permission_fingerprints.append(permission_fingerprint)
+        protected_identifier_count += len(protected_tokens)
+
+    observation_snapshot_fingerprint = sha256_json(
+        {
+            "schema_version": 1,
+            "source_access_fingerprint": (authorized_source.authorization_fingerprint),
+            "ordered_observation_hashes": ordered_observation_hashes,
+            "observation_count": len(ordered_observation_hashes),
+        }
+    )
+    occurrence_lineage_fingerprint = sha256_json(ordered_lineage_fingerprints)
+    permission_set_fingerprint = sha256_json(sorted(permission_fingerprints))
+    candidate_manifest_fingerprint = sha256_json(
+        [
+            {
+                "source_observation_hash": snippet.source_observation_hash,
+                "source_occurrence_lineage_fingerprint": (ordered_lineage_fingerprints[index]),
+                "candidate_token_hashes": sorted(
+                    sha256_json(token) for token in snippet.searchable_tokens
+                ),
+                "protected_identifier_token_hashes": sorted(
+                    sha256_json(token) for token in snippet.protected_identifier_tokens
+                ),
+                "dense_evidence_text_hash": sha256_json(snippet.dense_evidence_text),
+            }
+            for index, snippet in enumerate(indexed)
+        ]
+    )
+    index_fingerprint = sha256_json(
+        {
+            "source_access_fingerprint": (authorized_source.authorization_fingerprint),
+            "observation_snapshot_fingerprint": observation_snapshot_fingerprint,
+            "occurrence_lineage_fingerprint": occurrence_lineage_fingerprint,
+            "permission_set_fingerprint": permission_set_fingerprint,
+            "profile_fingerprint": tokenizer_profile.profile_fingerprint,
+            "candidate_manifest_fingerprint": candidate_manifest_fingerprint,
+            "postings": {
+                sha256_json(token): tuple(indexes)
+                for token, indexes in sorted(indexes_by_token.items())
+            },
+        }
+    )
+    snippet_index = _ObservationSnippetIndex(
+        snippets=tuple(indexed),
+        snippet_indexes_by_token={
+            token: tuple(indexes) for token, indexes in indexes_by_token.items()
+        },
+        profile_fingerprint=tokenizer_profile.profile_fingerprint,
+        source_access_fingerprint=authorized_source.authorization_fingerprint,
+        observation_snapshot_fingerprint=observation_snapshot_fingerprint,
+        occurrence_lineage_fingerprint=occurrence_lineage_fingerprint,
+        candidate_manifest_fingerprint=candidate_manifest_fingerprint,
+        index_fingerprint=index_fingerprint,
+        protected_identifier_count=protected_identifier_count,
+    )
+    manifest = AuthorizedObservationIndexBuildManifest(
+        artifact_id="formowl_authorized_observation_index_manifest_v1",
+        schema_version=1,
+        input_kind="authorized_observations_with_typed_occurrences",
+        source_kind_hash=sha256_json(authorized_source.source_kind),
+        occurrence_schema_hash=sha256_json(authorized_source.occurrence_schema_id),
+        source_access_fingerprint=(authorized_source.authorization_fingerprint),
+        permission_set_fingerprint=permission_set_fingerprint,
+        occurrence_lineage_fingerprint=occurrence_lineage_fingerprint,
+        observation_snapshot_fingerprint=observation_snapshot_fingerprint,
+        observation_count=len(normalized_by_id),
+        indexed_observation_count=len(indexed),
+        indexed_snippet_count=len(indexed),
+        admitted_candidate_count=sum(len(snippet.searchable_tokens) for snippet in indexed),
+        protected_identifier_count=protected_identifier_count,
+        candidate_manifest_fingerprint=candidate_manifest_fingerprint,
+        index_fingerprint=index_fingerprint,
+        query_profile_fingerprint=tokenizer_profile.profile_fingerprint,
+        evidence_profile_fingerprint=tokenizer_profile.profile_fingerprint,
+        missing_lineage_count=0,
+    )
+    manifest.to_safe_dict()
+    return snippet_index, manifest
+
+
+def _validate_observation_source_scope(
+    observation: Observation,
+    *,
+    authorized_source: AuthorizedSemanticSource,
+) -> None:
+    permission_scope = to_plain(observation.permission_scope)
+    if not isinstance(permission_scope, dict):
+        raise ContractValidationError("Observation index permission scope is invalid")
+    scope_type = permission_scope.get("scope_type")
+    scope_id = permission_scope.get("scope_id")
+    if not isinstance(scope_type, str) or not isinstance(scope_id, str) or not scope_id:
+        raise ContractValidationError("Observation index permission scope is invalid")
+    if authorized_source.source_kind == GITHUB_PROJECT_OBSERVATION_SOURCE_KIND:
+        if scope_type != "project" or scope_id not in authorized_source.source_scope_ids:
+            raise ContractValidationError("Observation index permission scope mismatch")
+        return
+    if authorized_source.source_kind == AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND:
+        workspace_scope_matches = (
+            scope_type == "workspace" and scope_id == authorized_source.workspace_id
+        )
+        occurrence_scope_matches = (
+            scope_type == "mail_import_session" and scope_id in authorized_source.source_scope_ids
+        )
+        if not (workspace_scope_matches or occurrence_scope_matches):
+            raise ContractValidationError("Observation index permission scope mismatch")
+        return
+    raise ContractValidationError("semantic query source kind is unsupported")
+
+
+def _source_neutral_searchable_text(
+    observation: Observation,
+    *,
+    source_kind: str,
+) -> str:
+    values: list[str] = [
+        value
+        for value in (
+            observation.text,
+            observation.caption,
+            observation.observation_type,
+            observation.modality,
+        )
+        if isinstance(value, str) and value
+    ]
+    if source_kind == GITHUB_PROJECT_OBSERVATION_SOURCE_KIND:
+        payload = observation.payload or {}
+        for field_name in (
+            "record_kind",
+            "issue_number",
+            "state",
+            "state_reason",
+            "created_at",
+            "updated_at",
+            "closed_at",
+            "label_names",
+            "source_native_issue_references",
+        ):
+            value = payload.get(field_name)
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+                values.append(str(value))
+            elif isinstance(value, list):
+                values.extend(
+                    str(item)
+                    for item in value
+                    if isinstance(item, (str, int, float)) and not isinstance(item, bool)
+                )
+    return "\n".join(values)
+
+
 def build_existing_observation_snippet_index(
     observations: Sequence[Observation],
     *,
     bundle: MailEvidenceBundle,
     tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
-) -> tuple[_MailSnippetIndex, ExistingObservationIndexBuildManifest]:
+) -> tuple[MailSnippetIndex, ExistingObservationIndexBuildManifest]:
     """Re-tokenize a bundle from existing Observation records only."""
 
     normalized: list[Observation] = []
@@ -502,6 +983,58 @@ def build_existing_observation_snippet_index(
     )
     manifest.to_safe_dict()
     return snippet_index, manifest
+
+
+def authorize_mail_evidence_bundles(
+    bundles: Sequence[MailEvidenceBundle],
+    *,
+    requester_user_id: str,
+    workspace_id: str,
+    grants: Sequence[Grant | dict[str, Any]] = (),
+    now: str | None = None,
+) -> tuple[MailEvidenceBundle, ...]:
+    """Filter bundles before any query candidate or index materialization."""
+
+    if not isinstance(requester_user_id, str) or not requester_user_id.strip():
+        raise ContractValidationError("requester_user_id is required")
+    if not isinstance(workspace_id, str) or not workspace_id.strip():
+        raise ContractValidationError("workspace_id is required")
+    safe_public_string(requester_user_id, "requester_user_id")
+    safe_public_string(workspace_id, "workspace_id")
+    resolved_now = now or "9999-12-31T23:59:59+00:00"
+    grant_objects = normalize_grants(grants)
+    return tuple(
+        bundle
+        for bundle in bundles
+        if bundle.mail_import_session.workspace_id == workspace_id
+        and _can_read_bundle(
+            bundle,
+            requester_user_id=requester_user_id,
+            grants=grant_objects,
+            now=resolved_now,
+        )
+    )
+
+
+def require_issue56_target_tokenizer_profile(
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+    *,
+    expected_profile_fingerprint: str,
+) -> None:
+    """Fail closed unless the available profile is the pinned Issue #56 target."""
+
+    if not isinstance(tokenizer_profile, MailCandidateAdmissionTokenizerProfile):
+        raise ContractValidationError("issue56 target tokenizer profile is unavailable")
+    if tokenizer_profile.tokenizer_id != JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID:
+        raise ContractValidationError("issue56 target tokenizer profile is unavailable")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_profile_fingerprint):
+        raise ContractValidationError("issue56 tokenizer profile fingerprint is invalid")
+    if tokenizer_profile.profile_fingerprint != expected_profile_fingerprint:
+        raise ContractValidationError("mail evidence tokenizer profile mismatch")
+    try:
+        tokenizer_profile.analyze("Issue56 交期 profile readiness")
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise ContractValidationError("issue56 target tokenizer profile is unavailable") from exc
 
 
 def _safe_snippet(payload: dict[str, Any]) -> dict[str, Any]:
@@ -611,7 +1144,23 @@ def _validate_query_inputs(
 
 
 def _tokenize(value: str) -> set[str]:
-    return ascii_identifier_regex_tokens(value)
+    return jieba_sentencepiece_frozen_profile_candidate_admission_tokens(value)
+
+
+def _load_mail_tokenizer_profile() -> MailCandidateAdmissionTokenizerProfile:
+    profile = load_default_mail_candidate_admission_tokenizer_profile()
+    if not _is_target_mail_tokenizer_profile(profile):
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    return profile
+
+
+def _is_target_mail_tokenizer_profile(
+    profile: MailCandidateAdmissionTokenizerProfile,
+) -> bool:
+    return (
+        profile.tokenizer_id == MAIL_TOKENIZER_ID
+        and profile.profile_fingerprint == MAIL_TOKENIZER_PROFILE_FINGERPRINT
+    )
 
 
 def _require_matching_profile(
@@ -623,9 +1172,21 @@ def _require_matching_profile(
 
 
 __all__ = [
+    "AuthorizedObservationIndexBuildManifest",
     "ExistingObservationIndexBuildManifest",
+    "GitHubProjectOccurrenceLineage",
+    "IndexedMailSnippet",
+    "IndexedObservationSnippet",
+    "MailMessageOccurrenceLineage",
     "MailEvidenceQueryGateway",
     "MailEvidenceQueryResult",
+    "MailSnippetIndex",
+    "ObservationSnippetIndex",
+    "SourceOccurrenceLineage",
+    "authorize_mail_evidence_bundles",
+    "build_authorized_observation_snippet_index",
     "build_existing_observation_snippet_index",
     "build_mail_evidence_query_handler",
+    "require_issue56_target_tokenizer_profile",
+    "source_occurrence_lineage_from_observation",
 ]

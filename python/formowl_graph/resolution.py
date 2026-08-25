@@ -9,9 +9,11 @@ import re
 from typing import Any, Iterable, Mapping, Sequence
 
 from formowl_contract import (
+    CandidateMention,
     ContractValidationError,
     now_iso,
     sha256_json,
+    stable_candidate_mention_id,
     stable_resource_contract_id,
     to_plain,
 )
@@ -41,6 +43,17 @@ _DEFAULT_REVIEW_ACTIONS = (
 )
 _RAPIDFUZZ_SOURCE_URL = "https://github.com/rapidfuzz/RapidFuzz"
 _SPLINK_SOURCE_URL = "https://moj-analytical-services.github.io/splink/"
+_EXACT_PROTECTED_IDENTIFIER_RESOLUTION_POLICY_ID = (
+    "exact_source_bound_protected_identifier_candidate_resolution_v2"
+)
+_TENANT_WORKSPACE_IDENTITY_SCOPE_MODE = "tenant_workspace_v1"
+_WORKSPACE_ONLY_IDENTITY_SCOPE_MODE = "workspace_only_v1"
+_APPROVED_IDENTITY_SCOPE_MODES = frozenset(
+    {
+        _TENANT_WORKSPACE_IDENTITY_SCOPE_MODE,
+        _WORKSPACE_ONLY_IDENTITY_SCOPE_MODE,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -167,6 +180,211 @@ class EvidenceLink:
             "source_candidate_atom_id": self.source_candidate_atom_id,
             "source_observation_ids": list(self.source_observation_ids),
         }
+
+
+@dataclass(frozen=True)
+class ProtectedIdentifierOccurrenceScope:
+    """Safe source-occurrence lineage retained by one resolution candidate."""
+
+    candidate_mention_id: str
+    source_observation_id: str
+    source_observation_fingerprint: str
+    source_extractor_provenance_fingerprint: str
+    message_occurrence_fingerprint: str
+    source_locator_fingerprint: str
+    occurrence_scope_fingerprint: str
+    permission_boundary_fingerprint: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return to_plain(self)
+
+
+@dataclass(frozen=True)
+class ExactProtectedIdentifierCandidate:
+    """Candidate-only exact identity; never a canonical entity or merge."""
+
+    candidate_resolution_id: str
+    candidate_identity_fingerprint: str
+    exact_protected_token_hash: str
+    identifier_kind: str
+    identity_scope_mode: str
+    identity_scope_fingerprint: str
+    workspace_id: str
+    identity_scope_attestation_fingerprint: str
+    identity_scope_policy_fingerprint: str
+    operator_approval_fingerprint: str
+    permission_boundary_fingerprint: str
+    tokenizer_id: str
+    tokenizer_profile_fingerprint: str
+    extraction_policy_id: str
+    extraction_policy_fingerprint: str
+    occurrence_scopes: tuple[ProtectedIdentifierOccurrenceScope, ...]
+    candidate_fingerprint: str
+    tenant_id: str | None = None
+    spec_approval_fingerprint: str | None = None
+    status: str = "pending_review"
+    requires_review: bool = True
+    canonical_merge_performed: bool = False
+    canonical_write_allowed: bool = False
+    resolution_algorithm: str = "exact_protected_token_hash_v1"
+    resolution_policy_id: str = _EXACT_PROTECTED_IDENTIFIER_RESOLUTION_POLICY_ID
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = {
+            **to_plain(self),
+            "occurrence_scopes": [occurrence.to_dict() for occurrence in self.occurrence_scopes],
+        }
+        _validate_exact_identifier_candidate_payload(payload)
+        return payload
+
+
+@dataclass(frozen=True)
+class ExactProtectedIdentifierResolutionResult:
+    """Deterministic candidate grouping over exact source-bound mentions."""
+
+    candidates: tuple[ExactProtectedIdentifierCandidate, ...]
+    source_mention_count: int
+    candidate_count: int
+    resolution_policy_id: str
+    resolution_fingerprint: str
+    canonical_merge_performed: bool = False
+    canonical_write_allowed: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = {
+            "candidates": [candidate.to_dict() for candidate in self.candidates],
+            "source_mention_count": self.source_mention_count,
+            "candidate_count": self.candidate_count,
+            "resolution_policy_id": self.resolution_policy_id,
+            "resolution_fingerprint": self.resolution_fingerprint,
+            "canonical_merge_performed": self.canonical_merge_performed,
+            "canonical_write_allowed": self.canonical_write_allowed,
+        }
+        _validate_no_raw_reference(payload, "exact identifier resolution result")
+        return payload
+
+
+def resolve_exact_protected_identifier_candidates(
+    candidate_mentions: Sequence[CandidateMention],
+) -> ExactProtectedIdentifierResolutionResult:
+    """Group exact protected-token mentions without fuzzy or canonical writes."""
+
+    if isinstance(candidate_mentions, (str, bytes)) or not isinstance(candidate_mentions, Sequence):
+        raise ContractValidationError("candidate_mentions must be a sequence")
+    validated_mentions: list[CandidateMention] = []
+    for mention in candidate_mentions:
+        if not isinstance(mention, CandidateMention):
+            raise ContractValidationError(
+                "exact identifier resolution requires CandidateMention records"
+            )
+        validated_mentions.append(CandidateMention.from_dict(mention.to_dict()))
+    if len({mention.candidate_mention_id for mention in validated_mentions}) != len(
+        validated_mentions
+    ):
+        raise ContractValidationError(
+            "exact identifier resolution requires unique candidate mention ids"
+        )
+
+    grouped: dict[tuple[str, ...], dict[str, Any]] = {}
+    for mention in validated_mentions:
+        binding = _validated_source_bound_identifier_mention(mention)
+        key = (
+            binding["exact_protected_token_hash"],
+            binding["identity_scope_mode"],
+            binding["identity_scope_fingerprint"],
+            binding["workspace_id"],
+            binding["identity_scope_attestation_fingerprint"],
+            binding["identity_scope_policy_fingerprint"],
+            binding["operator_approval_fingerprint"],
+            binding.get("tenant_id") or "",
+            binding.get("spec_approval_fingerprint") or "",
+            binding["permission_boundary_fingerprint"],
+            binding["tokenizer_profile_fingerprint"],
+            binding["extraction_policy_fingerprint"],
+        )
+        identity_fields = {
+            "exact_protected_token_hash": binding["exact_protected_token_hash"],
+            "identifier_kind": binding["identifier_kind"],
+            "identity_scope_mode": binding["identity_scope_mode"],
+            "identity_scope_fingerprint": binding["identity_scope_fingerprint"],
+            "workspace_id": binding["workspace_id"],
+            "identity_scope_attestation_fingerprint": binding[
+                "identity_scope_attestation_fingerprint"
+            ],
+            "identity_scope_policy_fingerprint": binding["identity_scope_policy_fingerprint"],
+            "operator_approval_fingerprint": binding["operator_approval_fingerprint"],
+            "permission_boundary_fingerprint": binding["permission_boundary_fingerprint"],
+            "tokenizer_id": binding["tokenizer_id"],
+            "tokenizer_profile_fingerprint": binding["tokenizer_profile_fingerprint"],
+            "extraction_policy_id": binding["extraction_policy_id"],
+            "extraction_policy_fingerprint": binding["extraction_policy_fingerprint"],
+        }
+        if binding["identity_scope_mode"] == _TENANT_WORKSPACE_IDENTITY_SCOPE_MODE:
+            identity_fields["tenant_id"] = binding["tenant_id"]
+        else:
+            identity_fields["spec_approval_fingerprint"] = binding["spec_approval_fingerprint"]
+        existing = grouped.get(key)
+        if existing is None:
+            grouped[key] = {
+                "identity_fields": identity_fields,
+                "occurrence_scopes": [binding["occurrence_scope"]],
+            }
+            continue
+        if existing["identity_fields"] != identity_fields:
+            raise ContractValidationError("exact identifier candidate binding is inconsistent")
+        existing["occurrence_scopes"].append(binding["occurrence_scope"])
+
+    candidates: list[ExactProtectedIdentifierCandidate] = []
+    for grouped_item in grouped.values():
+        identity_fields = dict(grouped_item["identity_fields"])
+        occurrence_scopes = tuple(
+            sorted(
+                grouped_item["occurrence_scopes"],
+                key=lambda item: item.candidate_mention_id,
+            )
+        )
+        candidate_identity_fingerprint = sha256_json(identity_fields)
+        candidate_resolution_id = stable_resource_contract_id(
+            "idcand",
+            "ExactProtectedIdentifierCandidate",
+            {
+                "resolution_policy_id": (_EXACT_PROTECTED_IDENTIFIER_RESOLUTION_POLICY_ID),
+                **identity_fields,
+            },
+        )
+        candidate_fingerprint = sha256_json(
+            {
+                "candidate_identity_fingerprint": (candidate_identity_fingerprint),
+                "occurrence_scopes": [occurrence.to_dict() for occurrence in occurrence_scopes],
+                "resolution_policy_id": (_EXACT_PROTECTED_IDENTIFIER_RESOLUTION_POLICY_ID),
+            }
+        )
+        candidates.append(
+            ExactProtectedIdentifierCandidate(
+                candidate_resolution_id=candidate_resolution_id,
+                candidate_identity_fingerprint=(candidate_identity_fingerprint),
+                occurrence_scopes=occurrence_scopes,
+                candidate_fingerprint=candidate_fingerprint,
+                **identity_fields,
+            )
+        )
+    candidates.sort(key=lambda candidate: candidate.candidate_resolution_id)
+    resolution_fingerprint = sha256_json(
+        {
+            "candidate_fingerprints": [candidate.candidate_fingerprint for candidate in candidates],
+            "resolution_policy_id": (_EXACT_PROTECTED_IDENTIFIER_RESOLUTION_POLICY_ID),
+            "source_mention_ids": sorted(
+                mention.candidate_mention_id for mention in validated_mentions
+            ),
+        }
+    )
+    return ExactProtectedIdentifierResolutionResult(
+        candidates=tuple(candidates),
+        source_mention_count=len(validated_mentions),
+        candidate_count=len(candidates),
+        resolution_policy_id=_EXACT_PROTECTED_IDENTIFIER_RESOLUTION_POLICY_ID,
+        resolution_fingerprint=resolution_fingerprint,
+    )
 
 
 @dataclass(frozen=True)
@@ -1041,6 +1259,359 @@ def _validate_score(value: Any, field_name: str) -> None:
         raise ContractValidationError(f"{field_name} must be between 0 and 1")
 
 
+def _validated_source_bound_identifier_mention(
+    mention: CandidateMention,
+) -> dict[str, Any]:
+    metadata = mention.metadata
+    required_metadata = (
+        "candidate_kind",
+        "canonical_write_allowed",
+        "candidate_only",
+        "exact_protected_token_hash",
+        "identity_scope_mode",
+        "identity_scope_fingerprint",
+        "workspace_id",
+        "identity_scope_attestation_fingerprint",
+        "identity_scope_policy_fingerprint",
+        "operator_approval_fingerprint",
+        "permission_scope",
+        "permission_boundary_fingerprint",
+        "tokenizer_id",
+        "tokenizer_profile_fingerprint",
+        "extraction_policy_id",
+        "extraction_policy_fingerprint",
+        "source_observation_fingerprint",
+        "source_extractor_provenance_fingerprint",
+        "message_occurrence_fingerprint",
+        "source_locator_fingerprint",
+        "occurrence_scope_fingerprint",
+    )
+    missing = [field_name for field_name in required_metadata if field_name not in metadata]
+    if missing:
+        raise ContractValidationError(
+            "source-bound protected identifier mention missing binding: " + ", ".join(missing)
+        )
+    if (
+        metadata["candidate_kind"] != "protected_identifier_occurrence"
+        or metadata["canonical_write_allowed"] is not False
+        or metadata["candidate_only"] is not True
+        or mention.status != "pending_review"
+        or mention.requires_review is not True
+    ):
+        raise ContractValidationError(
+            "protected identifier resolution accepts candidate-only pending review mentions"
+        )
+    prefix = "protected_identifier:"
+    if not mention.mention_type.startswith(prefix):
+        raise ContractValidationError(
+            "protected identifier resolution requires protected identifier mentions"
+        )
+    identifier_kind = mention.mention_type.removeprefix(prefix)
+    _validate_non_empty_string(identifier_kind, "identifier_kind")
+    exact_hash = metadata["exact_protected_token_hash"]
+    _validate_sha256_fingerprint(
+        exact_hash,
+        "CandidateMention.metadata.exact_protected_token_hash",
+    )
+    if mention.normalized_label != exact_hash or mention.text_hash != exact_hash:
+        raise ContractValidationError(
+            "protected identifier mention exact-token hash binding mismatch"
+        )
+
+    identity_scope_mode = metadata["identity_scope_mode"]
+    if identity_scope_mode not in _APPROVED_IDENTITY_SCOPE_MODES:
+        raise ContractValidationError("protected identifier identity scope mode is not approved")
+    workspace_id = metadata["workspace_id"]
+    _validate_non_empty_string(
+        workspace_id,
+        "CandidateMention.metadata.workspace_id",
+    )
+    identity_scope_fingerprint = metadata["identity_scope_fingerprint"]
+    identity_scope_attestation_fingerprint = metadata["identity_scope_attestation_fingerprint"]
+    identity_scope_policy_fingerprint = metadata["identity_scope_policy_fingerprint"]
+    operator_approval_fingerprint = metadata["operator_approval_fingerprint"]
+    for field_name, value in (
+        ("identity_scope_fingerprint", identity_scope_fingerprint),
+        (
+            "identity_scope_attestation_fingerprint",
+            identity_scope_attestation_fingerprint,
+        ),
+        ("identity_scope_policy_fingerprint", identity_scope_policy_fingerprint),
+        ("operator_approval_fingerprint", operator_approval_fingerprint),
+    ):
+        _validate_sha256_fingerprint(value, f"CandidateMention.metadata.{field_name}")
+    tenant_id: str | None = None
+    spec_approval_fingerprint: str | None = None
+    if identity_scope_mode == _TENANT_WORKSPACE_IDENTITY_SCOPE_MODE:
+        if "tenant_id" not in metadata or "spec_approval_fingerprint" in metadata:
+            raise ContractValidationError(
+                "tenant_workspace_v1 protected identifier scope fields are invalid"
+            )
+        tenant_id = metadata["tenant_id"]
+        _validate_non_empty_string(tenant_id, "CandidateMention.metadata.tenant_id")
+        expected_identity_scope = {
+            "mode": identity_scope_mode,
+            "workspace_id": workspace_id,
+            "tenant_id": tenant_id,
+        }
+    else:
+        if "tenant_id" in metadata or "spec_approval_fingerprint" not in metadata:
+            raise ContractValidationError(
+                "workspace_only_v1 protected identifier tenant/spec binding is invalid"
+            )
+        spec_approval_fingerprint = metadata["spec_approval_fingerprint"]
+        _validate_sha256_fingerprint(
+            spec_approval_fingerprint,
+            "CandidateMention.metadata.spec_approval_fingerprint",
+        )
+        expected_identity_scope = {
+            "mode": identity_scope_mode,
+            "workspace_id": workspace_id,
+        }
+    _validate_no_raw_reference(
+        expected_identity_scope,
+        "protected identifier identity scope",
+    )
+    if identity_scope_fingerprint != sha256_json(expected_identity_scope):
+        raise ContractValidationError("protected identifier identity scope binding mismatch")
+
+    permission_scope = metadata["permission_scope"]
+    if not isinstance(permission_scope, Mapping):
+        raise ContractValidationError("protected identifier permission scope must be an object")
+    permission_boundary_fingerprint = metadata["permission_boundary_fingerprint"]
+    _validate_sha256_fingerprint(
+        permission_boundary_fingerprint,
+        "CandidateMention.metadata.permission_boundary_fingerprint",
+    )
+    if sha256_json(dict(permission_scope)) != permission_boundary_fingerprint:
+        raise ContractValidationError("protected identifier permission boundary binding mismatch")
+
+    tokenizer_id = metadata["tokenizer_id"]
+    extraction_policy_id = metadata["extraction_policy_id"]
+    _validate_non_empty_string(
+        tokenizer_id,
+        "CandidateMention.metadata.tokenizer_id",
+    )
+    _validate_non_empty_string(
+        extraction_policy_id,
+        "CandidateMention.metadata.extraction_policy_id",
+    )
+    tokenizer_profile_fingerprint = metadata["tokenizer_profile_fingerprint"]
+    extraction_policy_fingerprint = metadata["extraction_policy_fingerprint"]
+    for field_name, value in (
+        ("tokenizer_profile_fingerprint", tokenizer_profile_fingerprint),
+        ("extraction_policy_fingerprint", extraction_policy_fingerprint),
+        (
+            "source_observation_fingerprint",
+            metadata["source_observation_fingerprint"],
+        ),
+        (
+            "source_extractor_provenance_fingerprint",
+            metadata["source_extractor_provenance_fingerprint"],
+        ),
+        (
+            "message_occurrence_fingerprint",
+            metadata["message_occurrence_fingerprint"],
+        ),
+        ("source_locator_fingerprint", metadata["source_locator_fingerprint"]),
+        (
+            "occurrence_scope_fingerprint",
+            metadata["occurrence_scope_fingerprint"],
+        ),
+    ):
+        _validate_sha256_fingerprint(
+            value,
+            f"CandidateMention.metadata.{field_name}",
+        )
+    if len(mention.source_observation_ids) != 1:
+        raise ContractValidationError(
+            "protected identifier occurrence requires one source Observation"
+        )
+    source_observation_id = mention.source_observation_ids[0]
+    location = mention.location
+    expected_location_fields = {
+        "source_observation_id": source_observation_id,
+        "message_occurrence_fingerprint": metadata["message_occurrence_fingerprint"],
+        "source_locator_fingerprint": metadata["source_locator_fingerprint"],
+        "identity_scope_mode": identity_scope_mode,
+        "identity_scope_fingerprint": identity_scope_fingerprint,
+        "workspace_id": workspace_id,
+        "identity_scope_attestation_fingerprint": (identity_scope_attestation_fingerprint),
+        "identity_scope_policy_fingerprint": identity_scope_policy_fingerprint,
+        "operator_approval_fingerprint": operator_approval_fingerprint,
+        "permission_boundary_fingerprint": permission_boundary_fingerprint,
+        "tokenizer_profile_fingerprint": tokenizer_profile_fingerprint,
+        "extraction_policy_fingerprint": extraction_policy_fingerprint,
+        "identifier_kind": identifier_kind,
+        "occurrence_scope_fingerprint": metadata["occurrence_scope_fingerprint"],
+    }
+    if identity_scope_mode == _TENANT_WORKSPACE_IDENTITY_SCOPE_MODE:
+        expected_location_fields["tenant_id"] = tenant_id
+        if "spec_approval_fingerprint" in location:
+            raise ContractValidationError(
+                "tenant_workspace_v1 protected identifier location fields are invalid"
+            )
+    else:
+        expected_location_fields["spec_approval_fingerprint"] = spec_approval_fingerprint
+        if "tenant_id" in location:
+            raise ContractValidationError(
+                "workspace_only_v1 protected identifier location fabricates tenant"
+            )
+    if any(location.get(key) != value for key, value in expected_location_fields.items()):
+        raise ContractValidationError("protected identifier occurrence location binding mismatch")
+    span_start = location.get("span_start")
+    span_end = location.get("span_end")
+    if (
+        not isinstance(span_start, int)
+        or isinstance(span_start, bool)
+        or not isinstance(span_end, int)
+        or isinstance(span_end, bool)
+        or span_start < 0
+        or span_end <= span_start
+    ):
+        raise ContractValidationError("protected identifier occurrence span is invalid")
+    if (
+        sha256_json(
+            {
+                "source_observation_fingerprint": metadata["source_observation_fingerprint"],
+                "message_occurrence_fingerprint": metadata["message_occurrence_fingerprint"],
+                "source_locator_fingerprint": metadata["source_locator_fingerprint"],
+                "span_start": span_start,
+                "span_end": span_end,
+                "identifier_kind": identifier_kind,
+            }
+        )
+        != metadata["occurrence_scope_fingerprint"]
+    ):
+        raise ContractValidationError("protected identifier occurrence scope binding mismatch")
+    if (
+        stable_candidate_mention_id(
+            source_observation_ids=[source_observation_id],
+            mention_type=mention.mention_type,
+            normalized_label=mention.normalized_label,
+            location=mention.location,
+            extractor_run_id=mention.extractor_run_id,
+        )
+        != mention.candidate_mention_id
+    ):
+        raise ContractValidationError("protected identifier candidate mention identity mismatch")
+    return {
+        "exact_protected_token_hash": exact_hash,
+        "identifier_kind": identifier_kind,
+        "identity_scope_mode": identity_scope_mode,
+        "identity_scope_fingerprint": identity_scope_fingerprint,
+        "workspace_id": workspace_id,
+        "identity_scope_attestation_fingerprint": (identity_scope_attestation_fingerprint),
+        "identity_scope_policy_fingerprint": identity_scope_policy_fingerprint,
+        "operator_approval_fingerprint": operator_approval_fingerprint,
+        "tenant_id": tenant_id,
+        "spec_approval_fingerprint": spec_approval_fingerprint,
+        "permission_boundary_fingerprint": permission_boundary_fingerprint,
+        "tokenizer_id": tokenizer_id,
+        "tokenizer_profile_fingerprint": tokenizer_profile_fingerprint,
+        "extraction_policy_id": extraction_policy_id,
+        "extraction_policy_fingerprint": extraction_policy_fingerprint,
+        "occurrence_scope": ProtectedIdentifierOccurrenceScope(
+            candidate_mention_id=mention.candidate_mention_id,
+            source_observation_id=source_observation_id,
+            source_observation_fingerprint=metadata["source_observation_fingerprint"],
+            source_extractor_provenance_fingerprint=metadata[
+                "source_extractor_provenance_fingerprint"
+            ],
+            message_occurrence_fingerprint=metadata["message_occurrence_fingerprint"],
+            source_locator_fingerprint=metadata["source_locator_fingerprint"],
+            occurrence_scope_fingerprint=metadata["occurrence_scope_fingerprint"],
+            permission_boundary_fingerprint=permission_boundary_fingerprint,
+        ),
+    }
+
+
+def _validate_sha256_fingerprint(value: Any, field_name: str) -> None:
+    if not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+        raise ContractValidationError(f"{field_name} must be a sha256-prefixed fingerprint")
+
+
+def _validate_exact_identifier_candidate_payload(
+    payload: Mapping[str, Any],
+) -> None:
+    if payload.get("status") != "pending_review":
+        raise ContractValidationError("exact protected identifier candidates require review")
+    if (
+        payload.get("requires_review") is not True
+        or payload.get("canonical_merge_performed") is not False
+        or payload.get("canonical_write_allowed") is not False
+    ):
+        raise ContractValidationError(
+            "exact protected identifier candidates cannot mutate canonical state"
+        )
+    _validate_record_id(
+        payload["candidate_resolution_id"],
+        "ExactProtectedIdentifierCandidate.candidate_resolution_id",
+    )
+    for field_name in (
+        "candidate_identity_fingerprint",
+        "exact_protected_token_hash",
+        "identity_scope_fingerprint",
+        "identity_scope_attestation_fingerprint",
+        "identity_scope_policy_fingerprint",
+        "operator_approval_fingerprint",
+        "permission_boundary_fingerprint",
+        "tokenizer_profile_fingerprint",
+        "extraction_policy_fingerprint",
+        "candidate_fingerprint",
+    ):
+        _validate_sha256_fingerprint(
+            payload[field_name],
+            f"ExactProtectedIdentifierCandidate.{field_name}",
+        )
+    mode = payload.get("identity_scope_mode")
+    workspace_id = payload.get("workspace_id")
+    _validate_non_empty_string(workspace_id, "ExactProtectedIdentifierCandidate.workspace_id")
+    if mode == _TENANT_WORKSPACE_IDENTITY_SCOPE_MODE:
+        if "tenant_id" not in payload or "spec_approval_fingerprint" in payload:
+            raise ContractValidationError(
+                "tenant_workspace_v1 exact identifier candidate scope is invalid"
+            )
+        _validate_non_empty_string(
+            payload["tenant_id"],
+            "ExactProtectedIdentifierCandidate.tenant_id",
+        )
+        expected_scope = {
+            "mode": mode,
+            "workspace_id": workspace_id,
+            "tenant_id": payload["tenant_id"],
+        }
+    elif mode == _WORKSPACE_ONLY_IDENTITY_SCOPE_MODE:
+        if "tenant_id" in payload or "spec_approval_fingerprint" not in payload:
+            raise ContractValidationError(
+                "workspace_only_v1 exact identifier candidate scope is invalid"
+            )
+        _validate_sha256_fingerprint(
+            payload["spec_approval_fingerprint"],
+            "ExactProtectedIdentifierCandidate.spec_approval_fingerprint",
+        )
+        expected_scope = {
+            "mode": mode,
+            "workspace_id": workspace_id,
+        }
+    else:
+        raise ContractValidationError(
+            "exact protected identifier candidate identity scope mode is not approved"
+        )
+    if payload["identity_scope_fingerprint"] != sha256_json(expected_scope):
+        raise ContractValidationError(
+            "exact protected identifier candidate identity scope binding mismatch"
+        )
+    if not payload.get("occurrence_scopes"):
+        raise ContractValidationError(
+            "exact protected identifier candidate requires source occurrences"
+        )
+    _validate_no_raw_reference(
+        payload,
+        "exact protected identifier candidate",
+    )
+
+
 def _validate_optional_timestamp(value: str | None, field_name: str) -> None:
     if value is None:
         return
@@ -1121,10 +1692,13 @@ def _require_splink_package() -> None:
 __all__ = [
     "ClericalReviewItem",
     "EvidenceLink",
+    "ExactProtectedIdentifierCandidate",
+    "ExactProtectedIdentifierResolutionResult",
     "FusionCandidate",
     "LexicalFusionCandidateGenerator",
     "NormalizationTrace",
     "PackageAdapterManifest",
+    "ProtectedIdentifierOccurrenceScope",
     "RapidFuzzPackageCandidateGenerator",
     "ResolutionPolicy",
     "ResolutionRecord",
@@ -1141,5 +1715,6 @@ __all__ = [
     "real_rapid_fuzz_package_adapter_binding",
     "real_splink_package_adapter_binding",
     "render_visible_fusion_candidates",
+    "resolve_exact_protected_identifier_candidates",
     "splink_model_config_manifest_bound_to_main_repo",
 ]

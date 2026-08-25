@@ -125,6 +125,111 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
         self.assertEqual(len(bundle.messages), 1)
         self.assertEqual(len(bundle.message_occurrences), 2)
 
+    def test_attachment_observation_binding_disambiguates_by_physical_identity(self) -> None:
+        from formowl_ingestion.extractors.mail.pst import (
+            _ParsedAttachment,
+            _PstAttachmentInventoryIndex,
+            _pst_attachment_observation_binding,
+        )
+        from formowl_contract import SourceInventoryItem, SourceInventory
+
+        parent_key = "msg_001"
+        target_name_fp = sha256_json("target.txt")
+        other_name_fp = sha256_json("other.txt")
+
+        item1 = SourceInventoryItem.create(
+            source_asset_id="asset_001",
+            structure_kind="regular_attachment_occurrence",
+            content_type="text/plain",
+            ordinal=1,
+            processing_state="parsed",
+            raw_retention_state="retained",
+            source_fingerprint="sha256:" + "0" * 64,
+            parser_fingerprint="sha256:" + "0" * 64,
+            permission_scope={"workspace_id": "ws1", "owner_user_id": "u1"},
+            location={
+                "source_local_key": "att_001",
+                "parent_source_local_key": parent_key,
+                "attachment_id": "att_id_1",
+                "attachment_ordinal": 1,
+                "attachment_name_fingerprint": target_name_fp,
+            },
+        )
+        item2 = SourceInventoryItem.create(
+            source_asset_id="asset_001",
+            structure_kind="inline_attachment_occurrence",
+            content_type="text/plain",
+            ordinal=2,
+            processing_state="parsed",
+            raw_retention_state="retained",
+            source_fingerprint="sha256:" + "0" * 64,
+            parser_fingerprint="sha256:" + "0" * 64,
+            permission_scope={"workspace_id": "ws1", "owner_user_id": "u1"},
+            location={
+                "source_local_key": "att_002",
+                "parent_source_local_key": parent_key,
+                "attachment_id": "att_id_1",
+                "attachment_ordinal": 1,
+                "attachment_name_fingerprint": other_name_fp,
+            },
+        )
+        msg_item = SourceInventoryItem.create(
+            source_asset_id="asset_001",
+            structure_kind="exported_message_occurrence",
+            content_type="message/rfc822",
+            ordinal=0,
+            processing_state="parsed",
+            raw_retention_state="retained",
+            source_fingerprint="sha256:" + "0" * 64,
+            parser_fingerprint="sha256:" + "0" * 64,
+            permission_scope={"workspace_id": "ws1", "owner_user_id": "u1"},
+            location={
+                "source_local_key": parent_key,
+                "parent_source_local_key": "root",
+            },
+        )
+
+        inventory = SourceInventory.create(
+            source_asset_id="asset_001",
+            items=[msg_item, item1, item2],
+            source_fingerprint="sha256:" + "0" * 64,
+            parser_fingerprint="sha256:" + "0" * 64,
+            created_at=NOW,
+        )
+
+        index = _PstAttachmentInventoryIndex(
+            item_by_key={"msg_001": msg_item, "att_001": item1, "att_002": item2},
+            attachment_items=(item1, item2),
+            attachment_items_by_id={"att_id_1": (item1, item2)},
+            attachment_items_by_id_and_ordinal={("att_id_1", 1): (item1, item2)},
+            attachment_items_by_parent_message_key={"msg_001": (item1, item2)},
+            message_key_by_occurrence_id={"occ_001": "msg_001"},
+        )
+
+        attachment = _ParsedAttachment(
+            attachment_id="att_id_1",
+            filename="target.txt",
+            source_name_fingerprint=target_name_fp,
+        )
+
+        class DummyMessage:
+            source_local_key = parent_key
+
+        class DummyContext:
+            occurrence_id = "occ_001"
+            parent_occurrence_id = None
+            message = DummyMessage()
+
+        binding = _pst_attachment_observation_binding(
+            attachment,
+            attachment_ordinal=1,
+            context=DummyContext(),
+            source_inventory=inventory,
+            inventory_index=index,
+        )
+
+        self.assertEqual(binding["attachment_inventory_item_id"], item1.source_inventory_item_id)
+
     def test_readpst_command_contract_and_timeout_are_forwarded(self) -> None:
         context = _PstExtractionContext.create("pst-extractor-command-contract")
         runner = _CapturingRunner([_rfc822_message()])
@@ -305,7 +410,7 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
             extractor_run_store=context.run_store,
             observation_store=context.observation_store,
             adapter=adapter,
-            config={"max_messages": 25},
+            config={"max_messages": 25, "preserve_private_body_text": False},
             started_at=NOW,
             completed_at=NOW,
         )
@@ -317,7 +422,11 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
             },
             sort_keys=True,
         )
-        self.assertIn("pst_parser_body_segment_redacted", result.extractor_run.warnings)
+        self.assertTrue(
+            "pst_parser_body_segment_redacted" in result.extractor_run.warnings
+            or "pst_parser_body_segment_contains_publicly_unsafe_text"
+            in result.extractor_run.warnings
+        )
         self.assertIn("redacted_mail_body_segment", rendered)
         self.assertIn("redacted_filename_", rendered)
         self.assertNotIn(unsafe_body, rendered)

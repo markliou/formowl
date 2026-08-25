@@ -9,21 +9,26 @@ from formowl_contract import (
     ContractValidationError,
     Observation,
     now_iso,
+    sha256_json,
     stable_resource_contract_id,
     to_plain,
 )
 from formowl_core import (
-    ascii_identifier_regex_tokens,
+    jieba_sentencepiece_frozen_profile_candidate_admission_tokens,
+    load_default_mail_candidate_admission_tokenizer_profile,
     read_json_object,
     write_json_atomic,
 )
-from formowl_core.tokenization import DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE
+from formowl_core.tokenization import (
+    ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT,
+    JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
+    MailCandidateAdmissionTokenizerProfile,
+)
 
 from ._guards import assert_public_payload_safe, safe_public_string
 
-MAIL_TOKENIZER_PROFILE = DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE
-MAIL_TOKENIZER_ID = MAIL_TOKENIZER_PROFILE.tokenizer_id
-MAIL_TOKENIZER_PROFILE_FINGERPRINT = MAIL_TOKENIZER_PROFILE.profile_fingerprint
+MAIL_TOKENIZER_ID = JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID
+MAIL_TOKENIZER_PROFILE_FINGERPRINT = ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT
 _SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
@@ -84,6 +89,9 @@ class MailEvidencePack:
     query_index: dict[str, list[str]]
     created_at: str
     warnings: list[str] = field(default_factory=list)
+    analysis_profile_id: str | None = None
+    profile_fingerprint: str | None = None
+    index_fingerprint: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = to_plain(self)
@@ -131,6 +139,9 @@ class MailEvidencePack:
             },
             created_at=str(value["created_at"]),
             warnings=list(value.get("warnings", [])),
+            analysis_profile_id=_string_or_none(value.get("analysis_profile_id")),
+            profile_fingerprint=_string_or_none(value.get("profile_fingerprint")),
+            index_fingerprint=_string_or_none(value.get("index_fingerprint")),
         )
         assert_public_payload_safe(pack.to_dict(), "mail_evidence_pack")
         return pack
@@ -197,13 +208,22 @@ def build_mail_evidence_pack(
     source_observation_ids = sorted(observation.observation_id for observation in mail_observations)
     if not records:
         warnings.append("no_mail_evidence_records")
+    tokenizer_profile = _load_mail_tokenizer_profile()
     query_index = {record.record_key: _query_terms(record) for record in records}
+    index_fingerprint = _mail_evidence_pack_index_fingerprint(
+        source_observation_ids=source_observation_ids,
+        records=records,
+        query_index=query_index,
+        tokenizer_profile=tokenizer_profile,
+    )
     pack_id = _stable_mail_evidence_pack_id(
         "MailEvidencePack",
         {
             "source_observation_ids": source_observation_ids,
             "record_keys": [record.record_key for record in records],
             "query_index": query_index,
+            "profile_fingerprint": MAIL_TOKENIZER_PROFILE_FINGERPRINT,
+            "index_fingerprint": index_fingerprint,
         },
     )
     return MailEvidencePack(
@@ -213,6 +233,9 @@ def build_mail_evidence_pack(
         query_index=query_index,
         created_at=created_at or now_iso(),
         warnings=warnings,
+        analysis_profile_id=MAIL_TOKENIZER_ID,
+        profile_fingerprint=MAIL_TOKENIZER_PROFILE_FINGERPRINT,
+        index_fingerprint=index_fingerprint,
     )
 
 
@@ -226,6 +249,7 @@ def search_mail_evidence(
         raise ContractValidationError("query must be a non-empty string")
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
         raise ContractValidationError("limit must be a non-negative integer")
+    _require_matching_pack_profile(pack, _load_mail_tokenizer_profile())
     terms = _tokenize(query)
     results: list[MailSearchResult] = []
     records_by_key = {record.record_key: record for record in pack.records}
@@ -356,7 +380,58 @@ def _query_terms(record: MailEvidenceRecord) -> list[str]:
 
 
 def _tokenize(value: str) -> set[str]:
-    return ascii_identifier_regex_tokens(value)
+    return jieba_sentencepiece_frozen_profile_candidate_admission_tokens(value)
+
+
+def _load_mail_tokenizer_profile() -> MailCandidateAdmissionTokenizerProfile:
+    profile = load_default_mail_candidate_admission_tokenizer_profile()
+    if (
+        profile.tokenizer_id != MAIL_TOKENIZER_ID
+        or profile.profile_fingerprint != MAIL_TOKENIZER_PROFILE_FINGERPRINT
+    ):
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    return profile
+
+
+def _mail_evidence_pack_index_fingerprint(
+    *,
+    source_observation_ids: Sequence[str],
+    records: Sequence[MailEvidenceRecord],
+    query_index: dict[str, list[str]],
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+) -> str:
+    return sha256_json(
+        {
+            "artifact_id": "formowl_mail_evidence_pack_index_v1",
+            "schema_version": 1,
+            "tokenizer_id": tokenizer_profile.tokenizer_id,
+            "profile_fingerprint": tokenizer_profile.profile_fingerprint,
+            "source_observation_ids": list(source_observation_ids),
+            "record_observation_ids": {
+                record.record_key: list(record.observation_ids) for record in records
+            },
+            "query_index": query_index,
+        },
+    )
+
+
+def _require_matching_pack_profile(
+    pack: MailEvidencePack,
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+) -> None:
+    if (
+        pack.analysis_profile_id != tokenizer_profile.tokenizer_id
+        or pack.profile_fingerprint != tokenizer_profile.profile_fingerprint
+    ):
+        raise ContractValidationError("mail evidence tokenizer profile mismatch")
+    expected_index_fingerprint = _mail_evidence_pack_index_fingerprint(
+        source_observation_ids=pack.source_observation_ids,
+        records=pack.records,
+        query_index=pack.query_index,
+        tokenizer_profile=tokenizer_profile,
+    )
+    if pack.index_fingerprint != expected_index_fingerprint:
+        raise ContractValidationError("mail evidence index fingerprint mismatch")
 
 
 def _required_location(observation: Observation, field_name: str) -> str:

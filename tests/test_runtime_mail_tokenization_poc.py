@@ -15,6 +15,7 @@ from formowl_core.tokenization import (
     ASCII_IDENTIFIER_REGEX_TOKENIZER_ID,
     JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
     build_mail_candidate_admission_tokenizer_profile,
+    load_issue56_target_mail_tokenizer_profile,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,35 @@ class RuntimeMailTokenizationPocTests(unittest.TestCase):
             {"po470002002", "03.80503g301"},
         )
 
+    def test_packaged_target_loader_is_independent_of_legacy_environment(self) -> None:
+        with _profile_environment(None, None):
+            profile = load_issue56_target_mail_tokenizer_profile()
+
+        self.assertEqual(
+            profile.tokenizer_id,
+            JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
+        )
+        self.assertRegex(profile.profile_fingerprint, r"^sha256:[0-9a-f]{64}$")
+        self.assertIsNotNone(profile.artifact_manifest_sha256)
+        self.assertIsNotNone(profile.calibration_corpus_sha256)
+        self.assertIsNotNone(profile.sentencepiece_vocabulary_artifact_sha256)
+        self.assertTrue(
+            {
+                "zx-2048-alpha",
+                "owner42@example.test",
+                "2026-09-30",
+                "https://example.test/cases/zx-2048-alpha",
+                "交期",
+                "採購單",
+            }.issubset(
+                profile.tokenize(
+                    "採購單 ZX-2048-ALPHA 的交期由 owner42@example.test 更新，"
+                    "截止 2026-09-30，詳見 "
+                    "https://example.test/cases/ZX-2048-ALPHA。"
+                )
+            )
+        )
+
     def test_partial_or_unpinned_profile_fails_closed(self) -> None:
         with _profile_environment("/tmp/not-used.model", None):
             with self.assertRaisesRegex(
@@ -48,7 +78,7 @@ class RuntimeMailTokenizationPocTests(unittest.TestCase):
             ):
                 build_mail_candidate_admission_tokenizer_profile()
 
-    def test_partial_startup_configuration_cannot_silently_use_ascii_fallback(self) -> None:
+    def test_legacy_environment_cannot_replace_packaged_runtime_target(self) -> None:
         environment = {
             **os.environ,
             MODEL_PATH_ENV: "/tmp/not-used.model",
@@ -56,16 +86,26 @@ class RuntimeMailTokenizationPocTests(unittest.TestCase):
         }
         environment.pop(MODEL_SHA256_ENV, None)
         completed = subprocess.run(
-            [sys.executable, "-c", "from formowl_mail import query"],
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from formowl_mail import evidence, query\n"
+                    "print(query.MAIL_TOKENIZER_ID)\n"
+                    "print(evidence.MAIL_TOKENIZER_ID)\n"
+                ),
+            ],
             cwd=ROOT,
             env=environment,
-            check=False,
+            check=True,
             capture_output=True,
             text=True,
         )
 
-        self.assertNotEqual(completed.returncode, 0)
-        self.assertIn("frozen tokenizer profile is unavailable", completed.stderr)
+        self.assertEqual(
+            completed.stdout.splitlines(),
+            [JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID] * 2,
+        )
         self.assertNotIn("/tmp/not-used.model", completed.stderr)
 
     def test_frozen_profile_preserves_identifiers_and_admits_cjk_terms(self) -> None:
@@ -102,7 +142,6 @@ class RuntimeMailTokenizationPocTests(unittest.TestCase):
                         "from formowl_mail import evidence, query\n"
                         "value = 'PO470002002 的交期與 03.80503G301 的產地'\n"
                         "initial = {\n"
-                        "  'same_object': query.MAIL_TOKENIZER_PROFILE is evidence.MAIL_TOKENIZER_PROFILE,\n"
                         "  'query_id': query.MAIL_TOKENIZER_ID,\n"
                         "  'evidence_id': evidence.MAIL_TOKENIZER_ID,\n"
                         "  'query_fingerprint': query.MAIL_TOKENIZER_PROFILE_FINGERPRINT,\n"
@@ -124,7 +163,6 @@ class RuntimeMailTokenizationPocTests(unittest.TestCase):
             )
             payload = json.loads(completed.stdout)
 
-        self.assertTrue(payload["same_object"])
         self.assertEqual(
             payload["query_id"],
             JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
