@@ -1,54 +1,54 @@
 # Agent Handoff Log
 Lifecycle label: `active`.
-
 This is a bounded active window. Earlier entries are immutable history under
 `docs/archive/`, including the complete pre-rewrite log at
 `../archive/2026-08-18/active/docs/agent-goals/handoff-log.md`.
-
 ## Retention Rule
 - Keep the latest 14 calendar days and at most 300 lines.
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
-## 2026-08-23 — Source-backed real-prompt v4 diagnostic passed
-- Read-only source tracing found both old synthetic fixed-prompt terms at count
-  `0` in raw/parser/retrieval; the cause was prompt-to-approved-source mismatch.
-- The deterministic
-  `issue56_source_backed_connected_identifier_prompt_selection_v1` selector
-  requires authorized exact-term/lexical lineage and an allowed source-backed
-  connected path. Its combined focused E2E passed `11/11`.
-- Immutable mode
-  `issue56-sealed-source-real-prompt-phase-traced-diagnostic-20260823-v4`
-  consumed one claim over `456` Observations as `workspace_only_v1` for
-  `workspace_formowl`, actor/approver
-  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
-- The bounded real-source path passed with `2` anchors, `10` graph paths, and
-  `1` citation. Query/gateway/HTTP were `951.148333`, `953.544449`, and
-  `982.203990 ms`; `relation_projection` was largest at `717.357210 ms`;
-  `deadline_exhausted_phase` was null. Loader `678625.866681 ms` was one-time
-  source load/selection outside request latency.
+## 2026-08-25 — Relation-projection equivalence v5 consumed and blocked
+- Formal mode `issue56-sealed-source-real-prompt-relation-projection-equivalence-phase-traced-diagnostic-20260825-v5`
+  consumed its canonical claim over `456` Observations as `workspace_only_v1`
+  for `workspace_formowl`, approved actor `user_full_pst_domain_hard_case_eval_owner`;
+  no tenant dimension exists.
+- The cold arm exhausted the `1500 ms` budget in `graph_snapshot` after
+  `1511.686057 ms`, returning `0` paths/citations/scores. The precomputed arm
+  completed with relation projection/query/HTTP `58.316231`/`298.853709`/
+  `360.889611 ms`, `10` paths, `1` citation, and `48` scores.
+- Loader/precompute were `686919.980220`/`4303.273780 ms`.
+  Permission/runtime/index equivalence passed; all other
+  semantic groups failed because the cold arm timed out before planning/results.
 - Claim/claim-byte/report-byte hashes are
-  `sha256:2b092814194dd90d597161dfcd04822be75c97fc5c5364478bbc8b52307098cb`,
+  `sha256:9f811f9ae024a478beb4b6be5874eb2c810cee2bd572cde326757530cf7c3494`,
+  `sha256:8e13877c68684be769fd20c1f039a583e7cbbf5750cb33bd71ca3a5dfa016116`,
+  `sha256:d558dc1c918bd87e08fdff1def1d354e411f9e445c0ef93d4da75450bc3fe23a`;
+  trace/execution/source are `sha256:fb06c4087f8c421f48e175dd225a0dd6a56eca7602b32a4ffab5747974e485e6`,
+  `sha256:fd90b8f13b74e05e56c177f713547e21891bd0ecb6f1ca899357e26f050de33e`,
+  `sha256:57be8e51275d81fe26fbc22bcbed564b0a9838178ece0bef1f4b4ccae672f66e`.
+- Focused code evidence passed `45/45`; the formal v5 root is consumed. V5
+  cannot be rerun/retried/tuned and earns no readiness or superiority claim.
+- Authority remains blocked on four gates and Work D remains in progress. Any
+  next diagnostic needs a new approved version around the cold graph snapshot.
+## 2026-08-23 — Source-backed real-prompt v4 diagnostic passed
+- Source tracing found both synthetic fixed-prompt terms at count `0` in
+  raw/parser/retrieval; the cause was prompt-to-approved-source mismatch.
+- The deterministic source-backed connected selector passed `11/11`. V4 then
+  consumed one claim over the same workspace-only `456` Observations with no
+  tenant and passed with `2` anchors, `10` paths, and `1` citation.
+- Query/gateway/HTTP were `951.148333`/`953.544449`/`982.203990 ms`;
+  relation projection was `717.357210 ms`, deadline exhaustion was null, and
+  one-time loader time was `678625.866681 ms`.
+- Claim/claim-byte/report-byte were `sha256:2b092814194dd90d597161dfcd04822be75c97fc5c5364478bbc8b52307098cb`,
   `sha256:76dda5b18801a7587b212631b0d4d7ae0544646910e143ced0883f14e5db69b8`,
-  `sha256:40f48fea0145d523f5d14e2943b41750a48923e111cdf6e6c5e3cd265903a458`.
-- Trace/execution/source, gateway/owner selection, and result/answer hashes are
-  `sha256:4b518dd33bc406027f2fe0104559ead2cdb27a096b3357d9470acdac34e09ef4`,
+  `sha256:40f48fea0145d523f5d14e2943b41750a48923e111cdf6e6c5e3cd265903a458`;
+  trace/execution/source were `sha256:4b518dd33bc406027f2fe0104559ead2cdb27a096b3357d9470acdac34e09ef4`,
   `sha256:031cfe6f04c9b595bed6fd24375590a78df18dd03e07b68821c955bc03ad0b94`,
-  `sha256:b3959bba1267879ba3bcc6889fd063363f899987722b2447685aad844f6b53ae`,
-  `sha256:5c6bbbac6df98afb061d5aa4b21a7802fdcab7d9d09d32dadaec2f1ac0ab3c1a`,
-  `sha256:84857528eb34f4e03e343c078f5a9f89e6c8278a6807a6d84cc72fdc2d59b543`,
-  `sha256:cd4791354b612ae652da2f76d9733c28946bc18c63856b2a08f6e0a9bab63670`,
-  `sha256:025d02916a7c0c1a816fba06754d9578a327a7e442ff9d1e34b2f273d2af20f7`.
-- V1-v4 cannot be rerun/tuned; authority remains blocked on four gates and Work
-  D remains in progress.
-- Full regression `1873` total / `1781` passed / `54` failures / `23` errors /
-  `15` skips was blocked by `formowl-dev` Python 3.13 versus pinned E5 and
-  Issue #20/#33/authority drift. The sole related stale v3 expectation passed
-  pinned E5 `11/11`; full regression was not rerun and remains non-green.
-  V4 POC passed, but no repository-wide completion or quality claim is earned.
-- Next: separately approved `relation_projection` latency POC, then four gates.
+  `sha256:b3959bba1267879ba3bcc6889fd063363f899987722b2447685aad844f6b53ae`.
+- Full regression remains non-green (`1873` total / `1781` passed / `54`
+  failures / `23` errors / `15` skips); V4 passed but earned no broad claim.
 ## 2026-08-21 — Sealed-source v3 diagnostic consumed and blocked
-
 - Mode `issue56-sealed-source-phase-traced-diagnostic-20260821-v3` consumed its
   claim exactly once over `456` Observations as `workspace_only_v1` for
   `workspace_formowl` and approved actor

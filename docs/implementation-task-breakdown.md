@@ -16,7 +16,7 @@ This is the bounded active work board. Lossless history is indexed in
 - `[ ]` incomplete, blocked, or not verified.
 - Goal files hold durable role state; this board holds task completion.
 
-## Current Phase Summary — 2026-08-23
+## Current Phase Summary — 2026-08-25
 
 - The active KG program is GitHub issue #56, not the historical issue #33 plan
   or issue #55 document-first POC.
@@ -92,7 +92,32 @@ This is the bounded active work board. Lossless history is indexed in
   `sha256:84857528eb34f4e03e343c078f5a9f89e6c8278a6807a6d84cc72fdc2d59b543`,
   `sha256:cd4791354b612ae652da2f76d9733c28946bc18c63856b2a08f6e0a9bab63670`,
   and `sha256:025d02916a7c0c1a816fba06754d9578a327a7e442ff9d1e34b2f273d2af20f7`.
-- Diagnostic versions v1, v2, v3, and v4 are consumed and must never be
+- Formal v5 mode
+  `issue56-sealed-source-real-prompt-relation-projection-equivalence-phase-traced-diagnostic-20260825-v5`
+  consumed its canonical claim over the same `456` Observations as
+  `workspace_only_v1` for `workspace_formowl`, approved actor
+  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
+- V5 is blocked. The cold arm exhausted the `1500 ms` budget in
+  `graph_snapshot` after `1511.686057 ms` and produced `0` graph paths,
+  citations, and scores. The precomputed arm completed with
+  `relation_projection` `58.316231 ms`, query `298.853709 ms`, HTTP
+  `360.889611 ms`, `10` graph paths, `1` citation, and `48` scores.
+- V5 loader and owner relation-base precompute timings were
+  `686919.980220 ms` and `4303.273780 ms`. Permission, runtime, and index
+  equivalence passed; the other semantic equivalence groups failed because
+  the cold arm exhausted its deadline before planning and result production.
+- V5 claim/claim-byte/report-byte hashes are
+  `sha256:9f811f9ae024a478beb4b6be5874eb2c810cee2bd572cde326757530cf7c3494`,
+  `sha256:8e13877c68684be769fd20c1f039a583e7cbbf5750cb33bd71ca3a5dfa016116`,
+  and `sha256:d558dc1c918bd87e08fdff1def1d354e411f9e445c0ef93d4da75450bc3fe23a`.
+  Trace/execution/source bindings are
+  `sha256:fb06c4087f8c421f48e175dd225a0dd6a56eca7602b32a4ffab5747974e485e6`,
+  `sha256:fd90b8f13b74e05e56c177f713547e21891bd0ecb6f1ca899357e26f050de33e`,
+  and `sha256:57be8e51275d81fe26fbc22bcbed564b0a9838178ece0bef1f4b4ccae672f66e`.
+- The focused code evidence is `45/45` passing tests. The formal v5 root is
+  consumed; this is diagnostic-only evidence and does not establish
+  methodology readiness, quality, or KG/ontology superiority.
+- Diagnostic versions v1, v2, v3, v4, and v5 are consumed and must never be
   rerun, retried, or tuned.
 - V4 is neither an independent holdout nor promotion evidence and
   cannot support KG/ontology superiority. The sealed 41-case and additive
@@ -155,11 +180,10 @@ This is the bounded active work board. Lossless history is indexed in
   - Work D: typed router, validated plan, bounded traversal, evidence bundles,
     and deterministic exact execution.
   - Step 4 / Work D status remains `in-progress`; no checkbox is earned by the
-    non-claim-bearing v4 diagnostic.
-  - The next action remains inside step 4: a separately approved,
-    behavior-neutral `relation_projection` latency POC, followed by closure of
-    the four blocked authority gates. Do not rerun or tune any consumed
-    diagnostic version.
+    non-claim-bearing v4 or blocked v5 diagnostic.
+  - The next action remains inside step 4 and requires a separately approved
+    version addressing the cold graph-snapshot boundary without rerunning v5,
+    followed by closure of the four blocked authority gates.
   - Work E: controlled, citation-grounded LLM roles with the same answer model
     across arms.
   - Work F: strong RAG control, anti-fitting split, diagnostic evaluation,

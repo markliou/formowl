@@ -45,7 +45,6 @@ Mail is the first source fixture. The method must transfer to a materially
 different source family without question-specific core types or aliases.
 
 ## Status
-
 `blocked` for methodology-quality UAT, comparative superiority, default-path
 replacement, and objective completion. The pinned authority is valid but fail-closed
 with four blocking gates. The normal runtime-method gate passes for
@@ -55,8 +54,7 @@ are source completeness, accepted execution-fingerprint binding, same-pipeline
 real-source ablation, and independent final-answer acceptance. The v3
 promotion contract is repaired, but no passed evidence exists to promote.
 
-## Diagnostic Checkpoint — 2026-08-23
-
+## Diagnostic Checkpoint — 2026-08-25
 The sealed `456`-Observation `workspace_only_v1` package has no tenant
 dimension. Its earlier development one-shot is consumed: Hybrid `0/100`, graph
 CI `[0,0]`, citations `0%`, no-answer false positives `100`, p95
@@ -77,22 +75,23 @@ Query/gateway/HTTP timings were `951.148333`, `953.544449`, and `982.203990 ms`;
 `relation_projection` was the largest semantic phase at `717.357210 ms`, and
 `deadline_exhausted_phase` was null. Loader time `678625.866681 ms` was
 one-time source loading/selection outside request latency.
-Bindings: claim `sha256:2b092814194dd90d597161dfcd04822be75c97fc5c5364478bbc8b52307098cb`;
-claim/report bytes `sha256:76dda5b18801a7587b212631b0d4d7ae0544646910e143ced0883f14e5db69b8`,
-`sha256:40f48fea0145d523f5d14e2943b41750a48923e111cdf6e6c5e3cd265903a458`;
-trace/execution/source `sha256:4b518dd33bc406027f2fe0104559ead2cdb27a096b3357d9470acdac34e09ef4`,
-`sha256:031cfe6f04c9b595bed6fd24375590a78df18dd03e07b68821c955bc03ad0b94`,
-`sha256:b3959bba1267879ba3bcc6889fd063363f899987722b2447685aad844f6b53ae`;
-gateway/owner selection `sha256:5c6bbbac6df98afb061d5aa4b21a7802fdcab7d9d09d32dadaec2f1ac0ab3c1a`,
-`sha256:84857528eb34f4e03e343c078f5a9f89e6c8278a6807a6d84cc72fdc2d59b543`;
-result/answer `sha256:cd4791354b612ae652da2f76d9733c28946bc18c63856b2a08f6e0a9bab63670`,
-`sha256:025d02916a7c0c1a816fba06754d9578a327a7e442ff9d1e34b2f273d2af20f7`.
-V1-v4 cannot be rerun/tuned. Full regression was `1873` total / `1781` passed /
-`54` failures / `23` errors / `15` skips; blockers were `formowl-dev` Python
-3.13 versus pinned E5 plus Issue #20/#33/authority drift. The sole related stale
-v3 expectation passed pinned E5 `11/11`; full regression was not rerun and
-remains non-green. V4 POC passed, but no repository-wide completion or quality,
-UAT, holdout, transfer, readiness, or superiority claim is earned.
+Formal v5 mode `issue56-sealed-source-real-prompt-relation-projection-equivalence-phase-traced-diagnostic-20260825-v5`
+consumed its canonical claim for `workspace_formowl` and approved actor
+`user_full_pst_domain_hard_case_eval_owner`, with no tenant.
+It is blocked: cold `graph_snapshot` exhausted `1500 ms` after `1511.686057 ms`
+with `0` paths/citations/scores; precomputed relation projection/query/HTTP were
+`58.316231`/`298.853709`/`360.889611 ms` with `10` paths, `1` citation, and
+`48` scores. Loader/precompute were `686919.980220`/`4303.273780 ms`.
+Permission/runtime/index equivalence passed; all other groups failed on timeout.
+V5 claim/claim-byte/report-byte are `sha256:9f811f9ae024a478beb4b6be5874eb2c810cee2bd572cde326757530cf7c3494`,
+`sha256:8e13877c68684be769fd20c1f039a583e7cbbf5750cb33bd71ca3a5dfa016116`,
+`sha256:d558dc1c918bd87e08fdff1def1d354e411f9e445c0ef93d4da75450bc3fe23a`;
+trace/execution/source are `sha256:fb06c4087f8c421f48e175dd225a0dd6a56eca7602b32a4ffab5747974e485e6`,
+`sha256:fd90b8f13b74e05e56c177f713547e21891bd0ecb6f1ca899357e26f050de33e`,
+`sha256:57be8e51275d81fe26fbc22bcbed564b0a9838178ece0bef1f4b4ccae672f66e`.
+Focused code evidence passed `45/45`; the formal v5 root is consumed and V1-v5
+cannot be rerun/tuned. V4 passed but v5 is blocked; no quality, readiness,
+superiority, or repository-wide completion claim is earned.
 ## Non-Negotiable Method
 
 - Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence
@@ -176,5 +175,6 @@ exiting zero.
 ## Next Action
 
 Remain within step 4, but do not rerun or tune any consumed diagnostic.
-Run only a separately approved behavior-neutral `relation_projection` latency
-POC, then close the four blocked authority gates; do not execute holdouts.
+Any next diagnostic must be separately versioned and approved around the cold
+graph-snapshot boundary; then close the four blocked authority gates without
+executing holdouts prematurely.
