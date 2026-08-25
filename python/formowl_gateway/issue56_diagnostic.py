@@ -79,11 +79,18 @@ ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID = (
     "issue56-sealed-source-real-prompt-relation-projection-equivalence-"
     "phase-traced-diagnostic-20260825-v6"
 )
+ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID = (
+    "issue56-sealed-source-real-prompt-relation-projection-offline-equivalence-"
+    "phase-traced-diagnostic-20260825-v7"
+)
 _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_TEST_MODE_ID = (
     "issue56-internal-test-relation-projection-equivalence-phase-traced-v0"
 )
 _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_TEST_MODE_ID = (
     "issue56-internal-test-relation-projection-equivalence-phase-traced-v6"
+)
+_ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_TEST_MODE_ID = (
+    "issue56-internal-test-relation-projection-offline-equivalence-phase-traced-v7"
 )
 ISSUE56_SEALED_SOURCE_DIAGNOSTIC_PROMPT = ISSUE56_DIAGNOSTIC_DEFAULT_PROMPT
 ISSUE56_SEALED_SOURCE_LOADER_CONTRACT_ID = "issue56_sealed_source_diagnostic_loader_v3"
@@ -96,28 +103,41 @@ ISSUE56_RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_ID = (
 ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_CONTRACT_ID = (
     "issue56_relation_projection_equivalence_diagnostic_loader_v6"
 )
+ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_LOADER_CONTRACT_ID = (
+    "issue56_relation_projection_offline_equivalence_diagnostic_loader_v7"
+)
 
 _REAL_PROMPT_DIAGNOSTIC_MODE_IDS = frozenset(
     {
         ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
+        ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_TEST_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_TEST_MODE_ID,
+        _ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_TEST_MODE_ID,
     }
 )
 _RELATION_PROJECTION_EQUIVALENCE_MODE_IDS = frozenset(
     {
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
+        ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_TEST_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_TEST_MODE_ID,
+        _ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_TEST_MODE_ID,
     }
 )
 _RELATION_PROJECTION_EQUIVALENCE_V6_MODE_IDS = frozenset(
     {
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_TEST_MODE_ID,
+    }
+)
+_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_MODE_IDS = frozenset(
+    {
+        ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID,
+        _ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_TEST_MODE_ID,
     }
 )
 
@@ -458,6 +478,266 @@ class Issue56GraphContentPresealEvidence:
             },
             "evidence_binding_fingerprint": self.evidence_binding_fingerprint,
         }
+
+
+@dataclass(frozen=True)
+class Issue56OfflineEquivalencePreflightEvidence:
+    """Safe proof that v7 has two cold-presealed isolated graph views."""
+
+    status: str
+    cache_status: str
+    graph_preseal_helper_invocation_count: int
+    after_relation_precompute_helper_invocation_count: int
+    cold_graph_preseal_elapsed_ms: float
+    after_graph_preseal_elapsed_ms: float
+    after_relation_precompute_elapsed_ms: float
+    session_binding_fingerprint: str
+    source_access_fingerprint: str
+    source_binding_fingerprint: str
+    permission_lineage_fingerprint: str
+    effective_graph_view_fingerprint: str
+    graph_revision_fingerprint: str
+    graph_content_fingerprint: str
+    index_fingerprint: str
+    candidate_admission_profile_fingerprint: str
+    authorized_observation_set_fingerprint: str
+    cold_graph_preseal_fingerprint: str
+    after_graph_preseal_fingerprint: str
+    relation_projection_precompute_fingerprint: str
+    relation_projection_cache_binding_fingerprint: str
+    authorized_observation_count: int
+    source_scope_count: int
+    node_count: int
+    edge_count: int
+    access_required_count: int
+    applied_grant_count: int
+    cold_binding_cache_entry_count: int
+    cold_base_cache_entry_count: int
+    after_binding_cache_entry_count: int
+    after_base_cache_entry_count: int
+    evidence_binding_fingerprint: str
+
+    def _binding_payload(self) -> dict[str, Any]:
+        return {
+            "artifact_id": (
+                "formowl_issue56_relation_projection_offline_equivalence_preflight_safe_v1"
+            ),
+            "schema_version": 1,
+            "status": self.status,
+            "cache_status": self.cache_status,
+            "graph_preseal_helper_invocation_count": (self.graph_preseal_helper_invocation_count),
+            "after_relation_precompute_helper_invocation_count": (
+                self.after_relation_precompute_helper_invocation_count
+            ),
+            "cold_graph_preseal_elapsed_ms": self.cold_graph_preseal_elapsed_ms,
+            "after_graph_preseal_elapsed_ms": self.after_graph_preseal_elapsed_ms,
+            "after_relation_precompute_elapsed_ms": (self.after_relation_precompute_elapsed_ms),
+            "session_binding_fingerprint": self.session_binding_fingerprint,
+            "source_access_fingerprint": self.source_access_fingerprint,
+            "source_binding_fingerprint": self.source_binding_fingerprint,
+            "permission_lineage_fingerprint": self.permission_lineage_fingerprint,
+            "effective_graph_view_fingerprint": self.effective_graph_view_fingerprint,
+            "graph_revision_fingerprint": self.graph_revision_fingerprint,
+            "graph_content_fingerprint": self.graph_content_fingerprint,
+            "index_fingerprint": self.index_fingerprint,
+            "candidate_admission_profile_fingerprint": (
+                self.candidate_admission_profile_fingerprint
+            ),
+            "authorized_observation_set_fingerprint": (self.authorized_observation_set_fingerprint),
+            "cold_graph_preseal_fingerprint": self.cold_graph_preseal_fingerprint,
+            "after_graph_preseal_fingerprint": self.after_graph_preseal_fingerprint,
+            "relation_projection_precompute_fingerprint": (
+                self.relation_projection_precompute_fingerprint
+            ),
+            "relation_projection_cache_binding_fingerprint": (
+                self.relation_projection_cache_binding_fingerprint
+            ),
+            "authorized_observation_count": self.authorized_observation_count,
+            "source_scope_count": self.source_scope_count,
+            "node_count": self.node_count,
+            "edge_count": self.edge_count,
+            "access_required_count": self.access_required_count,
+            "applied_grant_count": self.applied_grant_count,
+            "cold_binding_cache_entry_count": self.cold_binding_cache_entry_count,
+            "cold_base_cache_entry_count": self.cold_base_cache_entry_count,
+            "after_binding_cache_entry_count": self.after_binding_cache_entry_count,
+            "after_base_cache_entry_count": self.after_base_cache_entry_count,
+        }
+
+    def to_safe_dict(self) -> dict[str, Any]:
+        binding_payload = self._binding_payload()
+        if self.evidence_binding_fingerprint != sha256_json(binding_payload):
+            raise ContractValidationError("offline equivalence preflight evidence seal mismatch")
+        safe = {
+            "artifact_id": binding_payload["artifact_id"],
+            "schema_version": binding_payload["schema_version"],
+            "status": self.status,
+            "cache_status": self.cache_status,
+            "session_binding_fingerprint": self.session_binding_fingerprint,
+            "source_access_fingerprint": self.source_access_fingerprint,
+            "source_binding_fingerprint": self.source_binding_fingerprint,
+            "permission_lineage_fingerprint": self.permission_lineage_fingerprint,
+            "effective_graph_view_fingerprint": self.effective_graph_view_fingerprint,
+            "graph_revision_fingerprint": self.graph_revision_fingerprint,
+            "graph_content_fingerprint": self.graph_content_fingerprint,
+            "index_fingerprint": self.index_fingerprint,
+            "candidate_admission_profile_fingerprint": (
+                self.candidate_admission_profile_fingerprint
+            ),
+            "authorized_observation_set_fingerprint": (self.authorized_observation_set_fingerprint),
+            "cold_graph_preseal_fingerprint": self.cold_graph_preseal_fingerprint,
+            "after_graph_preseal_fingerprint": self.after_graph_preseal_fingerprint,
+            "relation_projection_precompute_fingerprint": (
+                self.relation_projection_precompute_fingerprint
+            ),
+            "relation_projection_cache_binding_fingerprint": (
+                self.relation_projection_cache_binding_fingerprint
+            ),
+            "isolation": {
+                "view_objects": "isolated",
+                "snapshot_objects": "isolated",
+                "locks": "isolated",
+                "binding_cache_containers": "isolated",
+                "base_cache_containers": "isolated",
+            },
+            "timing": {
+                "cold_graph_preseal_elapsed_ms": self.cold_graph_preseal_elapsed_ms,
+                "after_graph_preseal_elapsed_ms": self.after_graph_preseal_elapsed_ms,
+                "after_relation_precompute_elapsed_ms": (self.after_relation_precompute_elapsed_ms),
+            },
+            "counts": {
+                "graph_preseal_helper_invocation_count": (
+                    self.graph_preseal_helper_invocation_count
+                ),
+                "after_relation_precompute_helper_invocation_count": (
+                    self.after_relation_precompute_helper_invocation_count
+                ),
+                "authorized_observation_count": self.authorized_observation_count,
+                "source_scope_count": self.source_scope_count,
+                "node_count": self.node_count,
+                "edge_count": self.edge_count,
+                "access_required_count": self.access_required_count,
+                "applied_grant_count": self.applied_grant_count,
+                "cold_binding_cache_entry_count": (self.cold_binding_cache_entry_count),
+                "cold_base_cache_entry_count": self.cold_base_cache_entry_count,
+                "after_binding_cache_entry_count": (self.after_binding_cache_entry_count),
+                "after_base_cache_entry_count": self.after_base_cache_entry_count,
+            },
+            "evidence_binding_fingerprint": self.evidence_binding_fingerprint,
+        }
+        _assert_no_legacy_identity_fields(safe)
+        assert_no_public_raw_references(
+            safe,
+            "issue56_relation_projection_offline_equivalence_preflight",
+        )
+        return safe
+
+
+@dataclass(frozen=True)
+class Issue56OfflineRelationPrecomputeEvidence:
+    """Safe owner evidence for one post-claim unbudgeted cold cache prime."""
+
+    status: str
+    cache_status: str
+    helper_invocation_count: int
+    query_executed: bool
+    binding_snapshot_status: str
+    base_builder_status: str
+    binding_snapshot_elapsed_ms: float
+    base_builder_elapsed_ms: float
+    total_elapsed_ms: float
+    binding_entry_count_before: int
+    binding_entry_count_after: int
+    base_entry_count_before: int
+    base_entry_count_after: int
+    cache_binding_fingerprint: str
+    graph_revision_fingerprint: str
+    effective_graph_view_fingerprint: str
+    index_fingerprint: str
+    candidate_admission_profile_fingerprint: str
+    authorized_observation_set_fingerprint: str
+    candidate_set_fingerprint: str
+    precompute_fingerprint: str
+    owner_evidence_fingerprint: str
+    evidence_binding_fingerprint: str
+
+    def _binding_payload(self) -> dict[str, Any]:
+        return {
+            "artifact_id": ("formowl_issue56_relation_projection_offline_precompute_safe_v1"),
+            "schema_version": 1,
+            "status": self.status,
+            "cache_status": self.cache_status,
+            "helper_invocation_count": self.helper_invocation_count,
+            "query_executed": self.query_executed,
+            "binding_snapshot_status": self.binding_snapshot_status,
+            "base_builder_status": self.base_builder_status,
+            "binding_snapshot_elapsed_ms": self.binding_snapshot_elapsed_ms,
+            "base_builder_elapsed_ms": self.base_builder_elapsed_ms,
+            "total_elapsed_ms": self.total_elapsed_ms,
+            "binding_entry_count_before": self.binding_entry_count_before,
+            "binding_entry_count_after": self.binding_entry_count_after,
+            "base_entry_count_before": self.base_entry_count_before,
+            "base_entry_count_after": self.base_entry_count_after,
+            "cache_binding_fingerprint": self.cache_binding_fingerprint,
+            "graph_revision_fingerprint": self.graph_revision_fingerprint,
+            "effective_graph_view_fingerprint": self.effective_graph_view_fingerprint,
+            "index_fingerprint": self.index_fingerprint,
+            "candidate_admission_profile_fingerprint": (
+                self.candidate_admission_profile_fingerprint
+            ),
+            "authorized_observation_set_fingerprint": (self.authorized_observation_set_fingerprint),
+            "candidate_set_fingerprint": self.candidate_set_fingerprint,
+            "precompute_fingerprint": self.precompute_fingerprint,
+            "owner_evidence_fingerprint": self.owner_evidence_fingerprint,
+        }
+
+    def to_safe_dict(self) -> dict[str, Any]:
+        payload = self._binding_payload()
+        if self.evidence_binding_fingerprint != sha256_json(payload):
+            raise ContractValidationError("offline relation precompute evidence seal mismatch")
+        safe = {
+            "artifact_id": payload["artifact_id"],
+            "schema_version": payload["schema_version"],
+            "status": self.status,
+            "cache_status": self.cache_status,
+            "helper_invocation_count": self.helper_invocation_count,
+            "query_executed": self.query_executed,
+            "phases": {
+                "binding_snapshot": {
+                    "status": self.binding_snapshot_status,
+                    "elapsed_ms": self.binding_snapshot_elapsed_ms,
+                },
+                "base_builder": {
+                    "status": self.base_builder_status,
+                    "elapsed_ms": self.base_builder_elapsed_ms,
+                },
+            },
+            "total_elapsed_ms": self.total_elapsed_ms,
+            "cache": {
+                "binding_entry_count_before": self.binding_entry_count_before,
+                "binding_entry_count_after": self.binding_entry_count_after,
+                "base_entry_count_before": self.base_entry_count_before,
+                "base_entry_count_after": self.base_entry_count_after,
+            },
+            "cache_binding_fingerprint": self.cache_binding_fingerprint,
+            "graph_revision_fingerprint": self.graph_revision_fingerprint,
+            "effective_graph_view_fingerprint": self.effective_graph_view_fingerprint,
+            "index_fingerprint": self.index_fingerprint,
+            "candidate_admission_profile_fingerprint": (
+                self.candidate_admission_profile_fingerprint
+            ),
+            "authorized_observation_set_fingerprint": (self.authorized_observation_set_fingerprint),
+            "candidate_set_fingerprint": self.candidate_set_fingerprint,
+            "precompute_fingerprint": self.precompute_fingerprint,
+            "owner_evidence_fingerprint": self.owner_evidence_fingerprint,
+            "evidence_binding_fingerprint": self.evidence_binding_fingerprint,
+        }
+        _assert_no_legacy_identity_fields(safe)
+        assert_no_public_raw_references(
+            safe,
+            "issue56_relation_projection_offline_precompute",
+        )
+        return safe
 
 
 @dataclass
@@ -846,8 +1126,10 @@ def _validate_sealed_source_diagnostic_input(
         ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
+        ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_TEST_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_TEST_MODE_ID,
+        _ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_TEST_MODE_ID,
     }:
         raise ContractValidationError("sealed-source diagnostic mode binding mismatch")
     real_prompt_mode = source.diagnostic_mode_id in _REAL_PROMPT_DIAGNOSTIC_MODE_IDS
@@ -1876,6 +2158,8 @@ def build_issue56_diagnostic_composition(
         "default",
         "before_cold",
         "after_precomputed",
+        "offline_cold_precomputed",
+        "preexisting_precomputed",
     }:
         raise ContractValidationError("relation projection cache role is invalid")
     state = Issue56DiagnosticState()
@@ -1906,8 +2190,10 @@ def build_issue56_diagnostic_composition(
             ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
             ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
             ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
+            ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID,
             _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_TEST_MODE_ID,
             _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_TEST_MODE_ID,
+            _ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_TEST_MODE_ID,
         }:
             raise ContractValidationError(
                 "sealed-source diagnostic input cannot be used by another mode"
@@ -2413,6 +2699,287 @@ def build_issue56_relation_projection_equivalence_v6_compositions(
     return before, after, evidence
 
 
+def build_issue56_relation_projection_offline_equivalence_v7_compositions(
+    source: Issue56SealedSourceDiagnosticInput,
+    *,
+    graph_content_snapshot_materializer: Callable[..., Any] | None = None,
+    relation_projection_base_precomputer: Callable[..., Any] | None = None,
+) -> tuple[
+    Issue56DiagnosticComposition,
+    Issue56DiagnosticComposition,
+    Issue56OfflineEquivalencePreflightEvidence,
+]:
+    """Preflight two isolated graph snapshots and prime only the after arm."""
+
+    _validate_sealed_source_diagnostic_input(source)
+    if source.diagnostic_mode_id not in _RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_MODE_IDS:
+        raise ContractValidationError("relation projection v7 source mode mismatch")
+    if graph_content_snapshot_materializer is None:
+        from formowl_mail import precompute_effective_graph_content_snapshot
+
+        graph_content_snapshot_materializer = precompute_effective_graph_content_snapshot
+    if relation_projection_base_precomputer is None:
+        from formowl_mail.hybrid import precompute_relation_projection_base
+
+        relation_projection_base_precomputer = precompute_relation_projection_base
+    if not callable(graph_content_snapshot_materializer) or not callable(
+        relation_projection_base_precomputer
+    ):
+        raise ContractValidationError("relation projection v7 owner helper is unavailable")
+
+    cold_view = _copy_effective_graph_view(source.effective_graph_view)
+    after_view = _copy_effective_graph_view(source.effective_graph_view)
+    materializations: list[tuple[Mapping[str, Any], float]] = []
+    for selected_view in (cold_view, after_view):
+        started_at = time.perf_counter()
+        owner_materialization = graph_content_snapshot_materializer(
+            session=source.session,
+            effective_graph_view=selected_view,
+            expected_graph_revision_fingerprint=source.graph_revision_fingerprint,
+            expected_effective_graph_view_fingerprint=(source.effective_graph_view_fingerprint),
+        )
+        elapsed_ms = round((time.perf_counter() - started_at) * 1_000.0, 6)
+        safe_materialization = _safe_owner_graph_content_materialization(owner_materialization)
+        materializations.append((safe_materialization, elapsed_ms))
+
+    cold_materialization, cold_preseal_elapsed_ms = materializations[0]
+    after_materialization, after_preseal_elapsed_ms = materializations[1]
+    cold_counts = cold_materialization["counts"]
+    after_counts = after_materialization["counts"]
+    expected_observation_set = (
+        source.relation_projection_base_precompute.authorized_observation_set_fingerprint
+    )
+    for safe_materialization, counts, selected_view in (
+        (cold_materialization, cold_counts, cold_view),
+        (after_materialization, after_counts, after_view),
+    ):
+        if (
+            safe_materialization.get("status") != "passed"
+            or safe_materialization.get("snapshot_status")
+            != "materialized_relation_projection_caches_cold"
+            or safe_materialization.get("graph_revision_fingerprint")
+            != source.graph_revision_fingerprint
+            or safe_materialization.get("effective_graph_view_fingerprint")
+            != source.effective_graph_view_fingerprint
+            or safe_materialization.get("source_session_binding_fingerprint")
+            != source.session.source_session_binding_fingerprint
+            or safe_materialization.get("source_access_fingerprint")
+            != source.session.authorized_source.authorization_fingerprint
+            or safe_materialization.get("permission_lineage_fingerprint")
+            != source.permission_lineage_fingerprint
+            or safe_materialization.get("index_fingerprint")
+            != source.session.index.index_fingerprint
+            or safe_materialization.get("candidate_admission_profile_fingerprint")
+            != source.session.index.profile_fingerprint
+            or safe_materialization.get("authorized_observation_set_fingerprint")
+            != expected_observation_set
+            or counts["authorized_observation_count"] != source.observation_count
+            or counts["source_scope_count"] != len(source.session.authorized_source_scope_ids)
+            or counts["node_count"] != len(selected_view.visible_nodes)
+            or counts["edge_count"] != len(selected_view.visible_edges)
+            or counts["access_required_count"] != len(selected_view.access_required)
+            or counts["applied_grant_count"] != len(selected_view.applied_grant_ids)
+            or counts["relation_projection_cache_binding_entry_count"] != 0
+            or counts["relation_projection_base_entry_count"] != 0
+        ):
+            raise ContractValidationError("relation projection v7 graph preseal binding mismatch")
+    if (
+        cold_materialization["graph_content_fingerprint"]
+        != after_materialization["graph_content_fingerprint"]
+        or cold_materialization["precompute_fingerprint"]
+        != after_materialization["precompute_fingerprint"]
+        or cold_counts != after_counts
+    ):
+        raise ContractValidationError("relation projection v7 graph preseal drift")
+
+    cold_snapshot_state = _effective_graph_snapshot_cache_state(
+        cold_view,
+        expected_graph_revision_fingerprint=source.graph_revision_fingerprint,
+    )
+    after_snapshot_state = _effective_graph_snapshot_cache_state(
+        after_view,
+        expected_graph_revision_fingerprint=source.graph_revision_fingerprint,
+    )
+    if (
+        cold_snapshot_state["binding_entry_count"] != 0
+        or cold_snapshot_state["base_entry_count"] != 0
+        or after_snapshot_state["binding_entry_count"] != 0
+        or after_snapshot_state["base_entry_count"] != 0
+        or cold_view is after_view
+        or cold_snapshot_state["snapshot"] is after_snapshot_state["snapshot"]
+        or cold_snapshot_state["lock"] is after_snapshot_state["lock"]
+        or cold_snapshot_state["binding_cache_container"]
+        is after_snapshot_state["binding_cache_container"]
+        or cold_snapshot_state["base_cache_container"]
+        is after_snapshot_state["base_cache_container"]
+    ):
+        raise ContractValidationError("relation projection v7 graph isolation mismatch")
+
+    after_precompute_started_at = time.perf_counter()
+    after_owner_precompute = relation_projection_base_precomputer(
+        session=source.session,
+        effective_graph_view=after_view,
+    )
+    after_precompute_elapsed_ms = round(
+        (time.perf_counter() - after_precompute_started_at) * 1_000.0,
+        6,
+    )
+    after_owner_precompute_safe = _safe_owner_relation_projection_base_precompute(
+        after_owner_precompute
+    )
+    expected_relation_precompute = source.relation_projection_base_precompute
+    if (
+        after_owner_precompute_safe["status"] != "passed"
+        or after_owner_precompute_safe["cache_status"] != "primed"
+        or after_owner_precompute_safe["cache_binding_fingerprint"]
+        != expected_relation_precompute.cache_binding_fingerprint
+        or after_owner_precompute_safe["graph_revision_fingerprint"]
+        != source.graph_revision_fingerprint
+        or after_owner_precompute_safe["index_fingerprint"]
+        != source.session.index.index_fingerprint
+        or after_owner_precompute_safe["candidate_admission_profile_fingerprint"]
+        != source.session.index.profile_fingerprint
+        or after_owner_precompute_safe["authorized_observation_set_fingerprint"]
+        != expected_relation_precompute.authorized_observation_set_fingerprint
+        or after_owner_precompute_safe["candidate_set_fingerprint"]
+        != expected_relation_precompute.candidate_set_fingerprint
+        or after_owner_precompute_safe["precompute_fingerprint"]
+        != expected_relation_precompute.precompute_fingerprint
+        or after_owner_precompute_safe["counts"]
+        != expected_relation_precompute.to_safe_dict()["counts"]
+    ):
+        raise ContractValidationError("relation projection v7 after precompute binding mismatch")
+    after_snapshot_state = _effective_graph_snapshot_cache_state(
+        after_view,
+        expected_graph_revision_fingerprint=source.graph_revision_fingerprint,
+    )
+    if (
+        cold_snapshot_state["binding_entry_count"] != 0
+        or cold_snapshot_state["base_entry_count"] != 0
+        or after_snapshot_state["binding_entry_count"] != 1
+        or after_snapshot_state["base_entry_count"] != 1
+        or expected_relation_precompute.cache_binding_fingerprint
+        not in after_snapshot_state["base_cache_container"]
+        or not any(
+            getattr(binding, "cache_binding_fingerprint", None)
+            == expected_relation_precompute.cache_binding_fingerprint
+            for binding in after_snapshot_state["binding_cache_container"].values()
+        )
+    ):
+        raise ContractValidationError("relation projection v7 cache preflight mismatch")
+
+    cold_source = _copy_sealed_source_with_view(source, cold_view)
+    after_source = _copy_sealed_source_with_view(source, after_view)
+    before = build_issue56_diagnostic_composition(
+        diagnostic_mode_id=source.diagnostic_mode_id,
+        sealed_source=cold_source,
+        relation_projection_cache_role="offline_cold_precomputed",
+    )
+    after = build_issue56_diagnostic_composition(
+        diagnostic_mode_id=source.diagnostic_mode_id,
+        sealed_source=after_source,
+        relation_projection_cache_role="preexisting_precomputed",
+    )
+    if (
+        before.session is not after.session
+        or before.effective_graph_view is after.effective_graph_view
+        or before.source_binding_fingerprint != after.source_binding_fingerprint
+        or before.permission_lineage_fingerprint != after.permission_lineage_fingerprint
+        or before.effective_graph_view_fingerprint != after.effective_graph_view_fingerprint
+        or before.graph_revision_fingerprint != after.graph_revision_fingerprint
+        or before.state.hybrid_query_count != 0
+        or after.state.hybrid_query_count != 0
+        or before.state.authentication_count != 0
+        or after.state.authentication_count != 0
+    ):
+        raise ContractValidationError("relation projection v7 composition preflight mismatch")
+
+    evidence_payload = {
+        "status": "passed",
+        "cache_status": "cold_0_0_after_1_1_before_claim",
+        "graph_preseal_helper_invocation_count": 2,
+        "after_relation_precompute_helper_invocation_count": 1,
+        "cold_graph_preseal_elapsed_ms": cold_preseal_elapsed_ms,
+        "after_graph_preseal_elapsed_ms": after_preseal_elapsed_ms,
+        "after_relation_precompute_elapsed_ms": after_precompute_elapsed_ms,
+        "session_binding_fingerprint": cold_materialization["source_session_binding_fingerprint"],
+        "source_access_fingerprint": cold_materialization["source_access_fingerprint"],
+        "source_binding_fingerprint": source.source_binding_fingerprint,
+        "permission_lineage_fingerprint": source.permission_lineage_fingerprint,
+        "effective_graph_view_fingerprint": source.effective_graph_view_fingerprint,
+        "graph_revision_fingerprint": source.graph_revision_fingerprint,
+        "graph_content_fingerprint": cold_materialization["graph_content_fingerprint"],
+        "index_fingerprint": source.session.index.index_fingerprint,
+        "candidate_admission_profile_fingerprint": source.session.index.profile_fingerprint,
+        "authorized_observation_set_fingerprint": expected_observation_set,
+        "cold_graph_preseal_fingerprint": cold_materialization["precompute_fingerprint"],
+        "after_graph_preseal_fingerprint": after_materialization["precompute_fingerprint"],
+        "relation_projection_precompute_fingerprint": (
+            expected_relation_precompute.precompute_fingerprint
+        ),
+        "relation_projection_cache_binding_fingerprint": (
+            expected_relation_precompute.cache_binding_fingerprint
+        ),
+        "authorized_observation_count": cold_counts["authorized_observation_count"],
+        "source_scope_count": cold_counts["source_scope_count"],
+        "node_count": cold_counts["node_count"],
+        "edge_count": cold_counts["edge_count"],
+        "access_required_count": cold_counts["access_required_count"],
+        "applied_grant_count": cold_counts["applied_grant_count"],
+        "cold_binding_cache_entry_count": (cold_snapshot_state["binding_entry_count"]),
+        "cold_base_cache_entry_count": cold_snapshot_state["base_entry_count"],
+        "after_binding_cache_entry_count": (after_snapshot_state["binding_entry_count"]),
+        "after_base_cache_entry_count": after_snapshot_state["base_entry_count"],
+    }
+    evidence = Issue56OfflineEquivalencePreflightEvidence(
+        **evidence_payload,
+        evidence_binding_fingerprint=sha256_json(
+            {
+                "artifact_id": (
+                    "formowl_issue56_relation_projection_offline_equivalence_" "preflight_safe_v1"
+                ),
+                "schema_version": 1,
+                **evidence_payload,
+            }
+        ),
+    )
+    evidence.to_safe_dict()
+    return before, after, evidence
+
+
+def _copy_sealed_source_with_view(
+    source: Issue56SealedSourceDiagnosticInput,
+    effective_graph_view: EffectiveGraphView,
+) -> Issue56SealedSourceDiagnosticInput:
+    copied = build_issue56_sealed_source_diagnostic_input(
+        session=source.session,
+        effective_graph_view=effective_graph_view,
+        allowed_relation_types=source.allowed_relation_types,
+        source_asset_fingerprint=source.source_asset_fingerprint,
+        loader_contract_fingerprint=source.loader_contract_fingerprint,
+        graph_revision_fingerprint=source.graph_revision_fingerprint,
+        source_loader_binding_fingerprint=source.source_loader_binding_fingerprint,
+        lineage_crosswalk_precompute=source.lineage_crosswalk_precompute.to_safe_dict(),
+        relation_projection_base_precompute=(
+            source.relation_projection_base_precompute.to_safe_dict()
+        ),
+        private_prompt=source.private_prompt,
+        prompt_selection=(
+            source.prompt_selection.to_safe_dict() if source.prompt_selection is not None else None
+        ),
+        diagnostic_mode_id=source.diagnostic_mode_id,
+    )
+    if (
+        copied.source_binding_fingerprint != source.source_binding_fingerprint
+        or copied.observation_inventory_fingerprint != source.observation_inventory_fingerprint
+        or copied.permission_lineage_fingerprint != source.permission_lineage_fingerprint
+        or copied.effective_graph_view_fingerprint != source.effective_graph_view_fingerprint
+        or copied.graph_revision_fingerprint != source.graph_revision_fingerprint
+    ):
+        raise ContractValidationError("relation projection copied source binding mismatch")
+    return copied
+
+
 def _copy_effective_graph_view(
     effective_graph_view: EffectiveGraphView,
 ) -> EffectiveGraphView:
@@ -2535,6 +3102,94 @@ def _safe_owner_graph_content_materialization(
     return safe
 
 
+def _safe_owner_relation_projection_base_precompute(
+    precompute: Any,
+) -> Mapping[str, Any]:
+    if isinstance(precompute, Mapping):
+        safe = dict(precompute)
+    else:
+        to_safe_dict = getattr(precompute, "to_safe_dict", None)
+        if not callable(to_safe_dict):
+            raise ContractValidationError(
+                "relation projection base owner precompute evidence is invalid"
+            )
+        safe = to_safe_dict()
+    expected_keys = {
+        "artifact_id",
+        "schema_version",
+        "status",
+        "cache_status",
+        "cache_binding_fingerprint",
+        "graph_revision_fingerprint",
+        "index_fingerprint",
+        "candidate_admission_profile_fingerprint",
+        "authorized_observation_set_fingerprint",
+        "candidate_set_fingerprint",
+        "counts",
+        "precompute_fingerprint",
+    }
+    expected_count_keys = {
+        "authorized_observation_count",
+        "candidate_count",
+        "projected_node_count",
+        "observation_bound_node_group_count",
+        "adjacency_node_count",
+        "adjacency_transition_count",
+        "authorized_index_vocabulary_hash_count",
+        "authorized_graph_vocabulary_hash_count",
+    }
+    counts = safe.get("counts")
+    if (
+        not isinstance(safe, Mapping)
+        or set(safe) != expected_keys
+        or safe.get("artifact_id") != "formowl_issue56_relation_projection_base_precompute_v1"
+        or safe.get("schema_version") != 1
+        or safe.get("status") != "passed"
+        or safe.get("cache_status") != "primed"
+        or not isinstance(counts, Mapping)
+        or set(counts) != expected_count_keys
+        or any(type(value) is not int or value < 0 for value in counts.values())
+    ):
+        raise ContractValidationError(
+            "relation projection base owner precompute evidence is invalid"
+        )
+    for field_name in (
+        "cache_binding_fingerprint",
+        "graph_revision_fingerprint",
+        "index_fingerprint",
+        "candidate_admission_profile_fingerprint",
+        "authorized_observation_set_fingerprint",
+        "candidate_set_fingerprint",
+        "precompute_fingerprint",
+    ):
+        _require_sha256(
+            str(safe.get(field_name, "")),
+            f"relation projection base owner {field_name}",
+        )
+    expected_precompute_fingerprint = sha256_json(
+        {
+            "artifact_id": safe["artifact_id"],
+            "cache_binding_fingerprint": safe["cache_binding_fingerprint"],
+            "graph_revision_fingerprint": safe["graph_revision_fingerprint"],
+            "index_fingerprint": safe["index_fingerprint"],
+            "tokenizer_profile_fingerprint": safe["candidate_admission_profile_fingerprint"],
+            "authorized_observation_set_fingerprint": safe[
+                "authorized_observation_set_fingerprint"
+            ],
+            "candidate_set_fingerprint": safe["candidate_set_fingerprint"],
+            **{key: counts[key] for key in expected_count_keys},
+        }
+    )
+    if safe["precompute_fingerprint"] != expected_precompute_fingerprint:
+        raise ContractValidationError("relation projection base owner precompute seal mismatch")
+    _assert_no_legacy_identity_fields(safe)
+    assert_no_public_raw_references(
+        safe,
+        "issue56_relation_projection_base_owner_precompute",
+    )
+    return safe
+
+
 def _effective_graph_snapshot_cache_state(
     effective_graph_view: EffectiveGraphView,
     *,
@@ -2637,6 +3292,320 @@ def relation_projection_cache_evidence(
     return evidence
 
 
+def precompute_issue56_offline_relation_projection_base(
+    composition: Issue56DiagnosticComposition,
+    *,
+    phase_traced_precomputer: Callable[..., Any] | None = None,
+) -> Issue56OfflineRelationPrecomputeEvidence:
+    """Invoke the owner cold precompute once, outside every user query budget."""
+
+    if (
+        composition.diagnostic_mode_id not in _RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_MODE_IDS
+        or composition.relation_projection_cache_role != "offline_cold_precomputed"
+        or composition.relation_projection_base_precompute is None
+        or composition.effective_graph_view_fingerprint is None
+        or composition.graph_revision_fingerprint is None
+    ):
+        raise ContractValidationError("offline relation projection precompute composition mismatch")
+    cache_before = relation_projection_cache_evidence(composition)
+    if (
+        cache_before["binding_snapshot_entry_count"] != 0
+        or cache_before["entry_count"] != 0
+        or cache_before["expected_binding_snapshot_present"]
+        or cache_before["expected_binding_present"]
+        or cache_before["snapshot_graph_binding_status"] != "passed"
+        or composition.state.hybrid_query_count != 0
+        or composition.state.authentication_count != 0
+    ):
+        raise ContractValidationError(
+            "offline relation projection precompute must start cold before query"
+        )
+    if phase_traced_precomputer is None:
+        try:
+            from formowl_mail import (
+                precompute_relation_projection_base_cold_diagnostic,
+            )
+        except ImportError as exc:
+            raise ContractValidationError(
+                "relation projection phase-traced owner precompute helper is unavailable"
+            ) from exc
+
+        phase_traced_precomputer = precompute_relation_projection_base_cold_diagnostic
+    if not callable(phase_traced_precomputer):
+        raise ContractValidationError(
+            "relation projection phase-traced owner precompute helper is unavailable"
+        )
+    precompute_started_at = time.perf_counter()
+    owner_evidence = phase_traced_precomputer(
+        session=composition.session,
+        effective_graph_view=composition.effective_graph_view,
+        expected_graph_revision_fingerprint=composition.graph_revision_fingerprint,
+        expected_effective_graph_view_fingerprint=(composition.effective_graph_view_fingerprint),
+    )
+    total_elapsed_ms = round(
+        (time.perf_counter() - precompute_started_at) * 1_000.0,
+        6,
+    )
+    safe_owner_evidence = _safe_owner_relation_projection_phase_precompute(owner_evidence)
+    cache_after = relation_projection_cache_evidence(composition)
+    expected = composition.relation_projection_base_precompute
+    if (
+        cache_after["binding_snapshot_entry_count"] != 1
+        or cache_after["entry_count"] != 1
+        or not cache_after["expected_binding_snapshot_present"]
+        or not cache_after["expected_binding_present"]
+        or cache_after["snapshot_graph_binding_status"] != "passed"
+        or composition.state.hybrid_query_count != 0
+        or composition.state.authentication_count != 0
+        or safe_owner_evidence["cache_binding_fingerprint"] != expected.cache_binding_fingerprint
+        or safe_owner_evidence["graph_revision_fingerprint"]
+        != composition.graph_revision_fingerprint
+        or safe_owner_evidence["effective_graph_view_fingerprint"]
+        != composition.effective_graph_view_fingerprint
+        or safe_owner_evidence["index_fingerprint"] != composition.session.index.index_fingerprint
+        or safe_owner_evidence["candidate_admission_profile_fingerprint"]
+        != composition.session.index.profile_fingerprint
+        or safe_owner_evidence["authorized_observation_set_fingerprint"]
+        != expected.authorized_observation_set_fingerprint
+        or safe_owner_evidence["candidate_set_fingerprint"] != expected.candidate_set_fingerprint
+        or safe_owner_evidence["relation_projection_base_precompute_fingerprint"]
+        != expected.precompute_fingerprint
+        or safe_owner_evidence["source_session_binding_fingerprint"]
+        != composition.session.source_session_binding_fingerprint
+        or safe_owner_evidence["source_access_fingerprint"]
+        != composition.session.authorized_source.authorization_fingerprint
+        or safe_owner_evidence["permission_lineage_fingerprint"]
+        != composition.permission_lineage_fingerprint
+        or safe_owner_evidence["counts"] != expected.to_safe_dict()["counts"]
+        or total_elapsed_ms
+        < (
+            safe_owner_evidence["phases"]["binding"]["elapsed_ms"]
+            + safe_owner_evidence["phases"]["base_builder"]["elapsed_ms"]
+        )
+    ):
+        raise ContractValidationError("offline relation projection precompute binding mismatch")
+    phases = safe_owner_evidence["phases"]
+    cache = safe_owner_evidence["cache"]
+    evidence_payload = {
+        "status": safe_owner_evidence["status"],
+        "cache_status": "primed_from_cold",
+        "helper_invocation_count": 1,
+        "query_executed": False,
+        "binding_snapshot_status": "completed",
+        "base_builder_status": "completed",
+        "binding_snapshot_elapsed_ms": round(
+            float(phases["binding"]["elapsed_ms"]),
+            6,
+        ),
+        "base_builder_elapsed_ms": round(
+            float(phases["base_builder"]["elapsed_ms"]),
+            6,
+        ),
+        "total_elapsed_ms": total_elapsed_ms,
+        "binding_entry_count_before": cache["before"]["binding_entry_count"],
+        "binding_entry_count_after": cache["after"]["binding_entry_count"],
+        "base_entry_count_before": cache["before"]["base_entry_count"],
+        "base_entry_count_after": cache["after"]["base_entry_count"],
+        "cache_binding_fingerprint": safe_owner_evidence["cache_binding_fingerprint"],
+        "graph_revision_fingerprint": safe_owner_evidence["graph_revision_fingerprint"],
+        "effective_graph_view_fingerprint": safe_owner_evidence["effective_graph_view_fingerprint"],
+        "index_fingerprint": safe_owner_evidence["index_fingerprint"],
+        "candidate_admission_profile_fingerprint": safe_owner_evidence[
+            "candidate_admission_profile_fingerprint"
+        ],
+        "authorized_observation_set_fingerprint": safe_owner_evidence[
+            "authorized_observation_set_fingerprint"
+        ],
+        "candidate_set_fingerprint": safe_owner_evidence["candidate_set_fingerprint"],
+        "precompute_fingerprint": safe_owner_evidence[
+            "relation_projection_base_precompute_fingerprint"
+        ],
+        "owner_evidence_fingerprint": safe_owner_evidence["diagnostic_fingerprint"],
+    }
+    evidence = Issue56OfflineRelationPrecomputeEvidence(
+        **evidence_payload,
+        evidence_binding_fingerprint=sha256_json(
+            {
+                "artifact_id": ("formowl_issue56_relation_projection_offline_precompute_safe_v1"),
+                "schema_version": 1,
+                **evidence_payload,
+            }
+        ),
+    )
+    evidence.to_safe_dict()
+    return evidence
+
+
+def _safe_owner_relation_projection_phase_precompute(
+    evidence: Any,
+) -> Mapping[str, Any]:
+    if isinstance(evidence, Mapping):
+        safe = dict(evidence)
+    else:
+        to_safe_dict = getattr(evidence, "to_safe_dict", None)
+        if not callable(to_safe_dict):
+            raise ContractValidationError(
+                "relation projection phase-traced owner evidence is invalid"
+            )
+        safe = to_safe_dict()
+    expected_keys = {
+        "artifact_id",
+        "schema_version",
+        "status",
+        "claim_boundary",
+        "deadline_mode",
+        "phases",
+        "cache",
+        "cache_binding_fingerprint",
+        "graph_revision_fingerprint",
+        "graph_content_fingerprint",
+        "effective_graph_view_fingerprint",
+        "source_session_binding_fingerprint",
+        "source_access_fingerprint",
+        "permission_lineage_fingerprint",
+        "index_fingerprint",
+        "candidate_admission_profile_fingerprint",
+        "authorized_observation_set_fingerprint",
+        "candidate_set_fingerprint",
+        "relation_projection_base_precompute_fingerprint",
+        "counts",
+        "diagnostic_fingerprint",
+    }
+    phases = safe.get("phases")
+    cache = safe.get("cache")
+    if (
+        not isinstance(safe, Mapping)
+        or set(safe) != expected_keys
+        or safe.get("artifact_id") != "formowl_issue56_relation_projection_base_cold_diagnostic_v1"
+        or safe.get("schema_version") != 1
+        or safe.get("status") != "passed"
+        or safe.get("claim_boundary") != "diagnostic_only_not_query_or_methodology_evidence"
+        or safe.get("deadline_mode") != "offline_no_query_deadline"
+        or not isinstance(phases, Mapping)
+        or set(phases) != {"binding", "base_builder"}
+        or not isinstance(cache, Mapping)
+        or set(cache) != {"before", "after"}
+        or cache.get("before") != {"binding_entry_count": 0, "base_entry_count": 0}
+        or cache.get("after") != {"binding_entry_count": 1, "base_entry_count": 1}
+    ):
+        raise ContractValidationError("relation projection phase-traced owner evidence is invalid")
+    for phase_name in ("binding", "base_builder"):
+        phase = phases.get(phase_name)
+        if (
+            not isinstance(phase, Mapping)
+            or set(phase)
+            != {
+                "started",
+                "completed",
+                "elapsed_ms",
+                "invocation_count",
+                "publication_status",
+            }
+            or phase.get("started") is not True
+            or phase.get("completed") is not True
+            or phase.get("invocation_count") != 1
+            or phase.get("publication_status") != "published"
+            or isinstance(phase.get("elapsed_ms"), bool)
+            or not isinstance(phase.get("elapsed_ms"), (int, float))
+            or phase["elapsed_ms"] < 0
+        ):
+            raise ContractValidationError("relation projection phase-traced owner phase is invalid")
+    for field_name in (
+        "cache_binding_fingerprint",
+        "graph_revision_fingerprint",
+        "graph_content_fingerprint",
+        "effective_graph_view_fingerprint",
+        "source_session_binding_fingerprint",
+        "source_access_fingerprint",
+        "permission_lineage_fingerprint",
+        "index_fingerprint",
+        "candidate_admission_profile_fingerprint",
+        "authorized_observation_set_fingerprint",
+        "candidate_set_fingerprint",
+        "relation_projection_base_precompute_fingerprint",
+        "diagnostic_fingerprint",
+    ):
+        _require_sha256(
+            str(safe.get(field_name, "")),
+            f"relation projection phase-traced owner {field_name}",
+        )
+    counts = safe.get("counts")
+    expected_count_keys = {
+        "authorized_observation_count",
+        "candidate_count",
+        "projected_node_count",
+        "observation_bound_node_group_count",
+        "adjacency_node_count",
+        "adjacency_transition_count",
+        "authorized_index_vocabulary_hash_count",
+        "authorized_graph_vocabulary_hash_count",
+    }
+    if (
+        not isinstance(counts, Mapping)
+        or set(counts) != expected_count_keys
+        or any(type(value) is not int or value < 0 for value in counts.values())
+    ):
+        raise ContractValidationError("relation projection phase-traced owner counts are invalid")
+    supplied_evidence_fingerprint = safe["diagnostic_fingerprint"]
+    before_cache = cache["before"]
+    after_cache = cache["after"]
+    if (
+        not isinstance(before_cache, Mapping)
+        or not isinstance(after_cache, Mapping)
+        or set(before_cache) != {"binding_entry_count", "base_entry_count"}
+        or set(after_cache) != {"binding_entry_count", "base_entry_count"}
+    ):
+        raise ContractValidationError("relation projection phase-traced owner cache is invalid")
+    binding_phase = phases["binding"]
+    base_builder_phase = phases["base_builder"]
+    fingerprint_payload = {
+        "artifact_id": safe["artifact_id"],
+        "schema_version": safe["schema_version"],
+        "status": safe["status"],
+        "claim_boundary": safe["claim_boundary"],
+        "deadline_mode": safe["deadline_mode"],
+        "graph_revision_fingerprint": safe["graph_revision_fingerprint"],
+        "graph_content_fingerprint": safe["graph_content_fingerprint"],
+        "effective_graph_view_fingerprint": (safe["effective_graph_view_fingerprint"]),
+        "source_session_binding_fingerprint": (safe["source_session_binding_fingerprint"]),
+        "source_access_fingerprint": safe["source_access_fingerprint"],
+        "permission_lineage_fingerprint": (safe["permission_lineage_fingerprint"]),
+        "index_fingerprint": safe["index_fingerprint"],
+        "tokenizer_profile_fingerprint": (safe["candidate_admission_profile_fingerprint"]),
+        "authorized_observation_set_fingerprint": (safe["authorized_observation_set_fingerprint"]),
+        "candidate_set_fingerprint": safe["candidate_set_fingerprint"],
+        "cache_binding_fingerprint": safe["cache_binding_fingerprint"],
+        "relation_projection_base_precompute_fingerprint": (
+            safe["relation_projection_base_precompute_fingerprint"]
+        ),
+        "before_binding_cache_entry_count": before_cache["binding_entry_count"],
+        "before_base_cache_entry_count": before_cache["base_entry_count"],
+        "after_binding_cache_entry_count": after_cache["binding_entry_count"],
+        "after_base_cache_entry_count": after_cache["base_entry_count"],
+        "binding_started": binding_phase["started"],
+        "binding_completed": binding_phase["completed"],
+        "binding_elapsed_ms": binding_phase["elapsed_ms"],
+        "binding_invocation_count": binding_phase["invocation_count"],
+        "binding_publication_status": binding_phase["publication_status"],
+        "base_builder_started": base_builder_phase["started"],
+        "base_builder_completed": base_builder_phase["completed"],
+        "base_builder_elapsed_ms": base_builder_phase["elapsed_ms"],
+        "base_builder_invocation_count": base_builder_phase["invocation_count"],
+        "base_publication_status": base_builder_phase["publication_status"],
+        **counts,
+    }
+    if supplied_evidence_fingerprint != sha256_json(fingerprint_payload):
+        raise ContractValidationError(
+            "relation projection phase-traced owner evidence seal mismatch"
+        )
+    _assert_no_legacy_identity_fields(safe)
+    assert_no_public_raw_references(
+        safe,
+        "issue56_relation_projection_phase_traced_owner_precompute",
+    )
+    return safe
+
+
 def relation_projection_cache_containers_are_isolated(
     before: Issue56DiagnosticComposition,
     after: Issue56DiagnosticComposition,
@@ -2670,7 +3639,12 @@ def build_safe_relation_projection_equivalence_arm(
 ) -> dict[str, Any]:
     """Build one safe full-HTTP arm result without embedding private evidence."""
 
-    if arm_id not in {"before_cold", "after_precomputed"}:
+    if arm_id not in {
+        "before_cold",
+        "after_precomputed",
+        "offline_cold_precomputed",
+        "preexisting_precomputed",
+    }:
         raise ContractValidationError("relation projection equivalence arm is invalid")
     initialized = initialize_response.get("result")
     listed = list_response.get("result")
@@ -3109,6 +4083,328 @@ def build_safe_relation_projection_equivalence_report(
     return report
 
 
+def build_safe_relation_projection_offline_equivalence_v7_report(
+    *,
+    source: Issue56SealedSourceDiagnosticInput,
+    prompt: str,
+    cold_arm: Mapping[str, Any],
+    after_arm: Mapping[str, Any],
+    source_loader_elapsed_ms: float,
+    consumed_claim_fingerprint: str,
+    consumed_claim_byte_sha256: str,
+    execution_binding_fingerprint: str,
+    cache_containers_isolated: bool,
+    preflight: Issue56OfflineEquivalencePreflightEvidence,
+    offline_precompute: Issue56OfflineRelationPrecomputeEvidence,
+) -> dict[str, Any]:
+    """Publish the v7 timing-free real-source equivalence result."""
+
+    if source.diagnostic_mode_id not in _RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_MODE_IDS:
+        raise ContractValidationError(
+            "relation projection offline equivalence report mode mismatch"
+        )
+    for value, label in (
+        (consumed_claim_fingerprint, "consumed claim fingerprint"),
+        (consumed_claim_byte_sha256, "consumed claim byte seal"),
+        (execution_binding_fingerprint, "execution binding fingerprint"),
+    ):
+        _require_sha256(value, label)
+    if source_loader_elapsed_ms < 0:
+        raise ContractValidationError("relation projection offline source loader timing is invalid")
+    if (
+        preflight.status != "passed"
+        or preflight.source_binding_fingerprint != source.source_binding_fingerprint
+        or preflight.permission_lineage_fingerprint != source.permission_lineage_fingerprint
+        or preflight.effective_graph_view_fingerprint != source.effective_graph_view_fingerprint
+        or preflight.graph_revision_fingerprint != source.graph_revision_fingerprint
+        or preflight.index_fingerprint != source.session.index.index_fingerprint
+        or preflight.candidate_admission_profile_fingerprint
+        != source.session.index.profile_fingerprint
+        or preflight.authorized_observation_set_fingerprint
+        != source.relation_projection_base_precompute.authorized_observation_set_fingerprint
+        or preflight.cold_binding_cache_entry_count != 0
+        or preflight.cold_base_cache_entry_count != 0
+        or preflight.after_binding_cache_entry_count != 1
+        or preflight.after_base_cache_entry_count != 1
+        or offline_precompute.status != "passed"
+        or offline_precompute.cache_status != "primed_from_cold"
+        or offline_precompute.helper_invocation_count != 1
+        or offline_precompute.query_executed
+        or offline_precompute.binding_snapshot_status != "completed"
+        or offline_precompute.base_builder_status != "completed"
+        or offline_precompute.binding_entry_count_before != 0
+        or offline_precompute.binding_entry_count_after != 1
+        or offline_precompute.base_entry_count_before != 0
+        or offline_precompute.base_entry_count_after != 1
+        or offline_precompute.cache_binding_fingerprint
+        != source.relation_projection_base_precompute.cache_binding_fingerprint
+        or offline_precompute.precompute_fingerprint
+        != source.relation_projection_base_precompute.precompute_fingerprint
+        or offline_precompute.graph_revision_fingerprint != source.graph_revision_fingerprint
+        or offline_precompute.effective_graph_view_fingerprint
+        != source.effective_graph_view_fingerprint
+        or offline_precompute.index_fingerprint != source.session.index.index_fingerprint
+        or offline_precompute.candidate_admission_profile_fingerprint
+        != source.session.index.profile_fingerprint
+        or offline_precompute.authorized_observation_set_fingerprint
+        != source.relation_projection_base_precompute.authorized_observation_set_fingerprint
+        or offline_precompute.candidate_set_fingerprint
+        != source.relation_projection_base_precompute.candidate_set_fingerprint
+    ):
+        raise ContractValidationError(
+            "relation projection offline equivalence evidence binding mismatch"
+        )
+
+    cold_semantic = cold_arm.get("semantic")
+    after_semantic = after_arm.get("semantic")
+    if not isinstance(cold_semantic, Mapping) or not isinstance(
+        after_semantic,
+        Mapping,
+    ):
+        raise ContractValidationError(
+            "relation projection offline semantic comparison is unavailable"
+        )
+    field_groups = {
+        "status": ("status",),
+        "answer": (
+            "answer_status",
+            "answer_hash",
+            "source_result_fingerprint",
+        ),
+        "plan": ("query_hash", "plan_fingerprint"),
+        "result": (
+            "result_fingerprint",
+            "semantic_payload_fingerprint",
+        ),
+        "paths": ("path_fingerprint",),
+        "citations": ("citation_fingerprint",),
+        "scores": ("score_fingerprint",),
+        "permission": ("permission_fingerprint",),
+        "lineage": (
+            "lineage_fingerprint",
+            "lineage_crosswalk_fingerprint",
+        ),
+        "runtime": (
+            "runtime_method_fingerprint",
+            "profile_fingerprint",
+            "execution_component_fingerprint",
+        ),
+        "index": ("index_fingerprint",),
+        "graph": ("graph_revision_fingerprint",),
+    }
+    equivalence = {
+        group: all(
+            cold_semantic.get(field_name) == after_semantic.get(field_name)
+            for field_name in field_names
+        )
+        for group, field_names in field_groups.items()
+    }
+    equivalence["counts"] = cold_semantic.get("counts") == after_semantic.get("counts")
+    cold_cache = cold_arm["cache"]
+    after_cache = after_arm["cache"]
+    cache_acceptance = {
+        "containers_isolated": cache_containers_isolated,
+        "preflight_cold_0_0_after_1_1": (
+            preflight.cold_binding_cache_entry_count == 0
+            and preflight.cold_base_cache_entry_count == 0
+            and preflight.after_binding_cache_entry_count == 1
+            and preflight.after_base_cache_entry_count == 1
+        ),
+        "offline_cold_0_0_to_1_1": (
+            offline_precompute.binding_entry_count_before == 0
+            and offline_precompute.base_entry_count_before == 0
+            and offline_precompute.binding_entry_count_after == 1
+            and offline_precompute.base_entry_count_after == 1
+        ),
+        "cold_query_reused_1_1": _relation_projection_query_reused_cache(cold_cache),
+        "after_query_reused_1_1": _relation_projection_query_reused_cache(after_cache),
+    }
+    prompt_selection = source.prompt_selection
+    passed = (
+        cold_arm.get("status") == "passed"
+        and after_arm.get("status") == "passed"
+        and all(equivalence.values())
+        and all(cache_acceptance.values())
+        and prompt_selection is not None
+        and prompt_selection.lexical_anchor_count > 0
+        and prompt_selection.authorized_connected_graph_path_count > 0
+        and int(cold_arm["counts"]["graph_path_count"]) > 0
+        and int(after_arm["counts"]["graph_path_count"]) > 0
+        and int(cold_arm["counts"]["citation_count"]) > 0
+        and int(after_arm["counts"]["citation_count"]) > 0
+        and cold_arm["timing"]["semantic_phases"]["deadline_exhausted_phase"] is None
+        and after_arm["timing"]["semantic_phases"]["deadline_exhausted_phase"] is None
+    )
+    report = {
+        "artifact_id": ("formowl_issue56_relation_projection_offline_equivalence_diagnostic_v1"),
+        "schema_version": 1,
+        "diagnostic_mode_id": source.diagnostic_mode_id,
+        "status": "passed" if passed else "blocked",
+        "claim_status": ISSUE56_DIAGNOSTIC_CLAIM_STATUS,
+        "quality_claim": "not_made",
+        "diagnostic_only": True,
+        "methodology_authority_status": "blocked",
+        "identity_scope_mode": ISSUE56_DIAGNOSTIC_IDENTITY_SCOPE_MODE,
+        "identity_scope_fingerprint": sha256_json(
+            {
+                "identity_scope_mode": ISSUE56_DIAGNOSTIC_IDENTITY_SCOPE_MODE,
+                "workspace_id": ISSUE56_DIAGNOSTIC_WORKSPACE_ID,
+                "approver_user_id": ISSUE56_DIAGNOSTIC_USER_ID,
+            }
+        ),
+        "source_fixture_mode": (
+            "sealed_source_real_prompt_relation_projection_offline_equivalence"
+        ),
+        "sealed_source_asset": "validated_and_exercised",
+        "external_google_oauth_exchange": "not_exercised",
+        "production_connected_tool_policy": "not_exercised",
+        "real_llm": "not_exercised",
+        "prompt_hash": sha256_json(prompt),
+        "source_prompt_selection": (
+            prompt_selection.to_safe_dict()
+            if prompt_selection is not None
+            else {"status": "blocked"}
+        ),
+        "source_binding": {
+            "source_asset_fingerprint": source.source_asset_fingerprint,
+            "loader_contract_fingerprint": source.loader_contract_fingerprint,
+            "observation_inventory_fingerprint": (source.observation_inventory_fingerprint),
+            "permission_lineage_fingerprint": (source.permission_lineage_fingerprint),
+            "effective_graph_view_fingerprint": (source.effective_graph_view_fingerprint),
+            "graph_revision_fingerprint": source.graph_revision_fingerprint,
+            "source_loader_binding_fingerprint": (source.source_loader_binding_fingerprint),
+            "source_binding_fingerprint": source.source_binding_fingerprint,
+        },
+        "version_guard": {
+            "status": "consumed_once",
+            "consumed_claim_fingerprint": consumed_claim_fingerprint,
+            "consumed_claim_byte_sha256": consumed_claim_byte_sha256,
+            "execution_binding_fingerprint": execution_binding_fingerprint,
+        },
+        "query_budget": {
+            "per_arm_ms": 1500,
+            "offline_precompute_consumes_query_budget": False,
+            "phase_local_budget_override": False,
+        },
+        "preflight": preflight.to_safe_dict(),
+        "offline_precompute": offline_precompute.to_safe_dict(),
+        "equivalence": equivalence,
+        "cache_acceptance": cache_acceptance,
+        "counts": {
+            "arm_count": 2,
+            "source_observation_count": source.observation_count,
+            "graph_preseal_helper_invocation_count": (
+                preflight.graph_preseal_helper_invocation_count
+            ),
+            "after_relation_precompute_helper_invocation_count": (
+                preflight.after_relation_precompute_helper_invocation_count
+            ),
+            "cold_offline_precompute_helper_invocation_count": (
+                offline_precompute.helper_invocation_count
+            ),
+            "cold_graph_path_count": cold_arm["counts"]["graph_path_count"],
+            "after_graph_path_count": after_arm["counts"]["graph_path_count"],
+            "cold_citation_count": cold_arm["counts"]["citation_count"],
+            "after_citation_count": after_arm["counts"]["citation_count"],
+        },
+        "timing": {
+            "source_loader_elapsed_ms": round(source_loader_elapsed_ms, 6),
+            "cold_graph_preseal_elapsed_ms": (preflight.cold_graph_preseal_elapsed_ms),
+            "after_graph_preseal_elapsed_ms": (preflight.after_graph_preseal_elapsed_ms),
+            "after_relation_precompute_elapsed_ms": (
+                preflight.after_relation_precompute_elapsed_ms
+            ),
+            "cold_offline_precompute_total_elapsed_ms": (offline_precompute.total_elapsed_ms),
+            "cold_offline_binding_elapsed_ms": (offline_precompute.binding_snapshot_elapsed_ms),
+            "cold_offline_base_builder_elapsed_ms": (offline_precompute.base_builder_elapsed_ms),
+            "cold_relation_projection_elapsed_ms": (
+                cold_arm["timing"]["relation_projection_elapsed_ms"]
+            ),
+            "after_relation_projection_elapsed_ms": (
+                after_arm["timing"]["relation_projection_elapsed_ms"]
+            ),
+            "cold_query_elapsed_ms": cold_arm["timing"]["query_elapsed_ms"],
+            "after_query_elapsed_ms": after_arm["timing"]["query_elapsed_ms"],
+            "cold_http_elapsed_ms": cold_arm["timing"]["http_elapsed_ms"],
+            "after_http_elapsed_ms": after_arm["timing"]["http_elapsed_ms"],
+            "cold_semantic_phases": cold_arm["timing"]["semantic_phases"],
+            "after_semantic_phases": after_arm["timing"]["semantic_phases"],
+            "latency_claim": "measurement_only_not_quality_claim",
+        },
+        "arms": {
+            "offline_cold_precomputed": dict(cold_arm),
+            "preexisting_precomputed": dict(after_arm),
+        },
+        "boundary_status": {
+            "non_query_preflight_before_claim": "passed",
+            "offline_unbudgeted_precompute_after_claim": (
+                "passed" if offline_precompute.status == "passed" else "blocked"
+            ),
+            "normal_1500ms_asgi_mcp_each_arm": (
+                "passed"
+                if cold_arm.get("status") == after_arm.get("status") == "passed"
+                else "blocked"
+            ),
+            "timing_free_semantic_equivalence": (
+                "passed" if all(equivalence.values()) else "blocked"
+            ),
+            "relation_projection_cache_isolation": (
+                "passed" if all(cache_acceptance.values()) else "blocked"
+            ),
+            "exactly_once_version_guard": "passed",
+            "quality_uat": "not_executed",
+            "independent_holdout": "not_executed",
+            "transfer_evaluation": "not_executed",
+        },
+    }
+    report["safe_trace_binding_fingerprint"] = sha256_json(
+        {
+            "diagnostic_mode_id": source.diagnostic_mode_id,
+            "prompt_hash": report["prompt_hash"],
+            "source_binding_fingerprint": source.source_binding_fingerprint,
+            "execution_binding_fingerprint": execution_binding_fingerprint,
+            "preflight_fingerprint": preflight.evidence_binding_fingerprint,
+            "offline_precompute_fingerprint": (offline_precompute.evidence_binding_fingerprint),
+            "cold_semantic": cold_semantic,
+            "after_semantic": after_semantic,
+            "cold_phase_trace": cold_arm["timing"]["semantic_phases"],
+            "after_phase_trace": after_arm["timing"]["semantic_phases"],
+            "equivalence": equivalence,
+            "cache_acceptance": cache_acceptance,
+        }
+    )
+    _assert_no_legacy_identity_fields(report)
+    assert_no_public_raw_references(
+        report,
+        "formowl_issue56_relation_projection_offline_equivalence_diagnostic_v1",
+    )
+    validate_public_gateway_payload(report)
+    return report
+
+
+def _relation_projection_query_reused_cache(
+    cache: Mapping[str, Any],
+) -> bool:
+    before = cache.get("before")
+    after = cache.get("after")
+    return (
+        isinstance(before, Mapping)
+        and isinstance(after, Mapping)
+        and before.get("binding_snapshot_entry_count") == 1
+        and before.get("entry_count") == 1
+        and before.get("expected_binding_snapshot_present") is True
+        and before.get("expected_binding_present") is True
+        and before.get("snapshot_graph_binding_status") == "passed"
+        and after.get("binding_snapshot_entry_count") == 1
+        and after.get("entry_count") == 1
+        and after.get("expected_binding_snapshot_present") is True
+        and after.get("expected_binding_present") is True
+        and after.get("snapshot_graph_binding_status") == "passed"
+        and cache.get("binding_snapshot_entry_delta") == 0
+        and cache.get("entry_delta") == 0
+    )
+
+
 def mcp_initialize_request() -> dict[str, Any]:
     return {
         "jsonrpc": "2.0",
@@ -3211,8 +4507,10 @@ def build_safe_diagnostic_report(
         ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
+        ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_TEST_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_TEST_MODE_ID,
+        _ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_TEST_MODE_ID,
     }
     real_prompt_mode = composition.diagnostic_mode_id in _REAL_PROMPT_DIAGNOSTIC_MODE_IDS
     semantic_trace_completed = (
@@ -3509,8 +4807,10 @@ def safe_blocked_report(
         ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
+        ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_TEST_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_TEST_MODE_ID,
+        _ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_TEST_MODE_ID,
     }:
         diagnostic_mode_id = ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID
     sealed_mode = diagnostic_mode_id in {
@@ -3520,8 +4820,10 @@ def safe_blocked_report(
         ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
         ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
+        ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_TEST_MODE_ID,
         _ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_TEST_MODE_ID,
+        _ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_TEST_MODE_ID,
     }
     report = {
         "artifact_id": ISSUE56_DIAGNOSTIC_ARTIFACT_ID,
@@ -3821,6 +5123,8 @@ __all__ = [
     "ISSUE56_RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_ID",
     "ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID",
     "ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_CONTRACT_ID",
+    "ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID",
+    "ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_LOADER_CONTRACT_ID",
     "ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID",
     "ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V1_MODE_ID",
     "ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V2_MODE_ID",
@@ -3834,14 +5138,18 @@ __all__ = [
     "Issue56LineageCrosswalkPrecomputeEvidence",
     "Issue56RelationProjectionBasePrecomputeEvidence",
     "Issue56GraphContentPresealEvidence",
+    "Issue56OfflineEquivalencePreflightEvidence",
+    "Issue56OfflineRelationPrecomputeEvidence",
     "Issue56SourceBackedPromptSelectionEvidence",
     "Issue56DiagnosticState",
     "build_issue56_diagnostic_composition",
     "build_issue56_relation_projection_equivalence_compositions",
     "build_issue56_relation_projection_equivalence_v6_compositions",
+    "build_issue56_relation_projection_offline_equivalence_v7_compositions",
     "build_issue56_sealed_source_diagnostic_input",
     "build_safe_relation_projection_equivalence_arm",
     "build_safe_relation_projection_equivalence_report",
+    "build_safe_relation_projection_offline_equivalence_v7_report",
     "build_safe_diagnostic_report",
     "mcp_headers",
     "mcp_initialize_request",
@@ -3849,5 +5157,6 @@ __all__ = [
     "mcp_query_request",
     "relation_projection_cache_containers_are_isolated",
     "relation_projection_cache_evidence",
+    "precompute_issue56_offline_relation_projection_base",
     "safe_blocked_report",
 ]

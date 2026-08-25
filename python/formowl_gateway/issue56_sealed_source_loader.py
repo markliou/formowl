@@ -29,6 +29,8 @@ from .issue56_diagnostic import (
     ISSUE56_RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_ID,
     ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
     ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_CONTRACT_ID,
+    ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID,
+    ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_LOADER_CONTRACT_ID,
     ISSUE56_SEALED_SOURCE_LOADER_CONTRACT_ID,
     Issue56SealedSourceDiagnosticInput,
     build_issue56_sealed_source_diagnostic_input,
@@ -49,6 +51,10 @@ RELATION_PROJECTION_EQUIVALENCE_LOADER_SPEC: Final[str] = (
 RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_SPEC: Final[str] = (
     "formowl_gateway.issue56_sealed_source_loader:"
     "load_issue56_relation_projection_equivalence_v6_diagnostic_input"
+)
+RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_LOADER_SPEC: Final[str] = (
+    "formowl_gateway.issue56_sealed_source_loader:"
+    "load_issue56_relation_projection_offline_equivalence_v7_diagnostic_input"
 )
 LOADER_CONTRACT_FINGERPRINT: Final[str] = sha256_json(
     {
@@ -133,6 +139,41 @@ RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_CONTRACT_FINGERPRINT: Final[str] = sha
             "formowl_mail.issue56_sealed_source"
         ),
         "gateway_relation_projection_base_precompute_allowed": False,
+        "identity_scope_mode": IDENTITY_SCOPE_MODE,
+        "workspace_id": WORKSPACE_ID,
+        "approver_actor": APPROVER_ACTOR,
+        "tenant_id_allowed": False,
+        "uat_or_holdout_manifest_input_allowed": False,
+        "canonical_write_allowed": False,
+    }
+)
+RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_LOADER_CONTRACT_FINGERPRINT: Final[str] = sha256_json(
+    {
+        "loader_contract_id": (
+            ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_LOADER_CONTRACT_ID
+        ),
+        "base_real_prompt_loader_contract_fingerprint": (REAL_PROMPT_LOADER_CONTRACT_FINGERPRINT),
+        "source_view_policy": (
+            "two_gateway_fresh_public_snapshot_only_presealed_cold_views_"
+            "then_after_owner_relation_precompute_before_claim_v1"
+        ),
+        "graph_content_snapshot_precompute_contract_id": (
+            "formowl_issue56_effective_graph_content_snapshot_precompute_v1"
+        ),
+        "graph_content_snapshot_precompute_symbol": (
+            "formowl_mail:precompute_effective_graph_content_snapshot"
+        ),
+        "graph_content_snapshot_precompute_invocation_count": 2,
+        "preclaim_after_relation_projection_base_precompute_symbol": (
+            "formowl_mail.hybrid:precompute_relation_projection_base"
+        ),
+        "preclaim_after_relation_projection_base_precompute_invocation_count": 1,
+        "postclaim_cold_relation_projection_diagnostic_symbol": (
+            "formowl_mail:precompute_relation_projection_base_cold_diagnostic"
+        ),
+        "postclaim_cold_relation_projection_diagnostic_invocation_count": 1,
+        "user_query_time_budget_ms": 1500,
+        "phase_local_query_budget_override_allowed": False,
         "identity_scope_mode": IDENTITY_SCOPE_MODE,
         "workspace_id": WORKSPACE_ID,
         "approver_actor": APPROVER_ACTOR,
@@ -319,6 +360,47 @@ def load_issue56_relation_projection_equivalence_v6_diagnostic_input(
             RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_CONTRACT_FINGERPRINT
         ),
         diagnostic_mode_id=(ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID),
+        private_prompt=private_prompt,
+        prompt_selection=safe_selection_proof,
+    )
+
+
+def load_issue56_relation_projection_offline_equivalence_v7_diagnostic_input(
+    *,
+    selector: Callable[[Any], Any] | None = None,
+) -> Issue56SealedSourceDiagnosticInput:
+    """Load one sealed source for the post-claim offline v7 comparison."""
+
+    loaded = _load_approved_sealed_source()
+    if selector is None:
+        from formowl_mail.issue56_real_prompt import (
+            select_source_backed_connected_identifier_prompt,
+        )
+
+        selector = select_source_backed_connected_identifier_prompt
+    relation_types = tuple(
+        sorted({edge.relation_type for edge in loaded.effective_graph_view.visible_edges})
+    )
+    selected = selector(
+        session=loaded.session,
+        effective_graph_view=loaded.effective_graph_view,
+        candidate_inventory=loaded.identifier_mention_batch,
+        allowed_relation_types=relation_types,
+    )
+    private_prompt, owner_selection_proof = _normalize_prompt_selection(selected)
+    safe_binding = _validated_owner_safe_binding(loaded.safe_binding)
+    safe_selection_proof = _gateway_prompt_selection_binding(
+        private_prompt=private_prompt,
+        owner_selection_proof=owner_selection_proof,
+        source_loader_binding_fingerprint=str(safe_binding["binding_fingerprint"]),
+        permission_fingerprint=str(safe_binding["permission_fingerprint"]),
+    )
+    return _build_gateway_input(
+        loaded,
+        loader_contract_fingerprint=(
+            RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_LOADER_CONTRACT_FINGERPRINT
+        ),
+        diagnostic_mode_id=(ISSUE56_RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_DIAGNOSTIC_MODE_ID),
         private_prompt=private_prompt,
         prompt_selection=safe_selection_proof,
     )
@@ -515,8 +597,11 @@ __all__ = [
     "RELATION_PROJECTION_EQUIVALENCE_LOADER_SPEC",
     "RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_CONTRACT_FINGERPRINT",
     "RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_SPEC",
+    "RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_LOADER_CONTRACT_FINGERPRINT",
+    "RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_LOADER_SPEC",
     "load_issue56_sealed_source_diagnostic_input",
     "load_issue56_real_prompt_sealed_source_diagnostic_input",
     "load_issue56_relation_projection_equivalence_diagnostic_input",
     "load_issue56_relation_projection_equivalence_v6_diagnostic_input",
+    "load_issue56_relation_projection_offline_equivalence_v7_diagnostic_input",
 ]
