@@ -8,29 +8,29 @@ This is a bounded active window. Earlier entries are immutable history under
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
-## 2026-08-25 — Relation-projection equivalence v5 consumed and blocked
-- Formal mode `issue56-sealed-source-real-prompt-relation-projection-equivalence-phase-traced-diagnostic-20260825-v5`
-  consumed its canonical claim over `456` Observations as `workspace_only_v1`
-  for `workspace_formowl`, approved actor `user_full_pst_domain_hard_case_eval_owner`;
-  no tenant dimension exists.
-- The cold arm exhausted the `1500 ms` budget in `graph_snapshot` after
-  `1511.686057 ms`, returning `0` paths/citations/scores. The precomputed arm
-  completed with relation projection/query/HTTP `58.316231`/`298.853709`/
-  `360.889611 ms`, `10` paths, `1` citation, and `48` scores.
-- Loader/precompute were `686919.980220`/`4303.273780 ms`.
-  Permission/runtime/index equivalence passed; all other
-  semantic groups failed because the cold arm timed out before planning/results.
+## 2026-08-25 — Graph-presealed relation-projection v6 consumed and blocked
+- Formal mode `issue56-sealed-source-real-prompt-relation-projection-equivalence-phase-traced-diagnostic-20260825-v6`
+  consumed its canonical claim over `456` Observations as `workspace_only_v1` for
+  `workspace_formowl`, approved actor `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
+- Loader, before graph preseal, and owner relation-base precompute were
+  `677442.490893`, `60990.781102`, and `4245.079389 ms`.
+- Before completed graph snapshot/Strong RAG in `0.036742`/`90.802575 ms`, then relation
+  projection exhausted after `1415.389724 ms`; query/HTTP were `1520.515069`/`1555.417065 ms`,
+  with `0` paths/citations/scores.
+- After relation projection/query/HTTP were `57.939772`/`291.040282`/`346.270890 ms`;
+  all required phases completed with `10` paths, `1` citation, and `48` scores.
+- Binding/base caches moved before `0/0 -> 1/0` and after `1/1 -> 1/1`; graph/index/
+  permission/plan/runtime gates passed, while remaining groups failed on the before deadline.
 - Claim/claim-byte/report-byte hashes are
-  `sha256:9f811f9ae024a478beb4b6be5874eb2c810cee2bd572cde326757530cf7c3494`,
-  `sha256:8e13877c68684be769fd20c1f039a583e7cbbf5750cb33bd71ca3a5dfa016116`,
-  `sha256:d558dc1c918bd87e08fdff1def1d354e411f9e445c0ef93d4da75450bc3fe23a`;
-  trace/execution/source are `sha256:fb06c4087f8c421f48e175dd225a0dd6a56eca7602b32a4ffab5747974e485e6`,
-  `sha256:fd90b8f13b74e05e56c177f713547e21891bd0ecb6f1ca899357e26f050de33e`,
-  `sha256:57be8e51275d81fe26fbc22bcbed564b0a9838178ece0bef1f4b4ccae672f66e`.
-- Focused code evidence passed `45/45`; the formal v5 root is consumed. V5
-  cannot be rerun/retried/tuned and earns no readiness or superiority claim.
-- Authority remains blocked on four gates and Work D remains in progress. Any
-  next diagnostic needs a new approved version around the cold graph snapshot.
+  `sha256:6b045800e19d82fa187ff4271ab2d854189726a3449bcd4cedf1c03c47c2639e`,
+  `sha256:65b3b3d1f9889e1d82ec47ade77fb7dc44b4a9a3711f7bd37a538cdc9e986b61`,
+  and `sha256:ae10a358242f6f44b1f92267a80e48eac296ebd677eb1ac27bcc24f6111909f1`.
+- Execution/source/preseal/trace bindings are `sha256:7ecf2c31901116ddb32d2a8a7cb41b0e3b504648006a68b3e23e89ee22b2c1cf`,
+  `sha256:bbc67d7fc7051a597488034d277c772a4a5c68bc09dc8ce696bfd2bcc0d8db8b`,
+  `sha256:4900fd366f300af097de355b59feeb6059a06b41574d01d9834e51576c4eed27`,
+  and `sha256:040cb86b70af99fd6f0467306423e0e556a6dfc41b1ed734227b613248c27a93`.
+- Temporary/combined tests passed `6/6` and `31/31`; independent cross-review found no
+  blocker. V6 cannot be rerun/retried/tuned; authority remains blocked, Work D remains in progress, and no readiness or superiority claim is earned.
 ## 2026-08-23 — Source-backed real-prompt v4 diagnostic passed
 - Source tracing found both synthetic fixed-prompt terms at count `0` in
   raw/parser/retrieval; the cause was prompt-to-approved-source mismatch.
