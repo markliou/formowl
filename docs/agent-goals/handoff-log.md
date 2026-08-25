@@ -12,7 +12,7 @@ This is a bounded active window. Earlier entries are immutable history under
 ## 2026-08-25 — Source completeness and execution binding checkpoint
 - The existing sealed safe source report is passed at its own boundary: `8,443`
   source inventory units reconcile to `8,443` Observations with unexplained
-  loss `0`. Report/snapshot byte seals are
+  loss `0`. Report/snapshot fingerprints are
   `sha256:9bf59781bb846f87934511fe7378626eddd380cbe9e1acea201aa0625f11f8b6`
   and `sha256:55df0dc7d96a7822271f4b7f4509b4da1bbb94f26bb7710e3919f8134d28f2d1`.
 - Commits `9955df0`, `3b7ee0d`, `ad4364c`, `12575a1`, and `a85604c` provide

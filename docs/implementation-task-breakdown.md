@@ -29,7 +29,7 @@ This is the bounded active work board. Lossless history is indexed in
   remain blocked.
 - The existing safe source-completeness report passes its own sealed contract:
   `8,443` raw/source inventory units reconcile to `8,443` Observations with
-  unexplained loss `0`. Its report/snapshot byte seals are
+  unexplained loss `0`. Its report/snapshot fingerprints are
   `sha256:9bf59781bb846f87934511fe7378626eddd380cbe9e1acea201aa0625f11f8b6`
   and
   `sha256:55df0dc7d96a7822271f4b7f4509b4da1bbb94f26bb7710e3919f8134d28f2d1`.
