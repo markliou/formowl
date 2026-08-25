@@ -44,6 +44,7 @@ REPORT_ARTIFACT_ID = "formowl_methodology_gate_evidence_authoring_report_v1"
 REJECTION_ARTIFACT_ID = "formowl_methodology_gate_evidence_authoring_rejection_v1"
 BUNDLE_ARTIFACT_ID = "formowl_methodology_gate_evidence_authoring_bundle_v1"
 SCHEMA_VERSION = 1
+EXECUTION_BINDING_DEPENDENCY_ROLE = "execution_binding_bundle"
 
 GATE_IDS = (
     "evaluation_reports_bind_execution_fingerprint",
@@ -66,6 +67,9 @@ RESULT_ARTIFACT_IDS = {
 COMMON_STRUCTURED_ARTIFACT_IDS = {
     "case_manifest": "formowl_methodology_case_manifest_dependency_v1",
     "configuration_manifest": "formowl_methodology_configuration_manifest_dependency_v1",
+    EXECUTION_BINDING_DEPENDENCY_ROLE: (
+        "formowl_issue56_execution_fingerprint_acceptance_bundle_v1"
+    ),
     "source_inventory_manifest": "formowl_methodology_source_inventory_dependency_v1",
 }
 GATE_STRUCTURED_ARTIFACT_IDS = {
@@ -87,6 +91,7 @@ COMMON_ROLES = frozenset(
     {
         "case_manifest",
         "configuration_manifest",
+        EXECUTION_BINDING_DEPENDENCY_ROLE,
         "model_artifact",
         "package_lock",
         "source_inventory_manifest",
@@ -153,6 +158,7 @@ class Dependency:
     relative_path: Path
     byte_sha256: str
     artifact_id: str | None
+    internal_fingerprint_field: str | None
     internal_fingerprint: str | None
     artifact: dict[str, Any] | None
 
@@ -162,9 +168,7 @@ class Dependency:
             "path": self.relative_path.as_posix(),
             "artifact_id": self.artifact_id,
             "byte_sha256": self.byte_sha256,
-            "internal_fingerprint_field": (
-                "artifact_fingerprint" if self.artifact is not None else None
-            ),
+            "internal_fingerprint_field": self.internal_fingerprint_field,
             "internal_fingerprint": self.internal_fingerprint,
         }
 
@@ -196,6 +200,16 @@ class ExecutionBinding:
     source_item_count: int
     observation_count: int
     unexplained_loss_count: int
+    bundle: dict[str, Any]
+
+    def reference(self) -> dict[str, str]:
+        return {
+            "role": EXECUTION_BINDING_DEPENDENCY_ROLE,
+            "path": self.relative_path.as_posix(),
+            "byte_sha256": self.byte_sha256,
+            "bundle_fingerprint": self.bundle_fingerprint,
+            "complete_execution_fingerprint": self.complete_execution_fingerprint,
+        }
 
 
 def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
@@ -431,6 +445,7 @@ def _load_execution_binding(
         source_item_count=int(counts["source_item_count"]),
         observation_count=int(counts["observation_count"]),
         unexplained_loss_count=int(counts["unexplained_loss_count"]),
+        bundle=bundle,
     )
 
 
@@ -477,6 +492,7 @@ def _load_dependency(
             relative_path=relative_path,
             byte_sha256=byte_sha256,
             artifact_id=None,
+            internal_fingerprint_field=None,
             internal_fingerprint=None,
             artifact=None,
         )
@@ -495,8 +511,38 @@ def _load_dependency(
         relative_path=relative_path,
         byte_sha256=byte_sha256,
         artifact_id=expected_artifact_id,
+        internal_fingerprint_field="artifact_fingerprint",
         internal_fingerprint=str(artifact["artifact_fingerprint"]),
         artifact=artifact,
+    )
+
+
+def _execution_binding_dependency(
+    *,
+    reference: Mapping[str, Any],
+    execution_binding: ExecutionBinding,
+) -> Dependency:
+    if reference.get("role") != EXECUTION_BINDING_DEPENDENCY_ROLE:
+        raise GateEvidenceError("dependency_role_invalid")
+    relative_path = _safe_relative_path(reference.get("path"))
+    if relative_path != execution_binding.relative_path:
+        raise GateEvidenceError("execution_binding_dependency_mismatched")
+    bundle = execution_binding.bundle
+    if (
+        bundle.get("artifact_id")
+        != COMMON_STRUCTURED_ARTIFACT_IDS[EXECUTION_BINDING_DEPENDENCY_ROLE]
+        or bundle.get("bundle_fingerprint") != execution_binding.bundle_fingerprint
+        or bundle.get("execution_fingerprint") != execution_binding.complete_execution_fingerprint
+    ):
+        raise GateEvidenceError("execution_binding_dependency_mismatched")
+    return Dependency(
+        role=EXECUTION_BINDING_DEPENDENCY_ROLE,
+        relative_path=relative_path,
+        byte_sha256=execution_binding.byte_sha256,
+        artifact_id=str(bundle["artifact_id"]),
+        internal_fingerprint_field="bundle_fingerprint",
+        internal_fingerprint=execution_binding.bundle_fingerprint,
+        artifact=bundle,
     )
 
 
@@ -610,6 +656,22 @@ def _validate_execution_binding_dependencies(
     common_dependencies: Sequence[Dependency],
     gate_dependencies: Mapping[str, Sequence[Dependency]],
 ) -> None:
+    binding_dependencies = _dependency_by_role(
+        common_dependencies,
+        EXECUTION_BINDING_DEPENDENCY_ROLE,
+    )
+    if (
+        len(binding_dependencies) != 1
+        or binding_dependencies[0].relative_path != execution_binding.relative_path
+        or binding_dependencies[0].byte_sha256 != execution_binding.byte_sha256
+        or binding_dependencies[0].artifact_id
+        != COMMON_STRUCTURED_ARTIFACT_IDS[EXECUTION_BINDING_DEPENDENCY_ROLE]
+        or binding_dependencies[0].internal_fingerprint_field != "bundle_fingerprint"
+        or binding_dependencies[0].internal_fingerprint != execution_binding.bundle_fingerprint
+        or binding_dependencies[0].artifact != execution_binding.bundle
+    ):
+        raise GateEvidenceError("execution_binding_dependency_mismatched")
+
     inventories = _dependency_by_role(common_dependencies, "source_inventory_manifest")
     if len(inventories) != 1 or inventories[0].artifact is None:
         raise GateEvidenceError("execution_binding_source_inventory_missing")
@@ -658,6 +720,7 @@ def _build_gate_artifacts(
     authority_id: str,
     gate_id: str,
     execution_fingerprint: str,
+    execution_binding: ExecutionBinding,
     source_manifest_relative: Path,
     source_manifest_sha256: str,
     dependencies: Sequence[Dependency],
@@ -709,6 +772,7 @@ def _build_gate_artifacts(
             "dependency_manifest_sha256": dependency_manifest_sha256,
             "dependency_manifest_fingerprint": dependency_manifest["manifest_fingerprint"],
             "dependency_count": len(entries),
+            "execution_binding": execution_binding.reference(),
             "status": "passed",
             "evidence_classification": "production",
             "promotion_status": "not_performed",
@@ -896,7 +960,14 @@ def author_gate_evidence_bundle(
     )
 
     common_dependencies = [
-        _load_dependency(repository_root, reference)
+        (
+            _execution_binding_dependency(
+                reference=reference,
+                execution_binding=execution_binding,
+            )
+            if reference["role"] == EXECUTION_BINDING_DEPENDENCY_ROLE
+            else _load_dependency(repository_root, reference)
+        )
         for reference in authoring_input["common_dependencies"]
     ]
     all_dependencies: dict[Path, Dependency] = {
@@ -920,6 +991,7 @@ def author_gate_evidence_bundle(
                 authority_id=authoring_input["authority_id"],
                 gate_id=gate_input["gate_id"],
                 execution_fingerprint=execution_fingerprint,
+                execution_binding=execution_binding,
                 source_manifest_relative=source_manifest_relative,
                 source_manifest_sha256=source_manifest_sha256,
                 dependencies=dependencies,

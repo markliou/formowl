@@ -155,6 +155,7 @@ _GATE_EVIDENCE_KEYS = {
     "dependency_manifest_sha256",
     "dependency_manifest_fingerprint",
     "dependency_count",
+    "execution_binding",
     "status",
     "evidence_classification",
     "promotion_status",
@@ -183,6 +184,13 @@ _GATE_DEPENDENCY_ENTRY_KEYS = {
     "internal_fingerprint_field",
     "internal_fingerprint",
 }
+_GATE_EXECUTION_BINDING_REFERENCE_KEYS = {
+    "role",
+    "path",
+    "byte_sha256",
+    "bundle_fingerprint",
+    "complete_execution_fingerprint",
+}
 _GATE_DEPENDENCY_ARTIFACT_KEYS = {
     "artifact_id",
     "gate_id",
@@ -201,6 +209,94 @@ _SOURCE_ROOT_DEPENDENCY_ARTIFACT_KEYS = {
     "artifact_fingerprint",
 }
 _GATE_DEPENDENCY_INTERNAL_FINGERPRINT_FIELD = "artifact_fingerprint"
+_EXECUTION_BINDING_DEPENDENCY_ROLE = "execution_binding_bundle"
+_EXECUTION_BINDING_BUNDLE_ARTIFACT_ID = "formowl_issue56_execution_fingerprint_acceptance_bundle_v1"
+_EXECUTION_BINDING_ARTIFACT_ID = "formowl_issue56_complete_execution_binding_v1"
+_EXECUTION_BINDING_SCHEMA_VERSION = 1
+_EXECUTION_BINDING_BUNDLE_KEYS = {
+    "artifact_id",
+    "schema_version",
+    "status",
+    "run_binding_fingerprint",
+    "source_binding_fingerprint",
+    "execution_fingerprint",
+    "execution_binding_status",
+    "execution_binding",
+    "component_artifact_fingerprints",
+    "bound_fingerprints",
+    "counts",
+    "statuses",
+    "blocking_status_ids",
+    "blocking_status_fingerprint",
+    "bundle_fingerprint",
+}
+_EXECUTION_BINDING_KEYS = {
+    "artifact_id",
+    "schema_version",
+    "source_binding_fingerprint",
+    "source_completeness_report_sha256",
+    "source_completeness_report_fingerprint",
+    "bound_fingerprints",
+}
+_EXECUTION_BINDING_COMPONENT_KEYS = {
+    "answer",
+    "authority",
+    "code",
+    "evaluation",
+    "graph_ontology",
+    "image",
+    "lexical_index",
+    "source",
+}
+_EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS = {
+    "answer_budget",
+    "answer_model",
+    "answer_prompt",
+    "authority_execution",
+    "authorized_identifier_mention_set",
+    "code_commit",
+    "code_tree",
+    "code_tree_scope",
+    "complete_identifier_mention_batch",
+    "complete_identifier_mention_set",
+    "complete_identifier_resolution",
+    "dense_profile",
+    "evaluator",
+    "graph_adapter",
+    "graph_artifact",
+    "graph_identifier_resolution_set",
+    "graph_relation_type_set",
+    "image_attestor",
+    "image_id",
+    "image_metadata",
+    "index",
+    "lexical_profile",
+    "ontology_artifact",
+    "ontology_target",
+    "runtime_component",
+    "runtime_method",
+    "script",
+    "selected_identifier_mention_batch",
+    "selected_identifier_resolution",
+    "source_graph_policy",
+    "source_identifier_adapter",
+    "source_identifier_candidate_artifact",
+    "source_identifier_candidate_binding",
+    "source_identifier_candidate_schema",
+    "source_identifier_extraction_policy",
+    "source_identifier_identity_scope",
+    "source_identifier_identity_scope_attestation",
+    "source_identifier_identity_scope_attestation_bytes",
+    "source_identifier_identity_scope_binding",
+    "source_identifier_identity_scope_graph_binding_set",
+    "source_identifier_identity_scope_mode",
+    "source_identifier_identity_scope_policy",
+    "source_identifier_mode_approval",
+    "source_identifier_operator_approval",
+    "source_identifier_resolution_policy",
+    "source_inventory",
+    "source_snapshot",
+}
 _GATE_DEPENDENCY_MANIFEST_FINGERPRINT_FIELD = "manifest_fingerprint"
 _SOURCE_MANIFEST_FINGERPRINT_FIELD = "manifest_fingerprint"
 _GATE_RESULT_FINGERPRINT_FIELD = "result_fingerprint"
@@ -212,6 +308,7 @@ _OPAQUE_DEPENDENCY_ROLES = {
 _COMMON_DEPENDENCY_ARTIFACT_IDS = {
     "case_manifest": "formowl_methodology_case_manifest_dependency_v1",
     "configuration_manifest": "formowl_methodology_configuration_manifest_dependency_v1",
+    _EXECUTION_BINDING_DEPENDENCY_ROLE: _EXECUTION_BINDING_BUNDLE_ARTIFACT_ID,
     "source_inventory_manifest": "formowl_methodology_source_inventory_dependency_v1",
 }
 _GATE_DEPENDENCY_ARTIFACT_IDS = {
@@ -1257,10 +1354,15 @@ def _load_methodology_gate_dependency_manifest(
                 **_COMMON_DEPENDENCY_ARTIFACT_IDS,
                 **_GATE_DEPENDENCY_ARTIFACT_IDS,
             }.get(role)
+            expected_internal_field = (
+                "bundle_fingerprint"
+                if role == _EXECUTION_BINDING_DEPENDENCY_ROLE
+                else _GATE_DEPENDENCY_INTERNAL_FINGERPRINT_FIELD
+            )
             if (
                 not isinstance(artifact_id, str)
                 or artifact_id != expected_artifact_id
-                or internal_field != _GATE_DEPENDENCY_INTERNAL_FINGERPRINT_FIELD
+                or internal_field != expected_internal_field
                 or not _is_sha256(internal_fingerprint)
             ):
                 return None
@@ -1270,7 +1372,13 @@ def _load_methodology_gate_dependency_manifest(
                 return None
             if not isinstance(artifact, dict) or artifact.get("artifact_id") != artifact_id:
                 return None
-            if role in _COMMON_DEPENDENCY_ARTIFACT_IDS:
+            if role == _EXECUTION_BINDING_DEPENDENCY_ROLE:
+                artifact_binding_valid = _validate_execution_binding_bundle(
+                    artifact,
+                    authority_execution_fingerprint=execution_fingerprint,
+                    source_manifest=source_manifest,
+                )
+            elif role in _COMMON_DEPENDENCY_ARTIFACT_IDS:
                 artifact_binding_valid = set(artifact) == _SOURCE_ROOT_DEPENDENCY_ARTIFACT_KEYS
             else:
                 artifact_binding_valid = (
@@ -1285,24 +1393,28 @@ def _load_methodology_gate_dependency_manifest(
                 not artifact_binding_valid
                 or artifact.get(internal_field) != internal_fingerprint
                 or not _has_internal_fingerprint(artifact, internal_field)
-                or _contains_disallowed_evidence_state(artifact)
-            ):
-                return None
-            dependency_paths = artifact.get("dependency_paths")
-            payload = artifact.get("payload")
-            if (
-                not isinstance(dependency_paths, list)
-                or any(
-                    not isinstance(item, str)
-                    or not item
-                    or not _is_safe_production_dependency_path(Path(item))
-                    for item in dependency_paths
+                or (
+                    role != _EXECUTION_BINDING_DEPENDENCY_ROLE
+                    and _contains_disallowed_evidence_state(artifact)
                 )
-                or dependency_paths != sorted(set(dependency_paths))
-                or not isinstance(payload, dict)
             ):
                 return None
-            structured_artifacts.append((artifact, tuple(dependency_paths)))
+            if role != _EXECUTION_BINDING_DEPENDENCY_ROLE:
+                dependency_paths = artifact.get("dependency_paths")
+                payload = artifact.get("payload")
+                if (
+                    not isinstance(dependency_paths, list)
+                    or any(
+                        not isinstance(item, str)
+                        or not item
+                        or not _is_safe_production_dependency_path(Path(item))
+                        for item in dependency_paths
+                    )
+                    or dependency_paths != sorted(set(dependency_paths))
+                    or not isinstance(payload, dict)
+                ):
+                    return None
+                structured_artifacts.append((artifact, tuple(dependency_paths)))
 
         entry_sort_keys.append((role, path_value))
         entry_paths.add(path_value)
@@ -1358,6 +1470,7 @@ def _validate_common_methodology_dependencies(
     source_inventories = manifest.by_role("source_inventory_manifest")
     case_manifests = manifest.by_role("case_manifest")
     configuration_manifests = manifest.by_role("configuration_manifest")
+    execution_binding_bundles = manifest.by_role(_EXECUTION_BINDING_DEPENDENCY_ROLE)
     if not (
         len(source_items) == source_manifest.get("source_count")
         and len(model_artifacts) == len(source_manifest.get("model_artifact_hashes", []))
@@ -1365,6 +1478,7 @@ def _validate_common_methodology_dependencies(
         and len(source_inventories) == 1
         and len(case_manifests) == 1
         and len(configuration_manifests) == 1
+        and len(execution_binding_bundles) == 1
     ):
         return False
     if (
@@ -1420,6 +1534,7 @@ def _allowed_dependency_roles(gate_id: str) -> set[str]:
     common_roles = {
         "case_manifest",
         "configuration_manifest",
+        _EXECUTION_BINDING_DEPENDENCY_ROLE,
         "model_artifact",
         "package_lock",
         "source_inventory_manifest",
@@ -1555,6 +1670,151 @@ def _is_nonnegative_int(value: Any) -> bool:
 
 def _is_positive_int(value: Any) -> bool:
     return type(value) is int and value > 0
+
+
+def _validate_execution_binding_bundle(
+    value: dict[str, Any],
+    *,
+    authority_execution_fingerprint: str,
+    source_manifest: dict[str, Any],
+) -> bool:
+    if (
+        set(value) != _EXECUTION_BINDING_BUNDLE_KEYS
+        or value.get("artifact_id") != _EXECUTION_BINDING_BUNDLE_ARTIFACT_ID
+        or value.get("schema_version") != _EXECUTION_BINDING_SCHEMA_VERSION
+        or value.get("status") not in {"blocked", "passed"}
+        or value.get("execution_binding_status") != "passed"
+    ):
+        return False
+    if any(
+        not _is_sha256(value.get(field_name))
+        for field_name in (
+            "run_binding_fingerprint",
+            "source_binding_fingerprint",
+            "execution_fingerprint",
+            "blocking_status_fingerprint",
+            "bundle_fingerprint",
+        )
+    ):
+        return False
+
+    component_fingerprints = value.get("component_artifact_fingerprints")
+    bound_fingerprints = value.get("bound_fingerprints")
+    execution_binding = value.get("execution_binding")
+    if (
+        not isinstance(component_fingerprints, dict)
+        or set(component_fingerprints) != _EXECUTION_BINDING_COMPONENT_KEYS
+        or any(not _is_sha256(item) for item in component_fingerprints.values())
+        or not isinstance(bound_fingerprints, dict)
+        or not bound_fingerprints
+        or any(not _is_sha256(item) for item in bound_fingerprints.values())
+        or not isinstance(execution_binding, dict)
+        or set(execution_binding) != _EXECUTION_BINDING_KEYS
+        or execution_binding.get("artifact_id") != _EXECUTION_BINDING_ARTIFACT_ID
+        or execution_binding.get("schema_version") != _EXECUTION_BINDING_SCHEMA_VERSION
+        or execution_binding.get("source_binding_fingerprint")
+        != value["source_binding_fingerprint"]
+        or not _is_sha256(execution_binding.get("source_completeness_report_sha256"))
+        or not _is_sha256(execution_binding.get("source_completeness_report_fingerprint"))
+    ):
+        return False
+
+    execution_bound_fingerprints = execution_binding.get("bound_fingerprints")
+    if (
+        not isinstance(execution_bound_fingerprints, dict)
+        or set(execution_bound_fingerprints) != _EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS
+        or any(not _is_sha256(item) for item in execution_bound_fingerprints.values())
+        or any(
+            bound_fingerprints.get(key) != fingerprint
+            for key, fingerprint in execution_bound_fingerprints.items()
+        )
+        or execution_bound_fingerprints.get("authority_execution")
+        != authority_execution_fingerprint
+        or value["execution_fingerprint"] != _canonical_sha256(execution_binding)
+    ):
+        return False
+
+    counts = value.get("counts")
+    statuses = value.get("statuses")
+    blocker_ids = value.get("blocking_status_ids")
+    if (
+        not isinstance(counts, dict)
+        or not counts
+        or any(not _is_nonnegative_int(item) for item in counts.values())
+        or counts.get("source_item_count") != source_manifest.get("source_item_count")
+        or counts.get("observation_count") != counts.get("source_item_count")
+        or counts.get("unexplained_loss_count") != 0
+        or not isinstance(statuses, dict)
+        or not statuses
+        or any(
+            item not in {"blocked", "failed", "missing", "passed", "ready"}
+            for item in statuses.values()
+        )
+        or not isinstance(blocker_ids, list)
+        or any(not isinstance(item, str) or not item for item in blocker_ids)
+        or blocker_ids != sorted(set(blocker_ids))
+        or value["blocking_status_fingerprint"] != _canonical_sha256(blocker_ids)
+        or (value["status"] == "passed") != (not blocker_ids)
+        or not _has_internal_fingerprint(value, "bundle_fingerprint")
+    ):
+        return False
+    return True
+
+
+def _gate_execution_binding_reference_matches(
+    *,
+    repository_root: Path,
+    reference: Any,
+    dependency_manifest: dict[str, Any],
+) -> bool:
+    if (
+        not isinstance(reference, dict)
+        or set(reference) != _GATE_EXECUTION_BINDING_REFERENCE_KEYS
+        or reference.get("role") != _EXECUTION_BINDING_DEPENDENCY_ROLE
+        or not _is_sha256(reference.get("byte_sha256"))
+        or not _is_sha256(reference.get("bundle_fingerprint"))
+        or not _is_sha256(reference.get("complete_execution_fingerprint"))
+    ):
+        return False
+    path_value = reference.get("path")
+    if (
+        not isinstance(path_value, str)
+        or not path_value
+        or not _is_safe_production_dependency_path(Path(path_value))
+    ):
+        return False
+    matching_entries = [
+        entry
+        for entry in dependency_manifest.get("dependencies", [])
+        if isinstance(entry, dict) and entry.get("role") == _EXECUTION_BINDING_DEPENDENCY_ROLE
+    ]
+    if len(matching_entries) != 1:
+        return False
+    entry = matching_entries[0]
+    if (
+        set(entry) != _GATE_DEPENDENCY_ENTRY_KEYS
+        or entry.get("path") != path_value
+        or entry.get("artifact_id") != _EXECUTION_BINDING_BUNDLE_ARTIFACT_ID
+        or entry.get("byte_sha256") != reference["byte_sha256"]
+        or entry.get("internal_fingerprint_field") != "bundle_fingerprint"
+        or entry.get("internal_fingerprint") != reference["bundle_fingerprint"]
+    ):
+        return False
+    bundle_path = _resolve_repo_regular_file(repository_root, Path(path_value))
+    if bundle_path is None:
+        return False
+    try:
+        bundle_bytes = bundle_path.read_bytes()
+        bundle = json.loads(bundle_bytes)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return (
+        _sha256_bytes(bundle_bytes) == reference["byte_sha256"]
+        and isinstance(bundle, dict)
+        and bundle.get("artifact_id") == _EXECUTION_BINDING_BUNDLE_ARTIFACT_ID
+        and bundle.get("bundle_fingerprint") == reference["bundle_fingerprint"]
+        and bundle.get("execution_fingerprint") == reference["complete_execution_fingerprint"]
+    )
 
 
 def _production_source_completeness_validator(
@@ -1899,6 +2159,12 @@ def _validate_passed_gate_evidence(
                 and is_positive_int(dependency_count)
                 and isinstance(dependency_manifest.get("dependencies"), list)
                 and dependency_count == len(dependency_manifest["dependencies"])
+            ):
+                continue
+            if not _gate_execution_binding_reference_matches(
+                repository_root=repository_root,
+                reference=payload.get("execution_binding"),
+                dependency_manifest=dependency_manifest,
             ):
                 continue
             try:
