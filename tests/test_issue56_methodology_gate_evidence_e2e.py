@@ -32,6 +32,7 @@ from scripts.issue56_execution_fingerprint import (
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "issue56_methodology_gate_evidence.py"
 OUTPUT_ROOT = Path("evidence/production/issue56-methodology-gates-v3")
+EXECUTION_BINDING_DEPENDENCY_ROLE = "execution_binding_bundle"
 
 
 def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
@@ -232,6 +233,11 @@ class ProductionFixture:
         self.execution_binding_byte_sha256 = _write_json(
             self.root / self.execution_binding_path,
             execution_binding_bundle,
+        )
+        self._reference(
+            gate_id=None,
+            role=EXECUTION_BINDING_DEPENDENCY_ROLE,
+            path=self.execution_binding_path,
         )
 
         source_gate = "source_completeness_compared_with_raw_oracle"
@@ -574,9 +580,94 @@ class Issue56MethodologyGateEvidenceEndToEndTests(unittest.TestCase):
             self.assertEqual(retry.returncode, 2)
             self.assertEqual(json.loads(retry.stdout)["rejection_status"], "output_exists")
 
+    def test_execution_binding_is_durably_preserved_across_all_four_gates(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = ProductionFixture(Path(temp_dir))
+            authored = _run_cli(fixture)
+            self.assertEqual(authored.returncode, 0, authored.stdout + authored.stderr)
+            expected_reference = {
+                "role": EXECUTION_BINDING_DEPENDENCY_ROLE,
+                "path": fixture.execution_binding_path.as_posix(),
+                "byte_sha256": fixture.execution_binding_byte_sha256,
+                "bundle_fingerprint": fixture.execution_binding_bundle_fingerprint,
+                "complete_execution_fingerprint": fixture.complete_execution_fingerprint,
+            }
+
+            for gate_id in GATE_IDS:
+                with self.subTest(gate_id=gate_id):
+                    gate_root = fixture.root / OUTPUT_ROOT / gate_id
+                    envelope = json.loads(
+                        (gate_root / "evidence-v3.json").read_text(encoding="utf-8")
+                    )
+                    dependency_manifest = json.loads(
+                        (gate_root / "result.json.dependencies.json").read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(
+                        envelope["execution_binding"],
+                        expected_reference,
+                    )
+                    execution_entries = [
+                        entry
+                        for entry in dependency_manifest["dependencies"]
+                        if entry["role"] == EXECUTION_BINDING_DEPENDENCY_ROLE
+                    ]
+                    self.assertEqual(
+                        execution_entries,
+                        [
+                            {
+                                "role": EXECUTION_BINDING_DEPENDENCY_ROLE,
+                                "path": fixture.execution_binding_path.as_posix(),
+                                "artifact_id": EXECUTION_BUNDLE_ARTIFACT_ID,
+                                "byte_sha256": fixture.execution_binding_byte_sha256,
+                                "internal_fingerprint_field": "bundle_fingerprint",
+                                "internal_fingerprint": (
+                                    fixture.execution_binding_bundle_fingerprint
+                                ),
+                            }
+                        ],
+                    )
+                    self.assertEqual(
+                        envelope["dependency_count"],
+                        len(dependency_manifest["dependencies"]),
+                    )
+                    self.assertEqual(
+                        envelope["envelope_fingerprint"],
+                        _fingerprint(
+                            {
+                                key: value
+                                for key, value in envelope.items()
+                                if key != "envelope_fingerprint"
+                            }
+                        ),
+                    )
+
+            self.assertEqual(
+                sorted(path.name for path in (fixture.root / OUTPUT_ROOT).iterdir()),
+                sorted(GATE_IDS),
+            )
+
     def test_execution_binding_legacy_tamper_and_cross_bundle_fail_closed(
         self,
     ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = ProductionFixture(Path(temp_dir))
+            payload = fixture.input_payload()
+            payload["common_dependencies"] = [
+                reference
+                for reference in payload["common_dependencies"]
+                if reference["role"] != EXECUTION_BINDING_DEPENDENCY_ROLE
+            ]
+            fixture.write_input(_seal(payload, "manifest_fingerprint"))
+            result = _run_cli(fixture)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertEqual(
+                json.loads(result.stdout)["rejection_status"],
+                "dependency_role_missing",
+            )
+            self.assertFalse((fixture.root / OUTPUT_ROOT).exists())
+
         with tempfile.TemporaryDirectory() as temp_dir:
             fixture = ProductionFixture(Path(temp_dir))
             payload = fixture.input_payload()
@@ -615,6 +706,66 @@ class Issue56MethodologyGateEvidenceEndToEndTests(unittest.TestCase):
             self.assertEqual(
                 json.loads(result.stdout)["rejection_status"],
                 "execution_binding_bundle_mismatched",
+            )
+            self.assertFalse((fixture.root / OUTPUT_ROOT).exists())
+
+    def test_execution_binding_fingerprint_path_and_state_drift_fail_closed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = ProductionFixture(Path(temp_dir))
+            payload = fixture.input_payload()
+            payload["execution_binding"]["bundle_fingerprint"] = _fingerprint(
+                "different-bundle-fingerprint"
+            )
+            fixture.write_input(_seal(payload, "manifest_fingerprint"))
+            result = _run_cli(fixture)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertEqual(
+                json.loads(result.stdout)["rejection_status"],
+                "execution_binding_bundle_mismatched",
+            )
+            self.assertFalse((fixture.root / OUTPUT_ROOT).exists())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = ProductionFixture(Path(temp_dir))
+            payload = fixture.input_payload()
+            payload["execution_binding"]["path"] = (
+                ".test-tmp/issue56-execution-binding-v1/bundle.safe.json"
+            )
+            fixture.write_input(_seal(payload, "manifest_fingerprint"))
+            result = _run_cli(fixture)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertEqual(
+                json.loads(result.stdout)["rejection_status"],
+                "unsafe_artifact_path",
+            )
+            self.assertFalse((fixture.root / OUTPUT_ROOT).exists())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = ProductionFixture(Path(temp_dir))
+            bundle = json.loads(
+                (fixture.root / fixture.execution_binding_path).read_text(encoding="utf-8")
+            )
+            bundle["execution_binding_status"] = "blocked"
+            bundle = _seal(bundle, "bundle_fingerprint")
+            binding_sha256 = _write_json(
+                fixture.root / fixture.execution_binding_path,
+                bundle,
+            )
+            payload = fixture.input_payload()
+            payload["execution_binding"].update(
+                {
+                    "byte_sha256": binding_sha256,
+                    "bundle_fingerprint": bundle["bundle_fingerprint"],
+                }
+            )
+            fixture.write_input(_seal(payload, "manifest_fingerprint"))
+            result = _run_cli(fixture)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertEqual(
+                json.loads(result.stdout)["rejection_status"],
+                "execution_binding_bundle_invalid",
             )
             self.assertFalse((fixture.root / OUTPUT_ROOT).exists())
 

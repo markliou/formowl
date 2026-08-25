@@ -21,8 +21,16 @@ from formowl_core.methodology_authority import (
     probe_runtime_tokenizers,
 )
 from formowl_core.tokenization import ascii_identifier_regex_tokens
+from scripts.issue56_execution_fingerprint import (
+    BUNDLE_ARTIFACT_ID as EXECUTION_BUNDLE_ARTIFACT_ID,
+    EXECUTION_BINDING_ARTIFACT_ID,
+    REQUIRED_COMPONENT_NAMES,
+    SCHEMA_VERSION as EXECUTION_SCHEMA_VERSION,
+    _EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
+EXECUTION_BINDING_DEPENDENCY_ROLE = "execution_binding_bundle"
 
 
 class MethodologyAuthorityTests(unittest.TestCase):
@@ -70,7 +78,7 @@ class MethodologyAuthorityTests(unittest.TestCase):
         self.assertIn("methodology_ready_for_quality_uat", report["blocked_claim_ids"])
         self.assertRegex(report["execution_fingerprint"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(report["authority_state_fingerprint"], r"^sha256:[0-9a-f]{64}$")
-        self.assertEqual(report["pipeline_source_binding_count"], 62)
+        self.assertEqual(report["pipeline_source_binding_count"], 64)
         rendered = json.dumps(report, sort_keys=True)
         for forbidden in ("/home/", "/tmp/", "/workspace/", "postgresql://", "raw_path"):
             self.assertNotIn(forbidden, rendered)
@@ -638,7 +646,356 @@ class MethodologyAuthorityTests(unittest.TestCase):
             board,
         )
         self.assertIn("pinned authority is valid but fail-closed", goal.lower())
-        self.assertIn("the executable authority still blocks", goal.lower())
+        self.assertIn("the authority blocks source completeness", goal.lower())
+
+    def test_core_validator_accepts_durable_complete_execution_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository_root = Path(temp_dir)
+            self._build_future_ready_production_fixture(repository_root)
+            result = check_methodology_authority(repository_root=repository_root)
+
+        self.assertTrue(result.authority_valid, result.errors)
+        self.assertTrue(result.methodology_ready, result.errors)
+
+    def test_core_validator_rejects_missing_execution_role_or_reference(self) -> None:
+        gate_id = "source_completeness_compared_with_raw_oracle"
+        for mutation in ("missing_role", "missing_reference"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp_dir:
+                repository_root = Path(temp_dir)
+                evidence_paths = self._build_future_ready_production_fixture(repository_root)
+                evidence_path = repository_root / evidence_paths[gate_id]
+                envelope = json.loads(evidence_path.read_text(encoding="utf-8"))
+                if mutation == "missing_reference":
+                    envelope.pop("execution_binding")
+                    envelope = self._with_internal_fingerprint(
+                        envelope,
+                        "envelope_fingerprint",
+                    )
+                    self._write_json(evidence_path, envelope)
+                else:
+                    dependency_manifest_path = (
+                        repository_root / envelope["dependency_manifest_path"]
+                    )
+                    dependency_manifest = json.loads(
+                        dependency_manifest_path.read_text(encoding="utf-8")
+                    )
+                    dependency_manifest["dependencies"] = [
+                        entry
+                        for entry in dependency_manifest["dependencies"]
+                        if entry["role"] != EXECUTION_BINDING_DEPENDENCY_ROLE
+                    ]
+                    dependency_manifest = self._with_internal_fingerprint(
+                        dependency_manifest,
+                        "manifest_fingerprint",
+                    )
+                    dependency_manifest_sha256 = self._write_json(
+                        dependency_manifest_path,
+                        dependency_manifest,
+                    )
+                    envelope.update(
+                        {
+                            "dependency_manifest_sha256": dependency_manifest_sha256,
+                            "dependency_manifest_fingerprint": dependency_manifest[
+                                "manifest_fingerprint"
+                            ],
+                            "dependency_count": len(dependency_manifest["dependencies"]),
+                        }
+                    )
+                    envelope = self._with_internal_fingerprint(
+                        envelope,
+                        "envelope_fingerprint",
+                    )
+                    self._write_json(evidence_path, envelope)
+
+                result = check_methodology_authority(repository_root=repository_root)
+
+            self.assertFalse(result.authority_valid)
+            self.assertFalse(result.methodology_ready)
+            self.assertIn(
+                f"passed_gate_missing_validated_evidence:{gate_id}",
+                result.errors,
+            )
+
+    def test_core_validator_rejects_execution_binding_integrity_drift(self) -> None:
+        gate_id = "source_completeness_compared_with_raw_oracle"
+        mutations = (
+            "byte_seal",
+            "bundle_fingerprint",
+            "complete_execution",
+            "authority_binding",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp_dir:
+                repository_root = Path(temp_dir)
+                evidence_paths = self._build_future_ready_production_fixture(repository_root)
+                binding = self._execution_binding_reference(
+                    repository_root=repository_root,
+                    evidence_path=evidence_paths[gate_id],
+                )
+                if mutation == "authority_binding":
+                    bundle_path = repository_root / binding["path"]
+                    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+                    wrong_authority = self._fingerprint_value("different-authority-execution")
+                    bundle["execution_binding"]["bound_fingerprints"]["authority_execution"] = (
+                        wrong_authority
+                    )
+                    bundle["bound_fingerprints"]["authority_execution"] = wrong_authority
+                    bundle["execution_fingerprint"] = self._fingerprint_value(
+                        bundle["execution_binding"]
+                    )
+                    bundle = self._with_internal_fingerprint(
+                        bundle,
+                        "bundle_fingerprint",
+                    )
+                    binding = {
+                        **binding,
+                        "byte_sha256": self._write_json(bundle_path, bundle),
+                        "bundle_fingerprint": bundle["bundle_fingerprint"],
+                        "complete_execution_fingerprint": bundle["execution_fingerprint"],
+                    }
+                    self._rewrite_complete_execution_binding(
+                        repository_root=repository_root,
+                        evidence_paths=evidence_paths,
+                        binding=binding,
+                    )
+                else:
+                    evidence_path = repository_root / evidence_paths[gate_id]
+                    envelope = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    field_name = {
+                        "byte_seal": "byte_sha256",
+                        "bundle_fingerprint": "bundle_fingerprint",
+                        "complete_execution": "complete_execution_fingerprint",
+                    }[mutation]
+                    envelope["execution_binding"][field_name] = self._fingerprint_value(
+                        f"drift:{mutation}"
+                    )
+                    envelope = self._with_internal_fingerprint(
+                        envelope,
+                        "envelope_fingerprint",
+                    )
+                    self._write_json(evidence_path, envelope)
+
+                result = check_methodology_authority(repository_root=repository_root)
+
+            self.assertFalse(result.authority_valid)
+            self.assertFalse(result.methodology_ready)
+            self.assertIn(
+                f"passed_gate_missing_validated_evidence:{gate_id}",
+                result.errors,
+            )
+
+    def test_core_validator_rejects_execution_binding_path_and_state_drift(
+        self,
+    ) -> None:
+        gate_id = "source_completeness_compared_with_raw_oracle"
+        for mutation in ("path", "state"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp_dir:
+                repository_root = Path(temp_dir)
+                evidence_paths = self._build_future_ready_production_fixture(repository_root)
+                binding = self._execution_binding_reference(
+                    repository_root=repository_root,
+                    evidence_path=evidence_paths[gate_id],
+                )
+                if mutation == "path":
+                    evidence_path = repository_root / evidence_paths[gate_id]
+                    envelope = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    envelope["execution_binding"]["path"] = (
+                        ".test-tmp/issue56-execution-binding-v1/bundle.safe.json"
+                    )
+                    envelope = self._with_internal_fingerprint(
+                        envelope,
+                        "envelope_fingerprint",
+                    )
+                    self._write_json(evidence_path, envelope)
+                else:
+                    bundle_path = repository_root / binding["path"]
+                    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+                    bundle["execution_binding_status"] = "blocked"
+                    bundle = self._with_internal_fingerprint(
+                        bundle,
+                        "bundle_fingerprint",
+                    )
+                    binding = {
+                        **binding,
+                        "byte_sha256": self._write_json(bundle_path, bundle),
+                        "bundle_fingerprint": bundle["bundle_fingerprint"],
+                    }
+                    self._rewrite_complete_execution_binding(
+                        repository_root=repository_root,
+                        evidence_paths=evidence_paths,
+                        binding=binding,
+                    )
+
+                result = check_methodology_authority(repository_root=repository_root)
+
+            self.assertFalse(result.authority_valid)
+            self.assertFalse(result.methodology_ready)
+            self.assertIn(
+                f"passed_gate_missing_validated_evidence:{gate_id}",
+                result.errors,
+            )
+
+    @classmethod
+    def _attach_complete_execution_binding(
+        cls,
+        *,
+        repository_root: Path,
+        evidence_paths: dict[str, Path],
+    ) -> dict[str, str]:
+        source_manifest = json.loads(
+            (repository_root / "evidence/production/source-manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        execution_fingerprint = str(source_manifest["execution_fingerprint"])
+        bundle_path = Path("evidence/production/issue56-execution-binding-v1/bundle.safe.json")
+        bundle = cls._complete_execution_binding_bundle(
+            authority_execution_fingerprint=execution_fingerprint,
+        )
+        binding = {
+            "role": EXECUTION_BINDING_DEPENDENCY_ROLE,
+            "path": bundle_path.as_posix(),
+            "byte_sha256": cls._write_json(repository_root / bundle_path, bundle),
+            "bundle_fingerprint": str(bundle["bundle_fingerprint"]),
+            "complete_execution_fingerprint": str(bundle["execution_fingerprint"]),
+        }
+        cls._rewrite_complete_execution_binding(
+            repository_root=repository_root,
+            evidence_paths=evidence_paths,
+            binding=binding,
+        )
+        return binding
+
+    @staticmethod
+    def _execution_binding_reference(
+        *,
+        repository_root: Path,
+        evidence_path: Path,
+    ) -> dict[str, str]:
+        envelope = json.loads((repository_root / evidence_path).read_text(encoding="utf-8"))
+        reference = envelope["execution_binding"]
+        if not isinstance(reference, dict):
+            raise AssertionError("execution_binding_reference_missing")
+        return {str(key): str(value) for key, value in reference.items()}
+
+    @classmethod
+    def _rewrite_complete_execution_binding(
+        cls,
+        *,
+        repository_root: Path,
+        evidence_paths: dict[str, Path],
+        binding: dict[str, str],
+    ) -> None:
+        dependency_entry = {
+            "role": EXECUTION_BINDING_DEPENDENCY_ROLE,
+            "path": binding["path"],
+            "artifact_id": EXECUTION_BUNDLE_ARTIFACT_ID,
+            "byte_sha256": binding["byte_sha256"],
+            "internal_fingerprint_field": "bundle_fingerprint",
+            "internal_fingerprint": binding["bundle_fingerprint"],
+        }
+        for evidence_relative_path in evidence_paths.values():
+            evidence_path = repository_root / evidence_relative_path
+            envelope = json.loads(evidence_path.read_text(encoding="utf-8"))
+            dependency_manifest_path = repository_root / envelope["dependency_manifest_path"]
+            dependency_manifest = json.loads(dependency_manifest_path.read_text(encoding="utf-8"))
+            dependency_manifest["dependencies"] = sorted(
+                [
+                    entry
+                    for entry in dependency_manifest["dependencies"]
+                    if entry["role"] != EXECUTION_BINDING_DEPENDENCY_ROLE
+                ]
+                + [dependency_entry],
+                key=lambda item: (str(item["role"]), str(item["path"])),
+            )
+            dependency_manifest = cls._with_internal_fingerprint(
+                dependency_manifest,
+                "manifest_fingerprint",
+            )
+            dependency_manifest_sha256 = cls._write_json(
+                dependency_manifest_path,
+                dependency_manifest,
+            )
+            envelope.update(
+                {
+                    "execution_binding": dict(binding),
+                    "dependency_manifest_sha256": dependency_manifest_sha256,
+                    "dependency_manifest_fingerprint": dependency_manifest["manifest_fingerprint"],
+                    "dependency_count": len(dependency_manifest["dependencies"]),
+                }
+            )
+            envelope = cls._with_internal_fingerprint(
+                envelope,
+                "envelope_fingerprint",
+            )
+            cls._write_json(evidence_path, envelope)
+
+    @classmethod
+    def _complete_execution_binding_bundle(
+        cls,
+        *,
+        authority_execution_fingerprint: str,
+    ) -> dict[str, object]:
+        bound_fingerprints = {
+            key: (
+                authority_execution_fingerprint
+                if key == "authority_execution"
+                else cls._fingerprint_value(f"execution-binding:{key}")
+            )
+            for key in sorted(_EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS)
+        }
+        execution_binding = {
+            "artifact_id": EXECUTION_BINDING_ARTIFACT_ID,
+            "schema_version": EXECUTION_SCHEMA_VERSION,
+            "source_binding_fingerprint": cls._fingerprint_value("source-binding"),
+            "source_completeness_report_sha256": cls._fingerprint_value(
+                "source-completeness-report-bytes"
+            ),
+            "source_completeness_report_fingerprint": cls._fingerprint_value(
+                "source-completeness-report"
+            ),
+            "bound_fingerprints": bound_fingerprints,
+        }
+        blocker_ids = ["methodology_authority_not_ready"]
+        return cls._with_internal_fingerprint(
+            {
+                "artifact_id": EXECUTION_BUNDLE_ARTIFACT_ID,
+                "schema_version": EXECUTION_SCHEMA_VERSION,
+                "status": "blocked",
+                "run_binding_fingerprint": cls._fingerprint_value("run-binding"),
+                "source_binding_fingerprint": execution_binding["source_binding_fingerprint"],
+                "execution_fingerprint": cls._fingerprint_value(execution_binding),
+                "execution_binding_status": "passed",
+                "execution_binding": execution_binding,
+                "component_artifact_fingerprints": {
+                    name.removesuffix("_component"): cls._fingerprint_value(f"component:{name}")
+                    for name in REQUIRED_COMPONENT_NAMES
+                },
+                "bound_fingerprints": bound_fingerprints,
+                "counts": {
+                    "source_item_count": 100,
+                    "observation_count": 100,
+                    "unexplained_loss_count": 0,
+                },
+                "statuses": {
+                    "source_completeness": "passed",
+                    "methodology_authority": "blocked",
+                },
+                "blocking_status_ids": blocker_ids,
+                "blocking_status_fingerprint": cls._fingerprint_value(blocker_ids),
+            },
+            "bundle_fingerprint",
+        )
+
+    @staticmethod
+    def _fingerprint_value(value: object) -> str:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
     @classmethod
     def _build_future_ready_production_fixture(
@@ -1115,6 +1472,10 @@ class MethodologyAuthorityTests(unittest.TestCase):
                 "envelope_fingerprint",
             )
             cls._write_json(repository_root / evidence_path, evidence)
+        cls._attach_complete_execution_binding(
+            repository_root=repository_root,
+            evidence_paths=evidence_paths,
+        )
         return evidence_paths
 
     @classmethod
