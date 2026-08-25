@@ -20,6 +20,13 @@ from scripts.issue56_methodology_gate_evidence import (
     INPUT_ARTIFACT_ID,
     REPORT_ARTIFACT_ID,
 )
+from scripts.issue56_execution_fingerprint import (
+    BUNDLE_ARTIFACT_ID as EXECUTION_BUNDLE_ARTIFACT_ID,
+    EXECUTION_BINDING_ARTIFACT_ID,
+    REQUIRED_COMPONENT_NAMES,
+    SCHEMA_VERSION as EXECUTION_SCHEMA_VERSION,
+    _EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -116,6 +123,9 @@ class ProductionFixture:
         self.authority_id = "formowl_methodology_authority_v1"
         self.source_manifest_path = Path("evidence/production/source-manifest.json")
         self.input_manifest_path = Path("evidence/production/authoring-input.json")
+        self.execution_binding_path = Path(
+            "evidence/production/issue56-execution-binding-v1/bundle.safe.json"
+        )
         self.common_references: list[dict[str, str]] = []
         self.gate_references: dict[str, list[dict[str, str]]] = {
             gate_id: [] for gate_id in GATE_IDS
@@ -211,6 +221,17 @@ class ProductionFixture:
         source_manifest_sha = _write_json(
             self.root / self.source_manifest_path,
             source_manifest,
+        )
+        execution_binding_bundle = _execution_binding_bundle(
+            authority_execution_fingerprint=self.execution_fingerprint,
+            source_item_count=100,
+            observation_count=100,
+        )
+        self.complete_execution_fingerprint = execution_binding_bundle["execution_fingerprint"]
+        self.execution_binding_bundle_fingerprint = execution_binding_bundle["bundle_fingerprint"]
+        self.execution_binding_byte_sha256 = _write_json(
+            self.root / self.execution_binding_path,
+            execution_binding_bundle,
         )
 
         source_gate = "source_completeness_compared_with_raw_oracle"
@@ -361,6 +382,12 @@ class ProductionFixture:
                 "artifact_id": INPUT_ARTIFACT_ID,
                 "authority_id": self.authority_id,
                 "execution_fingerprint": self.execution_fingerprint,
+                "execution_binding": {
+                    "path": self.execution_binding_path.as_posix(),
+                    "byte_sha256": self.execution_binding_byte_sha256,
+                    "bundle_fingerprint": self.execution_binding_bundle_fingerprint,
+                    "complete_execution_fingerprint": (self.complete_execution_fingerprint),
+                },
                 "source_manifest_path": self.source_manifest_path.as_posix(),
                 "common_dependencies": sorted(
                     self.common_references,
@@ -417,6 +444,58 @@ def _run_cli(
     )
 
 
+def _execution_binding_bundle(
+    *,
+    authority_execution_fingerprint: str,
+    source_item_count: int,
+    observation_count: int,
+) -> dict[str, Any]:
+    bound_fingerprints = {
+        key: (
+            authority_execution_fingerprint
+            if key == "authority_execution"
+            else _fingerprint(f"execution-binding:{key}")
+        )
+        for key in sorted(_EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS)
+    }
+    execution_binding = {
+        "artifact_id": EXECUTION_BINDING_ARTIFACT_ID,
+        "schema_version": EXECUTION_SCHEMA_VERSION,
+        "source_binding_fingerprint": _fingerprint("source-binding"),
+        "source_completeness_report_sha256": _fingerprint("source-completeness-report-bytes"),
+        "source_completeness_report_fingerprint": _fingerprint("source-completeness-report"),
+        "bound_fingerprints": bound_fingerprints,
+    }
+    blocker_ids = ["methodology_authority_not_ready"]
+    bundle = {
+        "artifact_id": EXECUTION_BUNDLE_ARTIFACT_ID,
+        "schema_version": EXECUTION_SCHEMA_VERSION,
+        "status": "blocked",
+        "run_binding_fingerprint": _fingerprint("run-binding"),
+        "source_binding_fingerprint": execution_binding["source_binding_fingerprint"],
+        "execution_fingerprint": _fingerprint(execution_binding),
+        "execution_binding_status": "passed",
+        "execution_binding": execution_binding,
+        "component_artifact_fingerprints": {
+            name.removesuffix("_component"): _fingerprint(f"component:{name}")
+            for name in REQUIRED_COMPONENT_NAMES
+        },
+        "bound_fingerprints": bound_fingerprints,
+        "counts": {
+            "source_item_count": source_item_count,
+            "observation_count": observation_count,
+            "unexplained_loss_count": 0,
+        },
+        "statuses": {
+            "source_completeness": "passed",
+            "methodology_authority": "blocked",
+        },
+        "blocking_status_ids": blocker_ids,
+        "blocking_status_fingerprint": _fingerprint(blocker_ids),
+    }
+    return _seal(bundle, "bundle_fingerprint")
+
+
 class Issue56MethodologyGateEvidenceEndToEndTests(unittest.TestCase):
     def test_preflight_and_atomic_authoring_validate_with_production_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -439,6 +518,18 @@ class Issue56MethodologyGateEvidenceEndToEndTests(unittest.TestCase):
             self.assertEqual(report["status"], "passed")
             self.assertEqual(report["authoring_status"], "authoring_completed")
             self.assertEqual(report["promotion_status"], "not_performed")
+            self.assertEqual(
+                report["complete_execution_fingerprint"],
+                fixture.complete_execution_fingerprint,
+            )
+            self.assertEqual(
+                report["execution_binding_bundle_sha256"],
+                fixture.execution_binding_byte_sha256,
+            )
+            self.assertEqual(
+                report["execution_binding_bundle_fingerprint"],
+                fixture.execution_binding_bundle_fingerprint,
+            )
             self.assertEqual(report["result_artifact_count"], 4)
             self.assertEqual(report["dependency_manifest_count"], 4)
             self.assertEqual(report["envelope_count"], 4)
@@ -482,6 +573,84 @@ class Issue56MethodologyGateEvidenceEndToEndTests(unittest.TestCase):
             retry = _run_cli(fixture)
             self.assertEqual(retry.returncode, 2)
             self.assertEqual(json.loads(retry.stdout)["rejection_status"], "output_exists")
+
+    def test_execution_binding_legacy_tamper_and_cross_bundle_fail_closed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = ProductionFixture(Path(temp_dir))
+            payload = fixture.input_payload()
+            payload.pop("execution_binding")
+            fixture.write_input(_seal(payload, "manifest_fingerprint"))
+            result = _run_cli(fixture)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertEqual(
+                json.loads(result.stdout)["rejection_status"],
+                "authoring_input_unsealed_or_invalid",
+            )
+            self.assertFalse((fixture.root / OUTPUT_ROOT).exists())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = ProductionFixture(Path(temp_dir))
+            payload = fixture.input_payload()
+            payload["execution_binding"]["byte_sha256"] = _fingerprint("different-binding-bytes")
+            fixture.write_input(_seal(payload, "manifest_fingerprint"))
+            result = _run_cli(fixture)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertEqual(
+                json.loads(result.stdout)["rejection_status"],
+                "execution_binding_byte_sha256_mismatch",
+            )
+            self.assertFalse((fixture.root / OUTPUT_ROOT).exists())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = ProductionFixture(Path(temp_dir))
+            payload = fixture.input_payload()
+            payload["execution_binding"]["complete_execution_fingerprint"] = _fingerprint(
+                "another-complete-execution"
+            )
+            fixture.write_input(_seal(payload, "manifest_fingerprint"))
+            result = _run_cli(fixture)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertEqual(
+                json.loads(result.stdout)["rejection_status"],
+                "execution_binding_bundle_mismatched",
+            )
+            self.assertFalse((fixture.root / OUTPUT_ROOT).exists())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = ProductionFixture(Path(temp_dir))
+            bundle = json.loads(
+                (fixture.root / fixture.execution_binding_path).read_text(encoding="utf-8")
+            )
+            bundle["execution_binding"]["bound_fingerprints"]["authority_execution"] = _fingerprint(
+                "another-authority-execution"
+            )
+            bundle["bound_fingerprints"]["authority_execution"] = bundle["execution_binding"][
+                "bound_fingerprints"
+            ]["authority_execution"]
+            bundle["execution_fingerprint"] = _fingerprint(bundle["execution_binding"])
+            bundle = _seal(bundle, "bundle_fingerprint")
+            binding_sha256 = _write_json(
+                fixture.root / fixture.execution_binding_path,
+                bundle,
+            )
+            payload = fixture.input_payload()
+            payload["execution_binding"].update(
+                {
+                    "byte_sha256": binding_sha256,
+                    "bundle_fingerprint": bundle["bundle_fingerprint"],
+                    "complete_execution_fingerprint": bundle["execution_fingerprint"],
+                }
+            )
+            fixture.write_input(_seal(payload, "manifest_fingerprint"))
+            result = _run_cli(fixture)
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertEqual(
+                json.loads(result.stdout)["rejection_status"],
+                "execution_binding_bundle_mismatched",
+            )
+            self.assertFalse((fixture.root / OUTPUT_ROOT).exists())
 
     def test_blocked_diagnostic_and_preflight_dependencies_fail_closed(self) -> None:
         mutations = (

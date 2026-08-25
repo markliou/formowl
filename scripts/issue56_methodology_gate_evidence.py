@@ -32,6 +32,9 @@ from formowl_core.methodology_authority import (  # noqa: E402
     methodology_gate_dependency_manifest_path,
     validate_methodology_gate_dependency_manifest,
 )
+from scripts.issue56_execution_fingerprint import (  # noqa: E402
+    load_and_validate_bundle,
+)
 
 
 INPUT_ARTIFACT_ID = "formowl_methodology_gate_evidence_authoring_input_v1"
@@ -120,10 +123,17 @@ _INPUT_KEYS = {
     "artifact_id",
     "authority_id",
     "execution_fingerprint",
+    "execution_binding",
     "source_manifest_path",
     "common_dependencies",
     "gates",
     "manifest_fingerprint",
+}
+_EXECUTION_BINDING_REFERENCE_KEYS = {
+    "path",
+    "byte_sha256",
+    "bundle_fingerprint",
+    "complete_execution_fingerprint",
 }
 _REFERENCE_KEYS = {"role", "path"}
 _GATE_INPUT_KEYS = {"gate_id", "dependencies"}
@@ -172,6 +182,20 @@ class GateArtifacts:
     envelope: dict[str, Any]
     envelope_bytes: bytes
     dependency_count: int
+
+
+@dataclass(frozen=True)
+class ExecutionBinding:
+    relative_path: Path
+    byte_sha256: str
+    bundle_fingerprint: str
+    complete_execution_fingerprint: str
+    source_completeness_report_sha256: str
+    source_completeness_report_fingerprint: str
+    source_binding_fingerprint: str
+    source_item_count: int
+    observation_count: int
+    unexplained_loss_count: int
 
 
 def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
@@ -330,6 +354,17 @@ def _load_authoring_input(
         raise GateEvidenceError("authoring_input_unsealed_or_invalid")
     source_manifest_relative = _safe_relative_path(payload.get("source_manifest_path"))
     _resolve_regular_file(repository_root, source_manifest_relative)
+    execution_binding = payload.get("execution_binding")
+    if (
+        not isinstance(execution_binding, dict)
+        or set(execution_binding) != _EXECUTION_BINDING_REFERENCE_KEYS
+        or not _is_sha256(execution_binding.get("byte_sha256"))
+        or not _is_sha256(execution_binding.get("bundle_fingerprint"))
+        or not _is_sha256(execution_binding.get("complete_execution_fingerprint"))
+    ):
+        raise GateEvidenceError("execution_binding_reference_invalid")
+    execution_binding_relative = _safe_relative_path(execution_binding.get("path"))
+    _resolve_regular_file(repository_root, execution_binding_relative)
 
     common = payload.get("common_dependencies")
     gates = payload.get("gates")
@@ -351,6 +386,52 @@ def _load_authoring_input(
     if gate_ids != sorted(GATE_IDS):
         raise GateEvidenceError("all_four_gates_required")
     return payload
+
+
+def _load_execution_binding(
+    *,
+    repository_root: Path,
+    reference: Mapping[str, Any],
+    authority_execution_fingerprint: str,
+) -> ExecutionBinding:
+    relative_path = _safe_relative_path(reference.get("path"))
+    path = _resolve_regular_file(repository_root, relative_path)
+    byte_sha256 = _sha256_file(path)
+    if byte_sha256 != reference.get("byte_sha256"):
+        raise GateEvidenceError("execution_binding_byte_sha256_mismatch")
+    try:
+        bundle = load_and_validate_bundle(path)
+    except Exception as exc:
+        raise GateEvidenceError("execution_binding_bundle_invalid") from exc
+    execution_binding = bundle["execution_binding"]
+    binding_fingerprints = execution_binding["bound_fingerprints"]
+    counts = bundle["counts"]
+    if (
+        bundle.get("execution_binding_status") != "passed"
+        or bundle.get("bundle_fingerprint") != reference.get("bundle_fingerprint")
+        or bundle.get("execution_fingerprint") != reference.get("complete_execution_fingerprint")
+        or binding_fingerprints.get("authority_execution") != authority_execution_fingerprint
+        or counts.get("source_item_count", 0) <= 0
+        or counts.get("observation_count") != counts.get("source_item_count")
+        or counts.get("unexplained_loss_count") != 0
+    ):
+        raise GateEvidenceError("execution_binding_bundle_mismatched")
+    return ExecutionBinding(
+        relative_path=relative_path,
+        byte_sha256=byte_sha256,
+        bundle_fingerprint=str(bundle["bundle_fingerprint"]),
+        complete_execution_fingerprint=str(bundle["execution_fingerprint"]),
+        source_completeness_report_sha256=str(
+            execution_binding["source_completeness_report_sha256"]
+        ),
+        source_completeness_report_fingerprint=str(
+            execution_binding["source_completeness_report_fingerprint"]
+        ),
+        source_binding_fingerprint=str(bundle["source_binding_fingerprint"]),
+        source_item_count=int(counts["source_item_count"]),
+        observation_count=int(counts["observation_count"]),
+        unexplained_loss_count=int(counts["unexplained_loss_count"]),
+    )
 
 
 def _validate_references(
@@ -520,6 +601,55 @@ def _derive_result(
             **{key: value for key, value in payload.items() if key not in excluded},
         }
     return _with_fingerprint(result, "result_fingerprint")
+
+
+def _validate_execution_binding_dependencies(
+    *,
+    execution_binding: ExecutionBinding,
+    source_manifest: Mapping[str, Any],
+    common_dependencies: Sequence[Dependency],
+    gate_dependencies: Mapping[str, Sequence[Dependency]],
+) -> None:
+    inventories = _dependency_by_role(common_dependencies, "source_inventory_manifest")
+    if len(inventories) != 1 or inventories[0].artifact is None:
+        raise GateEvidenceError("execution_binding_source_inventory_missing")
+    inventory_payload = inventories[0].artifact.get("payload")
+    if (
+        not isinstance(inventory_payload, dict)
+        or inventory_payload.get("source_item_count") != execution_binding.source_item_count
+        or source_manifest.get("source_item_count") != execution_binding.source_item_count
+    ):
+        raise GateEvidenceError("execution_binding_source_inventory_mismatch")
+
+    source_dependencies = gate_dependencies["source_completeness_compared_with_raw_oracle"]
+    _, reconciliation_payload = _one_payload(
+        source_dependencies,
+        "observation_reconciliation_report",
+    )
+    if (
+        reconciliation_payload.get("raw_source_unit_count") != execution_binding.source_item_count
+        or reconciliation_payload.get("emitted_observation_unit_count")
+        != execution_binding.observation_count
+        or reconciliation_payload.get("unexplained_loss_unit_count")
+        != execution_binding.unexplained_loss_count
+    ):
+        raise GateEvidenceError("execution_binding_source_completeness_mismatch")
+
+    evaluation_dependencies = gate_dependencies["evaluation_reports_bind_execution_fingerprint"]
+    reports = _dependency_by_role(evaluation_dependencies, "evaluation_report")
+    indexes = _dependency_by_role(evaluation_dependencies, "evaluation_report_index")
+    if len(indexes) != 1 or not reports or indexes[0].artifact is None:
+        raise GateEvidenceError("execution_binding_evaluation_inventory_invalid")
+    index_payload = indexes[0].artifact.get("payload")
+    report_hashes = sorted(report.byte_sha256 for report in reports)
+    report_paths = sorted(report.relative_path.as_posix() for report in reports)
+    if (
+        not isinstance(index_payload, dict)
+        or index_payload.get("report_count") != len(reports)
+        or index_payload.get("report_hashes") != report_hashes
+        or index_payload.get("report_paths") != report_paths
+    ):
+        raise GateEvidenceError("execution_binding_evaluation_inventory_invalid")
 
 
 def _build_gate_artifacts(
@@ -759,6 +889,11 @@ def author_gate_evidence_bundle(
     ):
         raise GateEvidenceError("source_manifest_unsealed_or_mismatched")
     source_manifest_sha256 = _sha256_file(source_manifest_path)
+    execution_binding = _load_execution_binding(
+        repository_root=repository_root,
+        reference=authoring_input["execution_binding"],
+        authority_execution_fingerprint=execution_fingerprint,
+    )
 
     common_dependencies = [
         _load_dependency(repository_root, reference)
@@ -767,12 +902,14 @@ def author_gate_evidence_bundle(
     all_dependencies: dict[Path, Dependency] = {
         dependency.relative_path: dependency for dependency in common_dependencies
     }
+    gate_dependencies_by_id: dict[str, list[Dependency]] = {}
     gate_artifacts: list[GateArtifacts] = []
     for gate_input in authoring_input["gates"]:
         gate_dependencies = [
             _load_dependency(repository_root, reference) for reference in gate_input["dependencies"]
         ]
         dependencies = [*common_dependencies, *gate_dependencies]
+        gate_dependencies_by_id[gate_input["gate_id"]] = gate_dependencies
         if len({item.relative_path for item in dependencies}) != len(dependencies):
             raise GateEvidenceError("dependency_path_duplicated")
         for dependency in gate_dependencies:
@@ -798,12 +935,20 @@ def author_gate_evidence_bundle(
         dependencies=tuple(all_dependencies.values()),
         gate_artifacts=gate_artifacts,
     )
+    _validate_execution_binding_dependencies(
+        execution_binding=execution_binding,
+        source_manifest=source_manifest,
+        common_dependencies=common_dependencies,
+        gate_dependencies=gate_dependencies_by_id,
+    )
 
     envelope_hashes = {item.gate_id: _sha256_bytes(item.envelope_bytes) for item in gate_artifacts}
     bundle_fingerprint = _canonical_fingerprint(
         {
             "artifact_id": BUNDLE_ARTIFACT_ID,
             "execution_fingerprint": execution_fingerprint,
+            "complete_execution_fingerprint": (execution_binding.complete_execution_fingerprint),
+            "execution_binding_bundle_sha256": execution_binding.byte_sha256,
             "envelope_hashes": envelope_hashes,
         }
     )
@@ -818,6 +963,13 @@ def author_gate_evidence_bundle(
         "status": "passed",
         "authoring_status": ("preflight_completed" if preflight_only else "authoring_completed"),
         "promotion_status": "not_performed",
+        "complete_execution_fingerprint": execution_binding.complete_execution_fingerprint,
+        "execution_binding_bundle_sha256": execution_binding.byte_sha256,
+        "execution_binding_bundle_fingerprint": execution_binding.bundle_fingerprint,
+        "source_completeness_report_sha256": (execution_binding.source_completeness_report_sha256),
+        "source_completeness_report_fingerprint": (
+            execution_binding.source_completeness_report_fingerprint
+        ),
         "gate_count": len(gate_artifacts),
         "result_artifact_count": len(gate_artifacts),
         "dependency_manifest_count": len(gate_artifacts),

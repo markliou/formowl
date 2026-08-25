@@ -23,6 +23,7 @@ from scripts.issue56_execution_fingerprint import (
     READINESS_BLOCKER_IDS,
     REPORT_ARTIFACT_ID,
     SCHEMA_VERSION,
+    SOURCE_COMPLETENESS_REPORT_ARTIFACT_ID,
     SOURCE_IDENTIFIER_CANDIDATE_ARTIFACT_ID,
     SOURCE_IDENTIFIER_CANDIDATE_SCHEMA_VERSION,
     SOURCE_COMPONENT_ID,
@@ -36,6 +37,7 @@ from scripts.issue56_execution_fingerprint import (
     current_runtime_binding_fingerprints,
     load_and_validate_bundle,
     seal_safe_artifact,
+    source_completeness_report_binding,
 )
 from formowl_mail.answer import ISSUE56_DETERMINISTIC_ANSWER_MODEL_ID
 from formowl_core import load_issue56_target_mail_tokenizer_profile
@@ -71,12 +73,26 @@ class Issue56ExecutionFingerprintEndToEndTests(unittest.TestCase):
         self.assertEqual(report["public_report_round_trip_status"], "passed")
         self.assertEqual(
             report["blocking_status_ids"],
-            sorted((*READINESS_BLOCKER_IDS, "methodology_authority_not_ready")),
+            sorted(
+                (
+                    *(
+                        blocker
+                        for blocker in READINESS_BLOCKER_IDS
+                        if blocker != "source_completeness_not_passed"
+                    ),
+                    "methodology_authority_not_ready",
+                )
+            ),
         )
         self.assertEqual(report["component_count"], 8)
         self.assertGreater(report["accepted_component_count"], 0)
         self.assertGreater(report["blocked_component_count"], 0)
         self.assertRegex(report["execution_fingerprint"], r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual(report["execution_binding_status"], "passed")
+        self.assertRegex(
+            report["source_completeness_report_sha256"],
+            r"^sha256:[0-9a-f]{64}$",
+        )
         self.assertRegex(report["bundle_fingerprint"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(report["report_fingerprint"], r"^sha256:[0-9a-f]{64}$")
         assert_no_public_raw_references(
@@ -87,6 +103,11 @@ class Issue56ExecutionFingerprintEndToEndTests(unittest.TestCase):
         bundle = load_and_validate_bundle(first.bundle_path)
         persisted_report = json.loads(first.public_path.read_text(encoding="utf-8"))
         self.assertEqual(bundle["status"], "blocked")
+        self.assertEqual(bundle["execution_binding_status"], "passed")
+        self.assertEqual(
+            bundle["execution_fingerprint"],
+            sha256_json(bundle["execution_binding"]),
+        )
         for binding_name in (
             "source_identifier_candidate_schema",
             "source_identifier_identity_scope_mode",
@@ -133,6 +154,104 @@ class Issue56ExecutionFingerprintEndToEndTests(unittest.TestCase):
         self.assertEqual(
             second_report["report_fingerprint"],
             report["report_fingerprint"],
+        )
+
+    def test_execution_identity_is_stable_across_evaluation_outcome_artifacts(
+        self,
+    ) -> None:
+        image_id, image_metadata = _image_attestation()
+        payload = _valid_input_payload(
+            image_id=image_id,
+            image_metadata=image_metadata,
+        )
+        baseline = _run_cli(
+            payload,
+            image_id=image_id,
+            image_metadata=image_metadata,
+        )
+        self.assertEqual(baseline.returncode, 2, baseline.stdout)
+        baseline_bundle = load_and_validate_bundle(baseline.bundle_path)
+
+        changed_uat = _valid_uat_report(payload)
+        changed_uat["diagnostic_run_fingerprint"] = sha256_json(
+            "different-completed-evaluation-run"
+        )
+        changed_uat["quality_gate"] = {
+            "status": "blocked",
+            "check_set_fingerprint": sha256_json("different-quality-report"),
+        }
+        changed = _run_cli(
+            payload,
+            image_id=image_id,
+            image_metadata=image_metadata,
+            uat_report=changed_uat,
+        )
+        self.assertEqual(changed.returncode, 2, changed.stdout)
+        changed_bundle = load_and_validate_bundle(changed.bundle_path)
+
+        self.assertEqual(
+            changed_bundle["execution_fingerprint"],
+            baseline_bundle["execution_fingerprint"],
+        )
+        self.assertEqual(
+            changed_bundle["execution_binding"],
+            baseline_bundle["execution_binding"],
+        )
+        self.assertNotEqual(
+            changed_bundle["bundle_fingerprint"],
+            baseline_bundle["bundle_fingerprint"],
+        )
+        self.assertNotEqual(
+            changed_bundle["bound_fingerprints"]["uat_run"],
+            baseline_bundle["bound_fingerprints"]["uat_run"],
+        )
+
+    def test_source_completeness_report_binding_fails_closed(self) -> None:
+        image_id, image_metadata = _image_attestation()
+        payload = _valid_input_payload(
+            image_id=image_id,
+            image_metadata=image_metadata,
+        )
+
+        missing = _run_cli(
+            payload,
+            image_id=image_id,
+            image_metadata=image_metadata,
+            include_source_completeness_report=False,
+        )
+        _assert_rejected(
+            self,
+            missing,
+            "source_completeness_report_missing_or_invalid",
+        )
+
+        wrong_byte_hash = _run_cli(
+            payload,
+            image_id=image_id,
+            image_metadata=image_metadata,
+            expected_source_completeness_report_sha256=sha256_json("wrong-source-report-bytes"),
+        )
+        _assert_rejected(
+            self,
+            wrong_byte_hash,
+            "source_completeness_report_byte_sha256_mismatch",
+        )
+
+        tampered = _valid_source_completeness_report()
+        tampered["counts"]["observation_count"] -= 1
+        tampered["report_fingerprint"] = sha256_json(
+            {key: value for key, value in tampered.items() if key != "report_fingerprint"}
+        )
+        tampered_result = _run_cli(
+            payload,
+            image_id=image_id,
+            image_metadata=image_metadata,
+            source_completeness_report=tampered,
+        )
+        _assert_rejected(
+            self,
+            tampered_result,
+            "source_completeness_report_counts_invalid",
         )
 
     def test_missing_tampered_and_cross_run_inputs_fail_closed(self) -> None:
@@ -528,17 +647,27 @@ def _run_cli(
     image_id: str | None,
     image_metadata: str | None,
     uat_report: dict[str, object] | None = None,
+    source_completeness_report: dict[str, object] | None = None,
+    expected_source_completeness_report_sha256: str | None = None,
     expected_uat_report_fingerprint: str | None = None,
+    include_source_completeness_report: bool = True,
+    include_expected_source_completeness_report_sha256: bool = True,
     include_uat_report: bool = True,
     include_expected_uat_report_fingerprint: bool = True,
 ) -> _CliResult:
     cleanup = tempfile.TemporaryDirectory(prefix="issue56-execution-fingerprint-")
     temp_root = Path(cleanup.name)
     input_path = temp_root / "inputs.safe.json"
+    source_report_path = temp_root / "source-completeness.safe.json"
     uat_path = temp_root / "uat.safe.json"
     bundle_path = temp_root / "bundle.safe.json"
     public_path = temp_root / "report.safe.json"
     prepared_payload = copy.deepcopy(payload)
+    prepared_source_report = (
+        _valid_source_completeness_report()
+        if source_completeness_report is None
+        else copy.deepcopy(source_completeness_report)
+    )
     prepared_uat = (
         _valid_uat_report(prepared_payload) if uat_report is None else copy.deepcopy(uat_report)
     )
@@ -547,6 +676,8 @@ def _run_cli(
         json.dumps(prepared_payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    source_report_bytes = _serialized_json_bytes(prepared_source_report)
+    source_report_path.write_bytes(source_report_bytes)
     uat_bytes = _serialized_json_bytes(prepared_uat)
     uat_path.write_bytes(uat_bytes)
     command = [
@@ -559,6 +690,20 @@ def _run_cli(
         "--public-output",
         str(public_path),
     ]
+    if include_source_completeness_report:
+        command.extend(
+            (
+                "--source-completeness-report",
+                str(source_report_path),
+            )
+        )
+    if include_expected_source_completeness_report_sha256:
+        command.extend(
+            (
+                "--expected-source-completeness-report-sha256",
+                expected_source_completeness_report_sha256 or _sha256_bytes(source_report_bytes),
+            )
+        )
     if include_uat_report:
         command.extend(("--uat-report", str(uat_path)))
     if include_expected_uat_report_fingerprint:
@@ -599,7 +744,9 @@ def _valid_input_payload(
     image_metadata: str,
 ) -> dict[str, object]:
     run_binding = sha256_json("issue56-execution-fingerprint-e2e-run")
-    source_binding = sha256_json("issue56-safe-source-binding")
+    source_report = _valid_source_completeness_report()
+    source_report_binding = source_completeness_report_binding(source_report)
+    source_binding = source_report_binding["source_binding_fingerprint"]
     runtime = current_runtime_binding_fingerprints()
     identity_scope_mode = WORKSPACE_ONLY_IDENTITY_SCOPE_MODE
     identity_scope_fingerprint = sha256_json(
@@ -625,15 +772,17 @@ def _valid_input_payload(
         {
             "artifact_id": SOURCE_COMPONENT_ID,
             "schema_version": SCHEMA_VERSION,
-            "status": "blocked",
+            "status": "passed",
             "run_binding_fingerprint": run_binding,
             "source_binding_fingerprint": source_binding,
-            "source_snapshot_fingerprint": sha256_json("source-snapshot"),
-            "completeness_report_fingerprint": sha256_json("completeness-report"),
-            "source_inventory_fingerprint": sha256_json("source-inventory"),
-            "source_item_count": 2793,
-            "observation_count": 2668,
-            "unexplained_loss_count": 157,
+            "source_snapshot_fingerprint": source_report_binding["source_snapshot_fingerprint"],
+            "completeness_report_fingerprint": source_report_binding[
+                "completeness_report_fingerprint"
+            ],
+            "source_inventory_fingerprint": source_report_binding["source_inventory_fingerprint"],
+            "source_item_count": source_report["counts"]["source_inventory_item_count"],
+            "observation_count": source_report["counts"]["observation_count"],
+            "unexplained_loss_count": 0,
         }
     )
     lexical_index_component = seal_safe_artifact(
@@ -1065,6 +1214,47 @@ def _valid_uat_report(payload: dict[str, object]) -> dict[str, object]:
             "production_ready": False,
             "supports_arm_superiority_claim": False,
         },
+    }
+
+
+def _valid_source_completeness_report() -> dict[str, object]:
+    report = {
+        "artifact_id": SOURCE_COMPLETENESS_REPORT_ARTIFACT_ID,
+        "schema_version": SCHEMA_VERSION,
+        "status": "passed",
+        "source_completeness_gate_status": "eligible",
+        "claim_boundary_status": "source_complete_observation_snapshot_only",
+        "methodology_readiness_status": "blocked",
+        "canonical_fact_status": "not_asserted",
+        "source_asset_sha256": sha256_json("source-asset"),
+        "native_manifest_fingerprint": sha256_json("native-manifest"),
+        "asset_binding_fingerprint": sha256_json("asset-binding"),
+        "permission_fingerprint": sha256_json("permission"),
+        "source_ref_fingerprint": sha256_json("source-ref"),
+        "parser_fingerprint": sha256_json("parser"),
+        "source_inventory_fingerprint": sha256_json("source-inventory"),
+        "observation_snapshot_fingerprint": sha256_json("observation-snapshot"),
+        "message_lineage_fingerprint": sha256_json("message-lineage"),
+        "attachment_lineage_fingerprint": sha256_json("attachment-lineage"),
+        "folder_lineage_fingerprint": sha256_json("folder-lineage"),
+        "unsupported_lineage_fingerprint": sha256_json("unsupported-lineage"),
+        "snapshot_fingerprint": sha256_json("source-snapshot"),
+        "blocker_fingerprints": [],
+        "round_trip_status": "passed",
+        "counts": {
+            "source_inventory_item_count": 8443,
+            "observation_count": 8443,
+            "missing_source_inventory_binding_count": 0,
+            "missing_parent_lineage_count": 0,
+            "missing_content_hash_count": 0,
+            "unexplained_loss_count": 0,
+            "failed_record_count": 0,
+            "blocker_count": 0,
+        },
+    }
+    return {
+        **report,
+        "report_fingerprint": sha256_json(report),
     }
 
 

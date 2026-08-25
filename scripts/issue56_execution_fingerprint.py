@@ -63,6 +63,10 @@ INPUT_ARTIFACT_ID = "formowl_issue56_execution_fingerprint_inputs_v1"
 BUNDLE_ARTIFACT_ID = "formowl_issue56_execution_fingerprint_acceptance_bundle_v1"
 REPORT_ARTIFACT_ID = "formowl_issue56_execution_fingerprint_public_report_v1"
 ERROR_ARTIFACT_ID = "formowl_issue56_execution_fingerprint_rejection_v1"
+SOURCE_COMPLETENESS_REPORT_ARTIFACT_ID = (
+    "formowl_issue56_native_source_complete_authorized_observation_report_v1"
+)
+EXECUTION_BINDING_ARTIFACT_ID = "formowl_issue56_complete_execution_binding_v1"
 UAT_ARTIFACT_ID = "formowl_issue56_simulated_human_uat_v1"
 UAT_DEVELOPMENT_BOUNDARY_ID = "diagnostic_same_pipeline_not_independent_holdout"
 SCHEMA_VERSION = 1
@@ -110,10 +114,104 @@ READINESS_BLOCKER_IDS = (
 _HASH_FIELD = "artifact_fingerprint"
 _HASH_LENGTH = 71
 _MAX_INPUT_BYTES = 2 * 1024 * 1024
+_MAX_SOURCE_COMPLETENESS_REPORT_BYTES = 2 * 1024 * 1024
 _MAX_UAT_REPORT_BYTES = 4 * 1024 * 1024
 _ALLOWED_STATUSES = {"passed", "blocked", "failed", "missing"}
 _CODE_DIRECTORY_SCOPES = ("python", "scripts", "containers")
 _CODE_FILE_SCOPES = ("pyproject.toml", "compose.yaml")
+_SOURCE_COMPLETENESS_REPORT_KEYS = {
+    "artifact_id",
+    "schema_version",
+    "status",
+    "source_completeness_gate_status",
+    "claim_boundary_status",
+    "methodology_readiness_status",
+    "canonical_fact_status",
+    "source_asset_sha256",
+    "native_manifest_fingerprint",
+    "asset_binding_fingerprint",
+    "permission_fingerprint",
+    "source_ref_fingerprint",
+    "parser_fingerprint",
+    "source_inventory_fingerprint",
+    "observation_snapshot_fingerprint",
+    "message_lineage_fingerprint",
+    "attachment_lineage_fingerprint",
+    "folder_lineage_fingerprint",
+    "unsupported_lineage_fingerprint",
+    "snapshot_fingerprint",
+    "blocker_fingerprints",
+    "round_trip_status",
+    "counts",
+    "report_fingerprint",
+}
+_SOURCE_COMPLETENESS_BINDING_FIELDS = (
+    "source_asset_sha256",
+    "native_manifest_fingerprint",
+    "asset_binding_fingerprint",
+    "permission_fingerprint",
+    "source_ref_fingerprint",
+    "parser_fingerprint",
+    "source_inventory_fingerprint",
+    "observation_snapshot_fingerprint",
+    "message_lineage_fingerprint",
+    "attachment_lineage_fingerprint",
+    "folder_lineage_fingerprint",
+    "unsupported_lineage_fingerprint",
+    "snapshot_fingerprint",
+    "report_fingerprint",
+)
+_EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS = frozenset(
+    {
+        "source_snapshot",
+        "source_inventory",
+        "lexical_profile",
+        "dense_profile",
+        "runtime_component",
+        "index",
+        "graph_artifact",
+        "graph_adapter",
+        "source_graph_policy",
+        "source_identifier_adapter",
+        "graph_relation_type_set",
+        "source_identifier_candidate_artifact",
+        "source_identifier_candidate_binding",
+        "source_identifier_candidate_schema",
+        "source_identifier_identity_scope_mode",
+        "source_identifier_identity_scope",
+        "source_identifier_identity_scope_binding",
+        "source_identifier_identity_scope_attestation_bytes",
+        "source_identifier_identity_scope_attestation",
+        "source_identifier_identity_scope_policy",
+        "source_identifier_operator_approval",
+        "source_identifier_mode_approval",
+        "source_identifier_extraction_policy",
+        "source_identifier_resolution_policy",
+        "source_identifier_identity_scope_graph_binding_set",
+        "complete_identifier_mention_batch",
+        "selected_identifier_mention_batch",
+        "complete_identifier_mention_set",
+        "authorized_identifier_mention_set",
+        "complete_identifier_resolution",
+        "selected_identifier_resolution",
+        "graph_identifier_resolution_set",
+        "ontology_artifact",
+        "ontology_target",
+        "answer_model",
+        "answer_prompt",
+        "answer_budget",
+        "evaluator",
+        "runtime_method",
+        "code_commit",
+        "code_tree",
+        "code_tree_scope",
+        "script",
+        "image_id",
+        "image_metadata",
+        "image_attestor",
+        "authority_execution",
+    }
+)
 
 _TOP_LEVEL_KEYS = {
     "artifact_id",
@@ -512,6 +610,8 @@ def build_image_component(
 def create_execution_fingerprint_artifacts(
     *,
     input_payload: Mapping[str, Any],
+    source_completeness_report_path: Path,
+    expected_source_completeness_report_sha256: str,
     uat_report_path: Path,
     expected_uat_report_fingerprint: str,
     repository_root: Path,
@@ -534,6 +634,11 @@ def create_execution_fingerprint_artifacts(
     code = validated["code_component"]
     image = validated["image_component"]
     authority = validated["authority_component"]
+    source_completeness_binding = _load_and_validate_source_completeness_report(
+        report_path=source_completeness_report_path,
+        expected_report_sha256=expected_source_completeness_report_sha256,
+        source_component=source,
+    )
     uat_binding = _load_and_validate_completed_uat_report(
         report_path=uat_report_path,
         expected_report_fingerprint=expected_uat_report_fingerprint,
@@ -676,14 +781,20 @@ def create_execution_fingerprint_artifacts(
         "source_completeness_authority_gate": authority["source_completeness_gate_status"],
         "real_source_ablation_authority_gate": authority["real_source_ablation_gate_status"],
     }
-    execution_fingerprint = sha256_json(
-        {
-            "run_binding_fingerprint": validated["run_binding_fingerprint"],
-            "source_binding_fingerprint": source["source_binding_fingerprint"],
-            "component_artifact_fingerprints": component_artifact_fingerprints,
-            "bound_fingerprints": bound_fingerprints,
-        }
-    )
+    execution_identity_bound_fingerprints = {
+        key: bound_fingerprints[key] for key in sorted(_EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS)
+    }
+    execution_binding = {
+        "artifact_id": EXECUTION_BINDING_ARTIFACT_ID,
+        "schema_version": SCHEMA_VERSION,
+        "source_binding_fingerprint": source["source_binding_fingerprint"],
+        "source_completeness_report_sha256": source_completeness_binding["byte_sha256"],
+        "source_completeness_report_fingerprint": source_completeness_binding[
+            "completeness_report_fingerprint"
+        ],
+        "bound_fingerprints": execution_identity_bound_fingerprints,
+    }
+    execution_fingerprint = sha256_json(execution_binding)
     status = "passed" if not blocker_ids else "blocked"
     bundle = {
         "artifact_id": BUNDLE_ARTIFACT_ID,
@@ -692,6 +803,8 @@ def create_execution_fingerprint_artifacts(
         "run_binding_fingerprint": validated["run_binding_fingerprint"],
         "source_binding_fingerprint": source["source_binding_fingerprint"],
         "execution_fingerprint": execution_fingerprint,
+        "execution_binding_status": "passed",
+        "execution_binding": execution_binding,
         "component_artifact_fingerprints": component_artifact_fingerprints,
         "bound_fingerprints": bound_fingerprints,
         "counts": counts,
@@ -716,6 +829,11 @@ def create_execution_fingerprint_artifacts(
         "run_binding_fingerprint": validated["run_binding_fingerprint"],
         "input_artifact_fingerprint": validated[_HASH_FIELD],
         "execution_fingerprint": execution_fingerprint,
+        "execution_binding_status": "passed",
+        "source_completeness_report_sha256": source_completeness_binding["byte_sha256"],
+        "source_completeness_report_fingerprint": source_completeness_binding[
+            "completeness_report_fingerprint"
+        ],
         "bundle_fingerprint": bundle["bundle_fingerprint"],
         "component_set_fingerprint": sha256_json(component_artifact_fingerprints),
         "component_count": len(component_artifact_fingerprints),
@@ -782,6 +900,110 @@ def load_and_validate_bundle(path: Path) -> dict[str, Any]:
     payload = _read_json_object(path)
     _validate_bundle(payload)
     return payload
+
+
+def source_completeness_report_binding(
+    report: Mapping[str, Any],
+) -> dict[str, str]:
+    """Return the safe source-native binding carried by a passed report."""
+
+    _validate_source_completeness_report_schema(report)
+    return {
+        "source_binding_fingerprint": sha256_json(
+            {field_name: report[field_name] for field_name in _SOURCE_COMPLETENESS_BINDING_FIELDS}
+        ),
+        "source_snapshot_fingerprint": str(report["snapshot_fingerprint"]),
+        "completeness_report_fingerprint": str(report["report_fingerprint"]),
+        "source_inventory_fingerprint": str(report["source_inventory_fingerprint"]),
+    }
+
+
+def _load_and_validate_source_completeness_report(
+    *,
+    report_path: Path,
+    expected_report_sha256: str,
+    source_component: Mapping[str, Any],
+) -> dict[str, str]:
+    _require_sha256(
+        expected_report_sha256,
+        "expected_source_completeness_report_sha256_missing_or_invalid",
+    )
+    report_bytes, report = _read_json_object_with_bytes(
+        report_path,
+        maximum_bytes=_MAX_SOURCE_COMPLETENESS_REPORT_BYTES,
+        reason_code="source_completeness_report_missing_or_invalid",
+    )
+    byte_sha256 = _sha256_bytes(report_bytes)
+    if byte_sha256 != expected_report_sha256:
+        raise ExecutionFingerprintValidationError("source_completeness_report_byte_sha256_mismatch")
+    binding = source_completeness_report_binding(report)
+    counts = report["counts"]
+    expected_component_bindings = {
+        "source_binding_fingerprint": binding["source_binding_fingerprint"],
+        "source_snapshot_fingerprint": binding["source_snapshot_fingerprint"],
+        "completeness_report_fingerprint": binding["completeness_report_fingerprint"],
+        "source_inventory_fingerprint": binding["source_inventory_fingerprint"],
+        "source_item_count": counts["source_inventory_item_count"],
+        "observation_count": counts["observation_count"],
+        "unexplained_loss_count": counts["unexplained_loss_count"],
+        "status": "passed",
+    }
+    if any(
+        source_component.get(field_name) != expected_value
+        for field_name, expected_value in expected_component_bindings.items()
+    ):
+        raise ExecutionFingerprintValidationError("source_completeness_component_binding_mismatch")
+    return {
+        **binding,
+        "byte_sha256": byte_sha256,
+    }
+
+
+def _validate_source_completeness_report_schema(report: Mapping[str, Any]) -> None:
+    if (
+        type(report) is not dict
+        or set(report) != _SOURCE_COMPLETENESS_REPORT_KEYS
+        or report.get("artifact_id") != SOURCE_COMPLETENESS_REPORT_ARTIFACT_ID
+        or report.get("schema_version") != SCHEMA_VERSION
+        or report.get("status") != "passed"
+        or report.get("source_completeness_gate_status") != "eligible"
+        or report.get("claim_boundary_status") != "source_complete_observation_snapshot_only"
+        or report.get("methodology_readiness_status") != "blocked"
+        or report.get("canonical_fact_status") != "not_asserted"
+        or report.get("round_trip_status") != "passed"
+        or report.get("blocker_fingerprints") != []
+    ):
+        raise ExecutionFingerprintValidationError("source_completeness_report_schema_invalid")
+    for field_name in _SOURCE_COMPLETENESS_BINDING_FIELDS:
+        _require_sha256(
+            report.get(field_name),
+            "source_completeness_report_fingerprint_invalid",
+        )
+    if report["report_fingerprint"] != _payload_fingerprint(
+        report,
+        "report_fingerprint",
+    ):
+        raise ExecutionFingerprintValidationError("source_completeness_report_fingerprint_invalid")
+    counts = report.get("counts")
+    if (
+        type(counts) is not dict
+        or any(type(value) is not int or value < 0 for value in counts.values())
+        or counts.get("source_inventory_item_count", 0) <= 0
+        or counts.get("observation_count") != counts.get("source_inventory_item_count")
+        or any(
+            counts.get(field_name) != 0
+            for field_name in (
+                "missing_source_inventory_binding_count",
+                "missing_parent_lineage_count",
+                "missing_content_hash_count",
+                "unexplained_loss_count",
+                "failed_record_count",
+                "blocker_count",
+            )
+        )
+    ):
+        raise ExecutionFingerprintValidationError("source_completeness_report_counts_invalid")
+    _assert_public_safe(report, "issue56_source_completeness_report")
 
 
 def _load_and_validate_completed_uat_report(
@@ -1590,6 +1812,8 @@ def _validate_bundle(value: Mapping[str, Any]) -> None:
         "run_binding_fingerprint",
         "source_binding_fingerprint",
         "execution_fingerprint",
+        "execution_binding_status",
+        "execution_binding",
         "component_artifact_fingerprints",
         "bound_fingerprints",
         "counts",
@@ -1604,6 +1828,7 @@ def _validate_bundle(value: Mapping[str, Any]) -> None:
         or value.get("artifact_id") != BUNDLE_ARTIFACT_ID
         or value.get("schema_version") != SCHEMA_VERSION
         or value.get("status") not in {"passed", "blocked"}
+        or value.get("execution_binding_status") != "passed"
     ):
         raise ExecutionFingerprintValidationError("bundle_schema_invalid")
     for field_name in (
@@ -1629,6 +1854,35 @@ def _validate_bundle(value: Mapping[str, Any]) -> None:
         or any(not _is_sha256(item) for item in bound_fingerprints.values())
     ):
         raise ExecutionFingerprintValidationError("bundle_binding_set_invalid")
+    execution_binding = value.get("execution_binding")
+    if (
+        type(execution_binding) is not dict
+        or set(execution_binding)
+        != {
+            "artifact_id",
+            "schema_version",
+            "source_binding_fingerprint",
+            "source_completeness_report_sha256",
+            "source_completeness_report_fingerprint",
+            "bound_fingerprints",
+        }
+        or execution_binding.get("artifact_id") != EXECUTION_BINDING_ARTIFACT_ID
+        or execution_binding.get("schema_version") != SCHEMA_VERSION
+        or execution_binding.get("source_binding_fingerprint")
+        != value["source_binding_fingerprint"]
+        or not _is_sha256(execution_binding.get("source_completeness_report_sha256"))
+        or not _is_sha256(execution_binding.get("source_completeness_report_fingerprint"))
+        or type(execution_binding.get("bound_fingerprints")) is not dict
+        or set(execution_binding["bound_fingerprints"])
+        != _EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS
+        or any(not _is_sha256(item) for item in execution_binding["bound_fingerprints"].values())
+        or any(
+            bound_fingerprints.get(key) != fingerprint
+            for key, fingerprint in execution_binding["bound_fingerprints"].items()
+        )
+        or value["execution_fingerprint"] != sha256_json(execution_binding)
+    ):
+        raise ExecutionFingerprintValidationError("bundle_execution_binding_invalid")
     counts = value.get("counts")
     if (
         type(counts) is not dict
@@ -1671,6 +1925,9 @@ def _validate_public_report(value: Mapping[str, Any]) -> None:
         "run_binding_fingerprint",
         "input_artifact_fingerprint",
         "execution_fingerprint",
+        "execution_binding_status",
+        "source_completeness_report_sha256",
+        "source_completeness_report_fingerprint",
         "bundle_fingerprint",
         "component_set_fingerprint",
         "component_count",
@@ -1713,6 +1970,10 @@ def _validate_public_report(value: Mapping[str, Any]) -> None:
         elif field_name.endswith("_status"):
             if field_value not in {"passed", "blocked"}:
                 raise ExecutionFingerprintValidationError("public_report_status_invalid")
+    _require_sha256(
+        value.get("source_completeness_report_sha256"),
+        "public_report_fingerprint_invalid",
+    )
     blocker_ids = value.get("blocking_status_ids")
     if (
         type(blocker_ids) is not list
@@ -1996,6 +2257,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--public-output", type=Path, required=True)
+    parser.add_argument("--source-completeness-report", type=Path)
+    parser.add_argument("--expected-source-completeness-report-sha256")
     parser.add_argument("--uat-report", type=Path)
     parser.add_argument("--expected-uat-report-fingerprint")
     parser.add_argument(
@@ -2009,6 +2272,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.source_completeness_report is None:
+            raise ExecutionFingerprintValidationError(
+                "source_completeness_report_missing_or_invalid"
+            )
+        if args.expected_source_completeness_report_sha256 is None:
+            raise ExecutionFingerprintValidationError(
+                "expected_source_completeness_report_sha256_missing_or_invalid"
+            )
         if args.uat_report is None:
             raise ExecutionFingerprintValidationError("uat_report_missing_or_invalid")
         if args.expected_uat_report_fingerprint is None:
@@ -2018,6 +2289,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         input_payload = _read_json_object(args.input)
         artifacts = create_execution_fingerprint_artifacts(
             input_payload=input_payload,
+            source_completeness_report_path=args.source_completeness_report,
+            expected_source_completeness_report_sha256=(
+                args.expected_source_completeness_report_sha256
+            ),
             uat_report_path=args.uat_report,
             expected_uat_report_fingerprint=args.expected_uat_report_fingerprint,
             repository_root=ROOT,
