@@ -21,6 +21,13 @@ from formowl_core.methodology_authority import (
     methodology_gate_dependency_manifest_path,
     validate_methodology_gate_dependency_manifest,
 )
+from scripts.issue56_execution_fingerprint import (
+    BUNDLE_ARTIFACT_ID as EXECUTION_BUNDLE_ARTIFACT_ID,
+    EXECUTION_BINDING_ARTIFACT_ID,
+    REQUIRED_COMPONENT_NAMES,
+    SCHEMA_VERSION as EXECUTION_SCHEMA_VERSION,
+    _EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -249,6 +256,65 @@ class SealedCompletenessFixture:
             self.source_manifest_path,
             source_manifest,
         )
+        self.execution_binding_path = (
+            repository_root / "evidence/production/issue56-execution-binding-v1/bundle.safe.json"
+        )
+        bound_fingerprints = {
+            key: (
+                self.execution_fingerprint
+                if key == "authority_execution"
+                else evidence._canonical_fingerprint(f"execution-binding:{key}")
+            )
+            for key in sorted(_EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS)
+        }
+        execution_binding = {
+            "artifact_id": EXECUTION_BINDING_ARTIFACT_ID,
+            "schema_version": EXECUTION_SCHEMA_VERSION,
+            "source_binding_fingerprint": evidence._canonical_fingerprint("source-binding"),
+            "source_completeness_report_sha256": evidence._canonical_fingerprint(
+                "source-completeness-report-bytes"
+            ),
+            "source_completeness_report_fingerprint": evidence._canonical_fingerprint(
+                "source-completeness-report"
+            ),
+            "bound_fingerprints": bound_fingerprints,
+        }
+        blocking_status_ids = ["methodology_authority_not_ready"]
+        self.execution_binding_bundle = evidence._with_fingerprint(
+            {
+                "artifact_id": EXECUTION_BUNDLE_ARTIFACT_ID,
+                "schema_version": EXECUTION_SCHEMA_VERSION,
+                "status": "blocked",
+                "run_binding_fingerprint": evidence._canonical_fingerprint("run-binding"),
+                "source_binding_fingerprint": execution_binding["source_binding_fingerprint"],
+                "execution_fingerprint": evidence._canonical_fingerprint(execution_binding),
+                "execution_binding_status": "passed",
+                "execution_binding": execution_binding,
+                "component_artifact_fingerprints": {
+                    name.removesuffix("_component"): evidence._canonical_fingerprint(
+                        f"component:{name}"
+                    )
+                    for name in REQUIRED_COMPONENT_NAMES
+                },
+                "bound_fingerprints": bound_fingerprints,
+                "counts": {
+                    "source_item_count": raw_source_unit_count,
+                    "observation_count": raw_source_unit_count,
+                    "unexplained_loss_count": 0,
+                },
+                "statuses": {
+                    "source_completeness": "passed",
+                    "methodology_authority": "blocked",
+                },
+                "blocking_status_ids": blocking_status_ids,
+                "blocking_status_fingerprint": evidence._canonical_fingerprint(blocking_status_ids),
+            },
+            "bundle_fingerprint",
+        )
+        self.execution_binding_sha256 = _write_json(
+            self.execution_binding_path,
+            self.execution_binding_bundle,
+        )
 
     def kwargs(self, output_name: str) -> dict[str, object]:
         return {
@@ -387,6 +453,16 @@ class Issue56SealedSourceCompletenessE2ETests(unittest.TestCase):
                 "internal_fingerprint": json.loads(
                     self.fixture.configuration_manifest_path.read_bytes()
                 )["artifact_fingerprint"],
+            },
+            {
+                "role": "execution_binding_bundle",
+                "path": self.fixture.execution_binding_path.relative_to(
+                    self.repository_root
+                ).as_posix(),
+                "byte_sha256": self.fixture.execution_binding_sha256,
+                "artifact_id": EXECUTION_BUNDLE_ARTIFACT_ID,
+                "internal_fingerprint_field": "bundle_fingerprint",
+                "internal_fingerprint": self.fixture.execution_binding_bundle["bundle_fingerprint"],
             },
             {
                 "role": "model_artifact",
