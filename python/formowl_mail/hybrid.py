@@ -2634,6 +2634,9 @@ def build_authorized_semantic_mail_session(
         observations_by_bundle_id=observations_by_bundle_id,
         authorized_bundles=authorized_bundles,
     )
+    selected_source_scope_ids = tuple(
+        sorted(bundle.mail_evidence_bundle_id for bundle in selected_bundles)
+    )
     authorized_source_scope_ids = tuple(
         sorted(bundle.mail_evidence_bundle_id for bundle in authorized_bundles)
     )
@@ -2668,20 +2671,31 @@ def build_authorized_semantic_mail_session(
         if authorized_source is not None
         else ()
     )
+    source_session_binding_fingerprint = (
+        _mail_compatibility_session_binding_fingerprint(
+            authorized_source=authorized_source,
+            index=index,
+            requester_user_id=requester_user_id,
+            workspace_id=workspace_id,
+            selected_source_scope_ids=selected_source_scope_ids,
+            authorized_source_scope_ids=authorized_source_scope_ids,
+            authorized_observations=authorized_observations,
+            occurrence_lineages=occurrence_lineages,
+        )
+        if authorized_source is not None
+        else None
+    )
     return AuthorizedSemanticMailSession(
         index=index,
         requester_user_id=requester_user_id,
         workspace_id=workspace_id,
-        selected_source_scope_ids=tuple(
-            sorted(bundle.mail_evidence_bundle_id for bundle in selected_bundles)
-        ),
-        authorized_source_scope_ids=tuple(
-            sorted(bundle.mail_evidence_bundle_id for bundle in authorized_bundles)
-        ),
+        selected_source_scope_ids=selected_source_scope_ids,
+        authorized_source_scope_ids=authorized_source_scope_ids,
         authorized_observation_hashes=tuple(sorted(authorized_observation_hash_by_id.items())),
         authorized_source=authorized_source,
         authorized_observations=authorized_observations,
         occurrence_lineages=occurrence_lineages,
+        source_session_binding_fingerprint=source_session_binding_fingerprint,
     )
 
 
@@ -3412,23 +3426,28 @@ def precompute_evidence_identity_lineage_crosswalk(
 
 def precompute_effective_graph_content_snapshot(
     *,
-    session: AuthorizedSemanticObservationSession,
+    session: AuthorizedSemanticMailSession,
     effective_graph_view: EffectiveGraphView,
     expected_graph_revision_fingerprint: str,
     expected_effective_graph_view_fingerprint: str,
 ) -> EffectiveGraphContentSnapshotPrecompute:
     """Materialize only the immutable graph-content snapshot before a query.
 
-    This owner helper validates the complete source-neutral session, index,
-    tokenizer, Observation, permission, and expected graph/view bindings.  It
-    deliberately does not build a relation-projection cache binding or base.
-    Repeated calls over the same sealed view reuse its content snapshot and
-    require both relation-projection cache containers to remain empty.
+    This owner helper accepts the existing source-neutral and mail-compatibility
+    authorized semantic sessions.  It validates their complete source/session,
+    index, tokenizer, Observation, permission, and expected graph/view
+    bindings.  It deliberately does not build a relation-projection cache
+    binding or base.  Repeated calls over the same sealed view reuse its content
+    snapshot and require both relation-projection cache containers to remain
+    empty.
     """
 
-    if not isinstance(session, AuthorizedSemanticObservationSession):
+    if not isinstance(session, AuthorizedSemanticMailSession) or not (
+        _is_mail_compatibility_session(session)
+        or isinstance(session, AuthorizedSemanticObservationSession)
+    ):
         raise ContractValidationError(
-            "graph snapshot precompute requires a source-neutral semantic session"
+            "graph snapshot precompute requires an authorized semantic session"
         )
     if not isinstance(effective_graph_view, EffectiveGraphView):
         raise ContractValidationError("graph snapshot precompute effective graph view is invalid")
@@ -3448,40 +3467,12 @@ def precompute_effective_graph_content_snapshot(
         effective_graph_view=effective_graph_view,
     )
 
-    authorized_source = session.authorized_source
-    if (
-        authorized_source is None
-        or authorized_source.workspace_id != session.workspace_id
-        or authorized_source.source_scope_ids != session.authorized_source_scope_ids
-        or session.selected_source_scope_ids != session.authorized_source_scope_ids
-        or session.index.selected_bundle_count != len(session.selected_source_scope_ids)
-        or session.index.authorized_bundle_count != len(session.authorized_source_scope_ids)
-        or session.index.denied_bundle_count != 0
-    ):
-        raise ContractValidationError("graph snapshot precompute source scope binding mismatch")
-    source_access_fingerprint = _source_graph_require_sha256(
-        authorized_source.authorization_fingerprint,
-        "source authorization fingerprint",
-    )
-    source_session_binding_fingerprint = _source_graph_require_sha256(
-        session.source_session_binding_fingerprint,
-        "source session binding fingerprint",
-    )
-
-    actual_authorized_observation_hashes = tuple(
-        sorted(
-            (
-                observation.observation_id,
-                sha256_json(observation.to_dict()),
-            )
-            for observation in session.authorized_observations
-        )
-    )
-    if (
-        not actual_authorized_observation_hashes
-        or actual_authorized_observation_hashes != session.authorized_observation_hashes
-    ):
-        raise ContractValidationError("graph snapshot precompute Observation binding mismatch")
+    (
+        authorized_source,
+        actual_authorized_observation_hashes,
+        source_access_fingerprint,
+        source_session_binding_fingerprint,
+    ) = _validated_effective_graph_snapshot_session_bindings(session)
     authorized_observation_set_fingerprint = sha256_json(list(actual_authorized_observation_hashes))
 
     tokenizer_profile = session.index._runtime_components.tokenizer_profile
@@ -4119,9 +4110,197 @@ def _source_neutral_session_binding_fingerprint(
     )
 
 
+def _mail_compatibility_session_binding_fingerprint(
+    *,
+    authorized_source: AuthorizedSemanticSource,
+    index: AuthorizedHybridMailIndex,
+    requester_user_id: str,
+    workspace_id: str,
+    selected_source_scope_ids: Sequence[str],
+    authorized_source_scope_ids: Sequence[str],
+    authorized_observations: Sequence[Observation],
+    occurrence_lineages: Sequence[SourceOccurrenceLineage],
+) -> str:
+    return sha256_json(
+        {
+            "schema_version": 1,
+            "session_kind": "authorized_semantic_mail_session",
+            "requester_fingerprint": sha256_json(requester_user_id),
+            "workspace_fingerprint": sha256_json(workspace_id),
+            "selected_source_scope_hashes": [
+                sha256_json(source_scope_id) for source_scope_id in selected_source_scope_ids
+            ],
+            "authorized_source_scope_hashes": [
+                sha256_json(source_scope_id) for source_scope_id in authorized_source_scope_ids
+            ],
+            "source_access_fingerprint": authorized_source.authorization_fingerprint,
+            "index_fingerprint": index.index_fingerprint,
+            "runtime_method_fingerprint": index.execution_component_fingerprint,
+            "authorized_observation_binding_hashes": [
+                sha256_json(
+                    [
+                        observation.observation_id,
+                        sha256_json(observation.to_dict()),
+                    ]
+                )
+                for observation in sorted(
+                    authorized_observations,
+                    key=lambda item: item.observation_id,
+                )
+            ],
+            "occurrence_lineage_fingerprints": sorted(
+                lineage.lineage_fingerprint for lineage in occurrence_lineages
+            ),
+            "candidate_content_fingerprints": sorted(
+                _hybrid_candidate_content_fingerprint(candidate) for candidate in index.candidates
+            ),
+        }
+    )
+
+
+def _validated_effective_graph_snapshot_session_bindings(
+    session: AuthorizedSemanticMailSession,
+) -> tuple[
+    AuthorizedSemanticSource,
+    tuple[tuple[str, str], ...],
+    str,
+    str,
+]:
+    authorized_source = session.authorized_source
+    selected_source_scope_ids = session.selected_source_scope_ids
+    authorized_source_scope_ids = session.authorized_source_scope_ids
+    if (
+        authorized_source is None
+        or authorized_source.workspace_id != session.workspace_id
+        or authorized_source.source_scope_ids != authorized_source_scope_ids
+        or not selected_source_scope_ids
+        or selected_source_scope_ids != tuple(sorted(set(selected_source_scope_ids)))
+        or not authorized_source_scope_ids
+        or authorized_source_scope_ids != tuple(sorted(set(authorized_source_scope_ids)))
+        or not set(authorized_source_scope_ids).issubset(selected_source_scope_ids)
+        or session.index.selected_bundle_count != len(selected_source_scope_ids)
+        or session.index.authorized_bundle_count != len(authorized_source_scope_ids)
+        or session.index.denied_bundle_count
+        != len(selected_source_scope_ids) - len(authorized_source_scope_ids)
+    ):
+        raise ContractValidationError("graph snapshot precompute source scope binding mismatch")
+    if not _is_mail_compatibility_session(session) and (
+        selected_source_scope_ids != authorized_source_scope_ids
+        or session.index.denied_bundle_count != 0
+    ):
+        raise ContractValidationError("graph snapshot precompute source scope binding mismatch")
+
+    observation_by_id: dict[str, Observation] = {}
+    actual_authorized_observation_hashes: list[tuple[str, str]] = []
+    for observation in session.authorized_observations:
+        if not isinstance(observation, Observation):
+            raise ContractValidationError(
+                "graph snapshot precompute requires authorized Observation records"
+            )
+        validated = Observation.from_dict(observation.to_dict())
+        if validated.observation_id in observation_by_id:
+            raise ContractValidationError("graph snapshot precompute has duplicate Observation ids")
+        observation_by_id[validated.observation_id] = validated
+        actual_authorized_observation_hashes.append(
+            (validated.observation_id, sha256_json(validated.to_dict()))
+        )
+    frozen_authorized_observation_hashes = tuple(sorted(actual_authorized_observation_hashes))
+    if (
+        not frozen_authorized_observation_hashes
+        or frozen_authorized_observation_hashes != session.authorized_observation_hashes
+    ):
+        raise ContractValidationError("graph snapshot precompute Observation binding mismatch")
+
+    source_access_fingerprint = _source_graph_require_sha256(
+        authorized_source.authorization_fingerprint,
+        "source authorization fingerprint",
+    )
+    if not _is_mail_compatibility_session(session):
+        source_session_binding_fingerprint = _source_graph_require_sha256(
+            session.source_session_binding_fingerprint,
+            "source session binding fingerprint",
+        )
+        return (
+            authorized_source,
+            frozen_authorized_observation_hashes,
+            source_access_fingerprint,
+            source_session_binding_fingerprint,
+        )
+
+    if authorized_source.source_kind != AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND:
+        raise ContractValidationError("graph snapshot precompute mail source kind mismatch")
+    authorized_observation_hashes = frozenset(
+        observation_hash
+        for _observation_id, observation_hash in frozen_authorized_observation_hashes
+    )
+    if (
+        session.index.candidates is not session.index._relation_projection_candidates_snapshot
+        or any(
+            candidate.bundle_id not in authorized_source_scope_ids
+            or candidate.source_observation_hash not in authorized_observation_hashes
+            for candidate in session.index.candidates
+        )
+    ):
+        raise ContractValidationError("graph snapshot precompute mail index binding mismatch")
+
+    lineage_by_observation_id: dict[str, SourceOccurrenceLineage] = {}
+    for lineage in session.occurrence_lineages:
+        observation_id = getattr(lineage, "source_observation_id", None)
+        if (
+            not isinstance(observation_id, str)
+            or observation_id not in observation_by_id
+            or observation_id in lineage_by_observation_id
+        ):
+            raise ContractValidationError(
+                "graph snapshot precompute mail occurrence lineage is invalid"
+            )
+        lineage_by_observation_id[observation_id] = lineage
+    expected_lineage_observation_ids = {
+        observation_id
+        for observation_id, observation in observation_by_id.items()
+        if _observation_message_occurrence_id(observation) is not None
+    }
+    if set(lineage_by_observation_id) != expected_lineage_observation_ids:
+        raise ContractValidationError(
+            "graph snapshot precompute mail occurrence lineage is incomplete"
+        )
+    for observation_id, lineage in lineage_by_observation_id.items():
+        if lineage != source_occurrence_lineage_from_observation(
+            observation_by_id[observation_id],
+            authorized_source=authorized_source,
+        ):
+            raise ContractValidationError(
+                "graph snapshot precompute mail occurrence lineage mismatch"
+            )
+
+    source_session_binding_fingerprint = _mail_compatibility_session_binding_fingerprint(
+        authorized_source=authorized_source,
+        index=session.index,
+        requester_user_id=session.requester_user_id,
+        workspace_id=session.workspace_id,
+        selected_source_scope_ids=selected_source_scope_ids,
+        authorized_source_scope_ids=authorized_source_scope_ids,
+        authorized_observations=tuple(
+            observation_by_id[observation_id] for observation_id in sorted(observation_by_id)
+        ),
+        occurrence_lineages=tuple(
+            lineage_by_observation_id[observation_id]
+            for observation_id in sorted(lineage_by_observation_id)
+        ),
+    )
+    if session.source_session_binding_fingerprint != source_session_binding_fingerprint:
+        raise ContractValidationError("graph snapshot precompute mail session binding mismatch")
+    return (
+        authorized_source,
+        frozen_authorized_observation_hashes,
+        source_access_fingerprint,
+        source_session_binding_fingerprint,
+    )
+
+
 def _effective_graph_permission_lineage_fingerprint(
     *,
-    session: AuthorizedSemanticObservationSession,
+    session: AuthorizedSemanticMailSession,
     effective_graph_view: EffectiveGraphView,
 ) -> str:
     permission_fingerprint_by_observation_id: dict[str, str] = {}

@@ -8,10 +8,19 @@ from unittest.mock import patch
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError, sha256_json
 from formowl_mail import (
+    AuthorizedSemanticMailSession,
     EffectiveGraphContentSnapshotPrecompute,
+    build_authorized_semantic_mail_session,
+    build_authorized_source_backed_effective_graph_view,
     precompute_effective_graph_content_snapshot,
 )
 from formowl_mail import hybrid as hybrid_module
+from scripts.issue56_semantic_execution_smoke import (
+    REQUESTER_USER_ID,
+    WORKSPACE_ID,
+    build_semantic_poc_inputs,
+)
+from test_issue56_node_backed_fallback_e2e import _contract_only_runtime
 import test_issue56_source_neutral_hybrid_e2e as source_neutral_fixture
 
 
@@ -295,6 +304,264 @@ class Issue56GraphSnapshotPrecomputeEndToEndTests(unittest.TestCase):
 
     def _tokenizer_drift_session(self):
         changed_profile_fingerprint = sha256_json("graph snapshot changed tokenizer profile")
+        changed_index = replace(
+            self.session.index,
+            profile_fingerprint=changed_profile_fingerprint,
+            _integrity_fingerprint=hybrid_module._hybrid_index_integrity_fingerprint(
+                index_fingerprint=self.session.index.index_fingerprint,
+                tokenizer_id=self.session.index.tokenizer_id,
+                profile_fingerprint=changed_profile_fingerprint,
+                execution_component_fingerprint=(
+                    self.session.index.execution_component_fingerprint
+                ),
+                candidates=self.session.index.candidates,
+            ),
+        )
+        return replace(self.session, index=changed_index)
+
+    @staticmethod
+    def _cold_clone(view):
+        return replace(
+            view,
+            visible_nodes=list(view.visible_nodes),
+            visible_edges=list(view.visible_edges),
+            access_required=list(view.access_required),
+            applied_grant_ids=list(view.applied_grant_ids),
+        )
+
+
+class Issue56MailGraphSnapshotPrecomputeCompatibilityEndToEndTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.runtime = _contract_only_runtime()
+
+    def setUp(self) -> None:
+        self.inputs = build_semantic_poc_inputs()
+        with patch.object(
+            hybrid_module,
+            "_load_pinned_issue56_runtime_components",
+            return_value=self.runtime,
+        ):
+            self.session = build_authorized_semantic_mail_session(
+                observations_by_bundle_id=self.inputs.observations_by_bundle_id,
+                bundles=self.inputs.bundles,
+                requester_user_id=REQUESTER_USER_ID,
+                workspace_id=WORKSPACE_ID,
+                mail_evidence_bundle_id=(self.inputs.current_bundle.mail_evidence_bundle_id),
+            )
+        graph_build = build_authorized_source_backed_effective_graph_view(
+            session=self.session,
+            observations_by_bundle_id=self.inputs.observations_by_bundle_id,
+            source_binding_fingerprint=sha256_json(
+                "issue56 mail graph snapshot precompute fixture"
+            ),
+        )
+        self.expected_graph_revision_fingerprint = graph_build.graph_revision_fingerprint
+        self.view = self._cold_clone(graph_build.effective_graph_view)
+        self.expected_view_fingerprint = sha256_json(self.view.to_dict())
+
+    def test_mail_session_materializes_once_reuses_snapshot_and_keeps_caches_cold(
+        self,
+    ) -> None:
+        self.assertIs(type(self.session), AuthorizedSemanticMailSession)
+        self.assertNotIsInstance(
+            self.session,
+            hybrid_module.AuthorizedSemanticObservationSession,
+        )
+        self.assertRegex(
+            self.session.source_session_binding_fingerprint,
+            r"^sha256:[0-9a-f]{64}$",
+        )
+        content_builder = hybrid_module._build_effective_graph_content_snapshot
+        with (
+            patch.object(
+                hybrid_module,
+                "_build_effective_graph_content_snapshot",
+                wraps=content_builder,
+            ) as build_content,
+            patch.object(
+                hybrid_module,
+                "_relation_projection_base_cache_binding_snapshot",
+            ) as build_binding,
+            patch.object(
+                hybrid_module,
+                "_build_relation_projection_base",
+            ) as build_base,
+        ):
+            first = self._precompute()
+            first_snapshot = hybrid_module._require_effective_graph_content_snapshot(self.view)
+            repeated = self._precompute()
+            repeated_snapshot = hybrid_module._require_effective_graph_content_snapshot(self.view)
+
+        self.assertEqual(first, repeated)
+        self.assertEqual(build_content.call_count, 1)
+        self.assertIs(first_snapshot, repeated_snapshot)
+        build_binding.assert_not_called()
+        build_base.assert_not_called()
+        self.assertEqual(
+            len(first_snapshot.relation_projection_cache_binding_snapshots),
+            0,
+        )
+        self.assertEqual(len(first_snapshot.relation_projection_bases), 0)
+        self.assertEqual(first.relation_projection_cache_binding_entry_count, 0)
+        self.assertEqual(first.relation_projection_base_entry_count, 0)
+        self.assertEqual(
+            first.source_session_binding_fingerprint,
+            self.session.source_session_binding_fingerprint,
+        )
+        self.assertEqual(
+            first.authorized_observation_count,
+            len(self.session.authorized_observations),
+        )
+        safe = first.to_safe_dict()
+        rendered = json.dumps(safe, ensure_ascii=True, sort_keys=True)
+        for private_value in (
+            self.session.requester_user_id,
+            self.session.workspace_id,
+            self.session.authorized_source_scope_ids[0],
+            self.session.authorized_observations[0].observation_id,
+            self.session.authorized_observations[0].text,
+            self.view.visible_nodes[0].node_id,
+            "tenant",
+            "tenant_id",
+        ):
+            self.assertNotIn(private_value, rendered)
+
+    def test_mail_session_binding_and_permission_drift_fail_closed(self) -> None:
+        cases = (
+            (
+                "requester",
+                replace(
+                    self.view,
+                    requester_user_id="user_graph_snapshot_mail_not_authorized",
+                ),
+                self.session,
+                "requester mismatch",
+            ),
+            (
+                "workspace",
+                self._cold_clone(self.view),
+                replace(
+                    self.session,
+                    workspace_id="workspace_graph_snapshot_mail_drift",
+                ),
+                "source scope binding mismatch",
+            ),
+            (
+                "source_scope",
+                self._cold_clone(self.view),
+                replace(
+                    self.session,
+                    selected_source_scope_ids=(
+                        *self.session.selected_source_scope_ids,
+                        "mail_bundle_graph_snapshot_drift",
+                    ),
+                ),
+                "source scope binding mismatch",
+            ),
+            (
+                "observation",
+                self._cold_clone(self.view),
+                replace(
+                    self.session,
+                    authorized_observation_hashes=tuple(
+                        (
+                            observation_id,
+                            sha256_json(["mail-drift", observation_hash]),
+                        )
+                        for observation_id, observation_hash in (
+                            self.session.authorized_observation_hashes
+                        )
+                    ),
+                ),
+                "Observation binding mismatch",
+            ),
+            (
+                "occurrence",
+                self._cold_clone(self.view),
+                replace(
+                    self.session,
+                    occurrence_lineages=self.session.occurrence_lineages[:-1],
+                ),
+                "mail occurrence lineage is incomplete",
+            ),
+            (
+                "permission",
+                self._permission_drift_view(),
+                self.session,
+                "permission lineage mismatch",
+            ),
+            (
+                "index",
+                self._cold_clone(self.view),
+                replace(
+                    self.session,
+                    index=replace(
+                        self.session.index,
+                        _integrity_fingerprint=sha256_json(
+                            "graph snapshot stale mail index integrity"
+                        ),
+                    ),
+                ),
+                "index binding mismatch",
+            ),
+            (
+                "tokenizer",
+                self._cold_clone(self.view),
+                self._tokenizer_drift_session(),
+                "tokenizer profile mismatch",
+            ),
+            (
+                "parallel_binding",
+                self._cold_clone(self.view),
+                replace(
+                    self.session,
+                    source_session_binding_fingerprint=sha256_json(
+                        "mail compatibility session must not fabricate a parallel binding"
+                    ),
+                ),
+                "mail session binding mismatch",
+            ),
+        )
+        for label, view, session, error_pattern in cases:
+            with (
+                self.subTest(label=label),
+                self.assertRaisesRegex(ContractValidationError, error_pattern),
+            ):
+                precompute_effective_graph_content_snapshot(
+                    session=session,
+                    effective_graph_view=view,
+                    expected_graph_revision_fingerprint=(self.expected_graph_revision_fingerprint),
+                    expected_effective_graph_view_fingerprint=sha256_json(view.to_dict()),
+                )
+
+    def _precompute(self) -> EffectiveGraphContentSnapshotPrecompute:
+        return precompute_effective_graph_content_snapshot(
+            session=self.session,
+            effective_graph_view=self.view,
+            expected_graph_revision_fingerprint=(self.expected_graph_revision_fingerprint),
+            expected_effective_graph_view_fingerprint=self.expected_view_fingerprint,
+        )
+
+    def _permission_drift_view(self):
+        first_node = self.view.visible_nodes[0]
+        changed_node = replace(
+            first_node,
+            permission_scope={
+                **dict(first_node.permission_scope),
+                "scope_id": "project_graph_snapshot_mail_not_authorized",
+            },
+        )
+        return replace(
+            self.view,
+            visible_nodes=[changed_node, *self.view.visible_nodes[1:]],
+            visible_edges=list(self.view.visible_edges),
+            access_required=list(self.view.access_required),
+            applied_grant_ids=list(self.view.applied_grant_ids),
+        )
+
+    def _tokenizer_drift_session(self):
+        changed_profile_fingerprint = sha256_json("graph snapshot changed mail tokenizer profile")
         changed_index = replace(
             self.session.index,
             profile_fingerprint=changed_profile_fingerprint,
