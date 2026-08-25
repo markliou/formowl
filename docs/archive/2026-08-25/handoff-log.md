@@ -1,35 +1,13 @@
 # Agent Handoff Log
 Lifecycle label: `active`.
 This is a bounded active window. Earlier entries are immutable history under
-`docs/archive/`; the complete pre-trim log is at
-`../archive/2026-08-25/handoff-log.md`, and the pre-rewrite log remains at
+`docs/archive/`, including the complete pre-rewrite log at
 `../archive/2026-08-18/active/docs/agent-goals/handoff-log.md`.
 ## Retention Rule
 - Keep the latest 14 calendar days and at most 300 lines.
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
-## 2026-08-25 — Source completeness and execution binding checkpoint
-- The existing sealed safe source report is passed at its own boundary: `8,443`
-  source inventory units reconcile to `8,443` Observations with unexplained
-  loss `0`. Report/snapshot byte seals are
-  `sha256:9bf59781bb846f87934511fe7378626eddd380cbe9e1acea201aa0625f11f8b6`
-  and `sha256:55df0dc7d96a7822271f4b7f4509b4da1bbb94f26bb7710e3919f8134d28f2d1`.
-- Commits `9955df0`, `3b7ee0d`, `ad4364c`, `12575a1`, and `a85604c` provide
-  sealed evidence rebinding without reparsing, remove execution-fingerprint
-  circularity, make the complete execution bundle a mandatory durable
-  promotion dependency, and cover authoring/core integration.
-- Integrated pinned-E5 E2E passed `45/45`. No formal all-four-gate evidence was
-  authored or promoted, so the canonical authority remains valid but blocked
-  on source completeness, accepted execution binding, same-pipeline real-source
-  ablation, and independent final-answer acceptance.
-- The active identity boundary remains `workspace_only_v1` for
-  `workspace_formowl`, approved actor
-  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
-- No v1-v7 diagnostic was rerun. No UAT, holdout, transfer, or formal evidence
-  execution occurred. Work D and plan step 4 remain in progress.
-- Next: assemble production-safe component, source, and evaluation artifacts on
-  one stable execution fingerprint; do not run holdouts or claim readiness.
 ## 2026-08-25 — Offline relation-precompute v7 consumed and passed
 - Formal mode `issue56-sealed-source-real-prompt-relation-projection-offline-equivalence-phase-traced-diagnostic-20260825-v7`
   consumed one claim over `456` Observations as `workspace_only_v1` for `workspace_formowl`; approved
@@ -232,3 +210,91 @@ This is a bounded active window. Earlier entries are immutable history under
   unchanged. Next, after restoring the second-worker slot, split disjoint work
   into a per-query projection cache and bounded source-backed proof-completion
   E2E. Do not execute a sealed independent holdout yet.
+## 2026-08-18 — Master plus two-worker, POC-first operating mode
+- The user set the issue #56 execution topology to one Master plus exactly two
+  implementation subagents. Both workers use `gpt-5.6-sol` with
+  `reasoning_effort=ultra`.
+- The Master owns a global plan capped at five steps, non-overlapping work
+  assignment, progress monitoring, duplicate/loop prevention, integration
+  review, and final acceptance. The Master does not implement code; all
+  implementation is delegated to the two workers.
+- Worker write sets must not overlap. If the same blocker or method fails
+  repeatedly, the Master must change the decomposition, owner, or validation
+  route rather than continue an unlimited retry loop.
+- POC acceptance requires a real source/Observation-to-result end-to-end path.
+  API, contract, schema, mock, or unit wiring by itself is insufficient.
+- The operator reported an approximately six-hour window before a power outage
+  on 2026-08-18. The immediate decision is therefore fast E2E POC first;
+  optional hardening, onboarding, and broad suites may wait until feasibility
+  is shown.
+- The time box does not relax permission, privacy, provenance,
+  candidate-before-canonical, no-secret, no-raw-path, redaction, audit, or
+  fail-closed methodology authority. A POC is not production readiness,
+  implementation completion, comparative superiority, or methodology
+  completion.
+- Two-worker E2E evidence may support rapid POC continuation after Master
+  integration review. Formal implementation completion, release, and
+  production hardening still require the existing three independent read-only
+  Codex/GPT reviewer decisions unless the user explicitly changes that count.
+- Issue #56 remains `active-blocked`. The frozen method is
+  `evidence_to_knowledge_kg_ontology_v2_hybrid_v1`; the frozen tokenizer is
+  `jieba_sentencepiece_frozen_profile_candidate_admission_v1`. No checklist
+  item was completed or checked by this operating-mode update.
+## 2026-08-18 — Issue #56 becomes the sole active KG methodology program
+- GitHub issue #56 defines the active objective: graph-guided Hybrid KG +
+  Ontology v2 must earn a measurable final-answer win over strong RAG on
+  heterogeneous integration tasks.
+- Frozen target remains
+  `evidence_to_knowledge_kg_ontology_v2_hybrid_v1` with
+  `jieba_sentencepiece_frozen_profile_candidate_admission_v1`; no v3 was
+  created.
+- Architecture is strong RAG retrieval plus reviewed entity links, bounded
+  graph traversal, temporal/provenance/coverage filtering, capped soft ontology
+  scoring, evidence-bundle reranking, and deterministic exact-set execution.
+- Inferred ontology mismatch no longer prunes admitted evidence. The old hard
+  gate is a negative ablation only.
+- The final answer model is not an architectural shortcut: every arm must pin
+  and share the same model, prompt, reasoning effort, schema, and budget.
+- Independent holdout questions cannot influence tokenizer, aliases, ontology,
+  graph rules, thresholds, prompts, or model choice.
+- PostgreSQL/pgvector remains canonical. Do not resume Neo4j benchmarks,
+  migration, projection, or dual-write work.
+- Issue #55's document-first exactly-one-call POC and issue #33 plans are
+  historical only. Their complete active-file state before this rewrite is
+  preserved under `docs/archive/2026-08-18/`.
+- Methodology authority check is valid but blocked. Runtime remains
+  `ascii_identifier_regex_v1` with CJK support false, and all five readiness
+  gates remain unresolved.
+- Next KG action: implement the immutable target tokenizer/profile and
+  same-profile query/evidence binding, then source-completeness reconciliation
+  and a strong RAG control. No methodology-quality comparison may start while
+  `--require-ready` exits nonzero.
+- The Issue #20 operator helper now derives or validates one safe non-secret predefined client ID; app configuration replaces only the ChatGPT-displayed callback; if the same client ID cannot be used, the live campaign stops as an external blocker.
+- Issue #20 remains open and unchecked; this KG documentation rewrite does not change its external evidence state.
+## 2026-08-18 — Active-document rewrite verification
+- Active KG, architecture, workflow, provenance, infrastructure, evaluation,
+  role, goal, and startup documents now point to issue #56 and the frozen
+  Hybrid-v2 target. Superseded mail-only, issue #33, and issue #55 files are
+  explicit historical pointers; their pre-rewrite content remains immutable
+  under `docs/archive/2026-08-18/`.
+- `python3 scripts/methodology_authority_check.py --check` passes with 56 bound
+  sources. Authority remains valid but blocked; all five readiness gates remain
+  unresolved and `--require-ready` must continue to exit nonzero.
+- The focused documentation/methodology/container suite passed 150 tests with
+  one skip. The canonical full suite ran 1,558 tests and is not green:
+  11 failures and one error remain in legacy coordination-frame metrics,
+  Issue #20 function-onboarding state, and an unrelated PST extractor test.
+  Those failures are outside this documentation rewrite's write set and were
+  not hidden or broadly repaired.
+- Issue #20 remains open and unchecked; this documentation-only verification
+  does not change its external evidence or closure state.
+- Next KG action remains Work Package A: immutable Jieba + SentencePiece
+  profile packaging and same-profile query/evidence indexing, followed by
+  source-completeness reconciliation and the strong RAG control.
+## 2026-08-20 — Sealed-source loader verification boundary
+- The full `formowl-dev:local` suite ran `1,849` tests with `20` failures,
+  `19` errors, and `15` skips. In that image, the same focused `26`-test slice
+  had `15` `DenseEmbeddingUnavailableError:
+  python_runtime_version_mismatch` errors; the pinned E5 image passed all
+  `26`. The full canonical suite is therefore not green, and this slice remains
+  non-complete and non-release.

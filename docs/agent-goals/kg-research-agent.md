@@ -46,52 +46,27 @@ with four blocking gates. The normal runtime-method gate passes for
 `jieba_sentencepiece_frozen_profile_candidate_admission_v1`. Remaining gates
 are source completeness, accepted execution-fingerprint binding, same-pipeline
 real-source ablation, and independent final-answer acceptance. The v3
-promotion contract is repaired, but no passed evidence exists to promote.
+promotion contract is repaired, but no formal all-four-gate evidence exists to
+promote.
 ## Diagnostic Checkpoint — 2026-08-25
 The sealed `456`-Observation `workspace_only_v1` package has no tenant
-dimension. Its earlier development one-shot is consumed: Hybrid `0/100`, graph
-CI `[0,0]`, citations `0%`, no-answer false positives `100`, p95
-`1510.841 ms`, and leakage `0`.
-Source tracing found the old fixed prompt had zero raw/parser/retrieval
-occurrences; v4 corrected that prompt-to-source mismatch and passed with `2`
-anchors, `10` paths, and `1` citation. V5/v6 then isolated relation-precompute
-latency: v6's cold arm exhausted relation projection at `1415.389724 ms`, while
-its primed arm completed at `57.939772 ms` with `10` paths/`1` citation/`48`
-scores. Their immutable details remain on the active board and handoff.
+dimension. It is bound to `workspace_formowl` and approved actor
+`user_full_pst_domain_hard_case_eval_owner`; no tenant dimension may be
+invented. Diagnostics v1-v7 are consumed and cannot be rerun or tuned.
 
-Formal v7 mode
-`issue56-sealed-source-real-prompt-relation-projection-offline-equivalence-phase-traced-diagnostic-20260825-v7`
-is consumed and passed over the same `456` Observations for
-`workspace_formowl`, approved actor
-`user_full_pst_domain_hard_case_eval_owner`, with no tenant dimension. Its two
-isolated presealed views each contained `10281` nodes and `29748` edges.
-Cold/after graph preseal took `61825.028571`/`61485.804325 ms`; the after
-relation precompute took `4344.986693 ms`. Post-claim cold binding/base/total
-were `633.968035`/`3196.093676`/`35771.614738 ms`, moving `0/0 -> 1/1`.
-Both normal `1500 ms` ASGI `/mcp` arms completed: cold/after relation projection
-was `57.473886`/`58.790683 ms`, query `290.941898`/`298.654947 ms`, and HTTP
-`366.720007`/`361.008008 ms`; each produced `10` paths, `1` citation, and `48`
-scores with no deadline exhaustion. All `13` timing-free equivalence groups,
-all cache checks, and all applicable boundary gates passed.
+The existing passed safe source report reconciles `8,443` source units to
+`8,443` Observations with unexplained loss `0`. Commits `9955df0`, `3b7ee0d`,
+`ad4364c`, `12575a1`, and `a85604c` add deterministic evidence rebinding
+without reparsing, remove execution-fingerprint circularity, require the
+complete execution bundle as a durable promotion dependency, and cover the
+gate/core contract. Integrated pinned-E5 tests passed `45/45`.
 
-V7 claim/claim-byte/report-byte are
-`sha256:879e903599e95d38d52e0bd1fb0d29fb6266371e7168289547d0bbc23a1d643b`,
-`sha256:4de4d694f042f46b3a0d6c68dd93101ca7c7610a0b3f97496f44be34f20b7a0c`,
-and `sha256:5b34d191244391c560cda849c0666c2f7e41be1d220fd3799108b6ca738a99d0`;
-claim/report sizes are `1508`/`30893` bytes. Trace/execution/source/preflight/
-offline-evidence/owner/precompute/cache bindings are
-`sha256:9af61b1918c6ef2c31a91a8d6f73a875e796bbf678b13c49f7db44530189e6d6`,
-`sha256:a99e1fa89b01d2d383209ae09f742ee55cfddcd2095992c9391878d73b00c649`,
-`sha256:b5a8112dd88eb829b26ec7b795a6071ca81a6327362a0d265c1749d41c5f002e`,
-`sha256:10c44440e0cde947591af7c8ad9797ba47b755d50d027d280c0cfa464dd8baf0`,
-`sha256:bd6d0e962d07ba10f273caa83996a6e57114d6801d56660c551d3728a655fdf1`,
-`sha256:8f63bdcf6baa4d18b6574071905900baf002318d9227e0d0da0523bf297a293e`,
-`sha256:b2edcd214a19a6b3283abc475a8b67abd984753653a6136396b1630bfbfecf3b`,
-and `sha256:d15cf0214e9112b1a28130496dc5ea0c554587606e32dd423886ee14364e110f`.
-Temporary evidence passed `51/51`; cross-review found no blocker. With v6's
-latency-necessity evidence, v7 accepts the bounded behavior-neutral same-source
-relation-precompute POC only. V1-v7 cannot be rerun or tuned; this is not
-methodology/UAT/holdout/readiness/superiority/completion evidence.
+This does not pass the source-completeness authority gate yet: no formal
+all-four-gate evidence bundle was authored or promoted. V7 remains only a
+consumed behavior-neutral relation-precompute POC, with `10` paths, `1`
+citation, `48` scores, and timing-free equivalence passing in both arms.
+No UAT, independent holdout, formal evidence run, or v1-v7 diagnostic rerun
+occurred during this checkpoint.
 ## Non-Negotiable Method
 
 - Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence
@@ -176,5 +151,5 @@ exiting zero.
 
 Remain within step 4 and do not rerun or tune v1-v7. The bounded relation
 precompute POC is accepted only inside its diagnostic claim boundary. Next,
-close the four blocked authority gates with legitimate evidence; do not execute
-holdouts prematurely.
+assemble production-safe component, source, and evaluation artifacts on one
+stable execution fingerprint. Do not run holdouts or claim readiness.

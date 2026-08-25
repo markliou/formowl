@@ -27,6 +27,22 @@ This is the bounded active work board. Lossless history is indexed in
   gate is passed; source completeness, accepted execution-fingerprint binding,
   same-pipeline real-source ablation, and independent final-answer acceptance
   remain blocked.
+- The existing safe source-completeness report passes its own sealed contract:
+  `8,443` raw/source inventory units reconcile to `8,443` Observations with
+  unexplained loss `0`. Its report/snapshot byte seals are
+  `sha256:9bf59781bb846f87934511fe7378626eddd380cbe9e1acea201aa0625f11f8b6`
+  and
+  `sha256:55df0dc7d96a7822271f4b7f4509b4da1bbb94f26bb7710e3919f8134d28f2d1`.
+  The authority gate remains blocked because no formal all-four-gate evidence
+  bundle has been authored and atomically promoted.
+- Commits `9955df0`, `3b7ee0d`, `ad4364c`, `12575a1`, and `a85604c` provide the
+  sealed source-completeness rebind author, remove execution-fingerprint
+  circularity, require the complete execution bundle as a durable promotion
+  dependency, and cover gate/core integration. The author can rebind the
+  existing passed evidence without reparsing the source.
+- Integrated pinned-E5 evidence passed `45/45`. This was fixture/contract
+  verification only: no formal gate evidence, UAT, independent holdout, or
+  consumed v1-v7 diagnostic was executed.
 - Strong RAG is a required component/control. KG adds heterogeneous identity,
   joins, bounded topology, time, contradiction, provenance, and coverage.
   Ontology is scoped/data-first/capped soft scoring. Exact sets use a
@@ -167,7 +183,7 @@ This is the bounded active work board. Lossless history is indexed in
   cannot support KG/ontology superiority. The sealed 41-case and additive
   59-case mail holdouts and the GitHub transfer holdout remain unexecuted.
 - The v3 gate-evidence-to-atomic-promotion contract is implemented and focused
-  tests pass, but no passed production gate evidence exists to promote.
+  tests pass, but no formal all-four-gate evidence bundle exists to promote.
 - PostgreSQL/pgvector remains canonical. Neo4j work is not active.
 - Pre-rewrite KG/methodology/coordination documents were preserved losslessly
   under `docs/archive/2026-08-18/` before active documents were rewritten.
