@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout
 from dataclasses import replace
+import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import stat
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -12,13 +15,13 @@ from unittest import mock
 
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError, sha256_json
+from formowl_gateway import issue56_diagnostic as diagnostic_module
 from formowl_gateway import issue56_sealed_source_loader as gateway_loader
 from formowl_gateway.issue56_diagnostic import (
     ISSUE56_DIAGNOSTIC_IDENTITY_SCOPE_MODE,
     ISSUE56_DIAGNOSTIC_USER_ID,
     ISSUE56_DIAGNOSTIC_WORKSPACE_ID,
     ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
-    ISSUE56_REAL_PROMPT_SEALED_SOURCE_LOADER_CONTRACT_ID,
     ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
     ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V1_MODE_ID,
     ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V2_MODE_ID,
@@ -31,9 +34,97 @@ import test_issue56_prompt_mcp_hybrid_e2e as existing_diagnostic_fixture
 
 
 _PRIVATE_PROMPT = "PO470002002 與 ORIGIN-TAIWAN-01 的關係"
+_INTERNAL_V4_TEST_MODE_ID = diagnostic_module._ISSUE56_RELATION_PROJECTION_EQUIVALENCE_TEST_MODE_ID
+_INTERNAL_V4_TEST_CONTRACT = diagnostic_cli._RelationProjectionEquivalenceVersionContract(
+    diagnostic_mode_id=_INTERNAL_V4_TEST_MODE_ID,
+    loader_contract_id="issue56_real_prompt_internal_test_loader_v4",
+    claim_artifact_id=("formowl_issue56_real_prompt_internal_test_consumed_claim_v4"),
+    claim_schema_version=4,
+    enforce_repository_state_root=False,
+)
+_FORMAL_V4_STATE_ROOT = (
+    Path(__file__).resolve().parents[1]
+    / ".test-tmp"
+    / f"{ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID}-state"
+)
+
+
+def _snapshot_formal_v4_state_root(
+    root: Path,
+) -> tuple[str, str | None, int | None, str | None, tuple[tuple[str, str, int, str | None], ...]]:
+    """Capture hash-only immutable state without following links."""
+
+    try:
+        root.lstat()
+    except FileNotFoundError:
+        return ("absent", None, None, None, ())
+
+    def file_sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return f"sha256:{digest.hexdigest()}"
+
+    def entry_metadata(
+        path: Path,
+        relative_path: str,
+    ) -> tuple[str, str, int, str | None]:
+        metadata = path.lstat()
+        if stat.S_ISREG(metadata.st_mode):
+            entry_type = "regular_file"
+            byte_sha256 = file_sha256(path)
+        elif stat.S_ISDIR(metadata.st_mode):
+            entry_type = "directory"
+            byte_sha256 = None
+        elif stat.S_ISLNK(metadata.st_mode):
+            entry_type = "symlink"
+            byte_sha256 = "sha256:" + hashlib.sha256(os.fsencode(os.readlink(path))).hexdigest()
+        else:
+            entry_type = "other"
+            byte_sha256 = None
+        return (
+            relative_path,
+            entry_type,
+            metadata.st_size,
+            byte_sha256,
+        )
+
+    root_entry = entry_metadata(root, ".")
+    inventory: list[tuple[str, str, int, str | None]] = []
+
+    def visit(directory: Path) -> None:
+        with os.scandir(directory) as iterator:
+            entries = sorted(iterator, key=lambda entry: entry.name)
+        for entry in entries:
+            path = Path(entry.path)
+            relative_path = path.relative_to(root).as_posix()
+            inventory.append(entry_metadata(path, relative_path))
+            if entry.is_dir(follow_symlinks=False):
+                visit(path)
+
+    if root_entry[1] == "directory":
+        visit(root)
+    return (
+        "present",
+        root_entry[1],
+        root_entry[2],
+        root_entry[3],
+        tuple(inventory),
+    )
 
 
 class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._formal_v4_state_root_snapshot = _snapshot_formal_v4_state_root(_FORMAL_V4_STATE_ROOT)
+
+    def tearDown(self) -> None:
+        self.assertEqual(
+            _snapshot_formal_v4_state_root(_FORMAL_V4_STATE_ROOT),
+            self._formal_v4_state_root_snapshot,
+            "focused tests must preserve the formal v4 state root byte-for-byte",
+        )
+
     def test_stub_selector_loads_after_sealed_source_and_real_prompt_crosses_http(
         self,
     ) -> None:
@@ -87,6 +178,7 @@ class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
         )
         self.assertEqual(source.private_prompt, _PRIVATE_PROMPT)
         self.assertEqual(source.prompt_selection.lexical_anchor_count, 2)
+        source = self._internal_v4_source(source)
 
         loader_calls = 0
 
@@ -97,49 +189,50 @@ class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             state_root = Path(temporary_directory)
-            report = diagnostic_cli.run_real_prompt_sealed_source_diagnostic_once(
+            report = diagnostic_cli._run_relation_projection_equivalence_diagnostic_once(
                 loader=loader,
-                loader_spec_fingerprint=sha256_json(
-                    {
-                        "loader_contract_id": (
-                            ISSUE56_REAL_PROMPT_SEALED_SOURCE_LOADER_CONTRACT_ID
-                        ),
-                        "loader_spec": gateway_loader.REAL_PROMPT_LOADER_SPEC,
-                    }
-                ),
+                loader_spec_fingerprint=self._internal_loader_spec_fingerprint(),
                 state_root=state_root,
+                contract=_INTERNAL_V4_TEST_CONTRACT,
             )
             self.assertEqual(loader_calls, 1)
             self.assertEqual(report["status"], "passed", report)
             self.assertTrue(report["diagnostic_only"])
             self.assertEqual(report["methodology_authority_status"], "blocked")
-            self.assertEqual(report["source_fixture_mode"], "sealed_source_real_prompt")
+            self.assertEqual(
+                report["source_fixture_mode"],
+                "sealed_source_real_prompt_relation_projection_equivalence",
+            )
             self.assertEqual(
                 report["identity_scope_mode"],
                 ISSUE56_DIAGNOSTIC_IDENTITY_SCOPE_MODE,
             )
-            self.assertGreater(report["counts"]["lexical_anchor_count"], 0)
-            self.assertGreater(
-                report["counts"]["source_selected_connected_path_count"],
-                0,
-            )
-            self.assertGreater(report["counts"]["graph_path_count"], 0)
-            self.assertGreater(report["counts"]["citation_count"], 0)
+            self.assertEqual(report["counts"]["arm_count"], 2)
             self.assertEqual(
-                report["boundary_status"]["source_backed_prompt_selection"],
+                report["source_prompt_selection"]["status"],
                 "passed",
             )
+            self.assertEqual(report["source_prompt_selection"]["counts"]["lexical_anchor_count"], 2)
             self.assertEqual(
-                report["boundary_status"]["semantic_phase_completion"],
+                report["boundary_status"]["full_asgi_mcp_each_arm"],
                 "passed",
             )
-            phase_trace = report["timing"]["semantic_phases"]
-            self.assertEqual(phase_trace["terminal_status"], "completed")
-            self.assertTrue(phase_trace["phases"])
-            self.assertTrue(
-                all(phase["outcome"] in {"completed", "skipped"} for phase in phase_trace["phases"])
-            )
-            self.assertIsNone(phase_trace["deadline_exhausted_phase"])
+            for arm_id in ("before_cold", "after_precomputed"):
+                arm = report["arms"][arm_id]
+                self.assertEqual(arm["status"], "passed")
+                self.assertEqual(arm["counts"]["http_request_count"], 3)
+                self.assertGreater(arm["counts"]["graph_path_count"], 0)
+                self.assertGreater(arm["counts"]["citation_count"], 0)
+                phase_trace = arm["timing"]["semantic_phases"]
+                self.assertEqual(phase_trace["terminal_status"], "completed")
+                self.assertTrue(phase_trace["phases"])
+                self.assertTrue(
+                    all(
+                        phase["outcome"] in {"completed", "skipped"}
+                        for phase in phase_trace["phases"]
+                    )
+                )
+                self.assertIsNone(phase_trace["deadline_exhausted_phase"])
             rendered = json.dumps(report, ensure_ascii=False, sort_keys=True)
             self.assertNotIn(_PRIVATE_PROMPT, rendered)
             self.assertNotIn("PO470002002", rendered)
@@ -147,34 +240,31 @@ class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
             self.assertNotIn('"tenant"', rendered.lower())
             self.assertNotIn('"tenant_id"', rendered.lower())
 
-            claim_path, report_path = diagnostic_cli._real_prompt_sealed_paths(state_root)
+            claim_path, report_path = diagnostic_cli._relation_projection_equivalence_paths(
+                state_root,
+                contract=_INTERNAL_V4_TEST_CONTRACT,
+            )
             self.assertTrue(claim_path.is_file())
             self.assertTrue(report_path.is_file())
             claim = json.loads(claim_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 claim["diagnostic_mode_id"],
-                ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
+                _INTERNAL_V4_TEST_MODE_ID,
             )
             self.assertEqual(claim["status"], "consumed")
             self.assertNotIn(_PRIVATE_PROMPT, json.dumps(claim))
 
             with self.assertRaisesRegex(ContractValidationError, "already consumed"):
-                diagnostic_cli.run_real_prompt_sealed_source_diagnostic_once(
+                diagnostic_cli._run_relation_projection_equivalence_diagnostic_once(
                     loader=loader,
-                    loader_spec_fingerprint=sha256_json(
-                        {
-                            "loader_contract_id": (
-                                ISSUE56_REAL_PROMPT_SEALED_SOURCE_LOADER_CONTRACT_ID
-                            ),
-                            "loader_spec": gateway_loader.REAL_PROMPT_LOADER_SPEC,
-                        }
-                    ),
+                    loader_spec_fingerprint=self._internal_loader_spec_fingerprint(),
                     state_root=state_root,
+                    contract=_INTERNAL_V4_TEST_CONTRACT,
                 )
             self.assertEqual(loader_calls, 1)
 
     def test_selection_drift_fails_before_consumed_claim(self) -> None:
-        source = self._v4_source()
+        source = self._internal_v4_source()
         drifted = replace(source, private_prompt="different private prompt")
         with tempfile.TemporaryDirectory() as temporary_directory:
             state_root = Path(temporary_directory)
@@ -182,17 +272,21 @@ class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
                 ContractValidationError,
                 "prompt selection proof binding mismatch",
             ):
-                diagnostic_cli.run_real_prompt_sealed_source_diagnostic_once(
+                diagnostic_cli._run_relation_projection_equivalence_diagnostic_once(
                     loader=lambda: drifted,
-                    loader_spec_fingerprint=sha256_json("stub loader"),
+                    loader_spec_fingerprint=self._internal_loader_spec_fingerprint(),
                     state_root=state_root,
+                    contract=_INTERNAL_V4_TEST_CONTRACT,
                 )
-            claim_path, report_path = diagnostic_cli._real_prompt_sealed_paths(state_root)
+            claim_path, report_path = diagnostic_cli._relation_projection_equivalence_paths(
+                state_root,
+                contract=_INTERNAL_V4_TEST_CONTRACT,
+            )
             self.assertFalse(claim_path.exists())
             self.assertFalse(report_path.exists())
 
     def test_post_claim_failure_is_consumed_without_partial_report(self) -> None:
-        source = self._v4_source()
+        source = self._internal_v4_source()
         loader_calls = 0
 
         def loader() -> Issue56SealedSourceDiagnosticInput:
@@ -205,24 +299,29 @@ class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
             with (
                 mock.patch.object(
                     diagnostic_cli,
-                    "_run_http_diagnostic",
+                    "_execute_http_diagnostic_exchange",
                     side_effect=RuntimeError("synthetic post-claim failure"),
                 ),
                 self.assertRaisesRegex(RuntimeError, "post-claim failure"),
             ):
-                diagnostic_cli.run_real_prompt_sealed_source_diagnostic_once(
+                diagnostic_cli._run_relation_projection_equivalence_diagnostic_once(
                     loader=loader,
-                    loader_spec_fingerprint=sha256_json("stub loader"),
+                    loader_spec_fingerprint=self._internal_loader_spec_fingerprint(),
                     state_root=state_root,
+                    contract=_INTERNAL_V4_TEST_CONTRACT,
                 )
-            claim_path, report_path = diagnostic_cli._real_prompt_sealed_paths(state_root)
+            claim_path, report_path = diagnostic_cli._relation_projection_equivalence_paths(
+                state_root,
+                contract=_INTERNAL_V4_TEST_CONTRACT,
+            )
             self.assertTrue(claim_path.is_file())
             self.assertFalse(report_path.exists())
             with self.assertRaisesRegex(ContractValidationError, "already consumed"):
-                diagnostic_cli.run_real_prompt_sealed_source_diagnostic_once(
+                diagnostic_cli._run_relation_projection_equivalence_diagnostic_once(
                     loader=loader,
-                    loader_spec_fingerprint=sha256_json("stub loader"),
+                    loader_spec_fingerprint=self._internal_loader_spec_fingerprint(),
                     state_root=state_root,
+                    contract=_INTERNAL_V4_TEST_CONTRACT,
                 )
             self.assertEqual(loader_calls, 1)
 
@@ -263,6 +362,19 @@ class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
                     state_root=Path(directory),
                 )
             legacy_loader.assert_not_called()
+        formal_v4_loader = mock.Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "immutable and already consumed",
+            ):
+                diagnostic_cli.run_real_prompt_sealed_source_diagnostic_once(
+                    loader=formal_v4_loader,
+                    loader_spec_fingerprint=sha256_json("formal v4 loader"),
+                    state_root=Path(directory),
+                )
+            formal_v4_loader.assert_not_called()
+            self.assertEqual(list(Path(directory).iterdir()), [])
 
     def _v4_source(self) -> Issue56SealedSourceDiagnosticInput:
         base = self._base_source()
@@ -281,6 +393,36 @@ class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
             private_prompt=_PRIVATE_PROMPT,
             prompt_selection=self._selection_binding(base),
             diagnostic_mode_id=(ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID),
+        )
+
+    def _internal_v4_source(
+        self,
+        source: Issue56SealedSourceDiagnosticInput | None = None,
+    ) -> Issue56SealedSourceDiagnosticInput:
+        source = source or self._v4_source()
+        return build_issue56_sealed_source_diagnostic_input(
+            session=source.session,
+            effective_graph_view=source.effective_graph_view,
+            allowed_relation_types=source.allowed_relation_types,
+            source_asset_fingerprint=source.source_asset_fingerprint,
+            loader_contract_fingerprint=source.loader_contract_fingerprint,
+            graph_revision_fingerprint=source.graph_revision_fingerprint,
+            source_loader_binding_fingerprint=(source.source_loader_binding_fingerprint),
+            lineage_crosswalk_precompute=(source.lineage_crosswalk_precompute.to_safe_dict()),
+            relation_projection_base_precompute=(
+                source.relation_projection_base_precompute.to_safe_dict()
+            ),
+            private_prompt=source.private_prompt,
+            prompt_selection=source.prompt_selection.to_safe_dict(),
+            diagnostic_mode_id=_INTERNAL_V4_TEST_MODE_ID,
+        )
+
+    def _internal_loader_spec_fingerprint(self) -> str:
+        return sha256_json(
+            {
+                "loader_contract_id": _INTERNAL_V4_TEST_CONTRACT.loader_contract_id,
+                "loader_spec": "tests.internal_real_prompt_loader:load",
+            }
         )
 
     def _base_source(self) -> Issue56SealedSourceDiagnosticInput:
