@@ -35,6 +35,8 @@ from formowl_gateway.issue56_diagnostic import (  # noqa: E402
     ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
     ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
     ISSUE56_RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_ID,
+    ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
+    ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_CONTRACT_ID,
     ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
     ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V1_MODE_ID,
     ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V2_MODE_ID,
@@ -43,6 +45,7 @@ from formowl_gateway.issue56_diagnostic import (  # noqa: E402
     Issue56SealedSourceDiagnosticInput,
     build_issue56_diagnostic_composition,
     build_issue56_relation_projection_equivalence_compositions,
+    build_issue56_relation_projection_equivalence_v6_compositions,
     build_safe_diagnostic_report,
     build_safe_relation_projection_equivalence_arm,
     build_safe_relation_projection_equivalence_report,
@@ -65,6 +68,10 @@ _RELATION_PROJECTION_EQUIVALENCE_CONSUMED_CLAIM_ARTIFACT_ID = (
     "formowl_issue56_relation_projection_equivalence_consumed_claim_v5"
 )
 _RELATION_PROJECTION_EQUIVALENCE_CONSUMED_CLAIM_SCHEMA_VERSION = 5
+_RELATION_PROJECTION_EQUIVALENCE_V6_CONSUMED_CLAIM_ARTIFACT_ID = (
+    "formowl_issue56_relation_projection_equivalence_consumed_claim_v6"
+)
+_RELATION_PROJECTION_EQUIVALENCE_V6_CONSUMED_CLAIM_SCHEMA_VERSION = 6
 _LOADER_SPEC_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$")
 _SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -83,6 +90,7 @@ class _RelationProjectionEquivalenceVersionContract:
     claim_artifact_id: str
     claim_schema_version: int
     enforce_repository_state_root: bool
+    preseal_graph_content: bool = False
 
 
 @dataclass(frozen=True)
@@ -100,6 +108,14 @@ _RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT = _RelationProjectionEquivalenceVer
     claim_schema_version=(_RELATION_PROJECTION_EQUIVALENCE_CONSUMED_CLAIM_SCHEMA_VERSION),
     enforce_repository_state_root=True,
 )
+_RELATION_PROJECTION_EQUIVALENCE_V6_CONTRACT = _RelationProjectionEquivalenceVersionContract(
+    diagnostic_mode_id=(ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID),
+    loader_contract_id=(ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_CONTRACT_ID),
+    claim_artifact_id=(_RELATION_PROJECTION_EQUIVALENCE_V6_CONSUMED_CLAIM_ARTIFACT_ID),
+    claim_schema_version=(_RELATION_PROJECTION_EQUIVALENCE_V6_CONSUMED_CLAIM_SCHEMA_VERSION),
+    enforce_repository_state_root=True,
+    preseal_graph_content=True,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -113,6 +129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
             ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
             ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
+            ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID,
         ),
         default=ISSUE56_SYNTHETIC_DIAGNOSTIC_MODE_ID,
     )
@@ -145,11 +162,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V2_MODE_ID,
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
             ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
+            ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
         }:
             raise ContractValidationError(
                 "sealed diagnostic version is immutable and already consumed"
             )
-        if args.mode == ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID:
+        if args.mode == ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID:
             if args.prompt is not None:
                 raise ContractValidationError(
                     "sealed diagnostic prompt is repository-owned and immutable"
@@ -159,12 +177,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "sealed diagnostic loader and state root are required"
                 )
             loader = resolve_sealed_source_loader(args.sealed_source_loader)
-            report = run_relation_projection_equivalence_diagnostic_once(
+            report = run_relation_projection_equivalence_v6_diagnostic_once(
                 loader=loader,
                 loader_spec_fingerprint=sha256_json(
                     {
                         "loader_contract_id": (
-                            ISSUE56_RELATION_PROJECTION_EQUIVALENCE_LOADER_CONTRACT_ID
+                            ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_CONTRACT_ID
                         ),
                         "loader_spec": args.sealed_source_loader,
                     }
@@ -178,10 +196,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             report = run_diagnostic(args.prompt or ISSUE56_DIAGNOSTIC_DEFAULT_PROMPT)
     except DenseEmbeddingUnavailableError as exc:
-        if args.mode == ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID:
+        if args.mode == ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID:
             version_consumed = _relation_projection_equivalence_claim_exists(
                 args.state_root,
-                contract=_RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT,
+                contract=_RELATION_PROJECTION_EQUIVALENCE_V6_CONTRACT,
             )
         report = safe_blocked_report(
             exc.reason_code,
@@ -194,12 +212,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_V2_MODE_ID,
             ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
             ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
+            ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID,
         }:
             version_consumed = True
-        elif args.mode == ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID:
+        elif args.mode == ISSUE56_RELATION_PROJECTION_EQUIVALENCE_V6_DIAGNOSTIC_MODE_ID:
             version_consumed = _relation_projection_equivalence_claim_exists(
                 args.state_root,
-                contract=_RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT,
+                contract=_RELATION_PROJECTION_EQUIVALENCE_V6_CONTRACT,
             )
         report = safe_blocked_report(
             type(exc).__name__,
@@ -250,13 +269,32 @@ def run_relation_projection_equivalence_diagnostic_once(
     loader_spec_fingerprint: str,
     state_root: Path,
 ) -> dict[str, Any]:
-    """Execute the official v5 contract once at its canonical state root."""
+    """Reject the immutable, already-consumed v5 execution boundary."""
+
+    expected_state_root = (
+        ROOT
+        / ".test-tmp"
+        / f"{_RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT.diagnostic_mode_id}-state"
+    ).resolve()
+    if state_root.resolve() != expected_state_root:
+        raise ContractValidationError("relation projection diagnostic state root mismatch")
+    del loader, loader_spec_fingerprint
+    raise ContractValidationError("sealed diagnostic version is immutable and already consumed")
+
+
+def run_relation_projection_equivalence_v6_diagnostic_once(
+    *,
+    loader: Callable[[], Issue56SealedSourceDiagnosticInput],
+    loader_spec_fingerprint: str,
+    state_root: Path,
+) -> dict[str, Any]:
+    """Execute the official v6 contract once at its canonical state root."""
 
     return _run_relation_projection_equivalence_diagnostic_once(
         loader=loader,
         loader_spec_fingerprint=loader_spec_fingerprint,
         state_root=state_root,
-        contract=_RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT,
+        contract=_RELATION_PROJECTION_EQUIVALENCE_V6_CONTRACT,
     )
 
 
@@ -303,7 +341,15 @@ def _run_relation_projection_equivalence_diagnostic_once(
         or source.prompt_selection is None
     ):
         raise ContractValidationError("relation projection diagnostic loader contract mismatch")
-    before, after = build_issue56_relation_projection_equivalence_compositions(source)
+    graph_content_preseal = None
+    if contract.preseal_graph_content:
+        (
+            before,
+            after,
+            graph_content_preseal,
+        ) = build_issue56_relation_projection_equivalence_v6_compositions(source)
+    else:
+        before, after = build_issue56_relation_projection_equivalence_compositions(source)
     prompt_hash = sha256_json(source.private_prompt)
     if prompt_hash != source.prompt_selection.prompt_hash:
         raise ContractValidationError("relation projection diagnostic prompt binding mismatch")
@@ -314,8 +360,23 @@ def _run_relation_projection_equivalence_diagnostic_once(
         not cache_containers_isolated
         or before_cache_before["entry_count"] != 0
         or before_cache_before["expected_binding_present"]
+        or before_cache_before["binding_snapshot_entry_count"] != 0
+        or before_cache_before["expected_binding_snapshot_present"]
         or after_cache_before["entry_count"] != 1
         or not after_cache_before["expected_binding_present"]
+        or after_cache_before["binding_snapshot_entry_count"] != 1
+        or not after_cache_before["expected_binding_snapshot_present"]
+        or (
+            contract.preseal_graph_content
+            and (
+                graph_content_preseal is None
+                or graph_content_preseal.status != "passed"
+                or graph_content_preseal.before_binding_cache_entry_count != 0
+                or graph_content_preseal.before_base_cache_entry_count != 0
+                or graph_content_preseal.after_binding_cache_entry_count != 1
+                or graph_content_preseal.after_base_cache_entry_count != 1
+            )
+        )
     ):
         raise ContractValidationError("relation projection diagnostic cache preflight mismatch")
     execution_binding_fingerprint = sha256_json(
@@ -336,6 +397,11 @@ def _run_relation_projection_equivalence_diagnostic_once(
             "relation_projection_cache_binding_fingerprint": (
                 source.relation_projection_base_precompute.cache_binding_fingerprint
             ),
+            "graph_content_preseal_fingerprint": (
+                graph_content_preseal.evidence_binding_fingerprint
+                if graph_content_preseal is not None
+                else None
+            ),
             "identity_scope_mode": ISSUE56_DIAGNOSTIC_IDENTITY_SCOPE_MODE,
             "workspace_id": ISSUE56_DIAGNOSTIC_WORKSPACE_ID,
             "approver_user_id": ISSUE56_DIAGNOSTIC_USER_ID,
@@ -354,6 +420,11 @@ def _run_relation_projection_equivalence_diagnostic_once(
         "selection_proof_fingerprint": (source.prompt_selection.selection_proof_fingerprint),
         "source_binding_fingerprint": source.source_binding_fingerprint,
         "permission_lineage_fingerprint": (source.permission_lineage_fingerprint),
+        "graph_content_preseal_fingerprint": (
+            graph_content_preseal.evidence_binding_fingerprint
+            if graph_content_preseal is not None
+            else None
+        ),
         "identity_scope_mode": ISSUE56_DIAGNOSTIC_IDENTITY_SCOPE_MODE,
         "identity_scope_fingerprint": sha256_json(
             {
@@ -422,6 +493,7 @@ def _run_relation_projection_equivalence_diagnostic_once(
         cache_containers_isolated=(
             relation_projection_cache_containers_are_isolated(before, after)
         ),
+        graph_content_preseal=graph_content_preseal,
     )
     _atomic_publish_json_once(output_path, report)
     return report
@@ -593,10 +665,11 @@ def _validate_relation_projection_equivalence_version_contract(
         or not contract.claim_artifact_id
         or type(contract.claim_schema_version) is not int
         or contract.claim_schema_version <= 0
+        or type(contract.preseal_graph_content) is not bool
     ):
         raise ContractValidationError("relation projection diagnostic version contract is invalid")
     if contract.enforce_repository_state_root and (
-        contract != _RELATION_PROJECTION_EQUIVALENCE_V5_CONTRACT
+        contract != _RELATION_PROJECTION_EQUIVALENCE_V6_CONTRACT
     ):
         raise ContractValidationError("relation projection diagnostic production contract mismatch")
 
