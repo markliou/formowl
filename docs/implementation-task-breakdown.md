@@ -125,8 +125,44 @@ This is the bounded active work board. Lossless history is indexed in
   and independent cross-review found no blocker. The formal v6 root is
   consumed; this diagnostic-only evidence does not establish methodology
   readiness, quality, or KG/ontology superiority.
-- Diagnostic versions v1, v2, v3, v4, v5, and v6 are consumed and must never be
-  rerun, retried, or tuned.
+- Formal v7 mode
+  `issue56-sealed-source-real-prompt-relation-projection-offline-equivalence-phase-traced-diagnostic-20260825-v7`
+  consumed its canonical claim and passed over the same `456` Observations as
+  `workspace_only_v1` for `workspace_formowl`, approved actor
+  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
+- The two isolated presealed views each bound `10281` nodes and `29748` edges.
+  Cold/after graph preseal took `61825.028571`/`61485.804325 ms`; the after-arm
+  relation precompute took `4344.986693 ms`.
+- After the persistent claim, the cold binding snapshot and base builder took
+  `633.968035` and `3196.093676 ms`; offline precompute total was
+  `35771.614738 ms`, and its cache moved exactly `0/0 -> 1/1`.
+- Both arms then used the normal `1500 ms` budget through complete ASGI `/mcp`.
+  Cold/after query times were `290.941898`/`298.654947 ms`, HTTP times were
+  `366.720007`/`361.008008 ms`, and relation projection was
+  `57.473886`/`58.790683 ms`. Each returned `10` paths, `1` citation, and `48`
+  scores with no exhausted deadline.
+- All `13` timing-free semantic equivalence groups, all `5` cache acceptance
+  checks, and every applicable boundary gate passed.
+- V7 claim/claim-byte/report-byte hashes are
+  `sha256:879e903599e95d38d52e0bd1fb0d29fb6266371e7168289547d0bbc23a1d643b`,
+  `sha256:4de4d694f042f46b3a0d6c68dd93101ca7c7610a0b3f97496f44be34f20b7a0c`,
+  and `sha256:5b34d191244391c560cda849c0666c2f7e41be1d220fd3799108b6ca738a99d0`;
+  claim/report sizes are `1508`/`30893` bytes.
+- Trace/execution/source/preflight/offline-evidence/owner/precompute/cache bindings are
+  `sha256:9af61b1918c6ef2c31a91a8d6f73a875e796bbf678b13c49f7db44530189e6d6`,
+  `sha256:a99e1fa89b01d2d383209ae09f742ee55cfddcd2095992c9391878d73b00c649`,
+  `sha256:b5a8112dd88eb829b26ec7b795a6071ca81a6327362a0d265c1749d41c5f002e`,
+  `sha256:10c44440e0cde947591af7c8ad9797ba47b755d50d027d280c0cfa464dd8baf0`,
+  `sha256:bd6d0e962d07ba10f273caa83996a6e57114d6801d56660c551d3728a655fdf1`,
+  `sha256:8f63bdcf6baa4d18b6574071905900baf002318d9227e0d0da0523bf297a293e`,
+  `sha256:b2edcd214a19a6b3283abc475a8b67abd984753653a6136396b1630bfbfecf3b`,
+  and `sha256:d15cf0214e9112b1a28130496dc5ea0c554587606e32dd423886ee14364e110f`.
+- Temporary v7 evidence passed `51/51`; final cross-review found no blocker.
+  Together with v6's latency-necessity evidence, v7 establishes the bounded,
+  behavior-neutral, same-real-source relation-precompute POC. It is not
+  methodology, UAT, holdout, readiness, completion, or superiority evidence.
+- Diagnostic versions v1 through v7 are consumed and must never be rerun,
+  retried, or tuned. The four methodology authority gates remain blocked.
 - V4 is neither an independent holdout nor promotion evidence and
   cannot support KG/ontology superiority. The sealed 41-case and additive
   59-case mail holdouts and the GitHub transfer holdout remain unexecuted.
@@ -188,10 +224,9 @@ This is the bounded active work board. Lossless history is indexed in
   - Work D: typed router, validated plan, bounded traversal, evidence bundles,
     and deterministic exact execution.
   - Step 4 / Work D status remains `in-progress`; no checkbox is earned by the
-    non-claim-bearing v4 or blocked v5/v6 diagnostics.
-  - The next action remains inside step 4 and requires separate approval; v6
-    must not be rerun, and all four blocked authority gates still require
-    legitimate production evidence.
+    bounded v4/v7 POC diagnostics or blocked v5/v6 diagnostics.
+  - The next action remains inside step 4; v1-v7 must not be rerun, and all four
+    blocked authority gates still require legitimate production evidence.
   - Work E: controlled, citation-grounded LLM roles with the same answer model
     across arms.
   - Work F: strong RAG control, anti-fitting split, diagnostic evaluation,
@@ -207,8 +242,9 @@ This is the bounded active work board. Lossless history is indexed in
 - [x] Methodology authority guard/runtime tokenizer probe and candidate,
   canonical, lifecycle, user/effective graph, scoped ontology, and projection
   contract slices exist; authority remains valid but blocked.
-- [x] The bounded deterministic source-backed prompt selector plus immutable v4
-  real-source diagnostic slice passed its stated non-claim-bearing scope.
+- [x] The bounded deterministic source-backed prompt selector and immutable
+  v4/v7 real-source diagnostic POC slices passed their stated non-claim-bearing
+  scopes.
 - [x] Source/Asset/Observation, mail evidence, Project MCP, Wiki MCP, connected
   gateway, and container-first backbone slices exist within their documented
   claim boundaries.

@@ -1,6 +1,5 @@
 # Knowledge Graph Research Agent Goal
 ## Lifecycle
-
 - Label: `active-blocked`
 - Active program: GitHub issue #56
 - Historical pre-rewrite state:
@@ -9,7 +8,6 @@
 ## Role
 Knowledge Graph Research Agent. Durable role: `../agent-roles.md`.
 ## Active Execution Model
-
 Issue #56 uses one Master and exactly two implementation subagents:
 
 ```text
@@ -17,13 +15,11 @@ Master: global plan, decomposition, monitoring, integration review, acceptance
 Worker A: gpt-5.6-sol, reasoning_effort=ultra
 Worker B: gpt-5.6-sol, reasoning_effort=ultra
 ```
-
 The Master does not implement or take over assigned edits. Workers receive
 non-overlapping write sets. The five-step plan changes only for a concrete new
 blocker; repeated failed routes require a changed decomposition or validation
 method, not another retry.
 ## Objective
-
 Implement and fairly evaluate
 `evidence_to_knowledge_kg_ontology_v2_hybrid_v1` so FormOwl can use a governed
 graph for heterogeneous-data integration and demonstrate a measurable
@@ -40,10 +36,8 @@ source-complete authorized Observations
   -> scoped ontology with capped soft scoring
   -> deterministic exact executor or cited answer
 ```
-
 Mail is the first source fixture. The method must transfer to a materially
 different source family without question-specific core types or aliases.
-
 ## Status
 `blocked` for methodology-quality UAT, comparative superiority, default-path
 replacement, and objective completion. The pinned authority is valid but fail-closed
@@ -53,45 +47,51 @@ with four blocking gates. The normal runtime-method gate passes for
 are source completeness, accepted execution-fingerprint binding, same-pipeline
 real-source ablation, and independent final-answer acceptance. The v3
 promotion contract is repaired, but no passed evidence exists to promote.
-
 ## Diagnostic Checkpoint — 2026-08-25
 The sealed `456`-Observation `workspace_only_v1` package has no tenant
 dimension. Its earlier development one-shot is consumed: Hybrid `0/100`, graph
 CI `[0,0]`, citations `0%`, no-answer false positives `100`, p95
 `1510.841 ms`, and leakage `0`.
-Read-only source tracing found zero occurrences for both identifiers from the
-old synthetic fixed prompt at raw source, parser-native, and sealed retrieval
-layers. The generalized root cause was prompt-to-approved-source mismatch.
-The deterministic
-`issue56_source_backed_connected_identifier_prompt_selection_v1` selector now
-requires authorized exact-term/lexical lineage and an existing source-backed
-connected path; its combined focused E2E passed `11/11`. Immutable mode
-`issue56-sealed-source-real-prompt-phase-traced-diagnostic-20260823-v4`
-consumed one real-source claim over the same `456` Observations for
-`workspace_formowl`, actor/approver
-`user_full_pst_domain_hard_case_eval_owner`, with no tenant dimension.
-V4 passed with `2` anchors, `10` graph paths, and `1` citation.
-Query/gateway/HTTP timings were `951.148333`, `953.544449`, and `982.203990 ms`;
-`relation_projection` was the largest semantic phase at `717.357210 ms`, and
-`deadline_exhausted_phase` was null. Loader time `678625.866681 ms` was
-one-time source loading/selection outside request latency.
-Formal v6 mode `issue56-sealed-source-real-prompt-relation-projection-equivalence-phase-traced-diagnostic-20260825-v6`
-consumed its claim over `456` Observations for `workspace_formowl`, approved actor `user_full_pst_domain_hard_case_eval_owner`, with no tenant. Loader, before graph
-preseal, and owner relation-base precompute were `677442.490893`, `60990.781102`,
-and `4245.079389 ms`. Before completed graph snapshot/Strong RAG
-in `0.036742`/`90.802575 ms`, then relation projection exhausted after
-`1415.389724 ms`; query/HTTP were `1520.515069`/`1555.417065 ms` with
-`0` paths/citations/scores. After relation projection/query/HTTP were
-`57.939772`/`291.040282`/`346.270890 ms`, with all required phases complete,
-`10` paths, `1` citation, and `48` scores. Cache entries moved before `0/0->1/0`
-and after `1/1->1/1`; graph/index/permission/plan/runtime gates passed.
-Claim/claim-byte/report-byte are `sha256:6b045800e19d82fa187ff4271ab2d854189726a3449bcd4cedf1c03c47c2639e`,
-`sha256:65b3b3d1f9889e1d82ec47ade77fb7dc44b4a9a3711f7bd37a538cdc9e986b61`,
-`sha256:ae10a358242f6f44b1f92267a80e48eac296ebd677eb1ac27bcc24f6111909f1`;
-execution/source/preseal/trace are `sha256:7ecf2c31901116ddb32d2a8a7cb41b0e3b504648006a68b3e23e89ee22b2c1cf`,
-`sha256:bbc67d7fc7051a597488034d277c772a4a5c68bc09dc8ce696bfd2bcc0d8db8b`,
-`sha256:4900fd366f300af097de355b59feeb6059a06b41574d01d9834e51576c4eed27`, `sha256:040cb86b70af99fd6f0467306423e0e556a6dfc41b1ed734227b613248c27a93`.
-Temporary/combined tests passed `6/6` and `31/31`; cross-review found no blocker. V1-v6 cannot be rerun/tuned. V6 is blocked and earns no broad claim.
+Source tracing found the old fixed prompt had zero raw/parser/retrieval
+occurrences; v4 corrected that prompt-to-source mismatch and passed with `2`
+anchors, `10` paths, and `1` citation. V5/v6 then isolated relation-precompute
+latency: v6's cold arm exhausted relation projection at `1415.389724 ms`, while
+its primed arm completed at `57.939772 ms` with `10` paths/`1` citation/`48`
+scores. Their immutable details remain on the active board and handoff.
+
+Formal v7 mode
+`issue56-sealed-source-real-prompt-relation-projection-offline-equivalence-phase-traced-diagnostic-20260825-v7`
+is consumed and passed over the same `456` Observations for
+`workspace_formowl`, approved actor
+`user_full_pst_domain_hard_case_eval_owner`, with no tenant dimension. Its two
+isolated presealed views each contained `10281` nodes and `29748` edges.
+Cold/after graph preseal took `61825.028571`/`61485.804325 ms`; the after
+relation precompute took `4344.986693 ms`. Post-claim cold binding/base/total
+were `633.968035`/`3196.093676`/`35771.614738 ms`, moving `0/0 -> 1/1`.
+Both normal `1500 ms` ASGI `/mcp` arms completed: cold/after relation projection
+was `57.473886`/`58.790683 ms`, query `290.941898`/`298.654947 ms`, and HTTP
+`366.720007`/`361.008008 ms`; each produced `10` paths, `1` citation, and `48`
+scores with no deadline exhaustion. All `13` timing-free equivalence groups,
+all cache checks, and all applicable boundary gates passed.
+
+V7 claim/claim-byte/report-byte are
+`sha256:879e903599e95d38d52e0bd1fb0d29fb6266371e7168289547d0bbc23a1d643b`,
+`sha256:4de4d694f042f46b3a0d6c68dd93101ca7c7610a0b3f97496f44be34f20b7a0c`,
+and `sha256:5b34d191244391c560cda849c0666c2f7e41be1d220fd3799108b6ca738a99d0`;
+claim/report sizes are `1508`/`30893` bytes. Trace/execution/source/preflight/
+offline-evidence/owner/precompute/cache bindings are
+`sha256:9af61b1918c6ef2c31a91a8d6f73a875e796bbf678b13c49f7db44530189e6d6`,
+`sha256:a99e1fa89b01d2d383209ae09f742ee55cfddcd2095992c9391878d73b00c649`,
+`sha256:b5a8112dd88eb829b26ec7b795a6071ca81a6327362a0d265c1749d41c5f002e`,
+`sha256:10c44440e0cde947591af7c8ad9797ba47b755d50d027d280c0cfa464dd8baf0`,
+`sha256:bd6d0e962d07ba10f273caa83996a6e57114d6801d56660c551d3728a655fdf1`,
+`sha256:8f63bdcf6baa4d18b6574071905900baf002318d9227e0d0da0523bf297a293e`,
+`sha256:b2edcd214a19a6b3283abc475a8b67abd984753653a6136396b1630bfbfecf3b`,
+and `sha256:d15cf0214e9112b1a28130496dc5ea0c554587606e32dd423886ee14364e110f`.
+Temporary evidence passed `51/51`; cross-review found no blocker. With v6's
+latency-necessity evidence, v7 accepts the bounded behavior-neutral same-source
+relation-precompute POC only. V1-v7 cannot be rerun or tuned; this is not
+methodology/UAT/holdout/readiness/superiority/completion evidence.
 ## Non-Negotiable Method
 
 - Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence
@@ -174,7 +174,7 @@ exiting zero.
 
 ## Next Action
 
-Remain within step 4, but do not rerun or tune any consumed diagnostic.
-Any next diagnostic must be separately versioned and approved around the cold
-graph-snapshot boundary; then close the four blocked authority gates without
-executing holdouts prematurely.
+Remain within step 4 and do not rerun or tune v1-v7. The bounded relation
+precompute POC is accepted only inside its diagnostic claim boundary. Next,
+close the four blocked authority gates with legitimate evidence; do not execute
+holdouts prematurely.

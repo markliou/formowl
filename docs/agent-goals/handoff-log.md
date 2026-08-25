@@ -8,29 +8,50 @@ This is a bounded active window. Earlier entries are immutable history under
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
+## 2026-08-25 — Offline relation-precompute v7 consumed and passed
+- Formal mode `issue56-sealed-source-real-prompt-relation-projection-offline-equivalence-phase-traced-diagnostic-20260825-v7`
+  consumed one claim over `456` Observations as `workspace_only_v1` for `workspace_formowl`; approved
+  actor `user_full_pst_domain_hard_case_eval_owner`; no tenant exists.
+- Both isolated views held `10281` nodes/`29748` edges; cold/after graph preseal
+  was `61825.028571`/`61485.804325 ms`, and after relation precompute was `4344.986693 ms`.
+- Post-claim cold binding/base/total was `633.968035`/`3196.093676`/`35771.614738 ms`,
+  with exact cache transition `0/0 -> 1/1`.
+- Both normal `1500 ms` ASGI `/mcp` arms completed: cold/after relation was
+  `57.473886`/`58.790683 ms`, query `290.941898`/`298.654947 ms`, and HTTP
+  `366.720007`/`361.008008 ms`; each had `10` paths, `1` citation, `48` scores,
+  and null deadline exhaustion. All `13` timing-free equivalence groups, all
+  cache acceptance checks, and all applicable boundary gates passed.
+- Claim/claim-byte/report-byte are `sha256:879e903599e95d38d52e0bd1fb0d29fb6266371e7168289547d0bbc23a1d643b`,
+  `sha256:4de4d694f042f46b3a0d6c68dd93101ca7c7610a0b3f97496f44be34f20b7a0c`,
+  `sha256:5b34d191244391c560cda849c0666c2f7e41be1d220fd3799108b6ca738a99d0`; claim/report sizes are `1508`/`30893` bytes.
+- Trace/execution/source/preflight are `sha256:9af61b1918c6ef2c31a91a8d6f73a875e796bbf678b13c49f7db44530189e6d6`,
+  `sha256:a99e1fa89b01d2d383209ae09f742ee55cfddcd2095992c9391878d73b00c649`,
+  `sha256:b5a8112dd88eb829b26ec7b795a6071ca81a6327362a0d265c1749d41c5f002e`,
+  `sha256:10c44440e0cde947591af7c8ad9797ba47b755d50d027d280c0cfa464dd8baf0`.
+- Offline-evidence/owner/precompute/cache are `sha256:bd6d0e962d07ba10f273caa83996a6e57114d6801d56660c551d3728a655fdf1`,
+  `sha256:8f63bdcf6baa4d18b6574071905900baf002318d9227e0d0da0523bf297a293e`,
+  `sha256:b2edcd214a19a6b3283abc475a8b67abd984753653a6136396b1630bfbfecf3b`,
+  `sha256:d15cf0214e9112b1a28130496dc5ea0c554587606e32dd423886ee14364e110f`.
+- Temporary evidence passed `51/51`; final cross-review found no blocker.
+  With v6 latency necessity, this accepts only the behavior-neutral same-source
+  relation-precompute POC. V1-v7 cannot be rerun; four authority gates remain
+  blocked, Work D stays in progress, and no broader claim is earned.
 ## 2026-08-25 — Graph-presealed relation-projection v6 consumed and blocked
-- Formal mode `issue56-sealed-source-real-prompt-relation-projection-equivalence-phase-traced-diagnostic-20260825-v6`
-  consumed its canonical claim over `456` Observations as `workspace_only_v1` for
-  `workspace_formowl`, approved actor `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
-- Loader, before graph preseal, and owner relation-base precompute were
-  `677442.490893`, `60990.781102`, and `4245.079389 ms`.
-- Before completed graph snapshot/Strong RAG in `0.036742`/`90.802575 ms`, then relation
-  projection exhausted after `1415.389724 ms`; query/HTTP were `1520.515069`/`1555.417065 ms`,
-  with `0` paths/citations/scores.
-- After relation projection/query/HTTP were `57.939772`/`291.040282`/`346.270890 ms`;
-  all required phases completed with `10` paths, `1` citation, and `48` scores.
-- Binding/base caches moved before `0/0 -> 1/0` and after `1/1 -> 1/1`; graph/index/
-  permission/plan/runtime gates passed, while remaining groups failed on the before deadline.
-- Claim/claim-byte/report-byte hashes are
-  `sha256:6b045800e19d82fa187ff4271ab2d854189726a3449bcd4cedf1c03c47c2639e`,
+- Formal v6 consumed the same workspace-only `456` Observations with no tenant.
+  Loader/preseal/owner precompute were `677442.490893`/`60990.781102`/`4245.079389 ms`.
+  Cold relation exhausted at `1415.389724 ms` (`1520.515069` query/
+  `1555.417065` HTTP; `0` paths/citations/scores); primed relation/query/HTTP
+  were `57.939772`/`291.040282`/`346.270890 ms` with `10` paths/`1` citation/
+  `48` scores. Caches were `0/0 -> 1/0` versus `1/1 -> 1/1`.
+- Claim/claim-byte/report-byte were `sha256:6b045800e19d82fa187ff4271ab2d854189726a3449bcd4cedf1c03c47c2639e`,
   `sha256:65b3b3d1f9889e1d82ec47ade77fb7dc44b4a9a3711f7bd37a538cdc9e986b61`,
-  and `sha256:ae10a358242f6f44b1f92267a80e48eac296ebd677eb1ac27bcc24f6111909f1`.
-- Execution/source/preseal/trace bindings are `sha256:7ecf2c31901116ddb32d2a8a7cb41b0e3b504648006a68b3e23e89ee22b2c1cf`,
+  `sha256:ae10a358242f6f44b1f92267a80e48eac296ebd677eb1ac27bcc24f6111909f1`;
+  execution/source/preseal/trace were `sha256:7ecf2c31901116ddb32d2a8a7cb41b0e3b504648006a68b3e23e89ee22b2c1cf`,
   `sha256:bbc67d7fc7051a597488034d277c772a4a5c68bc09dc8ce696bfd2bcc0d8db8b`,
   `sha256:4900fd366f300af097de355b59feeb6059a06b41574d01d9834e51576c4eed27`,
-  and `sha256:040cb86b70af99fd6f0467306423e0e556a6dfc41b1ed734227b613248c27a93`.
-- Temporary/combined tests passed `6/6` and `31/31`; independent cross-review found no
-  blocker. V6 cannot be rerun/retried/tuned; authority remains blocked, Work D remains in progress, and no readiness or superiority claim is earned.
+  `sha256:040cb86b70af99fd6f0467306423e0e556a6dfc41b1ed734227b613248c27a93`.
+- Tests passed `6/6` and `31/31`; review found no blocker. V6 is immutable,
+  blocked, and earns no readiness or superiority claim.
 ## 2026-08-23 — Source-backed real-prompt v4 diagnostic passed
 - Source tracing found both synthetic fixed-prompt terms at count `0` in
   raw/parser/retrieval; the cause was prompt-to-approved-source mismatch.
@@ -80,9 +101,7 @@ This is a bounded active window. Earlier entries are immutable history under
   and independent final-answer acceptance.
 - Next: stay in step 4; diagnose the generalized zero-path/zero-citation result
   and remaining relation-projection cost only under separate approval.
-
 ## 2026-08-21 — Sealed-source v2 diagnostic consumed and blocked
-
 - Mode `issue56-sealed-source-phase-traced-diagnostic-20260821-v2` consumed its
   claim exactly once over `456` Observations. It ran as `workspace_only_v1` for
   `workspace_formowl`, approved actor
@@ -114,9 +133,7 @@ This is a bounded active window. Earlier entries are immutable history under
   transfer remain unexecuted.
 - Next: stay in step 4 and require separate approval for any generalized
   relation-projection optimization/diagnostic version.
-
 ## 2026-08-20 — Versioned minimum MCP-to-Hybrid diagnostic passed
-
 - The user approved a versioned, non-claim-bearing minimum E2E plus
   phase-tracing diagnostic slice. It used only a `synthetic_non_sealed`
   workspace-only fixture.
@@ -136,9 +153,7 @@ This is a bounded active window. Earlier entries are immutable history under
   accepted execution-fingerprint binding, same-pipeline real-source ablation,
   and independent final-answer acceptance. No issue #56 checkbox, production
   readiness, methodology readiness, or superiority claim is earned.
-
 ## 2026-08-20 — Workspace-only development one-shot consumed and blocked
-
 - The sealed development work root
   `.test-tmp/issue56-development-uat-v2-workspace-only-work` passed its exact
   `456`-Observation artifact and identity-scope contract.
@@ -163,24 +178,18 @@ This is a bounded active window. Earlier entries are immutable history under
 - Plan step 4 and all corresponding board tasks remain unchecked. The sole next
   action is a governance/specification decision plus a read-only postmortem;
   another execution is prohibited.
-
 ## 2026-08-19 — Issue #56 step-4 development diagnostic status
-
-- The pinned methodology authority is valid but blocked. The normal
-  runtime-method gate is passed; four gates remain blocked: source
-  completeness, accepted execution-fingerprint binding, same-pipeline
-  real-source ablation, and independent final-answer acceptance.
-- The `node-term-lineage-v3` development run remains diagnostic:
-  Hybrid `60/100`, graph-required paired gain `+60` percentage points with the
-  paired-CI check passing, citation precision `98.74%`, and authorized hop
-  evidence `4083/4083`.
-- Acceptance is still blocked by positive-case no-answer false positives
-  `3 > 1` and Hybrid p95 latency `4036.462 ms > 3000 ms`. Hybrid p50 was
-  `2782.821 ms`.
-- Phase timing was strict projection p50/p95 `33.084/33.823 ms`, fallback
-  repair p50/p95 `0/1287.977 ms`, and graph traversal p50/p95
-  `2126.683/2155.965 ms`. Strict proof passed `62` cases and failed `38`;
-  fallback ran `38` times and targeted retraversal ran `4` times.
+- The pinned methodology authority is valid but blocked. The normal runtime-method
+  gate is passed; four gates remain blocked: source completeness, accepted
+  execution-fingerprint binding, same-pipeline real-source ablation, and independent final-answer acceptance.
+- The `node-term-lineage-v3` development run remains diagnostic: Hybrid `60/100`,
+  graph-required paired gain `+60` percentage points with the paired-CI check passing,
+  citation precision `98.74%`, and authorized hop evidence `4083/4083`.
+- Acceptance is still blocked by positive-case no-answer false positives `3 > 1`
+  and Hybrid p95 latency `4036.462 ms > 3000 ms`; Hybrid p50 was `2782.821 ms`.
+- Phase timing was strict projection p50/p95 `33.084/33.823 ms`, fallback repair
+  p50/p95 `0/1287.977 ms`, and graph traversal p50/p95 `2126.683/2155.965 ms`.
+  Strict proof passed `62` cases and failed `38`; fallback ran `38` times and targeted retraversal ran `4` times.
 - The behavior-neutral three-case `v5` diagnostic preserved the corresponding
   `v3` runtime results. Across 30 paths, rejection counts were
   `path_term_support_missing=29` and
@@ -194,17 +203,14 @@ This is a bounded active window. Earlier entries are immutable history under
   (`sha256:2d3a3952005dbac94c5b434bf818aa70d2dab3d0a30077064d4d654e2ab75490`).
   They are diagnostic-only and cannot support quality, budget, completion, or
   methodology claims.
-- Copernicus dispatch as the required `gpt-5.6-sol`,
-  `reasoning_effort=ultra` second worker failed twice with the platform
-  `prompt_cache_retention` error. The team did not substitute a model, add a
-  worker, or let the Master implement.
+- Copernicus dispatch as the required `gpt-5.6-sol`, `reasoning_effort=ultra`
+  second worker failed twice with `prompt_cache_retention`; the team did not
+  substitute a model, add a worker, or let the Master implement.
 - Plan step 4 remains `in-progress`; the existing five-step wording is
   unchanged. Next, after restoring the second-worker slot, split disjoint work
   into a per-query projection cache and bounded source-backed proof-completion
   E2E. Do not execute a sealed independent holdout yet.
-
 ## 2026-08-18 — Master plus two-worker, POC-first operating mode
-
 - The user set the issue #56 execution topology to one Master plus exactly two
   implementation subagents. Both workers use `gpt-5.6-sol` with
   `reasoning_effort=ultra`.
@@ -234,9 +240,7 @@ This is a bounded active window. Earlier entries are immutable history under
   `evidence_to_knowledge_kg_ontology_v2_hybrid_v1`; the frozen tokenizer is
   `jieba_sentencepiece_frozen_profile_candidate_admission_v1`. No checklist
   item was completed or checked by this operating-mode update.
-
 ## 2026-08-18 — Issue #56 becomes the sole active KG methodology program
-
 - GitHub issue #56 defines the active objective: graph-guided Hybrid KG +
   Ontology v2 must earn a measurable final-answer win over strong RAG on
   heterogeneous integration tasks.
@@ -267,9 +271,7 @@ This is a bounded active window. Earlier entries are immutable history under
   `--require-ready` exits nonzero.
 - The Issue #20 operator helper now derives or validates one safe non-secret predefined client ID; app configuration replaces only the ChatGPT-displayed callback; if the same client ID cannot be used, the live campaign stops as an external blocker.
 - Issue #20 remains open and unchecked; this KG documentation rewrite does not change its external evidence state.
-
 ## 2026-08-18 — Active-document rewrite verification
-
 - Active KG, architecture, workflow, provenance, infrastructure, evaluation,
   role, goal, and startup documents now point to issue #56 and the frozen
   Hybrid-v2 target. Superseded mail-only, issue #33, and issue #55 files are
@@ -289,9 +291,7 @@ This is a bounded active window. Earlier entries are immutable history under
 - Next KG action remains Work Package A: immutable Jieba + SentencePiece
   profile packaging and same-profile query/evidence indexing, followed by
   source-completeness reconciliation and the strong RAG control.
-
 ## 2026-08-20 — Sealed-source loader verification boundary
-
 - The full `formowl-dev:local` suite ran `1,849` tests with `20` failures,
   `19` errors, and `15` skips. In that image, the same focused `26`-test slice
   had `15` `DenseEmbeddingUnavailableError:
