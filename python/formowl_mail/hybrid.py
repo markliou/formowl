@@ -1047,6 +1047,11 @@ class _EffectiveGraphContentSnapshot:
 
     graph_revision_fingerprint: str
     view_binding: tuple[Any, ...]
+    relation_projection_cache_binding_snapshots: dict[tuple[Any, ...], Any] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
     relation_projection_bases: dict[str, Any] = field(
         default_factory=dict,
         repr=False,
@@ -1128,6 +1133,23 @@ class _RelationProjectionBase:
 
 
 @dataclass(frozen=True)
+class _RelationProjectionCacheBindingSnapshot:
+    """Immutable full-content binding reused before relation-base cache lookup."""
+
+    cache_binding_fingerprint: str
+    graph_revision_fingerprint: str
+    index_fingerprint: str
+    tokenizer_profile_fingerprint: str
+    authorized_observation_set_fingerprint: str
+    candidate_set_fingerprint: str
+    projection_helper_object_ids: tuple[int, ...]
+    index_candidates: tuple[_HybridCandidate, ...] = field(
+        repr=False,
+        compare=False,
+    )
+
+
+@dataclass(frozen=True)
 class _RelationQueryProjection:
     """Immutable authorization-bound relation projection for one query only."""
 
@@ -1202,6 +1224,10 @@ class AuthorizedHybridMailIndex:
     candidates: tuple[_HybridCandidate, ...] = field(repr=False)
     document_frequency: tuple[tuple[str, int], ...] = field(repr=False)
     average_document_length: float = field(repr=False)
+    _relation_projection_candidates_snapshot: tuple[_HybridCandidate, ...] = field(
+        repr=False,
+        compare=False,
+    )
     _integrity_fingerprint: str = field(repr=False, compare=False)
     _runtime_components: Issue56TargetRuntimeComponents = field(
         repr=False,
@@ -2291,12 +2317,13 @@ def build_authorized_hybrid_mail_index(
             ],
         }
     )
+    frozen_candidates = tuple(candidates)
     integrity_fingerprint = _hybrid_index_integrity_fingerprint(
         index_fingerprint=index_fingerprint,
         tokenizer_id=tokenizer_profile.tokenizer_id,
         profile_fingerprint=tokenizer_profile.profile_fingerprint,
         execution_component_fingerprint=(execution_binding.execution_component_fingerprint),
-        candidates=candidates,
+        candidates=frozen_candidates,
     )
     return AuthorizedHybridMailIndex(
         tokenizer_id=tokenizer_profile.tokenizer_id,
@@ -2311,9 +2338,10 @@ def build_authorized_hybrid_mail_index(
         selected_bundle_count=len(selected_bundles),
         authorized_bundle_count=len(authorized_bundles),
         denied_bundle_count=denied_bundle_count,
-        candidates=tuple(candidates),
+        candidates=frozen_candidates,
         document_frequency=tuple(sorted(document_frequency.items())),
         average_document_length=average_document_length,
+        _relation_projection_candidates_snapshot=frozen_candidates,
         _integrity_fingerprint=integrity_fingerprint,
         _runtime_components=runtime_components,
     )
@@ -2448,12 +2476,13 @@ def _build_authorized_hybrid_observation_index(
             ],
         }
     )
+    frozen_candidates = tuple(candidates)
     integrity_fingerprint = _hybrid_index_integrity_fingerprint(
         index_fingerprint=index_fingerprint,
         tokenizer_id=tokenizer_profile.tokenizer_id,
         profile_fingerprint=tokenizer_profile.profile_fingerprint,
         execution_component_fingerprint=execution_binding.execution_component_fingerprint,
-        candidates=candidates,
+        candidates=frozen_candidates,
     )
     return AuthorizedHybridMailIndex(
         tokenizer_id=tokenizer_profile.tokenizer_id,
@@ -2468,9 +2497,10 @@ def _build_authorized_hybrid_observation_index(
         selected_bundle_count=len(authorized_source.source_scope_ids),
         authorized_bundle_count=len(authorized_source.source_scope_ids),
         denied_bundle_count=0,
-        candidates=tuple(candidates),
+        candidates=frozen_candidates,
         document_frequency=tuple(sorted(document_frequency.items())),
         average_document_length=average_document_length,
+        _relation_projection_candidates_snapshot=frozen_candidates,
         _integrity_fingerprint=integrity_fingerprint,
         _runtime_components=runtime_components,
     )
@@ -3358,31 +3388,21 @@ def precompute_relation_projection_base(
         candidates_by_hash=candidates_by_hash,
         graph_snapshot=graph_snapshot,
     )
-    expected_authorized_observation_set_fingerprint = sha256_json(
-        sorted(authorized_observation_hash_by_id.items())
-    )
-    expected_candidate_set_fingerprint = sha256_json(
-        [
-            [
-                observation_hash,
-                candidate.index_binding_hash,
-                candidate.message_occurrence_hash,
-            ]
-            for observation_hash, candidate in sorted(candidates_by_hash.items())
-        ]
-    )
-    expected_cache_binding_fingerprint = _relation_projection_base_cache_binding(
-        graph_revision_fingerprint=graph_snapshot.graph_revision_fingerprint,
-        index_fingerprint=session.index.index_fingerprint,
-        tokenizer_profile_fingerprint=tokenizer_profile.profile_fingerprint,
+    cache_binding_snapshot = _relation_projection_base_cache_binding_snapshot(
+        index=session.index,
+        effective_graph_view=effective_graph_view,
+        tokenizer_profile=tokenizer_profile,
         authorized_observation_hash_by_id=authorized_observation_hash_by_id,
         candidates_by_hash=candidates_by_hash,
+        graph_snapshot=graph_snapshot,
     )
     if (
-        projection_base.cache_binding_fingerprint != expected_cache_binding_fingerprint
+        projection_base.cache_binding_fingerprint
+        != cache_binding_snapshot.cache_binding_fingerprint
         or projection_base.authorized_observation_set_fingerprint
-        != expected_authorized_observation_set_fingerprint
-        or projection_base.candidate_set_fingerprint != expected_candidate_set_fingerprint
+        != cache_binding_snapshot.authorized_observation_set_fingerprint
+        or projection_base.candidate_set_fingerprint
+        != cache_binding_snapshot.candidate_set_fingerprint
     ):
         raise ContractValidationError("relation projection base precompute binding mismatch")
     safe_payload = {
@@ -5322,7 +5342,38 @@ def _relation_projection_base_cache_binding(
     candidates_by_hash: Mapping[str, _HybridCandidate],
     execution_deadline: _QueryExecutionDeadline | None = None,
 ) -> str:
+    candidate_projection_inputs, _candidate_set_fingerprint = (
+        _relation_projection_candidate_binding_inputs(
+            candidates_by_hash=candidates_by_hash,
+            execution_deadline=execution_deadline,
+        )
+    )
+    return _relation_projection_base_cache_binding_from_inputs(
+        graph_revision_fingerprint=graph_revision_fingerprint,
+        index_fingerprint=index_fingerprint,
+        tokenizer_profile_fingerprint=tokenizer_profile_fingerprint,
+        authorized_observation_hash_by_id=authorized_observation_hash_by_id,
+        candidate_projection_inputs=candidate_projection_inputs,
+    )
+
+
+def _relation_projection_helper_object_ids() -> tuple[int, ...]:
+    return (
+        id(_authorized_property_evidence_hashes),
+        id(_node_searchable_values),
+        id(_node_source_term_hashes),
+        id(_node_protected_term_hashes),
+        id(_source_graph_term_hashes),
+    )
+
+
+def _relation_projection_candidate_binding_inputs(
+    *,
+    candidates_by_hash: Mapping[str, _HybridCandidate],
+    execution_deadline: _QueryExecutionDeadline | None = None,
+) -> tuple[list[list[Any]], str]:
     candidate_projection_inputs: list[list[Any]] = []
+    candidate_set_inputs: list[list[str]] = []
     for observation_hash, candidate in sorted(candidates_by_hash.items()):
         _query_deadline_checkpoint(execution_deadline)
         candidate_projection_inputs.append(
@@ -5337,23 +5388,153 @@ def _relation_projection_base_cache_binding(
                 ),
             ]
         )
+        candidate_set_inputs.append(
+            [
+                observation_hash,
+                candidate.index_binding_hash,
+                candidate.message_occurrence_hash,
+            ]
+        )
     _query_deadline_checkpoint(execution_deadline)
+    return candidate_projection_inputs, sha256_json(candidate_set_inputs)
+
+
+def _relation_projection_base_cache_binding_from_inputs(
+    *,
+    graph_revision_fingerprint: str,
+    index_fingerprint: str,
+    tokenizer_profile_fingerprint: str,
+    authorized_observation_hash_by_id: Mapping[str, str],
+    candidate_projection_inputs: Sequence[Sequence[Any]],
+) -> str:
     return sha256_json(
         {
             "graph_revision_fingerprint": graph_revision_fingerprint,
             "index_fingerprint": index_fingerprint,
             "tokenizer_profile_fingerprint": tokenizer_profile_fingerprint,
-            "projection_helper_object_ids": [
-                id(_authorized_property_evidence_hashes),
-                id(_node_searchable_values),
-                id(_node_source_term_hashes),
-                id(_node_protected_term_hashes),
-                id(_source_graph_term_hashes),
-            ],
+            "projection_helper_object_ids": list(_relation_projection_helper_object_ids()),
             "authorized_observations": sorted(authorized_observation_hash_by_id.items()),
             "candidate_projection_inputs": candidate_projection_inputs,
         }
     )
+
+
+def _require_relation_projection_cache_binding_snapshot(
+    snapshot: _RelationProjectionCacheBindingSnapshot,
+    *,
+    index: AuthorizedHybridMailIndex,
+    graph_revision_fingerprint: str,
+    tokenizer_profile_fingerprint: str,
+    authorized_observation_set_fingerprint: str,
+) -> None:
+    if (
+        snapshot.graph_revision_fingerprint != graph_revision_fingerprint
+        or snapshot.index_fingerprint != index.index_fingerprint
+        or snapshot.tokenizer_profile_fingerprint != tokenizer_profile_fingerprint
+        or snapshot.authorized_observation_set_fingerprint != authorized_observation_set_fingerprint
+        or snapshot.projection_helper_object_ids != _relation_projection_helper_object_ids()
+        or snapshot.index_candidates is not index.candidates
+        or index.candidates is not index._relation_projection_candidates_snapshot
+    ):
+        raise ContractValidationError("relation projection cache binding snapshot mismatch")
+
+
+def _relation_projection_base_cache_binding_snapshot(
+    *,
+    index: AuthorizedHybridMailIndex,
+    effective_graph_view: EffectiveGraphView,
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+    authorized_observation_hash_by_id: Mapping[str, str],
+    candidates_by_hash: Mapping[str, _HybridCandidate],
+    graph_snapshot: _QueryGraphSnapshot,
+    execution_deadline: _QueryExecutionDeadline | None = None,
+) -> _RelationProjectionCacheBindingSnapshot:
+    graph_revision_fingerprint = _require_query_graph_snapshot(
+        effective_graph_view=effective_graph_view,
+        graph_snapshot=graph_snapshot,
+    )
+    authorized_observation_set_fingerprint = sha256_json(
+        sorted(authorized_observation_hash_by_id.items())
+    )
+    helper_object_ids = _relation_projection_helper_object_ids()
+    snapshot_key = (
+        graph_revision_fingerprint,
+        index.index_fingerprint,
+        tokenizer_profile.profile_fingerprint,
+        authorized_observation_set_fingerprint,
+        helper_object_ids,
+        id(index.candidates),
+    )
+    content_snapshot = graph_snapshot.content_snapshot
+    with content_snapshot.relation_projection_base_lock:
+        cached = content_snapshot.relation_projection_cache_binding_snapshots.get(snapshot_key)
+        if cached is not None:
+            if not isinstance(cached, _RelationProjectionCacheBindingSnapshot):
+                raise ContractValidationError(
+                    "relation projection cache binding snapshot is invalid"
+                )
+            _require_relation_projection_cache_binding_snapshot(
+                cached,
+                index=index,
+                graph_revision_fingerprint=graph_revision_fingerprint,
+                tokenizer_profile_fingerprint=tokenizer_profile.profile_fingerprint,
+                authorized_observation_set_fingerprint=(authorized_observation_set_fingerprint),
+            )
+            _query_deadline_checkpoint(execution_deadline)
+            return cached
+
+        if index.candidates is not index._relation_projection_candidates_snapshot:
+            raise ContractValidationError("relation projection candidate content snapshot mismatch")
+        candidate_projection_inputs, candidate_set_fingerprint = (
+            _relation_projection_candidate_binding_inputs(
+                candidates_by_hash=candidates_by_hash,
+                execution_deadline=execution_deadline,
+            )
+        )
+        cache_binding_fingerprint = _relation_projection_base_cache_binding_from_inputs(
+            graph_revision_fingerprint=graph_revision_fingerprint,
+            index_fingerprint=index.index_fingerprint,
+            tokenizer_profile_fingerprint=tokenizer_profile.profile_fingerprint,
+            authorized_observation_hash_by_id=authorized_observation_hash_by_id,
+            candidate_projection_inputs=candidate_projection_inputs,
+        )
+        snapshot = _RelationProjectionCacheBindingSnapshot(
+            cache_binding_fingerprint=cache_binding_fingerprint,
+            graph_revision_fingerprint=graph_revision_fingerprint,
+            index_fingerprint=index.index_fingerprint,
+            tokenizer_profile_fingerprint=tokenizer_profile.profile_fingerprint,
+            authorized_observation_set_fingerprint=(authorized_observation_set_fingerprint),
+            candidate_set_fingerprint=candidate_set_fingerprint,
+            projection_helper_object_ids=helper_object_ids,
+            index_candidates=index.candidates,
+        )
+        _require_relation_projection_cache_binding_snapshot(
+            snapshot,
+            index=index,
+            graph_revision_fingerprint=graph_revision_fingerprint,
+            tokenizer_profile_fingerprint=tokenizer_profile.profile_fingerprint,
+            authorized_observation_set_fingerprint=(authorized_observation_set_fingerprint),
+        )
+        if len(content_snapshot.relation_projection_cache_binding_snapshots) >= 8:
+            content_snapshot.relation_projection_cache_binding_snapshots.clear()
+            content_snapshot.relation_projection_bases.clear()
+        content_snapshot.relation_projection_cache_binding_snapshots[snapshot_key] = snapshot
+        _query_deadline_checkpoint(execution_deadline)
+        return snapshot
+
+
+def _require_relation_projection_base_binding(
+    base: _RelationProjectionBase,
+    *,
+    binding_snapshot: _RelationProjectionCacheBindingSnapshot,
+) -> None:
+    if (
+        base.cache_binding_fingerprint != binding_snapshot.cache_binding_fingerprint
+        or base.authorized_observation_set_fingerprint
+        != binding_snapshot.authorized_observation_set_fingerprint
+        or base.candidate_set_fingerprint != binding_snapshot.candidate_set_fingerprint
+    ):
+        raise ContractValidationError("relation projection base precompute binding mismatch")
 
 
 def _build_relation_projection_base(
@@ -5364,7 +5545,7 @@ def _build_relation_projection_base(
     authorized_observation_hash_by_id: Mapping[str, str],
     candidates_by_hash: Mapping[str, _HybridCandidate],
     graph_snapshot: _QueryGraphSnapshot,
-    cache_binding_fingerprint: str,
+    cache_binding_snapshot: _RelationProjectionCacheBindingSnapshot,
     execution_deadline: _QueryExecutionDeadline | None = None,
 ) -> _RelationProjectionBase:
     _query_deadline_checkpoint(execution_deadline)
@@ -5372,16 +5553,15 @@ def _build_relation_projection_base(
         effective_graph_view=effective_graph_view,
         graph_snapshot=graph_snapshot,
     )
-    expected_cache_binding = _relation_projection_base_cache_binding(
+    _require_relation_projection_cache_binding_snapshot(
+        cache_binding_snapshot,
+        index=index,
         graph_revision_fingerprint=graph_revision_fingerprint,
-        index_fingerprint=index.index_fingerprint,
         tokenizer_profile_fingerprint=tokenizer_profile.profile_fingerprint,
-        authorized_observation_hash_by_id=authorized_observation_hash_by_id,
-        candidates_by_hash=candidates_by_hash,
-        execution_deadline=execution_deadline,
+        authorized_observation_set_fingerprint=sha256_json(
+            sorted(authorized_observation_hash_by_id.items())
+        ),
     )
-    if cache_binding_fingerprint != expected_cache_binding:
-        raise ContractValidationError("relation projection base binding mismatch")
 
     candidate_concept_hashes: dict[str, frozenset[str]] = {}
     candidate_identifier_hashes: dict[str, frozenset[str]] = {}
@@ -5512,24 +5692,13 @@ def _build_relation_projection_base(
         frozen_graph_nodes_by_observation_hash[observation_hash] = tuple(
             sorted(nodes, key=lambda item: item.node_id)
         )
-    authorized_observation_set_fingerprint = sha256_json(
-        sorted(authorized_observation_hash_by_id.items())
-    )
-    candidate_set_fingerprint = sha256_json(
-        [
-            [
-                observation_hash,
-                candidate.index_binding_hash,
-                candidate.message_occurrence_hash,
-            ]
-            for observation_hash, candidate in sorted(candidates_by_hash.items())
-        ]
-    )
     _query_deadline_checkpoint(execution_deadline)
     return _RelationProjectionBase(
-        cache_binding_fingerprint=cache_binding_fingerprint,
-        authorized_observation_set_fingerprint=(authorized_observation_set_fingerprint),
-        candidate_set_fingerprint=candidate_set_fingerprint,
+        cache_binding_fingerprint=cache_binding_snapshot.cache_binding_fingerprint,
+        authorized_observation_set_fingerprint=(
+            cache_binding_snapshot.authorized_observation_set_fingerprint
+        ),
+        candidate_set_fingerprint=cache_binding_snapshot.candidate_set_fingerprint,
         candidate_concept_term_hashes_by_observation=MappingProxyType(candidate_concept_hashes),
         candidate_identifier_term_hashes_by_observation=MappingProxyType(
             candidate_identifier_hashes
@@ -5556,24 +5725,27 @@ def _relation_projection_base(
     execution_deadline: _QueryExecutionDeadline | None = None,
 ) -> _RelationProjectionBase:
     _query_deadline_checkpoint(execution_deadline)
-    graph_revision_fingerprint = _require_query_graph_snapshot(
+    cache_binding_snapshot = _relation_projection_base_cache_binding_snapshot(
+        index=index,
         effective_graph_view=effective_graph_view,
-        graph_snapshot=graph_snapshot,
-    )
-    cache_binding_fingerprint = _relation_projection_base_cache_binding(
-        graph_revision_fingerprint=graph_revision_fingerprint,
-        index_fingerprint=index.index_fingerprint,
-        tokenizer_profile_fingerprint=tokenizer_profile.profile_fingerprint,
+        tokenizer_profile=tokenizer_profile,
         authorized_observation_hash_by_id=authorized_observation_hash_by_id,
         candidates_by_hash=candidates_by_hash,
+        graph_snapshot=graph_snapshot,
         execution_deadline=execution_deadline,
     )
     content_snapshot = graph_snapshot.content_snapshot
     with content_snapshot.relation_projection_base_lock:
-        cached = content_snapshot.relation_projection_bases.get(cache_binding_fingerprint)
+        cached = content_snapshot.relation_projection_bases.get(
+            cache_binding_snapshot.cache_binding_fingerprint
+        )
         if cached is not None:
             if not isinstance(cached, _RelationProjectionBase):
                 raise ContractValidationError("relation projection base cache is invalid")
+            _require_relation_projection_base_binding(
+                cached,
+                binding_snapshot=cache_binding_snapshot,
+            )
             _query_deadline_checkpoint(execution_deadline)
             return cached
         base = _build_relation_projection_base(
@@ -5583,12 +5755,18 @@ def _relation_projection_base(
             authorized_observation_hash_by_id=authorized_observation_hash_by_id,
             candidates_by_hash=candidates_by_hash,
             graph_snapshot=graph_snapshot,
-            cache_binding_fingerprint=cache_binding_fingerprint,
+            cache_binding_snapshot=cache_binding_snapshot,
             execution_deadline=execution_deadline,
+        )
+        _require_relation_projection_base_binding(
+            base,
+            binding_snapshot=cache_binding_snapshot,
         )
         if len(content_snapshot.relation_projection_bases) >= 8:
             content_snapshot.relation_projection_bases.clear()
-        content_snapshot.relation_projection_bases[cache_binding_fingerprint] = base
+        content_snapshot.relation_projection_bases[
+            cache_binding_snapshot.cache_binding_fingerprint
+        ] = base
         _query_deadline_checkpoint(execution_deadline)
         return base
 
@@ -5621,6 +5799,8 @@ def _validated_relation_projection_candidates(
         or set(candidates_by_hash) != set(indexed_candidate_hashes)
     ):
         raise ContractValidationError("relation projection authorized candidate mismatch")
+    if index.candidates is not index._relation_projection_candidates_snapshot:
+        raise ContractValidationError("relation projection candidate content snapshot mismatch")
     return authorized_observation_hashes
 
 
