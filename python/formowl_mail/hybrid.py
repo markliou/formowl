@@ -117,6 +117,7 @@ _RELATION_FALLBACK_POLICY_ID = "strict_no_answer_connected_authorized_relation_r
 _SEMANTIC_TIME_BUDGET_EXHAUSTED_WARNING = "semantic_query_time_budget_exhausted"
 _MONOTONIC_CLOCK: Callable[[], float] = _system_monotonic
 _SEMANTIC_PHASE_TRACE_CLOCK_NS: Callable[[], int] = _system_perf_counter_ns
+_RELATION_PROJECTION_COLD_DIAGNOSTIC_CLOCK_NS: Callable[[], int] = _system_perf_counter_ns
 _SEMANTIC_PHASE_TRACE_PHASES = (
     "source_session_validation",
     "graph_snapshot",
@@ -1054,6 +1055,217 @@ class RelationProjectionBasePrecompute:
             "issue56_relation_projection_base_precompute",
         )
         return payload
+
+
+@dataclass(frozen=True)
+class RelationProjectionBaseColdDiagnostic:
+    """Safe evidence for one offline cold binding/base build."""
+
+    graph_revision_fingerprint: str
+    graph_content_fingerprint: str
+    effective_graph_view_fingerprint: str
+    source_session_binding_fingerprint: str
+    source_access_fingerprint: str
+    permission_lineage_fingerprint: str
+    index_fingerprint: str
+    tokenizer_profile_fingerprint: str
+    authorized_observation_set_fingerprint: str
+    candidate_set_fingerprint: str
+    cache_binding_fingerprint: str
+    relation_projection_base_precompute_fingerprint: str
+    before_binding_cache_entry_count: int
+    before_base_cache_entry_count: int
+    after_binding_cache_entry_count: int
+    after_base_cache_entry_count: int
+    binding_started: bool
+    binding_completed: bool
+    binding_elapsed_ms: float
+    binding_invocation_count: int
+    binding_publication_status: str
+    base_builder_started: bool
+    base_builder_completed: bool
+    base_builder_elapsed_ms: float
+    base_builder_invocation_count: int
+    base_publication_status: str
+    authorized_observation_count: int
+    candidate_count: int
+    projected_node_count: int
+    observation_bound_node_group_count: int
+    adjacency_node_count: int
+    adjacency_transition_count: int
+    authorized_index_vocabulary_hash_count: int
+    authorized_graph_vocabulary_hash_count: int
+    diagnostic_fingerprint: str
+
+    def to_safe_dict(self) -> dict[str, Any]:
+        payload = {
+            "artifact_id": ("formowl_issue56_relation_projection_base_cold_diagnostic_v1"),
+            "schema_version": 1,
+            "status": "passed",
+            "claim_boundary": "diagnostic_only_not_query_or_methodology_evidence",
+            "deadline_mode": "offline_no_query_deadline",
+            "graph_revision_fingerprint": self.graph_revision_fingerprint,
+            "graph_content_fingerprint": self.graph_content_fingerprint,
+            "effective_graph_view_fingerprint": (self.effective_graph_view_fingerprint),
+            "source_session_binding_fingerprint": (self.source_session_binding_fingerprint),
+            "source_access_fingerprint": self.source_access_fingerprint,
+            "permission_lineage_fingerprint": self.permission_lineage_fingerprint,
+            "index_fingerprint": self.index_fingerprint,
+            "candidate_admission_profile_fingerprint": (self.tokenizer_profile_fingerprint),
+            "authorized_observation_set_fingerprint": (self.authorized_observation_set_fingerprint),
+            "candidate_set_fingerprint": self.candidate_set_fingerprint,
+            "cache_binding_fingerprint": self.cache_binding_fingerprint,
+            "relation_projection_base_precompute_fingerprint": (
+                self.relation_projection_base_precompute_fingerprint
+            ),
+            "cache": {
+                "before": {
+                    "binding_entry_count": (self.before_binding_cache_entry_count),
+                    "base_entry_count": self.before_base_cache_entry_count,
+                },
+                "after": {
+                    "binding_entry_count": self.after_binding_cache_entry_count,
+                    "base_entry_count": self.after_base_cache_entry_count,
+                },
+            },
+            "phases": {
+                "binding": {
+                    "started": self.binding_started,
+                    "completed": self.binding_completed,
+                    "elapsed_ms": self.binding_elapsed_ms,
+                    "invocation_count": self.binding_invocation_count,
+                    "publication_status": self.binding_publication_status,
+                },
+                "base_builder": {
+                    "started": self.base_builder_started,
+                    "completed": self.base_builder_completed,
+                    "elapsed_ms": self.base_builder_elapsed_ms,
+                    "invocation_count": self.base_builder_invocation_count,
+                    "publication_status": self.base_publication_status,
+                },
+            },
+            "counts": {
+                "authorized_observation_count": self.authorized_observation_count,
+                "candidate_count": self.candidate_count,
+                "projected_node_count": self.projected_node_count,
+                "observation_bound_node_group_count": (self.observation_bound_node_group_count),
+                "adjacency_node_count": self.adjacency_node_count,
+                "adjacency_transition_count": self.adjacency_transition_count,
+                "authorized_index_vocabulary_hash_count": (
+                    self.authorized_index_vocabulary_hash_count
+                ),
+                "authorized_graph_vocabulary_hash_count": (
+                    self.authorized_graph_vocabulary_hash_count
+                ),
+            },
+            "diagnostic_fingerprint": self.diagnostic_fingerprint,
+        }
+        assert_public_payload_safe(
+            payload,
+            "issue56_relation_projection_base_cold_diagnostic",
+        )
+        return payload
+
+
+@dataclass
+class _RelationProjectionBaseColdDiagnosticRecorder:
+    """Private default-off recorder for one exact cold cache publication."""
+
+    clock_ns: Callable[[], int] = field(repr=False)
+    binding_started_at_ns: int | None = None
+    binding_elapsed_ms: float | None = None
+    binding_invocation_count: int = 0
+    binding_publication_count: int = 0
+    base_builder_started_at_ns: int | None = None
+    base_builder_elapsed_ms: float | None = None
+    base_builder_invocation_count: int = 0
+    base_publication_count: int = 0
+
+    def start_binding(self) -> None:
+        if (
+            self.binding_started_at_ns is not None
+            or self.binding_elapsed_ms is not None
+            or self.binding_invocation_count != 0
+            or self.binding_publication_count != 0
+        ):
+            raise ContractValidationError(
+                "relation projection cold diagnostic binding invocation mismatch"
+            )
+        self.binding_started_at_ns = self.clock_ns()
+        self.binding_invocation_count = 1
+
+    def complete_binding(self) -> None:
+        if (
+            self.binding_started_at_ns is None
+            or self.binding_elapsed_ms is not None
+            or self.binding_invocation_count != 1
+        ):
+            raise ContractValidationError(
+                "relation projection cold diagnostic binding completion mismatch"
+            )
+        completed_at_ns = self.clock_ns()
+        if completed_at_ns < self.binding_started_at_ns:
+            raise ContractValidationError(
+                "relation projection cold diagnostic clock moved backwards"
+            )
+        self.binding_elapsed_ms = round(
+            (completed_at_ns - self.binding_started_at_ns) / 1_000_000.0,
+            6,
+        )
+
+    def publish_binding(self) -> None:
+        if (
+            self.binding_elapsed_ms is None
+            or self.binding_invocation_count != 1
+            or self.binding_publication_count != 0
+        ):
+            raise ContractValidationError(
+                "relation projection cold diagnostic binding publication mismatch"
+            )
+        self.binding_publication_count = 1
+
+    def start_base_builder(self) -> None:
+        if (
+            self.base_builder_started_at_ns is not None
+            or self.base_builder_elapsed_ms is not None
+            or self.base_builder_invocation_count != 0
+            or self.base_publication_count != 0
+        ):
+            raise ContractValidationError(
+                "relation projection cold diagnostic base invocation mismatch"
+            )
+        self.base_builder_started_at_ns = self.clock_ns()
+        self.base_builder_invocation_count = 1
+
+    def complete_base_builder(self) -> None:
+        if (
+            self.base_builder_started_at_ns is None
+            or self.base_builder_elapsed_ms is not None
+            or self.base_builder_invocation_count != 1
+        ):
+            raise ContractValidationError(
+                "relation projection cold diagnostic base completion mismatch"
+            )
+        completed_at_ns = self.clock_ns()
+        if completed_at_ns < self.base_builder_started_at_ns:
+            raise ContractValidationError(
+                "relation projection cold diagnostic clock moved backwards"
+            )
+        self.base_builder_elapsed_ms = round(
+            (completed_at_ns - self.base_builder_started_at_ns) / 1_000_000.0,
+            6,
+        )
+
+    def publish_base(self) -> None:
+        if (
+            self.base_builder_elapsed_ms is None
+            or self.base_builder_invocation_count != 1
+            or self.base_publication_count != 0
+        ):
+            raise ContractValidationError(
+                "relation projection cold diagnostic base publication mismatch"
+            )
+        self.base_publication_count = 1
 
 
 @dataclass(frozen=True)
@@ -3576,6 +3788,191 @@ def precompute_relation_projection_base(
     immutable base cache path used by a relation query.
     """
 
+    return _precompute_relation_projection_base_impl(
+        session=session,
+        effective_graph_view=effective_graph_view,
+    )
+
+
+def precompute_relation_projection_base_cold_diagnostic(
+    *,
+    session: AuthorizedSemanticMailSession,
+    effective_graph_view: EffectiveGraphView,
+    expected_graph_revision_fingerprint: str,
+    expected_effective_graph_view_fingerprint: str,
+) -> RelationProjectionBaseColdDiagnostic:
+    """Build one cold relation binding/base outside every query deadline.
+
+    This diagnostic-only helper requires an already sealed graph-content
+    snapshot whose relation caches are both empty.  It invokes the exact owner
+    validation, binding, base-builder, and publication path used by a cold
+    query, but it is forbidden while a query deadline is active.  Query
+    tokenization, slot coverage, anchor ranking, and result production are not
+    performed here.
+    """
+
+    if type(session) is not AuthorizedSemanticMailSession:
+        raise ContractValidationError(
+            "relation projection cold diagnostic requires an authorized mail session"
+        )
+    if not isinstance(effective_graph_view, EffectiveGraphView):
+        raise ContractValidationError(
+            "relation projection cold diagnostic effective graph view is invalid"
+        )
+    if _ACTIVE_QUERY_EXECUTION_DEADLINE.get() is not None:
+        raise ContractValidationError(
+            "relation projection cold diagnostic cannot run under a query deadline"
+        )
+    _source_graph_require_sha256(
+        expected_graph_revision_fingerprint,
+        "expected graph revision fingerprint",
+    )
+    _source_graph_require_sha256(
+        expected_effective_graph_view_fingerprint,
+        "expected effective graph view fingerprint",
+    )
+
+    content_snapshot = _require_effective_graph_content_snapshot(effective_graph_view)
+    graph_snapshot = _build_query_graph_snapshot(effective_graph_view)
+    graph_revision_fingerprint = _require_query_graph_snapshot(
+        effective_graph_view=effective_graph_view,
+        graph_snapshot=graph_snapshot,
+    )
+    if graph_revision_fingerprint != expected_graph_revision_fingerprint:
+        raise ContractValidationError("relation projection cold diagnostic graph revision mismatch")
+    effective_graph_view_fingerprint = sha256_json(effective_graph_view.to_dict())
+    if effective_graph_view_fingerprint != expected_effective_graph_view_fingerprint:
+        raise ContractValidationError(
+            "relation projection cold diagnostic effective graph binding mismatch"
+        )
+    (
+        authorized_source,
+        actual_authorized_observation_hashes,
+        source_access_fingerprint,
+        source_session_binding_fingerprint,
+    ) = _validated_effective_graph_snapshot_session_bindings(session)
+    permission_lineage_fingerprint = _effective_graph_permission_lineage_fingerprint(
+        session=session,
+        effective_graph_view=effective_graph_view,
+    )
+    graph_content_fingerprint = _effective_graph_content_fingerprint(effective_graph_view)
+
+    with content_snapshot.relation_projection_base_lock:
+        before_binding_cache_entry_count = len(
+            content_snapshot.relation_projection_cache_binding_snapshots
+        )
+        before_base_cache_entry_count = len(content_snapshot.relation_projection_bases)
+    if before_binding_cache_entry_count != 0 or before_base_cache_entry_count != 0:
+        raise ContractValidationError("relation projection cold diagnostic requires empty caches")
+
+    recorder = _RelationProjectionBaseColdDiagnosticRecorder(
+        clock_ns=_RELATION_PROJECTION_COLD_DIAGNOSTIC_CLOCK_NS
+    )
+    precompute = _precompute_relation_projection_base_impl(
+        session=session,
+        effective_graph_view=effective_graph_view,
+        diagnostic_recorder=recorder,
+    )
+
+    with content_snapshot.relation_projection_base_lock:
+        after_binding_cache_entry_count = len(
+            content_snapshot.relation_projection_cache_binding_snapshots
+        )
+        after_base_cache_entry_count = len(content_snapshot.relation_projection_bases)
+        binding_fingerprint_present = any(
+            isinstance(snapshot, _RelationProjectionCacheBindingSnapshot)
+            and snapshot.cache_binding_fingerprint == precompute.cache_binding_fingerprint
+            for snapshot in (content_snapshot.relation_projection_cache_binding_snapshots.values())
+        )
+        base_fingerprint_present = (
+            precompute.cache_binding_fingerprint in content_snapshot.relation_projection_bases
+        )
+    if (
+        after_binding_cache_entry_count != 1
+        or after_base_cache_entry_count != 1
+        or not binding_fingerprint_present
+        or not base_fingerprint_present
+        or recorder.binding_started_at_ns is None
+        or recorder.binding_elapsed_ms is None
+        or recorder.binding_invocation_count != 1
+        or recorder.binding_publication_count != 1
+        or recorder.base_builder_started_at_ns is None
+        or recorder.base_builder_elapsed_ms is None
+        or recorder.base_builder_invocation_count != 1
+        or recorder.base_publication_count != 1
+    ):
+        raise ContractValidationError("relation projection cold diagnostic publication mismatch")
+
+    if (
+        precompute.authorized_observation_count != len(actual_authorized_observation_hashes)
+        or authorized_source.workspace_id != session.workspace_id
+    ):
+        raise ContractValidationError("relation projection cold diagnostic source binding mismatch")
+    safe_payload = {
+        "graph_revision_fingerprint": graph_revision_fingerprint,
+        "graph_content_fingerprint": graph_content_fingerprint,
+        "effective_graph_view_fingerprint": effective_graph_view_fingerprint,
+        "source_session_binding_fingerprint": (source_session_binding_fingerprint),
+        "source_access_fingerprint": source_access_fingerprint,
+        "permission_lineage_fingerprint": permission_lineage_fingerprint,
+        "index_fingerprint": precompute.index_fingerprint,
+        "tokenizer_profile_fingerprint": (precompute.tokenizer_profile_fingerprint),
+        "authorized_observation_set_fingerprint": (
+            precompute.authorized_observation_set_fingerprint
+        ),
+        "candidate_set_fingerprint": precompute.candidate_set_fingerprint,
+        "cache_binding_fingerprint": precompute.cache_binding_fingerprint,
+        "relation_projection_base_precompute_fingerprint": (precompute.precompute_fingerprint),
+        "before_binding_cache_entry_count": (before_binding_cache_entry_count),
+        "before_base_cache_entry_count": before_base_cache_entry_count,
+        "after_binding_cache_entry_count": after_binding_cache_entry_count,
+        "after_base_cache_entry_count": after_base_cache_entry_count,
+        "binding_started": True,
+        "binding_completed": True,
+        "binding_elapsed_ms": recorder.binding_elapsed_ms,
+        "binding_invocation_count": recorder.binding_invocation_count,
+        "binding_publication_status": "published",
+        "base_builder_started": True,
+        "base_builder_completed": True,
+        "base_builder_elapsed_ms": recorder.base_builder_elapsed_ms,
+        "base_builder_invocation_count": (recorder.base_builder_invocation_count),
+        "base_publication_status": "published",
+        "authorized_observation_count": (precompute.authorized_observation_count),
+        "candidate_count": precompute.candidate_count,
+        "projected_node_count": precompute.projected_node_count,
+        "observation_bound_node_group_count": (precompute.observation_bound_node_group_count),
+        "adjacency_node_count": precompute.adjacency_node_count,
+        "adjacency_transition_count": precompute.adjacency_transition_count,
+        "authorized_index_vocabulary_hash_count": (
+            precompute.authorized_index_vocabulary_hash_count
+        ),
+        "authorized_graph_vocabulary_hash_count": (
+            precompute.authorized_graph_vocabulary_hash_count
+        ),
+    }
+    diagnostic = RelationProjectionBaseColdDiagnostic(
+        **safe_payload,
+        diagnostic_fingerprint=sha256_json(
+            {
+                "artifact_id": ("formowl_issue56_relation_projection_base_cold_diagnostic_v1"),
+                "schema_version": 1,
+                "status": "passed",
+                "claim_boundary": ("diagnostic_only_not_query_or_methodology_evidence"),
+                "deadline_mode": "offline_no_query_deadline",
+                **safe_payload,
+            }
+        ),
+    )
+    diagnostic.to_safe_dict()
+    return diagnostic
+
+
+def _precompute_relation_projection_base_impl(
+    *,
+    session: AuthorizedSemanticMailSession,
+    effective_graph_view: EffectiveGraphView,
+    diagnostic_recorder: (_RelationProjectionBaseColdDiagnosticRecorder | None) = None,
+) -> RelationProjectionBasePrecompute:
     _validate_hybrid_index_runtime(session.index)
     if effective_graph_view.requester_user_id != session.requester_user_id:
         raise ContractValidationError("effective graph requester mismatch")
@@ -3630,6 +4027,7 @@ def precompute_relation_projection_base(
         authorized_observation_hash_by_id=authorized_observation_hash_by_id,
         candidates_by_hash=candidates_by_hash,
         graph_snapshot=graph_snapshot,
+        diagnostic_recorder=diagnostic_recorder,
     )
     cache_binding_snapshot = _relation_projection_base_cache_binding_snapshot(
         index=session.index,
@@ -5981,6 +6379,7 @@ def _relation_projection_base_cache_binding_snapshot(
     candidates_by_hash: Mapping[str, _HybridCandidate],
     graph_snapshot: _QueryGraphSnapshot,
     execution_deadline: _QueryExecutionDeadline | None = None,
+    diagnostic_recorder: (_RelationProjectionBaseColdDiagnosticRecorder | None) = None,
 ) -> _RelationProjectionCacheBindingSnapshot:
     graph_revision_fingerprint = _require_query_graph_snapshot(
         effective_graph_view=effective_graph_view,
@@ -6005,6 +6404,10 @@ def _relation_projection_base_cache_binding_snapshot(
     ):
         cached = content_snapshot.relation_projection_cache_binding_snapshots.get(snapshot_key)
         if cached is not None:
+            if diagnostic_recorder is not None:
+                raise ContractValidationError(
+                    "relation projection cold diagnostic binding cache is not cold"
+                )
             if not isinstance(cached, _RelationProjectionCacheBindingSnapshot):
                 raise ContractValidationError(
                     "relation projection cache binding snapshot is invalid"
@@ -6021,6 +6424,8 @@ def _relation_projection_base_cache_binding_snapshot(
 
         if index.candidates is not index._relation_projection_candidates_snapshot:
             raise ContractValidationError("relation projection candidate content snapshot mismatch")
+        if diagnostic_recorder is not None:
+            diagnostic_recorder.start_binding()
         candidate_projection_inputs, candidate_set_fingerprint = (
             _relation_projection_candidate_binding_inputs(
                 candidates_by_hash=candidates_by_hash,
@@ -6051,10 +6456,14 @@ def _relation_projection_base_cache_binding_snapshot(
             tokenizer_profile_fingerprint=tokenizer_profile.profile_fingerprint,
             authorized_observation_set_fingerprint=(authorized_observation_set_fingerprint),
         )
+        if diagnostic_recorder is not None:
+            diagnostic_recorder.complete_binding()
         if len(content_snapshot.relation_projection_cache_binding_snapshots) >= 8:
             content_snapshot.relation_projection_cache_binding_snapshots.clear()
             content_snapshot.relation_projection_bases.clear()
         content_snapshot.relation_projection_cache_binding_snapshots[snapshot_key] = snapshot
+        if diagnostic_recorder is not None:
+            diagnostic_recorder.publish_binding()
         _query_deadline_checkpoint(execution_deadline)
         return snapshot
 
@@ -6259,6 +6668,7 @@ def _relation_projection_base(
     candidates_by_hash: Mapping[str, _HybridCandidate],
     graph_snapshot: _QueryGraphSnapshot,
     execution_deadline: _QueryExecutionDeadline | None = None,
+    diagnostic_recorder: (_RelationProjectionBaseColdDiagnosticRecorder | None) = None,
 ) -> _RelationProjectionBase:
     _query_deadline_checkpoint(execution_deadline)
     cache_binding_snapshot = _relation_projection_base_cache_binding_snapshot(
@@ -6269,6 +6679,7 @@ def _relation_projection_base(
         candidates_by_hash=candidates_by_hash,
         graph_snapshot=graph_snapshot,
         execution_deadline=execution_deadline,
+        diagnostic_recorder=diagnostic_recorder,
     )
     content_snapshot = graph_snapshot.content_snapshot
     with _acquire_relation_projection_base_lock(
@@ -6279,6 +6690,10 @@ def _relation_projection_base(
             cache_binding_snapshot.cache_binding_fingerprint
         )
         if cached is not None:
+            if diagnostic_recorder is not None:
+                raise ContractValidationError(
+                    "relation projection cold diagnostic base cache is not cold"
+                )
             if not isinstance(cached, _RelationProjectionBase):
                 raise ContractValidationError("relation projection base cache is invalid")
             _require_relation_projection_base_binding(
@@ -6287,6 +6702,8 @@ def _relation_projection_base(
             )
             _query_deadline_checkpoint(execution_deadline)
             return cached
+        if diagnostic_recorder is not None:
+            diagnostic_recorder.start_base_builder()
         base = _build_relation_projection_base(
             index=index,
             effective_graph_view=effective_graph_view,
@@ -6297,6 +6714,8 @@ def _relation_projection_base(
             cache_binding_snapshot=cache_binding_snapshot,
             execution_deadline=execution_deadline,
         )
+        if diagnostic_recorder is not None:
+            diagnostic_recorder.complete_base_builder()
         _require_relation_projection_base_binding(
             base,
             binding_snapshot=cache_binding_snapshot,
@@ -6306,6 +6725,8 @@ def _relation_projection_base(
         content_snapshot.relation_projection_bases[
             cache_binding_snapshot.cache_binding_fingerprint
         ] = base
+        if diagnostic_recorder is not None:
+            diagnostic_recorder.publish_base()
         _query_deadline_checkpoint(execution_deadline)
         return base
 
@@ -9485,6 +9906,7 @@ __all__ = [
     "ISSUE56_TARGET_RUNTIME_METHOD_FINGERPRINT",
     "ISSUE56_TARGET_RUNTIME_METHOD_ID",
     "RelationProjectionBasePrecompute",
+    "RelationProjectionBaseColdDiagnostic",
     "SemanticEvidenceScore",
     "SourceBackedGraphBuild",
     "build_authorized_hybrid_mail_index",
@@ -9495,6 +9917,7 @@ __all__ = [
     "precompute_effective_graph_content_snapshot",
     "precompute_evidence_identity_lineage_crosswalk",
     "precompute_relation_projection_base",
+    "precompute_relation_projection_base_cold_diagnostic",
     "run_authorized_hybrid_mail_query",
     "run_authorized_semantic_mail_query",
 ]
