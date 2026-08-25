@@ -9,7 +9,8 @@ diagnostic dense fallback.
 from __future__ import annotations
 
 from collections import Counter, deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
@@ -424,6 +425,9 @@ class _QueryExecutionDeadline:
         if self.clock() >= self.expires_at:
             raise _QueryExecutionDeadlineExceeded(_SEMANTIC_TIME_BUDGET_EXHAUSTED_WARNING)
 
+    def remaining_seconds(self) -> float:
+        return max(0.0, self.expires_at - self.clock())
+
 
 _ACTIVE_QUERY_EXECUTION_DEADLINE: ContextVar[_QueryExecutionDeadline | None] = ContextVar(
     "formowl_issue56_active_query_execution_deadline",
@@ -507,6 +511,30 @@ def _query_deadline_checkpoint(
     selected_deadline = execution_deadline or _ACTIVE_QUERY_EXECUTION_DEADLINE.get()
     if selected_deadline is not None:
         selected_deadline.checkpoint()
+
+
+@contextmanager
+def _acquire_relation_projection_base_lock(
+    lock: RLock,
+    *,
+    execution_deadline: _QueryExecutionDeadline | None = None,
+) -> Iterator[None]:
+    selected_deadline = execution_deadline or _ACTIVE_QUERY_EXECUTION_DEADLINE.get()
+    acquired = False
+    try:
+        if selected_deadline is None:
+            lock.acquire()
+            acquired = True
+        else:
+            remaining_seconds = selected_deadline.remaining_seconds()
+            if remaining_seconds <= 0.0 or not lock.acquire(timeout=remaining_seconds):
+                raise _QueryExecutionDeadlineExceeded(_SEMANTIC_TIME_BUDGET_EXHAUSTED_WARNING)
+            acquired = True
+            selected_deadline.checkpoint()
+        yield
+    finally:
+        if acquired:
+            lock.release()
 
 
 class _FrozenGraphList(list[Any]):
@@ -5466,7 +5494,10 @@ def _relation_projection_base_cache_binding_snapshot(
         id(index.candidates),
     )
     content_snapshot = graph_snapshot.content_snapshot
-    with content_snapshot.relation_projection_base_lock:
+    with _acquire_relation_projection_base_lock(
+        content_snapshot.relation_projection_base_lock,
+        execution_deadline=execution_deadline,
+    ):
         cached = content_snapshot.relation_projection_cache_binding_snapshots.get(snapshot_key)
         if cached is not None:
             if not isinstance(cached, _RelationProjectionCacheBindingSnapshot):
@@ -5735,7 +5766,10 @@ def _relation_projection_base(
         execution_deadline=execution_deadline,
     )
     content_snapshot = graph_snapshot.content_snapshot
-    with content_snapshot.relation_projection_base_lock:
+    with _acquire_relation_projection_base_lock(
+        content_snapshot.relation_projection_base_lock,
+        execution_deadline=execution_deadline,
+    ):
         cached = content_snapshot.relation_projection_bases.get(
             cache_binding_snapshot.cache_binding_fingerprint
         )

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError, sha256_json
-from formowl_mail import build_authorized_semantic_mail_session
+from formowl_mail import SemanticPlanLimits, build_authorized_semantic_mail_session
 from formowl_mail import hybrid as hybrid_module
 from scripts.issue56_semantic_execution_smoke import (
     ALLOWED_RELATIONS,
@@ -199,6 +201,70 @@ class Issue56RelationProjectionCacheBindingPrecomputeEndToEndTests(unittest.Test
                         requester_user_id="user_issue56_other",
                     ),
                 )
+
+    def test_relation_projection_lock_wait_respects_query_deadline(self) -> None:
+        hybrid_module.precompute_relation_projection_base(
+            session=self.session,
+            effective_graph_view=self.fixture.view,
+        )
+        graph_snapshot = hybrid_module._build_query_graph_snapshot(self.fixture.view)
+        relation_lock = graph_snapshot.content_snapshot.relation_projection_base_lock
+        holder_acquired = threading.Event()
+
+        def hold_lock() -> None:
+            with relation_lock:
+                holder_acquired.set()
+                time.sleep(0.35)
+
+        holder = threading.Thread(target=hold_lock, daemon=True)
+        holder.start()
+        self.assertTrue(holder_acquired.wait(timeout=1.0))
+        trace = hybrid_module.SemanticPhaseTrace()
+        started_at = time.monotonic()
+        try:
+            result = self.session.query(
+                query_text=self.fixture.query_text,
+                effective_graph_view=self.fixture.view,
+                allowed_relation_types=ALLOWED_RELATIONS,
+                seed_node_ids=(self.fixture.anchor_node_id,),
+                limits=SemanticPlanLimits(max_time_budget_ms=100),
+                phase_trace=trace,
+            )
+            query_elapsed = time.monotonic() - started_at
+        finally:
+            holder.join(timeout=1.0)
+
+        self.assertFalse(holder.is_alive())
+        self.assertGreaterEqual(query_elapsed, 0.06)
+        self.assertLess(query_elapsed, 0.25)
+        self.assertEqual(result.status, "no_answer")
+        self.assertEqual(
+            result.warnings,
+            ("semantic_query_time_budget_exhausted",),
+        )
+        self.assertEqual(result.graph_paths, ())
+        self.assertEqual(result.answer_citation_hashes, ())
+        self.assertEqual(result.graph_path_count, 0)
+        trace_payload = trace.to_safe_dict()
+        self.assertEqual(trace_payload["terminal_status"], "deadline_exhausted")
+        self.assertEqual(
+            trace_payload["deadline_exhausted_phase"],
+            "relation_projection",
+        )
+        events_by_phase = {event["phase"]: event for event in trace_payload["phases"]}
+        self.assertEqual(
+            events_by_phase["relation_projection"]["outcome"],
+            "deadline_exhausted",
+        )
+        for phase in (
+            "graph_traversal",
+            "scoring",
+            "proof_citation_selection",
+            "fallback",
+            "lineage_audit",
+            "result_projection",
+        ):
+            self.assertEqual(events_by_phase[phase]["outcome"], "skipped")
 
     def _query(self):
         return self.session.query(
