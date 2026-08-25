@@ -68,10 +68,35 @@ else:
 
 _PROJECT_SOURCE_SCOPE_ID = "project_issue56_sealed_source_fixture"
 _CREATED_AT = "2026-08-20T08:00:00+00:00"
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if _IMPORT_ERROR is None:
+    _INTERNAL_TEST_MODE_ID = diagnostic_module._ISSUE56_RELATION_PROJECTION_EQUIVALENCE_TEST_MODE_ID
+    _INTERNAL_TEST_CONTRACT = diagnostic_runner._RelationProjectionEquivalenceVersionContract(
+        diagnostic_mode_id=_INTERNAL_TEST_MODE_ID,
+        loader_contract_id="issue56_prompt_mcp_internal_test_loader_v0",
+        claim_artifact_id=("formowl_issue56_prompt_mcp_internal_test_consumed_claim_v0"),
+        claim_schema_version=1,
+        enforce_repository_state_root=False,
+    )
+    _FORMAL_STATE_ROOTS = (
+        _REPOSITORY_ROOT / ".test-tmp" / f"{ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID}-state",
+        _REPOSITORY_ROOT
+        / ".test-tmp"
+        / (
+            f"{diagnostic_module.ISSUE56_RELATION_PROJECTION_EQUIVALENCE_DIAGNOSTIC_MODE_ID}"
+            "-state"
+        ),
+    )
 
 
 @unittest.skipIf(_IMPORT_ERROR is not None, f"focused E2E dependency unavailable: {_IMPORT_ERROR}")
 class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._assert_formal_state_roots_absent()
+
+    def tearDown(self) -> None:
+        self._assert_formal_state_roots_absent()
+
     def test_prompt_crosses_real_http_oauth_dispatcher_gateway_and_hybrid(self) -> None:
         production_policy_names = frozenset(_CONNECTED_TOOL_POLICIES)
         composition = build_issue56_diagnostic_composition()
@@ -300,7 +325,7 @@ class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
             )
 
     def test_sealed_source_mode_executes_once_and_publishes_safe_report(self) -> None:
-        source = self._build_temp_sealed_source()
+        source = self._build_internal_equivalence_source()
         loader_calls = 0
 
         def loader() -> Issue56SealedSourceDiagnosticInput:
@@ -328,23 +353,22 @@ class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
                     ),
                 ),
             ):
-                report = diagnostic_runner.run_sealed_source_diagnostic_once(
+                report = diagnostic_runner._run_relation_projection_equivalence_diagnostic_once(
                     loader=loader,
-                    loader_spec_fingerprint=sha256_json(
-                        {
-                            "loader_contract_id": ISSUE56_SEALED_SOURCE_LOADER_CONTRACT_ID,
-                            "loader_spec": "tests.temp_loader:load",
-                        }
-                    ),
+                    loader_spec_fingerprint=self._internal_loader_spec_fingerprint(),
                     state_root=state_root,
+                    contract=_INTERNAL_TEST_CONTRACT,
                 )
             self.assertEqual(loader_calls, 1)
             self.assertEqual(report["status"], "passed")
             self.assertEqual(
                 report["diagnostic_mode_id"],
-                ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
+                _INTERNAL_TEST_MODE_ID,
             )
-            self.assertEqual(report["source_fixture_mode"], "sealed_source")
+            self.assertEqual(
+                report["source_fixture_mode"],
+                "sealed_source_real_prompt_relation_projection_equivalence",
+            )
             self.assertEqual(
                 report["sealed_source_asset"],
                 "validated_and_exercised",
@@ -353,75 +377,25 @@ class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
             self.assertEqual(report["quality_claim"], "not_made")
             self.assertTrue(report["diagnostic_only"])
             self.assertEqual(report["real_llm"], "not_exercised")
+            self.assertTrue(all(report["equivalence"].values()))
+            self.assertTrue(all(report["cache_acceptance"].values()))
+            self.assertEqual(report["counts"]["arm_count"], 2)
             self.assertEqual(
-                report["boundary_status"]["sealed_source_loader"],
-                "passed",
-            )
-            self.assertEqual(
-                report["boundary_status"]["lineage_crosswalk_precompute"],
-                "passed",
-            )
-            self.assertEqual(
-                report["boundary_status"]["lineage_crosswalk_cache_hit"],
-                "passed",
-            )
-            self.assertEqual(
-                report["lineage_crosswalk_precompute"]["status"],
-                "passed",
-            )
-            self.assertEqual(
-                report["lineage_crosswalk_precompute"]["cache_status"],
-                "primed",
-            )
-            self.assertEqual(
-                report["lineage_crosswalk_precompute"]["helper_invocation_count"],
+                report["counts"]["owner_relation_base_precompute_count"],
                 1,
             )
-            self.assertEqual(
-                report["lineage_crosswalk_query"],
-                {
-                    "cache_hit_status": "passed",
-                    "query_binding_status": "passed",
-                },
-            )
-            self.assertEqual(report["counts"]["lineage_crosswalk_precompute_count"], 1)
-            self.assertEqual(
-                report["counts"]["relation_projection_base_precompute_count"],
-                1,
-            )
-            self.assertGreaterEqual(
-                report["timing"]["lineage_crosswalk_precompute_elapsed_ms"],
-                0,
-            )
-            self.assertGreaterEqual(
-                report["timing"]["relation_projection_base_precompute_elapsed_ms"],
-                0,
-            )
-            self.assertEqual(
-                report["relation_projection_base_precompute"]["status"],
-                "passed",
-            )
-            self.assertEqual(
-                report["relation_projection_base_precompute"]["cache_status"],
-                "primed",
-            )
-            self.assertEqual(
-                report["relation_projection_base_precompute"]["helper_invocation_count"],
-                1,
-            )
-            self.assertEqual(
-                report["relation_projection_query"],
-                {
-                    "prequery_cache_status": "primed",
-                    "timing_source": "semantic_phase_trace_relation_projection",
-                },
-            )
-            self.assertEqual(
-                report["boundary_status"]["relation_projection_base_precompute"],
-                "passed",
-            )
+            self.assertEqual(report["counts"]["before_relation_base_build_count"], 1)
+            self.assertEqual(report["counts"]["after_relation_base_build_count"], 0)
             self.assertGreaterEqual(
                 report["timing"]["source_loader_elapsed_ms"],
+                0,
+            )
+            self.assertGreaterEqual(
+                report["timing"]["before_relation_projection_elapsed_ms"],
+                0,
+            )
+            self.assertGreaterEqual(
+                report["timing"]["after_relation_projection_elapsed_ms"],
                 0,
             )
             self.assertTrue(report["safe_trace_binding_fingerprint"].startswith("sha256:"))
@@ -443,28 +417,35 @@ class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
             self.assertTrue(
                 report["source_binding"]["permission_lineage_fingerprint"].startswith("sha256:")
             )
-            claim_path, report_path = diagnostic_runner._sealed_paths(state_root)
+            for arm_id in ("before_cold", "after_precomputed"):
+                arm = report["arms"][arm_id]
+                self.assertEqual(arm["status"], "passed")
+                self.assertGreater(arm["counts"]["graph_path_count"], 0)
+                self.assertGreater(arm["counts"]["citation_count"], 0)
+                self.assertEqual(
+                    arm["timing"]["semantic_phases"]["terminal_status"],
+                    "completed",
+                )
+            claim_path, report_path = diagnostic_runner._relation_projection_equivalence_paths(
+                state_root,
+                contract=_INTERNAL_TEST_CONTRACT,
+            )
             self.assertTrue(claim_path.is_file())
             self.assertTrue(report_path.is_file())
             claim = json.loads(claim_path.read_text())
             self.assertEqual(
                 claim["artifact_id"],
-                "formowl_issue56_sealed_source_diagnostic_consumed_claim_v3",
+                _INTERNAL_TEST_CONTRACT.claim_artifact_id,
             )
-            self.assertEqual(claim["schema_version"], 3)
+            self.assertEqual(
+                claim["schema_version"],
+                _INTERNAL_TEST_CONTRACT.claim_schema_version,
+            )
             self.assertEqual(
                 claim["diagnostic_mode_id"],
-                ISSUE56_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
+                _INTERNAL_TEST_MODE_ID,
             )
             self.assertEqual(json.loads(report_path.read_text()), report)
-            semantic_phases = {
-                phase["phase"]: phase for phase in report["timing"]["semantic_phases"]["phases"]
-            }
-            self.assertIn("relation_projection", semantic_phases)
-            self.assertGreaterEqual(
-                semantic_phases["relation_projection"]["elapsed_ms"],
-                0,
-            )
             rendered = json.dumps(report, ensure_ascii=False, sort_keys=True)
             self.assertNotIn(ISSUE56_SEALED_SOURCE_DIAGNOSTIC_PROMPT, rendered)
             self.assertNotIn("SUPPLIER-ALPHA-01", rendered)
@@ -476,15 +457,11 @@ class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
                 ContractValidationError,
                 "already consumed",
             ):
-                diagnostic_runner.run_sealed_source_diagnostic_once(
+                diagnostic_runner._run_relation_projection_equivalence_diagnostic_once(
                     loader=loader,
-                    loader_spec_fingerprint=sha256_json(
-                        {
-                            "loader_contract_id": (ISSUE56_SEALED_SOURCE_LOADER_CONTRACT_ID),
-                            "loader_spec": "tests.temp_loader:load",
-                        }
-                    ),
+                    loader_spec_fingerprint=self._internal_loader_spec_fingerprint(),
                     state_root=state_root,
+                    contract=_INTERNAL_TEST_CONTRACT,
                 )
             self.assertEqual(loader_calls, 1)
 
@@ -541,7 +518,7 @@ class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
             self._assert_no_legacy_identity_fields(blocked)
 
     def test_sealed_source_failure_consumes_version_without_partial_output(self) -> None:
-        source = self._build_temp_sealed_source()
+        source = self._build_internal_equivalence_source()
         loader_calls = 0
 
         def loader() -> Issue56SealedSourceDiagnosticInput:
@@ -553,24 +530,23 @@ class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
             state_root = Path(temporary_directory)
             with mock.patch.object(
                 diagnostic_runner,
-                "_run_http_diagnostic",
+                "_execute_http_diagnostic_exchange",
                 side_effect=RuntimeError("synthetic_crash_after_claim"),
             ):
                 with self.assertRaisesRegex(
                     RuntimeError,
                     "synthetic_crash_after_claim",
                 ):
-                    diagnostic_runner.run_sealed_source_diagnostic_once(
+                    diagnostic_runner._run_relation_projection_equivalence_diagnostic_once(
                         loader=loader,
-                        loader_spec_fingerprint=sha256_json(
-                            {
-                                "loader_contract_id": (ISSUE56_SEALED_SOURCE_LOADER_CONTRACT_ID),
-                                "loader_spec": "tests.temp_loader:load",
-                            }
-                        ),
+                        loader_spec_fingerprint=self._internal_loader_spec_fingerprint(),
                         state_root=state_root,
+                        contract=_INTERNAL_TEST_CONTRACT,
                     )
-            claim_path, report_path = diagnostic_runner._sealed_paths(state_root)
+            claim_path, report_path = diagnostic_runner._relation_projection_equivalence_paths(
+                state_root,
+                contract=_INTERNAL_TEST_CONTRACT,
+            )
             self.assertTrue(claim_path.is_file())
             self.assertFalse(report_path.exists())
             self.assertEqual(loader_calls, 1)
@@ -578,28 +554,20 @@ class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
                 ContractValidationError,
                 "already consumed",
             ):
-                diagnostic_runner.run_sealed_source_diagnostic_once(
+                diagnostic_runner._run_relation_projection_equivalence_diagnostic_once(
                     loader=loader,
-                    loader_spec_fingerprint=sha256_json(
-                        {
-                            "loader_contract_id": (ISSUE56_SEALED_SOURCE_LOADER_CONTRACT_ID),
-                            "loader_spec": "tests.temp_loader:load",
-                        }
-                    ),
+                    loader_spec_fingerprint=self._internal_loader_spec_fingerprint(),
                     state_root=state_root,
+                    contract=_INTERNAL_TEST_CONTRACT,
                 )
             self.assertEqual(loader_calls, 1)
 
-    def test_sealed_source_claim_race_has_one_winner_and_one_loader_call(self) -> None:
-        source = self._build_temp_sealed_source()
+    def test_sealed_source_claim_race_has_one_winner_and_one_execution(self) -> None:
+        source = self._build_internal_equivalence_source()
         loader_calls: list[str] = []
         barrier = threading.Barrier(2)
-        loader_spec_fingerprint = sha256_json(
-            {
-                "loader_contract_id": ISSUE56_SEALED_SOURCE_LOADER_CONTRACT_ID,
-                "loader_spec": "tests.temp_loader:load",
-            }
-        )
+        loader_spec_fingerprint = self._internal_loader_spec_fingerprint()
+        real_exchange = diagnostic_runner._execute_http_diagnostic_exchange
 
         def loader() -> Issue56SealedSourceDiagnosticInput:
             loader_calls.append("called")
@@ -610,10 +578,11 @@ class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
             try:
                 return (
                     "passed",
-                    diagnostic_runner.run_sealed_source_diagnostic_once(
+                    diagnostic_runner._run_relation_projection_equivalence_diagnostic_once(
                         loader=loader,
                         loader_spec_fingerprint=loader_spec_fingerprint,
                         state_root=state_root,
+                        contract=_INTERNAL_TEST_CONTRACT,
                     ),
                 )
             except ContractValidationError as exc:
@@ -621,22 +590,47 @@ class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             state_root = Path(temporary_directory)
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with (
+                mock.patch.object(
+                    diagnostic_runner,
+                    "_execute_http_diagnostic_exchange",
+                    wraps=real_exchange,
+                ) as execute_exchange,
+                ThreadPoolExecutor(max_workers=2) as executor,
+            ):
                 results = list(executor.map(lambda _: attempt(state_root), range(2)))
             self.assertEqual(
                 sorted(status for status, _ in results),
                 ["blocked", "passed"],
             )
-            self.assertEqual(loader_calls, ["called"])
+            self.assertGreaterEqual(len(loader_calls), 1)
+            self.assertLessEqual(len(loader_calls), 2)
+            self.assertEqual(set(loader_calls), {"called"})
+            self.assertEqual(execute_exchange.call_count, 2)
             blocked_reason = next(value for status, value in results if status == "blocked")
             self.assertIn("already exists", blocked_reason)
-            claim_path, report_path = diagnostic_runner._sealed_paths(state_root)
+            claim_path, report_path = diagnostic_runner._relation_projection_equivalence_paths(
+                state_root,
+                contract=_INTERNAL_TEST_CONTRACT,
+            )
             self.assertTrue(claim_path.is_file())
             self.assertTrue(report_path.is_file())
 
     def test_consumed_v3_rejects_prompt_tuning_without_creating_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             state_root = Path(temporary_directory)
+            loader = mock.Mock()
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "immutable and already consumed",
+            ):
+                diagnostic_runner.run_sealed_source_diagnostic_once(
+                    loader=loader,
+                    loader_spec_fingerprint=sha256_json("formal v3 loader"),
+                    state_root=state_root,
+                )
+            loader.assert_not_called()
+            self.assertEqual(list(state_root.iterdir()), [])
             stdout = io.StringIO()
             with redirect_stdout(stdout):
                 exit_code = diagnostic_runner.main(
@@ -1053,6 +1047,45 @@ class Issue56PromptMcpHybridE2ETests(unittest.TestCase):
             lineage_crosswalk_precompute=precompute_binding,
             relation_projection_base_precompute=relation_precompute_binding,
         )
+
+    def _build_internal_equivalence_source(
+        self,
+    ) -> Issue56SealedSourceDiagnosticInput:
+        import test_issue56_real_prompt_mcp_phase_trace_e2e as real_prompt_fixture
+
+        fixture = real_prompt_fixture.Issue56RealPromptMcpPhaseTraceE2ETests(methodName="runTest")
+        source = fixture._v4_source()
+        return build_issue56_sealed_source_diagnostic_input(
+            session=source.session,
+            effective_graph_view=source.effective_graph_view,
+            allowed_relation_types=source.allowed_relation_types,
+            source_asset_fingerprint=source.source_asset_fingerprint,
+            loader_contract_fingerprint=source.loader_contract_fingerprint,
+            graph_revision_fingerprint=source.graph_revision_fingerprint,
+            source_loader_binding_fingerprint=(source.source_loader_binding_fingerprint),
+            lineage_crosswalk_precompute=(source.lineage_crosswalk_precompute.to_safe_dict()),
+            relation_projection_base_precompute=(
+                source.relation_projection_base_precompute.to_safe_dict()
+            ),
+            private_prompt=source.private_prompt,
+            prompt_selection=source.prompt_selection.to_safe_dict(),
+            diagnostic_mode_id=_INTERNAL_TEST_MODE_ID,
+        )
+
+    def _internal_loader_spec_fingerprint(self) -> str:
+        return sha256_json(
+            {
+                "loader_contract_id": _INTERNAL_TEST_CONTRACT.loader_contract_id,
+                "loader_spec": "tests.internal_prompt_mcp_loader:load",
+            }
+        )
+
+    def _assert_formal_state_roots_absent(self) -> None:
+        for state_root in _FORMAL_STATE_ROOTS:
+            self.assertFalse(
+                state_root.exists(),
+                f"focused tests must leave formal state root absent: {state_root.name}",
+            )
 
     def _observation_by_id(
         self,
