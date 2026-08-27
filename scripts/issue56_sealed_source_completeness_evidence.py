@@ -105,6 +105,10 @@ identity_attestation = _load_script_module(
     "issue56_identity_scope_attestation_for_completeness",
     "scripts/issue56_identity_scope_attestation.py",
 )
+execution_bundle_owner = _load_script_module(
+    "issue56_execution_fingerprint_for_source_completeness",
+    "scripts/issue56_execution_fingerprint.py",
+)
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -330,6 +334,81 @@ def _validate_source_manifest(
         or not _has_fingerprint(artifact, "manifest_fingerprint")
     ):
         raise SourceCompletenessEvidenceError("source_manifest_binding_mismatch")
+
+
+def _validate_complete_execution_bundle_binding(
+    *,
+    bundle_path: Path,
+    expected_bundle_sha256: str,
+    source_report: Mapping[str, Any],
+    source_report_sha256: str,
+    source_manifest: Mapping[str, Any],
+    authority_execution_fingerprint: str,
+) -> None:
+    binding_error = SourceCompletenessEvidenceError
+    try:
+        bundle = execution_bundle_owner.load_and_validate_bundle(bundle_path)
+        report_binding = execution_bundle_owner.source_completeness_report_binding(
+            source_report
+        )
+    except execution_bundle_owner.ExecutionFingerprintValidationError as exc:
+        raise binding_error("execution_binding_bundle_invalid") from exc
+    sealed_bundle, _ = _read_json(
+        bundle_path,
+        expected_sha256=expected_bundle_sha256,
+        reason_code="execution_binding_bundle",
+    )
+    if bundle != sealed_bundle:
+        raise binding_error("execution_binding_bundle_invalid")
+    bundle = sealed_bundle
+
+    execution_binding = bundle["execution_binding"]
+    execution_bound = execution_binding["bound_fingerprints"]
+    bundle_bound = bundle["bound_fingerprints"]
+    actual_bindings = (
+        execution_binding["source_completeness_report_sha256"],
+        execution_binding["source_completeness_report_fingerprint"],
+        bundle["source_binding_fingerprint"],
+        execution_binding["source_binding_fingerprint"],
+        bundle_bound.get("source_snapshot"),
+        execution_bound.get("source_snapshot"),
+        bundle_bound.get("source_inventory"),
+        execution_bound.get("source_inventory"),
+        bundle_bound.get("completeness_report"),
+    )
+    expected_bindings = (
+        source_report_sha256,
+        source_report["report_fingerprint"],
+        report_binding["source_binding_fingerprint"],
+        report_binding["source_binding_fingerprint"],
+        report_binding["source_snapshot_fingerprint"],
+        report_binding["source_snapshot_fingerprint"],
+        report_binding["source_inventory_fingerprint"],
+        report_binding["source_inventory_fingerprint"],
+        report_binding["completeness_report_fingerprint"],
+    )
+    if actual_bindings != expected_bindings:
+        raise binding_error("execution_binding_bundle_source_binding_mismatch")
+
+    source_count = source_report["counts"]["source_inventory_item_count"]
+    if (
+        bundle["counts"].get("source_item_count") != source_count
+        or bundle["counts"].get("observation_count") != source_count
+        or bundle["counts"].get("unexplained_loss_count") != 0
+        or source_report["counts"]["observation_count"] != source_count
+        or source_report["counts"]["unexplained_loss_count"] != 0
+    ):
+        raise binding_error("execution_binding_bundle_source_counts_mismatch")
+    if (
+        execution_bound.get("authority_execution")
+        != authority_execution_fingerprint
+        or source_manifest.get("execution_fingerprint")
+        != authority_execution_fingerprint
+        or source_manifest.get("source_item_count") != source_count
+        or source_manifest.get("source_hashes")
+        != [source_report["source_asset_sha256"]]
+    ):
+        raise binding_error("execution_binding_bundle_source_manifest_mismatch")
 
 
 def _validate_snapshot_report_binding(
@@ -776,6 +855,8 @@ def author_sealed_source_completeness_evidence(
     expected_approver_actor: str,
     source_inventory_dependency_path: Path,
     expected_source_inventory_dependency_sha256: str,
+    execution_binding_bundle_path: Path,
+    expected_execution_binding_bundle_sha256: str,
     source_manifest_path: Path,
     expected_source_manifest_sha256: str,
     execution_fingerprint: str,
@@ -934,6 +1015,14 @@ def author_sealed_source_completeness_evidence(
         source_asset_sha256=expected_source_asset_sha256,
         raw_source_unit_count=accounting["raw_source_unit_count"],
     )
+    _validate_complete_execution_bundle_binding(
+        bundle_path=execution_binding_bundle_path,
+        expected_bundle_sha256=expected_execution_binding_bundle_sha256,
+        source_report=existing_report,
+        source_report_sha256=expected_existing_report_sha256,
+        source_manifest=source_manifest,
+        authority_execution_fingerprint=execution_fingerprint,
+    )
 
     raw_oracle = _gate_dependency(
         artifact_id=RAW_ORACLE_ARTIFACT_ID,
@@ -1045,6 +1134,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-approver-actor", required=True)
     parser.add_argument("--source-inventory-dependency", type=Path, required=True)
     parser.add_argument("--expected-source-inventory-dependency-sha256", required=True)
+    parser.add_argument("--execution-binding-bundle", type=Path, required=True)
+    parser.add_argument("--expected-execution-binding-bundle-sha256", required=True)
     parser.add_argument("--source-manifest", type=Path, required=True)
     parser.add_argument("--expected-source-manifest-sha256", required=True)
     parser.add_argument("--execution-fingerprint", required=True)
@@ -1080,6 +1171,10 @@ def main() -> int:
             source_inventory_dependency_path=args.source_inventory_dependency,
             expected_source_inventory_dependency_sha256=(
                 args.expected_source_inventory_dependency_sha256
+            ),
+            execution_binding_bundle_path=args.execution_binding_bundle,
+            expected_execution_binding_bundle_sha256=(
+                args.expected_execution_binding_bundle_sha256
             ),
             source_manifest_path=args.source_manifest,
             expected_source_manifest_sha256=args.expected_source_manifest_sha256,

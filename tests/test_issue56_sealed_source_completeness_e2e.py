@@ -27,6 +27,7 @@ from scripts.issue56_execution_fingerprint import (
     REQUIRED_COMPONENT_NAMES,
     SCHEMA_VERSION as EXECUTION_SCHEMA_VERSION,
     _EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS,
+    source_completeness_report_binding,
 )
 
 
@@ -79,6 +80,41 @@ def _copy_and_reseal(
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes((json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
     return _sha256_bytes(destination.read_bytes())
+
+
+def _replace_execution_bundle_source_binding(value: dict[str, object]) -> None:
+    foreign_fingerprint = evidence._canonical_fingerprint(
+        "same-count-foreign-source"
+    )
+    execution_binding = value["execution_binding"]
+    execution_binding.update(
+        {
+            "source_binding_fingerprint": foreign_fingerprint,
+            "source_completeness_report_sha256": foreign_fingerprint,
+            "source_completeness_report_fingerprint": foreign_fingerprint,
+        }
+    )
+    execution_binding["bound_fingerprints"].update(
+        {
+            "source_snapshot": foreign_fingerprint,
+            "source_inventory": foreign_fingerprint,
+        }
+    )
+    value.update(
+        {
+            "source_binding_fingerprint": foreign_fingerprint,
+            "execution_fingerprint": evidence._canonical_fingerprint(
+                execution_binding
+            ),
+        }
+    )
+    value["bound_fingerprints"].update(
+        {
+            "source_snapshot": foreign_fingerprint,
+            "source_inventory": foreign_fingerprint,
+            "completeness_report": foreign_fingerprint,
+        }
+    )
 
 
 class SealedCompletenessFixture:
@@ -259,25 +295,33 @@ class SealedCompletenessFixture:
         self.execution_binding_path = (
             repository_root / "evidence/production/issue56-execution-binding-v1/bundle.safe.json"
         )
+        source_report = json.loads(self.existing_report_path.read_bytes())
+        source_binding = source_completeness_report_binding(source_report)
         bound_fingerprints = {
             key: (
                 self.execution_fingerprint
                 if key == "authority_execution"
+                else source_binding["source_snapshot_fingerprint"]
+                if key == "source_snapshot"
+                else source_binding["source_inventory_fingerprint"]
+                if key == "source_inventory"
                 else evidence._canonical_fingerprint(f"execution-binding:{key}")
             )
             for key in sorted(_EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS)
         }
+        bound_fingerprints["completeness_report"] = source_binding[
+            "completeness_report_fingerprint"
+        ]
         execution_binding = {
             "artifact_id": EXECUTION_BINDING_ARTIFACT_ID,
             "schema_version": EXECUTION_SCHEMA_VERSION,
-            "source_binding_fingerprint": evidence._canonical_fingerprint("source-binding"),
-            "source_completeness_report_sha256": evidence._canonical_fingerprint(
-                "source-completeness-report-bytes"
-            ),
-            "source_completeness_report_fingerprint": evidence._canonical_fingerprint(
-                "source-completeness-report"
-            ),
-            "bound_fingerprints": bound_fingerprints,
+            "source_binding_fingerprint": source_binding["source_binding_fingerprint"],
+            "source_completeness_report_sha256": self.existing_report_sha256,
+            "source_completeness_report_fingerprint": source_report["report_fingerprint"],
+            "bound_fingerprints": {
+                key: bound_fingerprints[key]
+                for key in sorted(_EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS)
+            },
         }
         blocking_status_ids = ["methodology_authority_not_ready"]
         self.execution_binding_bundle = evidence._with_fingerprint(
@@ -286,7 +330,7 @@ class SealedCompletenessFixture:
                 "schema_version": EXECUTION_SCHEMA_VERSION,
                 "status": "blocked",
                 "run_binding_fingerprint": evidence._canonical_fingerprint("run-binding"),
-                "source_binding_fingerprint": execution_binding["source_binding_fingerprint"],
+                "source_binding_fingerprint": source_binding["source_binding_fingerprint"],
                 "execution_fingerprint": evidence._canonical_fingerprint(execution_binding),
                 "execution_binding_status": "passed",
                 "execution_binding": execution_binding,
@@ -307,7 +351,9 @@ class SealedCompletenessFixture:
                     "methodology_authority": "blocked",
                 },
                 "blocking_status_ids": blocking_status_ids,
-                "blocking_status_fingerprint": evidence._canonical_fingerprint(blocking_status_ids),
+                "blocking_status_fingerprint": evidence._canonical_fingerprint(
+                    blocking_status_ids
+                ),
             },
             "bundle_fingerprint",
         )
@@ -341,6 +387,8 @@ class SealedCompletenessFixture:
             "expected_approver_actor": "user_full_pst_domain_hard_case_eval_owner",
             "source_inventory_dependency_path": self.source_inventory_path,
             "expected_source_inventory_dependency_sha256": (self.source_inventory_sha256),
+            "execution_binding_bundle_path": self.execution_binding_path,
+            "expected_execution_binding_bundle_sha256": self.execution_binding_sha256,
             "source_manifest_path": self.source_manifest_path,
             "expected_source_manifest_sha256": self.source_manifest_sha256,
             "execution_fingerprint": self.execution_fingerprint,
@@ -374,6 +422,10 @@ class SealedCompletenessFixture:
             "source_inventory_dependency_path": "--source-inventory-dependency",
             "expected_source_inventory_dependency_sha256": (
                 "--expected-source-inventory-dependency-sha256"
+            ),
+            "execution_binding_bundle_path": "--execution-binding-bundle",
+            "expected_execution_binding_bundle_sha256": (
+                "--expected-execution-binding-bundle-sha256"
             ),
             "source_manifest_path": "--source-manifest",
             "expected_source_manifest_sha256": "--expected-source-manifest-sha256",
@@ -692,6 +744,42 @@ class Issue56SealedSourceCompletenessE2ETests(unittest.TestCase):
             "source_inventory_dependency_binding_mismatch",
         ):
             evidence.author_sealed_source_completeness_evidence(**kwargs)
+
+    def test_execution_bundle_tamper_and_same_count_foreign_binding_fail_closed(
+        self,
+    ) -> None:
+        tampered_bundle_path = self.repository_root / "tamper/execution-bundle-bytes.json"
+        tampered_bundle_path.parent.mkdir(parents=True, exist_ok=True)
+        tampered_bundle_path.write_bytes(
+            self.fixture.execution_binding_path.read_bytes() + b" "
+        )
+        kwargs = self.fixture.kwargs("execution-bundle-byte-tamper")
+        kwargs["execution_binding_bundle_path"] = tampered_bundle_path
+        with self.assertRaisesRegex(
+            evidence.SourceCompletenessEvidenceError,
+            "execution_binding_bundle_byte_seal_mismatch",
+        ):
+            evidence.author_sealed_source_completeness_evidence(**kwargs)
+        self.assertFalse((self.repository_root / kwargs["output_root"]).exists())
+
+        foreign_bundle_path = self.repository_root / "tamper/foreign-execution-bundle.json"
+        foreign_bundle_sha256 = _copy_and_reseal(
+            self.fixture.execution_binding_path,
+            foreign_bundle_path,
+            mutate=_replace_execution_bundle_source_binding,
+            fingerprint_field="bundle_fingerprint",
+        )
+        kwargs = self.fixture.kwargs("same-count-foreign-execution-binding")
+        kwargs["execution_binding_bundle_path"] = foreign_bundle_path
+        kwargs[
+            "expected_execution_binding_bundle_sha256"
+        ] = foreign_bundle_sha256
+        with self.assertRaisesRegex(
+            evidence.SourceCompletenessEvidenceError,
+            "execution_binding_bundle_source_binding_mismatch",
+        ):
+            evidence.author_sealed_source_completeness_evidence(**kwargs)
+        self.assertFalse((self.repository_root / kwargs["output_root"]).exists())
 
     def test_policy_redaction_requires_complete_typed_contract(self) -> None:
         inventory = SourceInventory.from_dict(self.fixture.approved_snapshot["source_inventory"])
