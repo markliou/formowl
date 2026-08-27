@@ -4,12 +4,33 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from formowl_contract import AuditLog, now_iso, stable_resource_contract_id
 from formowl_core import read_json_object, write_json_atomic
 
 _SAFE_RECORD_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
+_SAFE_AUDIT_CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_TOKEN_SESSION_AUDIT_STATUS_VALUES = frozenset({"active", "expired", "revoked"})
+_OAUTH_AUDIT_METADATA_SHAPES = {
+    "event_stage": "code",
+    "provider": "code",
+    "scopes": "code_sequence",
+    "membership_role": "code",
+    "workspace_decision": "code",
+    "identity_status": "code",
+    "client_authorization_status": "code",
+    "token_session_status": "token_session_status",
+    "lineage_source": "code",
+    "approval_user_id": "code",
+    "http_status": "http_status",
+    "replay_rejected": "boolean",
+}
+_OAUTH_AUDIT_METADATA_KEYS = frozenset(_OAUTH_AUDIT_METADATA_SHAPES)
+# HTTP status codes are three-digit values; 100 through 599 is the closed
+# protocol range accepted by this audit metadata boundary.
+_MIN_HTTP_STATUS = 100
+_MAX_HTTP_STATUS = 599
 
 
 class FileAuditLogStore:
@@ -49,7 +70,7 @@ class FileAuditLogStore:
 def write_audit_log(
     audit_store: FileAuditLogStore,
     *,
-    actor_user_id: str,
+    actor_user_id: str | None,
     action: str,
     target_type: str,
     target_id: str,
@@ -60,8 +81,23 @@ def write_audit_log(
     grant_id: str | None = None,
     metadata: dict[str, Any] | None = None,
     audit_log_id: str | None = None,
+    actor_type: str | None = None,
+    actor_service_id: str | None = None,
+    external_identity_id: str | None = None,
+    oauth_client_id: str | None = None,
+    oauth_token_session_id: str | None = None,
+    request_id: str | None = None,
+    tool_call_id: str | None = None,
+    reason_code: str | None = None,
 ) -> AuditLog:
     resolved_timestamp = timestamp or now_iso()
+    resolved_actor_type = actor_type or (
+        "user"
+        if actor_user_id is not None
+        else "service"
+        if actor_service_id is not None
+        else "external_unauthenticated"
+    )
     # Content-derived ids keep file-backed tests deterministic while still
     # preserving the event fields that make each audit record traceable.
     resolved_audit_log_id = audit_log_id or stable_resource_contract_id(
@@ -78,12 +114,22 @@ def write_audit_log(
             "status": status,
             "grant_id": grant_id,
             "metadata": metadata,
+            "actor_type": resolved_actor_type,
+            "actor_service_id": actor_service_id,
+            "external_identity_id": external_identity_id,
+            "oauth_client_id": oauth_client_id,
+            "oauth_token_session_id": oauth_token_session_id,
+            "request_id": request_id,
+            "tool_call_id": tool_call_id,
+            "reason_code": reason_code,
         },
     )
-    return audit_store.create(
+    audit_log = _validate_audit_log(
         AuditLog(
             audit_log_id=resolved_audit_log_id,
             actor_user_id=actor_user_id,
+            actor_type=resolved_actor_type,
+            actor_service_id=actor_service_id,
             action=action,
             target_type=target_type,
             target_id=target_id,
@@ -91,9 +137,108 @@ def write_audit_log(
             session_id=session_id,
             workspace_id=workspace_id,
             status=status,
+            external_identity_id=external_identity_id,
+            oauth_client_id=oauth_client_id,
+            oauth_token_session_id=oauth_token_session_id,
+            request_id=request_id,
+            tool_call_id=tool_call_id,
+            reason_code=reason_code,
             timestamp=resolved_timestamp,
             metadata=metadata,
         )
+    )
+    try:
+        return audit_store.create(audit_log)
+    except Exception:
+        record_path = audit_store._record_path(audit_log.audit_log_id)
+        temporary_path = record_path.with_suffix(f"{record_path.suffix}.tmp")
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RuntimeError("audit log persistence failed") from None
+
+
+def sanitize_oauth_audit_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if metadata is None:
+        return None
+    if not isinstance(metadata, Mapping):
+        raise ValueError("OAuth audit metadata must be an object")
+    if any(not isinstance(key, str) or key not in _OAUTH_AUDIT_METADATA_KEYS for key in metadata):
+        raise ValueError("OAuth audit metadata contains unsupported keys")
+    sanitized: dict[str, Any] = {}
+    for key, value in metadata.items():
+        shape = _OAUTH_AUDIT_METADATA_SHAPES[key]
+        if shape == "code" and isinstance(value, str) and _SAFE_AUDIT_CODE.fullmatch(value):
+            sanitized[key] = value
+        elif (
+            shape == "token_session_status"
+            and isinstance(value, str)
+            and value in _TOKEN_SESSION_AUDIT_STATUS_VALUES
+        ):
+            sanitized[key] = value
+        elif (
+            shape == "code_sequence"
+            and isinstance(value, (list, tuple))
+            and all(isinstance(item, str) and _SAFE_AUDIT_CODE.fullmatch(item) for item in value)
+        ):
+            sanitized[key] = list(value)
+        elif (
+            shape == "http_status"
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and _MIN_HTTP_STATUS <= value <= _MAX_HTTP_STATUS
+        ):
+            sanitized[key] = value
+        elif shape == "boolean" and isinstance(value, bool):
+            sanitized[key] = value
+        else:
+            raise ValueError("OAuth audit metadata contains an unsafe value")
+    return sanitized
+
+
+def write_oauth_audit_event(
+    audit_store: FileAuditLogStore,
+    *,
+    action: str,
+    target_type: str,
+    target_id: str,
+    session_id: str,
+    timestamp: str,
+    status: str,
+    actor_user_id: str | None = None,
+    actor_type: str | None = None,
+    actor_service_id: str | None = None,
+    workspace_id: str | None = None,
+    external_identity_id: str | None = None,
+    oauth_client_id: str | None = None,
+    oauth_token_session_id: str | None = None,
+    request_id: str | None = None,
+    tool_call_id: str | None = None,
+    reason_code: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    audit_log_id: str | None = None,
+) -> AuditLog:
+    return write_audit_log(
+        audit_store,
+        actor_user_id=actor_user_id,
+        actor_type=actor_type,
+        actor_service_id=actor_service_id,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        session_id=session_id,
+        workspace_id=workspace_id,
+        timestamp=timestamp,
+        status=status,
+        external_identity_id=external_identity_id,
+        oauth_client_id=oauth_client_id,
+        oauth_token_session_id=oauth_token_session_id,
+        request_id=request_id,
+        tool_call_id=tool_call_id,
+        reason_code=reason_code,
+        metadata=sanitize_oauth_audit_metadata(metadata),
+        audit_log_id=audit_log_id,
     )
 
 

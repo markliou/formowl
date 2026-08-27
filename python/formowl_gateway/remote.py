@@ -130,8 +130,17 @@ _CONNECTED_TOOL_POLICIES: Mapping[str, _ConnectedToolPolicy] = MappingProxyType(
             allowed_roles=frozenset({"owner", "member"}),
             requires_grant=False,
         ),
+        "query_effective_graph": _ConnectedToolPolicy(
+            allowed_roles=frozenset({"owner"}),
+            requires_grant=False,
+        ),
+        "query_effective_graph_view": _ConnectedToolPolicy(
+            allowed_roles=frozenset({"owner"}),
+            requires_grant=False,
+        ),
     }
 )
+_DEFAULT_CONNECTED_TOOL_NAMES = frozenset({"whoami", "open_upload_session"})
 
 _WHOAMI_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -431,7 +440,13 @@ class RemoteMcpDispatcher:
         self.required_scope = _required_scope(config)
         self.discovery_only = getattr(config, "chatgpt_callback_mode", None) == "discovery_only"
         self.enabled_tool_names = frozenset(enabled_tool_names)
-        self.tool_policies = _CONNECTED_TOOL_POLICIES
+        self.tool_policies = MappingProxyType(
+            {
+                name: _CONNECTED_TOOL_POLICIES[name]
+                for name in self.enabled_tool_names
+                if name in _CONNECTED_TOOL_POLICIES
+            }
+        )
         if "whoami" not in self.enabled_tool_names:
             raise ContractValidationError("connected MCP must expose whoami")
         if not self.enabled_tool_names <= frozenset(self.tool_policies):
@@ -744,7 +759,7 @@ def build_remote_tool_descriptors(
     if required_scope != _DEFAULT_REQUIRED_SCOPE:
         raise ContractValidationError("connected MCP scope must be formowl.use")
     enabled = (
-        frozenset(_CONNECTED_TOOL_POLICIES)
+        _DEFAULT_CONNECTED_TOOL_NAMES
         if enabled_tool_names is None
         else frozenset(enabled_tool_names)
     )

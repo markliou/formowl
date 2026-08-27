@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from formowl_contract import ContractValidationError, sha256_json
+from formowl_mail.answer import render_governed_evidence_answer
 from formowl_mail.issue56_sealed_source import (
     APPROVER_ACTOR,
     ARTIFACT_ID as SEALED_SOURCE_LOAD_ARTIFACT_ID,
@@ -35,6 +36,7 @@ from .issue56_diagnostic import (
     Issue56SealedSourceDiagnosticInput,
     build_issue56_sealed_source_diagnostic_input,
 )
+from .semantic import validate_public_gateway_payload
 
 
 LOADER_SPEC: Final[str] = (
@@ -425,6 +427,82 @@ def _load_approved_sealed_source() -> Any:
     )
 
 
+def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[str, Any]]:
+    """Build the opt-in production handler over the approved sealed source."""
+
+    loaded = _load_approved_sealed_source()
+    _validated_owner_safe_binding(loaded.safe_binding)
+    session, graph_view = loaded.session, loaded.effective_graph_view
+    relation_types = tuple(sorted({edge.relation_type for edge in graph_view.visible_edges}))
+    relation_by_edge_hash: dict[str, str] = {}
+    for edge in graph_view.visible_edges:
+        edge_hash = sha256_json(edge.edge_id)
+        if edge_hash in relation_by_edge_hash:
+            raise ContractValidationError("production graph edge binding is ambiguous")
+        relation_by_edge_hash[edge_hash] = edge.relation_type
+    if (
+        session.requester_user_id != APPROVER_ACTOR
+        or session.workspace_id != WORKSPACE_ID
+        or graph_view.requester_user_id != APPROVER_ACTOR
+        or not relation_types
+    ):
+        raise ContractValidationError("production sealed source binding is invalid")
+
+    def retrieval_handler(arguments: dict[str, Any]) -> dict[str, Any]:
+        if set(arguments) != {
+            "query_text",
+            "requester_user_id",
+            "session_id",
+            "workspace_id",
+        }:
+            raise ContractValidationError("production semantic arguments are invalid")
+        if (
+            arguments["requester_user_id"] != session.requester_user_id
+            or arguments["workspace_id"] != session.workspace_id
+            or not isinstance(arguments["session_id"], str)
+            or not arguments["session_id"]
+        ):
+            raise ContractValidationError("production semantic actor binding mismatch")
+        result = session.query(
+            query_text=arguments["query_text"],
+            effective_graph_view=graph_view,
+            allowed_relation_types=relation_types,
+        )
+        answer = render_governed_evidence_answer(result)
+        if result.graph_path_count != len(result.graph_paths):
+            raise ContractValidationError("production graph path count is inconsistent")
+        projected_relation_types: set[str] = set()
+        for path in result.graph_paths:
+            if path.hop_count != len(path.hops):
+                raise ContractValidationError("production graph path binding is inconsistent")
+            for hop in path.hops:
+                relation_type = relation_by_edge_hash.get(hop.edge_hash)
+                if relation_type is None or sha256_json(relation_type) != hop.relation_type_hash:
+                    raise ContractValidationError("production graph relation binding is invalid")
+                projected_relation_types.add(relation_type)
+        payload = {
+            "status": result.status,
+            "answer": {
+                "status": answer.status,
+                "text": answer.answer_text,
+                "answer_hash": answer.answer_hash,
+                "citation_count": len(answer.citation_hashes),
+            },
+            "citations": list(answer.citation_hashes),
+            "graph_hits": {"count": result.graph_path_count},
+            "relationship": {
+                "relation_types": sorted(projected_relation_types),
+                "path_count": len(result.graph_paths),
+                "max_hops": max((path.hop_count for path in result.graph_paths), default=0),
+            },
+            "redaction_counts": {"redacted_value_count": 0},
+        }
+        validate_public_gateway_payload(payload)
+        return payload
+
+    return retrieval_handler
+
+
 def _build_gateway_input(
     loaded: Any,
     *,
@@ -599,6 +677,7 @@ __all__ = [
     "RELATION_PROJECTION_EQUIVALENCE_V6_LOADER_SPEC",
     "RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_LOADER_CONTRACT_FINGERPRINT",
     "RELATION_PROJECTION_OFFLINE_EQUIVALENCE_V7_LOADER_SPEC",
+    "build_issue56_production_semantic_retrieval_handler",
     "load_issue56_sealed_source_diagnostic_input",
     "load_issue56_real_prompt_sealed_source_diagnostic_input",
     "load_issue56_relation_projection_equivalence_diagnostic_input",
