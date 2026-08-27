@@ -16,7 +16,7 @@ This is the bounded active work board. Lossless history is indexed in
 - `[ ]` incomplete, blocked, or not verified.
 - Goal files hold durable role state; this board holds task completion.
 
-## Current Phase Summary — 2026-08-25
+## Current Phase Summary — 2026-08-27
 
 - The active KG program is GitHub issue #56, not the historical issue #33 plan
   or issue #55 document-first POC.
@@ -35,14 +35,17 @@ This is the bounded active work board. Lossless history is indexed in
   `sha256:55df0dc7d96a7822271f4b7f4509b4da1bbb94f26bb7710e3919f8134d28f2d1`.
   The authority gate remains blocked because no formal all-four-gate evidence
   bundle has been authored and atomically promoted.
-- Commits `9955df0`, `3b7ee0d`, `ad4364c`, `12575a1`, and `a85604c` provide the
-  sealed source-completeness rebind author, remove execution-fingerprint
-  circularity, require the complete execution bundle as a durable promotion
-  dependency, and cover gate/core integration. The author can rebind the
-  existing passed evidence without reparsing the source.
-- Integrated pinned-E5 evidence passed `45/45`. This was fixture/contract
-  verification only: no formal gate evidence, UAT, independent holdout, or
-  consumed v1-v7 diagnostic was executed.
+- Commits `6e4663a` and `ad08b22` implement the current source-to-promotion
+  binding slice: the source evidence author validates the exact complete
+  execution bundle against report, source, counts, and authority before
+  output, while promotion preflight accepts the existing v3
+  `execution_binding` and cross-binds it to the single validated dependency.
+- Pinned-E5 focused E2E passed `48/48`; both cross-reviews returned `AGREE`
+  after one private-helper dependency blocker was corrected to use the public
+  bundle loader.
+- No formal evidence was authored or promoted, and no UAT, holdout, transfer,
+  or v1-v7 diagnostic rerun occurred. The same four authority gates remain
+  blocked; no readiness, superiority, or completion claim is supported.
 - Strong RAG is a required component/control. KG adds heterogeneous identity,
   joins, bounded topology, time, contradiction, provenance, and coverage.
   Ontology is scoped/data-first/capped soft scoring. Exact sets use a

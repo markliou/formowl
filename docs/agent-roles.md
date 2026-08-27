@@ -23,6 +23,11 @@ The Master is an orchestration role, not an implementation role. It:
   documentation, to the two subagents;
 - inspects progress, diffs, and evidence; detects repeated failure paths; and
   responds by repartitioning, changing validation, or stopping the route;
+- while implementation workers are active, inspects them at least every 15
+  minutes for overengineering, scope or file-count growth, parallel
+  abstractions, repeated failed routes, and unnecessary broad tests or
+  hardening, then stops, shrinks, or repartitions as needed; this cadence does
+  not imply background monitoring when no worker is active;
 - performs integration review and final acceptance without directly writing
   or modifying implementation code or repository documents.
 

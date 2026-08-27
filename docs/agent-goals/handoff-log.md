@@ -9,6 +9,21 @@ This is a bounded active window. Earlier entries are immutable history under
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
+## 2026-08-27 — Complete execution binding reaches promotion preflight
+- Commits `6e4663a` and `ad08b22` implement the current source-to-promotion
+  contract slice. The source evidence author now validates the exact complete
+  execution bundle against its sealed report, source, counts, and authority
+  before output; promotion preflight accepts the existing v3
+  `execution_binding` and cross-binds it to the single validated dependency.
+- Pinned-E5 focused E2E passed `48/48`. Both cross-reviews returned `AGREE`
+  after one private-helper dependency blocker was corrected to use the public
+  bundle loader.
+- Methodology authority remains valid but blocked on source completeness,
+  accepted execution binding, same-pipeline real-source ablation, and
+  independent final-answer acceptance. No formal evidence was authored or
+  promoted; no UAT, holdout, transfer, or v1-v7 rerun occurred, and no
+  readiness, superiority, or completion claim is supported.
+- Step 4 remains `in-progress`; the existing five-step wording is unchanged.
 ## 2026-08-25 — Source completeness and execution binding checkpoint
 - The existing sealed safe source report is passed at its own boundary: `8,443`
   source inventory units reconcile to `8,443` Observations with unexplained

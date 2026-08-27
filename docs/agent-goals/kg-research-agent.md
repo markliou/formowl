@@ -48,25 +48,26 @@ are source completeness, accepted execution-fingerprint binding, same-pipeline
 real-source ablation, and independent final-answer acceptance. The v3
 promotion contract is repaired, but no formal all-four-gate evidence exists to
 promote.
-## Diagnostic Checkpoint — 2026-08-25
+## Production Binding Checkpoint — 2026-08-27
 The sealed `456`-Observation `workspace_only_v1` package has no tenant
 dimension. It is bound to `workspace_formowl` and approved actor
 `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension may be
 invented. Diagnostics v1-v7 are consumed and cannot be rerun or tuned.
 
 The existing passed safe source report reconciles `8,443` source units to
-`8,443` Observations with unexplained loss `0`. Commits `9955df0`, `3b7ee0d`,
-`ad4364c`, `12575a1`, and `a85604c` add deterministic evidence rebinding
-without reparsing, remove execution-fingerprint circularity, require the
-complete execution bundle as a durable promotion dependency, and cover the
-gate/core contract. Integrated pinned-E5 tests passed `45/45`.
+`8,443` Observations with unexplained loss `0`. Commit `6e4663a` makes the
+source evidence author validate the exact complete execution bundle against
+the report, source, counts, and authority before output. Commit `ad08b22`
+makes promotion preflight accept and cross-bind the existing v3
+`execution_binding` to its single validated dependency. Pinned-E5 focused E2E
+passed `48/48`; both cross-reviews returned `AGREE` after one private-helper
+blocker was corrected to use the public bundle loader.
 
-This does not pass the source-completeness authority gate yet: no formal
-all-four-gate evidence bundle was authored or promoted. V7 remains only a
-consumed behavior-neutral relation-precompute POC, with `10` paths, `1`
-citation, `48` scores, and timing-free equivalence passing in both arms.
-No UAT, independent holdout, formal evidence run, or v1-v7 diagnostic rerun
-occurred during this checkpoint.
+No formal evidence was authored or promoted. No UAT, independent holdout,
+transfer, or v1-v7 diagnostic rerun occurred. Authority remains valid but
+blocked on the same four gates, step 4 remains in progress, and no readiness,
+superiority, or completion claim is earned. V7 remains only a consumed
+behavior-neutral relation-precompute POC.
 ## Non-Negotiable Method
 
 - Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence

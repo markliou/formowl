@@ -67,6 +67,12 @@ silently substitute another model, add workers, or let the Master implement.
   must not write or modify implementation code or durable repository
   documentation. Delegate every repository edit, including agent-spec edits,
   to one of the two subagents.
+- While implementation workers are active, the Master must inspect their
+  progress at least every 15 minutes for overengineering, scope or file-count
+  growth, parallel abstractions, repeated failed routes, and unnecessary broad
+  tests or hardening, then stop, shrink, or repartition the work when found.
+  This cadence applies only during active worker runs; it does not imply
+  background monitoring when no worker is active.
 - Give the two subagents disjoint paths and outcomes. If a route repeatedly
   fails, the Master must repartition the work, change the validation method, or
   stop that route rather than duplicate effort or repeat the same attempt.
