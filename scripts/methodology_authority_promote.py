@@ -55,6 +55,7 @@ _GATE_EVIDENCE_KEYS = {
     "dependency_manifest_sha256",
     "dependency_manifest_fingerprint",
     "dependency_count",
+    "execution_binding",
     "status",
     "evidence_classification",
     "promotion_status",
@@ -589,6 +590,11 @@ def _validate_gate_binding(
         execution_fingerprint=execution_fingerprint,
     ):
         raise MethodologyAuthorityPromotionError("gate_production_dependency_validation_failed")
+    _validate_execution_binding_reference(
+        repository_root=repository_root,
+        reference=evidence.get("execution_binding"),
+        dependencies=dependencies,
+    )
     return _GateBinding(
         gate_id=gate_id,
         evidence_relative_path=evidence_relative_path,
@@ -603,6 +609,38 @@ def _validate_gate_binding(
         source_manifest_byte_sha256=_sha256_bytes(source_bytes),
         result_artifact_byte_sha256=_sha256_bytes(result_bytes),
     )
+
+
+def _validate_execution_binding_reference(
+    *,
+    repository_root: Path,
+    reference: Any,
+    dependencies: Sequence[Any],
+) -> None:
+    binding_entries = [
+        entry
+        for entry in dependencies
+        if isinstance(entry, Mapping)
+        and entry.get("role") == "execution_binding_bundle"
+    ]
+    if len(binding_entries) != 1:
+        raise MethodologyAuthorityPromotionError("gate_execution_binding_bundle_mismatch")
+    binding_entry = binding_entries[0]
+    bundle_path = _resolve_existing_regular_file(
+        repository_root,
+        Path(str(binding_entry.get("path", ""))),
+        "gate_execution_binding_bundle_unavailable",
+    )
+    bundle = _read_json_object(bundle_path, "gate_execution_binding_bundle_unreadable")
+    expected_reference = {
+        "role": "execution_binding_bundle",
+        "path": binding_entry.get("path"),
+        "byte_sha256": binding_entry.get("byte_sha256"),
+        "bundle_fingerprint": binding_entry.get("internal_fingerprint"),
+        "complete_execution_fingerprint": bundle.get("execution_fingerprint"),
+    }
+    if reference != expected_reference:
+        raise MethodologyAuthorityPromotionError("gate_execution_binding_bundle_mismatch")
 
 
 def _claim_payload(preflight: _PromotionPreflight) -> dict[str, Any]:

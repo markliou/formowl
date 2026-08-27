@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import _paths  # noqa: F401
 import formowl_core.methodology_authority as methodology_authority
+import scripts.methodology_authority_promote as methodology_authority_promote
 from formowl_core.methodology_authority import (
     AUTHORITY_RELATIVE_PATH,
     check_methodology_authority,
@@ -657,6 +658,71 @@ class MethodologyAuthorityTests(unittest.TestCase):
         self.assertTrue(result.authority_valid, result.errors)
         self.assertTrue(result.methodology_ready, result.errors)
 
+    def test_promotion_preflight_accepts_v3_execution_binding_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository_root = Path(temp_dir)
+            inputs = self._promotion_preflight_inputs(repository_root)
+            current_before = (repository_root / AUTHORITY_RELATIVE_PATH).read_bytes()
+            preflight = methodology_authority_promote.preflight_methodology_authority_promotion(
+                **inputs
+            )
+
+            self.assertEqual(len(preflight.gate_bindings), 4)
+            self.assertTrue(preflight.candidate_result.methodology_ready)
+            self.assertEqual(
+                (repository_root / AUTHORITY_RELATIVE_PATH).read_bytes(),
+                current_before,
+            )
+            self.assertFalse((repository_root / inputs["claim_relative_path"]).exists())
+            self.assertFalse((repository_root / inputs["receipt_relative_path"]).exists())
+
+    def test_promotion_preflight_rejects_v3_execution_binding_tamper_without_writes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository_root = Path(temp_dir)
+            inputs = self._promotion_preflight_inputs(repository_root)
+            current_before = (repository_root / AUTHORITY_RELATIVE_PATH).read_bytes()
+            target_evidence_path = (
+                repository_root
+                / inputs["gate_evidence_relative_paths"][
+                    "evaluation_reports_bind_execution_fingerprint"
+                ]
+            ).resolve()
+            read_json_object = methodology_authority_promote._read_json_object
+
+            def read_with_post_candidate_tamper(path: Path, reason_code: str) -> dict:
+                payload = read_json_object(path, reason_code)
+                if path == target_evidence_path and reason_code == "gate_evidence_invalid_json":
+                    payload["execution_binding"]["complete_execution_fingerprint"] = (
+                        self._fingerprint_value("tampered-complete-execution")
+                    )
+                    return self._with_internal_fingerprint(payload, "envelope_fingerprint")
+                return payload
+
+            with (
+                patch.object(
+                    methodology_authority_promote,
+                    "_read_json_object",
+                    side_effect=read_with_post_candidate_tamper,
+                ),
+                self.assertRaises(
+                    methodology_authority_promote.MethodologyAuthorityPromotionError
+                ) as raised,
+            ):
+                methodology_authority_promote.preflight_methodology_authority_promotion(**inputs)
+
+            self.assertEqual(
+                raised.exception.reason_code,
+                "gate_execution_binding_bundle_mismatch",
+            )
+            self.assertEqual(
+                (repository_root / AUTHORITY_RELATIVE_PATH).read_bytes(),
+                current_before,
+            )
+            self.assertFalse((repository_root / inputs["claim_relative_path"]).exists())
+            self.assertFalse((repository_root / inputs["receipt_relative_path"]).exists())
+
     def test_core_validator_rejects_missing_execution_role_or_reference(self) -> None:
         gate_id = "source_completeness_compared_with_raw_oracle"
         for mutation in ("missing_role", "missing_reference"):
@@ -865,6 +931,34 @@ class MethodologyAuthorityTests(unittest.TestCase):
             binding=binding,
         )
         return binding
+
+    @classmethod
+    def _promotion_preflight_inputs(
+        cls,
+        repository_root: Path,
+    ) -> dict[str, object]:
+        evidence_paths = cls._build_future_ready_production_fixture(repository_root)
+        authority_path = repository_root / AUTHORITY_RELATIVE_PATH
+        candidate_path = Path("docs/methodology-authority.ready-candidate.json")
+        (repository_root / candidate_path).write_bytes(authority_path.read_bytes())
+        authority_path.write_bytes((ROOT / AUTHORITY_RELATIVE_PATH).read_bytes())
+        return {
+            "repository_root": repository_root,
+            "authority_relative_path": AUTHORITY_RELATIVE_PATH,
+            "expected_current_authority_sha256": cls._file_sha256(authority_path),
+            "candidate_authority_relative_path": candidate_path,
+            "gate_evidence_relative_paths": evidence_paths,
+            "gate_dependency_manifest_relative_paths": {
+                gate_id: Path(
+                    json.loads(
+                        (repository_root / evidence_path).read_text(encoding="utf-8")
+                    )["dependency_manifest_path"]
+                )
+                for gate_id, evidence_path in evidence_paths.items()
+            },
+            "claim_relative_path": Path("docs/methodology-authority.test.claim.json"),
+            "receipt_relative_path": Path("docs/methodology-authority.test.receipt.json"),
+        }
 
     @staticmethod
     def _execution_binding_reference(
