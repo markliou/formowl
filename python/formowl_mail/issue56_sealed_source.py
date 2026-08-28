@@ -118,6 +118,7 @@ def load_issue56_sealed_source(
     workspace_id: str,
     approver_actor: str,
     requester_user_id: str,
+    include_participant_authorization_observations: bool = False,
 ) -> Issue56SealedSourceLoad:
     """Validate one immutable source package and build existing runtime objects.
 
@@ -297,6 +298,55 @@ def load_issue56_sealed_source(
         source_bundle,
         selected_observations=selected_observations,
     )
+    authorization_observations = tuple(selected_observations)
+    if include_participant_authorization_observations:
+        full_source_occurrence_ids = {
+            occurrence.message_occurrence_id
+            for occurrence in source_bundle.message_occurrences
+        }
+        participant_observations = tuple(
+            observation
+            for observation in source_observations
+            if _observation_message_occurrence_id(observation)
+            in full_source_occurrence_ids
+            and (
+                observation.observation_type == "email_message"
+                or (
+                    observation.observation_type == "email_header"
+                    and str((observation.payload or {}).get("header_name", "")).casefold()
+                    in {"from", "sender", "to", "cc"}
+                )
+            )
+        )
+        selected_asset_ids = {observation.asset_id for observation in selected_observations}
+        selected_permission_fingerprints = {
+            sha256_json(observation.permission_scope) for observation in selected_observations
+        }
+        if any(
+            observation.asset_id not in selected_asset_ids
+            or sha256_json(observation.permission_scope) not in selected_permission_fingerprints
+            for observation in participant_observations
+        ):
+            raise Issue56SealedSourceLoadError("participant_authorization_scope_mismatch")
+        if {
+            occurrence_id
+            for observation in participant_observations
+            if (occurrence_id := _observation_message_occurrence_id(observation)) is not None
+        } != full_source_occurrence_ids:
+            raise Issue56SealedSourceLoadError(
+                "participant_authorization_occurrence_scope_incomplete"
+            )
+        authorization_by_id = dict(selected_by_id)
+        for observation in participant_observations:
+            existing = authorization_by_id.get(observation.observation_id)
+            if existing is not None and sha256_json(existing.to_dict()) != sha256_json(
+                observation.to_dict()
+            ):
+                raise Issue56SealedSourceLoadError("participant_authorization_hash_mismatch")
+            authorization_by_id[observation.observation_id] = observation
+        authorization_observations = tuple(
+            authorization_by_id[key] for key in sorted(authorization_by_id)
+        )
     observations_by_bundle_id = MappingProxyType(
         {
             query_bundle.mail_evidence_bundle_id: tuple(
@@ -306,6 +356,9 @@ def load_issue56_sealed_source(
                 )
             )
         }
+    )
+    authorization_observations_by_bundle_id = MappingProxyType(
+        {query_bundle.mail_evidence_bundle_id: authorization_observations}
     )
     source_binding_fingerprint = sha256_json(
         {
@@ -322,6 +375,9 @@ def load_issue56_sealed_source(
     try:
         session = build_authorized_semantic_mail_session(
             observations_by_bundle_id=observations_by_bundle_id,
+            authorization_observations_by_bundle_id=(
+                authorization_observations_by_bundle_id
+            ),
             bundles=(query_bundle,),
             requester_user_id=requester_user_id,
             workspace_id=workspace_id,
@@ -329,7 +385,7 @@ def load_issue56_sealed_source(
             mail_evidence_bundle_id=query_bundle.mail_evidence_bundle_id,
         )
         if len(session.authorized_observations) != len(
-            selected_observations
+            authorization_observations
         ) or session.authorized_source_scope_ids != (query_bundle.mail_evidence_bundle_id,):
             raise ContractValidationError("sealed source authorization projection is incomplete")
         graph_build = build_authorized_source_backed_effective_graph_view(
@@ -708,7 +764,7 @@ def _safe_binding(
         if field_name.endswith("_fingerprint") or field_name.endswith("_sha256"):
             _require_sha256(value, f"{field_name}_invalid")
     if (
-        counts["selected_observation_count"] != counts["authorized_observation_count"]
+        counts["authorized_observation_count"] < counts["selected_observation_count"]
         or counts["selected_observation_count"] != counts["query_bundle_body_segment_count"]
         or counts["overflow_count"] != 0
     ):
@@ -717,6 +773,8 @@ def _safe_binding(
     if (
         precompute_binding["index_fingerprint"] != binding["index_fingerprint"]
         or precompute_binding["graph_revision_fingerprint"] != binding["graph_revision_fingerprint"]
+        or precompute_binding["source_session_binding_fingerprint"]
+        != session.source_session_binding_fingerprint
         or precompute_binding["counts"]["authorized_evidence_count"]
         != counts["authorized_observation_count"]
     ):
@@ -765,6 +823,9 @@ def _lineage_crosswalk_precompute_safe_binding(
             "artifact_id": "formowl_issue56_evidence_identity_lineage_cache_key_v1",
             "index_fingerprint": lineage_crosswalk.index_fingerprint,
             "graph_revision_fingerprint": (lineage_crosswalk.graph_revision_fingerprint),
+            "source_session_binding_fingerprint": (
+                lineage_crosswalk.source_session_binding_fingerprint
+            ),
         }
     )
     binding = {
@@ -777,6 +838,9 @@ def _lineage_crosswalk_precompute_safe_binding(
         "crosswalk_fingerprint": lineage_crosswalk.crosswalk_fingerprint,
         "index_fingerprint": lineage_crosswalk.index_fingerprint,
         "graph_revision_fingerprint": (lineage_crosswalk.graph_revision_fingerprint),
+        "source_session_binding_fingerprint": (
+            lineage_crosswalk.source_session_binding_fingerprint
+        ),
         "cache_key_fingerprint": cache_key_fingerprint,
         "counts": counts,
     }
@@ -784,6 +848,7 @@ def _lineage_crosswalk_precompute_safe_binding(
         "crosswalk_fingerprint",
         "index_fingerprint",
         "graph_revision_fingerprint",
+        "source_session_binding_fingerprint",
         "cache_key_fingerprint",
     ):
         _require_sha256(

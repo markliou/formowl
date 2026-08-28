@@ -14,13 +14,22 @@ from _semantic_gateway_scenarios import (
     build_raw_path_raw_sql_worker_internal_leak_transcript,
     containerized_semantic_mcp_gateway_smoke,
 )
+from formowl_contract import sha256_json
 from formowl_gateway import (
     SemanticMcpGateway,
     SemanticGatewaySession,
     SemanticMcpJsonRpcGateway,
     create_mail_upload_semantic_jsonrpc_gateway,
 )
+from formowl_gateway.remote import build_remote_tool_descriptors
 from formowl_ingestion.storage import UploadSessionStore
+from formowl_mail.exact import (
+    AuthorizedSourceOccurrence,
+    ExactInventoryItem,
+    SourceOccurrenceProvider,
+    execute_deterministic_source_occurrence_inventory,
+)
+from formowl_mail.semantic_plan import SemanticQueryPlan
 
 
 class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
@@ -188,13 +197,55 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
         )["inputSchema"]
 
         self.assertEqual(tool_schema["required"], ["query_text"])
-        self.assertEqual(tool_schema["properties"], {"query_text": {"type": "string"}})
+        self.assertEqual(
+            tool_schema["properties"],
+            {
+                "cursor": {"type": "string"},
+                "exact_field": {"type": "string"},
+                "exact_inventory_kind": {"type": "string"},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
+                "query_text": {"type": "string"},
+            },
+        )
         self.assertFalse(tool_schema["additionalProperties"])
+
+        valid = gateway.handle_json_rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": "valid_optional_paging",
+                "method": "tools/call",
+                "params": {
+                    "name": "query_effective_graph_view",
+                    "arguments": {
+                        "query_text": "Optoma",
+                        "exact_inventory_kind": "mail_message_occurrence",
+                        "page_size": 25,
+                        "cursor": "opaque_cursor_v1",
+                    },
+                },
+            }
+        )
+        self.assertFalse(valid["result"]["isError"])
+        self.assertEqual(
+            handler_calls[0]["exact_inventory_kind"],
+            "mail_message_occurrence",
+        )
+        self.assertEqual(handler_calls[0]["page_size"], 25)
+        self.assertEqual(handler_calls[0]["cursor"], "opaque_cursor_v1")
+        handler_calls.clear()
 
         malformed_arguments = (
             {},
             {"query_text": ""},
             {"query_text": 42},
+            {"query_text": "Optoma", "page_size": 0},
+            {"query_text": "Optoma", "page_size": 101},
+            {"query_text": "Optoma", "page_size": True},
+            {"query_text": "Optoma", "page_size": "25"},
+            {"query_text": "Optoma", "cursor": 42},
+            {"query_text": "Optoma", "cursor": ""},
+            {"query_text": "Optoma", "exact_field": 42},
+            {"query_text": "Optoma", "exact_inventory_kind": 42},
             {"query_text": "Optoma", "workspace_id": "workspace_other"},
         )
         for index, arguments in enumerate(malformed_arguments):
@@ -215,6 +266,152 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
                 "unsafe_tool_payload",
             )
         self.assertEqual(handler_calls, [])
+
+    def test_terminal_partial_exact_inventory_reports_incomplete_coverage(self) -> None:
+        identifier_hash = sha256_json("participant")
+        safe_item = ExactInventoryItem(
+            item_hash=sha256_json("occurrence"),
+            cited_observation_hashes=(sha256_json("citation"),),
+            governed_references=((sha256_json("citation"), sha256_json("lineage")),),
+            matched_normalized_value_hashes=(identifier_hash,),
+        ).to_safe_dict()
+        self.assertEqual(safe_item["matched_normalized_value_hashes"], [identifier_hash])
+        plan = SemanticQueryPlan(
+            query_hash=sha256_json("list all participant mail"),
+            query_class="exact_set_or_inventory",
+            source_kind="authorized_mail_observation",
+            source_scope_ids=("scope_authorized",),
+            workspace_id="workspace_main",
+            requester_user_id="user_pm",
+            required_permissions=("evidence_snippet", "graph_snippet"),
+            user_graph_revision_id="user_graph_v1",
+            canonical_graph_revision_id="canonical_graph_v1",
+            ontology_revision_id="ontology_v1",
+            assembly_policy_id="assembly_v1",
+            allowed_paths=(),
+            seed_node_ids=(),
+            max_hops=0,
+            max_fanout=1,
+            candidate_limit=1,
+            result_limit=20,
+            evidence_budget=1,
+            time_budget_ms=1_500,
+            repair_budget=1,
+            repair_attempt_count=0,
+            claim_strength="complete_authorized_scope",
+            exact_operation="inventory_with_count",
+            exact_inventory_kind="mail_message_occurrence",
+            exact_filter_term_hashes=(identifier_hash,),
+            exact_identifier_term_hashes=(identifier_hash,),
+            exact_normalized_field="participant.any.local_part",
+            exact_predicate="source_occurrence_involves",
+            exact_operator="case_insensitive_exact",
+        )
+        provider = SourceOccurrenceProvider(
+            provider_id="mail_source_occurrence_provider_v1",
+            inventory_kind_alias="mail_observation",
+            resource_kind="mail_message_occurrence",
+            normalized_field="participant.any.local_part",
+            predicate="source_occurrence_involves",
+            operator="case_insensitive_exact",
+            requester_user_id="user_pm",
+            workspace_id="workspace_main",
+            source_scope_ids=("scope_authorized",),
+            authorized_scope_fingerprint=sha256_json("authorized_scope"),
+            occurrences=(
+                AuthorizedSourceOccurrence(
+                    item_hash=sha256_json("occurrence"),
+                    value_bindings=(
+                        (
+                            identifier_hash,
+                            identifier_hash,
+                            sha256_json("citation"),
+                            sha256_json("lineage"),
+                        ),
+                    ),
+                ),
+            ),
+            unresolved_count=1,
+        )
+
+        result = execute_deterministic_source_occurrence_inventory(
+            plan=plan,
+            provider=provider,
+            expected_authorized_scope_fingerprint=provider.authorized_scope_fingerprint,
+            page_size=20,
+            cursor=None,
+        )
+
+        self.assertEqual(result.status, "incomplete")
+        self.assertEqual(result.source_occurrence_page["coverage_status"], "incomplete")
+        self.assertIsNone(result.source_occurrence_page["next_cursor"])
+
+        terminal_payload = {
+            "status": result.status,
+            "exact_inventory": {
+                "status": result.status,
+                "query_class": plan.query_class,
+                "plan": {"plan_fingerprint": result.plan_fingerprint},
+                "total_count": result.exact_count,
+                "returned_count": result.returned_item_count,
+                "coverage_status": result.source_occurrence_page["coverage_status"],
+                "next_cursor": result.source_occurrence_page["next_cursor"],
+                "redacted_count": result.source_occurrence_page["redacted_count"],
+                "unsupported_count": result.source_occurrence_page["unsupported_count"],
+                "unresolved_count": result.source_occurrence_page["unresolved_count"],
+                "duplicate_policy": result.source_occurrence_page["duplicate_policy"],
+                "ambiguous_identifier_count": result.source_occurrence_page[
+                    "ambiguous_identifier_count"
+                ],
+                "items": [safe_item],
+            },
+            "citations": list(result.items[0].cited_observation_hashes),
+            "redaction_counts": {"redacted_value_count": 0},
+        }
+        gateway = SemanticMcpJsonRpcGateway(
+            semantic_gateway=SemanticMcpGateway(
+                retrieval_handler=lambda _input_data: terminal_payload
+            ),
+            session=SemanticGatewaySession(
+                session_id="session_terminal_inventory",
+                actor_user_id="user_pm",
+                workspace_id="workspace_main",
+            ),
+        )
+        response = gateway.handle_json_rpc(
+            {
+                "jsonrpc": "2.0",
+                "id": "terminal_inventory",
+                "method": "tools/call",
+                "params": {
+                    "name": "query_effective_graph_view",
+                    "arguments": {"query_text": "list all participant mail"},
+                },
+            }
+        )
+
+        self.assertFalse(response["result"]["isError"])
+        structured_content = response["result"]["content"][0]["json"]
+        terminal_inventory = structured_content["data"]["exact_inventory"]
+        self.assertIn("next_cursor", terminal_inventory)
+        self.assertIsNone(terminal_inventory["next_cursor"])
+
+        output_schema = next(
+            tool.outputSchema
+            for tool in build_remote_tool_descriptors(
+                required_scope="formowl.use",
+                enabled_tool_names={"whoami", "query_effective_graph_view"},
+            )
+            if tool.name == "query_effective_graph_view"
+        )
+        exact_inventory_schema = output_schema["properties"]["data"]["properties"][
+            "exact_inventory"
+        ]
+        self.assertIn("next_cursor", exact_inventory_schema["required"])
+        self.assertEqual(
+            exact_inventory_schema["properties"]["next_cursor"],
+            {"type": ["string", "null"]},
+        )
 
     def test_standards_compliant_mcp_gateway_transport_initialize_and_tool_list(
         self,

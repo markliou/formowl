@@ -9,6 +9,28 @@ This is a bounded active window. Earlier entries are immutable history under
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
+## 2026-08-28 — Direct-source deterministic inventory remains incomplete
+- The generic direct-source business-identifier deterministic inventory now
+  traverses normal ASGI `/mcp` with typed intent, query-hash provider
+  selection, source-occurrence preservation, bound cursor pagination, and
+  governed citation/lineage references. No private query alias or oracle branch
+  was added.
+- Coverage uses the full permission-authorized sealed-source occurrence scope.
+  The lineage cache key and owner/gateway checks bind the same index, graph,
+  and source-session fingerprints.
+- The production-local real E2E enumerated exactly `125` source-backed
+  occurrences against the UAT oracle `317` and correctly ended `incomplete`
+  with `192` unresolved. The remainder lacks an approved source-backed
+  identity/conversation provider contract; no thread/reply/quote/forward
+  expansion is authorized.
+- Focused pinned-E5 verification passed `52` tests with `1` skipped. Its
+  canonical execution fingerprint is
+  `sha256:6327d552a86d3d41b91ee68efc81229a8697bbb202c3ae91cad6de47839e53ea`;
+  both final read-only reviewers returned `AGREE`.
+- Work D and plan step 4 remain unchecked/in progress. The same four
+  methodology authority gates remain blocked; no formal evidence was promoted,
+  no holdout/transfer/v1-v7 rerun occurred, and no production readiness,
+  methodology readiness, superiority, or completion claim is supported.
 ## 2026-08-27 — Complete execution binding reaches promotion preflight
 - Commits `6e4663a` and `ad08b22` implement the current source-to-promotion
   contract slice. The source evidence author now validates the exact complete

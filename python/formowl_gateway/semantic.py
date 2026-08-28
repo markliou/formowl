@@ -139,9 +139,18 @@ PUBLIC_TOOL_SCHEMAS = [
         "tool_name": "query_effective_graph_view",
         "workflow": "access",
         "compatibility": {"status": "canonical"},
-        "input_keys": ["workspace_id", "query_text", "requester_user_id"],
+        "input_keys": [
+            "workspace_id",
+            "query_text",
+            "exact_inventory_kind",
+            "exact_field",
+            "page_size",
+            "cursor",
+            "requester_user_id",
+        ],
         "output_keys": [
             "answer",
+            "exact_inventory",
             "graph_hits",
             "evidence",
             "fallback_used",
@@ -730,6 +739,7 @@ def _safe_handler_envelope(
         payload_status = payload.get("status")
         status = payload_status if isinstance(payload_status, str) else "ok"
     envelope = _envelope(result_type=result_type, status=status, data=payload)
+    envelope["data"] = payload
     validate_public_gateway_payload(envelope)
     return envelope
 

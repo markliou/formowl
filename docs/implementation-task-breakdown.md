@@ -16,7 +16,7 @@ This is the bounded active work board. Lossless history is indexed in
 - `[ ]` incomplete, blocked, or not verified.
 - Goal files hold durable role state; this board holds task completion.
 
-## Current Phase Summary — 2026-08-27
+## Current Phase Summary — 2026-08-28
 
 - The active KG program is GitHub issue #56, not the historical issue #33 plan
   or issue #55 document-first POC.
@@ -43,9 +43,29 @@ This is the bounded active work board. Lossless history is indexed in
 - Pinned-E5 focused E2E passed `48/48`; both cross-reviews returned `AGREE`
   after one private-helper dependency blocker was corrected to use the public
   bundle loader.
-- No formal evidence was authored or promoted, and no UAT, holdout, transfer,
-  or v1-v7 diagnostic rerun occurred. The same four authority gates remain
-  blocked; no readiness, superiority, or completion claim is supported.
+- The generic direct-source business-identifier deterministic inventory
+  contract now runs through the normal ASGI `/mcp` path with typed intent,
+  data-driven provider selection, source-occurrence duplicate preservation,
+  stable cursor pagination, and governed citation/lineage references. It does
+  not contain a private query alias or oracle-specific branch.
+- The approved production-local real E2E enumerated exactly `125`
+  source-backed occurrences against the UAT oracle count `317`. It correctly
+  terminated `incomplete` with `192` unresolved occurrences. Those remaining
+  occurrences do not have an approved source-backed identity/conversation
+  provider contract, so they cannot be inferred through thread, reply, quote,
+  forward, or other scope expansion.
+- Full coverage is measured against the permission-authorized sealed-source
+  occurrence scope, not the smaller retrieval projection. The lineage
+  crosswalk cache key and owner/gateway validation bind the same
+  index/graph/source-session fingerprints.
+- The latest focused pinned-E5 verification passed `52` tests with `1`
+  skipped. Its canonical execution fingerprint is
+  `sha256:6327d552a86d3d41b91ee68efc81229a8697bbb202c3ae91cad6de47839e53ea`;
+  both final read-only reviewers returned `AGREE`.
+- No formal evidence was authored or promoted, and no methodology-quality UAT,
+  independent holdout, transfer, or v1-v7 diagnostic rerun occurred. The same
+  four authority gates remain blocked; no readiness, superiority, or
+  completion claim is supported.
 - Strong RAG is a required component/control. KG adds heterogeneous identity,
   joins, bounded topology, time, contradiction, provenance, and coverage.
   Ontology is scoped/data-first/capped soft scoring. Exact sets use a
@@ -244,6 +264,11 @@ This is the bounded active work board. Lossless history is indexed in
     and deterministic exact execution.
   - Step 4 / Work D status remains `in-progress`; no checkbox is earned by the
     bounded v4/v7 POC diagnostics or blocked v5/v6 diagnostics.
+  - The direct-source inventory sub-slice is generic and verified, but its real
+    execution remains `125/317` with `192` unresolved authorized occurrences.
+    Work D therefore stays unchecked until an approved source-backed
+    identity/conversation provider contract can cover the remaining scope
+    without oracle fitting or inferred conversation expansion.
   - The next action remains inside step 4; v1-v7 must not be rerun, and all four
     blocked authority gates still require legitimate production evidence.
   - Work E: controlled, citation-grounded LLM roles with the same answer model

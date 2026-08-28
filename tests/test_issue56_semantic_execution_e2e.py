@@ -40,6 +40,12 @@ from formowl_mail import (
     validate_semantic_query_plan,
 )
 from formowl_mail import hybrid as hybrid_module
+from formowl_mail.exact import (
+    AuthorizedSourceOccurrence,
+    SourceOccurrenceProvider,
+    authorized_source_occurrence_scope_fingerprint,
+    execute_deterministic_source_occurrence_inventory,
+)
 from formowl_mail.semantic_plan import repair_relation_plan_once
 from scripts.issue56_semantic_execution_smoke import (
     ALLOWED_RELATIONS,
@@ -112,6 +118,34 @@ class Issue56SemanticExecutionEndToEndTests(unittest.TestCase):
         self.assertEqual(plan.query_class, "relation_reasoning")
         self.assertEqual(plan.max_hops, 2)
         self.assertEqual(plan.repair_attempt_count, 0)
+
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "class override is invalid",
+        ):
+            route_semantic_query(
+                query_text="PO470002002 交期",
+                requester_user_id=REQUESTER_USER_ID,
+                workspace_id=WORKSPACE_ID,
+                source_scope_ids=source_scope_ids,
+                effective_graph_view=self.inputs.effective_graph_view,
+                exact_normalized_field="participant.any.local_part",
+                exact_predicate="source_occurrence_involves",
+                exact_operator="case_insensitive_exact",
+                query_class_override="evidence_lookup",
+            )
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "class override is invalid",
+        ):
+            route_semantic_query(
+                query_text="PO470002002 交期",
+                requester_user_id=REQUESTER_USER_ID,
+                workspace_id=WORKSPACE_ID,
+                source_scope_ids=source_scope_ids,
+                effective_graph_view=self.inputs.effective_graph_view,
+                query_class_override="exact_set_or_inventory",
+            )
 
         repaired = validate_semantic_query_plan(
             replace(plan, candidate_limit=999),
@@ -650,6 +684,499 @@ class Issue56SemanticExecutionEndToEndTests(unittest.TestCase):
         self.assertEqual(bounded_exact.returned_item_count, 0)
         self.assertFalse(bounded_exact.coverage.authorized_scope_complete)
 
+    def test_source_occurrence_provider_rejects_stale_lineage_fingerprint(
+        self,
+    ) -> None:
+        with patch(
+            "formowl_mail.hybrid._load_pinned_issue56_runtime_components",
+            return_value=self.runtime,
+        ):
+            session = build_authorized_semantic_mail_session(
+                observations_by_bundle_id=self.inputs.observations_by_bundle_id,
+                bundles=(self.inputs.current_bundle,),
+                requester_user_id=REQUESTER_USER_ID,
+                workspace_id=WORKSPACE_ID,
+            )
+        query_text = "列出全部 PO470002002 郵件"
+        identifier_hash = hybrid_module._deterministic_exact_filter_slots(
+            query_text,
+            tokenizer_profile=self.runtime.tokenizer_profile,
+        ).identifier_hashes[0]
+        source_observation = next(
+            observation
+            for observation in session.authorized_observations
+            if sha256_json(observation.to_dict()) == self.inputs.current_observation_hash
+        )
+        source_lineage = next(
+            lineage
+            for lineage in session.occurrence_lineages
+            if lineage.source_observation_id == source_observation.observation_id
+        )
+        scope_fingerprint = authorized_source_occurrence_scope_fingerprint(
+            requester_user_id=session.requester_user_id,
+            workspace_id=session.workspace_id,
+            source_scope_ids=session.authorized_source_scope_ids,
+            authorized_observation_hashes=session.authorized_observation_hashes,
+            source_session_binding_fingerprint=(
+                session.source_session_binding_fingerprint or ""
+            ),
+        )
+        provider = SourceOccurrenceProvider(
+            provider_id="mail_source_occurrence_provider_v1",
+            inventory_kind_alias="mail_observation",
+            resource_kind="mail_message_occurrence",
+            normalized_field="participant.any.local_part",
+            predicate="source_occurrence_involves",
+            operator="case_insensitive_exact",
+            requester_user_id=session.requester_user_id,
+            workspace_id=session.workspace_id,
+            source_scope_ids=session.authorized_source_scope_ids,
+            authorized_scope_fingerprint=scope_fingerprint,
+            occurrences=(
+                AuthorizedSourceOccurrence(
+                    item_hash=sha256_json(source_lineage.occurrence_id),
+                    value_bindings=(
+                        (
+                            identifier_hash,
+                            sha256_json("synthetic@example.test"),
+                            self.inputs.current_observation_hash,
+                            sha256_json("stale_occurrence_lineage"),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        stale_session = replace(
+            session,
+            source_occurrence_providers=(provider,),
+        )
+
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "provenance binding mismatch",
+        ):
+            stale_session.query(
+                query_text=query_text,
+                effective_graph_view=self.inputs.effective_graph_view,
+            )
+
+    def test_explicit_exact_field_routes_source_occurrence_without_exact_wording(
+        self,
+    ) -> None:
+        with patch(
+            "formowl_mail.hybrid._load_pinned_issue56_runtime_components",
+            return_value=self.runtime,
+        ):
+            session = build_authorized_semantic_mail_session(
+                observations_by_bundle_id=self.inputs.observations_by_bundle_id,
+                bundles=(self.inputs.current_bundle,),
+                requester_user_id=REQUESTER_USER_ID,
+                workspace_id=WORKSPACE_ID,
+            )
+        query_text = "查詢 synthetic@example.test 郵件"
+        self.assertEqual(deterministic_query_class(query_text), "evidence_lookup")
+        identifier_hash = hybrid_module._deterministic_exact_filter_slots(
+            query_text,
+            tokenizer_profile=self.runtime.tokenizer_profile,
+        ).identifier_hashes[0]
+        source_observation = next(
+            observation
+            for observation in session.authorized_observations
+            if sha256_json(observation.to_dict()) == self.inputs.current_observation_hash
+        )
+        source_lineage = next(
+            lineage
+            for lineage in session.occurrence_lineages
+            if lineage.source_observation_id == source_observation.observation_id
+        )
+        provider = SourceOccurrenceProvider(
+            provider_id="mail_source_occurrence_provider_v1",
+            inventory_kind_alias="mail_observation",
+            resource_kind="mail_message_occurrence",
+            normalized_field="participant.any.local_part",
+            predicate="source_occurrence_involves",
+            operator="case_insensitive_exact",
+            requester_user_id=session.requester_user_id,
+            workspace_id=session.workspace_id,
+            source_scope_ids=session.authorized_source_scope_ids,
+            authorized_scope_fingerprint=authorized_source_occurrence_scope_fingerprint(
+                requester_user_id=session.requester_user_id,
+                workspace_id=session.workspace_id,
+                source_scope_ids=session.authorized_source_scope_ids,
+                authorized_observation_hashes=session.authorized_observation_hashes,
+                source_session_binding_fingerprint=(
+                    session.source_session_binding_fingerprint or ""
+                ),
+            ),
+            occurrences=(
+                AuthorizedSourceOccurrence(
+                    item_hash=sha256_json(source_lineage.occurrence_id),
+                    value_bindings=(
+                        (
+                            identifier_hash,
+                            sha256_json("synthetic@example.test"),
+                            self.inputs.current_observation_hash,
+                            source_lineage.lineage_fingerprint,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        result = replace(
+            session,
+            source_occurrence_providers=(provider,),
+        ).query(
+            query_text=query_text,
+            effective_graph_view=self.inputs.effective_graph_view,
+            exact_field="participant.any.local_part",
+        )
+
+        self.assertEqual(result.query_class, "exact_set_or_inventory")
+        self.assertEqual(result.status, "complete_authorized_scope")
+        exact = result.exact_result
+        assert exact is not None
+        self.assertEqual(exact.exact_count, 1)
+        self.assertEqual(exact.returned_item_count, 1)
+        self.assertTrue(exact.coverage.authorized_scope_complete)
+
+    def test_source_occurrence_exact_matches_local_or_full_binding_dimension(
+        self,
+    ) -> None:
+        source_scope_ids = (self.inputs.current_bundle.mail_evidence_bundle_id,)
+        local_hash = sha256_json("synthetic-local")
+        variant_hashes = (
+            sha256_json("synthetic-local@example.test"),
+            sha256_json("synthetic-local@example.invalid"),
+        )
+        citation_hashes = (sha256_json("citation-one"), sha256_json("citation-two"))
+        lineage_hashes = (sha256_json("lineage-one"), sha256_json("lineage-two"))
+        scope_fingerprint = sha256_json("authorized-source-scope")
+        provider = SourceOccurrenceProvider(
+            provider_id="mail_source_occurrence_provider_v1",
+            inventory_kind_alias="mail_observation",
+            resource_kind="mail_message_occurrence",
+            normalized_field="participant.any.local_part",
+            predicate="source_occurrence_involves",
+            operator="case_insensitive_exact",
+            requester_user_id=REQUESTER_USER_ID,
+            workspace_id=WORKSPACE_ID,
+            source_scope_ids=source_scope_ids,
+            authorized_scope_fingerprint=scope_fingerprint,
+            occurrences=tuple(
+                AuthorizedSourceOccurrence(
+                    item_hash=sha256_json(["occurrence", index]),
+                    value_bindings=(
+                        (
+                            local_hash,
+                            variant_hash,
+                            citation_hash,
+                            lineage_hash,
+                        ),
+                    ),
+                )
+                for index, (variant_hash, citation_hash, lineage_hash) in enumerate(
+                    zip(variant_hashes, citation_hashes, lineage_hashes, strict=True)
+                )
+            ),
+        )
+
+        def execute(query_hash: str, *, cursor: str | None = None):
+            plan = route_semantic_query(
+                query_text="synthetic exact inventory",
+                requester_user_id=REQUESTER_USER_ID,
+                workspace_id=WORKSPACE_ID,
+                source_scope_ids=source_scope_ids,
+                effective_graph_view=self.inputs.effective_graph_view,
+                exact_inventory_kind=provider.resource_kind,
+                exact_filter_term_hashes=(query_hash,),
+                exact_identifier_term_hashes=(query_hash,),
+                exact_normalized_field=provider.normalized_field,
+                exact_predicate=provider.predicate,
+                exact_operator=provider.operator,
+                query_class_override="exact_set_or_inventory",
+            )
+            return execute_deterministic_source_occurrence_inventory(
+                plan=plan,
+                provider=provider,
+                expected_authorized_scope_fingerprint=scope_fingerprint,
+                page_size=1,
+                cursor=cursor,
+            )
+
+        first_local_page = execute(local_hash)
+        second_local_page = execute(
+            local_hash,
+            cursor=first_local_page.source_occurrence_page["next_cursor"],
+        )
+        local_items = (*first_local_page.items, *second_local_page.items)
+        self.assertEqual({item.item_hash for item in local_items}, {
+            occurrence.item_hash for occurrence in provider.occurrences
+        })
+        self.assertTrue(all(item.ambiguous_identifier for item in local_items))
+        self.assertTrue(
+            all(item.matched_normalized_value_hashes == (local_hash,) for item in local_items)
+        )
+
+        full_result = execute(variant_hashes[0])
+        self.assertEqual(full_result.exact_count, 1)
+        self.assertEqual(full_result.items[0].cited_observation_hashes, (citation_hashes[0],))
+        self.assertEqual(
+            full_result.items[0].governed_references,
+            ((citation_hashes[0], lineage_hashes[0]),),
+        )
+        self.assertEqual(
+            full_result.items[0].matched_normalized_value_hashes,
+            (local_hash,),
+        )
+        self.assertFalse(full_result.items[0].ambiguous_identifier)
+
+    def test_direct_identifier_provider_routes_uniquely_without_scope_expansion(
+        self,
+    ) -> None:
+        with patch(
+            "formowl_mail.hybrid._load_pinned_issue56_runtime_components",
+            return_value=self.runtime,
+        ):
+            session = build_authorized_semantic_mail_session(
+                observations_by_bundle_id=self.inputs.observations_by_bundle_id,
+                bundles=(self.inputs.current_bundle,),
+                requester_user_id=REQUESTER_USER_ID,
+                workspace_id=WORKSPACE_ID,
+            )
+        query_text = "列出全部 DIRECT-CASE-1001 郵件"
+        query_hash = hybrid_module._deterministic_exact_filter_slots(
+            query_text,
+            tokenizer_profile=self.runtime.tokenizer_profile,
+        ).identifier_hashes[0]
+        multi_query_text = "列出全部 DIRECT-CASE-1001 DIRECT-CASE-2002 郵件"
+        multi_query_hashes = hybrid_module._deterministic_exact_filter_slots(
+            multi_query_text,
+            tokenizer_profile=self.runtime.tokenizer_profile,
+        ).identifier_hashes
+        self.assertEqual(len(multi_query_hashes), 2)
+        second_query_hash = next(
+            value for value in multi_query_hashes if value != query_hash
+        )
+        authorized_hash_by_id = dict(session.authorized_observation_hashes)
+        lineage_by_id = {
+            lineage.source_observation_id: lineage
+            for lineage in session.occurrence_lineages
+        }
+        first_observation_id = "obs_issue56_semantic_current_body_1"
+        same_thread_observation_id = "obs_issue56_semantic_current_body_2"
+        first_reference = (
+            authorized_hash_by_id[first_observation_id],
+            lineage_by_id[first_observation_id].lineage_fingerprint,
+        )
+        same_thread_reference = (
+            authorized_hash_by_id[same_thread_observation_id],
+            lineage_by_id[same_thread_observation_id].lineage_fingerprint,
+        )
+        scope_fingerprint = authorized_source_occurrence_scope_fingerprint(
+            requester_user_id=session.requester_user_id,
+            workspace_id=session.workspace_id,
+            source_scope_ids=session.authorized_source_scope_ids,
+            authorized_observation_hashes=session.authorized_observation_hashes,
+            source_session_binding_fingerprint=(
+                session.source_session_binding_fingerprint or ""
+            ),
+        )
+
+        def provider(
+            normalized_field: str,
+            *,
+            matching_hash: str,
+            same_thread_hash: str,
+            unresolved_count: int = 0,
+        ) -> SourceOccurrenceProvider:
+            return SourceOccurrenceProvider(
+                provider_id=(
+                    "mail_message_occurrence_direct_source_identifier_provider_v1"
+                ),
+                inventory_kind_alias="source_identifier_observation",
+                resource_kind="mail_message_occurrence",
+                normalized_field=normalized_field,
+                predicate="source_occurrence_has_identifier",
+                operator="case_insensitive_exact",
+                requester_user_id=session.requester_user_id,
+                workspace_id=session.workspace_id,
+                source_scope_ids=session.authorized_source_scope_ids,
+                authorized_scope_fingerprint=scope_fingerprint,
+                occurrences=(
+                    AuthorizedSourceOccurrence(
+                        item_hash=sha256_json(
+                            lineage_by_id[first_observation_id].occurrence_id
+                        ),
+                        value_bindings=(
+                            (
+                                matching_hash,
+                                matching_hash,
+                                *first_reference,
+                            ),
+                        ),
+                    ),
+                    AuthorizedSourceOccurrence(
+                        item_hash=sha256_json(
+                            lineage_by_id[same_thread_observation_id].occurrence_id
+                        ),
+                        value_bindings=(
+                            (
+                                same_thread_hash,
+                                same_thread_hash,
+                                *same_thread_reference,
+                            ),
+                        ),
+                    ),
+                ),
+                unresolved_count=unresolved_count,
+            )
+
+        direct_provider = provider(
+            "message_occurrence.direct_source_identifier_v1",
+            matching_hash=query_hash,
+            same_thread_hash=second_query_hash,
+        )
+        participant_provider = provider(
+            "participant.any.local_part",
+            matching_hash=sha256_json("unrelated-participant"),
+            same_thread_hash=sha256_json("unrelated-participant-peer"),
+        )
+        routed_session = replace(
+            session,
+            source_occurrence_providers=(direct_provider, participant_provider),
+        )
+        result = routed_session.query(
+            query_text=query_text,
+            effective_graph_view=self.inputs.effective_graph_view,
+        )
+
+        self.assertEqual(result.query_class, "exact_set_or_inventory")
+        self.assertEqual(result.status, "complete_authorized_scope")
+        self.assertEqual(result.graph_paths, ())
+        exact = result.exact_result
+        assert exact is not None
+        self.assertEqual(exact.exact_count, 1)
+        self.assertEqual(exact.returned_item_count, 1)
+        self.assertEqual(exact.items[0].governed_references, (first_reference,))
+        self.assertNotEqual(
+            exact.items[0].item_hash,
+            sha256_json(lineage_by_id[same_thread_observation_id].occurrence_id),
+        )
+
+        typed_query_text = "DIRECT-CASE-1001 status"
+        self.assertEqual(deterministic_query_class(typed_query_text), "evidence_lookup")
+        typed_result = routed_session.query(
+            query_text=typed_query_text,
+            effective_graph_view=self.inputs.effective_graph_view,
+            exact_inventory_kind="mail_message_occurrence",
+        )
+        self.assertEqual(typed_result.query_class, "exact_set_or_inventory")
+        typed_exact = typed_result.exact_result
+        assert typed_exact is not None
+        self.assertEqual(typed_exact.exact_count, 1)
+        self.assertEqual(typed_exact.items[0].governed_references, (first_reference,))
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "source occurrence provider selection is invalid",
+        ):
+            routed_session.query(
+                query_text=typed_query_text,
+                effective_graph_view=self.inputs.effective_graph_view,
+                exact_inventory_kind="unknown_resource_kind",
+            )
+
+        multi_result = routed_session.query(
+            query_text=multi_query_text,
+            effective_graph_view=self.inputs.effective_graph_view,
+        )
+        self.assertEqual(multi_result.graph_paths, ())
+        multi_exact = multi_result.exact_result
+        assert multi_exact is not None
+        self.assertEqual(multi_exact.exact_count, 2)
+        self.assertEqual(multi_exact.returned_item_count, 2)
+        self.assertEqual(
+            {item.governed_references for item in multi_exact.items},
+            {(first_reference,), (same_thread_reference,)},
+        )
+
+        partial_provider = replace(
+            direct_provider,
+            occurrences=(direct_provider.occurrences[0],),
+        )
+        partial_plan = route_semantic_query(
+            query_text=multi_query_text,
+            requester_user_id=session.requester_user_id,
+            workspace_id=session.workspace_id,
+            source_scope_ids=session.authorized_source_scope_ids,
+            effective_graph_view=self.inputs.effective_graph_view,
+            exact_inventory_kind=partial_provider.resource_kind,
+            exact_filter_term_hashes=multi_query_hashes,
+            exact_identifier_term_hashes=multi_query_hashes,
+            exact_normalized_field=partial_provider.normalized_field,
+            exact_predicate=partial_provider.predicate,
+            exact_operator=partial_provider.operator,
+            authorized_source=session.authorized_source,
+            query_class_override="exact_set_or_inventory",
+        )
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "source occurrence identifier binding is incomplete",
+        ):
+            execute_deterministic_source_occurrence_inventory(
+                plan=partial_plan,
+                provider=partial_provider,
+                expected_authorized_scope_fingerprint=scope_fingerprint,
+                page_size=20,
+                cursor=None,
+            )
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "source occurrence identifier binding is incomplete",
+        ):
+            replace(
+                session,
+                source_occurrence_providers=(partial_provider, participant_provider),
+            ).query(
+                query_text=multi_query_text,
+                effective_graph_view=self.inputs.effective_graph_view,
+            )
+
+        incomplete = replace(
+            session,
+            source_occurrence_providers=(
+                replace(direct_provider, unresolved_count=1),
+                participant_provider,
+            ),
+        ).query(
+            query_text=query_text,
+            effective_graph_view=self.inputs.effective_graph_view,
+        )
+        assert incomplete.exact_result is not None
+        self.assertEqual(incomplete.status, "incomplete")
+        self.assertFalse(incomplete.exact_result.coverage.authorized_scope_complete)
+
+        ambiguous_provider = provider(
+            "source_identifier.protected_identifier",
+            matching_hash=query_hash,
+            same_thread_hash=sha256_json("unrelated-ambiguous-peer"),
+        )
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "source occurrence provider selection is ambiguous",
+        ):
+            replace(
+                session,
+                source_occurrence_providers=(
+                    direct_provider,
+                    participant_provider,
+                    ambiguous_provider,
+                ),
+            ).query(
+                query_text=query_text,
+                effective_graph_view=self.inputs.effective_graph_view,
+            )
+
     def test_source_backed_term_graph_and_exact_predicate_use_authorized_observations(
         self,
     ) -> None:
@@ -756,6 +1283,91 @@ class Issue56SemanticExecutionEndToEndTests(unittest.TestCase):
             exact_result.cited_observation_count,
             exact_result.exact_count,
         )
+
+    def test_lineage_crosswalk_cache_isolated_by_authorized_session_binding(
+        self,
+    ) -> None:
+        source_scope_id = self.inputs.current_bundle.mail_evidence_bundle_id
+        extra_observation = replace(
+            self.inputs.observations_by_bundle_id[source_scope_id][0],
+            observation_id="obs_issue56_semantic_authorization_superset",
+        )
+        authorization_observations = dict(self.inputs.observations_by_bundle_id)
+        authorization_observations[source_scope_id] = (
+            *authorization_observations[source_scope_id],
+            extra_observation,
+        )
+        with patch(
+            "formowl_mail.hybrid._load_pinned_issue56_runtime_components",
+            return_value=self.runtime,
+        ):
+            baseline_session, expanded_session = (
+                build_authorized_semantic_mail_session(
+                    observations_by_bundle_id=self.inputs.observations_by_bundle_id,
+                    authorization_observations_by_bundle_id=authorization,
+                    bundles=(self.inputs.current_bundle,),
+                    requester_user_id=REQUESTER_USER_ID,
+                    workspace_id=WORKSPACE_ID,
+                )
+                for authorization in (None, authorization_observations)
+            )
+
+        self.assertEqual(
+            baseline_session.index.index_fingerprint,
+            expanded_session.index.index_fingerprint,
+        )
+        self.assertNotEqual(
+            baseline_session.source_session_binding_fingerprint,
+            expanded_session.source_session_binding_fingerprint,
+        )
+        extra_observation_hash = sha256_json(extra_observation.to_dict())
+        with patch.dict(
+            hybrid_module._EVIDENCE_LINEAGE_CROSSWALK_CACHE,
+            clear=True,
+        ):
+            baseline_crosswalk, expanded_crosswalk = (
+                hybrid_module.build_evidence_identity_lineage_crosswalk(
+                    session=session,
+                    effective_graph_view=self.inputs.effective_graph_view,
+                )
+                for session in (baseline_session, expanded_session)
+            )
+            cached_crosswalks = dict(
+                hybrid_module._EVIDENCE_LINEAGE_CROSSWALK_CACHE
+            )
+
+        self.assertEqual(
+            baseline_crosswalk.graph_revision_fingerprint,
+            expanded_crosswalk.graph_revision_fingerprint,
+        )
+        expected_cache_keys = {
+            (
+                session.index.index_fingerprint,
+                crosswalk.graph_revision_fingerprint,
+                session.source_session_binding_fingerprint,
+            )
+            for session, crosswalk in (
+                (baseline_session, baseline_crosswalk),
+                (expanded_session, expanded_crosswalk),
+            )
+        }
+        self.assertEqual(set(cached_crosswalks), expected_cache_keys)
+        self.assertEqual(len(cached_crosswalks), 2)
+        self.assertIsNot(baseline_crosswalk, expanded_crosswalk)
+        self.assertNotEqual(
+            baseline_crosswalk.crosswalk_fingerprint,
+            expanded_crosswalk.crosswalk_fingerprint,
+        )
+        self.assertEqual(
+            expanded_crosswalk.authorized_evidence_count,
+            baseline_crosswalk.authorized_evidence_count + 1,
+        )
+        evidence_sets = tuple(
+            {entry.source_observation_hash for entry in crosswalk.entries}
+            for crosswalk in (baseline_crosswalk, expanded_crosswalk)
+        )
+        self.assertNotIn(extra_observation_hash, evidence_sets[0])
+        self.assertIn(extra_observation_hash, evidence_sets[1])
 
     def test_permission_denied_materializes_no_candidate_or_exact_result(self) -> None:
         result = self._run(

@@ -65,8 +65,11 @@ from .candidates import (
     SourceIdentifierIdentityScope,
 )
 from .exact import (
+    SourceOccurrenceProvider,
     DeterministicExactExecutionResult,
+    authorized_source_occurrence_scope_fingerprint,
     execute_deterministic_exact_inventory,
+    execute_deterministic_source_occurrence_inventory,
 )
 from .query import (
     GitHubProjectOccurrenceLineage,
@@ -243,7 +246,7 @@ _GRAPH_ADJACENCY_CACHE: dict[
     dict[str, tuple[tuple[GraphProjectionEdge, str, str], ...]],
 ] = {}
 _EVIDENCE_LINEAGE_CROSSWALK_CACHE: dict[
-    tuple[str, str],
+    tuple[str, str, str],
     "EvidenceIdentityLineageCrosswalk",
 ] = {}
 _EVIDENCE_LINEAGE_CROSSWALK_CACHE_LOCK = RLock()
@@ -916,6 +919,7 @@ class EvidenceIdentityLineageCrosswalk:
 
     index_fingerprint: str
     graph_revision_fingerprint: str
+    source_session_binding_fingerprint: str
     authorized_evidence_count: int
     indexed_evidence_count: int
     occurrence_bound_evidence_count: int
@@ -929,6 +933,9 @@ class EvidenceIdentityLineageCrosswalk:
             "artifact_id": "formowl_issue56_evidence_identity_lineage_crosswalk_v1",
             "index_fingerprint": self.index_fingerprint,
             "graph_revision_fingerprint": self.graph_revision_fingerprint,
+            "source_session_binding_fingerprint": (
+                self.source_session_binding_fingerprint
+            ),
             "authorized_evidence_count": self.authorized_evidence_count,
             "indexed_evidence_count": self.indexed_evidence_count,
             "occurrence_bound_evidence_count": self.occurrence_bound_evidence_count,
@@ -1874,6 +1881,9 @@ class AuthorizedSemanticMailSession:
     workspace_id: str
     selected_source_scope_ids: tuple[str, ...]
     authorized_source_scope_ids: tuple[str, ...]
+    retrieval_observation_hashes: tuple[tuple[str, str], ...] = field(
+        repr=False,
+    )
     authorized_observation_hashes: tuple[tuple[str, str], ...] = field(
         repr=False,
     )
@@ -1896,6 +1906,11 @@ class AuthorizedSemanticMailSession:
         repr=False,
         compare=False,
     )
+    source_occurrence_providers: tuple[SourceOccurrenceProvider, ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+    )
 
     def query(
         self,
@@ -1907,6 +1922,9 @@ class AuthorizedSemanticMailSession:
         seed_node_ids: Sequence[str] = (),
         target_core_supertype_id: str | None = None,
         exact_inventory_kind: str | None = None,
+        exact_field: str | None = None,
+        page_size: int = 20,
+        cursor: str | None = None,
         limits: SemanticPlanLimits = DEFAULT_SEMANTIC_PLAN_LIMITS,
         enable_entity_signal: bool = True,
         enable_graph_traversal: bool = True,
@@ -1921,17 +1939,25 @@ class AuthorizedSemanticMailSession:
                 raise ContractValidationError("semantic phase trace type is invalid")
             phase_trace._begin_query()
             source_validation_started_at_ns = phase_trace._start_phase("source_session_validation")
+        typed_exact_intent = any(
+            isinstance(value, str) and value.strip()
+            for value in (exact_inventory_kind, exact_field)
+        )
+        query_class = (
+            "exact_set_or_inventory"
+            if typed_exact_intent
+            else deterministic_query_class(query_text)
+        )
         try:
             _validate_hybrid_query_inputs(
                 query_text=query_text,
-                query_class=deterministic_query_class(query_text),
+                query_class=query_class,
                 candidate_limit=max(1, min(12, limits.max_candidates)),
                 result_limit=max(1, min(5, limits.max_results)),
             )
             _validate_hybrid_index_runtime(self.index)
             if effective_graph_view.requester_user_id != self.requester_user_id:
                 raise ContractValidationError("effective graph requester mismatch")
-            query_class = deterministic_query_class(query_text)
         except Exception:
             if phase_trace is not None and source_validation_started_at_ns is not None:
                 phase_trace._finish_phase(
@@ -2094,6 +2120,74 @@ class AuthorizedSemanticMailSession:
                 phase_trace._finish_query("deadline_exhausted")
             return result
         assert isinstance(exact_slots, _ExactFilterSlots)
+        exact_provider: SourceOccurrenceProvider | None = None
+        if query_class == "exact_set_or_inventory" and self.source_occurrence_providers:
+            eligible_providers = tuple(
+                provider
+                for provider in self.source_occurrence_providers
+                if (
+                    exact_inventory_kind
+                    in {None, provider.inventory_kind_alias, provider.resource_kind}
+                )
+            )
+            query_identifier_hashes = set(exact_slots.identifier_hashes)
+            providers = tuple(
+                provider
+                for provider in eligible_providers
+                if (
+                    exact_field is None
+                    or provider.normalized_field == exact_field
+                )
+                and any(
+                    query_identifier_hashes.intersection(binding[:2])
+                    for occurrence in provider.occurrences
+                    for binding in occurrence.value_bindings
+                )
+            )
+            if not providers:
+                raise ContractValidationError("source occurrence provider selection is invalid")
+            if len(providers) > 1:
+                raise ContractValidationError(
+                    "source occurrence provider selection is ambiguous"
+                )
+            exact_provider = providers[0]
+            authorized_hash_by_observation_id = dict(
+                self.authorized_observation_hashes
+            )
+            lineage_by_observation_id = {
+                lineage.source_observation_id: lineage
+                for lineage in self.occurrence_lineages
+            }
+            if len(lineage_by_observation_id) != len(self.occurrence_lineages) or any(
+                observation_id not in authorized_hash_by_observation_id
+                for observation_id in lineage_by_observation_id
+            ):
+                raise ContractValidationError(
+                    "source occurrence provider provenance binding is invalid"
+                )
+            authorized_provenance_pairs = {
+                (
+                    authorized_hash_by_observation_id[observation_id],
+                    lineage.lineage_fingerprint,
+                )
+                for observation_id, lineage in lineage_by_observation_id.items()
+            }
+            if any(
+                (binding[2], binding[3]) not in authorized_provenance_pairs
+                for occurrence in exact_provider.occurrences
+                for binding in occurrence.value_bindings
+            ):
+                raise ContractValidationError(
+                    "source occurrence provider provenance binding mismatch"
+                )
+        if (
+            isinstance(exact_field, str)
+            and exact_field.strip()
+            and exact_provider is None
+        ):
+            raise ContractValidationError("source occurrence provider selection is invalid")
+        if cursor is not None and exact_provider is None:
+            raise ContractValidationError("source occurrence cursor has no registered provider")
         plan = _run_before_query_deadline(
             deadline,
             lambda: route_semantic_query(
@@ -2106,16 +2200,32 @@ class AuthorizedSemanticMailSession:
                 allowed_directions=allowed_directions,
                 seed_node_ids=seed_node_ids,
                 target_core_supertype_id=target_core_supertype_id,
-                exact_inventory_kind=exact_inventory_kind,
-                exact_filter_term_hashes=exact_slots.combined_hashes,
+                exact_inventory_kind=(
+                    exact_provider.resource_kind if exact_provider is not None else exact_inventory_kind
+                ),
+                exact_filter_term_hashes=(
+                    exact_slots.identifier_hashes
+                    if exact_provider is not None
+                    else exact_slots.combined_hashes
+                ),
                 exact_identifier_term_hashes=(
                     exact_slots.identifier_hashes if query_class == "exact_set_or_inventory" else ()
                 ),
                 exact_topic_term_hashes=(
-                    exact_slots.topic_hashes if query_class == "exact_set_or_inventory" else ()
+                    ()
+                    if exact_provider is not None
+                    else exact_slots.topic_hashes
+                    if query_class == "exact_set_or_inventory"
+                    else ()
                 ),
+                exact_normalized_field=(
+                    exact_provider.normalized_field if exact_provider is not None else None
+                ),
+                exact_predicate=exact_provider.predicate if exact_provider is not None else None,
+                exact_operator=exact_provider.operator if exact_provider is not None else None,
                 limits=limits,
                 authorized_source=self.authorized_source,
+                **({"query_class_override": query_class} if exact_provider is not None else {}),
             ),
         )
         if phase_trace is not None and routing_started_at_ns is not None:
@@ -2173,10 +2283,30 @@ class AuthorizedSemanticMailSession:
                 deadline=deadline,
                 phase_trace=phase_trace,
                 phase="deterministic_exact_execution",
-                operation=lambda: execute_deterministic_exact_inventory(
-                    plan=plan,
-                    effective_graph_view=effective_graph_view,
-                    authorized_observation_hash_by_id=(authorized_observation_hash_by_id),
+                operation=lambda: (
+                    execute_deterministic_source_occurrence_inventory(
+                        plan=plan,
+                        provider=exact_provider,
+                        expected_authorized_scope_fingerprint=(
+                            authorized_source_occurrence_scope_fingerprint(
+                                requester_user_id=self.requester_user_id,
+                                workspace_id=self.workspace_id,
+                                source_scope_ids=self.authorized_source_scope_ids,
+                                authorized_observation_hashes=self.authorized_observation_hashes,
+                                source_session_binding_fingerprint=(
+                                    self.source_session_binding_fingerprint or ""
+                                ),
+                            )
+                        ),
+                        page_size=page_size,
+                        cursor=cursor,
+                    )
+                    if exact_provider is not None
+                    else execute_deterministic_exact_inventory(
+                        plan=plan,
+                        effective_graph_view=effective_graph_view,
+                        authorized_observation_hash_by_id=authorized_observation_hash_by_id,
+                    )
                 ),
             )
             if exact_result is _TIME_BUDGET_EXHAUSTED:
@@ -2205,6 +2335,13 @@ class AuthorizedSemanticMailSession:
             if exact_lineage_audit is _TIME_BUDGET_EXHAUSTED:
                 return timeout_result()
             assert isinstance(exact_lineage_audit, EvidenceIdentityLineageAudit)
+            if (
+                exact_provider is not None
+                and exact_lineage_audit.unresolved_evidence_hashes
+            ):
+                raise ContractValidationError(
+                    "exact source occurrence citation lineage is unresolved"
+                )
             exact_execution_result = _run_traced_query_phase(
                 deadline=deadline,
                 phase_trace=phase_trace,
@@ -2810,6 +2947,7 @@ def _build_authorized_hybrid_observation_index(
 def build_authorized_semantic_mail_session(
     *,
     observations_by_bundle_id: Mapping[str, Sequence[Observation]],
+    authorization_observations_by_bundle_id: Mapping[str, Sequence[Observation]] | None = None,
     bundles: Sequence[MailEvidenceBundle],
     requester_user_id: str,
     workspace_id: str,
@@ -2842,10 +2980,26 @@ def build_authorized_semantic_mail_session(
         grants=grants,
         now=now,
     )
-    authorized_observation_hash_by_id = _authorized_observation_hashes(
+    authorization_observations_by_bundle_id = (
+        observations_by_bundle_id
+        if authorization_observations_by_bundle_id is None
+        else authorization_observations_by_bundle_id
+    )
+    if set(authorization_observations_by_bundle_id) != set(observations_by_bundle_id):
+        raise ContractValidationError("mail session authorization bundle binding mismatch")
+    indexed_authorized_hash_by_id = _authorized_observation_hashes(
         observations_by_bundle_id=observations_by_bundle_id,
         authorized_bundles=authorized_bundles,
     )
+    authorized_observation_hash_by_id = _authorized_observation_hashes(
+        observations_by_bundle_id=authorization_observations_by_bundle_id,
+        authorized_bundles=authorized_bundles,
+    )
+    if any(
+        authorized_observation_hash_by_id.get(observation_id) != observation_hash
+        for observation_id, observation_hash in indexed_authorized_hash_by_id.items()
+    ):
+        raise ContractValidationError("mail session retrieval authorization binding mismatch")
     selected_source_scope_ids = tuple(
         sorted(bundle.mail_evidence_bundle_id for bundle in selected_bundles)
     )
@@ -2866,7 +3020,9 @@ def build_authorized_semantic_mail_session(
             (
                 Observation.from_dict(observation.to_dict())
                 for bundle in authorized_bundles
-                for observation in observations_by_bundle_id[bundle.mail_evidence_bundle_id]
+                for observation in authorization_observations_by_bundle_id[
+                    bundle.mail_evidence_bundle_id
+                ]
             ),
             key=lambda observation: observation.observation_id,
         )
@@ -2891,6 +3047,9 @@ def build_authorized_semantic_mail_session(
             workspace_id=workspace_id,
             selected_source_scope_ids=selected_source_scope_ids,
             authorized_source_scope_ids=authorized_source_scope_ids,
+            retrieval_observation_hashes=tuple(
+                sorted(indexed_authorized_hash_by_id.items())
+            ),
             authorized_observations=authorized_observations,
             occurrence_lineages=occurrence_lineages,
         )
@@ -2903,6 +3062,7 @@ def build_authorized_semantic_mail_session(
         workspace_id=workspace_id,
         selected_source_scope_ids=selected_source_scope_ids,
         authorized_source_scope_ids=authorized_source_scope_ids,
+        retrieval_observation_hashes=tuple(sorted(indexed_authorized_hash_by_id.items())),
         authorized_observation_hashes=tuple(sorted(authorized_observation_hash_by_id.items())),
         authorized_source=authorized_source,
         authorized_observations=authorized_observations,
@@ -2919,7 +3079,7 @@ def build_authorized_source_backed_effective_graph_view(
     identifier_mention_batch: SourceBoundIdentifierMentionBatch | None = None,
     source_graph_policy_id: str | None = None,
 ) -> SourceBackedGraphBuild:
-    """Build one deterministic candidate graph from every authorized Observation.
+    """Build one deterministic candidate graph from retrieval-bound Observations.
 
     The function reads only source scopes already authorized by ``session``.
     Query text, adjudication, expected ids, and case order are not inputs.
@@ -3256,9 +3416,17 @@ def build_authorized_source_backed_effective_graph_view(
                 )
             edges_by_id[edge.edge_id] = edge
 
-    if observed_ids != set(authorized_hash_by_id):
+    expected_observed_ids = (
+        {
+            observation_id
+            for observation_id, _observation_hash in session.retrieval_observation_hashes
+        }
+        if _is_mail_compatibility_session(session)
+        else set(authorized_hash_by_id)
+    )
+    if observed_ids != expected_observed_ids:
         raise ContractValidationError(
-            "source-backed graph did not consume the full authorized Observation scope"
+            "source-backed graph retrieval Observation binding mismatch"
         )
     if identifier_input is not None:
         entity_nodes, identifier_edges = _source_graph_identifier_projection(
@@ -3496,14 +3664,25 @@ def build_evidence_identity_lineage_crosswalk(
         effective_graph_view=effective_graph_view,
         graph_snapshot=graph_snapshot,
     )
-    cache_key = (session.index.index_fingerprint, graph_revision_fingerprint)
+    source_session_binding_fingerprint = _source_graph_require_sha256(
+        session.source_session_binding_fingerprint,
+        "evidence lineage crosswalk source session binding fingerprint",
+    )
+    cache_binding = (
+        session.index.index_fingerprint,
+        graph_revision_fingerprint,
+        source_session_binding_fingerprint,
+    )
+    cache_key = cache_binding
     with _EVIDENCE_LINEAGE_CROSSWALK_CACHE_LOCK:
         cached = _EVIDENCE_LINEAGE_CROSSWALK_CACHE.get(cache_key)
     if cached is not None:
-        if (
-            cached.index_fingerprint != cache_key[0]
-            or cached.graph_revision_fingerprint != cache_key[1]
-        ):
+        cached_binding = (
+            cached.index_fingerprint,
+            cached.graph_revision_fingerprint,
+            cached.source_session_binding_fingerprint,
+        )
+        if cached_binding != cache_key:
             raise ContractValidationError("evidence lineage crosswalk cache binding mismatch")
         _query_deadline_checkpoint(execution_deadline)
         return cached
@@ -3567,12 +3746,14 @@ def build_evidence_identity_lineage_crosswalk(
         {
             "index_fingerprint": session.index.index_fingerprint,
             "graph_revision_fingerprint": graph_revision_fingerprint,
+            "source_session_binding_fingerprint": source_session_binding_fingerprint,
             "entries": entry_payloads,
         }
     )
     result = EvidenceIdentityLineageCrosswalk(
         index_fingerprint=session.index.index_fingerprint,
         graph_revision_fingerprint=graph_revision_fingerprint,
+        source_session_binding_fingerprint=source_session_binding_fingerprint,
         authorized_evidence_count=len(entries),
         indexed_evidence_count=sum(bool(entry.index_binding_hashes) for entry in entries),
         occurrence_bound_evidence_count=sum(
@@ -3591,10 +3772,12 @@ def build_evidence_identity_lineage_crosswalk(
     with _EVIDENCE_LINEAGE_CROSSWALK_CACHE_LOCK:
         cached = _EVIDENCE_LINEAGE_CROSSWALK_CACHE.get(cache_key)
         if cached is not None:
-            if (
-                cached.index_fingerprint != cache_key[0]
-                or cached.graph_revision_fingerprint != cache_key[1]
-            ):
+            cached_binding = (
+                cached.index_fingerprint,
+                cached.graph_revision_fingerprint,
+                cached.source_session_binding_fingerprint,
+            )
+            if cached_binding != cache_key:
                 raise ContractValidationError("evidence lineage crosswalk cache binding mismatch")
             return cached
         if len(_EVIDENCE_LINEAGE_CROSSWALK_CACHE) >= 16:
@@ -4516,6 +4699,7 @@ def _mail_compatibility_session_binding_fingerprint(
     workspace_id: str,
     selected_source_scope_ids: Sequence[str],
     authorized_source_scope_ids: Sequence[str],
+    retrieval_observation_hashes: Sequence[tuple[str, str]],
     authorized_observations: Sequence[Observation],
     occurrence_lineages: Sequence[SourceOccurrenceLineage],
 ) -> str:
@@ -4534,6 +4718,10 @@ def _mail_compatibility_session_binding_fingerprint(
             "source_access_fingerprint": authorized_source.authorization_fingerprint,
             "index_fingerprint": index.index_fingerprint,
             "runtime_method_fingerprint": index.execution_component_fingerprint,
+            "retrieval_observation_binding_hashes": [
+                sha256_json([observation_id, observation_hash])
+                for observation_id, observation_hash in retrieval_observation_hashes
+            ],
             "authorized_observation_binding_hashes": [
                 sha256_json(
                     [
@@ -4608,6 +4796,19 @@ def _validated_effective_graph_snapshot_session_bindings(
         or frozen_authorized_observation_hashes != session.authorized_observation_hashes
     ):
         raise ContractValidationError("graph snapshot precompute Observation binding mismatch")
+    authorized_observation_hash_by_id = dict(frozen_authorized_observation_hashes)
+    if (
+        not session.retrieval_observation_hashes
+        or tuple(sorted(session.retrieval_observation_hashes))
+        != session.retrieval_observation_hashes
+        or any(
+            authorized_observation_hash_by_id.get(observation_id) != observation_hash
+            for observation_id, observation_hash in session.retrieval_observation_hashes
+        )
+    ):
+        raise ContractValidationError(
+            "graph snapshot precompute retrieval Observation binding mismatch"
+        )
 
     source_access_fingerprint = _source_graph_require_sha256(
         authorized_source.authorization_fingerprint,
@@ -4678,6 +4879,7 @@ def _validated_effective_graph_snapshot_session_bindings(
         workspace_id=session.workspace_id,
         selected_source_scope_ids=selected_source_scope_ids,
         authorized_source_scope_ids=authorized_source_scope_ids,
+        retrieval_observation_hashes=session.retrieval_observation_hashes,
         authorized_observations=tuple(
             observation_by_id[observation_id] for observation_id in sorted(observation_by_id)
         ),
@@ -4894,9 +5096,19 @@ def _source_backed_graph_inputs(
     }
     if tuple(sorted(stored_hash_by_id.items())) != session.authorized_observation_hashes:
         raise ContractValidationError("source-backed graph Observation lineage mismatch")
+    graph_hash_by_id = stored_hash_by_id
+    if _is_mail_compatibility_session(session):
+        _validated_effective_graph_snapshot_session_bindings(session)
+        graph_hash_by_id = dict(session.retrieval_observation_hashes)
     lineage_by_observation_id = {
         lineage.source_observation_id: lineage for lineage in session.occurrence_lineages
     }
+    if _is_mail_compatibility_session(session):
+        lineage_by_observation_id = {
+            observation_id: lineage
+            for observation_id, lineage in lineage_by_observation_id.items()
+            if observation_id in graph_hash_by_id
+        }
     if not _is_mail_compatibility_session(session) and set(lineage_by_observation_id) != set(
         stored_observation_by_id
     ):
@@ -4906,7 +5118,8 @@ def _source_backed_graph_inputs(
         source_scope_id: [] for source_scope_id in session.authorized_source_scope_ids
     }
     if observations_by_source_scope_id is None:
-        for observation in stored_observation_by_id.values():
+        for observation_id in graph_hash_by_id:
+            observation = stored_observation_by_id[observation_id]
             grouped[
                 _observation_source_scope_id(
                     observation,
@@ -4927,7 +5140,7 @@ def _source_backed_graph_inputs(
                         "source-backed graph requires Observation records"
                     )
                 validated = Observation.from_dict(observation.to_dict())
-                expected = stored_hash_by_id.get(validated.observation_id)
+                expected = graph_hash_by_id.get(validated.observation_id)
                 if expected is None or expected != sha256_json(validated.to_dict()):
                     raise ContractValidationError(
                         "source-backed graph Observation lineage mismatch"
@@ -4938,9 +5151,9 @@ def _source_backed_graph_inputs(
                     )
                 supplied_ids.add(validated.observation_id)
                 grouped[source_scope_id].append(validated)
-        if supplied_ids != set(stored_observation_by_id):
+        if supplied_ids != set(graph_hash_by_id):
             raise ContractValidationError(
-                "source-backed graph did not receive the full authorized Observation scope"
+                "source-backed graph retrieval Observation binding mismatch"
             )
     return (
         {

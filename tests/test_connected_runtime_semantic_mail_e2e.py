@@ -13,7 +13,14 @@ from starlette.testclient import TestClient
 
 import formowl_gateway.runtime as runtime_module
 from formowl_auth import ActorContext, OAuthPrincipal
-from formowl_contract import SessionIdentity, User, WorkspaceMember, sha256_json
+from formowl_contract import (
+    ContractValidationError,
+    Observation,
+    SessionIdentity,
+    User,
+    WorkspaceMember,
+    sha256_json,
+)
 from formowl_gateway.issue56_sealed_source_loader import APPROVER_ACTOR, WORKSPACE_ID
 from formowl_gateway.runtime import ConnectedRuntime, ConnectedRuntimeConfig
 from formowl_gateway.semantic import validate_public_gateway_payload
@@ -25,31 +32,131 @@ from test_connected_runtime import (
 
 
 class ConnectedRuntimeSemanticMailE2ETests(unittest.IsolatedAsyncioTestCase):
-    async def test_opt_in_default_composition_injects_actor_and_returns_citation(self) -> None:
+    def test_participant_authorization_extends_lineage_without_reindexing(self) -> None:
+        from formowl_mail import (
+            build_authorized_semantic_mail_session,
+            build_authorized_source_backed_effective_graph_view,
+        )
+        from scripts.issue56_semantic_execution_smoke import (
+            REQUESTER_USER_ID,
+            WORKSPACE_ID as SYNTHETIC_WORKSPACE_ID,
+            build_semantic_poc_inputs,
+        )
+        from test_issue56_semantic_execution_e2e import _contract_only_runtime
+
+        inputs = build_semantic_poc_inputs()
+        bundle = inputs.current_bundle
+        observations = tuple(
+            inputs.observations_by_bundle_id[bundle.mail_evidence_bundle_id]
+        )
+        source = next(
+            observation
+            for observation in observations
+            if observation.observation_type == "email_message"
+        )
+        header = Observation(
+            observation_id=source.observation_id + "_participant_header",
+            extractor_run_id=source.extractor_run_id,
+            observation_type="email_header",
+            modality="mail",
+            location=dict(source.location),
+            confidence=1.0,
+            permission_scope=source.permission_scope,
+            created_at=source.created_at,
+            asset_id=source.asset_id,
+            payload={
+                "header_name": "From",
+                "header_value": "source-authored@example.test",
+            },
+        )
+        indexed = {bundle.mail_evidence_bundle_id: observations}
+        authorized = {bundle.mail_evidence_bundle_id: (*observations, header)}
+        with patch(
+            "formowl_mail.hybrid._load_pinned_issue56_runtime_components",
+            return_value=_contract_only_runtime(),
+        ):
+            baseline = build_authorized_semantic_mail_session(
+                observations_by_bundle_id=indexed,
+                bundles=(bundle,),
+                requester_user_id=REQUESTER_USER_ID,
+                workspace_id=SYNTHETIC_WORKSPACE_ID,
+            )
+            session = build_authorized_semantic_mail_session(
+                observations_by_bundle_id=indexed,
+                authorization_observations_by_bundle_id=authorized,
+                bundles=(bundle,),
+                requester_user_id=REQUESTER_USER_ID,
+                workspace_id=SYNTHETIC_WORKSPACE_ID,
+            )
+        self.assertEqual(session.index.index_fingerprint, baseline.index.index_fingerprint)
+        self.assertEqual(len(session.index.candidates), len(baseline.index.candidates))
+        self.assertEqual(
+            len(session.authorized_observations),
+            len(baseline.authorized_observations) + 1,
+        )
+        header_hash = sha256_json(header.to_dict())
+        self.assertEqual(dict(session.authorized_observation_hashes)[header.observation_id], header_hash)
+        header_lineage = next(
+            lineage
+            for lineage in session.occurrence_lineages
+            if lineage.source_observation_id == header.observation_id
+        )
+        self.assertEqual(
+            header_lineage.occurrence_id,
+            source.location["message_occurrence_id"],
+        )
+        source_binding = sha256_json("participant_authorization_graph_subset")
+        expanded_graph = build_authorized_source_backed_effective_graph_view(
+            session=session,
+            observations_by_bundle_id=indexed,
+            source_binding_fingerprint=source_binding,
+        )
+        self.assertEqual(expanded_graph.source_observation_count, len(observations))
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "source-backed graph Observation lineage mismatch",
+        ):
+            build_authorized_source_backed_effective_graph_view(
+                session=session,
+                observations_by_bundle_id=authorized,
+                source_binding_fingerprint=source_binding,
+            )
+
+    async def test_opt_in_real_source_exact_set_cursor_union(self) -> None:
         if os.environ.get("FORMOWL_RUN_ISSUE56_REAL_PRODUCTION_SEMANTIC_E2E") != "1":
             self.skipTest("real production semantic E2E is explicitly opt-in")
-        query_file_value = os.environ.get("FORMOWL_ISSUE56_PRODUCTION_QUERY_FILE")
-        if not query_file_value:
-            self.fail("production query file is required")
-        query_file = Path(query_file_value)
-        try:
-            query_stat = query_file.lstat()
-            query_bytes = query_file.read_bytes()
-        except OSError:
-            self.fail("production query file is unavailable")
-        if (
-            not stat.S_ISREG(query_stat.st_mode)
-            or stat.S_IMODE(query_stat.st_mode) != 0o600
-            or not query_bytes
-            or len(query_bytes) > 4096
+
+        private_inputs = []
+        for environment_name, maximum_bytes in (
+            ("FORMOWL_ISSUE56_PRODUCTION_QUERY_FILE", 4096),
+            ("FORMOWL_ISSUE56_PRODUCTION_EXPECTED_COUNT_FILE", 32),
         ):
-            self.fail("production query file contract is invalid")
+            value = os.environ.get(environment_name)
+            if not value:
+                self.fail("production private input is required")
+            path = Path(value)
+            try:
+                file_stat = path.lstat()
+                content = path.read_bytes()
+            except OSError:
+                self.fail("production private input is unavailable")
+            if (
+                not stat.S_ISREG(file_stat.st_mode)
+                or stat.S_IMODE(file_stat.st_mode) != 0o600
+                or not content
+                or len(content) > maximum_bytes
+            ):
+                self.fail("production private input contract is invalid")
+            private_inputs.append((path, content))
+        query_file, query_bytes = private_inputs[0]
+        count_file, count_bytes = private_inputs[1]
         try:
             private_query = query_bytes.decode("utf-8").strip()
-        except UnicodeDecodeError:
-            self.fail("production query file encoding is invalid")
-        if not private_query or "\x00" in private_query:
-            self.fail("production query is invalid")
+            expected_count = int(count_bytes.decode("ascii").strip())
+        except (UnicodeError, ValueError):
+            self.fail("production private input encoding is invalid")
+        if not private_query or "\x00" in private_query or expected_count < 0:
+            self.fail("production private input is invalid")
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -120,42 +227,110 @@ class ConnectedRuntimeSemanticMailE2ETests(unittest.IsolatedAsyncioTestCase):
                     "/mcp",
                     headers=headers,
                     json={"jsonrpc": "2.0", "id": "list", "method": "tools/list"},
+                ).json()
+                tool = next(
+                    tool
+                    for tool in listed["result"]["tools"]
+                    if tool["name"] == "query_effective_graph_view"
                 )
-                query_request = {
-                    "jsonrpc": "2.0",
-                    "id": "query",
-                    "method": "tools/call",
-                    "params": {
-                        "name": "query_effective_graph_view",
-                        "arguments": {"query_text": private_query},
-                    },
-                }
-                queried = client.post(
-                    "/mcp",
-                    headers=headers,
-                    json=query_request,
+                self.assertTrue(
+                    {
+                        "query_text",
+                        "exact_inventory_kind",
+                        "page_size",
+                        "cursor",
+                    }
+                    <= set(tool["inputSchema"]["properties"])
+                )
+                exact_schema = tool["outputSchema"]["properties"]["data"]["properties"][
+                    "exact_inventory"
+                ]
+                self.assertTrue(
+                    {
+                        "plan",
+                        "total_count",
+                        "returned_count",
+                        "coverage_status",
+                        "next_cursor",
+                        "redacted_count",
+                        "unsupported_count",
+                        "unresolved_count",
+                        "items",
+                    }
+                    <= set(exact_schema["required"])
                 )
 
-            tool_names = [tool["name"] for tool in listed.json()["result"]["tools"]]
-            self.assertIn("query_effective_graph_view", tool_names)
-            self.assertFalse(queried.json()["result"]["isError"])
-            structured = queried.json()["result"]["structuredContent"]
-            validate_public_gateway_payload(structured)
-            data = structured["data"]
-            self.assertTrue(data["answer"]["text"])
+                cursor = None
+                item_hashes: set[str] = set()
+                returned_count = 0
+                total_count = None
+                final_page = None
+                while True:
+                    arguments = {
+                        "query_text": private_query,
+                        "exact_inventory_kind": "mail_message_occurrence",
+                        "page_size": 100,
+                    }
+                    if cursor is not None:
+                        arguments["cursor"] = cursor
+                    queried = client.post(
+                        "/mcp",
+                        headers=headers,
+                        json={
+                            "jsonrpc": "2.0",
+                            "id": "query",
+                            "method": "tools/call",
+                            "params": {
+                                "name": "query_effective_graph_view",
+                                "arguments": arguments,
+                            },
+                        },
+                    ).json()["result"]
+                    if queried["isError"]:
+                        self.fail("production exact-set MCP call failed")
+                    structured = queried["structuredContent"]
+                    validate_public_gateway_payload(structured)
+                    data = structured["data"]
+                    page = data["exact_inventory"]
+                    final_page = page
+                    self.assertEqual(page["returned_count"], len(page["items"]))
+                    citation_hashes = set(data["citations"])
+                    for item in page["items"]:
+                        references = item["governed_references"]
+                        self.assertTrue(references)
+                        for reference in references:
+                            self.assertIn(reference["citation_hash"], citation_hashes)
+                            self.assertRegex(
+                                reference["occurrence_lineage_fingerprint"],
+                                r"^sha256:[0-9a-f]{64}$",
+                            )
+                    current = {item["item_hash"] for item in page["items"]}
+                    self.assertTrue(item_hashes.isdisjoint(current))
+                    item_hashes.update(current)
+                    returned_count += page["returned_count"]
+                    total_count = page["total_count"] if total_count is None else total_count
+                    self.assertEqual(page["total_count"], total_count)
+                    cursor = page["next_cursor"]
+                    if cursor is None:
+                        break
+
+            assert final_page is not None
             self.assertEqual(
-                data["answer"]["answer_hash"],
-                sha256_json(data["answer"]["text"]),
+                (
+                    final_page["redacted_count"],
+                    final_page["unsupported_count"],
+                    final_page["unresolved_count"],
+                ),
+                (0, 0, 0),
             )
-            self.assertGreaterEqual(data["answer"]["citation_count"], 1)
-            self.assertEqual(data["answer"]["citation_count"], len(data["citations"]))
-            self.assertGreaterEqual(data["relationship"]["path_count"], 1)
-            self.assertEqual(data["relationship"]["path_count"], data["graph_hits"]["count"])
-            self.assertGreaterEqual(data["relationship"]["max_hops"], 1)
-            self.assertTrue(data["relationship"]["relation_types"])
+            self.assertEqual(final_page["coverage_status"], "complete")
+            self.assertEqual(total_count, expected_count)
+            self.assertEqual(returned_count, expected_count)
+            self.assertEqual(len(item_hashes), expected_count)
             rendered = repr(structured)
             self.assertFalse(temporary_directory in rendered)
             self.assertFalse(str(query_file) in rendered)
+            self.assertFalse(str(count_file) in rendered)
             self.assertFalse("tenant" in rendered.lower())
             self.assertFalse("semantic.runtime.token" in rendered)
             self.assertFalse(private_query in rendered)

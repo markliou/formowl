@@ -8,12 +8,22 @@ gateway contract.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import replace
+from email.utils import getaddresses
+import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Any, Final
 
-from formowl_contract import ContractValidationError, sha256_json
+from formowl_auth.security import normalize_verified_email
+from formowl_contract import CandidateMention, ContractValidationError, Observation, sha256_json
 from formowl_mail.answer import render_governed_evidence_answer
+from formowl_mail.exact import (
+    AuthorizedSourceOccurrence,
+    SourceOccurrenceProvider,
+    authorized_source_occurrence_scope_fingerprint,
+)
 from formowl_mail.issue56_sealed_source import (
     APPROVER_ACTOR,
     ARTIFACT_ID as SEALED_SOURCE_LOAD_ARTIFACT_ID,
@@ -22,6 +32,7 @@ from formowl_mail.issue56_sealed_source import (
     WORKSPACE_ID,
     load_issue56_sealed_source,
 )
+from formowl_mail.query import source_occurrence_lineage_from_observation
 
 from .issue56_diagnostic import (
     ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
@@ -271,7 +282,12 @@ def load_issue56_real_prompt_sealed_source_diagnostic_input(
         allowed_relation_types=relation_types,
     )
     private_prompt, owner_selection_proof = _normalize_prompt_selection(selected)
-    safe_binding = _validated_owner_safe_binding(loaded.safe_binding)
+    safe_binding = _validated_owner_safe_binding(
+        loaded.safe_binding,
+        source_session_binding_fingerprint=(
+            loaded.session.source_session_binding_fingerprint
+        ),
+    )
     safe_selection_proof = _gateway_prompt_selection_binding(
         private_prompt=private_prompt,
         owner_selection_proof=owner_selection_proof,
@@ -310,7 +326,12 @@ def load_issue56_relation_projection_equivalence_diagnostic_input(
         allowed_relation_types=relation_types,
     )
     private_prompt, owner_selection_proof = _normalize_prompt_selection(selected)
-    safe_binding = _validated_owner_safe_binding(loaded.safe_binding)
+    safe_binding = _validated_owner_safe_binding(
+        loaded.safe_binding,
+        source_session_binding_fingerprint=(
+            loaded.session.source_session_binding_fingerprint
+        ),
+    )
     safe_selection_proof = _gateway_prompt_selection_binding(
         private_prompt=private_prompt,
         owner_selection_proof=owner_selection_proof,
@@ -349,7 +370,12 @@ def load_issue56_relation_projection_equivalence_v6_diagnostic_input(
         allowed_relation_types=relation_types,
     )
     private_prompt, owner_selection_proof = _normalize_prompt_selection(selected)
-    safe_binding = _validated_owner_safe_binding(loaded.safe_binding)
+    safe_binding = _validated_owner_safe_binding(
+        loaded.safe_binding,
+        source_session_binding_fingerprint=(
+            loaded.session.source_session_binding_fingerprint
+        ),
+    )
     safe_selection_proof = _gateway_prompt_selection_binding(
         private_prompt=private_prompt,
         owner_selection_proof=owner_selection_proof,
@@ -390,7 +416,12 @@ def load_issue56_relation_projection_offline_equivalence_v7_diagnostic_input(
         allowed_relation_types=relation_types,
     )
     private_prompt, owner_selection_proof = _normalize_prompt_selection(selected)
-    safe_binding = _validated_owner_safe_binding(loaded.safe_binding)
+    safe_binding = _validated_owner_safe_binding(
+        loaded.safe_binding,
+        source_session_binding_fingerprint=(
+            loaded.session.source_session_binding_fingerprint
+        ),
+    )
     safe_selection_proof = _gateway_prompt_selection_binding(
         private_prompt=private_prompt,
         owner_selection_proof=owner_selection_proof,
@@ -408,7 +439,10 @@ def load_issue56_relation_projection_offline_equivalence_v7_diagnostic_input(
     )
 
 
-def _load_approved_sealed_source() -> Any:
+def _load_approved_sealed_source(
+    *,
+    include_participant_authorization_observations: bool = False,
+) -> Any:
     values: dict[str, str | Path] = {}
     for field_name, environment_name in _ENVIRONMENT_FIELDS.items():
         value = os.environ.get(environment_name)
@@ -424,15 +458,27 @@ def _load_approved_sealed_source() -> Any:
         workspace_id=WORKSPACE_ID,
         approver_actor=APPROVER_ACTOR,
         requester_user_id=APPROVER_ACTOR,
+        include_participant_authorization_observations=(
+            include_participant_authorization_observations
+        ),
     )
 
 
 def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[str, Any]]:
     """Build the opt-in production handler over the approved sealed source."""
 
-    loaded = _load_approved_sealed_source()
-    _validated_owner_safe_binding(loaded.safe_binding)
-    session, graph_view = loaded.session, loaded.effective_graph_view
+    loaded = _load_approved_sealed_source(
+        include_participant_authorization_observations=True
+    )
+    safe_binding = _validated_owner_safe_binding(
+        loaded.safe_binding,
+        source_session_binding_fingerprint=(
+            loaded.session.source_session_binding_fingerprint
+        ),
+    )
+    providers = _build_mail_source_occurrence_providers(loaded, safe_binding=safe_binding)
+    session = replace(loaded.session, source_occurrence_providers=providers)
+    graph_view = loaded.effective_graph_view
     relation_types = tuple(sorted({edge.relation_type for edge in graph_view.visible_edges}))
     relation_by_edge_hash: dict[str, str] = {}
     for edge in graph_view.visible_edges:
@@ -449,11 +495,17 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
         raise ContractValidationError("production sealed source binding is invalid")
 
     def retrieval_handler(arguments: dict[str, Any]) -> dict[str, Any]:
-        if set(arguments) != {
+        required_arguments = {
             "query_text",
             "requester_user_id",
             "session_id",
             "workspace_id",
+        }
+        if not required_arguments <= set(arguments) or set(arguments) - required_arguments - {
+            "exact_inventory_kind",
+            "exact_field",
+            "page_size",
+            "cursor",
         }:
             raise ContractValidationError("production semantic arguments are invalid")
         if (
@@ -467,8 +519,74 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
             query_text=arguments["query_text"],
             effective_graph_view=graph_view,
             allowed_relation_types=relation_types,
+            exact_inventory_kind=arguments.get("exact_inventory_kind"),
+            exact_field=arguments.get("exact_field"),
+            page_size=arguments.get("page_size", 20),
+            cursor=arguments.get("cursor"),
         )
         answer = render_governed_evidence_answer(result)
+        if result.exact_result is not None and result.exact_result.source_occurrence_page is not None:
+            exact_result = result.exact_result
+            page = exact_result.source_occurrence_page
+            selected_providers = tuple(
+                provider
+                for provider in providers
+                if provider.provider_fingerprint == page["provider_fingerprint"]
+            )
+            if len(selected_providers) != 1:
+                raise ContractValidationError(
+                    "production source occurrence provider binding is invalid"
+                )
+            provider = selected_providers[0]
+            payload = {
+                "status": result.status,
+                "exact_inventory": {
+                    "status": exact_result.status,
+                    "query_class": result.query_class,
+                    "plan": {
+                        "plan_fingerprint": result.plan_fingerprint,
+                        "resource_kind": provider.resource_kind,
+                        "normalized_field": provider.normalized_field,
+                        "predicate": provider.predicate,
+                        "operator": provider.operator,
+                        "claim_strength": result.claim_strength,
+                        "duplicate_policy": provider.duplicate_policy,
+                        "ordering": "item_hash_ascending_v1",
+                        "page_size": page["page_size"],
+                        "cursor_present": page["cursor_present"],
+                    },
+                    "total_count": exact_result.exact_count,
+                    "returned_count": exact_result.returned_item_count,
+                    "coverage_status": page["coverage_status"],
+                    "next_cursor": page["next_cursor"],
+                    "redacted_count": page["redacted_count"],
+                    "unsupported_count": page["unsupported_count"],
+                    "unresolved_count": page["unresolved_count"],
+                    "duplicate_policy": provider.duplicate_policy,
+                    "ambiguous_identifier_count": page["ambiguous_identifier_count"],
+                    "items": [
+                        {
+                            "item_hash": item.item_hash,
+                            "governed_references": [
+                                {
+                                    "citation_hash": citation_hash,
+                                    "occurrence_lineage_fingerprint": lineage_fingerprint,
+                                }
+                                for citation_hash, lineage_fingerprint in item.governed_references
+                            ],
+                            "matched_normalized_value_hashes": list(
+                                item.matched_normalized_value_hashes
+                            ),
+                            "ambiguous_identifier": item.ambiguous_identifier,
+                        }
+                        for item in exact_result.items
+                    ],
+                },
+                "citations": list(result.answer_citation_hashes),
+                "redaction_counts": {"redacted_value_count": page["redacted_count"]},
+            }
+            validate_public_gateway_payload(payload)
+            return payload
         if result.graph_path_count != len(result.graph_paths):
             raise ContractValidationError("production graph path count is inconsistent")
         projected_relation_types: set[str] = set()
@@ -503,6 +621,299 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
     return retrieval_handler
 
 
+def _build_mail_source_occurrence_providers(
+    loaded: Any,
+    *,
+    safe_binding: Mapping[str, Any],
+) -> tuple[SourceOccurrenceProvider, ...]:
+    snapshot_path = Path(os.environ["FORMOWL_ISSUE56_RETRIEVAL_SNAPSHOT_PATH"])
+    snapshot_bytes = snapshot_path.read_bytes()
+    byte_sha256 = "sha256:" + hashlib.sha256(snapshot_bytes).hexdigest()
+    try:
+        snapshot = json.loads(snapshot_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ContractValidationError("production retrieval snapshot is invalid") from exc
+    if (
+        not isinstance(snapshot, Mapping)
+        or byte_sha256 != os.environ["FORMOWL_ISSUE56_RETRIEVAL_SNAPSHOT_SHA256"]
+        or byte_sha256 != safe_binding["retrieval_snapshot_byte_sha256"]
+        or snapshot.get("snapshot_fingerprint")
+        != safe_binding["retrieval_snapshot_fingerprint"]
+        or snapshot.get("source_snapshot_fingerprint")
+        != safe_binding["source_snapshot_fingerprint"]
+        or _contains_tenant_id(snapshot)
+    ):
+        raise ContractValidationError("production retrieval snapshot binding is invalid")
+
+    session = loaded.session
+    if session.authorized_source is None:
+        raise ContractValidationError("production authorized source is unavailable")
+    authorized_observation_hashes = dict(session.authorized_observation_hashes)
+    item_lineage_by_occurrence: dict[str, str] = {}
+    for lineage in session.occurrence_lineages:
+        existing = item_lineage_by_occurrence.get(lineage.occurrence_id)
+        if existing is None or lineage.lineage_fingerprint < existing:
+            item_lineage_by_occurrence[lineage.occurrence_id] = lineage.lineage_fingerprint
+    authorized_asset_ids = {observation.asset_id for observation in session.authorized_observations}
+    permission_fingerprints = {
+        sha256_json(observation.permission_scope) for observation in session.authorized_observations
+    }
+    any_field = "participant.any.local_part"
+    direct_identifier_field = "message_occurrence.direct_source_identifier_v1"
+    field_by_role = {
+        role: f"participant.{role}.local_part" for role in ("from", "sender", "to", "cc")
+    }
+    value_bindings = {field: {} for field in (any_field, *field_by_role.values())}
+    unresolved_occurrence_ids = {field: set() for field in value_bindings}
+    direct_identifier_bindings: dict[
+        str,
+        set[tuple[str, str, str, str]],
+    ] = {}
+    rows = snapshot.get("parsed_mail_observations")
+    if not isinstance(rows, list):
+        raise ContractValidationError("production source occurrence inventory is unavailable")
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ContractValidationError("production source occurrence row is invalid")
+        payload = row.get("payload")
+        location = row.get("location")
+        if not isinstance(payload, Mapping) or not isinstance(location, Mapping):
+            continue
+        occurrence_id = location.get("message_occurrence_id")
+        if occurrence_id not in item_lineage_by_occurrence:
+            continue
+        role = str(payload.get("header_name", "")).casefold()
+        if row.get("observation_type") == "email_header" and role in field_by_role:
+            value = str(payload.get("header_value", ""))
+            fields = (any_field, field_by_role[role])
+        elif row.get("observation_type") == "email_message":
+            value = str(payload.get("sender", ""))
+            fields = (any_field,)
+        else:
+            continue
+        observation = Observation.from_dict(dict(row))
+        if (
+            observation.asset_id not in authorized_asset_ids
+            or sha256_json(observation.permission_scope) not in permission_fingerprints
+        ):
+            raise ContractValidationError("production participant evidence is unauthorized")
+        lineage = source_occurrence_lineage_from_observation(
+            observation,
+            authorized_source=session.authorized_source,
+        )
+        if lineage.occurrence_id != occurrence_id:
+            raise ContractValidationError("production participant lineage is invalid")
+        citation_hash = sha256_json(observation.to_dict())
+        if authorized_observation_hashes.get(observation.observation_id) != citation_hash:
+            raise ContractValidationError(
+                "production participant Observation binding is unauthorized"
+            )
+        for _, address in getaddresses([value]):
+            try:
+                normalized_address = normalize_verified_email(address)
+            except ContractValidationError:
+                for field in fields:
+                    unresolved_occurrence_ids[field].add(str(occurrence_id))
+                continue
+            binding = (
+                sha256_json(normalized_address.split("@", 1)[0]),
+                sha256_json(normalized_address),
+                citation_hash,
+                lineage.lineage_fingerprint,
+            )
+            for field in fields:
+                value_bindings[field].setdefault(str(occurrence_id), set()).add(
+                    binding
+                )
+
+    mention_batch = loaded.identifier_mention_batch
+    graph_build = loaded.graph_build
+    if (
+        mention_batch.identity_scope_mode != IDENTITY_SCOPE_MODE
+        or mention_batch.workspace_id != session.workspace_id
+        or mention_batch.tenant_id is not None
+        or mention_batch.occurrence_count != len(mention_batch.candidate_mentions)
+        or graph_build.identifier_mention_count != mention_batch.occurrence_count
+        or graph_build.authorized_identifier_mention_count
+        != mention_batch.occurrence_count
+        or safe_binding["source_identifier_mention_batch_fingerprint"]
+        != mention_batch.batch_fingerprint
+    ):
+        raise ContractValidationError(
+            "production direct source identifier batch binding is invalid"
+        )
+    retrieval_observation_hashes = dict(session.retrieval_observation_hashes)
+    observation_by_id = {
+        observation.observation_id: observation
+        for observation in session.authorized_observations
+    }
+    lineage_by_observation_id = {
+        lineage.source_observation_id: lineage
+        for lineage in session.occurrence_lineages
+    }
+    admitted_occurrence_ids: set[str] = set()
+    for observation_id, observation_hash in retrieval_observation_hashes.items():
+        observation = observation_by_id.get(observation_id)
+        if observation is None or sha256_json(observation.to_dict()) != observation_hash:
+            raise ContractValidationError(
+                "production direct source identifier retrieval binding is invalid"
+            )
+        admitted_occurrence_ids.add(
+            source_occurrence_lineage_from_observation(
+                observation,
+                authorized_source=session.authorized_source,
+            ).occurrence_id
+        )
+    authorized_occurrence_ids = set(item_lineage_by_occurrence)
+    full_source_occurrence_ids = {
+        occurrence.message_occurrence_id
+        for occurrence in loaded.source_bundle.message_occurrences
+    }
+    if (
+        len(full_source_occurrence_ids)
+        != len(loaded.source_bundle.message_occurrences)
+        or authorized_occurrence_ids != full_source_occurrence_ids
+        or not admitted_occurrence_ids <= authorized_occurrence_ids
+    ):
+        raise ContractValidationError(
+            "production direct source identifier occurrence scope is invalid"
+        )
+    for raw_mention in mention_batch.candidate_mentions:
+        mention = CandidateMention.from_dict(raw_mention.to_dict())
+        if len(mention.source_observation_ids) != 1:
+            raise ContractValidationError(
+                "production direct source identifier Observation binding is invalid"
+            )
+        observation_id = mention.source_observation_ids[0]
+        observation = observation_by_id.get(observation_id)
+        exact_hash = mention.metadata.get("exact_protected_token_hash")
+        if observation is None or not isinstance(exact_hash, str):
+            raise ContractValidationError(
+                "production direct source identifier evidence is unavailable"
+            )
+        citation_hash = sha256_json(observation.to_dict())
+        lineage = source_occurrence_lineage_from_observation(
+            observation,
+            authorized_source=session.authorized_source,
+        )
+        stored_lineage = lineage_by_observation_id.get(observation_id)
+        if (
+            retrieval_observation_hashes.get(observation_id) != citation_hash
+            or authorized_observation_hashes.get(observation_id) != citation_hash
+            or mention.normalized_label != exact_hash
+            or mention.text_hash != exact_hash
+            or mention.metadata.get("candidate_kind")
+            != "protected_identifier_occurrence"
+            or mention.metadata.get("candidate_only") is not True
+            or mention.metadata.get("canonical_write_allowed") is not False
+            or mention.metadata.get("source_observation_fingerprint")
+            != citation_hash
+            or mention.metadata.get("permission_boundary_fingerprint")
+            != sha256_json(observation.permission_scope)
+            or mention.metadata.get("message_occurrence_fingerprint")
+            != sha256_json(lineage.occurrence_id)
+            or stored_lineage is None
+            or stored_lineage.lineage_fingerprint != lineage.lineage_fingerprint
+        ):
+            raise ContractValidationError(
+                "production direct source identifier lineage binding is invalid"
+            )
+        if mention.mention_type != "protected_identifier:business_identifier":
+            continue
+        direct_identifier_bindings.setdefault(
+            lineage.occurrence_id,
+            set(),
+        ).add(
+            (
+                exact_hash,
+                exact_hash,
+                citation_hash,
+                lineage.lineage_fingerprint,
+            )
+        )
+    if not set(direct_identifier_bindings) <= admitted_occurrence_ids:
+        raise ContractValidationError(
+            "production direct source identifier occurrence scope is invalid"
+        )
+    direct_unresolved_count = len(
+        authorized_occurrence_ids - set(direct_identifier_bindings)
+    )
+
+    scope_fingerprint = authorized_source_occurrence_scope_fingerprint(
+        requester_user_id=session.requester_user_id,
+        workspace_id=session.workspace_id,
+        source_scope_ids=session.authorized_source_scope_ids,
+        authorized_observation_hashes=session.authorized_observation_hashes,
+        source_session_binding_fingerprint=session.source_session_binding_fingerprint or "",
+    )
+    participant_providers = tuple(
+        SourceOccurrenceProvider(
+            provider_id="mail_source_occurrence_provider_v1",
+            inventory_kind_alias="mail_observation",
+            resource_kind="mail_message_occurrence",
+            normalized_field=field,
+            predicate="source_occurrence_involves",
+            operator="case_insensitive_exact",
+            requester_user_id=session.requester_user_id,
+            workspace_id=session.workspace_id,
+            source_scope_ids=session.authorized_source_scope_ids,
+            authorized_scope_fingerprint=scope_fingerprint,
+            occurrences=tuple(
+                AuthorizedSourceOccurrence(
+                    item_hash=sha256_json(
+                        ["mail_message_occurrence", item_lineage_by_occurrence[occurrence_id]]
+                    ),
+                    value_bindings=tuple(sorted(bindings)),
+                )
+                for occurrence_id, bindings in sorted(bindings_by_occurrence.items())
+            ),
+            unresolved_count=len(
+                (authorized_occurrence_ids - set(bindings_by_occurrence))
+                | unresolved_occurrence_ids[field]
+            ),
+        )
+        for field, bindings_by_occurrence in value_bindings.items()
+    )
+    direct_identifier_provider = SourceOccurrenceProvider(
+        provider_id=(
+            "mail_message_occurrence_direct_source_identifier_provider_v1"
+        ),
+        inventory_kind_alias="mail_observation",
+        resource_kind="mail_message_occurrence",
+        normalized_field=direct_identifier_field,
+        predicate="source_occurrence_involves",
+        operator="case_insensitive_exact",
+        requester_user_id=session.requester_user_id,
+        workspace_id=session.workspace_id,
+        source_scope_ids=session.authorized_source_scope_ids,
+        authorized_scope_fingerprint=scope_fingerprint,
+        occurrences=tuple(
+            AuthorizedSourceOccurrence(
+                item_hash=sha256_json(
+                    [
+                        "mail_message_occurrence",
+                        item_lineage_by_occurrence[occurrence_id],
+                    ]
+                ),
+                value_bindings=tuple(sorted(bindings)),
+            )
+            for occurrence_id, bindings in sorted(
+                direct_identifier_bindings.items()
+            )
+        ),
+        unresolved_count=direct_unresolved_count,
+    )
+    return (*participant_providers, direct_identifier_provider)
+
+
+def _contains_tenant_id(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return "tenant_id" in value or any(_contains_tenant_id(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_tenant_id(item) for item in value)
+    return False
+
+
 def _build_gateway_input(
     loaded: Any,
     *,
@@ -516,7 +927,19 @@ def _build_gateway_input(
     )
     if not relation_types:
         raise ContractValidationError("sealed source graph has no authorized relation types")
-    safe_binding = _validated_owner_safe_binding(loaded.safe_binding)
+    safe_binding = _validated_owner_safe_binding(
+        loaded.safe_binding,
+        source_session_binding_fingerprint=(
+            loaded.session.source_session_binding_fingerprint
+        ),
+    )
+    diagnostic_lineage_precompute = dict(
+        safe_binding["lineage_crosswalk_precompute"]
+    )
+    diagnostic_lineage_precompute.pop(
+        "source_session_binding_fingerprint",
+        None,
+    )
     return build_issue56_sealed_source_diagnostic_input(
         session=loaded.session,
         effective_graph_view=loaded.effective_graph_view,
@@ -525,7 +948,7 @@ def _build_gateway_input(
         loader_contract_fingerprint=loader_contract_fingerprint,
         graph_revision_fingerprint=str(safe_binding["graph_revision_fingerprint"]),
         source_loader_binding_fingerprint=str(safe_binding["binding_fingerprint"]),
-        lineage_crosswalk_precompute=safe_binding["lineage_crosswalk_precompute"],
+        lineage_crosswalk_precompute=diagnostic_lineage_precompute,
         relation_projection_base_precompute=safe_binding["relation_projection_base_precompute"],
         private_prompt=private_prompt,
         prompt_selection=prompt_selection,
@@ -588,7 +1011,11 @@ def _gateway_prompt_selection_binding(
     return binding
 
 
-def _validated_owner_safe_binding(raw: Mapping[str, Any]) -> dict[str, Any]:
+def _validated_owner_safe_binding(
+    raw: Mapping[str, Any],
+    *,
+    source_session_binding_fingerprint: str | None,
+) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         raise ContractValidationError("sealed source owner safe binding is invalid")
     binding = dict(raw)
@@ -602,6 +1029,16 @@ def _validated_owner_safe_binding(raw: Mapping[str, Any]) -> dict[str, Any]:
     precompute = binding.get("lineage_crosswalk_precompute")
     relation_precompute = binding.get("relation_projection_base_precompute")
     counts = binding.get("counts")
+    expected_cache_key_fingerprint = sha256_json(
+        {
+            "artifact_id": "formowl_issue56_evidence_identity_lineage_cache_key_v1",
+            "index_fingerprint": binding.get("index_fingerprint"),
+            "graph_revision_fingerprint": binding.get("graph_revision_fingerprint"),
+            "source_session_binding_fingerprint": (
+                source_session_binding_fingerprint
+            ),
+        }
+    )
     if (
         binding.get("status") != "passed"
         or binding.get("identity_scope_mode_status") != IDENTITY_SCOPE_MODE
@@ -610,6 +1047,10 @@ def _validated_owner_safe_binding(raw: Mapping[str, Any]) -> dict[str, Any]:
         or not isinstance(counts, Mapping)
         or precompute.get("index_fingerprint") != binding.get("index_fingerprint")
         or precompute.get("graph_revision_fingerprint") != binding.get("graph_revision_fingerprint")
+        or precompute.get("source_session_binding_fingerprint")
+        != source_session_binding_fingerprint
+        or precompute.get("cache_key_fingerprint")
+        != expected_cache_key_fingerprint
         or not isinstance(precompute.get("counts"), Mapping)
         or precompute["counts"].get("authorized_evidence_count")
         != counts.get("authorized_observation_count")

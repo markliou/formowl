@@ -48,7 +48,7 @@ are source completeness, accepted execution-fingerprint binding, same-pipeline
 real-source ablation, and independent final-answer acceptance. The v3
 promotion contract is repaired, but no formal all-four-gate evidence exists to
 promote.
-## Production Binding Checkpoint — 2026-08-27
+## Step-4 Direct Inventory Checkpoint — 2026-08-28
 The sealed `456`-Observation `workspace_only_v1` package has no tenant
 dimension. It is bound to `workspace_formowl` and approved actor
 `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension may be
@@ -63,11 +63,28 @@ makes promotion preflight accept and cross-bind the existing v3
 passed `48/48`; both cross-reviews returned `AGREE` after one private-helper
 blocker was corrected to use the public bundle loader.
 
-No formal evidence was authored or promoted. No UAT, independent holdout,
+The generic direct-source business-identifier deterministic inventory now runs
+through normal ASGI `/mcp`, selects providers from query hashes, preserves
+source occurrences, pages with bound cursors, and returns governed
+citation/lineage references. Coverage is bound to the full permission-authorized
+sealed-source occurrence scope. Its lineage cache key and owner/gateway checks
+bind the same index, graph, and source-session fingerprints.
+
+The production-local real E2E enumerated exactly `125` source-backed
+occurrences against the UAT oracle `317` and correctly terminated `incomplete`
+with `192` unresolved. No approved source-backed identity/conversation provider
+contract covers those remaining occurrences, and no thread/reply/quote/forward
+expansion may be inferred. Latest focused pinned-E5 evidence passed `52` tests
+with `1` skipped. Its canonical execution fingerprint is
+`sha256:6327d552a86d3d41b91ee68efc81229a8697bbb202c3ae91cad6de47839e53ea`;
+both final read-only reviewers returned `AGREE`.
+
+No formal evidence was authored or promoted. This blocked production-local E2E
+is not methodology-quality UAT or independent holdout evidence; no holdout,
 transfer, or v1-v7 diagnostic rerun occurred. Authority remains valid but
-blocked on the same four gates, step 4 remains in progress, and no readiness,
-superiority, or completion claim is earned. V7 remains only a consumed
-behavior-neutral relation-precompute POC.
+blocked on the same four gates, Work D and step 4 remain in progress, and no
+production readiness, methodology readiness, superiority, or completion claim
+is earned. V7 remains only a consumed behavior-neutral relation-precompute POC.
 ## Non-Negotiable Method
 
 - Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence
@@ -152,5 +169,7 @@ exiting zero.
 
 Remain within step 4 and do not rerun or tune v1-v7. The bounded relation
 precompute POC is accepted only inside its diagnostic claim boundary. Next,
-assemble production-safe component, source, and evaluation artifacts on one
-stable execution fingerprint. Do not run holdouts or claim readiness.
+define and approve a generic source-backed identity/conversation provider
+contract for the unresolved authorized occurrence scope; do not infer
+conversation expansion or tune to the oracle. Do not run holdouts or claim
+readiness.

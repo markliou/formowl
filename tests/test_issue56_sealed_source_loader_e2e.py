@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -21,6 +22,7 @@ from formowl_gateway.issue56_diagnostic import Issue56SealedSourceDiagnosticInpu
 from formowl_gateway import issue56_sealed_source_loader as gateway_loader
 from formowl_mail import build_mail_evidence_bundle
 from formowl_mail import issue56_sealed_source as sealed_source
+from formowl_mail.query import source_occurrence_lineage_from_observation
 
 from scripts import issue56_identity_scope_attestation as identity_attestation
 from scripts import issue56_materialize_development_uat_observations as materializer
@@ -109,6 +111,10 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
                 precompute["graph_revision_fingerprint"],
                 loaded.safe_binding["graph_revision_fingerprint"],
             )
+            self.assertEqual(
+                precompute["source_session_binding_fingerprint"],
+                loaded.session.source_session_binding_fingerprint,
+            )
             relation_precompute = loaded.safe_binding["relation_projection_base_precompute"]
             self.assertEqual(relation_precompute["status"], "passed")
             self.assertEqual(relation_precompute["cache_status"], "primed")
@@ -176,9 +182,42 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
             )
             self.assertTrue(diagnostic_input.allowed_relation_types)
 
+            expanded = sealed_source.load_issue56_sealed_source(
+                **_loader_kwargs(package),
+                include_participant_authorization_observations=True,
+            )
+            selected_hashes = tuple(
+                sorted(
+                    (
+                        observation.observation_id,
+                        sha256_json(observation.to_dict()),
+                    )
+                    for observation in expanded.observations
+                )
+            )
+            self.assertEqual(expanded.session.retrieval_observation_hashes, selected_hashes)
+            self.assertTrue(
+                set(selected_hashes).issubset(
+                    set(expanded.session.authorized_observation_hashes)
+                )
+            )
+            self.assertEqual(
+                expanded.safe_binding["counts"]["selected_observation_count"],
+                len(expanded.observations),
+            )
+            self.assertGreater(
+                expanded.safe_binding["counts"]["authorized_observation_count"],
+                len(expanded.observations),
+            )
+            self.assertEqual(
+                expanded.safe_binding["counts"]["graph_source_observation_count"],
+                len(expanded.observations),
+            )
+
     def test_gateway_rejects_owner_precompute_safe_binding_drift(self) -> None:
         index_fingerprint = sha256_json("index")
         graph_revision_fingerprint = sha256_json("graph")
+        source_session_binding_fingerprint = sha256_json("authorized source set")
         tokenizer_profile_fingerprint = sha256_json("tokenizer")
         relation_counts = {
             "authorized_observation_count": 1,
@@ -216,6 +255,21 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
             "lineage_crosswalk_precompute": {
                 "index_fingerprint": index_fingerprint,
                 "graph_revision_fingerprint": graph_revision_fingerprint,
+                "source_session_binding_fingerprint": (
+                    source_session_binding_fingerprint
+                ),
+                "cache_key_fingerprint": sha256_json(
+                    {
+                        "artifact_id": (
+                            "formowl_issue56_evidence_identity_lineage_cache_key_v1"
+                        ),
+                        "index_fingerprint": index_fingerprint,
+                        "graph_revision_fingerprint": graph_revision_fingerprint,
+                        "source_session_binding_fingerprint": (
+                            source_session_binding_fingerprint
+                        ),
+                    }
+                ),
                 "counts": {"authorized_evidence_count": 1},
             },
             "relation_projection_base_precompute": {
@@ -243,7 +297,50 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
             },
         }
         binding["binding_fingerprint"] = sha256_json(binding)
-        gateway_loader._validated_owner_safe_binding(binding)
+        gateway_loader._validated_owner_safe_binding(
+            binding,
+            source_session_binding_fingerprint=(
+                source_session_binding_fingerprint
+            ),
+        )
+
+        different_authorization_cache_key = sha256_json(
+            {
+                "artifact_id": (
+                    "formowl_issue56_evidence_identity_lineage_cache_key_v1"
+                ),
+                "index_fingerprint": index_fingerprint,
+                "graph_revision_fingerprint": graph_revision_fingerprint,
+                "source_session_binding_fingerprint": sha256_json(
+                    "different authorized source set"
+                ),
+            }
+        )
+        self.assertNotEqual(
+            binding["lineage_crosswalk_precompute"]["cache_key_fingerprint"],
+            different_authorization_cache_key,
+        )
+        wrong_cache_key = deepcopy(binding)
+        wrong_cache_key["lineage_crosswalk_precompute"]["cache_key_fingerprint"] = (
+            different_authorization_cache_key
+        )
+        wrong_cache_key["binding_fingerprint"] = sha256_json(
+            {
+                key: value
+                for key, value in wrong_cache_key.items()
+                if key != "binding_fingerprint"
+            }
+        )
+        with self.assertRaisesRegex(
+            Exception,
+            "owner precompute binding mismatch",
+        ):
+            gateway_loader._validated_owner_safe_binding(
+                wrong_cache_key,
+                source_session_binding_fingerprint=(
+                    source_session_binding_fingerprint
+                ),
+            )
 
         drifted = deepcopy(binding)
         drifted["lineage_crosswalk_precompute"]["graph_revision_fingerprint"] = sha256_json(
@@ -253,7 +350,12 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
             Exception,
             "owner safe binding seal mismatch",
         ):
-            gateway_loader._validated_owner_safe_binding(drifted)
+            gateway_loader._validated_owner_safe_binding(
+                drifted,
+                source_session_binding_fingerprint=(
+                    source_session_binding_fingerprint
+                ),
+            )
 
         cross_binding_drift = deepcopy(binding)
         cross_binding_drift["relation_projection_base_precompute"]["graph_revision_fingerprint"] = (
@@ -270,7 +372,12 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
             Exception,
             "owner relation projection precompute binding mismatch",
         ):
-            gateway_loader._validated_owner_safe_binding(cross_binding_drift)
+            gateway_loader._validated_owner_safe_binding(
+                cross_binding_drift,
+                source_session_binding_fingerprint=(
+                    source_session_binding_fingerprint
+                ),
+            )
 
     def test_fixed_identity_mismatches_fail_before_source_loading(self) -> None:
         missing = Path("/not/read/by/fixed-identity-validation")
@@ -373,9 +480,224 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
             ):
                 gateway_loader.load_issue56_sealed_source_diagnostic_input()
 
+    def test_direct_identifier_provider_preserves_authorized_occurrence_lineage(
+        self,
+    ) -> None:
+        shared_identifier = "CASE-7777"
+        shared_identifier_hash = sha256_json(shared_identifier.casefold())
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package = _prepare_package(
+                Path(temp_dir),
+                shared_direct_identifier=shared_identifier,
+            )
+            loaded = sealed_source.load_issue56_sealed_source(
+                **_loader_kwargs(package),
+                include_participant_authorization_observations=True,
+            )
+            matching_mentions = tuple(
+                mention
+                for mention in loaded.identifier_mention_batch.candidate_mentions
+                if mention.normalized_label == shared_identifier_hash
+            )
+            source_occurrence_count = sum(
+                observation.text is not None
+                and shared_identifier.casefold() in observation.text.casefold()
+                for observation in (
+                    Observation.from_dict(row)
+                    for row in package.fixture.snapshot["parsed_mail_observations"]
+                )
+            )
+            self.assertGreater(source_occurrence_count, len(matching_mentions))
 
-def _prepare_package(root: Path) -> _PreparedPackage:
-    fixture = _write_workspace_fixture(root / "source")
+            with mock.patch.dict(
+                os.environ,
+                _loader_environment(package),
+                clear=False,
+            ):
+                providers = gateway_loader._build_mail_source_occurrence_providers(
+                    loaded,
+                    safe_binding=loaded.safe_binding,
+                )
+            matching_providers = tuple(
+                provider
+                for provider in providers
+                if any(
+                    shared_identifier_hash in binding[:2]
+                    for occurrence in provider.occurrences
+                    for binding in occurrence.value_bindings
+                )
+            )
+            direct_identifier_providers = tuple(
+                provider
+                for provider in providers
+                if provider.provider_id
+                == "mail_message_occurrence_direct_source_identifier_provider_v1"
+            )
+            self.assertEqual(len(direct_identifier_providers), 1)
+            self.assertEqual(len(matching_providers), 1)
+            provider = matching_providers[0]
+            self.assertIs(provider, direct_identifier_providers[0])
+            authorized_hash_by_id = dict(loaded.session.authorized_observation_hashes)
+            lineage_by_id = {
+                lineage.source_observation_id: lineage
+                for lineage in loaded.session.occurrence_lineages
+            }
+            retrieval_occurrence_ids = {
+                lineage_by_id[observation_id].occurrence_id
+                for observation_id, _ in loaded.session.retrieval_observation_hashes
+            }
+            authorized_occurrence_ids = {
+                lineage.occurrence_id for lineage in loaded.session.occurrence_lineages
+            }
+            projected_occurrence_ids = {
+                lineage_by_id[observation_id].occurrence_id
+                for mention in loaded.identifier_mention_batch.candidate_mentions
+                if mention.mention_type == "protected_identifier:business_identifier"
+                for observation_id in mention.source_observation_ids
+            }
+            self.assertLess(
+                len(retrieval_occurrence_ids),
+                len(authorized_occurrence_ids),
+            )
+            self.assertEqual(
+                authorized_occurrence_ids,
+                {
+                    occurrence.message_occurrence_id
+                    for occurrence in loaded.source_bundle.message_occurrences
+                },
+            )
+            self.assertEqual(
+                provider.unresolved_count,
+                len(authorized_occurrence_ids - projected_occurrence_ids),
+            )
+            expected_references = {
+                (
+                    authorized_hash_by_id[observation_id],
+                    lineage_by_id[observation_id].lineage_fingerprint,
+                )
+                for mention in matching_mentions
+                for observation_id in mention.source_observation_ids
+            }
+            actual_references = {
+                (citation_hash, lineage_fingerprint)
+                for occurrence in provider.occurrences
+                for (
+                    normalized_hash,
+                    variant_hash,
+                    citation_hash,
+                    lineage_fingerprint,
+                ) in occurrence.value_bindings
+                if shared_identifier_hash in {normalized_hash, variant_hash}
+            }
+            self.assertEqual(actual_references, expected_references)
+            self.assertEqual(
+                sum(
+                    any(shared_identifier_hash in binding[:2] for binding in occurrence.value_bindings)
+                    for occurrence in provider.occurrences
+                ),
+                len(matching_mentions),
+            )
+
+            routed_session = replace(
+                loaded.session,
+                source_occurrence_providers=providers,
+            )
+            cursor = None
+            while True:
+                result = routed_session.query(
+                    query_text=f"list all {shared_identifier} messages",
+                    effective_graph_view=loaded.effective_graph_view,
+                    exact_inventory_kind="mail_message_occurrence",
+                    page_size=100,
+                    cursor=cursor,
+                )
+                assert result.exact_result is not None
+                page = result.exact_result.source_occurrence_page
+                assert page is not None
+                cursor = page["next_cursor"]
+                if cursor is None:
+                    break
+            self.assertEqual(result.status, "incomplete")
+            self.assertEqual(page["coverage_status"], "incomplete")
+            self.assertGreater(page["unresolved_count"], 0)
+
+            source_observation = next(
+                observation
+                for observation in loaded.session.authorized_observations
+                if observation.observation_type == "email_message"
+            )
+            extra_occurrence_id = (
+                str(source_observation.location["message_occurrence_id"])
+                + "_authorization_only"
+            )
+            extra_payload = dict(source_observation.payload or {})
+            extra_payload["message_occurrence_id"] = extra_occurrence_id
+            extra_payload["message_fingerprint"] = sha256_json(extra_occurrence_id)
+            extra_location = dict(source_observation.location)
+            extra_location["message_occurrence_id"] = extra_occurrence_id
+            extra_observation = Observation.from_dict(
+                {
+                    **source_observation.to_dict(),
+                    "observation_id": (
+                        source_observation.observation_id + "_authorization_only"
+                    ),
+                    "location": extra_location,
+                    "payload": extra_payload,
+                }
+            )
+            assert loaded.session.authorized_source is not None
+            extra_lineage = source_occurrence_lineage_from_observation(
+                extra_observation,
+                authorized_source=loaded.session.authorized_source,
+            )
+            extra_observation_hash = sha256_json(extra_observation.to_dict())
+            expanded_session = replace(
+                loaded.session,
+                authorized_observations=tuple(
+                    sorted(
+                        (*loaded.session.authorized_observations, extra_observation),
+                        key=lambda observation: observation.observation_id,
+                    )
+                ),
+                authorized_observation_hashes=tuple(
+                    sorted(
+                        (
+                            *loaded.session.authorized_observation_hashes,
+                            (extra_observation.observation_id, extra_observation_hash),
+                        )
+                    )
+                ),
+                occurrence_lineages=tuple(
+                    sorted(
+                        (*loaded.session.occurrence_lineages, extra_lineage),
+                        key=lambda lineage: lineage.source_observation_id,
+                    )
+                ),
+            )
+            with mock.patch.dict(
+                os.environ,
+                _loader_environment(package),
+                clear=False,
+            ):
+                with self.assertRaisesRegex(
+                    Exception,
+                    "production direct source identifier occurrence scope is invalid",
+                ):
+                    gateway_loader._build_mail_source_occurrence_providers(
+                        replace(loaded, session=expanded_session),
+                        safe_binding=loaded.safe_binding,
+                    )
+
+
+def _prepare_package(
+    root: Path,
+    *,
+    shared_direct_identifier: str | None = None,
+) -> _PreparedPackage:
+    fixture = _write_workspace_fixture(
+        root / "source",
+        shared_direct_identifier=shared_direct_identifier,
+    )
     work_dir = root / "materialized"
     materialized = materializer.materialize_development_uat_observations(
         **materializer_fixture._build_kwargs(fixture, work_dir)
@@ -432,7 +754,11 @@ def _prepare_package(root: Path) -> _PreparedPackage:
     )
 
 
-def _write_workspace_fixture(root: Path) -> object:
+def _write_workspace_fixture(
+    root: Path,
+    *,
+    shared_direct_identifier: str | None = None,
+) -> object:
     fixture = materializer_fixture._write_fixture(root, body_count=500)
     snapshot = deepcopy(fixture.snapshot)
     manifest = deepcopy(fixture.manifest)
@@ -465,6 +791,13 @@ def _write_workspace_fixture(root: Path) -> object:
     observations: list[Observation] = []
     for raw_observation in snapshot["parsed_mail_observations"]:
         row = deepcopy(raw_observation)
+        if shared_direct_identifier is not None and row["observation_type"] == "email_body_segment":
+            ordinal = int(str(row["observation_id"]).rsplit("_", 1)[1])
+            if ordinal == 1 or ordinal > 200:
+                row["text"] = (
+                    f"Synthetic evidence segment {ordinal:04d} "
+                    f"references {shared_direct_identifier}."
+                )
         row["permission_scope"] = WORKSPACE_PERMISSION_SCOPE.to_dict()
         row["location"]["source_inventory_item_id"] = item_id_map[
             row["location"]["source_inventory_item_id"]

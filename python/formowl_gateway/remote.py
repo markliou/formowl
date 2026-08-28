@@ -193,6 +193,65 @@ _SEMANTIC_OUTPUT_SCHEMA: dict[str, Any] = {
     },
     "additionalProperties": False,
 }
+_EXACT_INVENTORY_OUTPUT_SCHEMA: dict[str, Any] = {
+    **_SEMANTIC_OUTPUT_SCHEMA,
+    "properties": {
+        **_SEMANTIC_OUTPUT_SCHEMA["properties"],
+        "data": {
+            "type": "object",
+            "properties": {
+                "exact_inventory": {
+                    "type": "object",
+                    "required": [
+                        "status",
+                        "query_class",
+                        "plan",
+                        "total_count",
+                        "returned_count",
+                        "coverage_status",
+                        "next_cursor",
+                        "redacted_count",
+                        "unsupported_count",
+                        "unresolved_count",
+                        "duplicate_policy",
+                        "ambiguous_identifier_count",
+                        "items",
+                    ],
+                    "properties": {
+                        "status": {"type": "string"},
+                        "query_class": {"const": "exact_set_or_inventory"},
+                        "plan": {"type": "object"},
+                        "total_count": {"type": "integer", "minimum": 0},
+                        "returned_count": {"type": "integer", "minimum": 0},
+                        "coverage_status": {
+                            "enum": ["complete_page", "complete", "incomplete"]
+                        },
+                        "next_cursor": {"type": ["string", "null"]},
+                        "redacted_count": {"type": "integer", "minimum": 0},
+                        "unsupported_count": {"type": "integer", "minimum": 0},
+                        "unresolved_count": {"type": "integer", "minimum": 0},
+                        "duplicate_policy": {"const": "preserve_source_occurrence_v1"},
+                        "ambiguous_identifier_count": {"type": "integer", "minimum": 0},
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": [
+                                    "item_hash",
+                                    "governed_references",
+                                    "matched_normalized_value_hashes",
+                                    "ambiguous_identifier",
+                                ],
+                            },
+                        },
+                    },
+                    "additionalProperties": False,
+                }
+            },
+            "additionalProperties": True,
+        },
+    },
+}
 
 
 class OAuthBridgeProtocol(Protocol):
@@ -784,7 +843,11 @@ def build_remote_tool_descriptors(
                 name=schema["tool_name"],
                 description=json_rpc_schema["description"],
                 input_schema=json_rpc_schema["inputSchema"],
-                output_schema=_SEMANTIC_OUTPUT_SCHEMA,
+                output_schema=(
+                    _EXACT_INVENTORY_OUTPUT_SCHEMA
+                    if schema["tool_name"] == "query_effective_graph_view"
+                    else _SEMANTIC_OUTPUT_SCHEMA
+                ),
                 schemes=schemes,
             )
         )

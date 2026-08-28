@@ -165,6 +165,9 @@ class SemanticQueryPlan:
     exact_filter_term_hashes: tuple[str, ...] = ()
     exact_identifier_term_hashes: tuple[str, ...] = ()
     exact_topic_term_hashes: tuple[str, ...] = ()
+    exact_normalized_field: str | None = None
+    exact_predicate: str | None = None
+    exact_operator: str | None = None
     target_core_supertype_id: str | None = None
     include_superseded: bool = False
     relation_repair_identifier_term_hashes: tuple[str, ...] = ()
@@ -209,6 +212,12 @@ class SemanticQueryPlan:
             "target_core_supertype_id": self.target_core_supertype_id,
             "include_superseded": self.include_superseded,
         }
+        if self.exact_normalized_field is not None:
+            payload["exact_source_occurrence"] = [
+                self.exact_normalized_field,
+                self.exact_predicate,
+                self.exact_operator,
+            ]
         if self.relation_repair_policy_fingerprint is not None:
             payload["relation_repair"] = {
                 "identifier_term_hashes": list(self.relation_repair_identifier_term_hashes),
@@ -309,8 +318,12 @@ def route_semantic_query(
     exact_filter_term_hashes: Sequence[str] = (),
     exact_identifier_term_hashes: Sequence[str] = (),
     exact_topic_term_hashes: Sequence[str] = (),
+    exact_normalized_field: str | None = None,
+    exact_predicate: str | None = None,
+    exact_operator: str | None = None,
     limits: SemanticPlanLimits = DEFAULT_SEMANTIC_PLAN_LIMITS,
     authorized_source: AuthorizedSemanticSource | None = None,
+    query_class_override: str | None = None,
 ) -> SemanticQueryPlan:
     """Build and validate the smallest deterministic plan for the query class."""
 
@@ -319,7 +332,19 @@ def route_semantic_query(
         workspace_id=workspace_id,
         source_scope_ids=source_scope_ids,
     )
-    query_class = deterministic_query_class(query_text)
+    if query_class_override is not None and (
+        query_class_override != "exact_set_or_inventory"
+        or not all(
+            isinstance(value, str) and value.strip()
+            for value in (exact_normalized_field, exact_predicate, exact_operator)
+        )
+    ):
+        raise ContractValidationError("semantic query class override is invalid")
+    query_class = (
+        query_class_override
+        if query_class_override is not None
+        else deterministic_query_class(query_text)
+    )
     relation_types = tuple(sorted(set(allowed_relation_types)))
     directions = tuple(sorted(set(allowed_directions)))
     allowed_paths = (
@@ -381,6 +406,9 @@ def route_semantic_query(
             if query_class == "exact_set_or_inventory"
             else ()
         ),
+        exact_normalized_field=exact_normalized_field,
+        exact_predicate=exact_predicate,
+        exact_operator=exact_operator,
         target_core_supertype_id=target_core_supertype_id,
         include_superseded=False,
     )
@@ -545,6 +573,11 @@ def _validate_plan_strings(plan: SemanticQueryPlan) -> None:
         _require_nonempty_public_string(plan.exact_operation, "exact_operation")
     if plan.exact_inventory_kind is not None:
         _require_nonempty_public_string(plan.exact_inventory_kind, "exact_inventory_kind")
+    exact_source_fields = (plan.exact_normalized_field, plan.exact_predicate, plan.exact_operator)
+    if any(value is not None for value in exact_source_fields) and not all(
+        isinstance(value, str) and value for value in exact_source_fields
+    ):
+        raise ContractValidationError("exact source occurrence binding is incomplete")
     for term_hash in (
         *plan.exact_filter_term_hashes,
         *plan.exact_identifier_term_hashes,
@@ -628,6 +661,7 @@ def _validate_query_class_shape(
             or plan.exact_filter_term_hashes
             or plan.exact_identifier_term_hashes
             or plan.exact_topic_term_hashes
+            or plan.exact_normalized_field is not None
         ):
             raise ContractValidationError("relation reasoning cannot carry exact execution")
         repair_fields_present = (
@@ -666,6 +700,7 @@ def _validate_query_class_shape(
         or plan.exact_filter_term_hashes
         or plan.exact_identifier_term_hashes
         or plan.exact_topic_term_hashes
+        or plan.exact_normalized_field is not None
     ):
         raise ContractValidationError("non-exact query cannot carry exact execution")
 

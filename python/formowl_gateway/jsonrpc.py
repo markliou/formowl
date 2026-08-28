@@ -45,7 +45,7 @@ _SEMANTIC_TOOL_OBJECT_ARGUMENT_KEYS = {
     "permission_scope",
     "requested_scope",
 }
-_SEMANTIC_TOOL_INTEGER_ARGUMENT_KEYS = {"limit"}
+_SEMANTIC_TOOL_INTEGER_ARGUMENT_KEYS = {"limit", "page_size"}
 _SEMANTIC_TOOL_REQUIRED_ARGUMENT_KEYS = {
     "open_upload_session": {"intent", "intended_asset_type"},
     "create_ingestion_job": {"asset_locator", "extractor_profile"},
