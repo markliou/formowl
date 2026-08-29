@@ -275,6 +275,7 @@ class EmailAttachmentOccurrence:
     source_observation_id: str
     attachment_id: str
     attachment_index: int | None = None
+    child_asset_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return _public_payload(self, "email_attachment_occurrence")
@@ -293,6 +294,7 @@ class EmailAttachmentOccurrence:
             source_observation_id=_required_str(item, "source_observation_id"),
             attachment_id=_required_str(item, "attachment_id"),
             attachment_index=_optional_int(item, "attachment_index"),
+            child_asset_id=_optional_str(item, "child_asset_id"),
         )
         occurrence.to_dict()
         return occurrence
@@ -936,6 +938,7 @@ def _attachments(
                     "source_observation_id": observation.observation_id,
                     "attachment_id": attachment_id_value,
                     "attachment_index": observation.location.get("attachment_index"),
+                    "child_asset_id": payload.get("child_asset_id"),
                 }
             )
         )

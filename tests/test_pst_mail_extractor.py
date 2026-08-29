@@ -13,7 +13,7 @@ from formowl_contract import (
     sha256_json,
 )
 from formowl_ingestion.assets import register_asset_from_local_file
-from formowl_ingestion.extraction import run_extractor
+from formowl_ingestion.extraction import AttachmentMaterializationContext, run_extractor
 from formowl_ingestion.extractors.mail.pst import (
     PstMailArchiveExtractor,
     _ParserCommandResult,
@@ -32,6 +32,82 @@ NOW = "2026-07-06T10:00:00+00:00"
 
 
 class PstMailArchiveExtractorTests(unittest.TestCase):
+    def test_attachment_child_asset_binding_and_compensating_rollback(self) -> None:
+        context = _PstExtractionContext.create("pst-attachment-child-asset")
+        result = run_extractor(
+            asset=context.asset,
+            object_store=context.object_store,
+            extractor_run_store=context.run_store,
+            observation_store=context.observation_store,
+            adapter=context.adapter_with_runner(_runner_with_messages([_rfc822_message()])),
+            attachment_asset_store=context.asset_store,
+            started_at=NOW,
+            completed_at=NOW,
+        )
+        attachment = next(
+            item
+            for item in result.observations
+            if item.observation_type == "email_attachment_occurrence"
+        )
+        child_asset = context.asset_store.get(attachment.payload["child_asset_id"])
+        self.assertIsNotNone(child_asset)
+        self.assertEqual(child_asset.content_hash, attachment.payload["content_hash"])
+        self.assertEqual(child_asset.workspace_id, context.asset.workspace_id)
+        self.assertEqual(child_asset.owner_user_id, context.asset.owner_user_id)
+        self.assertEqual(child_asset.permission_scope, context.asset.permission_scope)
+        self.assertTrue(
+            context.object_store.verify_object(
+                child_asset.object_uri,
+                child_asset.content_hash,
+            )
+        )
+        bundle = build_mail_evidence_bundle(
+            result.observations,
+            workspace_id=context.asset.workspace_id,
+            owner_user_id=context.asset.owner_user_id,
+            source_asset_id=context.asset.asset_id,
+            archive_sha256=context.asset.content_hash,
+            upload_session_id="upload_real_pst_unit",
+            created_at=NOW,
+        )
+        self.assertEqual(bundle.attachment_occurrences[0].child_asset_id, child_asset.asset_id)
+
+        materialization = AttachmentMaterializationContext(
+            parent_asset=context.asset,
+            asset_store=context.asset_store,
+            object_store=context.object_store,
+        )
+        with self.assertRaises(ValueError):
+            materialization.materialize(
+                content=b"tampered",
+                expected_content_hash="sha256:" + "0" * 64,
+                mime_type="text/plain",
+                source_ref=SourceRef(
+                    source_system="formowl_mail_attachment",
+                    source_type="email_attachment_occurrence",
+                    source_id="inventory_item_tampered",
+                ),
+            )
+
+        rollback = _PstExtractionContext.create("pst-attachment-child-rollback")
+        recording_objects = _RecordingObjectStore(rollback.object_store.backend_registry)
+        with self.assertRaises(RuntimeError):
+            run_extractor(
+                asset=rollback.asset,
+                object_store=recording_objects,
+                extractor_run_store=rollback.run_store,
+                observation_store=_FailingObservationStore(rollback.temp_dir),
+                adapter=rollback.adapter_with_runner(
+                    _runner_with_messages([_rfc822_message()])
+                ),
+                attachment_asset_store=rollback.asset_store,
+                started_at=NOW,
+                completed_at=NOW,
+            )
+        self.assertEqual(rollback.asset_store.list(), [rollback.asset])
+        self.assertIsNotNone(recording_objects.created_object_uri)
+        self.assertIsNone(recording_objects.get_object(recording_objects.created_object_uri))
+
     def test_pst_adapter_exports_mail_observations_from_runner_output(self) -> None:
         context = _PstExtractionContext.create("pst-extractor-basic")
         adapter = context.adapter_with_runner(_runner_with_messages([_rfc822_message()]))
@@ -442,12 +518,14 @@ class _PstExtractionContext:
         object_store: FileObjectStore,
         run_store: ExtractorRunStore,
         observation_store: ObservationStore,
+        asset_store: AssetStore,
         asset,
     ) -> None:
         self.temp_dir = temp_dir
         self.object_store = object_store
         self.run_store = run_store
         self.observation_store = observation_store
+        self.asset_store = asset_store
         self.asset = asset
 
     def adapter_with_runner(self, runner) -> PstMailArchiveExtractor:
@@ -497,6 +575,7 @@ class _PstExtractionContext:
             object_store=object_store,
             run_store=ExtractorRunStore(temp_dir),
             observation_store=ObservationStore(temp_dir),
+            asset_store=asset_store,
             asset=asset,
         )
 
@@ -508,6 +587,23 @@ class _CountingRunner:
     def __call__(self, command, timeout):
         self.calls += 1
         return _ParserCommandResult(0)
+
+
+class _FailingObservationStore(ObservationStore):
+    def create(self, observation):
+        raise RuntimeError("forced_observation_write_failure")
+
+
+class _RecordingObjectStore(FileObjectStore):
+    def __init__(self, backend_registry) -> None:
+        super().__init__(backend_registry)
+        self.created_object_uri: str | None = None
+
+    def copy_local_file(self, *args, **kwargs):
+        stored = super().copy_local_file(*args, **kwargs)
+        if kwargs.get("original_filename", "").startswith("formowl-attachment-"):
+            self.created_object_uri = stored.object_uri
+        return stored
 
 
 class _CapturingRunner:

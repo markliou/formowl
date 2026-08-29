@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 import re
+import tempfile
 from typing import Any, Mapping, Protocol, runtime_checkable
 
 from formowl_contract import (
@@ -11,14 +12,108 @@ from formowl_contract import (
     ContractValidationError,
     ExtractorRun,
     Observation,
+    SourceRef,
     now_iso,
+    stable_asset_id,
     stable_extractor_run_id,
     stable_resource_contract_hash,
     to_plain,
 )
 
-from .storage import ExtractorRunStore, FileObjectStore, ObservationStore
+from .assets import register_asset_from_local_file
+from .storage import (
+    AssetRecordStore,
+    ExtractorRunStore,
+    FileObjectStore,
+    ObservationStore,
+)
 
+
+@dataclass
+class AttachmentMaterializationContext:
+    """Small internal receipt set for governed attachment child assets."""
+
+    parent_asset: Asset
+    asset_store: AssetRecordStore
+    object_store: FileObjectStore
+    _receipts: list[tuple[str, str, str, bool]] = field(
+        default_factory=list,
+        init=False,
+        repr=False,
+    )
+    _closed: bool = field(default=False, init=False, repr=False)
+
+    def materialize(
+        self,
+        *,
+        content: bytes,
+        expected_content_hash: str,
+        mime_type: str,
+        source_ref: SourceRef,
+    ) -> str:
+        if self._closed:
+            raise RuntimeError("attachment materialization context is closed")
+        object_uri = self.object_store.object_uri_for_content(
+            storage_backend_id=self.parent_asset.storage_backend_id,
+            workspace_id=self.parent_asset.workspace_id,
+            content_hash=expected_content_hash,
+        )
+        object_preexisted = self.object_store.get_object(object_uri) is not None
+        child_asset_id = stable_asset_id(
+            storage_backend_id=self.parent_asset.storage_backend_id,
+            object_uri=object_uri,
+            content_hash=expected_content_hash,
+            workspace_id=self.parent_asset.workspace_id,
+            source_ref=source_ref,
+        )
+        if self.asset_store.get(child_asset_id) is not None:
+            raise ContractValidationError("attachment child asset is already registered")
+        with tempfile.NamedTemporaryFile(prefix="formowl-attachment-", suffix=".bin") as temporary:
+            temporary.write(content)
+            temporary.flush()
+            try:
+                child_asset = register_asset_from_local_file(
+                    temporary.name,
+                    object_store=self.object_store,
+                    asset_store=self.asset_store,
+                    storage_backend_id=self.parent_asset.storage_backend_id,
+                    workspace_id=self.parent_asset.workspace_id,
+                    owner_user_id=self.parent_asset.owner_user_id,
+                    permission_scope=self.parent_asset.permission_scope,
+                    source_ref=source_ref,
+                    mime_type=mime_type,
+                    expected_content_hash=expected_content_hash,
+                    project_id=self.parent_asset.project_id,
+                    created_at=self.parent_asset.created_at,
+                    registered_at=self.parent_asset.registered_at,
+                )
+            except Exception:
+                if not object_preexisted:
+                    self.object_store.delete_object(object_uri)
+                raise
+        self._receipts.append(
+            (
+                child_asset.asset_id,
+                child_asset.object_uri,
+                child_asset.content_hash,
+                object_preexisted,
+            )
+        )
+        return child_asset.asset_id
+
+    def validate_observations(self, observations: list[Observation]) -> None:
+        expected = {(receipt[0], receipt[2]) for receipt in self._receipts}
+        actual = [
+            (
+                str(payload.get("child_asset_id") or ""),
+                str(payload.get("content_hash") or ""),
+            )
+            for observation in observations
+            if observation.observation_type == "email_attachment_occurrence"
+            and (payload := observation.payload or {}).get("child_asset_id")
+        ]
+        if set(actual) != expected or len(actual) != len(expected):
+            raise ContractValidationError("attachment child asset observation binding mismatch")
 
 @dataclass(frozen=True)
 class ExtractionInput:
@@ -29,6 +124,7 @@ class ExtractionInput:
     extractor_run_id: str
     config: dict[str, Any] = field(default_factory=dict)
     created_at: str | None = None
+    attachment_materialization: AttachmentMaterializationContext | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +167,7 @@ def run_extractor(
     config: Mapping[str, Any] | None = None,
     started_at: str | None = None,
     completed_at: str | None = None,
+    attachment_asset_store: AssetRecordStore | None = None,
 ) -> StoredExtractionResult:
     # Caller-supplied extraction timestamps become run provenance, so reject
     # malformed explicit values before object verification or persistence.
@@ -99,12 +196,27 @@ def run_extractor(
         config_hash=config_hash,
     )
     run_started_at = started_at or now_iso()
+    attachment_materialization = None
+    if attachment_asset_store is not None:
+        if not callable(getattr(attachment_asset_store, "delete", None)):
+            raise TypeError("attachment materialization requires deletion-capable asset store")
+        parent_asset = attachment_asset_store.get(asset.asset_id)
+        if parent_asset is None or parent_asset.to_dict() != asset.to_dict():
+            raise ContractValidationError(
+                "attachment asset store is not bound to extraction asset"
+            )
+        attachment_materialization = AttachmentMaterializationContext(
+            parent_asset=asset,
+            asset_store=attachment_asset_store,
+            object_store=object_store,
+        )
     extraction_input = ExtractionInput(
         asset=asset,
         object_path=object_path,
         extractor_run_id=run_id,
         config=normalized_config,
         created_at=run_started_at,
+        attachment_materialization=attachment_materialization,
     )
 
     try:
@@ -120,6 +232,13 @@ def run_extractor(
             if status == "succeeded"
             else []
         )
+        if attachment_materialization is not None:
+            if status == "succeeded":
+                attachment_materialization.validate_observations(
+                    persisted_observations
+                )
+            else:
+                _rollback_attachment_materialization(attachment_materialization)
         run = ExtractorRun(
             extractor_run_id=run_id,
             asset_id=asset.asset_id,
@@ -138,11 +257,16 @@ def run_extractor(
         if status == "succeeded":
             for observation in persisted_observations:
                 observation_store.create(observation)
+            if attachment_materialization is not None:
+                attachment_materialization._receipts.clear()
+                attachment_materialization._closed = True
         return StoredExtractionResult(
             extractor_run=run,
             observations=persisted_observations,
         )
     except Exception as exc:
+        if attachment_materialization is not None and not attachment_materialization._closed:
+            _rollback_attachment_materialization(attachment_materialization)
         failed_run = ExtractorRun(
             extractor_run_id=run_id,
             asset_id=asset.asset_id,
@@ -158,6 +282,23 @@ def run_extractor(
         )
         extractor_run_store.create(failed_run)
         raise
+
+
+def _rollback_attachment_materialization(
+    context: AttachmentMaterializationContext,
+) -> None:
+    failed = False
+    for asset_id, object_uri, _, object_preexisted in reversed(context._receipts):
+        try:
+            context.asset_store.delete(asset_id)
+            if not object_preexisted:
+                context.object_store.delete_object(object_uri)
+        except Exception:
+            failed = True
+    context._receipts.clear()
+    context._closed = True
+    if failed:
+        raise RuntimeError("attachment materialization rollback failed")
 
 
 def _validate_observations(
@@ -227,6 +368,7 @@ def _looks_like_raw_diagnostic(value: str) -> bool:
 
 
 __all__ = [
+    "AttachmentMaterializationContext",
     "ExtractionInput",
     "ExtractionResult",
     "ExtractorAdapter",

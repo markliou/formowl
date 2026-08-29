@@ -86,6 +86,22 @@ class FileObjectStore:
         _write_json(metadata_path, stored.to_dict())
         return stored
 
+    def object_uri_for_content(
+        self,
+        *,
+        storage_backend_id: str,
+        workspace_id: str,
+        content_hash: str,
+    ) -> str:
+        _require_safe_segment(storage_backend_id, "storage_backend_id")
+        _require_safe_segment(workspace_id, "workspace_id")
+        if not isinstance(content_hash, str) or not content_hash.startswith("sha256:"):
+            raise ValueError("content_hash must be sha256")
+        digest = content_hash.removeprefix("sha256:")
+        if not _SHA256_HEX.fullmatch(digest):
+            raise ValueError("content_hash must be sha256")
+        return _object_uri(storage_backend_id, workspace_id, digest)
+
     def get_object(self, object_uri: str) -> StoredObject | None:
         try:
             storage_backend_id, workspace_id, digest = _parse_object_uri(object_uri)

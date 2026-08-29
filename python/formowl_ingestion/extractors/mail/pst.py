@@ -21,6 +21,7 @@ import uuid
 
 from formowl_contract import (
     Observation,
+    SourceRef,
     SourceInventory,
     SourceInventoryItem,
     SourceInventoryProcessingState,
@@ -73,6 +74,7 @@ class _ParsedAttachment:
     mime_type: str | None = None
     content_hash: str | None = None
     size_bytes: int | None = None
+    content_bytes: bytes | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -1794,6 +1796,7 @@ def _attachments(
                 mime_type=_safe_mail_text(part.get_content_type(), "attachment_mime_type"),
                 content_hash=content_hash,
                 size_bytes=size_bytes,
+                content_bytes=payload if content_hash is not None else None,
             )
         )
     return attachments
@@ -1936,6 +1939,7 @@ def _mail_observations_from_messages(
             mailbox_id=mailbox_id,
             source_inventory=source_inventory,
             inventory_index=inventory_index,
+            extraction_input=extraction_input,
         )
     )
     observations: list[Observation] = []
@@ -1974,6 +1978,7 @@ def _iter_mail_observations(
     mailbox_id: str,
     source_inventory: SourceInventory,
     inventory_index: _PstAttachmentInventoryIndex,
+    extraction_input: ExtractionInput,
 ) -> Iterable[dict[str, Any]]:
     folder_labels: dict[str, str] = {}
     for message in messages:
@@ -2130,6 +2135,27 @@ def _iter_mail_observations(
                 source_inventory=source_inventory,
                 inventory_index=inventory_index,
             )
+            child_asset_id = None
+            if (
+                extraction_input.attachment_materialization is not None
+                and attachment.content_bytes is not None
+                and attachment.content_hash is not None
+            ):
+                child_asset_id = extraction_input.attachment_materialization.materialize(
+                    content=attachment.content_bytes,
+                    expected_content_hash=attachment.content_hash,
+                    mime_type=attachment.mime_type or "application/octet-stream",
+                    source_ref=SourceRef(
+                        source_system="formowl_mail_attachment",
+                        source_type="email_attachment_occurrence",
+                        source_id=binding["source_inventory_item_id"],
+                        source_instance=binding["source_inventory_id"],
+                        source_key=occurrence_id,
+                    ),
+                )
+            child_binding = (
+                {"child_asset_id": child_asset_id} if child_asset_id is not None else {}
+            )
             yield {
                 "observation_type": "email_attachment_occurrence",
                 "text": attachment.filename,
@@ -2138,6 +2164,7 @@ def _iter_mail_observations(
                     "attachment_index": attachment_index,
                     "attachment_id": attachment.attachment_id,
                     **binding,
+                    **child_binding,
                 },
                 "payload": {
                     "archive_id": archive_id,
@@ -2147,6 +2174,7 @@ def _iter_mail_observations(
                     "thread_id": thread_id,
                     "attachment_id": attachment.attachment_id,
                     **binding,
+                    **child_binding,
                     "filename": attachment.filename,
                     "mime_type": attachment.mime_type,
                     "content_hash": attachment.content_hash,
