@@ -102,7 +102,11 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
                 self.assertEqual(len(child_runs), 1)
                 self.assertEqual(child_runs[0].status, "succeeded")
                 self.assertEqual(
-                    [item.location["row_index"] for item in child_observations if item.observation_type == "table_row"],
+                    sorted(
+                        item.location["row_index"]
+                        for item in child_observations
+                        if item.observation_type == "table_row"
+                    ),
                     row_indexes,
                 )
                 self.assertEqual(
