@@ -241,6 +241,7 @@ _GENERAL_QUERY_OPERATOR_PHRASES = (
     "和",
     "的",
 )
+_MAX_DETERMINISTIC_PROOF_TOPIC_SLOTS = 4
 _GRAPH_ADJACENCY_CACHE: dict[
     str,
     dict[str, tuple[tuple[GraphProjectionEdge, str, str], ...]],
@@ -9230,7 +9231,7 @@ def _deterministic_high_idf_proof_slots(
     document_frequency: Mapping[str, int],
     document_count: int,
 ) -> _EvidenceQuerySlots | None:
-    """Require exact identifiers plus one deterministic indexed query concept."""
+    """Require exact identifiers plus bounded indexed query concepts."""
 
     slots = _query_evidence_slots(
         query_text,
@@ -9254,10 +9255,10 @@ def _deterministic_high_idf_proof_slots(
         )
         return (-inverse_document_frequency, sha256_json(token))
 
-    required_topic = min(indexed_topics, key=topic_order)
+    ordered_topics = tuple(sorted(indexed_topics, key=topic_order))
     return _EvidenceQuerySlots(
         identifier_tokens=slots.identifier_tokens,
-        topic_tokens=frozenset((required_topic,)),
+        topic_tokens=frozenset(ordered_topics[:_MAX_DETERMINISTIC_PROOF_TOPIC_SLOTS]),
     )
 
 

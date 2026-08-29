@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -32,6 +34,138 @@ from test_connected_runtime import (
 
 
 class ConnectedRuntimeSemanticMailE2ETests(unittest.IsolatedAsyncioTestCase):
+    async def test_evidence_lookup_snippet_projection_over_asgi(self) -> None:
+        from formowl_gateway import issue56_sealed_source_loader as gateway_loader
+        from formowl_gateway.semantic import SemanticMcpGateway
+        from formowl_auth import FileAuditLogStore
+        from formowl_ingestion.storage import UploadSessionStore
+        from formowl_mail import (
+            build_authorized_semantic_mail_session,
+            build_mail_upload_session_handler,
+        )
+        from scripts.issue56_semantic_execution_smoke import (
+            REQUESTER_USER_ID as SYNTHETIC_REQUESTER_USER_ID,
+            WORKSPACE_ID as SYNTHETIC_WORKSPACE_ID,
+            build_semantic_poc_inputs,
+        )
+        from test_issue56_semantic_execution_e2e import _contract_only_runtime
+        inputs = build_semantic_poc_inputs()
+        bundle = inputs.current_bundle
+        source = next(o for o in inputs.observations_by_bundle_id[bundle.mail_evidence_bundle_id]
+                      if o.observation_id == "obs_issue56_semantic_current_body_1")
+        second_source = next(o for o in inputs.observations_by_bundle_id[bundle.mail_evidence_bundle_id]
+                             if o.observation_id == "obs_issue56_semantic_current_body_2")
+        evidence_source = replace(
+            source,
+            text="PO470002002 authorized evidence /private/runtime/mail.pst " + ("x" * 450),
+        )
+        indexed = dict(inputs.observations_by_bundle_id)
+        indexed[bundle.mail_evidence_bundle_id] = tuple(
+            evidence_source if o.observation_id == source.observation_id else o
+            for o in indexed[bundle.mail_evidence_bundle_id]
+        )
+        with patch("formowl_mail.hybrid._load_pinned_issue56_runtime_components",
+                   return_value=_contract_only_runtime()):
+            session = build_authorized_semantic_mail_session(
+                observations_by_bundle_id=indexed, bundles=inputs.bundles,
+                requester_user_id=SYNTHETIC_REQUESTER_USER_ID,
+                workspace_id=SYNTHETIC_WORKSPACE_ID)
+        loaded = SimpleNamespace(session=session, effective_graph_view=inputs.effective_graph_view,
+                                 safe_binding={})
+        with (patch.object(gateway_loader, "APPROVER_ACTOR", SYNTHETIC_REQUESTER_USER_ID),
+              patch.object(gateway_loader, "WORKSPACE_ID", SYNTHETIC_WORKSPACE_ID),
+              patch.object(gateway_loader, "_load_approved_sealed_source", return_value=loaded),
+              patch.object(gateway_loader, "_validated_owner_safe_binding", return_value={}),
+              patch.object(gateway_loader, "_build_mail_source_occurrence_providers", return_value=())):
+            retrieval_handler = gateway_loader.build_issue56_production_semantic_retrieval_handler()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            environment = _write_runtime_environment(Path(temporary_directory))
+            config = ConnectedRuntimeConfig.from_env_and_secrets(environment)
+            upload_session_handler = build_mail_upload_session_handler(
+                upload_session_store=UploadSessionStore(config.data_dir),
+                audit_store=FileAuditLogStore(config.data_dir),
+                expires_at_provider=lambda: "2030-01-01T00:00:00+00:00",
+            )
+            with patch.object(runtime_module.PostgreSQLOAuthRepository, "connect",
+                              return_value=_FakeRepository()):
+                runtime = await ConnectedRuntime.compose(
+                    config,
+                    semantic_gateway=SemanticMcpGateway(
+                        upload_session_handler=upload_session_handler,
+                        retrieval_handler=retrieval_handler,
+                    ),
+                    http_client=_FakeHttpClient())
+            runtime.preflight = AsyncMock(return_value={"status": "ready"})
+            principal = OAuthPrincipal(user_id=SYNTHETIC_REQUESTER_USER_ID,
+                external_identity_id="extid_snippet_evidence", oauth_client_id="chatgpt_closed_beta",
+                token_session_id="oauthsid_snippet_evidence", scopes=("formowl.use",),
+                resource=config.oauth.resource)
+            timestamp = "2026-08-27T00:00:00+00:00"
+            actor = ActorContext(
+                user=User(user_id=SYNTHETIC_REQUESTER_USER_ID, display_name="Synthetic evaluation owner",
+                          status="active", created_at=timestamp),
+                session_identity=SessionIdentity(session_id=principal.token_session_id,
+                    selected_user_id=SYNTHETIC_REQUESTER_USER_ID, selected_at=timestamp,
+                    selection_method="google_oidc_oauth"),
+                workspace_memberships=[WorkspaceMember(user_id=SYNTHETIC_REQUESTER_USER_ID,
+                    workspace_id=SYNTHETIC_WORKSPACE_ID, role="owner")],
+                current_workspace_id=SYNTHETIC_WORKSPACE_ID,
+                current_workspace_role="owner", external_identity_id=principal.external_identity_id,
+                oauth_client_id=principal.oauth_client_id, oauth_token_session_id=principal.token_session_id,
+                auth_mode="google_oidc_oauth", production_authentication=True)
+            try:
+                with (patch.object(runtime.bridge, "authenticate_access_token", return_value=principal),
+                      patch.object(runtime.bridge, "resolve_actor_context", return_value=actor),
+                      patch.object(runtime.bridge, "record_mcp_authorization_decision", return_value=None),
+                      TestClient(runtime.application.app, raise_server_exceptions=False) as client):
+                    headers = {"Authorization": "Bearer synthetic.token",
+                               "Accept": "application/json, text/event-stream",
+                               "MCP-Protocol-Version": LATEST_PROTOCOL_VERSION}
+                    def call(query: str) -> dict:
+                        return client.post("/mcp", headers=headers, json={
+                            "jsonrpc": "2.0", "id": "structured", "method": "tools/call",
+                            "params": {"name": "query_effective_graph_view", "arguments": {
+                                "query_text": query}}}).json()["result"]
+                    first = call("SUPPLIER-ALPHA-01")
+                    self.assertFalse(first["isError"])
+                    data = first["structuredContent"]["data"]
+                    validate_public_gateway_payload(data)
+                    answer = data["answer"]
+                    self.assertEqual(answer["status"], "answered")
+                    self.assertTrue(answer["citation_count"])
+                    evidence = data["evidence"]
+                    self.assertGreaterEqual(len(evidence), 2)
+                    self.assertLessEqual(len(evidence), 10)
+                    self.assertTrue(all(len(item["snippet"]) <= 400 for item in evidence))
+                    expected_lineages = {
+                        sha256_json(observation.to_dict()): next(
+                            lineage.lineage_fingerprint
+                            for lineage in session.occurrence_lineages
+                            if lineage.source_observation_id == observation.observation_id
+                        )
+                        for observation in (evidence_source, second_source)
+                    }
+                    projected_hashes = {item["citation_hash"] for item in evidence}
+                    self.assertTrue(set(expected_lineages) <= projected_hashes)
+                    for item in evidence:
+                        self.assertIn(item["citation_hash"], data["citations"])
+                        if item["citation_hash"] in expected_lineages:
+                            self.assertEqual(
+                                item["occurrence_lineage_fingerprint"],
+                                expected_lineages[item["citation_hash"]],
+                            )
+                    self.assertEqual(answer["citation_count"], len(data["citations"]))
+                    self.assertNotIn("/private/runtime/mail.pst", str(data))
+                    self.assertNotIn("tenant_id", str(data))
+                    second = call("UNMATCHED-EVIDENCE-999")
+                    self.assertFalse(second["isError"])
+                    data = second["structuredContent"]["data"]
+                    answer = data["answer"]
+                    self.assertEqual(answer["status"], "unsupported")
+                    self.assertEqual(data["evidence"], [])
+            finally:
+                await runtime.aclose()
+
     def test_participant_authorization_extends_lineage_without_reindexing(self) -> None:
         from formowl_mail import (
             build_authorized_semantic_mail_session,

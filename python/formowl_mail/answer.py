@@ -86,6 +86,7 @@ def render_governed_evidence_answer(
     result: GovernedHybridRagResult | GovernedSemanticExecutionResult,
     *,
     budget: EvidenceAnswerBudget = EvidenceAnswerBudget(),
+    evidence_count: int = 0,
 ) -> GovernedEvidenceAnswer:
     """Render one shared deterministic answer from authorized result metadata."""
 
@@ -101,11 +102,15 @@ def render_governed_evidence_answer(
     else:
         raise ContractValidationError("unsupported governed answer input")
 
+    if not isinstance(evidence_count, int) or isinstance(evidence_count, bool) or evidence_count < 0:
+        raise ContractValidationError("answer evidence count is invalid")
     selected_citations = citation_hashes[: budget.max_citations]
     answer_status, answer_text = _answer_text(
         result_status=result.status,
         citation_count=len(selected_citations),
         exact_count=exact_count,
+        query_class=result.query_class,
+        evidence_count=evidence_count,
     )
     if len(answer_text) > budget.max_answer_characters:
         raise ContractValidationError("answer exceeded pinned character budget")
@@ -161,12 +166,21 @@ def _answer_text(
     result_status: str,
     citation_count: int,
     exact_count: int | None,
+    query_class: str,
+    evidence_count: int,
 ) -> tuple[str, str]:
     if result_status == "permission_denied":
         return (
             "permission_denied",
             "Permission denied for requested evidence.",
         )
+    if query_class == "evidence_lookup":
+        if evidence_count:
+            return (
+                "answered",
+                f"Supported: {evidence_count} authorized evidence snippet(s).",
+            )
+        return ("unsupported", "Authorized evidence snippets are unavailable.")
     if result_status == "complete_authorized_scope" and exact_count is not None:
         if exact_count == 0:
             return (
