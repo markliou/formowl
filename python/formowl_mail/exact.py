@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from formowl_contract import ContractValidationError, sha256_json
@@ -147,33 +148,85 @@ class SourceOccurrenceProvider:
     redacted_count: int = 0
     duplicate_policy: str = "preserve_source_occurrence_v1"
 
+    def __post_init__(self) -> None:
+        ordered_occurrences = tuple(
+            sorted(self.occurrences, key=lambda value: value.item_hash)
+        )
+        postings: dict[str, list[int]] = {}
+        normalized_variants: dict[str, set[str]] = {}
+        for position, item in enumerate(ordered_occurrences):
+            occurrence_value_hashes: set[str] = set()
+            for normalized_hash, variant_hash, _, _ in item.value_bindings:
+                occurrence_value_hashes.update((normalized_hash, variant_hash))
+                normalized_variants.setdefault(normalized_hash, set()).add(
+                    variant_hash
+                )
+            for value_hash in occurrence_value_hashes:
+                postings.setdefault(value_hash, []).append(position)
+        object.__setattr__(
+            self,
+            "_provider_fingerprint",
+            sha256_json(
+                {
+                    "contract": [
+                        self.provider_id,
+                        self.inventory_kind_alias,
+                        self.resource_kind,
+                        self.normalized_field,
+                        self.predicate,
+                        self.operator,
+                        self.requester_user_id,
+                        self.workspace_id,
+                        *self.source_scope_ids,
+                        self.authorized_scope_fingerprint,
+                        self.duplicate_policy,
+                    ],
+                    "occurrences": [
+                        [
+                            item.item_hash,
+                            [list(binding) for binding in item.value_bindings],
+                        ]
+                        for item in self.occurrences
+                    ],
+                    "counts": [
+                        self.unresolved_count,
+                        self.unsupported_count,
+                        self.redacted_count,
+                    ],
+                }
+            ),
+        )
+        object.__setattr__(self, "_ordered_occurrences", ordered_occurrences)
+        object.__setattr__(
+            self,
+            "_value_hash_postings",
+            MappingProxyType(
+                {
+                    value_hash: tuple(postings[value_hash])
+                    for value_hash in sorted(postings)
+                }
+            ),
+        )
+        object.__setattr__(
+            self,
+            "_normalized_variant_hashes",
+            MappingProxyType(
+                {
+                    normalized_hash: frozenset(
+                        normalized_variants[normalized_hash]
+                    )
+                    for normalized_hash in sorted(normalized_variants)
+                }
+            ),
+        )
+
     @property
     def provider_fingerprint(self) -> str:
-        return sha256_json(
-            {
-                "contract": [
-                    self.provider_id,
-                    self.inventory_kind_alias,
-                    self.resource_kind,
-                    self.normalized_field,
-                    self.predicate,
-                    self.operator,
-                    self.requester_user_id,
-                    self.workspace_id,
-                    *self.source_scope_ids,
-                    self.authorized_scope_fingerprint,
-                    self.duplicate_policy,
-                ],
-                "occurrences": [
-                    [
-                        item.item_hash,
-                        [list(binding) for binding in item.value_bindings],
-                    ]
-                    for item in self.occurrences
-                ],
-                "counts": [self.unresolved_count, self.unsupported_count, self.redacted_count],
-            }
-        )
+        return self._provider_fingerprint
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> SourceOccurrenceProvider:
+        memo[id(self)] = self
+        return self
 
 
 def authorized_source_occurrence_scope_fingerprint(
@@ -222,45 +275,42 @@ def execute_deterministic_source_occurrence_inventory(
         or not 1 <= page_size <= 100
     ):
         raise ContractValidationError("source occurrence exact binding is invalid")
+    plan_fingerprint = plan.plan_fingerprint
     provider_fingerprint = provider.provider_fingerprint
-    query_hashes = set(plan.exact_identifier_term_hashes)
-    provider_value_hashes = {
-        value_hash
-        for item in provider.occurrences
-        for binding in item.value_bindings
-        for value_hash in binding[:2]
-    }
-    if not query_hashes <= provider_value_hashes:
+    query_hashes = frozenset(plan.exact_identifier_term_hashes)
+    if not all(
+        query_hash in provider._value_hash_postings for query_hash in query_hashes
+    ):
         raise ContractValidationError(
             "source occurrence identifier binding is incomplete"
         )
-    matched = tuple(
-        item
-        for item in sorted(provider.occurrences, key=lambda value: value.item_hash)
-        if query_hashes
-        & {
-            value_hash
-            for binding in item.value_bindings
-            for value_hash in binding[:2]
-        }
+    matched_positions = tuple(
+        sorted(
+            {
+                position
+                for query_hash in query_hashes
+                for position in provider._value_hash_postings[query_hash]
+            }
+        )
     )
-    local_query_hashes = query_hashes & {
-        binding[0] for item in matched for binding in item.value_bindings
-    }
-    variants = {
-        query_hash: {
-            variant_hash
-            for item in matched
-            for normalized_hash, variant_hash, _, _ in item.value_bindings
-            if normalized_hash == query_hash
-        }
+    matched = tuple(
+        provider._ordered_occurrences[position] for position in matched_positions
+    )
+    local_query_hashes = frozenset(
+        query_hash
+        for query_hash in query_hashes
+        if query_hash in provider._normalized_variant_hashes
+    )
+    ambiguous = {
+        query_hash
         for query_hash in local_query_hashes
+        if len(provider._normalized_variant_hashes[query_hash]) > 1
     }
-    ambiguous = {query_hash for query_hash, values in variants.items() if len(values) > 1}
     offset = _source_occurrence_cursor_offset(
         cursor,
-        plan=plan,
-        provider=provider,
+        plan_fingerprint=plan_fingerprint,
+        provider_fingerprint=provider_fingerprint,
+        authorized_scope_fingerprint=provider.authorized_scope_fingerprint,
         page_size=page_size,
     )
     if offset > len(matched):
@@ -268,51 +318,50 @@ def execute_deterministic_source_occurrence_inventory(
     selected = matched[offset : offset + page_size]
     next_offset = offset + len(selected)
     next_cursor = (
-        _source_occurrence_cursor(next_offset, plan=plan, provider=provider, page_size=page_size)
+        _source_occurrence_cursor(
+            next_offset,
+            plan_fingerprint=plan_fingerprint,
+            provider_fingerprint=provider_fingerprint,
+            authorized_scope_fingerprint=provider.authorized_scope_fingerprint,
+            page_size=page_size,
+        )
         if next_offset < len(matched)
         else None
     )
-    items = tuple(
-        ExactInventoryItem(
-            item_hash=item.item_hash,
-            cited_observation_hashes=tuple(
-                sorted(
-                    {
-                        citation_hash
-                        for normalized_hash, variant_hash, citation_hash, _ in item.value_bindings
-                        if normalized_hash in query_hashes or variant_hash in query_hashes
-                    }
-                )
-            ),
-            governed_references=tuple(
-                sorted(
-                    {
-                        (citation_hash, lineage_fingerprint)
-                        for (
-                            normalized_hash,
-                            variant_hash,
-                            citation_hash,
-                            lineage_fingerprint,
-                        ) in item.value_bindings
-                        if normalized_hash in query_hashes or variant_hash in query_hashes
-                    }
-                )
-            ),
-            matched_normalized_value_hashes=tuple(
-                sorted(
-                    {
-                        normalized_hash
-                        for normalized_hash, variant_hash, _, _ in item.value_bindings
-                        if normalized_hash in query_hashes or variant_hash in query_hashes
-                    }
-                )
-            ),
-            ambiguous_identifier=bool(
-                {binding[0] for binding in item.value_bindings} & ambiguous
+    projected_items: list[ExactInventoryItem] = []
+    for item in selected:
+        citation_hashes: set[str] = set()
+        governed_references: set[tuple[str, str]] = set()
+        matched_normalized_hashes: set[str] = set()
+        matched_ambiguous = False
+        for (
+            normalized_hash,
+            variant_hash,
+            citation_hash,
+            lineage_fingerprint,
+        ) in item.value_bindings:
+            if (
+                normalized_hash not in query_hashes
+                and variant_hash not in query_hashes
+            ):
+                continue
+            citation_hashes.add(citation_hash)
+            governed_references.add((citation_hash, lineage_fingerprint))
+            matched_normalized_hashes.add(normalized_hash)
+            if normalized_hash in ambiguous:
+                matched_ambiguous = True
+        projected_items.append(
+            ExactInventoryItem(
+                item_hash=item.item_hash,
+                cited_observation_hashes=tuple(sorted(citation_hashes)),
+                governed_references=tuple(sorted(governed_references)),
+                matched_normalized_value_hashes=tuple(
+                    sorted(matched_normalized_hashes)
+                ),
+                ambiguous_identifier=matched_ambiguous,
             ),
         )
-        for item in selected
-    )
+    items = tuple(projected_items)
     incomplete = provider.unresolved_count + provider.unsupported_count + provider.redacted_count
     status = "complete_authorized_scope" if incomplete == 0 else "incomplete"
     coverage_status = (
@@ -326,7 +375,7 @@ def execute_deterministic_source_occurrence_inventory(
         () if incomplete == 0 else (sha256_json("source_occurrence_provider_incomplete"),)
     )
     coverage_payload = [
-        plan.plan_fingerprint,
+        plan_fingerprint,
         provider_fingerprint,
         len(matched),
         len(items),
@@ -354,7 +403,7 @@ def execute_deterministic_source_occurrence_inventory(
     result = DeterministicExactExecutionResult(
         status=status,
         query_hash=plan.query_hash,
-        plan_fingerprint=plan.plan_fingerprint,
+        plan_fingerprint=plan_fingerprint,
         operation_hash=sha256_json(plan.exact_operation),
         inventory_kind_hash=sha256_json(plan.exact_inventory_kind),
         exact_count=len(matched),
@@ -385,15 +434,16 @@ def execute_deterministic_source_occurrence_inventory(
 def _source_occurrence_cursor(
     offset: int,
     *,
-    plan: SemanticQueryPlan,
-    provider: SourceOccurrenceProvider,
+    plan_fingerprint: str,
+    provider_fingerprint: str,
+    authorized_scope_fingerprint: str,
     page_size: int,
 ) -> str:
     digest = sha256_json(
         [
-            plan.plan_fingerprint,
-            provider.provider_fingerprint,
-            provider.authorized_scope_fingerprint,
+            plan_fingerprint,
+            provider_fingerprint,
+            authorized_scope_fingerprint,
             page_size,
             offset,
         ]
@@ -404,8 +454,9 @@ def _source_occurrence_cursor(
 def _source_occurrence_cursor_offset(
     cursor: str | None,
     *,
-    plan: SemanticQueryPlan,
-    provider: SourceOccurrenceProvider,
+    plan_fingerprint: str,
+    provider_fingerprint: str,
+    authorized_scope_fingerprint: str,
     page_size: int,
 ) -> int:
     if cursor is None:
@@ -421,8 +472,9 @@ def _source_occurrence_cursor_offset(
         or cursor
         != _source_occurrence_cursor(
             offset,
-            plan=plan,
-            provider=provider,
+            plan_fingerprint=plan_fingerprint,
+            provider_fingerprint=provider_fingerprint,
+            authorized_scope_fingerprint=authorized_scope_fingerprint,
             page_size=page_size,
         )
     ):

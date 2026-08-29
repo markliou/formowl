@@ -9,6 +9,27 @@ This is a bounded active window. Earlier entries are immutable history under
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
+## 2026-08-29 — Actual-user participant inventory passes with incomplete coverage
+- An actual-user request ran through `ConnectedRuntime`, OAuth, and normal ASGI
+  `/mcp` using the generic typed participant-any inventory. The raw request is
+  not retained; its request fingerprint is
+  `sha256:ace0484e2706d363d53a4733e269e1c0814fc9629d5ad8ebf2f1a645f4621d1d`.
+- The run completed `21` cursor pages with returned/total/union
+  `2069/2069/2069`, duplicate count `0`, and `2086` governed
+  references/citations. Per-page HTTP latency was `260.323–319.288 ms`, total
+  query HTTP time was `6415.888 ms`, and compose/load took `600090.276 ms`.
+- Coverage remains `incomplete`. The full permission-authorized scope is
+  `2793`: `2069` matches, `174` proven nonmatches, and `550` unresolved
+  occurrences; unsupported/redacted are `0/0`. The source gap is primarily
+  legacy or malformed participant evidence that the standard parser cannot
+  recover, so neither “all” nor production readiness is supported.
+- The conversation-closure experiment was removed. This run did not use the
+  `317` oracle; that count belongs to a different private prompt and cannot be
+  compared with this request.
+- Final scoped pinned-E5 verification passed `62` tests with `0` skipped.
+  `authority_valid=true` and `methodology_ready=false`; execution fingerprint is
+  `sha256:78cebbb2af8c6e4bcde3f2819436c6f62bd34e957f381dff610bf8a0a477711d`.
+  The same four gates remain blocked, and Work D remains unchecked.
 ## 2026-08-28 — Direct-source deterministic inventory remains incomplete
 - The generic direct-source business-identifier deterministic inventory now
   traverses normal ASGI `/mcp` with typed intent, query-hash provider

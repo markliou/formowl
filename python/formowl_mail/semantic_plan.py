@@ -644,9 +644,10 @@ def _validate_query_class_shape(
     supported_relation_types: Sequence[str],
 ) -> None:
     supported = set(supported_relation_types)
-    visible_node_ids = {node.node_id for node in effective_graph_view.visible_nodes}
-    if not set(plan.seed_node_ids).issubset(visible_node_ids):
-        raise ContractValidationError("semantic query seed scope is unavailable")
+    if plan.seed_node_ids:
+        visible_node_ids = {node.node_id for node in effective_graph_view.visible_nodes}
+        if not set(plan.seed_node_ids).issubset(visible_node_ids):
+            raise ContractValidationError("semantic query seed scope is unavailable")
     if plan.query_class == "relation_reasoning":
         if plan.max_hops < 1 or not plan.allowed_paths:
             raise ContractValidationError("relation reasoning requires bounded paths")

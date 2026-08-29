@@ -232,12 +232,17 @@ class Issue56SourceNeutralObservationIndexEndToEndTests(unittest.TestCase):
             )
 
     def test_exact_inventory_plan_is_pinned_to_github_source(self) -> None:
+        class NonIterableVisibleNodes(list[object]):
+            def __iter__(self):
+                raise AssertionError("seedless exact plans must not scan graph nodes")
+
+        view = replace(_view(), visible_nodes=NonIterableVisibleNodes())
         plan = route_semantic_query(
             query_text="How many issue records are in the complete inventory?",
             requester_user_id=REQUESTER_ID,
             workspace_id=WORKSPACE_ID,
             source_scope_ids=(PROJECT_SCOPE_ID,),
-            effective_graph_view=_view(),
+            effective_graph_view=view,
             exact_inventory_kind="project_observation",
             authorized_source=self.source,
         )
@@ -248,7 +253,7 @@ class Issue56SourceNeutralObservationIndexEndToEndTests(unittest.TestCase):
         self.assertEqual(
             validate_semantic_query_plan(
                 plan,
-                effective_graph_view=_view(),
+                effective_graph_view=view,
                 authorized_workspace_id=WORKSPACE_ID,
                 authorized_source_scope_ids=(PROJECT_SCOPE_ID,),
                 supported_relation_types=(),

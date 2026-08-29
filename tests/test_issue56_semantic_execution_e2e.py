@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from copy import deepcopy
+from dataclasses import asdict, fields, FrozenInstanceError, replace
 import inspect
 import json
 import math
@@ -40,6 +41,7 @@ from formowl_mail import (
     validate_semantic_query_plan,
 )
 from formowl_mail import hybrid as hybrid_module
+from formowl_mail import exact as exact_module
 from formowl_mail.exact import (
     AuthorizedSourceOccurrence,
     SourceOccurrenceProvider,
@@ -840,6 +842,208 @@ class Issue56SemanticExecutionEndToEndTests(unittest.TestCase):
         self.assertEqual(exact.returned_item_count, 1)
         self.assertTrue(exact.coverage.authorized_scope_complete)
 
+    def test_typed_participant_slots_preserve_complete_dot_atom_identifiers(
+        self,
+    ) -> None:
+        with patch(
+            "formowl_mail.hybrid._load_pinned_issue56_runtime_components",
+            return_value=self.runtime,
+        ):
+            session = build_authorized_semantic_mail_session(
+                observations_by_bundle_id=self.inputs.observations_by_bundle_id,
+                bundles=(self.inputs.current_bundle,),
+                requester_user_id=REQUESTER_USER_ID,
+                workspace_id=WORKSPACE_ID,
+            )
+        normalized_field = "participant.any.local_part"
+        local_parts = ("alpha.beta+tag", "gamma.delta%ops")
+        query_text = f"列出全部 {' '.join(local_parts)} 郵件"
+        local_hashes = tuple(
+            sha256_json(
+                self.runtime.tokenizer_profile.normalize_exact_identifier_surface(
+                    value
+                )
+            )
+            for value in local_parts
+        )
+        expected_hashes = tuple(sorted(local_hashes))
+        slots = hybrid_module._deterministic_exact_filter_slots(
+            query_text,
+            tokenizer_profile=self.runtime.tokenizer_profile,
+            exact_inventory_kind="mail_observation",
+            exact_field=normalized_field,
+        )
+        self.assertEqual(slots.identifier_hashes, expected_hashes)
+        unrelated_identifier = "ORDER-9001"
+        unrelated_hash = sha256_json(
+            self.runtime.tokenizer_profile.normalize_exact_identifier_surface(
+                unrelated_identifier
+            )
+        )
+        single_participant_query = (
+            f"列出全部 {local_parts[0]} {unrelated_identifier} 郵件"
+        )
+        single_participant_slots = hybrid_module._deterministic_exact_filter_slots(
+            single_participant_query,
+            tokenizer_profile=self.runtime.tokenizer_profile,
+            exact_inventory_kind="mail_observation",
+            exact_field=normalized_field,
+        )
+        self.assertEqual(single_participant_slots.identifier_hashes, (local_hashes[0],))
+        self.assertIn(unrelated_hash, single_participant_slots.topic_hashes)
+        self.assertEqual(
+            hybrid_module._deterministic_exact_filter_slots(
+                query_text,
+                tokenizer_profile=self.runtime.tokenizer_profile,
+                exact_inventory_kind="mail_observation",
+            ),
+            hybrid_module._deterministic_exact_filter_slots(
+                query_text,
+                tokenizer_profile=self.runtime.tokenizer_profile,
+            ),
+        )
+
+        full_address = f"{local_parts[0]}@example.test"
+        full_address_hash = sha256_json(
+            self.runtime.tokenizer_profile.normalize_exact_identifier_surface(
+                full_address
+            )
+        )
+        self.assertEqual(
+            hybrid_module._deterministic_exact_filter_slots(
+                f"查詢 {full_address} 郵件",
+                tokenizer_profile=self.runtime.tokenizer_profile,
+                exact_inventory_kind="mail_observation",
+                exact_field=normalized_field,
+            ).identifier_hashes,
+            (full_address_hash,),
+        )
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "typed participant identifier slot is unavailable",
+        ):
+            hybrid_module._deterministic_exact_filter_slots(
+                "review status. next step",
+                tokenizer_profile=self.runtime.tokenizer_profile,
+                exact_inventory_kind="mail_observation",
+                exact_field=normalized_field,
+            )
+
+        authorized_hash_by_id = dict(session.authorized_observation_hashes)
+        lineages_by_occurrence = {}
+        for lineage in session.occurrence_lineages:
+            if (
+                lineage.source_observation_id in authorized_hash_by_id
+                and lineage.occurrence_id not in lineages_by_occurrence
+            ):
+                lineages_by_occurrence[lineage.occurrence_id] = lineage
+        selected_lineages = tuple(lineages_by_occurrence.values())[:2]
+        self.assertEqual(len(selected_lineages), 2)
+        scope_fingerprint = authorized_source_occurrence_scope_fingerprint(
+            requester_user_id=session.requester_user_id,
+            workspace_id=session.workspace_id,
+            source_scope_ids=session.authorized_source_scope_ids,
+            authorized_observation_hashes=session.authorized_observation_hashes,
+            source_session_binding_fingerprint=(
+                session.source_session_binding_fingerprint or ""
+            ),
+        )
+        provider = SourceOccurrenceProvider(
+            provider_id="mail_source_occurrence_provider_v1",
+            inventory_kind_alias="mail_observation",
+            resource_kind="mail_message_occurrence",
+            normalized_field=normalized_field,
+            predicate="source_occurrence_involves",
+            operator="case_insensitive_exact",
+            requester_user_id=session.requester_user_id,
+            workspace_id=session.workspace_id,
+            source_scope_ids=session.authorized_source_scope_ids,
+            authorized_scope_fingerprint=scope_fingerprint,
+            occurrences=tuple(
+                AuthorizedSourceOccurrence(
+                    item_hash=sha256_json(["participant-occurrence", index]),
+                    value_bindings=(
+                        (
+                            local_hashes[index],
+                            sha256_json(f"{local_parts[index]}@example.test"),
+                            authorized_hash_by_id[lineage.source_observation_id],
+                            lineage.lineage_fingerprint,
+                        ),
+                    ),
+                )
+                for index, lineage in enumerate(selected_lineages)
+            ),
+        )
+        routed_session = replace(
+            session,
+            source_occurrence_providers=(provider,),
+        )
+        with patch.object(
+            hybrid_module,
+            "route_semantic_query",
+            wraps=hybrid_module.route_semantic_query,
+        ) as route:
+            single_result = routed_session.query(
+                query_text=single_participant_query,
+                effective_graph_view=self.inputs.effective_graph_view,
+                exact_inventory_kind="mail_observation",
+                exact_field=normalized_field,
+            )
+        assert route.call_args is not None
+        self.assertEqual(
+            route.call_args.kwargs["exact_identifier_term_hashes"],
+            (local_hashes[0],),
+        )
+        self.assertEqual(
+            route.call_args.kwargs["exact_filter_term_hashes"],
+            (local_hashes[0],),
+        )
+        assert single_result.exact_result is not None
+        self.assertEqual(single_result.exact_result.exact_count, 1)
+        result = routed_session.query(
+            query_text=query_text,
+            effective_graph_view=self.inputs.effective_graph_view,
+            exact_inventory_kind="mail_observation",
+            exact_field=normalized_field,
+            page_size=100,
+        )
+        exact_result = result.exact_result
+        assert exact_result is not None
+        self.assertEqual(exact_result.exact_count, 2)
+        self.assertEqual(
+            {
+                matched_hash
+                for item in exact_result.items
+                for matched_hash in item.matched_normalized_value_hashes
+            },
+            set(expected_hashes),
+        )
+        full_result = routed_session.query(
+            query_text=f"查詢 {full_address} 郵件",
+            effective_graph_view=self.inputs.effective_graph_view,
+            exact_inventory_kind="mail_observation",
+            exact_field=normalized_field,
+        )
+        assert full_result.exact_result is not None
+        self.assertEqual(full_result.exact_result.exact_count, 1)
+        self.assertFalse(full_result.exact_result.items[0].ambiguous_identifier)
+
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "source occurrence identifier binding is incomplete",
+        ):
+            replace(
+                routed_session,
+                source_occurrence_providers=(
+                    replace(provider, occurrences=(provider.occurrences[0],)),
+                ),
+            ).query(
+                query_text=query_text,
+                effective_graph_view=self.inputs.effective_graph_view,
+                exact_inventory_kind="mail_observation",
+                exact_field=normalized_field,
+            )
+
     def test_source_occurrence_exact_matches_local_or_full_binding_dimension(
         self,
     ) -> None:
@@ -852,6 +1056,18 @@ class Issue56SemanticExecutionEndToEndTests(unittest.TestCase):
         citation_hashes = (sha256_json("citation-one"), sha256_json("citation-two"))
         lineage_hashes = (sha256_json("lineage-one"), sha256_json("lineage-two"))
         scope_fingerprint = sha256_json("authorized-source-scope")
+        first_binding = (
+            local_hash,
+            variant_hashes[0],
+            citation_hashes[0],
+            lineage_hashes[0],
+        )
+        second_binding = (
+            local_hash,
+            variant_hashes[1],
+            citation_hashes[1],
+            lineage_hashes[1],
+        )
         provider = SourceOccurrenceProvider(
             provider_id="mail_source_occurrence_provider_v1",
             inventory_kind_alias="mail_observation",
@@ -863,62 +1079,178 @@ class Issue56SemanticExecutionEndToEndTests(unittest.TestCase):
             workspace_id=WORKSPACE_ID,
             source_scope_ids=source_scope_ids,
             authorized_scope_fingerprint=scope_fingerprint,
-            occurrences=tuple(
+            occurrences=(
                 AuthorizedSourceOccurrence(
-                    item_hash=sha256_json(["occurrence", index]),
-                    value_bindings=(
-                        (
-                            local_hash,
-                            variant_hash,
-                            citation_hash,
-                            lineage_hash,
-                        ),
-                    ),
-                )
-                for index, (variant_hash, citation_hash, lineage_hash) in enumerate(
-                    zip(variant_hashes, citation_hashes, lineage_hashes, strict=True)
-                )
+                    item_hash=sha256_json(["occurrence", 0]),
+                    value_bindings=(first_binding, first_binding),
+                ),
+                AuthorizedSourceOccurrence(
+                    item_hash=sha256_json(["occurrence", 1]),
+                    value_bindings=(second_binding,),
+                ),
             ),
         )
+        expected_provider_fingerprint = sha256_json(
+            {
+                "contract": [
+                    provider.provider_id,
+                    provider.inventory_kind_alias,
+                    provider.resource_kind,
+                    provider.normalized_field,
+                    provider.predicate,
+                    provider.operator,
+                    provider.requester_user_id,
+                    provider.workspace_id,
+                    *provider.source_scope_ids,
+                    provider.authorized_scope_fingerprint,
+                    provider.duplicate_policy,
+                ],
+                "occurrences": [
+                    [
+                        item.item_hash,
+                        [list(binding) for binding in item.value_bindings],
+                    ]
+                    for item in provider.occurrences
+                ],
+                "counts": [
+                    provider.unresolved_count,
+                    provider.unsupported_count,
+                    provider.redacted_count,
+                ],
+            }
+        )
+        self.assertEqual(provider.provider_fingerprint, expected_provider_fingerprint)
+        expected_provider_fields = (
+            "provider_id",
+            "inventory_kind_alias",
+            "resource_kind",
+            "normalized_field",
+            "predicate",
+            "operator",
+            "requester_user_id",
+            "workspace_id",
+            "source_scope_ids",
+            "authorized_scope_fingerprint",
+            "occurrences",
+            "unresolved_count",
+            "unsupported_count",
+            "redacted_count",
+            "duplicate_policy",
+        )
+        self.assertEqual(
+            tuple(provider_field.name for provider_field in fields(provider)),
+            expected_provider_fields,
+        )
+        self.assertEqual(tuple(asdict(provider)), expected_provider_fields)
+        self.assertIs(deepcopy(provider), provider)
+        with self.assertRaises(FrozenInstanceError):
+            provider._provider_fingerprint = sha256_json("changed")
+        with self.assertRaises(TypeError):
+            provider._value_hash_postings[local_hash] = ()
+        with self.assertRaises(TypeError):
+            provider._ordered_occurrences[0] = provider.occurrences[1]
+        with self.assertRaises(AttributeError):
+            provider._normalized_variant_hashes[local_hash].add(
+                sha256_json("changed")
+            )
+        foreign_provider = replace(
+            provider,
+            provider_id="mail_source_occurrence_provider_foreign_v1",
+        )
 
-        def execute(query_hash: str, *, cursor: str | None = None):
+        def execute(
+            query_hashes: str | Sequence[str],
+            *,
+            cursor: str | None = None,
+            page_size: int = 1,
+            selected_provider: SourceOccurrenceProvider = provider,
+            query_text: str = "synthetic exact inventory",
+        ):
+            resolved_hashes = (
+                (query_hashes,) if isinstance(query_hashes, str) else tuple(query_hashes)
+            )
             plan = route_semantic_query(
-                query_text="synthetic exact inventory",
+                query_text=query_text,
                 requester_user_id=REQUESTER_USER_ID,
                 workspace_id=WORKSPACE_ID,
                 source_scope_ids=source_scope_ids,
                 effective_graph_view=self.inputs.effective_graph_view,
-                exact_inventory_kind=provider.resource_kind,
-                exact_filter_term_hashes=(query_hash,),
-                exact_identifier_term_hashes=(query_hash,),
-                exact_normalized_field=provider.normalized_field,
-                exact_predicate=provider.predicate,
-                exact_operator=provider.operator,
+                exact_inventory_kind=selected_provider.resource_kind,
+                exact_filter_term_hashes=resolved_hashes,
+                exact_identifier_term_hashes=resolved_hashes,
+                exact_normalized_field=selected_provider.normalized_field,
+                exact_predicate=selected_provider.predicate,
+                exact_operator=selected_provider.operator,
                 query_class_override="exact_set_or_inventory",
             )
             return execute_deterministic_source_occurrence_inventory(
                 plan=plan,
-                provider=provider,
+                provider=selected_provider,
                 expected_authorized_scope_fingerprint=scope_fingerprint,
-                page_size=1,
+                page_size=page_size,
                 cursor=cursor,
             )
 
-        first_local_page = execute(local_hash)
-        second_local_page = execute(
-            local_hash,
-            cursor=first_local_page.source_occurrence_page["next_cursor"],
-        )
+        with patch.object(
+            exact_module,
+            "sha256_json",
+            wraps=sha256_json,
+        ) as exact_sha256:
+            self.assertEqual(provider.provider_fingerprint, expected_provider_fingerprint)
+            first_local_page = execute(local_hash)
+            local_cursor = first_local_page.source_occurrence_page["next_cursor"]
+            second_local_page = execute(local_hash, cursor=local_cursor)
+            multi_result = execute(variant_hashes, page_size=100)
+            full_result = execute(variant_hashes[0])
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "source occurrence cursor binding mismatch",
+            ):
+                execute(local_hash, cursor=local_cursor, page_size=2)
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "source occurrence cursor binding mismatch",
+            ):
+                execute(
+                    local_hash,
+                    cursor=local_cursor,
+                    selected_provider=foreign_provider,
+                )
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "source occurrence cursor binding mismatch",
+            ):
+                execute(
+                    local_hash,
+                    cursor=local_cursor,
+                    query_text="synthetic exact inventory replay",
+                )
+            provider_fingerprint_calls = [
+                call
+                for call in exact_sha256.call_args_list
+                if call.args
+                and isinstance(call.args[0], dict)
+                and set(call.args[0]) == {"contract", "occurrences", "counts"}
+            ]
+            self.assertEqual(provider_fingerprint_calls, [])
+
         local_items = (*first_local_page.items, *second_local_page.items)
-        self.assertEqual({item.item_hash for item in local_items}, {
-            occurrence.item_hash for occurrence in provider.occurrences
-        })
+        self.assertEqual(
+            {item.item_hash for item in local_items},
+            {occurrence.item_hash for occurrence in provider.occurrences},
+        )
+        self.assertEqual(len(local_items), 2)
         self.assertTrue(all(item.ambiguous_identifier for item in local_items))
         self.assertTrue(
             all(item.matched_normalized_value_hashes == (local_hash,) for item in local_items)
         )
 
-        full_result = execute(variant_hashes[0])
+        self.assertEqual(multi_result.exact_count, 2)
+        self.assertEqual(multi_result.returned_item_count, 2)
+        self.assertEqual(
+            {item.item_hash for item in multi_result.items},
+            {occurrence.item_hash for occurrence in provider.occurrences},
+        )
         self.assertEqual(full_result.exact_count, 1)
         self.assertEqual(full_result.items[0].cited_observation_hashes, (citation_hashes[0],))
         self.assertEqual(
@@ -988,13 +1320,14 @@ class Issue56SemanticExecutionEndToEndTests(unittest.TestCase):
             *,
             matching_hash: str,
             same_thread_hash: str,
+            inventory_kind_alias: str = "source_identifier_observation",
             unresolved_count: int = 0,
         ) -> SourceOccurrenceProvider:
             return SourceOccurrenceProvider(
                 provider_id=(
                     "mail_message_occurrence_direct_source_identifier_provider_v1"
                 ),
-                inventory_kind_alias="source_identifier_observation",
+                inventory_kind_alias=inventory_kind_alias,
                 resource_kind="mail_message_occurrence",
                 normalized_field=normalized_field,
                 predicate="source_occurrence_has_identifier",
@@ -1041,6 +1374,7 @@ class Issue56SemanticExecutionEndToEndTests(unittest.TestCase):
             "participant.any.local_part",
             matching_hash=sha256_json("unrelated-participant"),
             same_thread_hash=sha256_json("unrelated-participant-peer"),
+            inventory_kind_alias="participant_local_part",
         )
         routed_session = replace(
             session,
@@ -1066,11 +1400,53 @@ class Issue56SemanticExecutionEndToEndTests(unittest.TestCase):
 
         typed_query_text = "DIRECT-CASE-1001 status"
         self.assertEqual(deterministic_query_class(typed_query_text), "evidence_lookup")
-        typed_result = routed_session.query(
-            query_text=typed_query_text,
-            effective_graph_view=self.inputs.effective_graph_view,
-            exact_inventory_kind="mail_message_occurrence",
-        )
+        with patch.object(
+            hybrid_module,
+            "_validate_hybrid_index_runtime",
+            side_effect=AssertionError("full candidate integrity validation invoked"),
+        ) as full_index_validation:
+            typed_result = routed_session.query(
+                query_text=typed_query_text,
+                effective_graph_view=self.inputs.effective_graph_view,
+                exact_inventory_kind=direct_provider.inventory_kind_alias,
+            )
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "source occurrence identifier binding is incomplete",
+            ):
+                replace(
+                    session,
+                    source_occurrence_providers=(
+                        replace(
+                            direct_provider,
+                            occurrences=(direct_provider.occurrences[0],),
+                        ),
+                        participant_provider,
+                    ),
+                ).query(
+                    query_text=multi_query_text,
+                    effective_graph_view=self.inputs.effective_graph_view,
+                    exact_inventory_kind=direct_provider.inventory_kind_alias,
+                )
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "source occurrence exact binding is invalid",
+            ):
+                replace(
+                    session,
+                    source_occurrence_providers=(
+                        replace(
+                            direct_provider,
+                            authorized_scope_fingerprint=sha256_json("foreign-scope"),
+                        ),
+                        participant_provider,
+                    ),
+                ).query(
+                    query_text=typed_query_text,
+                    effective_graph_view=self.inputs.effective_graph_view,
+                    exact_inventory_kind=direct_provider.inventory_kind_alias,
+                )
+        full_index_validation.assert_not_called()
         self.assertEqual(typed_result.query_class, "exact_set_or_inventory")
         typed_exact = typed_result.exact_result
         assert typed_exact is not None

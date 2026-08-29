@@ -12,6 +12,7 @@ from unittest import mock
 
 import _paths  # noqa: F401
 from formowl_contract import (
+    ContractValidationError,
     Observation,
     PermissionScope,
     SourceInventory,
@@ -69,6 +70,60 @@ class _PreparedPackage:
 
 
 class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
+    def test_typed_exact_request_fails_closed_without_exact_result(self) -> None:
+        loaded = mock.Mock()
+        loaded.safe_binding = {}
+        loaded.session.source_session_binding_fingerprint = sha256_json(
+            "source_session"
+        )
+        loaded.effective_graph_view.requester_user_id = sealed_source.APPROVER_ACTOR
+        loaded.effective_graph_view.visible_edges = (
+            mock.Mock(edge_id="source_edge", relation_type="source_backed"),
+        )
+        routed_session = mock.Mock(
+            requester_user_id=sealed_source.APPROVER_ACTOR,
+            workspace_id=sealed_source.WORKSPACE_ID,
+        )
+        routed_session.query.return_value = mock.Mock(exact_result=None)
+
+        with (
+            mock.patch.object(
+                gateway_loader,
+                "_load_approved_sealed_source",
+                return_value=loaded,
+            ),
+            mock.patch.object(
+                gateway_loader,
+                "_validated_owner_safe_binding",
+                return_value={},
+            ),
+            mock.patch.object(
+                gateway_loader,
+                "_build_mail_source_occurrence_providers",
+                return_value=(),
+            ),
+            mock.patch.object(
+                gateway_loader,
+                "replace",
+                return_value=routed_session,
+            ),
+        ):
+            handler = gateway_loader.build_issue56_production_semantic_retrieval_handler()
+
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "production exact inventory result is unavailable",
+        ):
+            handler(
+                {
+                    "query_text": "synthetic exact request",
+                    "requester_user_id": sealed_source.APPROVER_ACTOR,
+                    "session_id": "session",
+                    "workspace_id": sealed_source.WORKSPACE_ID,
+                    "exact_inventory_kind": "synthetic_exact_inventory",
+                }
+            )
+
     def test_sealed_package_builds_existing_session_graph_and_gateway_contract(
         self,
     ) -> None:
@@ -608,6 +663,7 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
                     query_text=f"list all {shared_identifier} messages",
                     effective_graph_view=loaded.effective_graph_view,
                     exact_inventory_kind="mail_message_occurrence",
+                    exact_field="message_occurrence.direct_source_identifier_v1",
                     page_size=100,
                     cursor=cursor,
                 )
@@ -688,15 +744,140 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
                         safe_binding=loaded.safe_binding,
                     )
 
+    def test_participant_mailbox_lists_are_strict_and_partitioned(self) -> None:
+        headers = {
+            1: {
+                "from": '"Display, One" <alpha@example.invalid>, beta@example.invalid',
+                "sender": "Sender Person <sender@example.invalid>",
+                "to": "Team: gamma@example.invalid, delta@example.invalid;",
+                "cc": "Copy Person <copy@example.invalid>",
+            },
+            2: {
+                "from": "clean@example.invalid",
+                "to": "valid@example.invalid, not-an-address",
+            },
+            3: {"from": "nonmatch@example.invalid"},
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package = _prepare_package(
+                Path(temp_dir),
+                participant_headers=headers,
+            )
+            loaded = sealed_source.load_issue56_sealed_source(
+                **_loader_kwargs(package),
+                include_participant_authorization_observations=True,
+            )
+            with mock.patch.dict(
+                os.environ,
+                _loader_environment(package),
+                clear=False,
+            ):
+                providers = gateway_loader._build_mail_source_occurrence_providers(
+                    loaded,
+                    safe_binding=loaded.safe_binding,
+                )
+
+            participants = {
+                provider.normalized_field: provider
+                for provider in providers
+                if provider.provider_id == "mail_source_occurrence_provider_v1"
+            }
+            authorized_count = len(
+                {lineage.occurrence_id for lineage in loaded.session.occurrence_lineages}
+            )
+            for provider in participants.values():
+                self.assertEqual(
+                    len(provider.occurrences) + provider.unresolved_count,
+                    authorized_count,
+                )
+            expected_addresses_by_field = {
+                "participant.from.local_part": {
+                    "alpha@example.invalid",
+                    "beta@example.invalid",
+                },
+                "participant.sender.local_part": {"sender@example.invalid"},
+                "participant.to.local_part": {
+                    "gamma@example.invalid",
+                    "delta@example.invalid",
+                },
+                "participant.cc.local_part": {"copy@example.invalid"},
+            }
+            authorized_by_hash = {
+                sha256_json(observation.to_dict()): observation
+                for observation in loaded.session.authorized_observations
+            }
+            for field, expected_addresses in expected_addresses_by_field.items():
+                expected_hashes = {sha256_json(address) for address in expected_addresses}
+                matching_bindings = {
+                    binding
+                    for occurrence in participants[field].occurrences
+                    for binding in occurrence.value_bindings
+                    if binding[1] in expected_hashes
+                }
+                self.assertEqual(
+                    {binding[1] for binding in matching_bindings},
+                    expected_hashes,
+                )
+                for _, _, citation_hash, lineage_fingerprint in matching_bindings:
+                    observation = authorized_by_hash[citation_hash]
+                    lineage = source_occurrence_lineage_from_observation(
+                        observation,
+                        authorized_source=loaded.session.authorized_source,
+                    )
+                    self.assertEqual(
+                        lineage.occurrence_id,
+                        "message_occurrence_0001",
+                    )
+                    self.assertEqual(
+                        lineage.lineage_fingerprint,
+                        lineage_fingerprint,
+                    )
+            hashes_by_field = {
+                field: {
+                    value_hash
+                    for occurrence in provider.occurrences
+                    for binding in occurrence.value_bindings
+                    for value_hash in binding[:2]
+                }
+                for field, provider in participants.items()
+            }
+            clean_hash = sha256_json("clean@example.invalid")
+            malformed_partial_hash = sha256_json("valid@example.invalid")
+            self.assertIn(clean_hash, hashes_by_field["participant.from.local_part"])
+            self.assertNotIn(clean_hash, hashes_by_field["participant.any.local_part"])
+            self.assertNotIn(
+                malformed_partial_hash,
+                hashes_by_field["participant.to.local_part"],
+            )
+            self.assertNotIn(
+                malformed_partial_hash,
+                hashes_by_field["participant.any.local_part"],
+            )
+            self.assertIn(
+                sha256_json("nonmatch@example.invalid"),
+                hashes_by_field["participant.from.local_part"],
+            )
+            self.assertNotIn(
+                sha256_json("display, one"),
+                hashes_by_field["participant.from.local_part"],
+            )
+            self.assertNotIn(
+                sha256_json("team"),
+                hashes_by_field["participant.to.local_part"],
+            )
+
+
 
 def _prepare_package(
     root: Path,
     *,
     shared_direct_identifier: str | None = None,
+    participant_headers: dict[int, dict[str, str]] | None = None,
 ) -> _PreparedPackage:
     fixture = _write_workspace_fixture(
         root / "source",
         shared_direct_identifier=shared_direct_identifier,
+        participant_headers=participant_headers,
     )
     work_dir = root / "materialized"
     materialized = materializer.materialize_development_uat_observations(
@@ -758,6 +939,7 @@ def _write_workspace_fixture(
     root: Path,
     *,
     shared_direct_identifier: str | None = None,
+    participant_headers: dict[int, dict[str, str]] | None = None,
 ) -> object:
     fixture = materializer_fixture._write_fixture(root, body_count=500)
     snapshot = deepcopy(fixture.snapshot)
@@ -803,6 +985,49 @@ def _write_workspace_fixture(
             row["location"]["source_inventory_item_id"]
         ]
         observations.append(Observation.from_dict(row))
+    message_by_ordinal = {
+        int(observation.observation_id.rsplit("_", 1)[1]): observation
+        for observation in observations
+        if observation.observation_type == "email_message"
+    }
+    for ordinal, headers in sorted((participant_headers or {}).items()):
+        message = message_by_ordinal[ordinal]
+        for header_index, (header_name, header_value) in enumerate(
+            sorted(headers.items()),
+            start=1,
+        ):
+            location = {
+                **message.location,
+                "header_index": header_index,
+                "header_name": header_name,
+            }
+            observations.append(
+                Observation.from_dict(
+                    {
+                        "observation_id": (
+                            f"obs_participant_header_{ordinal:04d}_{header_index:02d}"
+                        ),
+                        "asset_id": message.asset_id,
+                        "extractor_run_id": message.extractor_run_id,
+                        "observation_type": "email_header",
+                        "modality": "mail",
+                        "location": location,
+                        "text": f"{header_name}: {header_value}",
+                        "payload": {
+                            **location,
+                            "header_name": header_name,
+                            "header_value": header_value,
+                            "message_fingerprint": (message.payload or {})[
+                                "message_fingerprint"
+                            ],
+                            "canonical_fact_status": "not_asserted",
+                        },
+                        "confidence": 1.0,
+                        "permission_scope": message.permission_scope,
+                        "created_at": CREATED_AT,
+                    }
+                )
+            )
 
     bundle = build_mail_evidence_bundle(
         observations,
@@ -838,6 +1063,12 @@ def _write_workspace_fixture(
     snapshot["source_inventory_fingerprint"] = sha256_json(new_inventory.to_dict())
     snapshot["permission_fingerprint"] = sha256_json(WORKSPACE_PERMISSION_SCOPE.to_dict())
     snapshot["parsed_mail_observations"] = [observation.to_dict() for observation in observations]
+    added_header_count = len(observations) - len(
+        fixture.snapshot["parsed_mail_observations"]
+    )
+    snapshot["counts"]["parsed_header_observation_count"] += added_header_count
+    snapshot["counts"]["parsed_observation_count"] += added_header_count
+    snapshot["counts"]["retrieval_snapshot_observation_count"] += added_header_count
     snapshot["parsed_observation_fingerprint"] = sha256_json(snapshot["parsed_mail_observations"])
     snapshot["mail_evidence_bundle_fingerprint"] = bundle_artifact["bundle_fingerprint"]
     snapshot["snapshot_fingerprint"] = _payload_fingerprint(
@@ -846,6 +1077,7 @@ def _write_workspace_fixture(
     )
 
     report = deepcopy(fixture.retrieval_report)
+    report["counts"] = deepcopy(snapshot["counts"])
     report_bindings = {
         "source_snapshot_fingerprint": snapshot["source_snapshot_fingerprint"],
         "source_inventory_fingerprint": snapshot["source_inventory_fingerprint"],

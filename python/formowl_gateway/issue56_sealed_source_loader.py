@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import replace
-from email.utils import getaddresses
+from email.headerregistry import HeaderRegistry
 import hashlib
 import json
 import os
@@ -524,9 +524,21 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
             page_size=arguments.get("page_size", 20),
             cursor=arguments.get("cursor"),
         )
+        exact_result = result.exact_result
+        exact_inventory_kind = arguments.get("exact_inventory_kind")
+        if (
+            isinstance(exact_inventory_kind, str)
+            and exact_inventory_kind.strip()
+            and (
+                exact_result is None
+                or exact_result.source_occurrence_page is None
+            )
+        ):
+            raise ContractValidationError(
+                "production exact inventory result is unavailable"
+            )
         answer = render_governed_evidence_answer(result)
-        if result.exact_result is not None and result.exact_result.source_occurrence_page is not None:
-            exact_result = result.exact_result
+        if exact_result is not None and exact_result.source_occurrence_page is not None:
             page = exact_result.source_occurrence_page
             selected_providers = tuple(
                 provider
@@ -665,6 +677,7 @@ def _build_mail_source_occurrence_providers(
     }
     value_bindings = {field: {} for field in (any_field, *field_by_role.values())}
     unresolved_occurrence_ids = {field: set() for field in value_bindings}
+    mailbox_header_registry = HeaderRegistry()
     direct_identifier_bindings: dict[
         str,
         set[tuple[str, str, str, str]],
@@ -685,9 +698,11 @@ def _build_mail_source_occurrence_providers(
         role = str(payload.get("header_name", "")).casefold()
         if row.get("observation_type") == "email_header" and role in field_by_role:
             value = str(payload.get("header_value", ""))
+            mailbox_header_name = role
             fields = (any_field, field_by_role[role])
         elif row.get("observation_type") == "email_message":
             value = str(payload.get("sender", ""))
+            mailbox_header_name = "from"
             fields = (any_field,)
         else:
             continue
@@ -708,13 +723,22 @@ def _build_mail_source_occurrence_providers(
             raise ContractValidationError(
                 "production participant Observation binding is unauthorized"
             )
-        for _, address in getaddresses([value]):
-            try:
-                normalized_address = normalize_verified_email(address)
-            except ContractValidationError:
-                for field in fields:
-                    unresolved_occurrence_ids[field].add(str(occurrence_id))
-                continue
+        try:
+            parsed_header = mailbox_header_registry(mailbox_header_name, value)
+            parsed_addresses = tuple(parsed_header.addresses)
+            if parsed_header.defects or not parsed_addresses:
+                raise ContractValidationError(
+                    "participant mailbox list is incomplete"
+                )
+            normalized_addresses = tuple(
+                normalize_verified_email(address.addr_spec)
+                for address in parsed_addresses
+            )
+        except (AttributeError, ContractValidationError, TypeError, ValueError):
+            for field in fields:
+                unresolved_occurrence_ids[field].add(str(occurrence_id))
+            continue
+        for normalized_address in normalized_addresses:
             binding = (
                 sha256_json(normalized_address.split("@", 1)[0]),
                 sha256_json(normalized_address),
@@ -846,34 +870,45 @@ def _build_mail_source_occurrence_providers(
         authorized_observation_hashes=session.authorized_observation_hashes,
         source_session_binding_fingerprint=session.source_session_binding_fingerprint or "",
     )
-    participant_providers = tuple(
-        SourceOccurrenceProvider(
-            provider_id="mail_source_occurrence_provider_v1",
-            inventory_kind_alias="mail_observation",
-            resource_kind="mail_message_occurrence",
-            normalized_field=field,
-            predicate="source_occurrence_involves",
-            operator="case_insensitive_exact",
-            requester_user_id=session.requester_user_id,
-            workspace_id=session.workspace_id,
-            source_scope_ids=session.authorized_source_scope_ids,
-            authorized_scope_fingerprint=scope_fingerprint,
-            occurrences=tuple(
-                AuthorizedSourceOccurrence(
-                    item_hash=sha256_json(
-                        ["mail_message_occurrence", item_lineage_by_occurrence[occurrence_id]]
-                    ),
-                    value_bindings=tuple(sorted(bindings)),
-                )
-                for occurrence_id, bindings in sorted(bindings_by_occurrence.items())
-            ),
-            unresolved_count=len(
-                (authorized_occurrence_ids - set(bindings_by_occurrence))
-                | unresolved_occurrence_ids[field]
-            ),
+    participant_providers_list: list[SourceOccurrenceProvider] = []
+    for field, bindings_by_occurrence in value_bindings.items():
+        clean_bindings_by_occurrence = {
+            occurrence_id: bindings
+            for occurrence_id, bindings in bindings_by_occurrence.items()
+            if occurrence_id not in unresolved_occurrence_ids[field]
+        }
+        participant_providers_list.append(
+            SourceOccurrenceProvider(
+                provider_id="mail_source_occurrence_provider_v1",
+                inventory_kind_alias="mail_observation",
+                resource_kind="mail_message_occurrence",
+                normalized_field=field,
+                predicate="source_occurrence_involves",
+                operator="case_insensitive_exact",
+                requester_user_id=session.requester_user_id,
+                workspace_id=session.workspace_id,
+                source_scope_ids=session.authorized_source_scope_ids,
+                authorized_scope_fingerprint=scope_fingerprint,
+                occurrences=tuple(
+                    AuthorizedSourceOccurrence(
+                        item_hash=sha256_json(
+                            [
+                                "mail_message_occurrence",
+                                item_lineage_by_occurrence[occurrence_id],
+                            ]
+                        ),
+                        value_bindings=tuple(sorted(bindings)),
+                    )
+                    for occurrence_id, bindings in sorted(
+                        clean_bindings_by_occurrence.items()
+                    )
+                ),
+                unresolved_count=len(
+                    authorized_occurrence_ids - set(clean_bindings_by_occurrence)
+                ),
+            )
         )
-        for field, bindings_by_occurrence in value_bindings.items()
-    )
+    participant_providers = tuple(participant_providers_list)
     direct_identifier_provider = SourceOccurrenceProvider(
         provider_id=(
             "mail_message_occurrence_direct_source_identifier_provider_v1"

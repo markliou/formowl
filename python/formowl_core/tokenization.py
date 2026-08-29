@@ -251,6 +251,12 @@ class MailCandidateAdmissionTokenizerProfile:
 
         return set(self.analyze(value).tokens)
 
+    def normalize_exact_identifier_surface(self, value: str) -> str:
+        """Normalize one exact identifier with this profile's frozen policy."""
+
+        _require_text(value)
+        return _normalize_text(value, self.normalization_id).strip()
+
     def analyze(self, value: str) -> MailCandidateAdmissionTokenization:
         """Tokenize while retaining identifier spans admitted before segmentation."""
 

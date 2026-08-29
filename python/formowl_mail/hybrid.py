@@ -1515,6 +1515,34 @@ class _ExactFilterSlots:
         return tuple(sorted(set(self.identifier_hashes) | set(self.topic_hashes)))
 
 
+_PARTICIPANT_LOCAL_PART_FIELDS = frozenset(
+    {
+        "participant.any.local_part",
+        "participant.from.local_part",
+        "participant.sender.local_part",
+        "participant.to.local_part",
+        "participant.cc.local_part",
+    }
+)
+_RFC_DOT_ATOM_ATEXT = r"A-Za-z0-9!#$%&'*+/=?^_`{|}~\-"
+_RFC_DOT_ATOM_LOCAL_PART = (
+    rf"[{_RFC_DOT_ATOM_ATEXT}]+(?:\.[{_RFC_DOT_ATOM_ATEXT}]+)*"
+)
+_RFC_DNS_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_PARTICIPANT_ADDR_SPEC_SLOT_RE = re.compile(
+    rf"(?<![{_RFC_DOT_ATOM_ATEXT}.@])"
+    rf"{_RFC_DOT_ATOM_LOCAL_PART}@"
+    rf"{_RFC_DNS_LABEL}(?:\.{_RFC_DNS_LABEL})+"
+    rf"(?![{_RFC_DOT_ATOM_ATEXT}.@])"
+)
+_PARTICIPANT_LOCAL_PART_SLOT_RE = re.compile(
+    rf"(?<![{_RFC_DOT_ATOM_ATEXT}.@])"
+    rf"{_RFC_DOT_ATOM_LOCAL_PART}"
+    rf"(?![{_RFC_DOT_ATOM_ATEXT}.@])"
+)
+_DISTINCTIVE_RFC_ATEXT = frozenset("!#$%&'*+/=?^`{|}~")
+
+
 @dataclass(frozen=True)
 class AuthorizedHybridMailIndex:
     tokenizer_id: str
@@ -1943,6 +1971,15 @@ class AuthorizedSemanticMailSession:
             isinstance(value, str) and value.strip()
             for value in (exact_inventory_kind, exact_field)
         )
+        typed_exact_inventory_kind = (
+            isinstance(exact_inventory_kind, str)
+            and bool(exact_inventory_kind.strip())
+        )
+        typed_source_occurrence_kind = typed_exact_inventory_kind and any(
+            exact_inventory_kind
+            in {provider.inventory_kind_alias, provider.resource_kind}
+            for provider in self.source_occurrence_providers
+        )
         query_class = (
             "exact_set_or_inventory"
             if typed_exact_intent
@@ -1955,7 +1992,11 @@ class AuthorizedSemanticMailSession:
                 candidate_limit=max(1, min(12, limits.max_candidates)),
                 result_limit=max(1, min(5, limits.max_results)),
             )
-            _validate_hybrid_index_runtime(self.index)
+            (
+                _validate_hybrid_index_runtime_binding(self.index)
+                if typed_source_occurrence_kind
+                else _validate_hybrid_index_runtime(self.index)
+            )
             if effective_graph_view.requester_user_id != self.requester_user_id:
                 raise ContractValidationError("effective graph requester mismatch")
         except Exception:
@@ -2097,6 +2138,8 @@ class AuthorizedSemanticMailSession:
                 _deterministic_exact_filter_slots(
                     query_text,
                     tokenizer_profile=self.index._runtime_components.tokenizer_profile,
+                    exact_inventory_kind=exact_inventory_kind,
+                    exact_field=exact_field,
                 )
                 if query_class == "exact_set_or_inventory"
                 else _ExactFilterSlots()
@@ -2122,28 +2165,32 @@ class AuthorizedSemanticMailSession:
         assert isinstance(exact_slots, _ExactFilterSlots)
         exact_provider: SourceOccurrenceProvider | None = None
         if query_class == "exact_set_or_inventory" and self.source_occurrence_providers:
-            eligible_providers = tuple(
-                provider
-                for provider in self.source_occurrence_providers
-                if (
-                    exact_inventory_kind
-                    in {None, provider.inventory_kind_alias, provider.resource_kind}
+            if typed_exact_inventory_kind:
+                providers = tuple(
+                    provider
+                    for provider in self.source_occurrence_providers
+                    if exact_inventory_kind
+                    in {provider.inventory_kind_alias, provider.resource_kind}
+                    and (
+                        exact_field is None
+                        or provider.normalized_field == exact_field
+                    )
                 )
-            )
-            query_identifier_hashes = set(exact_slots.identifier_hashes)
-            providers = tuple(
-                provider
-                for provider in eligible_providers
-                if (
-                    exact_field is None
-                    or provider.normalized_field == exact_field
+            else:
+                query_identifier_hashes = set(exact_slots.identifier_hashes)
+                providers = tuple(
+                    provider
+                    for provider in self.source_occurrence_providers
+                    if (
+                        exact_field is None
+                        or provider.normalized_field == exact_field
+                    )
+                    and any(
+                        query_identifier_hashes.intersection(binding[:2])
+                        for occurrence in provider.occurrences
+                        for binding in occurrence.value_bindings
+                    )
                 )
-                and any(
-                    query_identifier_hashes.intersection(binding[:2])
-                    for occurrence in provider.occurrences
-                    for binding in occurrence.value_bindings
-                )
-            )
             if not providers:
                 raise ContractValidationError("source occurrence provider selection is invalid")
             if len(providers) > 1:
@@ -9218,16 +9265,82 @@ def _deterministic_exact_filter_slots(
     query_text: str,
     *,
     tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+    exact_inventory_kind: str | None = None,
+    exact_field: str | None = None,
 ) -> _ExactFilterSlots:
-    slots = _query_evidence_slots(
+    typed_participant_query = (
+        exact_inventory_kind == "mail_observation"
+        and exact_field in _PARTICIPANT_LOCAL_PART_FIELDS
+    )
+    participant_slots, remaining_query_text = _typed_participant_identifier_slots(
         query_text,
+        tokenizer_profile=tokenizer_profile,
+        exact_inventory_kind=exact_inventory_kind,
+        exact_field=exact_field,
+    )
+    slots = _query_evidence_slots(
+        remaining_query_text,
         query_class="exact_set_or_inventory",
         tokenizer_profile=tokenizer_profile,
     )
+    if typed_participant_query:
+        if not participant_slots:
+            raise ContractValidationError(
+                "typed participant identifier slot is unavailable"
+            )
+        return _ExactFilterSlots(
+            identifier_hashes=_source_graph_term_hashes(participant_slots),
+            topic_hashes=_source_graph_term_hashes(
+                (*slots.identifier_tokens, *slots.topic_tokens)
+            ),
+        )
     return _ExactFilterSlots(
-        identifier_hashes=_source_graph_term_hashes(tuple(slots.identifier_tokens)),
+        identifier_hashes=_source_graph_term_hashes(
+            (*participant_slots, *slots.identifier_tokens)
+        ),
         topic_hashes=_source_graph_term_hashes(tuple(slots.topic_tokens)),
     )
+
+
+def _typed_participant_identifier_slots(
+    query_text: str,
+    *,
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+    exact_inventory_kind: str | None,
+    exact_field: str | None,
+) -> tuple[tuple[str, ...], str]:
+    if (
+        exact_inventory_kind != "mail_observation"
+        or exact_field not in _PARTICIPANT_LOCAL_PART_FIELDS
+    ):
+        return (), query_text
+
+    occupied: list[tuple[int, int]] = []
+    slots: list[str] = []
+    for match in _PARTICIPANT_ADDR_SPEC_SLOT_RE.finditer(query_text):
+        occupied.append(match.span())
+        slots.append(
+            tokenizer_profile.normalize_exact_identifier_surface(match.group(0))
+        )
+    for match in _PARTICIPANT_LOCAL_PART_SLOT_RE.finditer(query_text):
+        start, end = match.span()
+        if any(
+            start < occupied_end and end > occupied_start
+            for occupied_start, occupied_end in occupied
+        ):
+            continue
+        surface = match.group(0)
+        if "." not in surface and not _DISTINCTIVE_RFC_ATEXT.intersection(surface):
+            continue
+        occupied.append((start, end))
+        slots.append(tokenizer_profile.normalize_exact_identifier_surface(surface))
+
+    if not occupied:
+        return (), query_text
+    characters = list(query_text)
+    for start, end in occupied:
+        characters[start:end] = " " * (end - start)
+    return tuple(slots), "".join(characters)
 
 
 def _ontology_subject_nodes(
@@ -10000,7 +10113,9 @@ def _hybrid_index_integrity_fingerprint(
     )
 
 
-def _validate_hybrid_index_runtime(index: AuthorizedHybridMailIndex) -> None:
+def _validate_hybrid_index_runtime_binding(
+    index: AuthorizedHybridMailIndex,
+) -> None:
     components = _validate_loaded_issue56_runtime_components(
         index._runtime_components,
         expected_profile_fingerprint=index.profile_fingerprint,
@@ -10017,6 +10132,10 @@ def _validate_hybrid_index_runtime(index: AuthorizedHybridMailIndex) -> None:
         or index.execution_component_fingerprint != binding.execution_component_fingerprint
     ):
         raise ContractValidationError("mail evidence execution component mismatch")
+
+
+def _validate_hybrid_index_runtime(index: AuthorizedHybridMailIndex) -> None:
+    _validate_hybrid_index_runtime_binding(index)
     expected_integrity_fingerprint = _hybrid_index_integrity_fingerprint(
         index_fingerprint=index.index_fingerprint,
         tokenizer_id=index.tokenizer_id,
