@@ -172,6 +172,47 @@ class MailMessageOccurrenceLineage:
 
 
 @dataclass(frozen=True)
+class MailAttachmentChildOccurrenceLineage:
+    source_observation_id: str
+    observation_type: str
+    child_asset_id: str
+    parent_attachment_observation_id: str
+    message_occurrence_id: str
+
+    @property
+    def source_kind(self) -> str:
+        return AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND
+
+    @property
+    def occurrence_kind(self) -> str:
+        return self.observation_type
+
+    @property
+    def occurrence_id(self) -> str:
+        return self.source_observation_id
+
+    @property
+    def parent_occurrence_id(self) -> str:
+        return self.message_occurrence_id
+
+    @property
+    def lineage_fingerprint(self) -> str:
+        return sha256_json(
+            {
+                "schema_version": 1,
+                "source_kind": self.source_kind,
+                "occurrence_kind": self.occurrence_kind,
+                "source_observation_id": self.source_observation_id,
+                "child_asset_id": self.child_asset_id,
+                "parent_attachment_observation_id": (
+                    self.parent_attachment_observation_id
+                ),
+                "message_occurrence_id": self.message_occurrence_id,
+            }
+        )
+
+
+@dataclass(frozen=True)
 class GitHubProjectOccurrenceLineage:
     source_observation_id: str
     record_kind: str
@@ -210,7 +251,122 @@ class GitHubProjectOccurrenceLineage:
         )
 
 
-SourceOccurrenceLineage: TypeAlias = MailMessageOccurrenceLineage | GitHubProjectOccurrenceLineage
+SourceOccurrenceLineage: TypeAlias = (
+    MailMessageOccurrenceLineage
+    | MailAttachmentChildOccurrenceLineage
+    | GitHubProjectOccurrenceLineage
+)
+
+
+_ATTACHMENT_CHILD_OBSERVATION_TYPES = {
+    "table_row",
+    "table_cell",
+}
+
+
+def normalized_authorized_observation_lineages(
+    observations: Sequence[Observation],
+    *,
+    authorized_source: AuthorizedSemanticSource,
+    occurrence_lineages: Sequence[SourceOccurrenceLineage] = (),
+) -> tuple[SourceOccurrenceLineage, ...]:
+    """Resolve source-backed attachment children without changing their evidence."""
+
+    observation_by_id = {
+        observation.observation_id: Observation.from_dict(observation.to_dict())
+        for observation in observations
+    }
+    if len(observation_by_id) != len(observations):
+        raise ContractValidationError("attachment lineage has duplicate Observation ids")
+    supplied_by_id: dict[str, SourceOccurrenceLineage] = {}
+    for lineage in occurrence_lineages:
+        observation_id = getattr(lineage, "source_observation_id", None)
+        if (
+            not isinstance(observation_id, str)
+            or observation_id not in observation_by_id
+            or observation_id in supplied_by_id
+        ):
+            raise ContractValidationError("attachment lineage input is invalid")
+        supplied_by_id[observation_id] = lineage
+
+    child_lineage_by_id = _attachment_child_lineages(observation_by_id)
+    resolved: list[SourceOccurrenceLineage] = []
+    for observation_id in sorted(observation_by_id):
+        observation = observation_by_id[observation_id]
+        expected = child_lineage_by_id.get(observation_id)
+        supplied = supplied_by_id.get(observation_id)
+        if expected is None:
+            if supplied is None:
+                raise ContractValidationError(
+                    "attachment lineage input is incomplete"
+                )
+            expected = source_occurrence_lineage_from_observation(
+                observation,
+                authorized_source=authorized_source,
+            )
+        if supplied is not None and supplied != expected:
+            raise ContractValidationError("attachment lineage input mismatch")
+        resolved.append(expected)
+    return tuple(resolved)
+
+
+def _attachment_child_lineages(
+    observation_by_id: Mapping[str, Observation],
+) -> dict[str, MailAttachmentChildOccurrenceLineage]:
+    parent_ids_by_child_asset: dict[str, list[str]] = {}
+    for observation_id, observation in observation_by_id.items():
+        if observation.observation_type != "email_attachment_occurrence":
+            continue
+        child_asset_id = (observation.payload or {}).get("child_asset_id")
+        if child_asset_id is None:
+            continue
+        if not isinstance(child_asset_id, str) or not child_asset_id:
+            raise ContractValidationError("attachment parent child asset binding is invalid")
+        safe_public_string(child_asset_id, "child_asset_id")
+        parent_ids_by_child_asset.setdefault(child_asset_id, []).append(observation_id)
+
+    child_lineage_by_id: dict[str, MailAttachmentChildOccurrenceLineage] = {}
+    for observation_id, observation in observation_by_id.items():
+        if (
+            observation.modality != "document"
+            or observation.observation_type not in _ATTACHMENT_CHILD_OBSERVATION_TYPES
+        ):
+            continue
+        payload = observation.payload or {}
+        nested_lineage = payload.get("lineage")
+        if not isinstance(nested_lineage, Mapping):
+            continue
+        claimed_child_asset_id = nested_lineage.get("child_asset_id")
+        if (
+            not isinstance(claimed_child_asset_id, str)
+            or not claimed_child_asset_id
+            or claimed_child_asset_id != observation.asset_id
+        ):
+            raise ContractValidationError("attachment child asset binding is unavailable")
+        parent_ids = parent_ids_by_child_asset.get(claimed_child_asset_id, [])
+        if not parent_ids:
+            raise ContractValidationError("attachment parent Observation binding is unavailable")
+        if len(parent_ids) != 1:
+            raise ContractValidationError("attachment parent Observation binding is ambiguous")
+        parent_id = parent_ids[0]
+        parent = observation_by_id[parent_id]
+        message_occurrence_id = parent.location.get("message_occurrence_id")
+        if (
+            not isinstance(message_occurrence_id, str)
+            or not message_occurrence_id
+            or to_plain(observation.permission_scope) != to_plain(parent.permission_scope)
+        ):
+            raise ContractValidationError("attachment parent-child lineage binding mismatch")
+        safe_public_string(parent_id, "parent_attachment_observation_id")
+        safe_public_string(message_occurrence_id, "message_occurrence_id")
+        child_lineage_by_id[observation_id] = MailAttachmentChildOccurrenceLineage(
+            source_observation_id=observation_id,
+            observation_type=observation.observation_type,
+            child_asset_id=claimed_child_asset_id,
+            parent_attachment_observation_id=parent_id,
+            message_occurrence_id=message_occurrence_id,
+        )
+    return child_lineage_by_id
 
 
 def validate_source_neutral_attachment_observation_coverage(
@@ -231,38 +387,14 @@ def validate_source_neutral_attachment_observation_coverage(
         for observation_id, observation in observation_by_id.items()
         if observation.observation_type == "email_attachment_occurrence"
     }
+    child_lineages = _attachment_child_lineages(observation_by_id)
     child_parent_by_hash: dict[str, str] = {}
     returned_parent_ids: set[str] = set()
-    for observation in observation_by_id.values():
-        if observation.observation_type == "email_attachment_occurrence":
-            continue
-        payload = observation.payload or {}
-        parent_id = payload.get("parent_attachment_observation_id")
-        child_asset_id = payload.get("child_asset_id")
-        if parent_id is None and child_asset_id is None:
-            continue
-        if (
-            not isinstance(parent_id, str)
-            or not parent_id
-            or not isinstance(child_asset_id, str)
-            or not child_asset_id
-            or observation.asset_id != child_asset_id
-        ):
-            raise ContractValidationError("attachment child asset binding is unavailable")
-        safe_public_string(parent_id, "parent_attachment_observation_id")
-        safe_public_string(child_asset_id, "child_asset_id")
-        parent = parents.get(parent_id)
-        if parent is None:
-            raise ContractValidationError("attachment parent Observation binding is unavailable")
-        parent_occurrence_id = parent.location.get("message_occurrence_id")
-        if (
-            observation.location.get("message_occurrence_id") != parent_occurrence_id
-            or to_plain(observation.permission_scope) != to_plain(parent.permission_scope)
-        ):
-            raise ContractValidationError("attachment parent-child lineage binding mismatch")
+    for observation_id, lineage in child_lineages.items():
+        observation = observation_by_id[observation_id]
         child_hash = sha256_json(observation.to_dict())
-        child_parent_by_hash[child_hash] = parent_id
-        returned_parent_ids.add(parent_id)
+        child_parent_by_hash[child_hash] = lineage.parent_attachment_observation_id
+        returned_parent_ids.add(lineage.parent_attachment_observation_id)
 
     partition = {
         "returned": len(returned_parent_ids),
@@ -788,18 +920,14 @@ def build_authorized_observation_snippet_index(
     ):
         raise ContractValidationError("Observation index authorization binding mismatch")
 
-    lineage_by_observation_id: dict[str, SourceOccurrenceLineage] = {}
-    for lineage in occurrence_lineages:
-        if not isinstance(
-            lineage,
-            MailMessageOccurrenceLineage | GitHubProjectOccurrenceLineage,
-        ):
-            raise ContractValidationError("Observation index occurrence lineage is invalid")
-        if lineage.source_observation_id in lineage_by_observation_id:
-            raise ContractValidationError("Observation index occurrence lineage is duplicate")
-        lineage_by_observation_id[lineage.source_observation_id] = lineage
-    if set(lineage_by_observation_id) != set(normalized_by_id):
-        raise ContractValidationError("Observation index occurrence lineage is incomplete")
+    lineage_by_observation_id = {
+        lineage.source_observation_id: lineage
+        for lineage in normalized_authorized_observation_lineages(
+            tuple(normalized_by_id.values()),
+            authorized_source=authorized_source,
+            occurrence_lineages=occurrence_lineages,
+        )
+    }
     validate_source_neutral_attachment_observation_coverage(
         tuple(normalized_by_id.values())
     )
@@ -817,11 +945,7 @@ def build_authorized_observation_snippet_index(
             observation,
             authorized_source=authorized_source,
         )
-        expected_lineage = source_occurrence_lineage_from_observation(
-            observation,
-            authorized_source=authorized_source,
-        )
-        if lineage.source_kind != authorized_source.source_kind or lineage != expected_lineage:
+        if lineage.source_kind != authorized_source.source_kind:
             raise ContractValidationError("Observation index source occurrence mismatch")
         searchable = _source_neutral_searchable_text(
             observation,
@@ -1286,6 +1410,7 @@ __all__ = [
     "GitHubProjectOccurrenceLineage",
     "IndexedMailSnippet",
     "IndexedObservationSnippet",
+    "MailAttachmentChildOccurrenceLineage",
     "MailMessageOccurrenceLineage",
     "MailEvidenceQueryGateway",
     "MailEvidenceQueryResult",
@@ -1296,6 +1421,7 @@ __all__ = [
     "build_authorized_observation_snippet_index",
     "build_existing_observation_snippet_index",
     "build_mail_evidence_query_handler",
+    "normalized_authorized_observation_lineages",
     "require_issue56_target_tokenizer_profile",
     "source_occurrence_lineage_from_observation",
     "validate_source_neutral_attachment_observation_coverage",

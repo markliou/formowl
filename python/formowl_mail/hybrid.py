@@ -81,6 +81,7 @@ from .query import (
     authorize_mail_evidence_bundles,
     build_authorized_observation_snippet_index,
     build_existing_observation_snippet_index,
+    normalized_authorized_observation_lineages,
     require_issue56_target_tokenizer_profile,
     source_occurrence_lineage_from_observation,
 )
@@ -4668,31 +4669,14 @@ def _validated_source_neutral_inputs(
             "authorized semantic session requires authorized Observations"
         )
 
-    lineage_by_observation_id: dict[str, SourceOccurrenceLineage] = {}
-    for lineage in occurrence_lineages:
-        _query_deadline_checkpoint(execution_deadline)
-        observation_id = getattr(lineage, "source_observation_id", None)
-        if not isinstance(observation_id, str) or not observation_id:
-            raise ContractValidationError(
-                "authorized semantic session occurrence lineage is invalid"
-            )
-        if observation_id in lineage_by_observation_id:
-            raise ContractValidationError(
-                "authorized semantic session occurrence lineage is duplicate"
-            )
-        lineage_by_observation_id[observation_id] = lineage
-    if set(lineage_by_observation_id) != set(observation_by_id):
-        raise ContractValidationError(
-            "authorized semantic session occurrence lineage is incomplete"
-        )
-    for observation_id, observation in observation_by_id.items():
-        _query_deadline_checkpoint(execution_deadline)
-        expected_lineage = source_occurrence_lineage_from_observation(
-            observation,
-            authorized_source=authorized_source,
-        )
-        if lineage_by_observation_id[observation_id] != expected_lineage:
-            raise ContractValidationError("authorized semantic session occurrence lineage mismatch")
+    normalized_lineages = normalized_authorized_observation_lineages(
+        tuple(observation_by_id.values()),
+        authorized_source=authorized_source,
+        occurrence_lineages=occurrence_lineages,
+    )
+    lineage_by_observation_id = {
+        lineage.source_observation_id: lineage for lineage in normalized_lineages
+    }
     return (
         tuple(observation_by_id[key] for key in sorted(observation_by_id)),
         tuple(lineage_by_observation_id[key] for key in sorted(lineage_by_observation_id)),

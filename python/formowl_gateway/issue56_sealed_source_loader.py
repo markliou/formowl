@@ -40,6 +40,7 @@ from formowl_mail.issue56_sealed_source import (
 )
 from formowl_mail.query import (
     MailEvidenceQueryResult,
+    normalized_authorized_observation_lineages,
     source_occurrence_lineage_from_observation,
 )
 
@@ -502,6 +503,13 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
         or not relation_types
     ):
         raise ContractValidationError("production sealed source binding is invalid")
+    normalized_lineages = normalized_authorized_observation_lineages(
+        session.authorized_observations,
+        authorized_source=session.authorized_source,
+        occurrence_lineages=session.occurrence_lineages,
+    )
+    if normalized_lineages != session.occurrence_lineages:
+        raise ContractValidationError("production evidence lineage binding is invalid")
 
     def retrieval_handler(arguments: dict[str, Any]) -> dict[str, Any]:
         required_arguments = {
@@ -584,11 +592,7 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
                     key=lambda item: item.observation_id,
                 ):
                     lineage = lineage_by_observation_id.get(observation.observation_id)
-                    expected_lineage = source_occurrence_lineage_from_observation(
-                        observation,
-                        authorized_source=session.authorized_source,
-                    )
-                    if lineage != expected_lineage:
+                    if lineage is None:
                         raise ContractValidationError(
                             "production evidence lineage binding is invalid"
                         )

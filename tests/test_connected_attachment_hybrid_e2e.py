@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -14,6 +15,7 @@ from starlette.testclient import TestClient
 import formowl_gateway.runtime as runtime_module
 from formowl_auth import ActorContext, OAuthPrincipal
 from formowl_contract import (
+    Asset,
     ContractValidationError,
     Observation,
     SessionIdentity,
@@ -25,6 +27,8 @@ from formowl_gateway.runtime import ConnectedRuntime, ConnectedRuntimeConfig
 from formowl_gateway.semantic import SemanticMcpGateway, validate_public_gateway_payload
 from formowl_graph import EffectiveGraphView
 from formowl_graph.index import GraphProjectionEdge
+from formowl_ingestion.extraction import ExtractionInput
+from formowl_ingestion.extractors.document.attachment import AttachmentDocumentExtractor
 from formowl_mail.hybrid import build_authorized_semantic_observation_session
 from formowl_mail.query import (
     build_authorized_observation_snippet_index,
@@ -84,6 +88,50 @@ def _observation(
     )
 
 
+def _attachment_child_observations(
+    *,
+    child_asset_id: str,
+    query_text: str,
+) -> tuple[Observation, ...]:
+    content = f"kind,value\npart,{query_text}\n".encode()
+    with tempfile.NamedTemporaryFile(suffix=".csv") as child_file:
+        child_file.write(content)
+        child_file.flush()
+        child_asset = Asset.from_dict(
+            {
+                "asset_id": child_asset_id,
+                "storage_backend_id": "attachment_test_store",
+                "object_uri": "formowl://asset/attachment-child",
+                "content_hash": "sha256:" + hashlib.sha256(content).hexdigest(),
+                "file_size": len(content),
+                "mime_type": "text/csv",
+                "created_at": "2026-08-29T00:00:00+00:00",
+                "registered_at": "2026-08-29T00:00:00+00:00",
+                "owner_user_id": REQUESTER_ID,
+                "workspace_id": WORKSPACE_ID,
+                "permission_scope": PERMISSION_SCOPE,
+                "lifecycle_state": "active",
+                "source_ref": {
+                    "source_system": "formowl_mail_attachment",
+                    "source_type": "email_attachment_occurrence",
+                    "source_id": "attachment_inventory_item",
+                },
+            }
+        )
+        result = AttachmentDocumentExtractor().extract(
+            ExtractionInput(
+                asset=child_asset,
+                object_path=Path(child_file.name),
+                extractor_run_id="extractor_attachment_document",
+                config={"parent_asset_id": "asset_parent_mail"},
+                created_at="2026-08-29T00:00:00+00:00",
+            )
+        )
+    if result.errors or result.warnings:
+        raise AssertionError("attachment document fixture extraction failed")
+    return tuple(result.observations)
+
+
 class ConnectedAttachmentHybridE2ETests(unittest.IsolatedAsyncioTestCase):
     async def test_attachment_child_is_authorized_before_index_and_projected_over_asgi(
         self,
@@ -103,7 +151,10 @@ class ConnectedAttachmentHybridE2ETests(unittest.IsolatedAsyncioTestCase):
             observation_id="observation_attachment_occurrence",
             observation_type="email_attachment_occurrence",
             text=f"Authorized attachment occurrence {query_text}",
-            payload={"attachment_id": "attachment_opaque_1"},
+            payload={
+                "attachment_id": "attachment_opaque_1",
+                "child_asset_id": "asset_attachment_child",
+            },
         )
         unresolved_attachment = _observation(
             observation_id="observation_attachment_unresolved",
@@ -113,22 +164,27 @@ class ConnectedAttachmentHybridE2ETests(unittest.IsolatedAsyncioTestCase):
             payload={"attachment_id": "attachment_opaque_2"},
         )
         child_asset_id = "asset_attachment_child"
-        child_row = _observation(
-            observation_id="observation_attachment_table_row",
-            observation_type="table_row",
-            text=f"Structured child row {query_text}",
-            asset_id=child_asset_id,
-            payload={
-                "parent_attachment_observation_id": parent_attachment.observation_id,
-                "child_asset_id": child_asset_id,
-                "object_uri": "storage://private/attachment.bin",
-            },
+        child_observations = _attachment_child_observations(
+            child_asset_id=child_asset_id,
+            query_text=query_text,
+        )
+        child_row = next(
+            observation
+            for observation in child_observations
+            if observation.observation_type == "table_row"
+            and query_text in (observation.text or "")
+        )
+        child_cell = next(
+            observation
+            for observation in child_observations
+            if observation.observation_type == "table_cell"
+            and observation.text == query_text
         )
         observations = (
             parent_mail,
             parent_attachment,
             unresolved_attachment,
-            child_row,
+            *child_observations,
         )
         authorized_source = validated_authorized_semantic_source(
             source_kind=AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
@@ -141,6 +197,7 @@ class ConnectedAttachmentHybridE2ETests(unittest.IsolatedAsyncioTestCase):
                 authorized_source=authorized_source,
             )
             for observation in observations
+            if observation.modality == "mail"
         )
         authorized_hashes = {
             observation.observation_id: sha256_json(observation.to_dict())
@@ -174,6 +231,10 @@ class ConnectedAttachmentHybridE2ETests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             candidate_by_hash[authorized_hashes[parent_mail.observation_id]].coherence_group_hash,
             candidate_by_hash[authorized_hashes[child_row.observation_id]].coherence_group_hash,
+        )
+        self.assertEqual(
+            candidate_by_hash[authorized_hashes[parent_mail.observation_id]].coherence_group_hash,
+            candidate_by_hash[authorized_hashes[child_cell.observation_id]].coherence_group_hash,
         )
         self.assertIn(
             authorized_hashes[unresolved_attachment.observation_id],
@@ -334,7 +395,9 @@ class ConnectedAttachmentHybridE2ETests(unittest.IsolatedAsyncioTestCase):
                 evidence = data["evidence"]
                 evidence_hashes = {item["citation_hash"] for item in evidence}
                 child_hash = authorized_hashes[child_row.observation_id]
+                child_cell_hash = authorized_hashes[child_cell.observation_id]
                 self.assertIn(child_hash, evidence_hashes)
+                self.assertIn(child_cell_hash, evidence_hashes)
                 self.assertIn(
                     authorized_hashes[parent_attachment.observation_id],
                     evidence_hashes,
@@ -347,7 +410,7 @@ class ConnectedAttachmentHybridE2ETests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("tenant", str(data))
                 coverage = validate_source_neutral_attachment_observation_coverage(
                     observations,
-                    matched_child_observation_hashes=(child_hash,),
+                    matched_child_observation_hashes=(child_hash, child_cell_hash),
                 )
                 self.assertEqual(
                     coverage["authorized_attachment_occurrence_count"],
@@ -372,18 +435,16 @@ class ConnectedAttachmentHybridE2ETests(unittest.IsolatedAsyncioTestCase):
         missing_child_asset = replace(
             child_row,
             asset_id="asset_missing_child_binding",
-            payload={
-                key: value
-                for key, value in (child_row.payload or {}).items()
-                if key != "child_asset_id"
-            },
         )
         with self.assertRaisesRegex(
             ContractValidationError,
             "child asset binding is unavailable",
         ):
             validate_source_neutral_attachment_observation_coverage(
-                (*observations[:-1], missing_child_asset)
+                tuple(
+                    missing_child_asset if item == child_row else item
+                    for item in observations
+                )
             )
 
         unauthorized_sibling = replace(
