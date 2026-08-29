@@ -213,6 +213,112 @@ class GitHubProjectOccurrenceLineage:
 SourceOccurrenceLineage: TypeAlias = MailMessageOccurrenceLineage | GitHubProjectOccurrenceLineage
 
 
+def validate_source_neutral_attachment_observation_coverage(
+    observations: Sequence[Observation],
+    *,
+    matched_child_observation_hashes: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Validate child-attachment lineage and its extraction coverage partition."""
+
+    observation_by_id = {
+        observation.observation_id: Observation.from_dict(observation.to_dict())
+        for observation in observations
+    }
+    if len(observation_by_id) != len(observations):
+        raise ContractValidationError("attachment coverage has duplicate Observation ids")
+    parents = {
+        observation_id: observation
+        for observation_id, observation in observation_by_id.items()
+        if observation.observation_type == "email_attachment_occurrence"
+    }
+    child_parent_by_hash: dict[str, str] = {}
+    returned_parent_ids: set[str] = set()
+    for observation in observation_by_id.values():
+        if observation.observation_type == "email_attachment_occurrence":
+            continue
+        payload = observation.payload or {}
+        parent_id = payload.get("parent_attachment_observation_id")
+        child_asset_id = payload.get("child_asset_id")
+        if parent_id is None and child_asset_id is None:
+            continue
+        if (
+            not isinstance(parent_id, str)
+            or not parent_id
+            or not isinstance(child_asset_id, str)
+            or not child_asset_id
+            or observation.asset_id != child_asset_id
+        ):
+            raise ContractValidationError("attachment child asset binding is unavailable")
+        safe_public_string(parent_id, "parent_attachment_observation_id")
+        safe_public_string(child_asset_id, "child_asset_id")
+        parent = parents.get(parent_id)
+        if parent is None:
+            raise ContractValidationError("attachment parent Observation binding is unavailable")
+        parent_occurrence_id = parent.location.get("message_occurrence_id")
+        if (
+            observation.location.get("message_occurrence_id") != parent_occurrence_id
+            or to_plain(observation.permission_scope) != to_plain(parent.permission_scope)
+        ):
+            raise ContractValidationError("attachment parent-child lineage binding mismatch")
+        child_hash = sha256_json(observation.to_dict())
+        child_parent_by_hash[child_hash] = parent_id
+        returned_parent_ids.add(parent_id)
+
+    partition = {
+        "returned": len(returned_parent_ids),
+        "unsupported": 0,
+        "encrypted": 0,
+        "redacted": 0,
+        "unresolved": 0,
+    }
+    for parent_id, parent in parents.items():
+        if parent_id in returned_parent_ids:
+            continue
+        status = (parent.payload or {}).get("attachment_extraction_status", "unresolved")
+        if status == "returned" or status not in partition:
+            raise ContractValidationError("attachment extraction status is invalid")
+        partition[status] += 1
+    if sum(partition.values()) != len(parents):
+        raise ContractValidationError("attachment coverage partition is invalid")
+
+    matched_hashes = tuple(matched_child_observation_hashes)
+    if any(
+        re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
+        for value in matched_hashes
+    ) or not set(matched_hashes).issubset(child_parent_by_hash):
+        raise ContractValidationError("attachment query match binding is invalid")
+    coverage_fingerprint = sha256_json(
+        {
+            "schema_version": 1,
+            "authorized_parent_hashes": sorted(
+                sha256_json(parent.to_dict()) for parent in parents.values()
+            ),
+            "returned_parent_hashes": sorted(
+                sha256_json(parents[parent_id].to_dict())
+                for parent_id in returned_parent_ids
+            ),
+            "partition": partition,
+        }
+    )
+    payload = {
+        "authorized_attachment_occurrence_count": len(parents),
+        "returned_attachment_occurrence_count": partition["returned"],
+        "unsupported_attachment_occurrence_count": partition["unsupported"],
+        "encrypted_attachment_occurrence_count": partition["encrypted"],
+        "redacted_attachment_occurrence_count": partition["redacted"],
+        "unresolved_attachment_occurrence_count": partition["unresolved"],
+        "query_matched_attachment_occurrence_count": len(
+            {child_parent_by_hash[value] for value in matched_hashes}
+        ),
+        "authorized_scope_complete": not any(
+            partition[key] for key in ("unsupported", "encrypted", "redacted", "unresolved")
+        ),
+        "coverage_fingerprint": coverage_fingerprint,
+    }
+    assert_public_payload_safe(payload, "source_neutral_attachment_coverage")
+    return payload
+
+
 @dataclass(frozen=True)
 class AuthorizedObservationIndexBuildManifest:
     """Public-safe binding for one source-neutral authorized Observation index."""
@@ -694,6 +800,9 @@ def build_authorized_observation_snippet_index(
         lineage_by_observation_id[lineage.source_observation_id] = lineage
     if set(lineage_by_observation_id) != set(normalized_by_id):
         raise ContractValidationError("Observation index occurrence lineage is incomplete")
+    validate_source_neutral_attachment_observation_coverage(
+        tuple(normalized_by_id.values())
+    )
 
     indexed: list[_IndexedObservationSnippet] = []
     indexes_by_token: dict[str, list[int]] = {}
@@ -1189,4 +1298,5 @@ __all__ = [
     "build_mail_evidence_query_handler",
     "require_issue56_target_tokenizer_profile",
     "source_occurrence_lineage_from_observation",
+    "validate_source_neutral_attachment_observation_coverage",
 ]

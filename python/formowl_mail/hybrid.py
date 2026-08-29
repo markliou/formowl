@@ -2892,6 +2892,7 @@ def build_authorized_semantic_observation_session(
         workspace_id=authorized_source.workspace_id,
         selected_source_scope_ids=authorized_source.source_scope_ids,
         authorized_source_scope_ids=authorized_source.source_scope_ids,
+        retrieval_observation_hashes=tuple(sorted(authorized_hash_by_id.items())),
         authorized_observation_hashes=tuple(sorted(authorized_hash_by_id.items())),
         authorized_source=authorized_source,
         authorized_observations=observations,
