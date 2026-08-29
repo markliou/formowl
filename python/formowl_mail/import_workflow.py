@@ -227,6 +227,7 @@ def run_upload_session_mail_import(
         config=extraction_config,
         started_at=resolved_started_at,
         completed_at=resolved_completed_at,
+        attachment_asset_store=asset_store,
     )
     if finished_job.status != "succeeded":
         upload_session_store.create(

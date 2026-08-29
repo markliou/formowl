@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import replace
+from email.message import EmailMessage
 import json
 from pathlib import Path
 import unittest
@@ -249,6 +250,83 @@ class MailUploadImportWorkflowTests(unittest.TestCase):
         self.assertNotIn("fixture_mail_archive_extractor", rendered_summary)
         self.assertNotIn("readpst", rendered_summary)
         self.assertNotIn("pst-scratch", rendered_summary)
+
+    def test_pst_upload_import_materializes_csv_attachment_document_evidence(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-upload-import-csv-attachment")
+        stores = _workflow_stores(temp_dir)
+        upload_session = _create_mail_upload_session(
+            stores["upload_session_store"],
+            audit_store=stores["audit_store"],
+        )
+        staged_archive = _write_pst_archive(temp_dir)
+        original_pst_adapter = import_workflow.PstMailArchiveExtractor
+
+        class _RunnerBackedPstAdapter(PstMailArchiveExtractor):
+            def __init__(self) -> None:
+                super().__init__(
+                    runner=_pst_runner_with_messages([_pst_rfc822_csv_attachment()]),
+                    scratch_parent=temp_dir / "pst-scratch",
+                )
+
+        import_workflow.PstMailArchiveExtractor = _RunnerBackedPstAdapter
+        try:
+            result = run_upload_session_mail_import(
+                staged_archive,
+                upload_session_id=upload_session.upload_session_id,
+                upload_session_store=stores["upload_session_store"],
+                object_store=stores["object_store"],
+                asset_store=stores["asset_store"],
+                job_store=stores["job_store"],
+                extractor_run_store=stores["extractor_run_store"],
+                observation_store=stores["observation_store"],
+                mail_evidence_store=PostgreSQLMailEvidenceStore(
+                    _RecordingMailConnection()
+                ),
+                storage_backend_id=STORAGE_BACKEND_ID,
+                actor_user_id=OWNER_USER_ID,
+                session_id=SESSION_ID,
+                query_text="audit approval",
+                created_at=NOW,
+                asset_mime_type="application/vnd.ms-outlook",
+                extraction_config={"max_messages": 1},
+            )
+        finally:
+            import_workflow.PstMailArchiveExtractor = original_pst_adapter
+
+        observations = stores["observation_store"].list()
+        attachment = next(
+            item
+            for item in observations
+            if item.observation_type == "email_attachment_occurrence"
+        )
+        child_asset = stores["asset_store"].get(attachment.payload["child_asset_id"])
+        child_runs = [
+            item
+            for item in stores["extractor_run_store"].list()
+            if item.asset_id == child_asset.asset_id
+        ]
+        child_observations = [
+            item for item in observations if item.asset_id == child_asset.asset_id
+        ]
+
+        self.assertNotEqual(child_asset.asset_id, result.asset_id)
+        self.assertEqual(len(child_runs), 1)
+        self.assertEqual(child_runs[0].extractor_name, "attachment_document_parser")
+        self.assertEqual(child_runs[0].status, "succeeded")
+        self.assertEqual(
+            {item.observation_type for item in child_observations},
+            {"table_row", "table_cell"},
+        )
+        self.assertEqual(child_asset.permission_scope, attachment.permission_scope)
+        for observation in child_observations:
+            self.assertEqual(
+                observation.payload["lineage"]["parent_asset_id"],
+                result.asset_id,
+            )
+            self.assertEqual(
+                observation.payload["lineage"]["child_asset_id"],
+                child_asset.asset_id,
+            )
 
     def test_bound_asset_import_requires_upload_receipt_state_and_source_ref(
         self,
@@ -868,6 +946,23 @@ def _pst_rfc822_message() -> bytes:
         "\n"
         "Audit approval is next.\n"
     ).encode("utf-8")
+
+
+def _pst_rfc822_csv_attachment() -> bytes:
+    message = EmailMessage()
+    message["Message-ID"] = "<pst-unit-csv@example.test>"
+    message["Subject"] = "PST import attachment"
+    message["From"] = "pm@example.test"
+    message["To"] = "team@example.test"
+    message["Date"] = NOW
+    message.set_content("Audit approval is next.")
+    message.add_attachment(
+        b"part,price\nA1,7\n",
+        maintype="text",
+        subtype="csv",
+        filename="parts.csv",
+    )
+    return message.as_bytes()
 
 
 if __name__ == "__main__":
