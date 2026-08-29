@@ -36,6 +36,9 @@ class AttachmentMaterializationContext:
     parent_asset: Asset
     asset_store: AssetRecordStore
     object_store: FileObjectStore
+    extractor_run_store: ExtractorRunStore | None = field(default=None, repr=False)
+    observation_store: ObservationStore | None = field(default=None, repr=False)
+    document_adapter: ExtractorAdapter | None = field(default=None, repr=False)
     _receipts: list[tuple[str, str, str, bool]] = field(
         default_factory=list,
         init=False,
@@ -99,6 +102,21 @@ class AttachmentMaterializationContext:
                 object_preexisted,
             )
         )
+        if self.document_adapter is not None:
+            child_result = run_extractor(
+                asset=child_asset,
+                object_store=self.object_store,
+                extractor_run_store=self.extractor_run_store,
+                observation_store=self.observation_store,
+                adapter=self.document_adapter,
+                config={
+                    "parent_asset_id": self.parent_asset.asset_id,
+                    "parent_source_ref": to_plain(self.parent_asset.source_ref),
+                    "attachment_source_ref": to_plain(source_ref),
+                },
+            )
+            if child_result.extractor_run.status != "succeeded":
+                raise ContractValidationError("attachment document extraction failed")
         return child_asset.asset_id
 
     def validate_observations(self, observations: list[Observation]) -> None:
@@ -205,10 +223,15 @@ def run_extractor(
             raise ContractValidationError(
                 "attachment asset store is not bound to extraction asset"
             )
+        from .extractors.document import AttachmentDocumentExtractor
+
         attachment_materialization = AttachmentMaterializationContext(
             parent_asset=asset,
             asset_store=attachment_asset_store,
             object_store=object_store,
+            extractor_run_store=extractor_run_store,
+            observation_store=observation_store,
+            document_adapter=AttachmentDocumentExtractor(),
         )
     extraction_input = ExtractionInput(
         asset=asset,

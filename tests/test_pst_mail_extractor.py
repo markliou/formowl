@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from email.message import EmailMessage
+import io
 from pathlib import Path
 import json
 import subprocess
 import unittest
+from zipfile import ZipFile
 
 import _paths  # noqa: F401
 from formowl_contract import (
@@ -32,6 +35,95 @@ NOW = "2026-07-06T10:00:00+00:00"
 
 
 class PstMailArchiveExtractorTests(unittest.TestCase):
+    def test_attachment_child_document_rows_and_cells_are_source_bound(self) -> None:
+        xlsx = io.BytesIO()
+        with ZipFile(xlsx, "w") as archive:
+            archive.writestr("[Content_Types].xml", "<Types/>")
+            archive.writestr(
+                "xl/workbook.xml",
+                '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
+            )
+            archive.writestr(
+                "xl/_rels/workbook.xml.rels",
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
+            )
+            archive.writestr(
+                "xl/worksheets/sheet1.xml",
+                '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                '<sheetData><row r="2"><c r="A2" t="inlineStr"><is><t>part</t></is></c>'
+                '<c r="B2"><v>7</v></c></row><row r="4"><c r="A4" t="inlineStr">'
+                '<is><t>price</t></is></c><c r="B4"><v>9</v></c></row></sheetData></worksheet>',
+            )
+        cases = [
+            ("csv", b"part,price\nA1,7\n", "application", "octet-stream", [1, 2], None),
+            (
+                "xlsx",
+                xlsx.getvalue(),
+                "text",
+                "plain",
+                [2, 4],
+                "Sheet1",
+            ),
+        ]
+        for name, payload, maintype, subtype, row_indexes, sheet_name in cases:
+            with self.subTest(format=name):
+                context = _PstExtractionContext.create(f"pst-attachment-document-{name}")
+                result = run_extractor(
+                    asset=context.asset,
+                    object_store=context.object_store,
+                    extractor_run_store=context.run_store,
+                    observation_store=context.observation_store,
+                    adapter=context.adapter_with_runner(
+                        _runner_with_messages(
+                            [_rfc822_binary_attachment(payload, maintype, subtype)]
+                        )
+                    ),
+                    attachment_asset_store=context.asset_store,
+                    started_at=NOW,
+                    completed_at=NOW,
+                )
+                attachment = next(
+                    item
+                    for item in result.observations
+                    if item.observation_type == "email_attachment_occurrence"
+                )
+                child = context.asset_store.get(attachment.payload["child_asset_id"])
+                child_runs = [
+                    item for item in context.run_store.list() if item.asset_id == child.asset_id
+                ]
+                child_observations = [
+                    item
+                    for item in context.observation_store.list()
+                    if item.asset_id == child.asset_id
+                ]
+                self.assertEqual(len(child_runs), 1)
+                self.assertEqual(child_runs[0].status, "succeeded")
+                self.assertEqual(
+                    [item.location["row_index"] for item in child_observations if item.observation_type == "table_row"],
+                    row_indexes,
+                )
+                self.assertEqual(
+                    {item.observation_type for item in child_observations},
+                    {"table_row", "table_cell"},
+                )
+                self.assertEqual(
+                    {item.location.get("sheet_name") for item in child_observations},
+                    {sheet_name},
+                )
+                for item in child_observations:
+                    lineage = item.payload["lineage"]
+                    self.assertEqual(lineage["child_asset_id"], child.asset_id)
+                    self.assertEqual(lineage["child_content_hash"], child.content_hash)
+                    self.assertEqual(lineage["parent_asset_id"], context.asset.asset_id)
+                    self.assertEqual(
+                        lineage["attachment_source_ref"]["source_id"],
+                        attachment.payload["source_inventory_item_id"],
+                    )
+                    self.assertEqual(item.permission_scope, child.permission_scope)
+
     def test_attachment_child_asset_binding_and_compensating_rollback(self) -> None:
         context = _PstExtractionContext.create("pst-attachment-child-asset")
         result = run_extractor(
@@ -668,6 +760,27 @@ def _rfc822_message(
         "attachment body\n"
         "--unit-boundary--\n"
     ).encode("utf-8")
+
+
+def _rfc822_binary_attachment(
+    payload: bytes,
+    maintype: str,
+    subtype: str,
+) -> bytes:
+    message = EmailMessage()
+    message["Message-ID"] = "<unit-binary@example.test>"
+    message["Subject"] = "Attachment"
+    message["From"] = "pm@example.test"
+    message["To"] = "team@example.test"
+    message["Date"] = NOW
+    message.set_content("Attachment follows.")
+    message.add_attachment(
+        payload,
+        maintype=maintype,
+        subtype=subtype,
+        filename="opaque.bin",
+    )
+    return message.as_bytes()
 
 
 if __name__ == "__main__":
