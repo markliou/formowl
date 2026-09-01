@@ -782,13 +782,12 @@ def execute_deterministic_source_occurrence_inventory(
             )
             matched_position_set = set()
         matched_positions = tuple(sorted(matched_position_set))
-    if provider.filter_slot_policy != "identifier_union_v1":
-        matched_positions = tuple(
-            position
-            for position in matched_positions
-            if provider._ordered_occurrences[position].structure_status
-            != "candidate_only"
-        )
+    matched_positions = tuple(
+        position
+        for position in matched_positions
+        if provider._ordered_occurrences[position].structure_status
+        != "candidate_only"
+    )
     local_query_hashes = frozenset(
         query_hash
         for query_hash in query_hashes

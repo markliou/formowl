@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import replace
 import hashlib
 import inspect
 from pathlib import Path
@@ -24,6 +25,10 @@ from formowl_ingestion.extraction import ExtractionInput
 from formowl_ingestion.extractors.document.attachment import AttachmentDocumentExtractor
 from formowl_ingestion.storage import UploadSessionStore
 from formowl_mail import build_mail_upload_session_handler
+from formowl_mail.exact import (
+    SourceOccurrenceProvider,
+    authorized_source_occurrence_scope_fingerprint,
+)
 from formowl_mail.hybrid import (
     build_authorized_semantic_observation_session,
     build_authorized_source_backed_effective_graph_view,
@@ -171,6 +176,42 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(direct.canonical_kg)
         self.assertFalse(direct.deterministic_exact)
         self.assertIsNone(direct.exact_result)
+        exact_identifier = "SYN-DUP-77"
+        identifier_hash = sha256_json(
+            runtime_components.tokenizer_profile.analyze(
+                exact_identifier
+            ).protected_identifiers[0].exact_token
+        )
+        table_provider = gateway_loader._build_attachment_table_row_provider(
+            session,
+            authorized_scope_fingerprint=authorized_source_occurrence_scope_fingerprint(
+                requester_user_id=session.requester_user_id,
+                workspace_id=session.workspace_id,
+                source_scope_ids=session.authorized_source_scope_ids,
+                authorized_observation_hashes=session.authorized_observation_hashes,
+                source_session_binding_fingerprint=(
+                    session.source_session_binding_fingerprint or ""
+                ),
+            ),
+        )
+        self.assertIsInstance(table_provider, SourceOccurrenceProvider)
+        assert table_provider is not None
+        candidate_occurrence = next(
+            item
+            for item in table_provider.occurrences
+            if item.structure_status == "candidate_only"
+            and any(identifier_hash in binding[:2] for binding in item.value_bindings)
+        )
+        provider = replace(
+            table_provider,
+            provider_id="candidate_table_exact_guard_provider_v1",
+            filter_slot_policy="identifier_union_v1",
+            occurrences=(replace(candidate_occurrence, structured_column_bindings=()),),
+            unresolved_count=0,
+            authorized_occurrence_scope_count=1,
+            extractable_occurrence_scope_count=1,
+            source_asset_reason_counts=(),
+        )
         graph = build_authorized_source_backed_effective_graph_view(session=session,
             source_binding_fingerprint=sha256_json(
                 "candidate-table-answer-source")).effective_graph_view
@@ -183,7 +224,7 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
             patch.object(gateway_loader, "_validated_owner_safe_binding",
                          return_value={}),
             patch.object(gateway_loader, "_build_mail_source_occurrence_providers",
-                         return_value=()),
+                         return_value=(provider,)),
             patch.object(
                 gateway_loader,
                 "build_authorized_candidate_table_lookup",
@@ -237,7 +278,9 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                 oauth_client_id=principal.oauth_client_id,
                 oauth_token_session_id=principal.token_session_id,
                 auth_mode="google_oidc_oauth", production_authentication=True)
-            def call(client: TestClient, query_text: str) -> dict[str, object]:
+            def call(
+                client: TestClient, query_text: str, **extra_arguments: object
+            ) -> dict[str, object]:
                 response = client.post(
                     "/mcp",
                     headers={"Authorization": "Bearer synthetic.token",
@@ -249,7 +292,10 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                         "method": "tools/call",
                         "params": {
                             "name": "query_effective_graph_view",
-                            "arguments": {"query_text": query_text},
+                            "arguments": {
+                                "query_text": query_text,
+                                **extra_arguments,
+                            },
                         },
                     },
                 )
@@ -267,8 +313,6 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                                  return_value=actor),
                     patch.object(runtime.bridge, "record_mcp_authorization_decision",
                                  return_value=None),
-                    patch.object(hybrid_module,
-                        "execute_deterministic_source_occurrence_inventory") as exact_executor,
                     TestClient(runtime.application.app,
                                raise_server_exceptions=False) as client,
                 ):
@@ -276,6 +320,12 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                     duplicate = call(client, "SYN-DUP-77 asks for OriginField")
                     multi_header = call(client,
                         "SYN-ITEM-42 asks for OriginField and SecondaryField")
+                    exact = call(
+                        client,
+                        f"list every {exact_identifier} row",
+                        exact_inventory_kind=provider.inventory_kind_alias,
+                        exact_field=provider.normalized_field,
+                    )
                 candidate = success["candidate_interpretation"]
                 governed = candidate["governed_citations"]
                 citation_hashes = [item["observation_hash"] for item in governed]
@@ -290,12 +340,29 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(candidate["deterministic_exact"])
                 self.assertIsNone(candidate["exact_result"])
                 self.assertIsNone(success["exact_result"])
+                inventory = exact["exact_inventory"]
+                self.assertEqual(exact["status"], "incomplete")
+                self.assertEqual(inventory["status"], "incomplete")
+                self.assertEqual(inventory["coverage_status"], "incomplete")
+                self.assertEqual(inventory["total_count"], 0)
+                self.assertEqual(inventory["returned_count"], 0)
+                self.assertEqual(inventory["items"], [])
+                self.assertEqual(exact["citations"], [])
+                self.assertEqual(inventory["candidate_only_occurrence_count"], 1)
+                self.assertNotIn("candidate_interpretation", exact)
+                self.assertTrue(
+                    all(
+                        value not in str(exact)
+                        for _field, value, _citation, _lineage in (
+                            candidate_occurrence.projection_bindings
+                        )
+                    )
+                )
                 for rejected in (duplicate, multi_header):
                     self.assertNotIn("candidate_interpretation", rejected)
                     self.assertNotIn("REGION-X", str(rejected))
                     self.assertNotIn("REGION-Y", str(rejected))
                     self.assertNotIn("REGION-ALPHA", str(rejected))
-                exact_executor.assert_not_called()
                 self.assertEqual(lookup_builder.call_count, 1)
                 public = str((success, duplicate, multi_header))
                 self.assertNotIn("object_uri", public)
