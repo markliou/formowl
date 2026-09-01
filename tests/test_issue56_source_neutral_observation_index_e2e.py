@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 import unittest
+from unittest.mock import patch
 
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError, Observation, sha256_json
 from formowl_core import load_issue56_target_mail_tokenizer_profile
 from formowl_graph import EffectiveGraphView
+from formowl_mail import query as query_module
+from formowl_mail.hybrid import _sealed_source_neutral_observation
 from formowl_mail.query import (
     GitHubProjectOccurrenceLineage,
     build_authorized_observation_snippet_index,
@@ -165,6 +168,49 @@ class Issue56SourceNeutralObservationIndexEndToEndTests(unittest.TestCase):
             )
         )
 
+    def test_owner_snapshot_uses_one_detached_boundary_round_trip(self) -> None:
+        expected_index, expected_manifest = build_authorized_observation_snippet_index(
+            self.observations,
+            authorized_source=self.source,
+            occurrence_lineages=self.lineages,
+            authorized_observation_hash_by_id=self.authorized_hashes,
+            tokenizer_profile=self.profile,
+        )
+        sealed_observations = tuple(
+            _sealed_source_neutral_observation(observation)
+            for observation in self.observations
+        )
+        sealed_hashes = {
+            observation.observation_id: sha256_json(observation.to_dict())
+            for observation in sealed_observations
+        }
+        original_to_dict = Observation.to_dict
+        with (
+            patch.object(
+                query_module.Observation,
+                "to_dict",
+                autospec=True,
+                side_effect=original_to_dict,
+            ) as serialized_snapshots,
+            patch.object(
+                query_module.Observation,
+                "from_dict",
+                wraps=Observation.from_dict,
+            ) as boundary_snapshots,
+        ):
+            actual_index, actual_manifest = build_authorized_observation_snippet_index(
+                sealed_observations,
+                authorized_source=self.source,
+                occurrence_lineages=self.lineages,
+                authorized_observation_hash_by_id=sealed_hashes,
+                tokenizer_profile=self.profile,
+            )
+
+        self.assertEqual(serialized_snapshots.call_count, len(sealed_observations))
+        self.assertEqual(boundary_snapshots.call_count, len(sealed_observations))
+        self.assertEqual(actual_index, expected_index)
+        self.assertEqual(actual_manifest, expected_manifest)
+
     def test_denied_missing_authorization_and_mixed_source_fail_before_indexing(
         self,
     ) -> None:
@@ -181,7 +227,6 @@ class Issue56SourceNeutralObservationIndexEndToEndTests(unittest.TestCase):
                 },
                 tokenizer_profile=self.profile,
             )
-
         denied_comment = replace(
             self.comment,
             permission_scope={

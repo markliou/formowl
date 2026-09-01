@@ -29,6 +29,7 @@ from .semantic_plan import (
     AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
     GITHUB_PROJECT_OBSERVATION_SOURCE_KIND,
     AuthorizedSemanticSource,
+    authorized_permission_scope_matches,
 )
 
 MAIL_TOKENIZER_ID = JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID
@@ -278,6 +279,19 @@ def normalized_authorized_observation_lineages(
     }
     if len(observation_by_id) != len(observations):
         raise ContractValidationError("attachment lineage has duplicate Observation ids")
+    return _normalized_authorized_observation_lineages_from_snapshot(
+        observation_by_id,
+        authorized_source=authorized_source,
+        occurrence_lineages=occurrence_lineages,
+    )
+
+
+def _normalized_authorized_observation_lineages_from_snapshot(
+    observation_by_id: Mapping[str, Observation],
+    *,
+    authorized_source: AuthorizedSemanticSource,
+    occurrence_lineages: Sequence[SourceOccurrenceLineage],
+) -> tuple[SourceOccurrenceLineage, ...]:
     supplied_by_id: dict[str, SourceOccurrenceLineage] = {}
     for lineage in occurrence_lineages:
         observation_id = getattr(lineage, "source_observation_id", None)
@@ -300,7 +314,7 @@ def normalized_authorized_observation_lineages(
                 raise ContractValidationError(
                     "attachment lineage input is incomplete"
                 )
-            expected = source_occurrence_lineage_from_observation(
+            expected = _source_occurrence_lineage_from_snapshot(
                 observation,
                 authorized_source=authorized_source,
             )
@@ -382,6 +396,25 @@ def validate_source_neutral_attachment_observation_coverage(
     }
     if len(observation_by_id) != len(observations):
         raise ContractValidationError("attachment coverage has duplicate Observation ids")
+    observation_hash_by_id = {
+        observation_id: sha256_json(observation.to_dict())
+        for observation_id, observation in observation_by_id.items()
+    }
+    return _validate_source_neutral_attachment_observation_coverage_from_snapshot(
+        observation_by_id,
+        observation_hash_by_id=observation_hash_by_id,
+        matched_child_observation_hashes=matched_child_observation_hashes,
+    )
+
+
+def _validate_source_neutral_attachment_observation_coverage_from_snapshot(
+    observation_by_id: Mapping[str, Observation],
+    *,
+    observation_hash_by_id: Mapping[str, str],
+    matched_child_observation_hashes: Sequence[str],
+) -> dict[str, Any]:
+    if set(observation_hash_by_id) != set(observation_by_id):
+        raise ContractValidationError("attachment coverage Observation hash binding is invalid")
     parents = {
         observation_id: observation
         for observation_id, observation in observation_by_id.items()
@@ -391,8 +424,7 @@ def validate_source_neutral_attachment_observation_coverage(
     child_parent_by_hash: dict[str, str] = {}
     returned_parent_ids: set[str] = set()
     for observation_id, lineage in child_lineages.items():
-        observation = observation_by_id[observation_id]
-        child_hash = sha256_json(observation.to_dict())
+        child_hash = observation_hash_by_id[observation_id]
         child_parent_by_hash[child_hash] = lineage.parent_attachment_observation_id
         returned_parent_ids.add(lineage.parent_attachment_observation_id)
 
@@ -423,11 +455,10 @@ def validate_source_neutral_attachment_observation_coverage(
         {
             "schema_version": 1,
             "authorized_parent_hashes": sorted(
-                sha256_json(parent.to_dict()) for parent in parents.values()
+                observation_hash_by_id[parent_id] for parent_id in parents
             ),
             "returned_parent_hashes": sorted(
-                sha256_json(parents[parent_id].to_dict())
-                for parent_id in returned_parent_ids
+                observation_hash_by_id[parent_id] for parent_id in returned_parent_ids
             ),
             "partition": partition,
         }
@@ -822,6 +853,17 @@ def source_occurrence_lineage_from_observation(
     if not isinstance(observation, Observation):
         raise ContractValidationError("source occurrence lineage requires an Observation")
     validated = Observation.from_dict(observation.to_dict())
+    return _source_occurrence_lineage_from_snapshot(
+        validated,
+        authorized_source=authorized_source,
+    )
+
+
+def _source_occurrence_lineage_from_snapshot(
+    validated: Observation,
+    *,
+    authorized_source: AuthorizedSemanticSource,
+) -> SourceOccurrenceLineage:
     if not isinstance(authorized_source, AuthorizedSemanticSource):
         raise ContractValidationError("authorized Observation source is invalid")
     if authorized_source.source_kind == AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND:
@@ -906,11 +948,14 @@ def build_authorized_observation_snippet_index(
     for observation in observations:
         if not isinstance(observation, Observation):
             raise ContractValidationError("Observation index requires Observation records")
-        validated = Observation.from_dict(observation.to_dict())
+        serialized_snapshot = observation.to_dict()
+        validated = Observation.from_dict(serialized_snapshot)
         if validated.observation_id in normalized_by_id:
             raise ContractValidationError("Observation index has duplicate observation ids")
         normalized_by_id[validated.observation_id] = validated
-        observation_hash_by_id[validated.observation_id] = sha256_json(validated.to_dict())
+        observation_hash_by_id[validated.observation_id] = sha256_json(
+            serialized_snapshot
+        )
     if not normalized_by_id:
         raise ContractValidationError("Observation index requires observations")
     supplied_authorized_hashes = dict(authorized_observation_hash_by_id)
@@ -922,14 +967,16 @@ def build_authorized_observation_snippet_index(
 
     lineage_by_observation_id = {
         lineage.source_observation_id: lineage
-        for lineage in normalized_authorized_observation_lineages(
-            tuple(normalized_by_id.values()),
+        for lineage in _normalized_authorized_observation_lineages_from_snapshot(
+            normalized_by_id,
             authorized_source=authorized_source,
             occurrence_lineages=occurrence_lineages,
         )
     }
-    validate_source_neutral_attachment_observation_coverage(
-        tuple(normalized_by_id.values())
+    _validate_source_neutral_attachment_observation_coverage_from_snapshot(
+        normalized_by_id,
+        observation_hash_by_id=observation_hash_by_id,
+        matched_child_observation_hashes=(),
     )
 
     indexed: list[_IndexedObservationSnippet] = []
@@ -1092,7 +1139,15 @@ def _validate_observation_source_scope(
         occurrence_scope_matches = (
             scope_type == "mail_import_session" and scope_id in authorized_source.source_scope_ids
         )
-        if not (workspace_scope_matches or occurrence_scope_matches):
+        project_scope_matches = (
+            scope_type == "project"
+            and scope_id in authorized_source.source_scope_ids
+            and authorized_permission_scope_matches(
+                permission_scope,
+                authorized_source=authorized_source,
+            )
+        )
+        if not (workspace_scope_matches or occurrence_scope_matches or project_scope_matches):
             raise ContractValidationError("Observation index permission scope mismatch")
         return
     raise ContractValidationError("semantic query source kind is unsupported")
@@ -1134,6 +1189,26 @@ def _source_neutral_searchable_text(
                     str(item)
                     for item in value
                     if isinstance(item, (str, int, float)) and not isinstance(item, bool)
+                )
+    elif (
+        source_kind == AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND
+        and observation.modality == "document"
+        and observation.observation_type in _ATTACHMENT_CHILD_OBSERVATION_TYPES
+    ):
+        table_structure = (observation.payload or {}).get("table_structure")
+        if isinstance(table_structure, Mapping):
+            for field_name in ("table_name", "column_name"):
+                value = table_structure.get(field_name)
+                if isinstance(value, str) and value:
+                    values.append(value)
+            columns = table_structure.get("columns")
+            if isinstance(columns, list):
+                values.extend(
+                    str(column["name"])
+                    for column in columns
+                    if isinstance(column, Mapping)
+                    and isinstance(column.get("name"), str)
+                    and column["name"]
                 )
     return "\n".join(values)
 

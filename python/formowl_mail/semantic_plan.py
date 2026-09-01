@@ -6,7 +6,14 @@ from dataclasses import dataclass, replace
 import re
 from typing import Any, Sequence
 
-from formowl_contract import CORE_SUPERTYPE_IDS, ContractValidationError, sha256_json
+from formowl_contract import (
+    CORE_SUPERTYPE_IDS,
+    ContractValidationError,
+    PermissionScope,
+    sha256_json,
+    to_plain,
+    validate_permission_scope,
+)
 from formowl_graph import EffectiveGraphView
 
 from ._guards import assert_public_payload_safe, safe_public_string
@@ -29,6 +36,18 @@ _CLAIM_STRENGTH_BY_CLASS = {
     "exact_set_or_inventory": "complete_authorized_scope",
     "global_summarization": "bounded_summary",
 }
+EXACT_QUERY_GRAMMAR_ROLES = (
+    "conjunction",
+    "operator",
+    "particle",
+    "preposition",
+    "pronoun",
+    "verb",
+)
+_EXACT_QUERY_LEXICAL_ROLES = {
+    "filter_value",
+    "projection_field",
+}
 _PERMISSION_REQUIREMENTS_BY_CLASS = {
     "evidence_lookup": ("evidence_snippet",),
     "relation_reasoning": ("evidence_snippet", "graph_snippet"),
@@ -46,6 +65,13 @@ _EXACT_TERMS = (
     "清單",
     "盤點",
     "多少",
+    "哪些",
+    "明細",
+)
+_CJK_EXACT_OUTPUT_GRAMMAR_V1 = (
+    ("列出", "列舉", "調閱", "整理"),
+    ("出來",),
+    ("全部", "都", "所有"),
 )
 _RELATION_TERMS = (
     "relation",
@@ -89,6 +115,7 @@ class AuthorizedSemanticSource:
     source_kind: str
     workspace_id: str
     source_scope_ids: tuple[str, ...]
+    authorized_permission_scopes: tuple[PermissionScope, ...] = ()
 
     def __post_init__(self) -> None:
         _require_nonempty_public_string(self.source_kind, "source_kind")
@@ -101,6 +128,26 @@ class AuthorizedSemanticSource:
             raise ContractValidationError("semantic query source scope is invalid")
         for source_scope_id in self.source_scope_ids:
             _require_nonempty_public_string(source_scope_id, "source_scope_id")
+        if not isinstance(self.authorized_permission_scopes, tuple):
+            raise ContractValidationError("semantic query permission scope binding is invalid")
+        normalized_scopes: list[tuple[str, PermissionScope]] = []
+        scope_ids: set[str] = set()
+        for permission_scope in self.authorized_permission_scopes:
+            normalized = _canonical_permission_scope(permission_scope)
+            scope_id = normalized["scope_id"]
+            assert isinstance(scope_id, str)
+            if scope_id not in self.source_scope_ids or scope_id in scope_ids:
+                raise ContractValidationError(
+                    "semantic query permission scope binding is invalid"
+                )
+            scope_ids.add(scope_id)
+            normalized_scopes.append((sha256_json(normalized), permission_scope))
+        if tuple(hash_value for hash_value, _scope in normalized_scopes) != tuple(
+            sorted(hash_value for hash_value, _scope in normalized_scopes)
+        ):
+            raise ContractValidationError(
+                "semantic query permission scope binding is not canonical"
+            )
 
     @property
     def occurrence_schema_id(self) -> str:
@@ -108,15 +155,19 @@ class AuthorizedSemanticSource:
 
     @property
     def authorization_fingerprint(self) -> str:
-        return sha256_json(
-            {
-                "schema_version": 1,
-                "source_kind": self.source_kind,
-                "occurrence_schema_id": self.occurrence_schema_id,
-                "workspace_id": self.workspace_id,
-                "source_scope_ids": list(self.source_scope_ids),
-            }
-        )
+        payload = {
+            "schema_version": 1,
+            "source_kind": self.source_kind,
+            "occurrence_schema_id": self.occurrence_schema_id,
+            "workspace_id": self.workspace_id,
+            "source_scope_ids": list(self.source_scope_ids),
+        }
+        if self.authorized_permission_scopes:
+            payload["authorized_permission_scope_hashes"] = [
+                sha256_json(scope.to_dict())
+                for scope in self.authorized_permission_scopes
+            ]
+        return sha256_json(payload)
 
 
 def validated_authorized_semantic_source(
@@ -124,13 +175,51 @@ def validated_authorized_semantic_source(
     source_kind: str,
     workspace_id: str,
     source_scope_ids: Sequence[str],
+    authorized_permission_scopes: Sequence[PermissionScope] = (),
 ) -> AuthorizedSemanticSource:
     """Validate one upstream-authorized source scope without accepting mixed kinds."""
 
+    normalized_scopes = tuple(
+        sorted(
+            authorized_permission_scopes,
+            key=lambda scope: sha256_json(_canonical_permission_scope(scope)),
+        )
+    )
     return AuthorizedSemanticSource(
         source_kind=source_kind,
         workspace_id=workspace_id,
         source_scope_ids=tuple(sorted(set(source_scope_ids))),
+        authorized_permission_scopes=normalized_scopes,
+    )
+
+
+def authorized_permission_scope_matches(
+    permission_scope: Any,
+    *,
+    authorized_source: AuthorizedSemanticSource,
+) -> bool:
+    """Check a source permission scope without widening legacy mail/GitHub paths."""
+
+    normalized = to_plain(permission_scope)
+    if not isinstance(normalized, dict):
+        return False
+    scope_type = normalized.get("scope_type")
+    scope_id = normalized.get("scope_id")
+    if not isinstance(scope_type, str) or not isinstance(scope_id, str) or not scope_id:
+        return False
+    if authorized_source.source_kind == GITHUB_PROJECT_OBSERVATION_SOURCE_KIND:
+        return scope_type == "project" and scope_id in authorized_source.source_scope_ids
+    if authorized_source.source_kind != AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND:
+        return False
+    if scope_type == "workspace":
+        return scope_id == authorized_source.workspace_id
+    if scope_type == "mail_import_session":
+        return scope_id in authorized_source.source_scope_ids
+    if scope_type != "project":
+        return False
+    return any(
+        scope.to_dict() == normalized
+        for scope in authorized_source.authorized_permission_scopes
     )
 
 
@@ -163,6 +252,12 @@ class SemanticQueryPlan:
     exact_operation: str | None = None
     exact_inventory_kind: str | None = None
     exact_filter_term_hashes: tuple[str, ...] = ()
+    exact_projection_term_hashes: tuple[str, ...] = ()
+    exact_column_value_hash_pairs: tuple[tuple[str, str], ...] = ()
+    exact_lexical_term_ledger: tuple[tuple[str, str, str, str], ...] = ()
+    exact_grammar_term_ledger: tuple[tuple[str, str], ...] = ()
+    exact_grammar_policy_fingerprint: str | None = None
+    exact_source_occurrence_provider_fingerprint: str | None = None
     exact_identifier_term_hashes: tuple[str, ...] = ()
     exact_topic_term_hashes: tuple[str, ...] = ()
     exact_normalized_field: str | None = None
@@ -218,6 +313,28 @@ class SemanticQueryPlan:
                 self.exact_predicate,
                 self.exact_operator,
             ]
+        if self.exact_projection_term_hashes:
+            payload["exact_projection_term_hashes"] = list(
+                self.exact_projection_term_hashes
+            )
+        if self.exact_lexical_term_ledger:
+            payload["exact_structured_query_binding"] = {
+                "column_value_hash_pairs": [
+                    list(pair) for pair in self.exact_column_value_hash_pairs
+                ],
+                "lexical_term_ledger": [
+                    list(binding) for binding in self.exact_lexical_term_ledger
+                ],
+                "grammar_term_ledger": [
+                    list(binding) for binding in self.exact_grammar_term_ledger
+                ],
+                "grammar_policy_fingerprint": (
+                    self.exact_grammar_policy_fingerprint
+                ),
+                "provider_fingerprint": (
+                    self.exact_source_occurrence_provider_fingerprint
+                ),
+            }
         if self.relation_repair_policy_fingerprint is not None:
             payload["relation_repair"] = {
                 "identifier_term_hashes": list(self.relation_repair_identifier_term_hashes),
@@ -269,6 +386,37 @@ class SemanticQueryPlan:
                 sha256_json(self.exact_inventory_kind) if self.exact_inventory_kind else None
             ),
             "exact_filter_term_hashes": list(self.exact_filter_term_hashes),
+            **(
+                {"exact_projection_term_hashes": list(self.exact_projection_term_hashes)}
+                if self.exact_projection_term_hashes
+                else {}
+            ),
+            **(
+                {
+                    "exact_structured_query_binding": {
+                        "column_value_hash_pairs": [
+                            list(pair)
+                            for pair in self.exact_column_value_hash_pairs
+                        ],
+                        "lexical_term_ledger": [
+                            list(binding)
+                            for binding in self.exact_lexical_term_ledger
+                        ],
+                        "grammar_term_ledger": [
+                            list(binding)
+                            for binding in self.exact_grammar_term_ledger
+                        ],
+                        "grammar_policy_fingerprint": (
+                            self.exact_grammar_policy_fingerprint
+                        ),
+                        "provider_fingerprint": (
+                            self.exact_source_occurrence_provider_fingerprint
+                        ),
+                    }
+                }
+                if self.exact_lexical_term_ledger
+                else {}
+            ),
             "exact_identifier_term_hashes": list(self.exact_identifier_term_hashes),
             "exact_topic_term_hashes": list(self.exact_topic_term_hashes),
             "target_core_supertype_hash": (
@@ -296,6 +444,19 @@ def deterministic_query_class(query_text: str) -> str:
     normalized = query_text.casefold()
     if any(term in normalized for term in _EXACT_TERMS):
         return "exact_set_or_inventory"
+    (
+        output_verbs,
+        completion_markers,
+        inventory_markers,
+    ) = _CJK_EXACT_OUTPUT_GRAMMAR_V1
+    if (
+        any(term in normalized for term in output_verbs)
+        and (
+            any(marker in normalized for marker in completion_markers)
+            or any(marker in normalized for marker in inventory_markers)
+        )
+    ):
+        return "exact_set_or_inventory"
     if any(term in normalized for term in _RELATION_TERMS):
         return "relation_reasoning"
     if any(term in normalized for term in _SUMMARY_TERMS):
@@ -316,6 +477,12 @@ def route_semantic_query(
     target_core_supertype_id: str | None = None,
     exact_inventory_kind: str | None = None,
     exact_filter_term_hashes: Sequence[str] = (),
+    exact_projection_term_hashes: Sequence[str] = (),
+    exact_column_value_hash_pairs: Sequence[tuple[str, str]] = (),
+    exact_lexical_term_ledger: Sequence[tuple[str, str, str, str]] = (),
+    exact_grammar_term_ledger: Sequence[tuple[str, str]] = (),
+    exact_grammar_policy_fingerprint: str | None = None,
+    exact_source_occurrence_provider_fingerprint: str | None = None,
     exact_identifier_term_hashes: Sequence[str] = (),
     exact_topic_term_hashes: Sequence[str] = (),
     exact_normalized_field: str | None = None,
@@ -395,6 +562,36 @@ def route_semantic_query(
             tuple(sorted(set(exact_filter_term_hashes)))
             if query_class == "exact_set_or_inventory"
             else ()
+        ),
+        exact_projection_term_hashes=(
+            tuple(sorted(set(exact_projection_term_hashes)))
+            if query_class == "exact_set_or_inventory"
+            else ()
+        ),
+        exact_column_value_hash_pairs=(
+            tuple(sorted(set(exact_column_value_hash_pairs)))
+            if query_class == "exact_set_or_inventory"
+            else ()
+        ),
+        exact_lexical_term_ledger=(
+            tuple(exact_lexical_term_ledger)
+            if query_class == "exact_set_or_inventory"
+            else ()
+        ),
+        exact_grammar_term_ledger=(
+            tuple(exact_grammar_term_ledger)
+            if query_class == "exact_set_or_inventory"
+            else ()
+        ),
+        exact_grammar_policy_fingerprint=(
+            exact_grammar_policy_fingerprint
+            if query_class == "exact_set_or_inventory"
+            else None
+        ),
+        exact_source_occurrence_provider_fingerprint=(
+            exact_source_occurrence_provider_fingerprint
+            if query_class == "exact_set_or_inventory"
+            else None
         ),
         exact_identifier_term_hashes=(
             tuple(sorted(set(exact_identifier_term_hashes)))
@@ -553,6 +750,31 @@ def _validate_plan_strings(plan: SemanticQueryPlan) -> None:
         ("required_permissions", plan.required_permissions),
         ("seed_node_ids", plan.seed_node_ids),
         ("exact_filter_term_hashes", plan.exact_filter_term_hashes),
+        ("exact_projection_term_hashes", plan.exact_projection_term_hashes),
+        (
+            "exact_column_value_hash_pairs",
+            tuple(
+                value
+                for pair in plan.exact_column_value_hash_pairs
+                for value in pair
+            ),
+        ),
+        (
+            "exact_lexical_term_ledger",
+            tuple(
+                value
+                for binding in plan.exact_lexical_term_ledger
+                for value in binding
+            ),
+        ),
+        (
+            "exact_grammar_term_ledger",
+            tuple(
+                value
+                for binding in plan.exact_grammar_term_ledger
+                for value in binding
+            ),
+        ),
         ("exact_identifier_term_hashes", plan.exact_identifier_term_hashes),
         ("exact_topic_term_hashes", plan.exact_topic_term_hashes),
         (
@@ -580,6 +802,20 @@ def _validate_plan_strings(plan: SemanticQueryPlan) -> None:
         raise ContractValidationError("exact source occurrence binding is incomplete")
     for term_hash in (
         *plan.exact_filter_term_hashes,
+        *plan.exact_projection_term_hashes,
+        *(
+            value
+            for pair in plan.exact_column_value_hash_pairs
+            for value in pair
+        ),
+        *(
+            value
+            for term_hash, _role, column_hash, grounded_hash in (
+                plan.exact_lexical_term_ledger
+            )
+            for value in (term_hash, column_hash, grounded_hash)
+        ),
+        *(term_hash for term_hash, _role in plan.exact_grammar_term_ledger),
         *plan.exact_identifier_term_hashes,
         *plan.exact_topic_term_hashes,
         *plan.relation_repair_identifier_term_hashes,
@@ -587,7 +823,67 @@ def _validate_plan_strings(plan: SemanticQueryPlan) -> None:
     ):
         if re.fullmatch(r"sha256:[0-9a-f]{64}", term_hash) is None:
             raise ContractValidationError("semantic query term hash is invalid")
+    for _term_hash, role, _column_hash, _grounded_hash in (
+        plan.exact_lexical_term_ledger
+    ):
+        if role not in _EXACT_QUERY_LEXICAL_ROLES:
+            raise ContractValidationError(
+                "semantic query lexical term role is invalid"
+            )
+    for _term_hash, role in plan.exact_grammar_term_ledger:
+        if role not in EXACT_QUERY_GRAMMAR_ROLES:
+            raise ContractValidationError(
+                "semantic query grammar term role is invalid"
+            )
+    lexical_occurrence_hashes = tuple(
+        term_hash
+        for term_hash, _role, _column_hash, _grounded_hash in (
+            plan.exact_lexical_term_ledger
+        )
+    )
+    grammar_occurrence_hashes = tuple(
+        term_hash for term_hash, _role in plan.exact_grammar_term_ledger
+    )
+    lexical_bindings_by_term: dict[str, set[tuple[str, str, str]]] = {}
+    for term_hash, role, column_hash, grounded_hash in plan.exact_lexical_term_ledger:
+        lexical_bindings_by_term.setdefault(term_hash, set()).add(
+            (role, column_hash, grounded_hash)
+        )
+    if (
+        len(set(plan.exact_lexical_term_ledger))
+        != len(plan.exact_lexical_term_ledger)
+        or any(
+            len(bindings) > 1
+            and (
+                {role for role, _column_hash, _grounded_hash in bindings}
+                != {"filter_value"}
+                or len(
+                    {
+                        grounded_hash
+                        for _role, _column_hash, grounded_hash in bindings
+                    }
+                )
+                != 1
+            )
+            for bindings in lexical_bindings_by_term.values()
+        )
+        or len(set(grammar_occurrence_hashes)) != len(grammar_occurrence_hashes)
+        or set(lexical_occurrence_hashes).intersection(
+            grammar_occurrence_hashes
+        )
+    ):
+        raise ContractValidationError(
+            "semantic query grounding ledger is invalid"
+        )
     for field_name, fingerprint in (
+        (
+            "exact_grammar_policy_fingerprint",
+            plan.exact_grammar_policy_fingerprint,
+        ),
+        (
+            "exact_source_occurrence_provider_fingerprint",
+            plan.exact_source_occurrence_provider_fingerprint,
+        ),
         (
             "relation_repair_policy_fingerprint",
             plan.relation_repair_policy_fingerprint,
@@ -660,6 +956,12 @@ def _validate_query_class_shape(
             plan.exact_operation is not None
             or plan.exact_inventory_kind is not None
             or plan.exact_filter_term_hashes
+            or plan.exact_projection_term_hashes
+            or plan.exact_column_value_hash_pairs
+            or plan.exact_lexical_term_ledger
+            or plan.exact_grammar_term_ledger
+            or plan.exact_grammar_policy_fingerprint is not None
+            or plan.exact_source_occurrence_provider_fingerprint is not None
             or plan.exact_identifier_term_hashes
             or plan.exact_topic_term_hashes
             or plan.exact_normalized_field is not None
@@ -694,11 +996,84 @@ def _validate_query_class_shape(
         )
         if plan.exact_filter_term_hashes != expected_filter_hashes:
             raise ContractValidationError("exact query filter slots are inconsistent")
+        if set(plan.exact_filter_term_hashes).intersection(
+            plan.exact_projection_term_hashes
+        ):
+            raise ContractValidationError(
+                "exact query filter and projection slots overlap"
+            )
+        structured_fields_present = (
+            bool(plan.exact_column_value_hash_pairs),
+            bool(plan.exact_lexical_term_ledger),
+            bool(plan.exact_grammar_term_ledger),
+            plan.exact_grammar_policy_fingerprint is not None,
+            plan.exact_source_occurrence_provider_fingerprint is not None,
+        )
+        if any(structured_fields_present):
+            if not (
+                plan.exact_column_value_hash_pairs
+                and plan.exact_lexical_term_ledger
+                and plan.exact_grammar_policy_fingerprint is not None
+                and plan.exact_source_occurrence_provider_fingerprint is not None
+            ):
+                raise ContractValidationError(
+                    "exact structured query binding is incomplete"
+                )
+            filter_pairs = tuple(
+                sorted(
+                    {
+                        (column_hash, grounded_hash)
+                        for (
+                            _term_hash,
+                            role,
+                            column_hash,
+                            grounded_hash,
+                        ) in plan.exact_lexical_term_ledger
+                        if role == "filter_value"
+                    }
+                )
+            )
+            projection_columns = tuple(
+                sorted(
+                    {
+                        column_hash
+                        for (
+                            _term_hash,
+                            role,
+                            column_hash,
+                            _grounded_hash,
+                        ) in plan.exact_lexical_term_ledger
+                        if role == "projection_field"
+                    }
+                )
+            )
+            if (
+                filter_pairs != plan.exact_column_value_hash_pairs
+                or tuple(
+                    sorted(
+                        {
+                            value_hash
+                        for _column_hash, value_hash in filter_pairs
+                        }
+                    )
+                )
+                != plan.exact_filter_term_hashes
+                or projection_columns != plan.exact_projection_term_hashes
+            ):
+                raise ContractValidationError(
+                    "exact structured query slots are inconsistent"
+                )
         return
     if (
         plan.exact_operation is not None
         or plan.exact_inventory_kind is not None
         or plan.exact_filter_term_hashes
+        or plan.exact_projection_term_hashes
+        or plan.exact_column_value_hash_pairs
+        or plan.exact_lexical_term_ledger
+        or plan.exact_grammar_term_ledger
+        or plan.exact_grammar_policy_fingerprint is not None
+        or plan.exact_source_occurrence_provider_fingerprint is not None
         or plan.exact_identifier_term_hashes
         or plan.exact_topic_term_hashes
         or plan.exact_normalized_field is not None
@@ -755,14 +1130,49 @@ def _require_nonempty_public_string(value: str, field_name: str) -> None:
     safe_public_string(value, field_name)
 
 
+def _canonical_permission_scope(value: PermissionScope) -> dict[str, Any]:
+    if not isinstance(value, PermissionScope):
+        raise ContractValidationError("semantic query permission scope binding is invalid")
+    normalized = to_plain(value)
+    if not isinstance(normalized, dict):
+        raise ContractValidationError("semantic query permission scope binding is invalid")
+    try:
+        validate_permission_scope(normalized)
+    except (ContractValidationError, TypeError, ValueError) as exc:
+        raise ContractValidationError(
+            "semantic query permission scope binding is invalid"
+        ) from exc
+    if set(normalized) not in (
+        {"scope_type", "scope_id", "visibility"},
+        {"scope_type", "scope_id", "visibility", "inherited_from"},
+    ):
+        raise ContractValidationError("semantic query permission scope binding is invalid")
+    if normalized.get("scope_type") not in {
+        "workspace",
+        "mail_import_session",
+        "project",
+    } or normalized.get("visibility") != "restricted":
+        raise ContractValidationError("semantic query permission scope binding is invalid")
+    _require_nonempty_public_string(normalized.get("scope_id"), "permission_scope.scope_id")
+    inherited_from = normalized.get("inherited_from")
+    if inherited_from is not None:
+        _require_nonempty_public_string(
+            inherited_from,
+            "permission_scope.inherited_from",
+        )
+    return normalized
+
+
 __all__ = [
     "AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND",
     "GITHUB_PROJECT_OBSERVATION_SOURCE_KIND",
     "AuthorizedSemanticSource",
     "DEFAULT_SEMANTIC_PLAN_LIMITS",
+    "EXACT_QUERY_GRAMMAR_ROLES",
     "SEMANTIC_QUERY_CLASSES",
     "SemanticPlanLimits",
     "SemanticQueryPlan",
+    "authorized_permission_scope_matches",
     "deterministic_query_class",
     "repair_relation_plan_once",
     "route_semantic_query",

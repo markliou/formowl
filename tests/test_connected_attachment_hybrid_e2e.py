@@ -25,11 +25,12 @@ from formowl_contract import (
 )
 from formowl_gateway.runtime import ConnectedRuntime, ConnectedRuntimeConfig
 from formowl_gateway.semantic import SemanticMcpGateway, validate_public_gateway_payload
-from formowl_graph import EffectiveGraphView
-from formowl_graph.index import GraphProjectionEdge
 from formowl_ingestion.extraction import ExtractionInput
 from formowl_ingestion.extractors.document.attachment import AttachmentDocumentExtractor
-from formowl_mail.hybrid import build_authorized_semantic_observation_session
+from formowl_mail.hybrid import (
+    build_authorized_semantic_observation_session,
+    build_authorized_source_backed_effective_graph_view,
+)
 from formowl_mail.query import (
     build_authorized_observation_snippet_index,
     source_occurrence_lineage_from_observation,
@@ -241,28 +242,12 @@ class ConnectedAttachmentHybridE2ETests(unittest.IsolatedAsyncioTestCase):
             candidate_by_hash,
         )
 
-        graph_view = EffectiveGraphView(
-            requester_user_id=REQUESTER_ID,
-            user_graph_revision_id="user_graph_attachment_hybrid",
-            canonical_graph_revision_id="canonical_graph_attachment_hybrid",
-            ontology_revision_id="ontology_attachment_hybrid",
-            assembly_policy_id="assembly_attachment_hybrid",
-            visible_edges=[
-                GraphProjectionEdge(
-                    edge_id="edge_attachment_hybrid_source_backed",
-                    source_node_id="node_attachment_hybrid_parent",
-                    target_node_id="node_attachment_hybrid_child",
-                    relation_type="source_backed",
-                    properties={
-                        "source_observation_ids": [parent_mail.observation_id],
-                        "source_kind_hash": sha256_json(
-                            AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND
-                        ),
-                    },
-                    permission_scope=dict(PERMISSION_SCOPE),
-                )
-            ],
-        )
+        graph_view = build_authorized_source_backed_effective_graph_view(
+            session=session,
+            source_binding_fingerprint=sha256_json(
+                "attachment-hybrid-source-binding"
+            ),
+        ).effective_graph_view
         loaded = SimpleNamespace(
             session=session,
             effective_graph_view=graph_view,

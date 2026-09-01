@@ -1132,9 +1132,14 @@ class Issue56SemanticExecutionEndToEndTests(unittest.TestCase):
             "source_scope_ids",
             "authorized_scope_fingerprint",
             "occurrences",
+            "filter_slot_policy",
             "unresolved_count",
             "unsupported_count",
+            "encrypted_count",
             "redacted_count",
+            "authorized_occurrence_scope_count",
+            "extractable_occurrence_scope_count",
+            "source_asset_reason_counts",
             "duplicate_policy",
         )
         self.assertEqual(

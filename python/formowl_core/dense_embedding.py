@@ -52,6 +52,7 @@ ISSUE56_TARGET_DENSE_PROFILE_FINGERPRINT = (
 _PROFILE_CONTRACT_ID = "formowl_issue56_dense_embedding_profile_v1"
 _EXECUTION_COMPONENT_CONTRACT_ID = "formowl_issue56_execution_component_binding_v1"
 _UNAVAILABLE_MESSAGE = "issue56 target dense embedding model is unavailable"
+_DENSE_EVIDENCE_BATCH_CHUNK_SIZE = 32
 _MODEL_FILE_NAME = "model.safetensors"
 _MODEL_CONFIG_FILE_NAME = "config.json"
 _MAX_MODEL_BYTES = 1024 * 1024 * 1024
@@ -141,6 +142,12 @@ class DenseEncoder(Protocol):
     def encode_evidence(self, text: str) -> tuple[float, ...]:
         """Encode one authorized evidence text with the frozen passage policy."""
 
+    def encode_evidence_batch(
+        self,
+        texts: Sequence[str],
+    ) -> tuple[tuple[float, ...], ...]:
+        """Encode authorized evidence texts with the frozen passage policy."""
+
     def encode_tokens(self, tokens: Sequence[str]) -> tuple[float, ...]:
         """Compatibility boundary for token-set consumers."""
 
@@ -210,6 +217,12 @@ class SentenceTransformerDenseEncoder:
     def encode_evidence(self, text: str) -> tuple[float, ...]:
         return self._encode_one(ISSUE56_TARGET_DENSE_EVIDENCE_PREFIX, text)
 
+    def encode_evidence_batch(
+        self,
+        texts: Sequence[str],
+    ) -> tuple[tuple[float, ...], ...]:
+        return self._encode_many(ISSUE56_TARGET_DENSE_EVIDENCE_PREFIX, texts)
+
     def encode_tokens(self, tokens: Sequence[str]) -> tuple[float, ...]:
         """Encode a deterministic symmetric token representation.
 
@@ -233,26 +246,45 @@ class SentenceTransformerDenseEncoder:
         )
 
     def _encode_one(self, prefix: str, text: str) -> tuple[float, ...]:
-        normalized = _normalize_embedding_text(text)
-        if not normalized:
+        return self._encode_many(prefix, (text,))[0]
+
+    def _encode_many(
+        self,
+        prefix: str,
+        texts: Sequence[str],
+    ) -> tuple[tuple[float, ...], ...]:
+        normalized_texts = tuple(_normalize_embedding_text(text) for text in texts)
+        if any(not text for text in normalized_texts):
             raise ValueError("dense encoder text is required")
-        try:
-            encoded = self._model.encode(
-                [prefix + normalized],
-                batch_size=1,
-                show_progress_bar=False,
-                precision="float32",
-                convert_to_numpy=True,
-                convert_to_tensor=False,
-                device="cpu",
-                normalize_embeddings=True,
-            )
-            row = encoded[0]
-            vector = tuple(float(value) for value in row.tolist())
-        except (AttributeError, IndexError, TypeError, ValueError) as exc:
-            raise DenseEmbeddingUnavailableError("model_inference_failed") from exc
-        _validate_normalized_vector(vector, expected_dimension=self.dimension)
-        return vector
+        if not normalized_texts:
+            return ()
+        vectors: list[tuple[float, ...]] = []
+        for start in range(0, len(normalized_texts), _DENSE_EVIDENCE_BATCH_CHUNK_SIZE):
+            chunk = normalized_texts[start : start + _DENSE_EVIDENCE_BATCH_CHUNK_SIZE]
+            try:
+                encoded = self._model.encode(
+                    [prefix + text for text in chunk],
+                    batch_size=min(_DENSE_EVIDENCE_BATCH_CHUNK_SIZE, len(chunk)),
+                    show_progress_bar=False,
+                    precision="float32",
+                    convert_to_numpy=True,
+                    convert_to_tensor=False,
+                    device="cpu",
+                    normalize_embeddings=True,
+                )
+                if len(encoded) != len(chunk):
+                    raise DenseEmbeddingUnavailableError(
+                        "dense_batch_output_count_mismatch"
+                    )
+                chunk_vectors = tuple(
+                    tuple(float(value) for value in row.tolist()) for row in encoded
+                )
+            except (AttributeError, IndexError, TypeError, ValueError) as exc:
+                raise DenseEmbeddingUnavailableError("model_inference_failed") from exc
+            for vector in chunk_vectors:
+                _validate_normalized_vector(vector, expected_dimension=self.dimension)
+            vectors.extend(chunk_vectors)
+        return tuple(vectors)
 
 
 @dataclass(frozen=True)

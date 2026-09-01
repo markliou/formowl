@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 import re
 import stat
-from typing import Any
+from typing import Any, Literal
 import unicodedata
 
 ASCII_IDENTIFIER_REGEX_TOKENIZER_ID = "ascii_identifier_regex_v1"
@@ -195,6 +195,28 @@ _CANDIDATE_ADMISSION_POLICY_PAYLOAD = {
     "stopwords": sorted(_STOPWORDS),
     "cjk_boundary_stop_characters": sorted(_CJK_BOUNDARY_STOP_CHARACTERS),
 }
+_QUERY_GROUNDING_GRAMMAR_POLICY_ID = "formowl_query_grounding_grammar_policy_v1"
+_QUERY_GROUNDING_GRAMMAR_ROLE_BY_POS_PREFIX = {
+    "c": "conjunction",
+    "m": "operator",
+    "p": "preposition",
+    "q": "operator",
+    "r": "pronoun",
+    "u": "particle",
+    "v": "verb",
+    "y": "particle",
+}
+_QUERY_GROUNDING_GRAMMAR_POLICY_PAYLOAD = {
+    "policy_id": _QUERY_GROUNDING_GRAMMAR_POLICY_ID,
+    "segmenter": "jieba.posseg.POSTokenizer",
+    "hmm": False,
+    "roles_by_pos_prefix": _QUERY_GROUNDING_GRAMMAR_ROLE_BY_POS_PREFIX,
+    "default_role": "lexical",
+    "protected_identifiers": "atomic_lexical_terms",
+    "punctuation": "omit_unicode_category_P",
+    "whitespace": "omit",
+    "offsets": "original_python_codepoint_offsets",
+}
 
 
 @dataclass(frozen=True)
@@ -215,6 +237,35 @@ class MailCandidateAdmissionTokenization:
 
     tokens: frozenset[str]
     protected_identifiers: tuple[ProtectedIdentifierSpan, ...]
+
+
+QueryGroundingGrammarRole = Literal[
+    "conjunction",
+    "lexical",
+    "operator",
+    "particle",
+    "preposition",
+    "pronoun",
+    "verb",
+]
+
+
+@dataclass(frozen=True)
+class OrderedQueryGroundingTerm:
+    """One ordered normalized query span with a closed grammar role."""
+
+    start: int
+    end: int
+    normalized_term: str
+    grammar_role: QueryGroundingGrammarRole
+
+
+@dataclass(frozen=True)
+class OrderedQueryGroundingAnalysis:
+    """Ordered query terms governed by one profile-bound grammar policy."""
+
+    terms: tuple[OrderedQueryGroundingTerm, ...]
+    grammar_policy_fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -293,6 +344,86 @@ class MailCandidateAdmissionTokenizerProfile:
         return MailCandidateAdmissionTokenization(
             tokens=frozenset(admitted),
             protected_identifiers=protected_identifiers,
+        )
+
+    def analyze_query_grounding(self, value: str) -> OrderedQueryGroundingAnalysis:
+        """Return all ordered non-punctuation spans with deterministic POS roles.
+
+        This is a planning-only view.  It does not participate in candidate
+        admission, retrieval token hashing, or this profile's fingerprint.
+        """
+
+        _require_text(value)
+        if (
+            self.tokenizer_id != JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID
+            or self._jieba_module is None
+        ):
+            raise RuntimeError("frozen tokenizer query grounding is unavailable")
+        try:
+            posseg = importlib.import_module("jieba.posseg")
+            pos_tokenizer = posseg.POSTokenizer(self._jieba_module)
+        except (AttributeError, ImportError, TypeError) as exc:
+            raise RuntimeError("frozen tokenizer query grounding is unavailable") from exc
+
+        protected_identifiers = _protected_identifier_spans(value)
+        segmented_value = _without_protected_identifier_spans(
+            value,
+            protected_identifiers,
+        )
+        terms = [
+            OrderedQueryGroundingTerm(
+                start=span.start,
+                end=span.end,
+                normalized_term=span.normalized_surface,
+                grammar_role="lexical",
+            )
+            for span in protected_identifiers
+        ]
+        cursor = 0
+        try:
+            pos_terms = pos_tokenizer.cut(segmented_value, HMM=False)
+            for pos_term in pos_terms:
+                surface = str(pos_term.word)
+                start = segmented_value.find(surface, cursor)
+                if not surface or start < cursor:
+                    raise RuntimeError
+                end = start + len(surface)
+                cursor = end
+                if _query_grounding_omits(surface):
+                    continue
+                normalized_term = _normalize_text(surface, self.normalization_id).strip()
+                if not normalized_term:
+                    raise RuntimeError
+                terms.append(
+                    OrderedQueryGroundingTerm(
+                        start=start,
+                        end=end,
+                        normalized_term=normalized_term,
+                        grammar_role=_query_grounding_grammar_role(pos_term.flag),
+                    )
+                )
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            raise RuntimeError("frozen tokenizer query grounding is unavailable") from exc
+
+        ordered_terms = tuple(sorted(terms, key=lambda term: (term.start, term.end)))
+        if any(
+            current.end > following.start
+            for current, following in zip(ordered_terms, ordered_terms[1:])
+        ):
+            raise RuntimeError("frozen tokenizer query grounding is unavailable")
+        covered_offsets = {
+            offset
+            for term in ordered_terms
+            for offset in range(term.start, term.end)
+        }
+        if any(
+            offset not in covered_offsets and not _query_grounding_omits(character)
+            for offset, character in enumerate(value)
+        ):
+            raise RuntimeError("frozen tokenizer query grounding is unavailable")
+        return OrderedQueryGroundingAnalysis(
+            terms=ordered_terms,
+            grammar_policy_fingerprint=_query_grounding_grammar_policy_fingerprint(self),
         )
 
     def fingerprint_payload(self) -> dict[str, Any]:
@@ -992,6 +1123,39 @@ def _normalized_protected_token(value: str, identifier_kind: str) -> str:
     return normalized
 
 
+def _query_grounding_omits(value: str) -> bool:
+    return all(
+        character.isspace() or unicodedata.category(character).startswith("P")
+        for character in value
+    )
+
+
+def _query_grounding_grammar_role(pos_tag: Any) -> QueryGroundingGrammarRole:
+    normalized_tag = str(pos_tag).strip().lower()
+    if not normalized_tag:
+        raise RuntimeError("frozen tokenizer query grounding is unavailable")
+    return _QUERY_GROUNDING_GRAMMAR_ROLE_BY_POS_PREFIX.get(
+        normalized_tag[0],
+        "lexical",
+    )
+
+
+def _query_grounding_grammar_policy_fingerprint(
+    profile: MailCandidateAdmissionTokenizerProfile,
+) -> str:
+    return _canonical_sha256(
+        {
+            "grammar_policy": _QUERY_GROUNDING_GRAMMAR_POLICY_PAYLOAD,
+            "tokenizer_id": profile.tokenizer_id,
+            "normalization_id": profile.normalization_id,
+            "normalization_sha256": profile.normalization_sha256,
+            "jieba_version": profile.jieba_version,
+            "jieba_dictionary_sha256": profile.jieba_dictionary_sha256,
+            "jieba_user_dictionary_sha256": profile.jieba_user_dictionary_sha256,
+        }
+    )
+
+
 def _normalize_text(value: str, normalization_id: str) -> str:
     if normalization_id == _ASCII_NORMALIZATION_ID:
         return value.lower()
@@ -1021,7 +1185,10 @@ __all__ = [
     "JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID",
     "MailCandidateAdmissionTokenization",
     "MailCandidateAdmissionTokenizerProfile",
+    "OrderedQueryGroundingAnalysis",
+    "OrderedQueryGroundingTerm",
     "ProtectedIdentifierSpan",
+    "QueryGroundingGrammarRole",
     "ascii_identifier_regex_tokens",
     "build_ascii_identifier_regex_tokenizer_profile",
     "build_frozen_jieba_sentencepiece_tokenizer_profile",

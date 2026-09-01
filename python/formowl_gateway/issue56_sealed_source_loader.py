@@ -24,11 +24,13 @@ from formowl_contract import (
     redact_public_raw_references,
     sha256_json,
 )
-from formowl_mail.answer import render_governed_evidence_answer
+from formowl_mail.answer import build_authorized_candidate_table_lookup, interpret_authorized_candidate_table_query, render_governed_evidence_answer
 from formowl_mail.exact import (
     AuthorizedSourceOccurrence,
     SourceOccurrenceProvider,
     authorized_source_occurrence_scope_fingerprint,
+    source_occurrence_column_capability_hash,
+    source_occurrence_projection_capability_hash,
 )
 from formowl_mail.issue56_sealed_source import (
     APPROVER_ACTOR,
@@ -38,7 +40,9 @@ from formowl_mail.issue56_sealed_source import (
     WORKSPACE_ID,
     load_issue56_sealed_source,
 )
+from formowl_mail.hybrid import attach_authorized_source_occurrence_providers
 from formowl_mail.query import (
+    MailAttachmentChildOccurrenceLineage,
     MailEvidenceQueryResult,
     normalized_authorized_observation_lineages,
     source_occurrence_lineage_from_observation,
@@ -251,6 +255,18 @@ _PATH_FIELDS: Final[frozenset[str]] = frozenset(
         "source_identifier_candidate_artifact_path",
         "source_identifier_candidate_safe_report_path",
     }
+)
+_SOURCE_SCHEMA_CAPABILITY_MANIFEST_PATH_ENV: Final[str] = (
+    "FORMOWL_ISSUE56_SOURCE_SCHEMA_CAPABILITY_MANIFEST_PATH"
+)
+_SOURCE_SCHEMA_CAPABILITY_MANIFEST_SHA256_ENV: Final[str] = (
+    "FORMOWL_ISSUE56_SOURCE_SCHEMA_CAPABILITY_MANIFEST_SHA256"
+)
+_SOURCE_SCHEMA_CAPABILITY_MANIFEST_ARTIFACT_ID: Final[str] = (
+    "formowl_issue56_sealed_source_schema_capability_candidate_manifest_v2"
+)
+_SOURCE_SCHEMA_CAPABILITY_POLICY_ID: Final[str] = (
+    "source_schema_capability_candidate_only_unreviewed_v2"
 )
 
 
@@ -487,7 +503,10 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
         ),
     )
     providers = _build_mail_source_occurrence_providers(loaded, safe_binding=safe_binding)
-    session = replace(loaded.session, source_occurrence_providers=providers)
+    session = attach_authorized_source_occurrence_providers(
+        loaded.session,
+        providers,
+    )
     graph_view = loaded.effective_graph_view
     relation_types = tuple(sorted({edge.relation_type for edge in graph_view.visible_edges}))
     relation_by_edge_hash: dict[str, str] = {}
@@ -503,13 +522,46 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
         or not relation_types
     ):
         raise ContractValidationError("production sealed source binding is invalid")
+    lineaged_observation_ids = {
+        lineage.source_observation_id for lineage in session.occurrence_lineages
+    }
+    lineage_validation_observations = tuple(
+        observation
+        for observation in session.authorized_observations
+        if (
+            observation.observation_id in lineaged_observation_ids
+            or observation.observation_type in {"table_row", "table_cell"}
+            or (
+                observation.observation_type == "email_attachment_occurrence"
+                and "child_asset_id" in (observation.payload or {})
+            )
+        )
+    )
+    lineage_validation_observation_ids = {
+        observation.observation_id
+        for observation in lineage_validation_observations
+    }
+    excluded_lineage_observations = tuple(
+        observation
+        for observation in session.authorized_observations
+        if observation.observation_id not in lineage_validation_observation_ids
+    )
+    if any(
+        observation.modality != "mail"
+        or observation.observation_type != "mail_folder_occurrence"
+        for observation in excluded_lineage_observations
+    ):
+        raise ContractValidationError("production evidence lineage binding is invalid")
     normalized_lineages = normalized_authorized_observation_lineages(
-        session.authorized_observations,
+        lineage_validation_observations,
         authorized_source=session.authorized_source,
         occurrence_lineages=session.occurrence_lineages,
     )
     if normalized_lineages != session.occurrence_lineages:
         raise ContractValidationError("production evidence lineage binding is invalid")
+    candidate_ledger = _build_candidate_table_ledger(session)
+    candidate_lookup = (None if candidate_ledger is None else build_authorized_candidate_table_lookup(
+        session=session, ledger=candidate_ledger))
 
     def retrieval_handler(arguments: dict[str, Any]) -> dict[str, Any]:
         required_arguments = {
@@ -554,6 +606,31 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
             raise ContractValidationError(
                 "production exact inventory result is unavailable"
             )
+        candidate = (interpret_authorized_candidate_table_query(session=session,
+            query_text=arguments["query_text"], lookup=candidate_lookup)
+            if candidate_lookup is not None and exact_result is None
+            and not result.answer_citation_hashes else None)
+        if candidate is not None:
+            candidate_payload = {**candidate.to_safe_dict(),
+                                 "structure_status": "candidate_only"}
+            citation_hashes = [item["observation_hash"]
+                               for item in candidate_payload["governed_citations"]]
+            if len(citation_hashes) != 4 or len(set(citation_hashes)) != 4:
+                raise ContractValidationError("production candidate citation binding is invalid")
+            payload = {
+                "status": candidate.status,
+                "answer": {
+                    "status": candidate.status, "text": f"{candidate.header}: {candidate.value}",
+                    "header": candidate.header, "value": candidate.value,
+                    "answer_hash": sha256_json(candidate_payload),
+                    "source_result_fingerprint": candidate.result_fingerprint,
+                    "citation_count": 4},
+                "candidate_interpretation": candidate_payload,
+                "citations": citation_hashes, "evidence": [],
+                "graph_hits": {"count": result.graph_path_count},
+                "canonical_kg": False, "deterministic_exact": False, "exact_result": None,
+                "redaction_counts": {"redacted_value_count": 0}}
+            validate_public_gateway_payload(payload); return payload
         authorized_hash_by_id = dict(session.authorized_observation_hashes)
         observation_by_id = {
             observation.observation_id: observation
@@ -668,7 +745,22 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
                     "next_cursor": page["next_cursor"],
                     "redacted_count": page["redacted_count"],
                     "unsupported_count": page["unsupported_count"],
+                    "encrypted_count": page.get("encrypted_count", 0),
                     "unresolved_count": page["unresolved_count"],
+                    "authorized_occurrence_scope_count": page.get(
+                        "authorized_occurrence_scope_count"
+                    ),
+                    "extractable_occurrence_scope_count": page.get(
+                        "extractable_occurrence_scope_count"
+                    ),
+                    "candidate_only_occurrence_count": page.get(
+                        "candidate_only_occurrence_count",
+                        0,
+                    ),
+                    "source_asset_reason_counts": page.get(
+                        "source_asset_reason_counts",
+                        [],
+                    ),
                     "duplicate_policy": provider.duplicate_policy,
                     "ambiguous_identifier_count": page["ambiguous_identifier_count"],
                     "items": [
@@ -685,6 +777,29 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
                                 item.matched_normalized_value_hashes
                             ),
                             "ambiguous_identifier": item.ambiguous_identifier,
+                            **(
+                                {
+                                    "structure_status": item.structure_status,
+                                    "structured_values": [
+                                        {
+                                            "field": field,
+                                            "value": value,
+                                            "citation_hash": citation_hash,
+                                            "occurrence_lineage_fingerprint": (
+                                                lineage_fingerprint
+                                            ),
+                                        }
+                                        for (
+                                            field,
+                                            value,
+                                            citation_hash,
+                                            lineage_fingerprint,
+                                        ) in item.structured_values
+                                    ],
+                                }
+                                if item.structured_values
+                                else {}
+                            ),
                         }
                         for item in exact_result.items
                     ],
@@ -727,6 +842,61 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
         return payload
 
     return retrieval_handler
+
+
+def _build_candidate_table_ledger(session: Any) -> dict[str, Any] | None:
+    hashes = dict(session.authorized_observation_hashes)
+    lineages = {
+        item.source_observation_id: item
+        for item in session.occurrence_lineages
+        if isinstance(item, MailAttachmentChildOccurrenceLineage)
+    }
+    cells_by_row: dict[tuple[Any, ...], list[Observation]] = {}
+    groups: dict[tuple[Any, ...], list[Observation]] = {}
+    for item in session.authorized_observations:
+        structure = (item.payload or {}).get("table_structure")
+        if (item.modality != "document" or not isinstance(structure, Mapping)
+                or structure.get("structure_status") != "candidate_only"
+                or item.observation_id not in lineages):
+            continue
+        if item.observation_type == "table_cell":
+            cells_by_row.setdefault(_table_row_key(item), []).append(item)
+        elif item.observation_type == "table_row":
+            key = (item.asset_id, item.location.get("sheet_name"),
+                   item.location.get("table_index"), structure.get("header_row_index"))
+            groups.setdefault(key, []).append(item)
+    if not groups:
+        return None
+    def reference(item: Observation, *, column: int | None = None) -> dict[str, Any]:
+        result = {"observation_id": item.observation_id,
+                  "observation_hash": hashes[item.observation_id],
+                  "lineage_fingerprint": lineages[item.observation_id].lineage_fingerprint}
+        return result if column is None else {
+            **result, "column_ordinal": column, "value_hash": sha256_json(item.text)}
+    tables = []
+    for key, grouped_rows in sorted(groups.items(), key=lambda item: repr(item[0])):
+        rows = sorted(grouped_rows, key=lambda item: item.location["row_index"])
+        header = next(
+            (row for row in rows if row.location.get("row_index") == key[-1]),
+            None,
+        )
+        if header is None:
+            raise ContractValidationError("candidate table header is unavailable")
+        ledger_rows = []
+        for row in rows:
+            cells = sorted(cells_by_row.get(_table_row_key(row), ()),
+                           key=lambda item: item.location.get("cell_index", 0))
+            ledger_rows.append({**reference(row), "cells": tuple(
+                reference(cell, column=cell.location["cell_index"]) for cell in cells)})
+        header_cells = {item["column_ordinal"]: item for item in ledger_rows[0]["cells"]}
+        tables.append({"structure_status": "candidate_only", "table_fingerprint": sha256_json(key),
+                       "rows": tuple(ledger_rows),
+                       "header_hypotheses": tuple(
+                           header_cells[column["cell_index"]]
+                           for column in header.payload["table_structure"]["columns"])})
+    payload = {"artifact_id": "formowl_candidate_table_ledger_v1",
+               "structure_status": "candidate_only", "tables": tuple(tables)}
+    return {**payload, "ledger_fingerprint": sha256_json(payload)}
 
 
 def _build_mail_source_occurrence_providers(
@@ -878,12 +1048,25 @@ def _build_mail_source_occurrence_providers(
             raise ContractValidationError(
                 "production direct source identifier retrieval binding is invalid"
             )
-        admitted_occurrence_ids.add(
-            source_occurrence_lineage_from_observation(
-                observation,
-                authorized_source=session.authorized_source,
-            ).occurrence_id
-        )
+        if observation.modality == "mail":
+            admitted_occurrence_ids.add(
+                source_occurrence_lineage_from_observation(
+                    observation,
+                    authorized_source=session.authorized_source,
+                ).occurrence_id
+            )
+            continue
+        child_lineage = lineage_by_observation_id.get(observation_id)
+        if (
+            observation.modality != "document"
+            or observation.observation_type != "table_row"
+            or not isinstance(child_lineage, MailAttachmentChildOccurrenceLineage)
+            or child_lineage.observation_type != "table_row"
+            or child_lineage.child_asset_id != observation.asset_id
+        ):
+            raise ContractValidationError(
+                "production source occurrence retrieval modality is invalid"
+            )
     authorized_occurrence_ids = set(item_lineage_by_occurrence)
     full_source_occurrence_ids = {
         occurrence.message_occurrence_id
@@ -966,6 +1149,23 @@ def _build_mail_source_occurrence_providers(
         authorized_observation_hashes=session.authorized_observation_hashes,
         source_session_binding_fingerprint=session.source_session_binding_fingerprint or "",
     )
+    has_attachment_table_rows = any(
+        observation.modality == "document"
+        and observation.observation_type == "table_row"
+        for observation in session.authorized_observations
+    ) and any(
+        observation.observation_type == "email_attachment_occurrence"
+        for observation in session.authorized_observations
+    )
+    table_capability_mapping = (
+        _load_source_schema_capability_mapping(
+            session,
+            safe_binding=safe_binding,
+            authorized_scope_fingerprint=scope_fingerprint,
+        )
+        if has_attachment_table_rows
+        else None
+    )
     participant_providers_list: list[SourceOccurrenceProvider] = []
     for field, bindings_by_occurrence in value_bindings.items():
         clean_bindings_by_occurrence = {
@@ -1034,7 +1234,531 @@ def _build_mail_source_occurrence_providers(
         ),
         unresolved_count=direct_unresolved_count,
     )
-    return (*participant_providers, direct_identifier_provider)
+    table_row_provider = _build_attachment_table_row_provider(
+        session,
+        authorized_scope_fingerprint=scope_fingerprint,
+        source_schema_capability_mapping=table_capability_mapping,
+    )
+    return (
+        *participant_providers,
+        direct_identifier_provider,
+        *((table_row_provider,) if table_row_provider is not None else ()),
+    )
+
+
+def _build_attachment_table_row_provider(
+    session: Any,
+    *,
+    authorized_scope_fingerprint: str,
+    source_schema_capability_mapping: Mapping[str, frozenset[str]] | None = None,
+) -> SourceOccurrenceProvider | None:
+    observations = tuple(session.authorized_observations)
+    parents = tuple(
+        observation
+        for observation in observations
+        if observation.observation_type == "email_attachment_occurrence"
+    )
+    rows = tuple(
+        observation
+        for observation in observations
+        if observation.modality == "document"
+        and observation.observation_type == "table_row"
+    )
+    if not parents or not rows:
+        return None
+    authorized_hashes = dict(session.authorized_observation_hashes)
+    lineage_by_id = {
+        lineage.source_observation_id: lineage
+        for lineage in session.occurrence_lineages
+    }
+    parent_by_child_asset: dict[str, Observation] = {}
+    for parent in parents:
+        child_asset_id = (parent.payload or {}).get("child_asset_id")
+        if child_asset_id is None:
+            continue
+        if (
+            not isinstance(child_asset_id, str)
+            or not child_asset_id
+            or child_asset_id in parent_by_child_asset
+        ):
+            raise ContractValidationError(
+                "production attachment table parent binding is invalid"
+            )
+        parent_by_child_asset[child_asset_id] = parent
+    cells_by_row: dict[tuple[Any, ...], list[Observation]] = {}
+    for cell in observations:
+        if cell.modality != "document" or cell.observation_type != "table_cell":
+            continue
+        cells_by_row.setdefault(_table_row_key(cell), []).append(cell)
+
+    provider_occurrences: list[AuthorizedSourceOccurrence] = []
+    bound_parent_ids: set[str] = set()
+    authorized_row_scope_count = 0
+    unresolved_row_count = 0
+    tokenizer_profile = session.index._runtime_components.tokenizer_profile
+    observed_source_schema_capabilities: dict[str, set[str]] = {}
+    for row in sorted(rows, key=lambda item: item.observation_id):
+        parent = parent_by_child_asset.get(row.asset_id or "")
+        row_hash = authorized_hashes.get(row.observation_id)
+        row_lineage = lineage_by_id.get(row.observation_id)
+        structure = (row.payload or {}).get("table_structure")
+        if (
+            parent is None
+            or not isinstance(row_hash, str)
+            or row_lineage is None
+            or not isinstance(structure, Mapping)
+        ):
+            raise ContractValidationError(
+                "production attachment table row binding is invalid"
+            )
+        structure_status = structure.get("structure_status")
+        row_role = structure.get("row_role")
+        if structure_status not in {
+            "source_provided",
+            "candidate_only",
+            "unavailable",
+        }:
+            raise ContractValidationError(
+                "production attachment table structure is invalid"
+            )
+        bound_parent_ids.add(parent.observation_id)
+        if structure_status == "source_provided" and row_role in {
+            "header",
+            "totals",
+        }:
+            continue
+        authorized_row_scope_count += 1
+        if structure_status == "unavailable" or row_role == "header_candidate":
+            unresolved_row_count += 1
+            continue
+        row_cells = sorted(
+            cells_by_row.get(_table_row_key(row), ()),
+            key=lambda item: int(item.location.get("cell_index", 0)),
+        )
+        if not row_cells or len(row_cells) > 64:
+            unresolved_row_count += 1
+            continue
+        value_bindings: set[tuple[str, str, str, str]] = set()
+        projection_bindings: list[tuple[str, str, str, str]] = []
+        structured_column_bindings: set[
+            tuple[str, str, str, str, str, str, str]
+        ] = set()
+        for cell in row_cells:
+            cell_hash = authorized_hashes.get(cell.observation_id)
+            cell_lineage = lineage_by_id.get(cell.observation_id)
+            cell_structure = (cell.payload or {}).get("table_structure")
+            if (
+                not isinstance(cell_hash, str)
+                or cell_lineage is None
+                or not isinstance(cell_structure, Mapping)
+                or cell_lineage.parent_occurrence_id
+                != row_lineage.parent_occurrence_id
+                or cell.permission_scope != row.permission_scope
+            ):
+                raise ContractValidationError(
+                    "production attachment table cell binding is invalid"
+                )
+            cell_index = cell.location.get("cell_index")
+            if not isinstance(cell_index, int) or isinstance(cell_index, bool):
+                raise ContractValidationError(
+                    "production attachment table cell location is invalid"
+                )
+            field = cell_structure.get("column_name")
+            if not isinstance(field, str) or not field:
+                field = f"column_{cell_index}"
+            value = cell.text or ""
+            safe_field, _ = redact_public_raw_references(field)
+            safe_value, _ = redact_public_raw_references(value)
+            safe_field = safe_field[:120]
+            safe_value = safe_value[:400]
+            projection_bindings.append(
+                (
+                    safe_field,
+                    safe_value,
+                    cell_hash,
+                    cell_lineage.lineage_fingerprint,
+                )
+            )
+            value_token_hashes = {
+                sha256_json(token)
+                for token in tokenizer_profile.analyze(value).tokens
+                if token
+            }
+            normalized_field = tokenizer_profile.normalize_exact_identifier_surface(
+                safe_field
+            )
+            column_hash = source_occurrence_column_capability_hash(
+                normalized_field
+            )
+            header_path = cell_structure.get("header_path", ())
+            if not isinstance(header_path, (list, tuple)) or len(header_path) > 4:
+                raise ContractValidationError(
+                    "production attachment table header path is invalid"
+                )
+            header_surfaces: list[str] = []
+            previous_header_row = 0
+            row_index = cell.location.get("row_index")
+            for component in header_path:
+                if not isinstance(component, Mapping):
+                    raise ContractValidationError(
+                        "production attachment table header path is invalid"
+                    )
+                address = tuple(
+                    component.get(key)
+                    for key in (
+                        "row_index",
+                        "cell_index",
+                        "min_row_index",
+                        "max_row_index",
+                        "min_column_index",
+                        "max_column_index",
+                    )
+                )
+                if (
+                    not isinstance(row_index, int)
+                    or isinstance(row_index, bool)
+                    or any(
+                        not isinstance(item, int) or isinstance(item, bool)
+                        for item in address
+                    )
+                    or not (
+                        0 < address[2] <= address[0] <= address[3] < row_index
+                        and 0 < address[4] <= address[1] <= address[5]
+                        and address[4] <= cell_index <= address[5]
+                        and address[0] > previous_header_row
+                    )
+                ):
+                    raise ContractValidationError(
+                        "production attachment table header path is invalid"
+                    )
+                component_value = component.get("value")
+                if not isinstance(component_value, str) or not component_value.strip():
+                    raise ContractValidationError(
+                        "production attachment table header path is invalid"
+                    )
+                safe_component, _ = redact_public_raw_references(component_value)
+                normalized_component = (
+                    tokenizer_profile.normalize_exact_identifier_surface(
+                        safe_component[:120]
+                    )
+                )
+                if not normalized_component:
+                    raise ContractValidationError(
+                        "production attachment table header path is invalid"
+                    )
+                header_surfaces.append(normalized_component)
+                previous_header_row = address[0]
+            candidate_surfaces = [safe_field, *header_surfaces]
+            column_candidate_hashes = {
+                sha256_json(field_token)
+                for surface in candidate_surfaces
+                for field_token in tokenizer_profile.analyze(surface).tokens
+                if field_token
+            }
+            phrase_surfaces = list(header_surfaces)
+            if not phrase_surfaces or phrase_surfaces[-1] != normalized_field:
+                phrase_surfaces.append(normalized_field)
+            for start in range(len(phrase_surfaces)):
+                for end in range(start + 1, min(len(phrase_surfaces), start + 4) + 1):
+                    phrase = "".join(phrase_surfaces[start:end])
+                    column_candidate_hashes.add(sha256_json(phrase))
+            if column_candidate_hashes:
+                observed_source_schema_capabilities.setdefault(
+                    column_hash,
+                    set(),
+                ).update(column_candidate_hashes)
+                if source_schema_capability_mapping is not None:
+                    sealed_candidates = source_schema_capability_mapping.get(
+                        column_hash
+                    )
+                    if sealed_candidates is None:
+                        raise ContractValidationError(
+                            "production source schema capability coverage is incomplete"
+                        )
+                    column_candidate_hashes = set(sealed_candidates)
+                for field_hash in column_candidate_hashes:
+                    value_bindings.add(
+                        (
+                            field_hash,
+                            source_occurrence_projection_capability_hash(field_hash),
+                            cell_hash,
+                            cell_lineage.lineage_fingerprint,
+                        )
+                    )
+                for field_hash in column_candidate_hashes:
+                    for value_hash in value_token_hashes:
+                        structured_column_bindings.add(
+                            (
+                                column_hash,
+                                field_hash,
+                                value_hash,
+                                safe_field,
+                                safe_value,
+                                cell_hash,
+                                cell_lineage.lineage_fingerprint,
+                            )
+                        )
+            value_token_hashes.add(
+                sha256_json(["table_cell_projection", cell_hash])
+            )
+            for token_hash in value_token_hashes:
+                value_bindings.add(
+                    (
+                        token_hash,
+                        token_hash,
+                        cell_hash,
+                        cell_lineage.lineage_fingerprint,
+                    )
+                )
+                value_bindings.add(
+                    (
+                        token_hash,
+                        token_hash,
+                        row_hash,
+                        row_lineage.lineage_fingerprint,
+                    )
+                )
+        provider_occurrences.append(
+            AuthorizedSourceOccurrence(
+                item_hash=sha256_json(
+                    [
+                        "attachment_table_row_occurrence",
+                        row_hash,
+                        row_lineage.lineage_fingerprint,
+                    ]
+                ),
+                value_bindings=tuple(sorted(value_bindings)),
+                projection_bindings=tuple(projection_bindings),
+                structure_status=str(structure_status),
+                structured_column_bindings=tuple(
+                    sorted(structured_column_bindings)
+                ),
+            )
+        )
+
+    if source_schema_capability_mapping is not None and {
+        column_hash: frozenset(candidate_hashes)
+        for column_hash, candidate_hashes in observed_source_schema_capabilities.items()
+    } != dict(source_schema_capability_mapping):
+        raise ContractValidationError(
+            "production source schema capability binding is invalid"
+        )
+    if source_schema_capability_mapping is not None:
+        provider_occurrences = [
+            replace(occurrence, structure_status="candidate_only")
+            for occurrence in provider_occurrences
+        ]
+
+    source_asset_reason_counts: dict[str, int] = {}
+    for parent in parents:
+        status = (parent.payload or {}).get("attachment_extraction_status")
+        if status in {"unsupported", "encrypted", "redacted"}:
+            source_asset_reason_counts[str(status)] = (
+                source_asset_reason_counts.get(str(status), 0) + 1
+            )
+        elif parent.observation_id not in bound_parent_ids:
+            source_asset_reason_counts["unresolved"] = (
+                source_asset_reason_counts.get("unresolved", 0) + 1
+            )
+    return SourceOccurrenceProvider(
+        provider_id="attachment_table_row_source_occurrence_provider_v1",
+        inventory_kind_alias="attachment_table_row",
+        resource_kind="attachment_table_row_occurrence",
+        normalized_field="table.row.cell_value",
+        predicate="source_occurrence_row_contains",
+        operator="case_insensitive_exact",
+        requester_user_id=session.requester_user_id,
+        workspace_id=session.workspace_id,
+        source_scope_ids=session.authorized_source_scope_ids,
+        authorized_scope_fingerprint=authorized_scope_fingerprint,
+        occurrences=tuple(provider_occurrences),
+        filter_slot_policy="combined_present_intersection_v1",
+        unresolved_count=unresolved_row_count,
+        authorized_occurrence_scope_count=authorized_row_scope_count,
+        extractable_occurrence_scope_count=len(provider_occurrences),
+        source_asset_reason_counts=tuple(sorted(source_asset_reason_counts.items())),
+    )
+
+
+def _load_source_schema_capability_mapping(
+    session: Any,
+    *,
+    safe_binding: Mapping[str, Any],
+    authorized_scope_fingerprint: str,
+) -> dict[str, frozenset[str]]:
+    raw_path = os.environ.get(_SOURCE_SCHEMA_CAPABILITY_MANIFEST_PATH_ENV)
+    expected_byte_sha256 = os.environ.get(
+        _SOURCE_SCHEMA_CAPABILITY_MANIFEST_SHA256_ENV
+    )
+    if not raw_path or not expected_byte_sha256:
+        raise ContractValidationError(
+            "production source schema capability manifest is unavailable"
+        )
+    try:
+        manifest_bytes = Path(raw_path).read_bytes()
+    except OSError as exc:
+        raise ContractValidationError(
+            "production source schema capability manifest is unavailable"
+        ) from exc
+    byte_sha256 = "sha256:" + hashlib.sha256(manifest_bytes).hexdigest()
+    try:
+        manifest = json.loads(manifest_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ContractValidationError(
+            "production source schema capability manifest is invalid"
+        ) from exc
+    if (
+        not isinstance(manifest, Mapping)
+        or byte_sha256 != expected_byte_sha256
+        or _contains_tenant_id(manifest)
+    ):
+        raise ContractValidationError(
+            "production source schema capability manifest binding is invalid"
+        )
+    expected_keys = {
+        "artifact_id",
+        "schema_version",
+        "policy_id",
+        "review_status",
+        "human_review_complete",
+        "identity_scope_mode",
+        "workspace_fingerprint",
+        "retrieval_snapshot_byte_sha256",
+        "retrieval_snapshot_fingerprint",
+        "source_snapshot_fingerprint",
+        "source_session_binding_fingerprint",
+        "authorized_scope_fingerprint",
+        "provider_binding_fingerprint",
+        "tokenizer_profile_fingerprint",
+        "column_count",
+        "candidate_hash_count",
+        "columns",
+        "mapping_fingerprint",
+        "manifest_fingerprint",
+    }
+    columns = manifest.get("columns")
+    tokenizer_profile = session.index._runtime_components.tokenizer_profile
+    fingerprint_fields = (
+        "workspace_fingerprint",
+        "retrieval_snapshot_byte_sha256",
+        "retrieval_snapshot_fingerprint",
+        "source_snapshot_fingerprint",
+        "source_session_binding_fingerprint",
+        "authorized_scope_fingerprint",
+        "provider_binding_fingerprint",
+        "tokenizer_profile_fingerprint",
+        "mapping_fingerprint",
+        "manifest_fingerprint",
+    )
+    provider_binding_fingerprint = sha256_json(
+        {
+            "artifact_id": "attachment_table_row_provider_capability_binding_v1",
+            "provider_id": "attachment_table_row_source_occurrence_provider_v1",
+            "inventory_kind_alias": "attachment_table_row",
+            "resource_kind": "attachment_table_row_occurrence",
+            "normalized_field": "table.row.cell_value",
+            "predicate": "source_occurrence_row_contains",
+            "operator": "case_insensitive_exact",
+            "filter_slot_policy": "combined_present_intersection_v1",
+            "requester_user_id": session.requester_user_id,
+            "workspace_id": session.workspace_id,
+            "source_scope_ids": list(session.authorized_source_scope_ids),
+            "authorized_scope_fingerprint": authorized_scope_fingerprint,
+            "policy_id": _SOURCE_SCHEMA_CAPABILITY_POLICY_ID,
+        }
+    )
+    if (
+        set(manifest) != expected_keys
+        or manifest.get("artifact_id")
+        != _SOURCE_SCHEMA_CAPABILITY_MANIFEST_ARTIFACT_ID
+        or manifest.get("schema_version") != 1
+        or manifest.get("policy_id") != _SOURCE_SCHEMA_CAPABILITY_POLICY_ID
+        or manifest.get("review_status") != "candidate_only_unreviewed"
+        or manifest.get("human_review_complete") is not False
+        or manifest.get("identity_scope_mode") != IDENTITY_SCOPE_MODE
+        or not _is_sha256(expected_byte_sha256)
+        or any(not _is_sha256(manifest.get(key)) for key in fingerprint_fields)
+        or manifest.get("workspace_fingerprint") != sha256_json(session.workspace_id)
+        or manifest.get("retrieval_snapshot_byte_sha256")
+        != safe_binding.get("retrieval_snapshot_byte_sha256")
+        or manifest.get("retrieval_snapshot_fingerprint")
+        != safe_binding.get("retrieval_snapshot_fingerprint")
+        or manifest.get("source_snapshot_fingerprint")
+        != safe_binding.get("source_snapshot_fingerprint")
+        or manifest.get("source_session_binding_fingerprint")
+        != session.source_session_binding_fingerprint
+        or manifest.get("authorized_scope_fingerprint")
+        != authorized_scope_fingerprint
+        or manifest.get("provider_binding_fingerprint")
+        != provider_binding_fingerprint
+        or manifest.get("tokenizer_profile_fingerprint")
+        != tokenizer_profile.profile_fingerprint
+        or not isinstance(columns, list)
+        or not columns
+    ):
+        raise ContractValidationError(
+            "production source schema capability manifest binding is invalid"
+        )
+    mapping: dict[str, frozenset[str]] = {}
+    for item in columns:
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {"column_hash", "candidate_hashes"}
+            or not _is_sha256(item.get("column_hash"))
+            or not isinstance(item.get("candidate_hashes"), list)
+            or not item["candidate_hashes"]
+            or item["candidate_hashes"] != sorted(set(item["candidate_hashes"]))
+            or any(not _is_sha256(value) for value in item["candidate_hashes"])
+            or item["column_hash"] in mapping
+        ):
+            raise ContractValidationError(
+                "production source schema capability manifest is invalid"
+            )
+        mapping[str(item["column_hash"])] = frozenset(item["candidate_hashes"])
+    ordered_mapping = [
+        [column_hash, sorted(mapping[column_hash])]
+        for column_hash in sorted(mapping)
+    ]
+    manifest_without_fingerprint = dict(manifest)
+    manifest_without_fingerprint.pop("manifest_fingerprint", None)
+    if (
+        columns
+        != [
+            {
+                "column_hash": column_hash,
+                "candidate_hashes": sorted(mapping[column_hash]),
+            }
+            for column_hash in sorted(mapping)
+        ]
+        or manifest.get("column_count") != len(mapping)
+        or manifest.get("candidate_hash_count")
+        != len({value for values in mapping.values() for value in values})
+        or manifest.get("mapping_fingerprint") != sha256_json(ordered_mapping)
+        or manifest.get("manifest_fingerprint")
+        != sha256_json(manifest_without_fingerprint)
+    ):
+        raise ContractValidationError(
+            "production source schema capability manifest seal mismatch"
+        )
+    return mapping
+
+
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith("sha256:")
+        and len(value) == len("sha256:") + 64
+        and all(character in "0123456789abcdef" for character in value[7:])
+    )
+
+
+def _table_row_key(observation: Observation) -> tuple[Any, ...]:
+    return (
+        observation.asset_id,
+        observation.location.get("sheet_name"),
+        observation.location.get("table_index"),
+        observation.location.get("row_index"),
+    )
 
 def _contains_tenant_id(value: Any) -> bool:
     if isinstance(value, Mapping):

@@ -18,11 +18,16 @@ from formowl_core import (
 )
 from formowl_mail.hybrid import (
     AuthorizedSemanticObservationSession,
+    attach_authorized_source_occurrence_providers,
     build_authorized_hybrid_mail_index,
     build_authorized_semantic_mail_session,
     build_authorized_semantic_observation_session,
     build_authorized_source_backed_effective_graph_view,
     run_authorized_semantic_mail_query,
+)
+from formowl_mail.exact import (
+    SourceOccurrenceProvider,
+    authorized_source_occurrence_scope_fingerprint,
 )
 from formowl_mail.query import (
     build_authorized_observation_snippet_index,
@@ -207,6 +212,33 @@ class Issue56SourceNeutralHybridEndToEndTests(unittest.TestCase):
             set(result.answer_citation_hashes).issubset(set(self.authorized_hashes.values()))
         )
         self.assertEqual(result.repair_attempt_count, 0)
+        provider = SourceOccurrenceProvider(
+            provider_id="source_neutral_provider_extension",
+            inventory_kind_alias="source_neutral_record",
+            resource_kind="source_neutral_record",
+            normalized_field="source_neutral.record",
+            predicate="source_occurrence_contains",
+            operator="case_insensitive_exact",
+            requester_user_id=session.requester_user_id,
+            workspace_id=session.workspace_id,
+            source_scope_ids=session.authorized_source_scope_ids,
+            authorized_scope_fingerprint=authorized_source_occurrence_scope_fingerprint(
+                requester_user_id=session.requester_user_id,
+                workspace_id=session.workspace_id,
+                source_scope_ids=session.authorized_source_scope_ids,
+                authorized_observation_hashes=session.authorized_observation_hashes,
+                source_session_binding_fingerprint=session.source_session_binding_fingerprint
+                or "",
+            ),
+            occurrences=(),
+        )
+        attached_result = attach_authorized_source_occurrence_providers(
+            session, (provider,)
+        ).query(
+            query_text="Find source-neutral semantic graph execution evidence.",
+            effective_graph_view=graph_build.effective_graph_view,
+        )
+        self.assertEqual(attached_result.result_fingerprint, result.result_fingerprint)
 
     def test_github_exact_inventory_and_rerun_are_deterministic(self) -> None:
         session, graph_build = self._session_and_graph()
@@ -245,7 +277,7 @@ class Issue56SourceNeutralHybridEndToEndTests(unittest.TestCase):
             self._runtime_patch(),
             self.assertRaisesRegex(
                 ContractValidationError,
-                "source|modality",
+                "permission scope mismatch",
             ),
         ):
             build_authorized_semantic_observation_session(
@@ -297,7 +329,7 @@ class Issue56SourceNeutralHybridEndToEndTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(
             ContractValidationError,
-            "source kind mismatch",
+            "effective graph content snapshot is unavailable",
         ):
             session.query(
                 query_text="Find source-neutral semantic graph evidence.",

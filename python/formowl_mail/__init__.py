@@ -98,6 +98,8 @@ from .answer import (
     ISSUE56_DETERMINISTIC_ANSWER_MODEL_ID,
     ISSUE56_DETERMINISTIC_ANSWER_PROMPT_FINGERPRINT,
     ISSUE56_DETERMINISTIC_ANSWER_PROMPT_ID,
+    build_authorized_candidate_table_lookup,
+    interpret_authorized_candidate_table_query,
     render_governed_evidence_answer,
 )
 from .exact import (
@@ -197,6 +199,7 @@ __all__ = [
     "SemanticQueryPlan",
     "SourceBackedGraphBuild",
     "build_case_progress_answer",
+    "build_authorized_candidate_table_lookup",
     "authorize_mail_evidence_bundles",
     "build_authorized_hybrid_mail_index",
     "build_authorized_semantic_mail_session",
@@ -218,6 +221,7 @@ __all__ = [
     "execute_deterministic_exact_inventory",
     "mail_evidence_postgre_sql_tables",
     "mail_evidence_query_indexes",
+    "interpret_authorized_candidate_table_query",
     "open_mail_upload_session",
     "postgre_sql_mail_evidence_store_interfaces",
     "mail_upload_http_error_payload",

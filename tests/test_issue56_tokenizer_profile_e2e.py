@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+from dataclasses import replace
 import json
 from pathlib import Path
 import shutil
@@ -13,6 +14,7 @@ import _paths  # noqa: F401
 from formowl_contract import sha256_json
 from formowl_core import (
     ASCII_IDENTIFIER_REGEX_TOKENIZER_ID,
+    ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT,
     JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
     build_ascii_identifier_regex_tokenizer_profile,
     load_default_mail_candidate_admission_tokenizer_profile,
@@ -176,6 +178,96 @@ class Issue56TokenizerProfileE2ETests(unittest.TestCase):
         self.assertFalse(manifest["source_policy"]["contains_private_source"])
         self.assertFalse(manifest["source_policy"]["contains_oracle"])
         self.assertFalse(manifest["source_policy"]["contains_uat_or_holdout_questions"])
+
+    def test_ordered_query_grounding_preserves_spans_roles_and_profile_contract(
+        self,
+    ) -> None:
+        profile = load_issue56_target_mail_tokenizer_profile()
+        query = "哪些記錄是由模組產生的，以及版本 ALPHA-42 與 alpha-42"
+        baseline_analysis = profile.analyze(query)
+        baseline_fingerprint = profile.profile_fingerprint
+
+        grounding = profile.analyze_query_grounding(query)
+        rerun = profile.analyze_query_grounding(query)
+
+        self.assertEqual(grounding, rerun)
+        self.assertRegex(
+            grounding.grammar_policy_fingerprint,
+            r"^sha256:[0-9a-f]{64}$",
+        )
+        self.assertEqual(
+            [(term.start, term.end) for term in grounding.terms],
+            sorted((term.start, term.end) for term in grounding.terms),
+        )
+        for term in grounding.terms:
+            self.assertEqual(
+                term.normalized_term,
+                profile.normalize_exact_identifier_surface(query[term.start : term.end]),
+            )
+        role_by_term = {
+            term.normalized_term: term.grammar_role for term in grounding.terms
+        }
+        self.assertTrue(
+            {term.grammar_role for term in grounding.terms}
+            <= {
+                "conjunction",
+                "lexical",
+                "operator",
+                "particle",
+                "preposition",
+                "pronoun",
+                "verb",
+            }
+        )
+        self.assertEqual(role_by_term["哪些"], "pronoun")
+        self.assertEqual(role_by_term["是"], "verb")
+        self.assertEqual(role_by_term["由"], "preposition")
+        self.assertEqual(role_by_term["生"], "verb")
+        self.assertEqual(role_by_term["的"], "particle")
+        self.assertEqual(role_by_term["以及"], "conjunction")
+        self.assertEqual(role_by_term["版本"], "lexical")
+        repeated_values = [
+            term
+            for term in grounding.terms
+            if term.normalized_term == "alpha-42"
+        ]
+        self.assertEqual(len(repeated_values), 2)
+        self.assertTrue(all(term.grammar_role == "lexical" for term in repeated_values))
+        self.assertNotEqual(repeated_values[0].start, repeated_values[1].start)
+        self.assertEqual(profile.analyze(query), baseline_analysis)
+        self.assertEqual(profile.profile_fingerprint, baseline_fingerprint)
+        self.assertEqual(
+            profile.profile_fingerprint,
+            ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT,
+        )
+
+    def test_ordered_query_grounding_keeps_paraphrased_term_order(self) -> None:
+        profile = load_issue56_target_mail_tokenizer_profile()
+        first = profile.analyze_query_grounding("哪些記錄是由模組產生的")
+        second = profile.analyze_query_grounding("模組產生哪些記錄")
+
+        first_terms = tuple(term.normalized_term for term in first.terms)
+        second_terms = tuple(term.normalized_term for term in second.terms)
+        self.assertEqual(first_terms.count("哪些"), 1)
+        self.assertEqual(second_terms.count("哪些"), 1)
+        self.assertLess(first_terms.index("哪些"), first_terms.index("模"))
+        self.assertGreater(second_terms.index("哪些"), second_terms.index("模"))
+        self.assertEqual(
+            first.grammar_policy_fingerprint,
+            second.grammar_policy_fingerprint,
+        )
+
+    def test_ordered_query_grounding_missing_pos_runtime_fails_closed(self) -> None:
+        profile = replace(
+            load_issue56_target_mail_tokenizer_profile(),
+            _jieba_module=None,
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^frozen tokenizer query grounding is unavailable$",
+        ):
+            profile.analyze_query_grounding("中性查詢")
 
     @staticmethod
     def _drift_manifest(profile_directory: Path) -> None:
