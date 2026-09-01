@@ -9,27 +9,34 @@ This is a bounded active window. Earlier entries are immutable history under
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
-## 2026-08-29 — Actual-user participant inventory passes with incomplete coverage
-- An actual-user request ran through `ConnectedRuntime`, OAuth, and normal ASGI
-  `/mcp` using the generic typed participant-any inventory. The raw request is
-  not retained; its request fingerprint is
-  `sha256:ace0484e2706d363d53a4733e269e1c0814fc9629d5ad8ebf2f1a645f4621d1d`.
-- The run completed `21` cursor pages with returned/total/union
-  `2069/2069/2069`, duplicate count `0`, and `2086` governed
-  references/citations. Per-page HTTP latency was `260.323–319.288 ms`, total
-  query HTTP time was `6415.888 ms`, and compose/load took `600090.276 ms`.
-- Coverage remains `incomplete`. The full permission-authorized scope is
-  `2793`: `2069` matches, `174` proven nonmatches, and `550` unresolved
-  occurrences; unsupported/redacted are `0/0`. The source gap is primarily
-  legacy or malformed participant evidence that the standard parser cannot
-  recover, so neither “all” nor production readiness is supported.
-- The conversation-closure experiment was removed. This run did not use the
-  `317` oracle; that count belongs to a different private prompt and cannot be
-  compared with this request.
-- Final scoped pinned-E5 verification passed `62` tests with `0` skipped.
-  `authority_valid=true` and `methodology_ready=false`; execution fingerprint is
-  `sha256:78cebbb2af8c6e4bcde3f2819436c6f62bd34e957f381dff610bf8a0a477711d`.
-  The same four gates remain blocked, and Work D remains unchecked.
+## 2026-09-01 — Candidate attachment-table answer checkpoint
+- Pushed checkpoint `dfaf38b` (`feat(issue56): answer candidate attachment
+  tables`) passed `43` directly relevant tests plus one real recovery-source
+  normal ASGI `/mcp` run: HTTP `200`, `candidate_interpretation`, four governed
+  citations, about `908.085 ms`, and no deadline exhaustion.
+- Missing semantic header markup kept the result `candidate_only`, with
+  `canonical_kg=false`, `deterministic_exact=false`, no `exact_result`, and
+  ambiguity fail-closed. Root cause: source-selection/artifact-binding scope.
+- The seal binds source session, authorization, requester, workspace, scopes,
+  authorized Observations, and index; cross-session reuse rejects. Lookup and
+  result types are private and fixed to the safe noncanonical, nonexact state.
+- Identity is `workspace_only_v1`/`workspace_formowl`, actor/approver
+  `user_full_pst_domain_hard_case_eval_owner`, with no tenant ID.
+- Canonical-container authority is valid but blocked:
+  `authority_valid=true`, `methodology_ready=false`, fingerprint
+  `sha256:3e694b04a2888ea829c1a558e7802e8720eeb69cc99ac91db9c534136616e858`.
+  Four gates remain blocked; step 4 is `in-progress`. This is not formal UAT
+  and earns no production, readiness, completion, or superiority claim.
+## 2026-08-29 — Actual-user participant inventory remains incomplete
+- An actual-user normal ASGI `/mcp` participant-any inventory completed `21`
+  bound-cursor pages with returned/total/union `2069/2069/2069`, no duplicate
+  occurrences, and `2086` governed references/citations.
+- Permission-authorized scope `2793` splits into `2069` matches, `174` proven
+  nonmatches, and `550` unresolved; coverage remains `incomplete` and supports
+  neither “all” nor production readiness.
+- Authority remained valid but blocked on the same four gates; Work D stayed
+  unchecked and plan step 4 remained in progress. This was not formal UAT,
+  readiness, completion, or superiority evidence.
 ## 2026-08-28 — Direct-source deterministic inventory remains incomplete
 - The generic direct-source business-identifier deterministic inventory now
   traverses normal ASGI `/mcp` with typed intent, query-hash provider

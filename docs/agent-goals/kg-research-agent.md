@@ -48,49 +48,42 @@ are source completeness, accepted execution-fingerprint binding, same-pipeline
 real-source ablation, and independent final-answer acceptance. The v3
 promotion contract is repaired, but no formal all-four-gate evidence exists to
 promote.
-## Step-4 Participant Inventory Checkpoint — 2026-08-29
-The sealed `456`-Observation `workspace_only_v1` package has no tenant
-dimension. It is bound to `workspace_formowl` and approved actor
-`user_full_pst_domain_hard_case_eval_owner`; no tenant dimension may be
-invented. Diagnostics v1-v7 are consumed and cannot be rerun or tuned.
+## Step-4 Candidate Attachment Checkpoint — 2026-09-01
+Pushed checkpoint `dfaf38b` (`feat(issue56): answer candidate attachment
+tables`) carries the bounded candidate-table answer slice. A real
+recovery-source attachment-table diagnostic used normal ASGI `/mcp` and
+returned HTTP `200`, `candidate_interpretation`, four governed citations, and
+about `908.085 ms` latency without deadline exhaustion.
 
-The existing passed safe source report reconciles `8,443` source units to
-`8,443` Observations with unexplained loss `0`. Commit `6e4663a` makes the
-source evidence author validate the exact complete execution bundle against
-the report, source, counts, and authority before output. Commit `ad08b22`
-makes promotion preflight accept and cross-bind the existing v3
-`execution_binding` to its single validated dependency. Pinned-E5 focused E2E
-passed `48/48`; both cross-reviews returned `AGREE` after one private-helper
-blocker was corrected to use the public bundle loader.
+The result remains `candidate_only` because the source HTML table had no
+semantic header markup. It reports `canonical_kg=false`,
+`deterministic_exact=false`, and no `exact_result`; ambiguous lookup remains
+fail-closed. The diagnosed root cause was a source-selection/artifact-binding
+scope gap, not permission expansion or deterministic exact evidence.
 
-The generic participant-any deterministic inventory ran an actual-user request
-through `ConnectedRuntime`, OAuth, and normal ASGI `/mcp` with typed intent.
-The raw request is not retained; its request fingerprint is
-`sha256:ace0484e2706d363d53a4733e269e1c0814fc9629d5ad8ebf2f1a645f4621d1d`.
-It completed `21` bound-cursor pages with returned/total/union
-`2069/2069/2069`, no duplicate occurrences, and `2086` governed
-references/citations. Per-page HTTP latency was `260.323–319.288 ms`, total
-query HTTP time was `6415.888 ms`, and one-time compose/load time was
-`600090.276 ms`.
+The source session, authorization, requester, workspace, scopes, authorized
+Observations, and index are bound into the lookup seal. Cross-session reuse is
+rejected. Candidate lookup/result types are private and their public claims are
+fixed to the safe noncanonical, nonexact state. Identity remains
+`workspace_only_v1` for `workspace_formowl`, actor/approver
+`user_full_pst_domain_hard_case_eval_owner`; no tenant ID exists or may be
+invented.
 
-Coverage remains `incomplete` over the full permission-authorized scope of
-`2793`: `2069` matches, `174` proven nonmatches, and `550` unresolved
-occurrences, with unsupported/redacted `0/0`. The remaining gap is primarily
-legacy or malformed participant evidence that the standard mailbox parser
-cannot recover. The source-native conversation-closure experiment was removed;
-no conversation expansion is authorized. This run did not use the `317`
-oracle, which belongs to a different private prompt and is not comparable.
+Clean committed-checkpoint verification passed `43` directly relevant focused
+tests plus one real recovery-source `/mcp` run. Canonical-container authority
+is valid but blocked: `authority_valid=true`, `methodology_ready=false`,
+fingerprint
+`sha256:3e694b04a2888ea829c1a558e7802e8720eeb69cc99ac91db9c534136616e858`.
+Source completeness, accepted execution-fingerprint binding, same-pipeline
+real-source ablation, and independent final-answer acceptance remain blocked.
+This is not formal UAT or evidence of production readiness, methodology
+readiness, Issue #56 completion, or comparative superiority. Step 4 remains
+`in-progress`.
 
-Latest focused pinned-E5 evidence passed `62` tests with `0` skipped.
-`authority_valid=true` and `methodology_ready=false`; execution fingerprint is
-`sha256:78cebbb2af8c6e4bcde3f2819436c6f62bd34e957f381dff610bf8a0a477711d`.
-No formal evidence was authored or promoted. This blocked production-local E2E
-is not methodology-quality UAT or independent holdout evidence; no holdout,
-transfer, or v1-v7 diagnostic rerun occurred. Authority remains valid but
-blocked on the same four gates, Work D remains unchecked, step 4 remains in
-progress, and no production readiness, methodology readiness, superiority, or
-completion claim is earned. V7 remains only a consumed behavior-neutral
-relation-precompute POC.
+The earlier participant inventory remains independently `incomplete`: its
+authorized scope is `2793`, split into `2069` matches, `174` proven nonmatches,
+and `550` unresolved. The candidate attachment slice does not supersede or
+close that coverage gap.
 ## Non-Negotiable Method
 
 - Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence
@@ -173,8 +166,8 @@ exiting zero.
 
 ## Next Action
 
-Remain within step 4 and do not rerun or tune v1-v7. The bounded participant
-inventory proves only its source-backed matched scope. Any treatment of the
-`550` unresolved occurrences requires approved recoverable source evidence;
-do not infer conversation expansion, compare against the unrelated private
-oracle, run holdouts, or claim readiness.
+Remain within step 4. Close the source-selection/artifact-binding scope gap and
+obtain source-backed or reviewed semantic header evidence before any
+canonical-KG or deterministic-exact promotion. Do not treat candidate-only
+interpretation as formal UAT, run blocked holdouts, or claim readiness,
+superiority, production status, or Issue #56 completion.
