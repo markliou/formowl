@@ -41,14 +41,12 @@ different source family without question-specific core types or aliases.
 ## Status
 `blocked` for methodology-quality UAT, comparative superiority, default-path
 replacement, and objective completion. Current authority is fail-closed with
-`authority_valid=false`, `methodology_ready=false`, and four blocking gates.
-The normal runtime-method gate passes for
-`evidence_to_knowledge_kg_ontology_v2_hybrid_v1` and
-`jieba_sentencepiece_frozen_profile_candidate_admission_v1`. Remaining gates
-are source completeness, accepted execution-fingerprint binding, same-pipeline
-real-source ablation, and independent final-answer acceptance. The v3
-promotion contract is repaired, but no formal all-four-gate evidence exists to
-promote.
+`authority_valid=false`, `methodology_ready=false`, runtime error
+`passed_runtime_gate_requires_cjk_runtime_support`, and four blocking gates:
+source completeness, accepted execution-fingerprint binding, same-pipeline
+real-source ablation, and independent final-answer acceptance. The target
+method and tokenizer remain pinned, but no formal all-four-gate evidence exists
+to promote.
 ## Step-4 Attachment-Table Checkpoint — 2026-09-02
 The earlier bounded candidate-table slice remains noncanonical/nonexact:
 normal ASGI `/mcp` returned HTTP `200`, `candidate_interpretation`, four
@@ -77,6 +75,16 @@ remains `in-progress`; the same four authority gates remain blocked. The
 earlier participant inventory also remains independently `incomplete`:
 authorized scope `2793` = `2069` matches + `174` proven nonmatches + `550`
 unresolved.
+## Step-4 Core Query Agent Orchestration POC — 2026-09-02
+The canonical spec now defines the Core Query Agent path through validated
+subqueries, coverage-driven bounded repair, and compact evidence context. The
+agent-ready orchestration POC passed focused normal ASGI `/mcp` E2E `1/1` in
+about `65.5 s`; the existing candidate-table production-handler regression
+passed `1/1` in about `3.3 s`, and read-only release review returned `AGREE`.
+The zero-arg production planner remains `not_connected`, and conversation
+coreference must resolve upstream before MCP. This supports only a bounded
+diagnostic POC claim—not general UAT, production, Issue #56 completion, or
+methodology readiness.
 ## Non-Negotiable Method
 
 - Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence

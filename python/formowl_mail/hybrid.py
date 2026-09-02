@@ -22,7 +22,7 @@ from threading import RLock
 from time import monotonic as _system_monotonic
 from time import perf_counter_ns as _system_perf_counter_ns
 from types import MappingProxyType
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from formowl_contract import (
     CandidateMention,
@@ -10966,6 +10966,215 @@ def _mark_partial_projection_exact_result(
     )
     updated.to_safe_dict()
     return updated
+
+
+AdaptiveQueryPlanner = Callable[
+    [str, tuple[Mapping[str, Any], ...],
+     MailCandidateAdmissionTokenizerProfile, int], str | None]
+
+
+def execute_bounded_adaptive_query(
+    *,
+    session: AuthorizedSemanticMailSession,
+    query_text: str,
+    effective_graph_view: EffectiveGraphView,
+    allowed_relation_types: Sequence[str] = (),
+    exact_inventory_kind: str | None = None,
+    exact_field: str | None = None,
+    page_size: int = 20,
+    cursor: str | None = None,
+    planner: AdaptiveQueryPlanner | None = None,
+    max_query_count: int = 3,
+    max_repair_count: int = 2,
+    context_citation_limit: int = 24,
+    total_time_budget_ms: int = 4_500,
+) -> tuple[GovernedSemanticExecutionResult,
+           tuple[GovernedSemanticExecutionResult, ...], dict[str, Any]]:
+    """Execute bounded query candidates through the existing authorized session."""
+
+    if (
+        not isinstance(query_text, str)
+        or not query_text.strip()
+        or not 1 <= max_query_count <= 4
+        or not 0 <= max_repair_count < max_query_count
+        or not 1 <= context_citation_limit <= 48
+        or not 1 <= total_time_budget_ms <= 6_000
+    ):
+        raise ContractValidationError("adaptive query input is invalid")
+    started = _system_monotonic()
+    steps: list[dict[str, Any]] = []
+    successful_results: list[GovernedSemanticExecutionResult] = []
+    seen_queries: set[str] = set()
+    stop_reason = "query_budget_exhausted"
+    for index in range(max_query_count + 1):
+        if index and started + total_time_budget_ms / 1_000 <= _system_monotonic():
+            stop_reason = "time_budget_exhausted"
+            break
+        planned_query = (
+            query_text if not steps else None
+        ) if planner is None else planner(
+            query_text,
+            tuple(MappingProxyType(step) for step in steps),
+            session.index._runtime_components.tokenizer_profile,
+            max_query_count,
+        )
+        if planned_query is None:
+            stop_reason = "planner_stopped"
+            break
+        if index > max_repair_count:
+            stop_reason = "repair_budget_exhausted"
+            break
+        if (
+            not isinstance(planned_query, str)
+            or not planned_query.strip()
+            or planned_query in seen_queries
+            or (not steps and planned_query != query_text)
+        ):
+            raise ContractValidationError("adaptive query plan is invalid")
+        seen_queries.add(planned_query)
+        tool_plan_fingerprint = sha256_json([
+            "query_effective_graph_view",
+            sha256_json(planned_query),
+            session.source_session_binding_fingerprint,
+            sha256_json(exact_inventory_kind) if exact_inventory_kind else None,
+            sha256_json(exact_field) if exact_field else None,
+        ])
+        try:
+            result = session.query(
+                query_text=planned_query,
+                effective_graph_view=effective_graph_view,
+                allowed_relation_types=allowed_relation_types,
+                exact_inventory_kind=exact_inventory_kind,
+                exact_field=exact_field,
+                page_size=page_size,
+                cursor=cursor,
+            )
+        except ContractValidationError as exc:
+            missing_field_hashes: set[str] = set()
+            try:
+                ordered_terms, _ = _ordered_source_occurrence_query_grounding(
+                    planned_query,
+                    tokenizer_profile=session.index._runtime_components.tokenizer_profile,
+                )
+            except (ContractValidationError, RuntimeError):
+                ordered_terms = ()
+            value_hashes = {
+                value
+                for provider in session.source_occurrence_providers
+                if provider.filter_slot_policy == "combined_present_intersection_v1"
+                for value in provider._value_candidate_columns
+            }
+            projection_hashes = {
+                value
+                for provider in session.source_occurrence_providers
+                if provider.filter_slot_policy == "combined_present_intersection_v1"
+                for value in provider._projection_candidate_columns
+            }
+            projection_start = next((
+                index + 1
+                for index, (_, role, _, control) in enumerate(ordered_terms)
+                if control == "none" and role == "particle"
+                and any(
+                    candidate in value_hashes
+                    for _, _, candidates, _ in ordered_terms[:index]
+                    for candidate in candidates
+                )
+            ), len(ordered_terms))
+            missing_field_hashes.update(
+                candidate
+                for _, role, candidates, control in ordered_terms[projection_start:]
+                if control == "none" and role in {"lexical", "operator"}
+                for candidate in candidates
+                if candidate not in projection_hashes
+            )
+            steps.append(
+                {
+                    "query_hash": sha256_json(planned_query),
+                    "tool_plan_fingerprint": tool_plan_fingerprint,
+                    "validation_status": "rejected_existing_validator",
+                    "status": "rejected",
+                    "coverage_status": "not_executed",
+                    "citation_hashes": [],
+                    "missing_field_hashes": sorted(missing_field_hashes),
+                    "rejection_fingerprint": sha256_json(
+                        [type(exc).__name__, str(exc)]
+                    ),
+                }
+            )
+            continue
+        if result.query_hash != sha256_json(planned_query):
+            raise ContractValidationError("adaptive query result binding is invalid")
+        page = result.exact_result.source_occurrence_page if result.exact_result else None
+        citations = set(result.answer_citation_hashes)
+        if result.exact_result:
+            for item in result.exact_result.items:
+                citations.update(item.cited_observation_hashes)
+        coverage = (
+            str(page.get("coverage_status"))
+            if isinstance(page, Mapping)
+            else ("supported" if citations else "no_answer")
+        )
+        unsupported = page.get("unsupported_projection_hashes", ()) if (
+            isinstance(page, Mapping)
+        ) else ()
+        missing_fields = sorted(
+            value for value in unsupported
+            if isinstance(value, str) and value.startswith("sha256:")
+        )
+        steps.append(
+            {
+                "query_hash": result.query_hash,
+                "tool_plan_fingerprint": tool_plan_fingerprint,
+                "validation_status": "validated_existing_scope_schema_permission",
+                "status": result.status,
+                "result_fingerprint": result.result_fingerprint,
+                "coverage_status": coverage,
+                "citation_hashes": sorted(citations),
+                "missing_field_hashes": missing_fields,
+                "rejection_fingerprint": None,
+            }
+        )
+        successful_results.append(result)
+        if cursor is not None or exact_inventory_kind or exact_field:
+            stop_reason = "single_exact_plan_completed"
+            break
+        if len({value for step in steps
+                for value in step["citation_hashes"]}) >= context_citation_limit:
+            stop_reason = "context_budget_reached"
+            break
+    if not successful_results:
+        raise ContractValidationError("adaptive query produced no authorized result")
+    citations = sorted({value for step in steps for value in step["citation_hashes"]})
+    missing = sorted({value for step in steps for value in step["missing_field_hashes"]})
+    complete = (len(steps) == 1 and bool(citations)
+                and steps[0]["validation_status"].startswith("validated_")
+                and steps[0]["coverage_status"]
+                in {"complete", "complete_authorized_scope"})
+    status = "complete" if complete else ("partial" if citations else "unsupported")
+    if stop_reason == "planner_stopped":
+        stop_reason = "coverage_complete" if complete else "planner_stopped_partial"
+    payload = {
+        "status": status,
+        "original_query_hash": sha256_json(query_text),
+        "planner_interface": "stepwise_callback_v1",
+        "planner_model_status": (
+            "not_connected" if planner is None else "injected_callback_non_model"),
+        "mcp_call_count": 1, "executed_subquery_count": len(steps),
+        "stop_reason": stop_reason,
+        "stop_reason_fingerprint": sha256_json(stop_reason),
+        "conversation_state": {
+            "status": "must_be_resolved_upstream", "hidden_history_used": False},
+        "subqueries": steps,
+        "context_bundle": {
+            "successful_subquery_count": len(successful_results),
+            "citation_hashes": citations,
+            "lineage_fingerprints": [],
+            "missing_field_hashes": missing,
+            "successful_subqueries": [],
+        },
+    }
+    assert_public_payload_safe(payload, "issue56_adaptive_query_execution")
+    return successful_results[0], tuple(successful_results), payload
 
 
 def _prefer_untyped_participant_any_provider(

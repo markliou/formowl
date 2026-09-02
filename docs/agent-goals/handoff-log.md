@@ -9,18 +9,18 @@ This is a bounded active window. Earlier entries are immutable history under
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
-## 2026-09-02 — Structural-blank attachment diagnostic
+## 2026-09-02 — Step-4 attachment and Core Query Agent POCs
 - The structural-blank plus sparse focused normal ASGI `/mcp` E2E passed `1/1` in `66.026 s`.
-- Exactly-once mode `issue56-after-structural-blank-diagnostic-20260902-v1` consumed exit `0` as
-  `workspace_only_v1`/`workspace_formowl`, approved actor/approver, with no tenant.
-- HTTP was `200`, MCP had no error, request count was `1`, request/compose was
-  `531.524261`/`607917.660851 ms`, scope `1799`, exact `2/2`, complete, candidate-only `0`, citations `7`.
-- Within the authorized sealed-source scope, the requested projection fields materialized as explicit
-  blanks; another unrequested field was not semantically equivalent and was not used as an alias.
-- Runner/wrapper/log/exit hashes: `sha256:4fb18f...394`, `sha256:846a82...d96`,
-  `sha256:194d04...66d`, `sha256:9a271f...86aa`.
-- Current `authority_valid=false`/`methodology_ready=false`; four gates remain blocked, step 4 remains
-  `in-progress`, and this exploratory POC is not UAT, production, readiness, completion, or superiority.
+- Its exactly-once `workspace_only_v1`/`workspace_formowl` mode consumed exit `0`: HTTP `200`, one request, exact `2/2`, complete coverage, candidate-only `0`, seven citations, approved actor/approver, and no tenant.
+- Requested fields were explicit source blanks; an unrequested field was not treated as an alias.
+- Runner/wrapper/log/exit hashes: `sha256:4fb18f...394`, `sha256:846a82...d96`, `sha256:194d04...66d`,
+  and `sha256:9a271f...86aa`.
+- The Core Query Agent spec plus agent-ready orchestration POC passed focused normal `/mcp` `1/1` in about `65.5 s`; the existing candidate-table production-handler regression passed `1/1` in `3.3 s`.
+- Read-only release review returned `AGREE`; zero-arg planning remains `not_connected`, and
+  conversation coreference must resolve upstream before MCP.
+- Authority remains invalid/blocked on the CJK runtime-support error and four gates; step 4 remains
+  `in-progress`. These are bounded diagnostic POCs, not general UAT, production, readiness, completion,
+  Issue #56 completion, or superiority evidence.
 ## 2026-09-01 — Candidate attachment-table answer checkpoint
 - Checkpoint `dfaf38b` passed `43` focused tests and one real normal `/mcp` run:
   HTTP `200`, `candidate_interpretation`, four citations, about `908.085 ms`,

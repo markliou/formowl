@@ -72,18 +72,27 @@ heterogeneous sources
 ### 3.2 Query execution
 
 ```text
-user query
-  -> typed query router
-  -> validated SemanticQueryPlan
-  -> BM25 + dense evidence retrieval
-  -> entity linking + bounded graph traversal
-  -> temporal, provenance, and coverage filtering
-  -> capped soft ontology scoring
-  -> evidence-bundle reranking
-  -> deterministic executor or citation-grounded LLM answer
+user prompt + bounded conversation state
+  -> core Query Agent
+  -> intent and coreference resolution
+  -> actual source-schema, scoped-ontology, and current MCP-capability discovery
+  -> candidate query expansion
+  -> one or more validated SemanticQueryPlans and tool plans
+  -> authorized execution
+  -> requested-field and evidence-coverage inspection
+  -> bounded adaptive repair or requery
+  -> compact rich evidence context
+  -> deterministic result or citation-grounded answer
 ```
 
-The method is intentionally hybrid:
+The core Query Agent is the governed orchestrator of this path, not a license
+for an LLM to bypass deterministic contracts. It receives only the current
+prompt and an explicit, bounded, versioned conversation-state envelope.
+Coreference must be resolved before an MCP query is issued, or transmitted as
+validated explicit state when the tool contract supports it. An MCP tool must
+never infer hidden conversation history from an under-specified `query_text`.
+
+The method remains intentionally hybrid:
 
 - strong RAG recovers source evidence;
 - the KG contributes identity, cross-source joins, bounded topology, temporal
@@ -93,6 +102,13 @@ The method is intentionally hybrid:
 - deterministic structured execution owns exact-set and completeness claims;
 - the answer model explains the authorized result and does not invent missing
   evidence.
+
+The Query Agent does not place every authorized record into model context. It
+selects and stops retrieval according to requested-field coverage, evidence
+diversity, contradiction and provenance needs, claim strength, and frozen
+budgets. Query expansions are candidates only: they cannot grant access, widen
+source scope, write canonical state, or convert public-web material into
+internal fact.
 
 No source adapter, extractor, LLM, retrieval path, or projection may bypass the
 separation between evidence, candidate interpretation, governed canonical
@@ -235,6 +251,14 @@ The implementation may represent these through `CandidateMention`,
 `CandidateBusinessObject`, `CandidateAtom`, `CandidateRelation`, and
 `CandidateFrame`. These are proposals, not truth.
 
+Candidate cardinality is zero-to-many at both the source document and
+Observation boundaries. One document or Observation may therefore produce no
+semantic annotation, or any number of source-addressed annotations, candidate
+atoms, candidate entities/business objects, relations, and frames. A candidate
+may span multiple Observations, but every candidate keeps the contributing
+Observation IDs and source occurrences; no layer may impose a one-annotation-
+per-document or one-annotation-per-Observation rule.
+
 ### 5.2 Candidate-before-canonical rule
 
 Before canonical commit, FormOwl applies:
@@ -369,6 +393,12 @@ A source-specific record retains its local source type and occurrence identity
 while mapping to shared concepts. Email, calendar, ticket, document, and
 database records do not become a single flattened source type.
 
+Ontology constrains and compresses the vocabulary, arity, and allowed shapes of
+candidate and canonical relation types so edge semantics and graph complexity
+remain governed. It does not cap how many source-addressed annotations or
+candidates a document or Observation may produce, and it does not collapse
+distinct source occurrences merely to reduce edge count.
+
 ### 6.3 Hard invariants and soft semantics
 
 Hard fail-closed checks are limited to:
@@ -414,7 +444,25 @@ graph, ontology authority, index authority, or answer service.
 
 ## 7. Query Planning and Execution
 
-### 7.1 Query classes
+### 7.1 Core Query Agent and query classes
+
+The core Query Agent accepts:
+
+```text
+current user prompt
+bounded validated conversation state
+authenticated actor and workspace context
+current permission-filtered source and EffectiveGraphView bindings
+frozen execution budgets and policy revisions
+```
+
+The conversation-state envelope may contain only explicitly retained prior
+turn references, previously validated entity or identifier bindings, user
+clarifications, and their source turn hashes. It is not ambient model memory.
+The Query Agent resolves intent and coreference before constructing MCP tool
+arguments. If a reference remains missing or ambiguous, it asks for
+clarification or fails closed; an MCP tool may not guess what an earlier turn
+meant.
 
 Every query routes to one of four classes:
 
@@ -429,10 +477,31 @@ Queries asking for all, every, count, inventory, duplicates, missing items,
 exact membership, completeness, or definitive absence route deterministically
 to structured execution.
 
-### 7.2 SemanticQueryPlan
+### 7.2 Capability discovery and validated plan set
 
-An LLM may propose a `SemanticQueryPlan`, but validation and execution limits
-are deterministic. A valid plan pins:
+Before planning execution, the Query Agent discovers and pins the actual
+current capabilities available to the request:
+
+```text
+authorized source schemas and source-provided field capabilities
+current permission-filtered source occurrence providers
+current EffectiveGraphView and scoped ontology revisions
+current MCP tools and their actual input/output schemas
+```
+
+Descriptions, cached assumptions, public documentation, and model knowledge do
+not override these runtime contracts. Tool arguments and source-field
+projections are validated against the discovered schemas before execution.
+
+The Query Agent may propose multiple query expansions, subqueries, and tool
+plans when the request has multiple intents, fields, sources, or dependencies.
+Each expansion remains a candidate. Each executable subquery is represented by
+a validated `SemanticQueryPlan` or an equivalently governed tool plan, with
+explicit dependencies and a mapping to the requested fields it is intended to
+cover.
+
+An LLM may propose plans, but validation and execution limits are
+deterministic. Every executable plan pins:
 
 ```text
 plan schema version
@@ -447,11 +516,40 @@ output schema
 planner model, prompt, and settings fingerprint when applicable
 ```
 
-An invalid, scope-widening, revision-unbound, or under-specified plan fails
-closed. One bounded repair pass may fill unresolved required slots only inside
-the original source and permission scope.
+An invalid, scope-widening, revision-unbound, ambiguous, or under-specified plan
+fails closed. No expansion or repair may create a permission, source, field,
+relation, alias, or canonical assertion that was not validated through the
+current authorized contracts.
 
-### 7.3 Strong RAG control
+When a planner or LLM has low confidence about a user instruction, domain term,
+schema concept, or MCP tool usage, it may use a redacted public-web search only
+for semantic disambiguation, terminology or schema understanding, and
+candidate tool-plan expansion. Before any tool call, the proposed plan must be
+revalidated against the actual current MCP tool schema and the caller's current
+permission scope. Public-web context remains untrusted and provenance-separated
+from workspace evidence: no private prompt detail, source content, identifier,
+value, secret, or tool result may be sent outward. Web material cannot grant
+access, authorize an external or canonical write, mutate canonical KG state, or
+replace source-grounded deterministic exact execution and its coverage
+contract.
+
+Every Query Agent run records versioned fingerprints for:
+
+```text
+user prompt and bounded conversation state
+resolved intent and coreference bindings
+discovered source-schema, ontology, and MCP capability revisions
+candidate expansions and their disposition
+validated subqueries and tool plans
+tool calls and governed result bindings
+requested-field and evidence-coverage checkpoints
+repair or requery decisions
+stop reason
+final compact evidence-context bundle
+deterministic result or cited-answer input
+```
+
+### 7.3 Strong RAG and bounded adaptive execution
 
 The minimum competitive retrieval control is:
 
@@ -464,6 +562,26 @@ BM25 or equivalent lexical retrieval
 ```
 
 A substring or regex-only retriever is not an adequate strong RAG baseline.
+
+After each authorized execution step, the Query Agent inspects coverage for
+every requested field and evidence need. Coverage distinguishes at least
+direct source support, explicit source blank, unsupported or unresolved field,
+conflict, policy denial or redaction, and no authorized evidence found.
+Evidence selection also considers diversity across source occurrences, source
+families, time, provenance, and contradictory assertions so repeated copies do
+not crowd out materially different evidence.
+
+Repair or requery is allowed only under a frozen attempt, tool-call, evidence,
+token, and time budget. It may select another validated field, source, or tool
+candidate; narrow or split a plan; or request clarification. It must not widen
+authorization, silently invent an alias, promote candidate knowledge, write
+canonical state, or treat public-web content as workspace evidence.
+
+Execution stops when the requested fields have support sufficient for the
+allowed claim, deterministic coverage is complete, no new authorized and
+materially useful evidence is available, clarification is required, or a
+budget or permission boundary is reached. The stop reason is explicit and
+audited.
 
 ### 7.4 Graph-guided expansion
 
@@ -508,10 +626,17 @@ coverage status
 
 Incomplete coverage produces a partial result and a weaker claim.
 
-### 7.6 Answer generation
+### 7.6 Compact evidence context and answer generation
 
-The final answer model receives only the validated plan and authorized evidence
-bundle. It must:
+The Query Agent assembles a compact rich evidence-context bundle rather than
+dumping the authorized corpus into the model context. The bundle contains only
+the validated plans, requested-field coverage, selected source evidence,
+provenance and citation bindings, conflicts, explicit blanks, and relevant
+graph or ontology explanations needed for the answer. Its schema, contents,
+ordering, budget, and fingerprint are recorded.
+
+The final answer model receives only this authorized bundle and the maximum
+claim contract. It must:
 
 - cite source evidence;
 - distinguish source assertion from canonical interpretation;
@@ -529,7 +654,8 @@ There is no single model called the FormOwl KG model. Every run records roles
 separately:
 
 ```text
-planner model, if used
+intent and coreference model, if used
+query expansion and planner model, if used
 candidate extraction or entity-linking model, if used
 embedding model
 reranker model, if used
@@ -537,6 +663,14 @@ final answer model
 reasoning effort and decoding settings
 prompt, output-schema, and context-budget hashes
 ```
+
+The core Query Agent is an orchestration role governed by deterministic
+validators, permission checks, capability discovery, coverage inspection,
+budgets, and audit records. It is not synonymous with any one model. Models may
+propose intent, coreference bindings, query expansions, plans, or answer text;
+they may not authorize their own tools, invent conversation history, define
+the current MCP schema, widen source scope, declare deterministic completeness,
+or commit canonical knowledge.
 
 All comparison arms use the same final answer model and settings. Model changes
 create a new experiment.
@@ -928,10 +1062,23 @@ occurrence, retention, purge, transfer, and authorization semantics.
 ### 15.3 Query and answer
 
 - strong RAG is implemented over the same source-complete Observations;
-- query class and `SemanticQueryPlan` are validated before execution;
+- the core Query Agent accepts the user prompt plus bounded, versioned
+  conversation state and resolves intent and coreference before MCP execution;
+- ambiguous references fail closed or request clarification, and MCP tools do
+  not infer hidden history from `query_text`;
+- actual authorized source schemas, scoped ontology revisions, and current MCP
+  capabilities are discovered, pinned, and revalidated before tool calls;
+- query expansions remain candidates, and every executed subquery or tool plan
+  is independently validated, permission-bounded, versioned, and audited;
+- requested-field coverage and evidence diversity govern bounded repair,
+  requery, context selection, and the recorded stop reason;
+- the final model context is a compact, fingerprinted, citation-bound evidence
+  bundle rather than an authorized-corpus dump;
 - exact-set claims use deterministic enumeration and coverage evidence;
 - answers cite evidence and disclose conflict or incompleteness;
-- no-answer and permission-denied behavior fail safely.
+- no-answer and permission-denied behavior fail safely; and
+- unseen pre-registered prompts pass without question-specific identifiers,
+  aliases, expected answers, or success-pattern fitting.
 
 ### 15.4 Evaluation
 
@@ -962,9 +1109,14 @@ FormOwl must not:
 
 ```text
 fit runtime behavior to UAT or holdout questions
+add question-specific aliases, literals, expected answers, or success patterns
 make mail or another source family the product ontology
 replace strong RAG with graph-only retrieval
 infer complete sets from top-k ranking
+place all authorized data into an answer-model context
+let MCP tools guess unprovided conversation history or coreference
+let query expansion, repair, or tool selection widen authorization
+use public-web material as internal source evidence or canonical fact
 use inferred ontology mismatch as a default hard evidence filter
 let an extractor or LLM create canonical truth automatically
 merge matching, authorization, canonicalization, and raw access
@@ -982,7 +1134,7 @@ Any Source
   -> Evidence-Backed Candidate Knowledge
   -> Governed Canonical KG + Scoped Ontology
   -> Permission-Aware Effective View
-  -> Strong-RAG + Graph-Guided Query Execution
+  -> Core Query Agent + Validated Adaptive Hybrid Execution
   -> Cited Answer, Projection, or Reviewed Action Proposal
 ```
 

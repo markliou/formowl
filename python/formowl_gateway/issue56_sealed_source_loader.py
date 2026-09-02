@@ -40,7 +40,11 @@ from formowl_mail.issue56_sealed_source import (
     WORKSPACE_ID,
     load_issue56_sealed_source,
 )
-from formowl_mail.hybrid import attach_authorized_source_occurrence_providers
+from formowl_mail.hybrid import (
+    AdaptiveQueryPlanner,
+    attach_authorized_source_occurrence_providers,
+    execute_bounded_adaptive_query,
+)
 from formowl_mail.query import (
     MailAttachmentChildOccurrenceLineage,
     MailEvidenceQueryResult,
@@ -522,7 +526,10 @@ def _load_approved_sealed_source(
     )
 
 
-def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[str, Any]]:
+def build_issue56_production_semantic_retrieval_handler(
+    *,
+    query_agent_planner: AdaptiveQueryPlanner | None = None,
+) -> Callable[..., dict[str, Any]]:
     """Build the opt-in production handler over the approved sealed source."""
 
     loaded = _load_approved_sealed_source(
@@ -594,6 +601,89 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
     candidate_ledger = _build_candidate_table_ledger(session)
     candidate_lookup = (None if candidate_ledger is None else build_authorized_candidate_table_lookup(
         session=session, ledger=candidate_ledger))
+    observation_by_id = {item.observation_id: item for item in session.authorized_observations}
+    observations_by_hash: dict[str, list[Observation]] = {}
+    for observation_id, observation_hash in session.authorized_observation_hashes:
+        if observation_id in observation_by_id:
+            observations_by_hash.setdefault(observation_hash, []).append(
+                observation_by_id[observation_id]
+            )
+    lineage_by_observation_id = {
+        item.source_observation_id: item for item in session.occurrence_lineages
+    }
+
+    def project_evidence(result: Any, *, limit: int) -> tuple[list[dict[str, Any]], int]:
+        hashes = [*result.answer_citation_hashes,
+                  *(score.source_observation_hash for score in result.scores)]
+        if result.exact_result is not None:
+            for item in result.exact_result.items:
+                hashes.extend(item.cited_observation_hashes)
+                hashes.extend(value[0] for value in item.governed_references)
+        evidence: list[dict[str, Any]] = []
+        redaction_count = 0
+        for citation_hash in dict.fromkeys(hashes):
+            if citation_hash not in observations_by_hash:
+                raise ContractValidationError("production evidence authorization binding is invalid")
+            for observation in sorted(
+                observations_by_hash[citation_hash],
+                key=lambda item: item.observation_id,
+            ):
+                lineage = lineage_by_observation_id.get(observation.observation_id)
+                if lineage is None:
+                    raise ContractValidationError(
+                        "production evidence lineage binding is invalid"
+                    )
+                source_text = observation.text or observation.caption or ""
+                if not source_text:
+                    continue
+                snippet, redacted = redact_public_raw_references(source_text)
+                evidence.append({
+                    "snippet": snippet[:400],
+                    "citation_hash": citation_hash,
+                    "occurrence_lineage_fingerprint": lineage.lineage_fingerprint,
+                    **({"content_redacted": True} if redacted else {}),
+                })
+                redaction_count += redacted
+                if len(evidence) == limit:
+                    return evidence, redaction_count
+        return evidence, redaction_count
+
+    def project_query_agent_context(
+        results: tuple[Any, ...],
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        contexts = []
+        citations = set(payload["context_bundle"]["citation_hashes"])
+        lineages = set(payload["context_bundle"]["lineage_fingerprints"])
+        redaction_count = 0
+        for result in results:
+            evidence, redacted = project_evidence(result, limit=4)
+            exact_items = (
+                [item.to_safe_dict() for item in result.exact_result.items[:4]]
+                if result.exact_result is not None
+                else []
+            )
+            contexts.append({
+                "query_hash": result.query_hash,
+                "status": result.status,
+                "query_class": result.query_class,
+                "evidence": evidence,
+                "exact_items": exact_items,
+            })
+            citations.update(item["citation_hash"] for item in evidence)
+            lineages.update(
+                item["occurrence_lineage_fingerprint"] for item in evidence
+            )
+            redaction_count += redacted
+        context = {
+            **payload["context_bundle"],
+            "citation_hashes": sorted(citations),
+            "lineage_fingerprints": sorted(lineages),
+            "successful_subqueries": contexts,
+            "redacted_value_count": redaction_count,
+        }
+        context["bundle_fingerprint"] = sha256_json(context)
+        return {**payload, "context_bundle": context}
 
     def retrieval_handler(arguments: dict[str, Any]) -> dict[str, Any]:
         required_arguments = {
@@ -616,7 +706,8 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
             or not arguments["session_id"]
         ):
             raise ContractValidationError("production semantic actor binding mismatch")
-        result = session.query(
+        result, successful_results, query_agent_payload = execute_bounded_adaptive_query(
+            session=session,
             query_text=arguments["query_text"],
             effective_graph_view=graph_view,
             allowed_relation_types=relation_types,
@@ -624,6 +715,10 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
             exact_field=arguments.get("exact_field"),
             page_size=arguments.get("page_size", 20),
             cursor=arguments.get("cursor"),
+            planner=query_agent_planner,
+        )
+        query_agent_payload = project_query_agent_context(
+            successful_results, query_agent_payload
         )
         exact_result = result.exact_result
         exact_inventory_kind = arguments.get("exact_inventory_kind")
@@ -658,70 +753,13 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
                     "source_result_fingerprint": candidate.result_fingerprint,
                     "citation_count": 4},
                 "candidate_interpretation": candidate_payload,
+                "query_agent": query_agent_payload,
                 "citations": citation_hashes, "evidence": [],
                 "graph_hits": {"count": result.graph_path_count},
                 "canonical_kg": False, "deterministic_exact": False, "exact_result": None,
                 "redaction_counts": {"redacted_value_count": 0}}
             validate_public_gateway_payload(payload); return payload
-        authorized_hash_by_id = dict(session.authorized_observation_hashes)
-        observation_by_id = {
-            observation.observation_id: observation
-            for observation in session.authorized_observations
-        }
-        observations_by_hash: dict[str, list[Observation]] = {}
-        for observation_id, observation_hash in authorized_hash_by_id.items():
-            observation = observation_by_id.get(observation_id)
-            if observation is not None:
-                observations_by_hash.setdefault(observation_hash, []).append(observation)
-        lineage_by_observation_id = {
-            lineage.source_observation_id: lineage
-            for lineage in session.occurrence_lineages
-        }
-        evidence: list[dict[str, Any]] = []
-        redaction_count = 0
-        if result.query_class == "evidence_lookup":
-            if session.authorized_source is None:
-                raise ContractValidationError("production evidence source binding is unavailable")
-            projection_hashes = tuple(
-                dict.fromkeys(
-                    (
-                        *result.answer_citation_hashes,
-                        *(score.source_observation_hash for score in result.scores),
-                    )
-                )
-            )[:10]
-            for citation_hash in projection_hashes:
-                cited_observations = observations_by_hash.get(citation_hash)
-                if not cited_observations:
-                    raise ContractValidationError(
-                        "production evidence authorization binding is invalid"
-                    )
-                for observation in sorted(
-                    cited_observations,
-                    key=lambda item: item.observation_id,
-                ):
-                    lineage = lineage_by_observation_id.get(observation.observation_id)
-                    if lineage is None:
-                        raise ContractValidationError(
-                            "production evidence lineage binding is invalid"
-                        )
-                    source_text = observation.text or observation.caption or ""
-                    if not source_text:
-                        continue
-                    snippet, item_redaction_count = redact_public_raw_references(source_text)
-                    item = {
-                        "snippet": snippet[:400],
-                        "citation_hash": citation_hash,
-                        "occurrence_lineage_fingerprint": lineage.lineage_fingerprint,
-                    }
-                    if item_redaction_count:
-                        item["content_redacted"] = True
-                    evidence.append(item)
-                    redaction_count += item_redaction_count
-                    if len(evidence) == 10:
-                        break
-                if len(evidence) == 10:
-                    break
+        evidence, redaction_count = project_evidence(result, limit=10)
         evidence_result = MailEvidenceQueryResult(
             status="ok",
             mail_import_session_id=None,
@@ -837,6 +875,7 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
                     ],
                 },
                 "citations": list(result.answer_citation_hashes),
+                "query_agent": query_agent_payload,
                 "redaction_counts": {"redacted_value_count": page["redacted_count"]},
             }
             validate_public_gateway_payload(payload)
@@ -862,6 +901,7 @@ def build_issue56_production_semantic_retrieval_handler() -> Callable[..., dict[
             },
             "evidence": evidence,
             "citations": public_citations,
+            "query_agent": query_agent_payload,
             "graph_hits": {"count": result.graph_path_count},
             "relationship": {
                 "relation_types": sorted(projected_relation_types),
