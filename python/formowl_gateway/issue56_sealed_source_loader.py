@@ -47,6 +47,7 @@ from formowl_mail.query import (
     normalized_authorized_observation_lineages,
     source_occurrence_lineage_from_observation,
 )
+from formowl_mail.semantic_plan import authorized_permission_scope_matches
 
 from .issue56_diagnostic import (
     ISSUE56_REAL_PROMPT_SEALED_SOURCE_DIAGNOSTIC_MODE_ID,
@@ -243,6 +244,20 @@ _ENVIRONMENT_FIELDS: Final[dict[str, str]] = {
         "FORMOWL_ISSUE56_SOURCE_IDENTIFIER_CANDIDATE_SAFE_REPORT_SHA256"
     ),
     "expected_identity_scope_fingerprint": ("FORMOWL_ISSUE56_IDENTITY_SCOPE_FINGERPRINT"),
+}
+_SUPPLEMENTAL_OBSERVATION_ENVIRONMENT_FIELDS: Final[dict[str, str]] = {
+    "supplemental_observation_artifact_path": (
+        "FORMOWL_ISSUE56_SUPPLEMENTAL_OBSERVATION_ARTIFACT_PATH"
+    ),
+    "expected_supplemental_observation_artifact_sha256": (
+        "FORMOWL_ISSUE56_SUPPLEMENTAL_OBSERVATION_ARTIFACT_SHA256"
+    ),
+    "supplemental_parent_snapshot_path": (
+        "FORMOWL_ISSUE56_SUPPLEMENTAL_PARENT_SNAPSHOT_PATH"
+    ),
+    "expected_supplemental_parent_snapshot_sha256": (
+        "FORMOWL_ISSUE56_SUPPLEMENTAL_PARENT_SNAPSHOT_SHA256"
+    ),
 }
 _PATH_FIELDS: Final[frozenset[str]] = frozenset(
     {
@@ -477,6 +492,23 @@ def _load_approved_sealed_source(
                 f"sealed source loader environment is incomplete: {environment_name}"
             )
         values[field_name] = Path(value) if field_name in _PATH_FIELDS else value
+    supplemental_values = {
+        field_name: os.environ.get(environment_name, "").strip()
+        for field_name, environment_name in (
+            _SUPPLEMENTAL_OBSERVATION_ENVIRONMENT_FIELDS.items()
+        )
+    }
+    if any(supplemental_values.values()) and not all(supplemental_values.values()):
+        raise ContractValidationError(
+            "sealed source supplemental observation environment is incomplete"
+        )
+    if all(supplemental_values.values()):
+        values.update(
+            {
+                field_name: Path(value) if field_name.endswith("_path") else value
+                for field_name, value in supplemental_values.items()
+            }
+        )
 
     return load_issue56_sealed_source(
         **values,
@@ -926,6 +958,44 @@ def _build_mail_source_occurrence_providers(
     session = loaded.session
     if session.authorized_source is None:
         raise ContractValidationError("production authorized source is unavailable")
+    if "supplemental_observation_partition_status" in safe_binding:
+        authorized_source = session.authorized_source
+        authorized_permission_scopes = authorized_source.authorized_permission_scopes
+        if (
+            safe_binding["supplemental_observation_partition_status"] != "loaded"
+            or len(session.authorized_source_scope_ids) != 1
+            or authorized_source.workspace_id != session.workspace_id
+            or authorized_source.source_scope_ids
+            != session.authorized_source_scope_ids
+            or len(authorized_permission_scopes) != 1
+            or authorized_permission_scopes[0].scope_id
+            != session.authorized_source_scope_ids[0]
+            or not authorized_permission_scope_matches(
+                authorized_permission_scopes[0],
+                authorized_source=authorized_source,
+            )
+        ):
+            raise ContractValidationError(
+                "production supplemental observation binding is invalid"
+            )
+        scope_fingerprint = authorized_source_occurrence_scope_fingerprint(
+            requester_user_id=session.requester_user_id,
+            workspace_id=session.workspace_id,
+            source_scope_ids=session.authorized_source_scope_ids,
+            authorized_observation_hashes=session.authorized_observation_hashes,
+            source_session_binding_fingerprint=(
+                session.source_session_binding_fingerprint or ""
+            ),
+        )
+        table_provider = _build_attachment_table_row_provider(
+            session,
+            authorized_scope_fingerprint=scope_fingerprint,
+        )
+        if table_provider is None or not table_provider.occurrences:
+            raise ContractValidationError(
+                "production supplemental table provider is unavailable"
+            )
+        return (table_provider,)
     authorized_observation_hashes = dict(session.authorized_observation_hashes)
     item_lineage_by_occurrence: dict[str, str] = {}
     for lineage in session.occurrence_lineages:
@@ -1384,6 +1454,17 @@ def _build_attachment_table_row_provider(
                 for token in tokenizer_profile.analyze(value).tokens
                 if token
             }
+            if (
+                structure_status == "source_provided"
+                and cell_structure.get("structure_status") == "source_provided"
+                and cell.text == ""
+                and (cell.payload or {}).get("cell_state") == "absent"
+                and isinstance(cell.location.get("row_index"), int)
+                and not isinstance(cell.location.get("row_index"), bool)
+            ):
+                value_token_hashes.add(
+                    sha256_json(["source_provided_structural_blank_value_v1"])
+                )
             normalized_field = tokenizer_profile.normalize_exact_identifier_surface(
                 safe_field
             )
@@ -1910,6 +1991,16 @@ def _validated_owner_safe_binding(
         != counts.get("authorized_observation_count")
     ):
         raise ContractValidationError("sealed source owner precompute binding mismatch")
+    if binding.get("supplemental_observation_partition_status") == "loaded":
+        if dict(relation_precompute or {}) != {
+            "status": "skipped",
+            "reason": "supplemental_observation_partition_not_applicable",
+            "helper_invocation_count": 0,
+        }:
+            raise ContractValidationError(
+                "sealed source owner relation projection precompute binding mismatch"
+            )
+        return binding
     relation_counts = (
         relation_precompute.get("counts") if isinstance(relation_precompute, Mapping) else None
     )

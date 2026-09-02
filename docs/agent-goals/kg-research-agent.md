@@ -40,50 +40,43 @@ Mail is the first source fixture. The method must transfer to a materially
 different source family without question-specific core types or aliases.
 ## Status
 `blocked` for methodology-quality UAT, comparative superiority, default-path
-replacement, and objective completion. The pinned authority is valid but fail-closed
-with four blocking gates. The normal runtime-method gate passes for
+replacement, and objective completion. Current authority is fail-closed with
+`authority_valid=false`, `methodology_ready=false`, and four blocking gates.
+The normal runtime-method gate passes for
 `evidence_to_knowledge_kg_ontology_v2_hybrid_v1` and
 `jieba_sentencepiece_frozen_profile_candidate_admission_v1`. Remaining gates
 are source completeness, accepted execution-fingerprint binding, same-pipeline
 real-source ablation, and independent final-answer acceptance. The v3
 promotion contract is repaired, but no formal all-four-gate evidence exists to
 promote.
-## Step-4 Candidate Attachment Checkpoint — 2026-09-01
-Pushed checkpoint `dfaf38b` (`feat(issue56): answer candidate attachment
-tables`) carries the bounded candidate-table answer slice. A real
-recovery-source attachment-table diagnostic used normal ASGI `/mcp` and
-returned HTTP `200`, `candidate_interpretation`, four governed citations, and
-about `908.085 ms` latency without deadline exhaustion.
+## Step-4 Attachment-Table Checkpoint — 2026-09-02
+The earlier bounded candidate-table slice remains noncanonical/nonexact:
+normal ASGI `/mcp` returned HTTP `200`, `candidate_interpretation`, four
+governed citations, and about `908.085 ms`; ambiguity remains
+fail-closed and cross-session lookup reuse is rejected.
 
-The result remains `candidate_only` because the source HTML table had no
-semantic header markup. It reports `canonical_kg=false`,
-`deterministic_exact=false`, and no `exact_result`; ambiguous lookup remains
-fail-closed. The diagnosed root cause was a source-selection/artifact-binding
-scope gap, not permission expansion or deterministic exact evidence.
+The structural-blank plus sparse focused normal `/mcp` E2E passed `1/1` in
+`66.026 s`. Exactly-once mode
+`issue56-after-structural-blank-diagnostic-20260902-v1` was consumed with exit
+`0` as `workspace_only_v1`/`workspace_formowl`, actor/approver
+`user_full_pst_domain_hard_case_eval_owner`, and no tenant. It returned HTTP
+`200`, no MCP error, request count `1`, request/compose
+`531.524261`/`607917.660851 ms`, authorized scope `1799`, exact returned/total
+`2/2`, complete coverage, candidate-only `0`, and `7` citations.
 
-The source session, authorization, requester, workspace, scopes, authorized
-Observations, and index are bound into the lookup seal. Cross-session reuse is
-rejected. Candidate lookup/result types are private and their public claims are
-fixed to the safe noncanonical, nonexact state. Identity remains
-`workspace_only_v1` for `workspace_formowl`, actor/approver
-`user_full_pst_domain_hard_case_eval_owner`; no tenant ID exists or may be
-invented.
+Within the authorized sealed-source scope, the requested projection fields
+materialized as explicit blanks; another unrequested field was not semantically
+equivalent and was not used as an alias.
+Safe runner/wrapper/log/exit-receipt hashes are respectively
+`sha256:4fb18f...394`, `sha256:846a82...d96`, `sha256:194d04...66d`, and
+`sha256:9a271f...86aa`.
 
-Clean committed-checkpoint verification passed `43` directly relevant focused
-tests plus one real recovery-source `/mcp` run. Canonical-container authority
-is valid but blocked: `authority_valid=true`, `methodology_ready=false`,
-fingerprint
-`sha256:3e694b04a2888ea829c1a558e7802e8720eeb69cc99ac91db9c534136616e858`.
-Source completeness, accepted execution-fingerprint binding, same-pipeline
-real-source ablation, and independent final-answer acceptance remain blocked.
-This is not formal UAT or evidence of production readiness, methodology
-readiness, Issue #56 completion, or comparative superiority. Step 4 remains
-`in-progress`.
-
-The earlier participant inventory remains independently `incomplete`: its
-authorized scope is `2793`, split into `2069` matches, `174` proven nonmatches,
-and `550` unresolved. The candidate attachment slice does not supersede or
-close that coverage gap.
+This is an exploratory diagnostic POC only—not formal UAT, production,
+readiness, Issue #56 completion, or comparative-superiority evidence. Step 4
+remains `in-progress`; the same four authority gates remain blocked. The
+earlier participant inventory also remains independently `incomplete`:
+authorized scope `2793` = `2069` matches + `174` proven nonmatches + `550`
+unresolved.
 ## Non-Negotiable Method
 
 - Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence

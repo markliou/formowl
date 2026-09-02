@@ -17,6 +17,7 @@ from functools import lru_cache
 import math
 import re
 import struct
+import unicodedata
 from threading import RLock
 from time import monotonic as _system_monotonic
 from time import perf_counter_ns as _system_perf_counter_ns
@@ -1560,7 +1561,14 @@ _DISTINCTIVE_RFC_ATEXT = frozenset("!#$%&'*+/=?^`{|}~")
 _SOURCE_OCCURRENCE_PROJECTION_CONNECTOR_POLICY_ID = "source_occurrence_projection_connector_v1"
 _SOURCE_OCCURRENCE_PROJECTION_CONNECTORS = ("以及", "與", "和", "跟", "還有")
 _SOURCE_OCCURRENCE_PROJECTION_CONNECTOR_BOUNDARY_RULE = (
-    "post_unique_directional_particle_strictly_between_grounded_projections_v1")
+    "post_unique_directional_particle_strictly_between_nonempty_projection_segments_v2")
+_SOURCE_OCCURRENCE_SENTENCE_FINAL_PARTICLE_POLICY_ID = (
+    "source_occurrence_sentence_final_particle_v1")
+_SOURCE_OCCURRENCE_SENTENCE_FINAL_PARTICLES = ("嗎", "呢", "吧", "麼")
+_SOURCE_OCCURRENCE_CONTIGUOUS_PHRASE_POLICY_ID = (
+    "source_occurrence_contiguous_lexical_particle_phrase_v1")
+_SOURCE_OCCURRENCE_CONTIGUOUS_PHRASE_BOUNDARY_RULE = (
+    "one_term_after_prior_particle_boundary_without_control_or_sentence_final_v1")
 _PRECOMPUTED_HYBRID_OBSERVATION_INDEX_ARTIFACT_ID = (
     "formowl_issue56_precomputed_hybrid_observation_index_v1"
 )
@@ -10513,6 +10521,16 @@ def _ordered_source_occurrence_query_grounding(
             continue
         term = terms[term_index]
         grammar_role, control_kind = exact_controls.get(term_index, (term.grammar_role, "none"))
+        if (
+            control_kind == "none"
+            and term.normalized_term in _SOURCE_OCCURRENCE_SENTENCE_FINAL_PARTICLES
+            and all(
+                character.isspace()
+                or unicodedata.category(character).startswith("P")
+                for character in query_text[term.end :]
+            )
+        ):
+            grammar_role = "particle"
         run_last = term_index
         normalized_surface = term.normalized_term
         occurrence_kind = "ordered_query_grounding_term_v1"
@@ -10521,7 +10539,44 @@ def _ordered_source_occurrence_query_grounding(
             if control_kind == "none"
             else set()
         )
-        if control_kind == "none" and grammar_role == "lexical" and not candidate_tokens:
+        if (
+            control_kind == "none"
+            and grammar_role == "lexical"
+            and term_index + 1 < len(terms)
+            and term_index + 1 not in controlled_term_indexes
+            and terms[term_index + 1].grammar_role == "particle"
+            and term.end == terms[term_index + 1].start
+            and any(
+                earlier.grammar_role == "particle"
+                for earlier in terms[:term_index]
+            )
+            and not (
+                terms[term_index + 1].normalized_term
+                in _SOURCE_OCCURRENCE_SENTENCE_FINAL_PARTICLES
+                and all(
+                    character.isspace()
+                    or unicodedata.category(character).startswith("P")
+                    for character in query_text[terms[term_index + 1].end :]
+                )
+            )
+        ):
+            phrase_end = terms[term_index + 1].end
+            span = query_text[term.start : phrase_end]
+            phrase_surface = tokenizer_profile.normalize_exact_identifier_surface(span)
+            if (
+                phrase_surface
+                and phrase_surface in tokenizer_profile.analyze(span).tokens
+            ):
+                run_last = term_index + 1
+                normalized_surface = phrase_surface
+                occurrence_kind = "ordered_query_grounding_contiguous_phrase_v1"
+                candidate_tokens = {phrase_surface}
+        if (
+            run_last == term_index
+            and control_kind == "none"
+            and grammar_role == "lexical"
+            and not candidate_tokens
+        ):
             occurrence_kind = "ordered_query_grounding_phrase_v1"
             while (
                 run_last + 1 < len(terms)
@@ -10548,12 +10603,16 @@ def _ordered_source_occurrence_query_grounding(
         term_index = run_last + 1
     grammar_policy_fingerprint = sha256_json(
         [
-            "source_occurrence_query_grammar_policy_v4",
+            "source_occurrence_query_grammar_policy_v7",
             analysis.grammar_policy_fingerprint,
             _CJK_EXACT_OUTPUT_GRAMMAR_V1,
             _SOURCE_OCCURRENCE_PROJECTION_CONNECTOR_POLICY_ID,
             _SOURCE_OCCURRENCE_PROJECTION_CONNECTORS,
             _SOURCE_OCCURRENCE_PROJECTION_CONNECTOR_BOUNDARY_RULE,
+            _SOURCE_OCCURRENCE_SENTENCE_FINAL_PARTICLE_POLICY_ID,
+            _SOURCE_OCCURRENCE_SENTENCE_FINAL_PARTICLES,
+            _SOURCE_OCCURRENCE_CONTIGUOUS_PHRASE_POLICY_ID,
+            _SOURCE_OCCURRENCE_CONTIGUOUS_PHRASE_BOUNDARY_RULE,
         ]
     )
     return tuple(ordered_terms), grammar_policy_fingerprint
@@ -10604,8 +10663,8 @@ def _partition_source_occurrence_query_grounding(
         index for index, (_, role, control, _, _) in enumerate(grounded_terms)
         if control == "none" and role == "particle")
     directional_particle: int | None = None
-    if len(particle_indices) == 1:
-        particle_index = particle_indices[0]
+    viable_particles = []
+    for particle_index in particle_indices:
         left = grounded_terms[:particle_index]
         right = grounded_terms[particle_index + 1 :]
         if (
@@ -10620,13 +10679,38 @@ def _partition_source_occurrence_query_grounding(
                     grounded_terms[particle_index + 1 :], particle_index + 1,
                 )
             )
+            and not any(
+                projection and not value for _, _, _, value, projection in left
+            )
+            and not any(
+                value and not projection for _, _, _, value, projection in right
+            )
         ):
-            if (
-                any(projection and not value for _, _, _, value, projection in left)
-                or any(value and not projection for _, _, _, value, projection in right)
-            ):
-                raise ContractValidationError("source occurrence query candidate binding is invalid")
-            directional_particle = particle_index
+            viable_particles.append(particle_index)
+    if particle_indices:
+        if len(viable_particles) != 1:
+            raise ContractValidationError("source occurrence query candidate binding is invalid")
+        directional_particle = viable_particles[0]
+        last_grounded_index = max(
+            index
+            for index, (_, _, _, value, projection) in enumerate(grounded_terms)
+            if value or projection
+        )
+        terminal_particles = {
+            index
+            for index in particle_indices
+            if index != directional_particle
+            and index > last_grounded_index
+            and not grounded_terms[index][3]
+            and not grounded_terms[index][4]
+        }
+        if any(
+            index != directional_particle and index not in terminal_particles
+            for index in particle_indices
+        ):
+            raise ContractValidationError("source occurrence query candidate binding is invalid")
+    else:
+        terminal_particles = set()
 
     resolved_bindings = []
     for index, (_, _, _, value_binding, projection_binding) in enumerate(grounded_terms):
@@ -10671,7 +10755,14 @@ def _partition_source_occurrence_query_grounding(
         connector_seen = False
         for index in range(directional_particle + 1, len(grounded_terms)):
             _, role, control_kind, _, _ = grounded_terms[index]
-            if control_kind == "projection_connector":
+            if (
+                control_kind == "projection_connector"
+                or (
+                    control_kind == "none"
+                    and role == "conjunction"
+                    and resolved_bindings[index] is None
+                )
+            ):
                 if not projection_segments[-1]:
                     raise ContractValidationError(
                         "source occurrence query connector binding is invalid"
@@ -10710,6 +10801,10 @@ def _partition_source_occurrence_query_grounding(
                     )
 
     for index, (term_hash, grammar_role, control_kind, _, _) in enumerate(grounded_terms):
+        if index in terminal_particles:
+            grammar_ledger.append((term_hash, grammar_role))
+            resolved_term_hashes.add(term_hash)
+            continue
         resolved_binding = resolved_bindings[index]
         if resolved_binding is not None:
             grounded_role, (grounded_hash, grounded_columns) = resolved_binding

@@ -9,34 +9,35 @@ This is a bounded active window. Earlier entries are immutable history under
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
+## 2026-09-02 — Structural-blank attachment diagnostic
+- The structural-blank plus sparse focused normal ASGI `/mcp` E2E passed `1/1` in `66.026 s`.
+- Exactly-once mode `issue56-after-structural-blank-diagnostic-20260902-v1` consumed exit `0` as
+  `workspace_only_v1`/`workspace_formowl`, approved actor/approver, with no tenant.
+- HTTP was `200`, MCP had no error, request count was `1`, request/compose was
+  `531.524261`/`607917.660851 ms`, scope `1799`, exact `2/2`, complete, candidate-only `0`, citations `7`.
+- Within the authorized sealed-source scope, the requested projection fields materialized as explicit
+  blanks; another unrequested field was not semantically equivalent and was not used as an alias.
+- Runner/wrapper/log/exit hashes: `sha256:4fb18f...394`, `sha256:846a82...d96`,
+  `sha256:194d04...66d`, `sha256:9a271f...86aa`.
+- Current `authority_valid=false`/`methodology_ready=false`; four gates remain blocked, step 4 remains
+  `in-progress`, and this exploratory POC is not UAT, production, readiness, completion, or superiority.
 ## 2026-09-01 — Candidate attachment-table answer checkpoint
-- Pushed checkpoint `dfaf38b` (`feat(issue56): answer candidate attachment
-  tables`) passed `43` directly relevant tests plus one real recovery-source
-  normal ASGI `/mcp` run: HTTP `200`, `candidate_interpretation`, four governed
-  citations, about `908.085 ms`, and no deadline exhaustion.
-- Missing semantic header markup kept the result `candidate_only`, with
-  `canonical_kg=false`, `deterministic_exact=false`, no `exact_result`, and
-  ambiguity fail-closed. Root cause: source-selection/artifact-binding scope.
-- The seal binds source session, authorization, requester, workspace, scopes,
-  authorized Observations, and index; cross-session reuse rejects. Lookup and
-  result types are private and fixed to the safe noncanonical, nonexact state.
-- Identity is `workspace_only_v1`/`workspace_formowl`, actor/approver
-  `user_full_pst_domain_hard_case_eval_owner`, with no tenant ID.
-- Canonical-container authority is valid but blocked:
-  `authority_valid=true`, `methodology_ready=false`, fingerprint
-  `sha256:3e694b04a2888ea829c1a558e7802e8720eeb69cc99ac91db9c534136616e858`.
-  Four gates remain blocked; step 4 is `in-progress`. This is not formal UAT
-  and earns no production, readiness, completion, or superiority claim.
+- Checkpoint `dfaf38b` passed `43` focused tests and one real normal `/mcp` run:
+  HTTP `200`, `candidate_interpretation`, four citations, about `908.085 ms`,
+  and no deadline exhaustion.
+- Missing semantic header markup kept it candidate-only/noncanonical/nonexact,
+  with no exact result and ambiguity fail-closed; root cause was source-selection/artifact binding.
+- The seal binds session, authorization, requester, workspace, scopes,
+  Observations, and index; cross-session reuse rejects and result types are private.
+- Identity was workspace-only with the approved actor and no tenant. At that
+  checkpoint authority was valid but four-gate blocked; no broader claim was earned.
 ## 2026-08-29 — Actual-user participant inventory remains incomplete
-- An actual-user normal ASGI `/mcp` participant-any inventory completed `21`
-  bound-cursor pages with returned/total/union `2069/2069/2069`, no duplicate
-  occurrences, and `2086` governed references/citations.
-- Permission-authorized scope `2793` splits into `2069` matches, `174` proven
-  nonmatches, and `550` unresolved; coverage remains `incomplete` and supports
-  neither “all” nor production readiness.
-- Authority remained valid but blocked on the same four gates; Work D stayed
-  unchecked and plan step 4 remained in progress. This was not formal UAT,
-  readiness, completion, or superiority evidence.
+- Normal `/mcp` completed `21` bound-cursor pages: returned/total/union
+  `2069/2069/2069`, duplicates `0`, and `2086` governed references/citations.
+- Authorized scope `2793` = `2069` matches + `174` proven nonmatches + `550`
+  unresolved; coverage remains incomplete and supports neither “all” nor production readiness.
+- The same four gates remained blocked; Work D and step 4 stayed in progress.
+  This was not UAT, readiness, completion, or superiority evidence.
 ## 2026-08-28 — Direct-source deterministic inventory remains incomplete
 - The generic direct-source business-identifier deterministic inventory now
   traverses normal ASGI `/mcp` with typed intent, query-hash provider

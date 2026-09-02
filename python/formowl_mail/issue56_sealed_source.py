@@ -23,6 +23,7 @@ from typing import Any, Mapping, Sequence
 from formowl_contract import (
     ContractValidationError,
     Observation,
+    PermissionScope,
     assert_no_public_raw_references,
     sha256_json,
 )
@@ -39,11 +40,18 @@ from .hybrid import (
     EvidenceIdentityLineageCrosswalk,
     RelationProjectionBasePrecompute,
     SourceBackedGraphBuild,
+    build_authorized_semantic_observation_session,
     build_authorized_semantic_mail_session,
     build_authorized_source_backed_effective_graph_view,
     precompute_evidence_identity_lineage_crosswalk,
     precompute_relation_projection_base,
 )
+from .query import (
+    build_authorized_observation_snippet_index,
+    normalized_authorized_observation_lineages,
+    source_occurrence_lineage_from_observation,
+)
+from .semantic_plan import validated_authorized_semantic_source
 
 from scripts import issue56_identity_scope_attestation as identity_attestation
 from scripts import issue56_simulated_uat as simulated_uat
@@ -57,6 +65,9 @@ IDENTITY_SCOPE_MODE = WORKSPACE_ONLY_IDENTITY_SCOPE_MODE
 WORKSPACE_ID = "workspace_formowl"
 APPROVER_ACTOR = "user_full_pst_domain_hard_case_eval_owner"
 SOURCE_GRAPH_POLICY_ID = "source_backed_mail_candidate_graph_v2"
+SUPPLEMENTAL_OBSERVATION_ARTIFACT_ID = (
+    "formowl_issue56_supplemental_observation_partition_v1"
+)
 
 _SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _MAX_SOURCE_BYTES = 1024 * 1024 * 1024
@@ -119,6 +130,10 @@ def load_issue56_sealed_source(
     approver_actor: str,
     requester_user_id: str,
     include_participant_authorization_observations: bool = False,
+    supplemental_observation_artifact_path: Path | None = None,
+    expected_supplemental_observation_artifact_sha256: str | None = None,
+    supplemental_parent_snapshot_path: Path | None = None,
+    expected_supplemental_parent_snapshot_sha256: str | None = None,
 ) -> Issue56SealedSourceLoad:
     """Validate one immutable source package and build existing runtime objects.
 
@@ -134,6 +149,18 @@ def load_issue56_sealed_source(
         requester_user_id=requester_user_id,
         expected_identity_scope_fingerprint=expected_identity_scope_fingerprint,
     )
+    supplemental_inputs = (
+        supplemental_observation_artifact_path,
+        expected_supplemental_observation_artifact_sha256,
+        supplemental_parent_snapshot_path,
+        expected_supplemental_parent_snapshot_sha256,
+    )
+    if any(value is not None for value in supplemental_inputs) and not all(
+        value is not None for value in supplemental_inputs
+    ):
+        raise Issue56SealedSourceLoadError(
+            "supplemental_observation_artifact_binding_incomplete"
+        )
 
     snapshot_bytes, snapshot = _read_sealed_json(
         retrieval_snapshot_path,
@@ -298,6 +325,38 @@ def load_issue56_sealed_source(
         source_bundle,
         selected_observations=selected_observations,
     )
+    supplemental_bytes: bytes | None = None
+    supplemental_parent_bytes: bytes | None = None
+    supplemental_observations: tuple[Observation, ...] = ()
+    supplemental_binding: Mapping[str, Any] | None = None
+    if supplemental_observation_artifact_path is not None:
+        assert expected_supplemental_observation_artifact_sha256 is not None
+        assert supplemental_parent_snapshot_path is not None
+        assert expected_supplemental_parent_snapshot_sha256 is not None
+        supplemental_parent_bytes, supplemental_parent = _read_sealed_json(
+            supplemental_parent_snapshot_path,
+            expected_sha256=expected_supplemental_parent_snapshot_sha256,
+            maximum_bytes=_MAX_ARTIFACT_BYTES,
+            reason_prefix="supplemental_parent_snapshot",
+        )
+        supplemental_bytes, supplemental_artifact = _read_sealed_json(
+            supplemental_observation_artifact_path,
+            expected_sha256=expected_supplemental_observation_artifact_sha256,
+            maximum_bytes=_MAX_ARTIFACT_BYTES,
+            reason_prefix="supplemental_observation_artifact",
+        )
+        _reject_tenant_id(supplemental_parent, "supplemental_parent_snapshot")
+        _reject_tenant_id(supplemental_artifact, "supplemental_observation_artifact")
+        supplemental_observations, supplemental_binding = (
+            _validate_supplemental_observation_partition(
+                supplemental_artifact,
+                parent_snapshot=supplemental_parent,
+                parent_snapshot_byte_sha256=_sha256_bytes(
+                    supplemental_parent_bytes
+                ),
+                base_snapshot=snapshot,
+            )
+        )
     authorization_observations = tuple(selected_observations)
     if include_participant_authorization_observations:
         full_source_occurrence_ids = {
@@ -347,7 +406,40 @@ def load_issue56_sealed_source(
         authorization_observations = tuple(
             authorization_by_id[key] for key in sorted(authorization_by_id)
         )
+    mail_authorization_observations = authorization_observations
+    if supplemental_observations:
+        authorization_by_id = {
+            observation.observation_id: observation
+            for observation in authorization_observations
+        }
+        for observation in supplemental_observations:
+            existing = authorization_by_id.get(observation.observation_id)
+            if existing is not None and existing != observation:
+                raise Issue56SealedSourceLoadError(
+                    "supplemental_observation_id_collision"
+                )
+            authorization_by_id[observation.observation_id] = observation
+        authorization_observations = tuple(
+            authorization_by_id[key] for key in sorted(authorization_by_id)
+        )
+    retrieval_observations = tuple(
+        sorted(
+            (
+                *selected_observations,
+                *(
+                    observation
+                    for observation in supplemental_observations
+                    if observation.observation_type
+                    in {"email_attachment_occurrence", "table_row"}
+                ),
+            ),
+            key=lambda observation: observation.observation_id,
+        )
+    )
     observations_by_bundle_id = MappingProxyType(
+        {query_bundle.mail_evidence_bundle_id: retrieval_observations}
+    )
+    mail_observations_by_bundle_id = MappingProxyType(
         {
             query_bundle.mail_evidence_bundle_id: tuple(
                 sorted(
@@ -360,40 +452,106 @@ def load_issue56_sealed_source(
     authorization_observations_by_bundle_id = MappingProxyType(
         {query_bundle.mail_evidence_bundle_id: authorization_observations}
     )
-    source_binding_fingerprint = sha256_json(
-        {
-            "artifact_id": ARTIFACT_ID,
-            "source_artifact_category": SOURCE_ARTIFACT_CATEGORY,
-            "retrieval_ready_binding_fingerprint": retrieval_intake.safe_binding[
-                "input_binding_fingerprint"
-            ],
-            "observation_selection_binding_fingerprint": sha256_json(observation_selection_binding),
-            "candidate_binding_fingerprint": candidate_intake.safe_binding["binding_fingerprint"],
-            "identity_scope_fingerprint": expected_identity_scope_fingerprint,
-        }
+    mail_authorization_by_bundle_id = MappingProxyType(
+        {query_bundle.mail_evidence_bundle_id: mail_authorization_observations}
     )
+    source_binding = {
+        "artifact_id": ARTIFACT_ID,
+        "source_artifact_category": SOURCE_ARTIFACT_CATEGORY,
+        "retrieval_ready_binding_fingerprint": retrieval_intake.safe_binding[
+            "input_binding_fingerprint"
+        ],
+        "observation_selection_binding_fingerprint": sha256_json(
+            observation_selection_binding
+        ),
+        "candidate_binding_fingerprint": candidate_intake.safe_binding[
+            "binding_fingerprint"
+        ],
+        "identity_scope_fingerprint": expected_identity_scope_fingerprint,
+    }
+    if supplemental_binding is not None:
+        source_binding["supplemental_observation_partition_fingerprint"] = (
+            supplemental_binding["partition_fingerprint"]
+        )
+    source_binding_fingerprint = sha256_json(source_binding)
     try:
-        session = build_authorized_semantic_mail_session(
-            observations_by_bundle_id=observations_by_bundle_id,
-            authorization_observations_by_bundle_id=(
-                authorization_observations_by_bundle_id
-            ),
+        mail_session = build_authorized_semantic_mail_session(
+            observations_by_bundle_id=mail_observations_by_bundle_id,
+            authorization_observations_by_bundle_id=mail_authorization_by_bundle_id,
             bundles=(query_bundle,),
             requester_user_id=requester_user_id,
             workspace_id=workspace_id,
             expected_profile_fingerprint=str(snapshot["tokenizer_profile_fingerprint"]),
             mail_evidence_bundle_id=query_bundle.mail_evidence_bundle_id,
         )
+        session = mail_session
+        runtime_scope_id = query_bundle.mail_evidence_bundle_id
+        if supplemental_observations:
+            runtime_scope_id = "project_formowl"
+            permission_scope = PermissionScope.project(runtime_scope_id)
+            authorized_source = validated_authorized_semantic_source(
+                source_kind=mail_session.authorized_source.source_kind,
+                workspace_id=workspace_id,
+                source_scope_ids=(runtime_scope_id,),
+                authorized_permission_scopes=(permission_scope,),
+            )
+            mail_lineages = tuple(
+                source_occurrence_lineage_from_observation(
+                    observation,
+                    authorized_source=authorized_source,
+                )
+                for observation in authorization_observations
+                if observation.modality == "mail"
+            )
+            lineages = normalized_authorized_observation_lineages(
+                authorization_observations,
+                authorized_source=authorized_source,
+                occurrence_lineages=mail_lineages,
+            )
+            retrieval_ids = {
+                observation.observation_id for observation in retrieval_observations
+            }
+            snippet_index, _ = build_authorized_observation_snippet_index(
+                retrieval_observations,
+                authorized_source=authorized_source,
+                occurrence_lineages=tuple(
+                    item
+                    for item in lineages
+                    if item.source_observation_id in retrieval_ids
+                ),
+                authorized_observation_hash_by_id={
+                    observation.observation_id: sha256_json(observation.to_dict())
+                    for observation in retrieval_observations
+                },
+                tokenizer_profile=mail_session.index._runtime_components.tokenizer_profile,
+            )
+            session = build_authorized_semantic_observation_session(
+                authorized_source=authorized_source,
+                snippet_index=snippet_index,
+                authorized_observations=authorization_observations,
+                retrieval_observations=retrieval_observations,
+                occurrence_lineages=lineages,
+                requester_user_id=requester_user_id,
+                expected_profile_fingerprint=str(
+                    snapshot["tokenizer_profile_fingerprint"]
+                ),
+            )
         if len(session.authorized_observations) != len(
             authorization_observations
-        ) or session.authorized_source_scope_ids != (query_bundle.mail_evidence_bundle_id,):
+        ) or session.authorized_source_scope_ids != (runtime_scope_id,):
             raise ContractValidationError("sealed source authorization projection is incomplete")
         graph_build = build_authorized_source_backed_effective_graph_view(
             session=session,
-            observations_by_bundle_id=observations_by_bundle_id,
+            observations_by_bundle_id=MappingProxyType(
+                {runtime_scope_id: retrieval_observations}
+            ),
             source_binding_fingerprint=source_binding_fingerprint,
-            identifier_mention_batch=candidate_intake.projected_batch,
-            source_graph_policy_id=SOURCE_GRAPH_POLICY_ID,
+            identifier_mention_batch=(
+                None if supplemental_observations else candidate_intake.projected_batch
+            ),
+            source_graph_policy_id=(
+                None if supplemental_observations else SOURCE_GRAPH_POLICY_ID
+            ),
         )
         precompute_started_ns = time.perf_counter_ns()
         lineage_crosswalk = precompute_evidence_identity_lineage_crosswalk(
@@ -404,15 +562,18 @@ def load_issue56_sealed_source(
             (time.perf_counter_ns() - precompute_started_ns) / 1_000_000.0,
             6,
         )
-        relation_precompute_started_ns = time.perf_counter_ns()
-        relation_projection_base_precompute = precompute_relation_projection_base(
-            session=session,
-            effective_graph_view=graph_build.effective_graph_view,
-        )
-        relation_projection_base_precompute_elapsed_ms = round(
-            (time.perf_counter_ns() - relation_precompute_started_ns) / 1_000_000.0,
-            6,
-        )
+        relation_projection_base_precompute = None
+        relation_projection_base_precompute_elapsed_ms = None
+        if not supplemental_observations:
+            relation_precompute_started_ns = time.perf_counter_ns()
+            relation_projection_base_precompute = precompute_relation_projection_base(
+                session=session,
+                effective_graph_view=graph_build.effective_graph_view,
+            )
+            relation_projection_base_precompute_elapsed_ms = round(
+                (time.perf_counter_ns() - relation_precompute_started_ns) / 1_000_000.0,
+                6,
+            )
     except ContractValidationError as exc:
         raise Issue56SealedSourceLoadError("authorized_runtime_source_binding_invalid") from exc
 
@@ -445,9 +606,20 @@ def load_issue56_sealed_source(
         relation_projection_base_precompute_elapsed_ms=(
             relation_projection_base_precompute_elapsed_ms
         ),
+        supplemental_artifact_byte_sha256=(
+            _sha256_bytes(supplemental_bytes)
+            if supplemental_bytes is not None
+            else None
+        ),
+        supplemental_parent_snapshot_byte_sha256=(
+            _sha256_bytes(supplemental_parent_bytes)
+            if supplemental_parent_bytes is not None
+            else None
+        ),
+        supplemental_binding=supplemental_binding,
     )
     return Issue56SealedSourceLoad(
-        observations=tuple(selected_observations),
+        observations=retrieval_observations,
         observations_by_bundle_id=observations_by_bundle_id,
         source_bundle=source_bundle,
         query_bundle=query_bundle,
@@ -564,6 +736,207 @@ def _validate_candidate_attestation_binding(
         raise Issue56SealedSourceLoadError("candidate_identity_scope_binding_mismatch")
 
 
+def _validate_supplemental_observation_partition(
+    artifact: Mapping[str, Any],
+    *,
+    parent_snapshot: Mapping[str, Any],
+    parent_snapshot_byte_sha256: str,
+    base_snapshot: Mapping[str, Any],
+) -> tuple[tuple[Observation, ...], Mapping[str, Any]]:
+    source = parent_snapshot.get("source")
+    binding = {
+        "artifact_type": parent_snapshot.get("artifact_type"),
+        "schema_version": parent_snapshot.get("schema_version"),
+        "artifact_byte_sha256": parent_snapshot_byte_sha256,
+        "artifact_commitment": parent_snapshot.get("artifact_commitment"),
+        "record_stream_fingerprint": parent_snapshot.get("record_stream_fingerprint"),
+        "record_count": parent_snapshot.get("record_count"),
+        "source_asset_id": source.get("source_asset_id") if isinstance(source, Mapping) else None,
+        "source_fingerprint": source.get("source_fingerprint") if isinstance(source, Mapping) else None,
+        "permission_scope_fingerprint": source.get("permission_scope_fingerprint") if isinstance(source, Mapping) else None,
+        "selection_checkpoint_fingerprint": source.get("selection_checkpoint_fingerprint") if isinstance(source, Mapping) else None,
+    }
+    if (
+        binding["artifact_type"] != "formowl_diagnostic_current_export_table_snapshot_v2"
+        or binding["schema_version"] != 2
+        or not isinstance(source, Mapping)
+        or not isinstance(parent_snapshot.get("records"), list)
+        or binding["record_count"] != len(parent_snapshot["records"])
+        or (parent_snapshot.get("capture") or {}).get("candidate_only") is not True
+        or (parent_snapshot.get("capture") or {}).get("canonical_kg") is not False
+        or source.get("workspace_id") != WORKSPACE_ID
+        or source.get("owner_user_id") != APPROVER_ACTOR
+        or binding["permission_scope_fingerprint"] != base_snapshot.get("permission_fingerprint")
+        or not isinstance(binding["source_asset_id"], str)
+        or not binding["source_asset_id"]
+    ):
+        raise Issue56SealedSourceLoadError("supplemental_parent_snapshot_contract_invalid")
+    for key in ("artifact_byte_sha256", "artifact_commitment", "record_stream_fingerprint", "source_fingerprint", "permission_scope_fingerprint", "selection_checkpoint_fingerprint"):
+        _require_sha256(binding[key], "supplemental_parent_snapshot_contract_invalid")
+    raw = artifact.get("observations")
+    counts = artifact.get("counts")
+    expected_base = {key: base_snapshot.get(key) for key in ("source_snapshot_fingerprint", "source_asset_sha256", "source_inventory_fingerprint", "permission_fingerprint")}
+    if (
+        set(artifact) != {"artifact_id", "schema_version", "identity_scope_mode", "workspace_id", "approver_actor", "base_source_binding", "v25_parent_snapshot_binding", "counts", "observations"}
+        or artifact.get("artifact_id") != SUPPLEMENTAL_OBSERVATION_ARTIFACT_ID
+        or artifact.get("schema_version") != 1
+        or artifact.get("identity_scope_mode") != IDENTITY_SCOPE_MODE
+        or artifact.get("workspace_id") != WORKSPACE_ID
+        or artifact.get("approver_actor") != APPROVER_ACTOR
+        or artifact.get("base_source_binding") != expected_base
+        or artifact.get("v25_parent_snapshot_binding") != binding
+        or not isinstance(counts, Mapping)
+        or not isinstance(raw, list)
+        or not raw
+    ):
+        raise Issue56SealedSourceLoadError("supplemental_observation_artifact_contract_invalid")
+    try:
+        observations = tuple(Observation.from_dict(dict(item)) for item in raw if isinstance(item, Mapping))
+    except (ContractValidationError, TypeError, ValueError) as exc:
+        raise Issue56SealedSourceLoadError("supplemental_observation_contract_invalid") from exc
+    if len(observations) != len(raw) or len({item.observation_id for item in observations}) != len(observations):
+        raise Issue56SealedSourceLoadError("supplemental_observation_contract_invalid")
+    permission = PermissionScope.project("project_formowl").to_dict()
+    parents = {str((item.payload or {}).get("child_asset_id")): item for item in observations if item.observation_type == "email_attachment_occurrence"}
+    if len(parents) != sum(item.observation_type == "email_attachment_occurrence" for item in observations) or any(
+        item.permission_scope != permission
+        or item.modality != "mail"
+        or item.asset_id != binding["source_asset_id"]
+        or _observation_message_occurrence_id(item) != (item.payload or {}).get("message_occurrence_id")
+        or _SHA256_RE.fullmatch(str((item.payload or {}).get("raw_message_fingerprint"))) is None
+        or _SHA256_RE.fullmatch(str((item.payload or {}).get("attachment_content_fingerprint"))) is None
+        for item in parents.values()
+    ):
+        raise Issue56SealedSourceLoadError("supplemental_attachment_parent_lineage_invalid")
+    children = tuple(item for item in observations if item.observation_type != "email_attachment_occurrence")
+    referenced_structural_ids = {
+        str((item.payload or {}).get("lineage", {}).get("source_structural_observation_id"))
+        for item in children
+    }
+    parent_records = {}
+    try:
+        for record in parent_snapshot["records"]:
+            structural = record["structural_observation"]
+            structural_id = structural["structural_observation_id"]
+            if structural_id not in referenced_structural_ids:
+                continue
+            rows_by_ordinal = {}
+            for source_row in structural["rows"]:
+                cells = source_row["cells"]
+                cells_by_ordinal = {
+                    source_cell["column_ordinal"]: source_cell
+                    for source_cell in cells
+                }
+                row_ordinal = source_row["row_ordinal"]
+                if (
+                    len(cells_by_ordinal) != len(cells)
+                    or any(
+                        not isinstance(index, int) or isinstance(index, bool)
+                        for index in cells_by_ordinal
+                    )
+                    or not isinstance(row_ordinal, int)
+                    or isinstance(row_ordinal, bool)
+                    or row_ordinal in rows_by_ordinal
+                ):
+                    raise ValueError
+                rows_by_ordinal[row_ordinal] = (
+                    "\t".join(
+                        cells_by_ordinal[index].get("value", "")
+                        for index in sorted(cells_by_ordinal)
+                    ),
+                    cells_by_ordinal,
+                )
+            if structural_id in parent_records:
+                raise ValueError
+            parent_records[structural_id] = (
+                record,
+                sha256_json(record),
+                rows_by_ordinal,
+            )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise Issue56SealedSourceLoadError(
+            "supplemental_parent_record_binding_invalid"
+        ) from exc
+    if set(parent_records) != referenced_structural_ids:
+        raise Issue56SealedSourceLoadError("supplemental_parent_record_binding_invalid")
+    statuses: list[str] = []
+    structural_ids: set[str] = set()
+    for item in children:
+        payload = item.payload or {}
+        lineage = payload.get("lineage")
+        structure = payload.get("table_structure")
+        parent = parents.get(item.asset_id or "")
+        status = structure.get("structure_status") if isinstance(structure, Mapping) else None
+        structural_id = (
+            lineage.get("source_structural_observation_id")
+            if isinstance(lineage, Mapping)
+            else None
+        )
+        parent_record = parent_records.get(str(structural_id))
+        source_row = (
+            parent_record[2].get(lineage.get("source_row_ordinal"))
+            if parent_record is not None and isinstance(lineage, Mapping)
+            else None
+        )
+        source_cell = None
+        expected_value = source_row[0] if source_row is not None else None
+        if item.observation_type == "table_cell" and source_row is not None:
+            source_cell = source_row[1].get(lineage.get("source_column_ordinal"))
+            expected_value = (
+                source_cell.get("value", "") if source_cell is not None else None
+            )
+        if (
+            item.permission_scope != permission
+            or item.modality != "document"
+            or item.observation_type not in {"table_row", "table_cell"}
+            or parent is None
+            or not isinstance(lineage, Mapping)
+            or lineage.get("parent_attachment_observation_id") != parent.observation_id
+            or lineage.get("source_structural_observation_id") in {None, ""}
+            or status not in {"source_provided", "candidate_only"}
+            or payload.get("canonical_fact_status") != "not_asserted"
+            or parent_record is None
+            or lineage.get("snapshot_record_fingerprint") != parent_record[1]
+            or (status == "source_provided" and parent_record[0].get("record_type") != "xlsx_sheet")
+            or parent_record[0]["structural_observation"].get("source_asset_id") != parent.asset_id
+            or parent_record[0].get("raw_message_fingerprint") != (parent.payload or {}).get("raw_message_fingerprint")
+            or parent_record[0].get("attachment_content_fingerprint") != (parent.payload or {}).get("attachment_content_fingerprint")
+            or source_row is None
+            or payload.get("value") != expected_value
+            or item.text != expected_value
+            or (
+                item.observation_type == "table_cell"
+                and (
+                    source_cell is None
+                    or payload.get("cell_state") != source_cell.get("cell_state")
+                )
+            )
+        ):
+            raise Issue56SealedSourceLoadError("supplemental_attachment_child_lineage_invalid")
+        structural_ids.add(str(lineage["source_structural_observation_id"]))
+        statuses.append(str(status))
+    rows = sum(item.observation_type == "table_row" for item in children)
+    computed = {
+        "reviewed_xlsx_binding_count": len(structural_ids),
+        "parent_message_occurrence_count": len({_observation_message_occurrence_id(item) for item in parents.values()}),
+        "attachment_parent_count": len(parents),
+        "table_row_count": rows,
+        "table_cell_count": len(children) - rows,
+        "source_provided_table_observation_count": statuses.count("source_provided"),
+        "candidate_only_table_observation_count": statuses.count("candidate_only"),
+        "authorized_supplemental_observation_count": len(observations),
+        "retrieval_supplemental_observation_count": len(parents) + rows,
+    }
+    if not parents or not rows or not computed["table_cell_count"] or dict(counts) != computed:
+        raise Issue56SealedSourceLoadError("supplemental_observation_count_mismatch")
+    return observations, MappingProxyType({
+        "status": "loaded",
+        "partition_fingerprint": sha256_json(artifact),
+        "parent_snapshot_artifact_commitment": binding["artifact_commitment"],
+        "parent_snapshot_record_stream_fingerprint": binding["record_stream_fingerprint"],
+        "counts": computed,
+    })
+
 def _project_query_bundle(
     source_bundle: MailEvidenceBundle,
     *,
@@ -677,8 +1050,11 @@ def _safe_binding(
     source_binding_fingerprint: str,
     lineage_crosswalk: EvidenceIdentityLineageCrosswalk,
     lineage_crosswalk_precompute_elapsed_ms: float,
-    relation_projection_base_precompute: RelationProjectionBasePrecompute,
-    relation_projection_base_precompute_elapsed_ms: float,
+    relation_projection_base_precompute: RelationProjectionBasePrecompute | None,
+    relation_projection_base_precompute_elapsed_ms: float | None,
+    supplemental_artifact_byte_sha256: str | None,
+    supplemental_parent_snapshot_byte_sha256: str | None,
+    supplemental_binding: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     counts = {
         "source_observation_count": source_observation_count,
@@ -711,7 +1087,7 @@ def _safe_binding(
         "tenant_dimension_status": "not_modeled_not_fabricated",
         "candidate_only": True,
         "canonical_write_allowed": False,
-        "source_graph_policy_id": SOURCE_GRAPH_POLICY_ID,
+        "source_graph_policy_id": graph_build.graph_policy_id,
         "retrieval_snapshot_byte_sha256": retrieval_snapshot_byte_sha256,
         "bundle_artifact_byte_sha256": bundle_artifact_byte_sha256,
         "retrieval_report_byte_sha256": retrieval_ready_binding["retrieval_report_byte_hash"],
@@ -757,9 +1133,42 @@ def _safe_binding(
                 precompute=relation_projection_base_precompute,
                 elapsed_ms=relation_projection_base_precompute_elapsed_ms,
             )
+            if relation_projection_base_precompute is not None
+            else {
+                "status": "skipped",
+                "reason": "supplemental_observation_partition_not_applicable",
+                "helper_invocation_count": 0,
+            }
         ),
         "counts": counts,
     }
+    if supplemental_binding is not None:
+        if (
+            supplemental_artifact_byte_sha256 is None
+            or supplemental_parent_snapshot_byte_sha256 is None
+        ):
+            raise Issue56SealedSourceLoadError(
+                "supplemental_observation_safe_binding_invalid"
+            )
+        binding.update(
+            supplemental_observation_artifact_byte_sha256=(
+                supplemental_artifact_byte_sha256
+            ),
+            supplemental_parent_snapshot_byte_sha256=(
+                supplemental_parent_snapshot_byte_sha256
+            ),
+            supplemental_parent_snapshot_artifact_commitment=(
+                supplemental_binding["parent_snapshot_artifact_commitment"]
+            ),
+            supplemental_parent_snapshot_record_stream_fingerprint=(
+                supplemental_binding["parent_snapshot_record_stream_fingerprint"]
+            ),
+            supplemental_observation_partition_fingerprint=(
+                supplemental_binding["partition_fingerprint"]
+            ),
+            supplemental_observation_partition_status=supplemental_binding["status"],
+        )
+        counts.update(supplemental_binding["counts"])
     for field_name, value in binding.items():
         if field_name.endswith("_fingerprint") or field_name.endswith("_sha256"):
             _require_sha256(value, f"{field_name}_invalid")
@@ -780,7 +1189,7 @@ def _safe_binding(
     ):
         raise Issue56SealedSourceLoadError("lineage_crosswalk_precompute_binding_mismatch")
     relation_precompute_binding = binding["relation_projection_base_precompute"]
-    if (
+    if relation_projection_base_precompute is not None and (
         relation_precompute_binding["index_fingerprint"] != binding["index_fingerprint"]
         or relation_precompute_binding["graph_revision_fingerprint"]
         != binding["graph_revision_fingerprint"]

@@ -741,6 +741,7 @@ def execute_deterministic_source_occurrence_inventory(
     provider_fingerprint = provider.provider_fingerprint
     query_hashes = _source_occurrence_query_hashes(plan=plan, provider=provider)
     candidate_links = None
+    projection_coverage_incomplete = False
     if provider.filter_slot_policy == "identifier_union_v1":
         if not all(
             query_hash in provider._value_hash_postings for query_hash in query_hashes
@@ -770,17 +771,18 @@ def execute_deterministic_source_occurrence_inventory(
             != "candidate_only"
         }
         matched_position_set = set(filter_matched_position_set)
-        for column_hash in plan.exact_projection_term_hashes:
+        if plan.exact_projection_term_hashes:
             matched_position_set.intersection_update(
-                provider._column_postings[column_hash]
+                position
+                for column_hash in plan.exact_projection_term_hashes
+                for position in provider._column_postings[column_hash]
             )
-        if not matched_position_set and plan.exact_projection_term_hashes:
-            candidate_links = _bounded_source_occurrence_candidate_links(
-                plan=plan,
-                provider=provider,
-                filter_positions=filter_matched_position_set,
+            projection_coverage_incomplete = any(
+                filter_matched_position_set.isdisjoint(
+                    provider._column_postings[column_hash]
+                )
+                for column_hash in plan.exact_projection_term_hashes
             )
-            matched_position_set = set()
         matched_positions = tuple(sorted(matched_position_set))
     matched_positions = tuple(
         position
@@ -956,6 +958,7 @@ def execute_deterministic_source_occurrence_inventory(
         occurrence_gap_count
         or candidate_only_count
         or source_asset_gap_count
+        or projection_coverage_incomplete
         or candidate_links is not None
     )
     status = "incomplete" if incomplete else "complete_authorized_scope"
@@ -982,6 +985,11 @@ def execute_deterministic_source_occurrence_inventory(
             *(
                 ("source_asset_extraction_incomplete",)
                 if source_asset_gap_count
+                else ()
+            ),
+            *(
+                ("source_occurrence_projection_capability_incomplete",)
+                if projection_coverage_incomplete
                 else ()
             ),
         )
