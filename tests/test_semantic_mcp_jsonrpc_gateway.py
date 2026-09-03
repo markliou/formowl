@@ -10,6 +10,7 @@ from typing import Any
 import unittest
 
 import _paths  # noqa: F401
+import jsonschema
 from _semantic_gateway_scenarios import (
     build_raw_path_raw_sql_worker_internal_leak_transcript,
     containerized_semantic_mcp_gateway_smoke,
@@ -45,7 +46,26 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
         listed = gateway.handle_json_rpc({"jsonrpc": "2.0", "id": "list", "method": "tools/list"})
         tools = {tool["name"]: tool for tool in listed["result"]["tools"]}
 
-        self.assertIn("canonical API", tools["query_effective_graph_view"]["description"])
+        description = tools["query_effective_graph_view"]["description"]
+        self.assertIn("canonical API", description)
+        for requirement in (
+            "resolve intent and coreference before calling",
+            "do not forward a terse or underspecified user prompt unchanged "
+            "as one attempt and stop",
+            "bounded clarified candidate query/tool plan",
+            "validate its query and arguments against this tool schema and "
+            "actual authorized capabilities before each call",
+            "After execution inspect query_agent coverage and result",
+            "multiple candidates are each authorization/schema-valid, non-redacted, "
+            "source_provided exact-label bindings",
+            "query them separately within that budget and compare coverage and evidence "
+            "without substring selection",
+            "at most two follow-up calls",
+            "Fail closed or clarify only when bindings are absent",
+            "candidates exceed the budget without validated narrowing",
+            "final evidence or claims remain ambiguous",
+        ):
+            self.assertIn(requirement, description)
         self.assertIn(
             "deprecated compatibility alias", tools["query_effective_graph"]["description"]
         )
@@ -269,12 +289,20 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
 
     def test_terminal_partial_exact_inventory_reports_incomplete_coverage(self) -> None:
         identifier_hash = sha256_json("participant")
+        citation_hash = sha256_json("citation")
+        lineage_fingerprint = sha256_json("lineage")
         safe_item = ExactInventoryItem(
             item_hash=sha256_json("occurrence"),
-            cited_observation_hashes=(sha256_json("citation"),),
-            governed_references=((sha256_json("citation"), sha256_json("lineage")),),
+            cited_observation_hashes=(citation_hash,),
+            governed_references=((citation_hash, lineage_fingerprint),),
             matched_normalized_value_hashes=(identifier_hash,),
+            structured_values=(
+                ("column_name", "projected value", citation_hash, lineage_fingerprint),
+            ),
+            structure_status="source_provided",
         ).to_safe_dict()
+        safe_item.pop("cited_observation_hashes")
+        safe_item.pop("citation_count")
         self.assertEqual(safe_item["matched_normalized_value_hashes"], [identifier_hash])
         plan = SemanticQueryPlan(
             query_hash=sha256_json("list all participant mail"),
@@ -351,14 +379,38 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
             "exact_inventory": {
                 "status": result.status,
                 "query_class": plan.query_class,
-                "plan": {"plan_fingerprint": result.plan_fingerprint},
+                "plan": {
+                    "plan_fingerprint": result.plan_fingerprint,
+                    "resource_kind": provider.resource_kind,
+                    "normalized_field": provider.normalized_field,
+                    "predicate": provider.predicate,
+                    "operator": provider.operator,
+                    "claim_strength": plan.claim_strength,
+                    "duplicate_policy": provider.duplicate_policy,
+                    "ordering": "item_hash_ascending_v1",
+                    "page_size": 20,
+                    "cursor_present": False,
+                },
                 "total_count": result.exact_count,
                 "returned_count": result.returned_item_count,
                 "coverage_status": result.source_occurrence_page["coverage_status"],
                 "next_cursor": result.source_occurrence_page["next_cursor"],
                 "redacted_count": result.source_occurrence_page["redacted_count"],
                 "unsupported_count": result.source_occurrence_page["unsupported_count"],
+                "encrypted_count": result.source_occurrence_page["encrypted_count"],
                 "unresolved_count": result.source_occurrence_page["unresolved_count"],
+                "authorized_occurrence_scope_count": result.source_occurrence_page[
+                    "authorized_occurrence_scope_count"
+                ],
+                "extractable_occurrence_scope_count": result.source_occurrence_page[
+                    "extractable_occurrence_scope_count"
+                ],
+                "candidate_only_occurrence_count": result.source_occurrence_page[
+                    "candidate_only_occurrence_count"
+                ],
+                "source_asset_reason_counts": result.source_occurrence_page[
+                    "source_asset_reason_counts"
+                ],
                 "duplicate_policy": result.source_occurrence_page["duplicate_policy"],
                 "ambiguous_identifier_count": result.source_occurrence_page[
                     "ambiguous_identifier_count"
@@ -412,6 +464,34 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
             exact_inventory_schema["properties"]["next_cursor"],
             {"type": ["string", "null"]},
         )
+        jsonschema.validate(instance=structured_content, schema=output_schema)
+
+    def test_remote_exact_inventory_schema_is_closed_for_structured_rows(self) -> None:
+        output_schema = next(
+            tool.outputSchema
+            for tool in build_remote_tool_descriptors(
+                required_scope="formowl.use",
+                enabled_tool_names={"whoami", "query_effective_graph_view"},
+            )
+            if tool.name == "query_effective_graph_view"
+        )
+        exact_inventory_schema = output_schema["properties"]["data"]["properties"][
+            "exact_inventory"
+        ]
+        self.assertFalse(exact_inventory_schema["additionalProperties"])
+        self.assertTrue(
+            {
+                "encrypted_count",
+                "authorized_occurrence_scope_count",
+                "extractable_occurrence_scope_count",
+                "candidate_only_occurrence_count",
+                "source_asset_reason_counts",
+            }.issubset(exact_inventory_schema["required"])
+        )
+        item_schema = exact_inventory_schema["properties"]["items"]["items"]
+        self.assertFalse(item_schema["additionalProperties"])
+        self.assertIn("structured_values", item_schema["properties"])
+        self.assertIn("structure_status", item_schema["properties"])
 
     def test_standards_compliant_mcp_gateway_transport_initialize_and_tool_list(
         self,
