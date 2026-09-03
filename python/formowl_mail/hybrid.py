@@ -10988,7 +10988,7 @@ def execute_bounded_adaptive_query(
     max_repair_count: int = 2,
     context_citation_limit: int = 24,
     total_time_budget_ms: int = 4_500,
-) -> tuple[GovernedSemanticExecutionResult,
+) -> tuple[GovernedSemanticExecutionResult | None,
            tuple[GovernedSemanticExecutionResult, ...], dict[str, Any]]:
     """Execute bounded query candidates through the existing authorized session."""
 
@@ -11142,17 +11142,35 @@ def execute_bounded_adaptive_query(
                 for value in step["citation_hashes"]}) >= context_citation_limit:
             stop_reason = "context_budget_reached"
             break
-    if not successful_results:
-        raise ContractValidationError("adaptive query produced no authorized result")
     citations = sorted({value for step in steps for value in step["citation_hashes"]})
     missing = sorted({value for step in steps for value in step["missing_field_hashes"]})
     complete = (len(steps) == 1 and bool(citations)
                 and steps[0]["validation_status"].startswith("validated_")
                 and steps[0]["coverage_status"]
                 in {"complete", "complete_authorized_scope"})
-    status = "complete" if complete else ("partial" if citations else "unsupported")
+    external_replan_required = planner is None and (
+        not successful_results
+        or any(
+            step["coverage_status"] in {"incomplete", "not_executed", "no_answer"}
+            for step in steps
+        )
+    )
+    status = (
+        "replan_required" if external_replan_required
+        else (
+            "replan_required" if not successful_results
+            else ("complete" if complete else ("partial" if citations else "unsupported"))
+        )
+    )
     if stop_reason == "planner_stopped":
-        stop_reason = "coverage_complete" if complete else "planner_stopped_partial"
+        stop_reason = (
+            "coverage_complete" if complete
+            else (
+                "external_replan_required"
+                if external_replan_required
+                else "planner_stopped_partial"
+            )
+        )
     payload = {
         "status": status,
         "original_query_hash": sha256_json(query_text),
@@ -11164,6 +11182,13 @@ def execute_bounded_adaptive_query(
         "stop_reason_fingerprint": sha256_json(stop_reason),
         "conversation_state": {
             "status": "must_be_resolved_upstream", "hidden_history_used": False},
+        "external_replan": {
+            "status": (
+                "required" if status == "replan_required"
+                else ("not_needed" if complete else "available")
+            ),
+            "max_follow_up_query_count": 2,
+        },
         "subqueries": steps,
         "context_bundle": {
             "successful_subquery_count": len(successful_results),
@@ -11174,7 +11199,11 @@ def execute_bounded_adaptive_query(
         },
     }
     assert_public_payload_safe(payload, "issue56_adaptive_query_execution")
-    return successful_results[0], tuple(successful_results), payload
+    return (
+        successful_results[0] if successful_results else None,
+        tuple(successful_results),
+        payload,
+    )
 
 
 def _prefer_untyped_participant_any_provider(

@@ -9,28 +9,24 @@ This is a bounded active window. Earlier entries are immutable history under
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
+## 2026-09-03 — Connected Route-A planner checkpoint
+- Route A uses the connected ChatGPT/workspace client for bounded MCP planning; no inline/server-side model client exists.
+- Zero-arg unresolved, incomplete, and candidate-only results return top-level `replan_required` while retaining nested native statuses.
+- Its source-session-bound capability summary exposes at most `128` authorized field labels/hashes/statuses/counts, with no values, tenant, or raw paths.
+- Tool guidance permits at most two client follow-ups; public web is redacted-terminology-only and never workspace evidence.
+- Master canonical focused verification passed `23/23` in `70.090 s`; final cross-reviews returned `AGREE`.
+- Production delta is net `+144` lines with no service, framework, dependency, configuration, or secret change.
+- Cross-request bounds remain client-enforced and no server model exists. Authority is invalid/blocked; this is not general UAT, production, readiness, Issue #56 completion, or methodology completion.
 ## 2026-09-02 — Step-4 attachment and Core Query Agent POCs
-- The structural-blank plus sparse focused normal ASGI `/mcp` E2E passed `1/1` in `66.026 s`.
-- Its exactly-once `workspace_only_v1`/`workspace_formowl` mode consumed exit `0`: HTTP `200`, one request, exact `2/2`, complete coverage, candidate-only `0`, seven citations, approved actor/approver, and no tenant.
-- Requested fields were explicit source blanks; an unrequested field was not treated as an alias.
-- Runner/wrapper/log/exit hashes: `sha256:4fb18f...394`, `sha256:846a82...d96`, `sha256:194d04...66d`,
-  and `sha256:9a271f...86aa`.
-- The Core Query Agent spec plus agent-ready orchestration POC passed focused normal `/mcp` `1/1` in about `65.5 s`; the existing candidate-table production-handler regression passed `1/1` in `3.3 s`.
-- Read-only release review returned `AGREE`; zero-arg planning remains `not_connected`, and
-  conversation coreference must resolve upstream before MCP.
-- Authority remains invalid/blocked on the CJK runtime-support error and four gates; step 4 remains
-  `in-progress`. These are bounded diagnostic POCs, not general UAT, production, readiness, completion,
-  Issue #56 completion, or superiority evidence.
+- Structural-blank/sparse normal `/mcp` passed `1/1` in `66.026 s`; its exactly-once workspace-only mode exited `0` with HTTP `200`, one request, exact `2/2`, complete coverage, candidate-only `0`, seven citations, approved actor/approver, and no tenant.
+- Requested fields were explicit source blanks; an unrequested field was not an alias. Runner/wrapper/log/exit hashes: `sha256:4fb18f...394`, `sha256:846a82...d96`, `sha256:194d04...66d`, `sha256:9a271f...86aa`.
+- The Core Query Agent spec/orchestration POC passed normal `/mcp` `1/1` in about `65.5 s`; its candidate-table regression passed `1/1` in `3.3 s`, and review returned `AGREE`.
+- Zero-arg planning remained `not_connected`; coreference required upstream resolution. Authority remained invalid/four-gate blocked and step 4 in progress; no UAT, production, readiness, completion, or superiority claim was earned.
 ## 2026-09-01 — Candidate attachment-table answer checkpoint
-- Checkpoint `dfaf38b` passed `43` focused tests and one real normal `/mcp` run:
-  HTTP `200`, `candidate_interpretation`, four citations, about `908.085 ms`,
-  and no deadline exhaustion.
-- Missing semantic header markup kept it candidate-only/noncanonical/nonexact,
-  with no exact result and ambiguity fail-closed; root cause was source-selection/artifact binding.
-- The seal binds session, authorization, requester, workspace, scopes,
-  Observations, and index; cross-session reuse rejects and result types are private.
-- Identity was workspace-only with the approved actor and no tenant. At that
-  checkpoint authority was valid but four-gate blocked; no broader claim was earned.
+- Checkpoint `dfaf38b` passed `43` focused tests and one real normal `/mcp`: HTTP `200`, `candidate_interpretation`, four citations, about `908.085 ms`, and no deadline exhaustion.
+- Missing semantic header markup kept it candidate-only/noncanonical/nonexact, with no exact result and ambiguity fail-closed; the gap was source-selection/artifact binding.
+- The seal binds session, authorization, requester, workspace, scopes, Observations, and index; cross-session reuse rejects and result types are private.
+- Identity was workspace-only with the approved actor and no tenant; authority was four-gate blocked and no broader claim was earned.
 ## 2026-08-29 — Actual-user participant inventory remains incomplete
 - Normal `/mcp` completed `21` bound-cursor pages: returned/total/union
   `2069/2069/2069`, duplicates `0`, and `2086` governed references/citations.

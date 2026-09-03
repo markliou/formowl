@@ -329,7 +329,8 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                 candidate = success["candidate_interpretation"]
                 governed = candidate["governed_citations"]
                 citation_hashes = [item["observation_hash"] for item in governed]
-                self.assertEqual(success["status"], "candidate_interpretation")
+                self.assertEqual(success["status"], "replan_required")
+                self.assertEqual(success["answer"]["status"], "candidate_interpretation")
                 self.assertEqual(success["answer"]["header"], "OriginField")
                 self.assertEqual(success["answer"]["value"], "REGION-ALPHA")
                 self.assertEqual(len(governed), 4)
@@ -341,7 +342,7 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(candidate["exact_result"])
                 self.assertIsNone(success["exact_result"])
                 inventory = exact["exact_inventory"]
-                self.assertEqual(exact["status"], "incomplete")
+                self.assertEqual(exact["status"], "replan_required")
                 self.assertEqual(inventory["status"], "incomplete")
                 self.assertEqual(inventory["coverage_status"], "incomplete")
                 self.assertEqual(inventory["total_count"], 0)

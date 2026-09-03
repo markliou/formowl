@@ -13,7 +13,7 @@ from starlette.testclient import TestClient
 import formowl_gateway.runtime as runtime_module
 import formowl_mail.hybrid as hybrid_module
 from formowl_auth import FileAuditLogStore
-from formowl_contract import ContractValidationError, sha256_json
+from formowl_contract import sha256_json
 from formowl_gateway import issue56_sealed_source_loader as gateway_loader
 from formowl_gateway.runtime import ConnectedRuntime, ConnectedRuntimeConfig
 from formowl_gateway.semantic import SemanticMcpGateway, validate_public_gateway_payload
@@ -33,8 +33,10 @@ from test_issue56_semantic_execution_e2e import _contract_only_runtime
 from test_issue56_supplemental_attachment_table_loader_e2e import (
     _ALTERNATE_HEADER,
     _ALTERNATE_VALUE,
+    _HEADER,
     _IDENTIFIER,
     _PERMISSION_SCOPE,
+    _VALUE,
     _oauth_context,
     _write_supplemental_partition,
 )
@@ -42,7 +44,9 @@ import test_issue56_sealed_source_loader_e2e as sealed_fixture
 
 
 class Issue56AdaptiveQueryAgentMcpE2ETests(unittest.IsolatedAsyncioTestCase):
-    async def test_multi_subquery_coverage_stop_over_normal_mcp(self) -> None:
+    async def test_external_agent_replans_from_capabilities_over_normal_mcp(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             with patch.object(
@@ -72,35 +76,10 @@ class Issue56AdaptiveQueryAgentMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                     ),
                 }
             )
-            unknown_field = _ALTERNATE_VALUE
-            query = (
-                f"把{_IDENTIFIER}的{_ALTERNATE_HEADER}"
-                f"跟{unknown_field}給出來"
+            cases = (
+                (_HEADER, _VALUE, "OpaqueGapAlpha"),
+                (_ALTERNATE_HEADER, _ALTERNATE_VALUE, "OpaqueGapBeta"),
             )
-            supported_query = f"有{_IDENTIFIER}的{_ALTERNATE_HEADER}呢？"
-            unsupported_query = f"有{_IDENTIFIER}的{unknown_field}呢？"
-            planner_inputs = []
-
-            def planner(
-                original_prompt,
-                prior_steps,
-                _tokenizer_profile,
-                _max_query_count,
-            ):
-                self.assertEqual(original_prompt, query)
-                planner_inputs.append(tuple(dict(step) for step in prior_steps))
-                if not prior_steps:
-                    return original_prompt
-                if len(prior_steps) == 1:
-                    self.assertEqual(
-                        prior_steps[-1]["validation_status"],
-                        "rejected_existing_validator",
-                    )
-                    return supported_query
-                if len(prior_steps) == 2:
-                    self.assertEqual(prior_steps[-1]["coverage_status"], "complete")
-                    return unsupported_query
-                return None
 
             with (
                 patch.dict(os.environ, environment, clear=True),
@@ -111,25 +90,7 @@ class Issue56AdaptiveQueryAgentMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                 ),
             ):
                 retrieval_handler = (
-                    gateway_loader.build_issue56_production_semantic_retrieval_handler(
-                        query_agent_planner=planner
-                    )
-                )
-            closure = dict(
-                zip(
-                    retrieval_handler.__code__.co_freevars,
-                    (
-                        cell.cell_contents
-                        for cell in retrieval_handler.__closure__ or ()
-                    ),
-                    strict=True,
-                )
-            )
-            with self.assertRaises(ContractValidationError):
-                closure["session"].query(
-                    query_text=query,
-                    effective_graph_view=closure["graph_view"],
-                    allowed_relation_types=closure["relation_types"],
+                    gateway_loader.build_issue56_production_semantic_retrieval_handler()
                 )
             runtime_root = root / "runtime"
             runtime_root.mkdir()
@@ -178,123 +139,139 @@ class Issue56AdaptiveQueryAgentMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                         raise_server_exceptions=False,
                     ) as client,
                 ):
-                    response = client.post(
-                        "/mcp",
-                        headers={
-                            "Authorization": "Bearer synthetic.token",
-                            "Accept": "application/json, text/event-stream",
-                            "MCP-Protocol-Version": LATEST_PROTOCOL_VERSION,
-                        },
-                        json={
-                            "jsonrpc": "2.0",
-                            "id": sha256_json(query),
-                            "method": "tools/call",
-                            "params": {
-                                "name": "query_effective_graph_view",
-                                "arguments": {"query_text": query},
+                    request_count = 0
+
+                    def post_query(query_text):
+                        nonlocal request_count
+                        request_count += 1
+                        return client.post(
+                            "/mcp",
+                            headers={
+                                "Authorization": "Bearer synthetic.token",
+                                "Accept": "application/json, text/event-stream",
+                                "MCP-Protocol-Version": LATEST_PROTOCOL_VERSION,
                             },
-                        },
-                    )
-                self.assertEqual(response.status_code, 200)
-                result = response.json()["result"]
-                self.assertFalse(result["isError"], result)
-                data = result["structuredContent"]["data"]
-                validate_public_gateway_payload(data)
-                inventory = data["exact_inventory"]
-                self.assertEqual(inventory["status"], "complete_authorized_scope")
-                self.assertEqual(inventory["coverage_status"], "complete")
-                self.assertEqual(inventory["returned_count"], 1)
-                self.assertEqual(inventory["unsupported_count"], 0)
-                values = inventory["items"][0]["structured_values"]
-                self.assertEqual(
-                    [(item["field"], item["value"]) for item in values],
-                    [(_ALTERNATE_HEADER, _ALTERNATE_VALUE)],
-                )
-                self.assertEqual(
-                    inventory["items"][0]["structure_status"],
-                    "source_provided",
-                )
-                self.assertTrue(data["citations"])
-                agent = data["query_agent"]
-                self.assertEqual(agent["status"], "partial")
-                self.assertEqual(agent["mcp_call_count"], 1)
-                self.assertEqual(agent["executed_subquery_count"], 3)
-                self.assertEqual(agent["stop_reason"], "planner_stopped_partial")
-                self.assertTrue(agent["stop_reason_fingerprint"].startswith("sha256:"))
-                self.assertEqual(
-                    len({item["query_hash"] for item in agent["subqueries"]}),
-                    3,
-                )
-                self.assertEqual(
-                    {item["validation_status"] for item in agent["subqueries"]},
-                    {
-                        "rejected_existing_validator",
-                        "validated_existing_scope_schema_permission",
-                    },
-                )
-                self.assertEqual(
-                    [item["coverage_status"] for item in agent["subqueries"]],
-                    ["not_executed", "complete", "not_executed"],
-                )
-                context = agent["context_bundle"]
-                self.assertEqual(context["successful_subquery_count"], 1)
-                self.assertTrue(context["citation_hashes"])
-                self.assertTrue(context["lineage_fingerprints"])
-                unsupported_step = agent["subqueries"][2]
-                self.assertEqual(
-                    unsupported_step["query_hash"],
-                    sha256_json(unsupported_query),
-                )
-                self.assertTrue(unsupported_step["missing_field_hashes"])
-                self.assertTrue(
-                    set(unsupported_step["missing_field_hashes"])
-                    <= set(context["missing_field_hashes"])
-                )
-                snippets = [
-                    item["snippet"]
-                    for subquery in context["successful_subqueries"]
-                    for item in subquery["evidence"]
-                ]
-                self.assertTrue(snippets)
-                self.assertTrue(
-                    any(_ALTERNATE_VALUE in snippet for snippet in snippets)
-                )
-                exact_items = [
-                    item
-                    for subquery in context["successful_subqueries"]
-                    for item in subquery["exact_items"]
-                ]
-                self.assertTrue(
-                    any(
-                        value["field"] == _ALTERNATE_HEADER
-                        and value["value"] == _ALTERNATE_VALUE
-                        for item in exact_items
-                        for value in item.get("structured_values", [])
-                    )
-                )
-                self.assertTrue(
-                    all(
-                        item.get("structure_status") == "source_provided"
-                        for item in exact_items
-                        if item.get("structured_values")
-                    )
-                )
-                self.assertEqual(
-                    agent["conversation_state"],
-                    {
-                        "status": "must_be_resolved_upstream",
-                        "hidden_history_used": False,
-                    },
-                )
-                self.assertEqual(
-                    agent["planner_model_status"],
-                    "injected_callback_non_model",
-                )
-                self.assertEqual(len(planner_inputs), 4)
-                rendered = str(data)
-                self.assertNotIn(str(root), rendered)
-                self.assertNotIn("object_uri", rendered)
-                self.assertNotIn("tenant_id", rendered)
+                            json={
+                                "jsonrpc": "2.0",
+                                "id": sha256_json(query_text),
+                                "method": "tools/call",
+                                "params": {
+                                    "name": "query_effective_graph_view",
+                                    "arguments": {"query_text": query_text},
+                                },
+                            },
+                        )
+
+                    for header, expected_value, unsupported_field in cases:
+                        prompt = (
+                            f"把{_IDENTIFIER}的{header}"
+                            f"跟{unsupported_field}給出來"
+                        )
+                        response = post_query(prompt)
+                        self.assertEqual(response.status_code, 200)
+                        result = response.json()["result"]
+                        self.assertFalse(result["isError"], result)
+                        data = result["structuredContent"]["data"]
+                        validate_public_gateway_payload(data)
+                        self.assertEqual(data["status"], "replan_required")
+                        agent = data["query_agent"]
+                        self.assertEqual(agent["status"], "replan_required")
+                        self.assertEqual(agent["planner_model_status"], "not_connected")
+                        self.assertEqual(agent["mcp_call_count"], 1)
+                        self.assertEqual(
+                            agent["conversation_state"],
+                            {
+                                "status": "must_be_resolved_upstream",
+                                "hidden_history_used": False,
+                            },
+                        )
+                        summary = agent["authorized_capability_summary"]
+                        projection_fields = summary["projection_fields"]
+                        self.assertTrue(projection_fields)
+                        self.assertTrue(
+                            all(
+                                item["field_hash"].startswith("sha256:")
+                                for item in projection_fields
+                            )
+                        )
+                        matching_fields = [
+                            item["field"]
+                            for item in projection_fields
+                            if item["structure_status"] == "source_provided"
+                            and item["field"] in prompt
+                        ]
+                        self.assertEqual(matching_fields, [header])
+                        self.assertNotIn(unsupported_field, matching_fields)
+                        self.assertFalse(
+                            any(
+                                key in item
+                                for item in projection_fields
+                                for key in ("value", "text", "snippet")
+                            )
+                        )
+                        summary_text = str(summary)
+                        self.assertNotIn(_VALUE, summary_text)
+                        self.assertNotIn(_ALTERNATE_VALUE, summary_text)
+
+                        follow_up = f"有{_IDENTIFIER}的{matching_fields[0]}呢？"
+                        follow_up_response = post_query(follow_up)
+                        self.assertEqual(follow_up_response.status_code, 200)
+                        follow_up_result = follow_up_response.json()["result"]
+                        self.assertFalse(
+                            follow_up_result["isError"],
+                            follow_up_result,
+                        )
+                        follow_up_data = follow_up_result["structuredContent"]["data"]
+                        validate_public_gateway_payload(follow_up_data)
+                        inventory = follow_up_data["exact_inventory"]
+                        self.assertEqual(
+                            inventory["status"],
+                            "complete_authorized_scope",
+                        )
+                        self.assertEqual(inventory["coverage_status"], "complete")
+                        self.assertEqual(inventory["returned_count"], 1)
+                        self.assertEqual(inventory["unsupported_count"], 0)
+                        self.assertEqual(
+                            inventory["candidate_only_occurrence_count"],
+                            0,
+                        )
+                        item = inventory["items"][0]
+                        self.assertEqual(item["structure_status"], "source_provided")
+                        self.assertEqual(
+                            [
+                                (value["field"], value["value"])
+                                for value in item["structured_values"]
+                            ],
+                            [(matching_fields[0], expected_value)],
+                        )
+                        self.assertTrue(follow_up_data["citations"])
+                        follow_up_agent = follow_up_data["query_agent"]
+                        self.assertEqual(follow_up_agent["status"], "complete")
+                        self.assertEqual(follow_up_agent["mcp_call_count"], 1)
+                        self.assertEqual(
+                            follow_up_agent["executed_subquery_count"],
+                            1,
+                        )
+                        self.assertEqual(
+                            follow_up_agent["planner_model_status"],
+                            "not_connected",
+                        )
+                        context = follow_up_agent["context_bundle"]
+                        self.assertTrue(context["citation_hashes"])
+                        self.assertTrue(context["lineage_fingerprints"])
+                        snippets = [
+                            evidence["snippet"]
+                            for successful in context["successful_subqueries"]
+                            for evidence in successful["evidence"]
+                        ]
+                        self.assertTrue(
+                            any(expected_value in snippet for snippet in snippets)
+                        )
+                        rendered = str((data, follow_up_data))
+                        self.assertNotIn(str(root), rendered)
+                        self.assertNotIn("object_uri", rendered)
+                        self.assertNotIn("tenant_id", rendered)
+                    self.assertEqual(request_count, 2 * len(cases))
             finally:
                 await runtime.aclose()
 

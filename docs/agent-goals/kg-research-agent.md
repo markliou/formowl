@@ -75,16 +75,22 @@ remains `in-progress`; the same four authority gates remain blocked. The
 earlier participant inventory also remains independently `incomplete`:
 authorized scope `2793` = `2069` matches + `174` proven nonmatches + `550`
 unresolved.
-## Step-4 Core Query Agent Orchestration POC — 2026-09-02
-The canonical spec now defines the Core Query Agent path through validated
-subqueries, coverage-driven bounded repair, and compact evidence context. The
-agent-ready orchestration POC passed focused normal ASGI `/mcp` E2E `1/1` in
-about `65.5 s`; the existing candidate-table production-handler regression
-passed `1/1` in about `3.3 s`, and read-only release review returned `AGREE`.
-The zero-arg production planner remains `not_connected`, and conversation
-coreference must resolve upstream before MCP. This supports only a bounded
-diagnostic POC claim—not general UAT, production, Issue #56 completion, or
-methodology readiness.
+## Step-4 Connected Route-A Planner Checkpoint — 2026-09-03
+Route A is selected: the connected ChatGPT/workspace client plans across
+bounded MCP calls; no inline or server-side model client was added. Zero-arg
+unresolved, incomplete, and candidate-only responses now expose top-level
+`replan_required` while preserving each nested native result status.
+The source-session-bound authorized capability summary exposes only bounded
+field labels, hashes, structure statuses, and counts—never values, tenant
+identity, or raw paths. Tool guidance caps follow-up calls at two and permits
+public web only for redacted terminology, never workspace evidence. The master
+canonical focused suite passed `23/23` in `70.090 s`; final cross-reviews
+returned `AGREE`. Production changed by net `+144` lines with no service,
+framework, dependency, configuration, or secret-plumbing addition.
+Limits remain explicit: follow-up enforcement is a client contract across
+requests, capability listings truncate at `128` fields, and conversation
+coreference remains upstream. Authority is invalid/blocked; this is not general
+UAT, production readiness, Issue #56 completion, or methodology completion.
 ## Non-Negotiable Method
 
 - Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence

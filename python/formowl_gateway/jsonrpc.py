@@ -272,6 +272,15 @@ def _tool_to_json_rpc_schema(schema: dict[str, Any]) -> dict[str, Any]:
         )
     elif compatibility.get("status") == "canonical":
         description += "; canonical API"
+    if tool_name == "query_effective_graph_view":
+        description += (
+            "; connected planners must inspect query_agent coverage and "
+            "authorized_capability_summary when status is replan_required or partial, "
+            "then issue at most two follow-up calls using exact authorized field "
+            "labels; candidate_only evidence is never deterministic exact; public "
+            "web may clarify only redacted terminology and must never supply "
+            "workspace evidence or authorization"
+        )
     return {
         "name": tool_name,
         "description": description,

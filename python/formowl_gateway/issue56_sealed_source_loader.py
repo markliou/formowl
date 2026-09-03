@@ -601,6 +601,88 @@ def build_issue56_production_semantic_retrieval_handler(
     candidate_ledger = _build_candidate_table_ledger(session)
     candidate_lookup = (None if candidate_ledger is None else build_authorized_candidate_table_lookup(
         session=session, ledger=candidate_ledger))
+    capability_fields: dict[tuple[str, str, str], dict[str, Any]] = {}
+    capability_providers = []
+    for provider in providers:
+        capability_providers.append({
+            "provider_fingerprint": provider.provider_fingerprint,
+            "filter_slot_policy": provider.filter_slot_policy,
+            "resource_kind": provider.resource_kind,
+            "normalized_field": provider.normalized_field,
+            "source_provided_occurrence_count": sum(
+                item.structure_status == "source_provided"
+                for item in provider.occurrences
+            ),
+            "candidate_only_occurrence_count": sum(
+                item.structure_status == "candidate_only"
+                for item in provider.occurrences
+            ),
+        })
+        for item in provider.occurrences:
+            for (
+                column_hash,
+                candidate_hash,
+                _value_hash,
+                field,
+                _value,
+                _citation_hash,
+                _lineage_fingerprint,
+            ) in item.structured_column_bindings:
+                safe_field, redacted = redact_public_raw_references(field)
+                entry = capability_fields.setdefault(
+                    (safe_field[:120], column_hash, str(item.structure_status)),
+                    {
+                        "candidate_hashes": set(),
+                        "item_hashes": set(),
+                        "label_redacted": False,
+                    },
+                )
+                entry["candidate_hashes"].add(candidate_hash)
+                entry["item_hashes"].add(item.item_hash)
+                entry["label_redacted"] = entry["label_redacted"] or bool(redacted)
+    all_capability_fields = [
+        {
+            "field": label,
+            "field_hash": column_hash,
+            "candidate_hashes": sorted(entry["candidate_hashes"]),
+            "structure_status": structure_status,
+            "authorized_occurrence_count": len(entry["item_hashes"]),
+            "label_redacted": entry["label_redacted"],
+        }
+        for (
+            label,
+            column_hash,
+            structure_status,
+        ), entry in sorted(capability_fields.items())
+    ]
+    capability_core = {
+        "artifact_id": "formowl_authorized_query_capability_summary_v1",
+        "identity_scope_mode": IDENTITY_SCOPE_MODE,
+        "workspace_id": session.workspace_id,
+        "source_session_binding_fingerprint": (
+            session.source_session_binding_fingerprint
+        ),
+        "listing_status": (
+            "complete" if len(all_capability_fields) <= 128 else "truncated"
+        ),
+        "projection_field_count": len(all_capability_fields),
+        "returned_projection_field_count": min(len(all_capability_fields), 128),
+        "projection_fields": all_capability_fields[:128],
+        "providers": sorted(
+            capability_providers,
+            key=lambda item: item["provider_fingerprint"],
+        ),
+        "query_contract": {
+            "filter_values_must_come_from_user_request": True,
+            "projection_labels_must_match_authorized_fields": True,
+            "candidate_only_is_deterministic_exact": False,
+        },
+    }
+    authorized_capabilities = {
+        **capability_core,
+        "capability_fingerprint": sha256_json(capability_core),
+    }
+    validate_public_gateway_payload(authorized_capabilities)
     observation_by_id = {item.observation_id: item for item in session.authorized_observations}
     observations_by_hash: dict[str, list[Observation]] = {}
     for observation_id, observation_hash in session.authorized_observation_hashes:
@@ -720,6 +802,30 @@ def build_issue56_production_semantic_retrieval_handler(
         query_agent_payload = project_query_agent_context(
             successful_results, query_agent_payload
         )
+        if query_agent_payload["status"] != "complete":
+            query_agent_payload = {
+                **query_agent_payload,
+                "authorized_capability_summary": authorized_capabilities,
+            }
+        public_replan_status = (
+            "replan_required"
+            if query_agent_payload["status"] == "replan_required"
+            else None
+        )
+        if result is None:
+            payload = {
+                "status": public_replan_status or "replan_required",
+                "query_agent": query_agent_payload,
+                "citations": [],
+                "evidence": [],
+                "graph_hits": {"count": 0},
+                "canonical_kg": False,
+                "deterministic_exact": False,
+                "exact_result": None,
+                "redaction_counts": {"redacted_value_count": 0},
+            }
+            validate_public_gateway_payload(payload)
+            return payload
         exact_result = result.exact_result
         exact_inventory_kind = arguments.get("exact_inventory_kind")
         if (
@@ -745,7 +851,7 @@ def build_issue56_production_semantic_retrieval_handler(
             if len(citation_hashes) != 4 or len(set(citation_hashes)) != 4:
                 raise ContractValidationError("production candidate citation binding is invalid")
             payload = {
-                "status": candidate.status,
+                "status": public_replan_status or candidate.status,
                 "answer": {
                     "status": candidate.status, "text": f"{candidate.header}: {candidate.value}",
                     "header": candidate.header, "value": candidate.value,
@@ -793,7 +899,7 @@ def build_issue56_production_semantic_retrieval_handler(
                 )
             provider = selected_providers[0]
             payload = {
-                "status": result.status,
+                "status": public_replan_status or result.status,
                 "exact_inventory": {
                     "status": exact_result.status,
                     "query_class": result.query_class,
@@ -892,7 +998,7 @@ def build_issue56_production_semantic_retrieval_handler(
                     raise ContractValidationError("production graph relation binding is invalid")
                 projected_relation_types.add(relation_type)
         payload = {
-            "status": result.status,
+            "status": public_replan_status or result.status,
             "answer": {
                 "status": answer.status,
                 "text": answer.answer_text,
