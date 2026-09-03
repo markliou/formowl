@@ -10,13 +10,17 @@ This is a bounded active window. Earlier entries are immutable history under
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
 ## 2026-09-03 — Connected Route-A planner checkpoint
-- Route A uses the connected ChatGPT/workspace client for bounded MCP planning; no inline/server-side model client exists.
-- Zero-arg unresolved, incomplete, and candidate-only results return top-level `replan_required` while retaining nested native statuses.
-- Its source-session-bound capability summary exposes at most `128` authorized field labels/hashes/statuses/counts, with no values, tenant, or raw paths.
-- Tool guidance permits at most two client follow-ups; public web is redacted-terminology-only and never workspace evidence.
-- Master canonical focused verification passed `23/23` in `70.090 s`; final cross-reviews returned `AGREE`.
-- Production delta is net `+144` lines with no service, framework, dependency, configuration, or secret change.
-- Cross-request bounds remain client-enforced and no server model exists. Authority is invalid/blocked; this is not general UAT, production, readiness, Issue #56 completion, or methodology completion.
+- Commit `f4a18e5` is pushed; scoped canonical verification passed `23/23`.
+- Safe v3 log `sha256:013aa643f17ac30e358800517d62268e8f5fbb3049747530f0004dd260b10b11` used `workspace_only_v1`/`workspace_formowl`, approved actor/approver, and no tenant.
+- Generic external-rescue transport succeeded: exact `12/12`, all `12` `source_provided`, with `36` citations/lineages.
+- Five distinct value fingerprints and `incomplete`/`context_budget_reached` kept `answerable=false`; the user request still requires clarification.
+- Tool guidance now requires one remaining call to use a unique authorized row
+  discriminator in a combined projection; synthetic formal-XLSX E2E proves
+  same-response row association, citation, and lineage.
+- V4 pre-run is blocked by multiple equally valid discriminators. Do not issue a
+  query-specific rerun; ask for an item/identifier field or let the real caller clarify.
+- Authority remains invalid/not ready with the same four gates; this remains
+  bounded diagnostic evidence, not general UAT, production, readiness, or completion.
 ## 2026-09-02 — Step-4 attachment and Core Query Agent POCs
 - Structural-blank/sparse normal `/mcp` passed `1/1` in `66.026 s`; its exactly-once workspace-only mode exited `0` with HTTP `200`, one request, exact `2/2`, complete coverage, candidate-only `0`, seven citations, approved actor/approver, and no tenant.
 - Requested fields were explicit source blanks; an unrequested field was not an alias. Runner/wrapper/log/exit hashes: `sha256:4fb18f...394`, `sha256:846a82...d96`, `sha256:194d04...66d`, `sha256:9a271f...86aa`.

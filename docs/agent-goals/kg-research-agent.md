@@ -76,21 +76,21 @@ earlier participant inventory also remains independently `incomplete`:
 authorized scope `2793` = `2069` matches + `174` proven nonmatches + `550`
 unresolved.
 ## Step-4 Connected Route-A Planner Checkpoint — 2026-09-03
-Route A is selected: the connected ChatGPT/workspace client plans across
-bounded MCP calls; no inline or server-side model client was added. Zero-arg
-unresolved, incomplete, and candidate-only responses now expose top-level
-`replan_required` while preserving each nested native result status.
-The source-session-bound authorized capability summary exposes only bounded
-field labels, hashes, structure statuses, and counts—never values, tenant
-identity, or raw paths. Tool guidance caps follow-up calls at two and permits
-public web only for redacted terminology, never workspace evidence. The master
-canonical focused suite passed `23/23` in `70.090 s`; final cross-reviews
-returned `AGREE`. Production changed by net `+144` lines with no service,
-framework, dependency, configuration, or secret-plumbing addition.
-Limits remain explicit: follow-up enforcement is a client contract across
-requests, capability listings truncate at `128` fields, and conversation
-coreference remains upstream. Authority is invalid/blocked; this is not general
-UAT, production readiness, Issue #56 completion, or methodology completion.
+Commit `f4a18e5` is pushed, and scoped canonical verification passed `23/23`.
+Route A keeps planning in the connected ChatGPT/workspace client across at most
+two follow-ups; no inline/server-side model client was added.
+Safe v3 log `sha256:013aa643f17ac30e358800517d62268e8f5fbb3049747530f0004dd260b10b11`
+used `workspace_only_v1`/`workspace_formowl`, the approved actor/approver, and
+no tenant. Transport succeeded with exact `12/12`, all `source_provided`, and
+`36` citations/lineages, but five distinct value fingerprints plus
+`incomplete`/`context_budget_reached` kept `answerable=false`; clarification is
+required.
+Tool guidance now requires a remaining follow-up to use one unique authorized
+row discriminator in a combined projection; a synthetic formal-XLSX E2E proves
+same-response row association, citation, and lineage. The v4 pre-run is blocked
+by multiple equally valid discriminators: do not tune or rerun the query; ask
+the user for an item/identifier field or let the real calling agent clarify.
+Authority remains invalid/not ready with the same four gates; no general UAT, production, readiness, Issue #56-completion, or methodology claim is earned.
 ## Non-Negotiable Method
 
 - Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence
