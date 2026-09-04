@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from collections.abc import Mapping, Sequence
 from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import secrets
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
 
@@ -12,6 +15,8 @@ _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_PROMPT_CHARS = 8_000
 _PRE_AUTH_COOKIE = "formowl_uat_pre_auth"
 _SESSION_COOKIE = "formowl_uat_session"
+_TEMPORARY_BASIC_USERNAME = b"formowl-uat"
+_TEMPORARY_BASIC_CHALLENGE = 'Basic realm="FormOwl temporary UAT", charset="UTF-8"'
 
 
 class MailHumanUatQueryService(Protocol):
@@ -43,22 +48,40 @@ def create_mail_human_uat_http_server(
     host: str,
     port: int,
     query_service: MailHumanUatQueryService,
+    *,
+    temporary_access_code: str | None = None,
 ) -> ThreadingHTTPServer:
     """Create the minimal same-origin browser UAT surface."""
 
+    if temporary_access_code is not None and (
+        not isinstance(temporary_access_code, str) or not temporary_access_code
+    ):
+        raise ValueError("temporary access code must be non-empty text")
     return ThreadingHTTPServer(
         (host, port),
-        _build_mail_human_uat_http_handler(query_service),
+        _build_mail_human_uat_http_handler(
+            query_service,
+            temporary_access_code=temporary_access_code,
+        ),
     )
 
 
 def _build_mail_human_uat_http_handler(
     query_service: MailHumanUatQueryService,
+    *,
+    temporary_access_code: str | None,
 ) -> type[BaseHTTPRequestHandler]:
+    expected_basic_password = (
+        temporary_access_code.encode("utf-8") if temporary_access_code is not None else None
+    )
+
     class MailHumanUatHttpHandler(BaseHTTPRequestHandler):
         server_version = "FormOwlMailHumanUAT/0.1"
 
         def do_GET(self) -> None:  # noqa: N802
+            if not self._basic_access_allowed():
+                self._send_basic_auth_required()
+                return
             parsed = urlparse(self.path)
             route = parsed.path
             if route == "/":
@@ -147,6 +170,9 @@ def _build_mail_human_uat_http_handler(
             self._send_error(HTTPStatus.NOT_FOUND, "route_not_found")
 
         def do_POST(self) -> None:  # noqa: N802
+            if not self._basic_access_allowed():
+                self._send_basic_auth_required()
+                return
             route = urlparse(self.path).path
             if route not in {"/api/chat", "/auth/logout"}:
                 self._send_error(HTTPStatus.NOT_FOUND, "route_not_found")
@@ -198,6 +224,49 @@ def _build_mail_human_uat_http_handler(
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             return
+
+        def _basic_access_allowed(self) -> bool:
+            if expected_basic_password is None:
+                return True
+            authorization_values = self.headers.get_all("Authorization")
+            if not authorization_values or len(authorization_values) != 1:
+                return False
+            scheme, separator, encoded_credentials = authorization_values[0].partition(" ")
+            if scheme.casefold() != "basic" or not separator or not encoded_credentials:
+                return False
+            try:
+                decoded_credentials = base64.b64decode(
+                    encoded_credentials,
+                    validate=True,
+                )
+            except (binascii.Error, ValueError):
+                return False
+            if b":" not in decoded_credentials:
+                return False
+            username, password = decoded_credentials.split(b":", 1)
+            username_matches = secrets.compare_digest(
+                username,
+                _TEMPORARY_BASIC_USERNAME,
+            )
+            password_matches = secrets.compare_digest(
+                password,
+                expected_basic_password,
+            )
+            return username_matches and password_matches
+
+        def _send_basic_auth_required(self) -> None:
+            payload = {
+                "status": "error",
+                "error_code": "temporary_access_required",
+                "http_status_code": int(HTTPStatus.UNAUTHORIZED),
+            }
+            encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            self.send_response(HTTPStatus.UNAUTHORIZED)
+            self._send_common_headers("application/json; charset=utf-8")
+            self.send_header("WWW-Authenticate", _TEMPORARY_BASIC_CHALLENGE)
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
 
         def _same_origin_allowed(self) -> bool:
             origins = self.headers.get_all("Origin")

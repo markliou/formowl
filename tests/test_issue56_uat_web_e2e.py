@@ -1,35 +1,45 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 import http.client
+import io
 import json
 from pathlib import Path
 import socket
+import stat
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import _paths  # noqa: F401
 from formowl_auth import GoogleIdentity, OAuthInvitation
 from formowl_auth.security import normalize_verified_email
+import formowl_gateway.issue56_uat_runtime as uat_runtime_module
 import formowl_gateway.runtime as runtime_module
 from formowl_contract import (
     User,
     WorkspaceMember,
     assert_no_public_raw_references,
-    sha256_json,
 )
 from formowl_gateway.issue56_uat_runtime import (
     Issue56UatQueryService,
-    _follow_up_queries,
+    create_issue56_temporary_lan_query_service,
 )
 from formowl_gateway.runtime import ConnectedRuntime, ConnectedRuntimeConfig
 from formowl_mail.human_uat_http import create_mail_human_uat_http_server
+from formowl_mail.human_uat_orchestrator import (
+    UatConversationOutcome,
+    UatEvidenceToolRequest,
+)
 import formowl_mail.issue56_sealed_source as sealed_source
 from oauth_harness import TransactionAwareMemoryRepository
+import scripts.issue56_uat_web as uat_web_script
 from test_connected_runtime import (
     _FakeConnection,
     _FakeHttpClient,
@@ -52,36 +62,489 @@ from test_issue56_supplemental_attachment_table_loader_e2e import (
 )
 
 
-class Issue56UatWebE2ETests(unittest.TestCase):
-    def test_safe_label_precedes_noisy_projection_particle(self) -> None:
-        label = "MetricField"
-        field_hash = sha256_json(["source_column", label])
-        prompt = f"有SYN-KEY-731的{label.casefold()}或玄地嗎？"
-        data = {
-            "status": "replan_required",
-            "query_agent": {
-                "external_replan": {
-                    "requested_projection_field_hashes": [field_hash],
-                    "ambiguous_projection_term_hashes": [sha256_json("玄地")],
-                },
-                "authorized_capability_summary": {
-                    "listing_status": "complete",
-                    "projection_fields": [
-                        {
-                            "field": label,
-                            "field_hash": field_hash,
-                            "structure_status": "source_provided",
-                            "label_redacted": False,
-                        }
-                    ],
-                },
-            },
-        }
+class _RecordingGptQueryAgent:
+    model_name = "codex:gpt-5.6-sol"
 
-        self.assertEqual(
-            _follow_up_queries(prompt, data),
-            (f"有SYN-KEY-731的{label}？",),
+    def __init__(self, *, standalone_query: str) -> None:
+        self.standalone_query = standalone_query
+        self.user_texts: list[str] = []
+        self.tool_queries: list[str] = []
+        self.closed = False
+
+    def respond(
+        self,
+        *,
+        history,
+        user_text,
+        latest_evidence,
+        safety_identifier,
+        evidence_tool,
+    ):
+        del history, latest_evidence, safety_identifier
+        self.user_texts.append(user_text)
+        if user_text == "你好":
+            return UatConversationOutcome(
+                response_kind="answer",
+                answer_text="你好，請告訴我想查詢的資料。",
+                display_format="narrative",
+                model_name=self.model_name,
+            )
+        request = UatEvidenceToolRequest(
+            query_text=self.standalone_query,
         )
+        evidence = evidence_tool(request)
+        self.tool_queries.append(request.query_text)
+        inventory = evidence.get("exact_inventory")
+        items = inventory.get("items", ()) if isinstance(inventory, dict) else ()
+        citations = tuple(evidence.get("citations", ()))
+        if not items or not citations:
+            return UatConversationOutcome(
+                response_kind="clarification",
+                answer_text="目前沒有可引用的來源結果，請補充查詢範圍。",
+                display_format="narrative",
+                model_name=self.model_name,
+                coverage_status="incomplete",
+                coverage_note="目前沒有足夠的可引用來源。",
+                tool_requests=(request,),
+                tool_results=(evidence,),
+            )
+        values = items[0]["structured_values"]
+        answer = "\n".join(f"{value['field']}: {value['value']}" for value in values)
+        coverage_complete = (
+            evidence.get("status") == "complete" and inventory.get("coverage_status") == "complete"
+        )
+        return UatConversationOutcome(
+            response_kind="answer",
+            answer_text=answer,
+            display_format="narrative",
+            model_name=self.model_name,
+            citation_ids=(citations[0],),
+            coverage_status="complete" if coverage_complete else "incomplete",
+            coverage_note="" if coverage_complete else "來源涵蓋範圍仍不完整。",
+            tool_requests=(request,),
+            tool_results=(evidence,),
+        )
+
+    def discard_conversation(self, safety_identifier) -> None:
+        del safety_identifier
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class Issue56UatWebE2ETests(unittest.TestCase):
+    def test_cli_binds_private_custom_provider_key_and_fails_closed(self) -> None:
+        provider_env_key = "FORMOWL_TEST_CUSTOM_PROVIDER_KEY"
+        provider_api_key = "synthetic-provider-key-never-public"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            key_path = root / "provider.key"
+            key_path.write_text(provider_api_key, encoding="utf-8")
+            key_path.chmod(0o600)
+            runtime_paths = SimpleNamespace(
+                codex_home=root / "codex-home",
+                workspace=root / "workspace",
+                provider_env_key=provider_env_key,
+            )
+            transport = MagicMock()
+            conversation_model = MagicMock()
+            query_service = MagicMock()
+            query_service.__enter__.return_value = query_service
+            server = MagicMock()
+            arguments = [
+                "issue56_uat_web.py",
+                "--temporary-lan-diagnostic",
+                "--temporary-access-code",
+                "synthetic-access-code",
+                "--codex-runtime-state-dir",
+                str(root / "runtime"),
+                "--codex-provider-api-key-file",
+                str(key_path),
+            ]
+            standard_output = io.StringIO()
+            standard_error = io.StringIO()
+            with (
+                patch.object(
+                    uat_web_script, "validate_codex_runtime_state", return_value=runtime_paths
+                ),
+                patch.object(
+                    uat_web_script,
+                    "CodexAppServerStdioTransport",
+                    return_value=transport,
+                ) as transport_factory,
+                patch.object(
+                    uat_web_script,
+                    "CodexAppServerConversationModel",
+                    return_value=conversation_model,
+                ),
+                patch.object(
+                    uat_web_script,
+                    "create_issue56_temporary_lan_query_service",
+                    return_value=query_service,
+                ),
+                patch.object(
+                    uat_web_script,
+                    "create_mail_human_uat_http_server",
+                    return_value=server,
+                ),
+                patch.object(uat_web_script.sys, "argv", arguments),
+                redirect_stdout(standard_output),
+                redirect_stderr(standard_error),
+            ):
+                self.assertEqual(uat_web_script.main(), 0)
+
+            transport_arguments = transport_factory.call_args.kwargs
+            self.assertEqual(
+                transport_arguments["environment"],
+                {provider_env_key: provider_api_key},
+            )
+            self.assertEqual(
+                transport_arguments["provider_env_key"],
+                provider_env_key,
+            )
+            self.assertNotIn(
+                provider_api_key,
+                standard_output.getvalue() + standard_error.getvalue(),
+            )
+            server.serve_forever.assert_called_once_with()
+
+            with patch.object(
+                uat_web_script,
+                "validate_codex_runtime_state",
+                return_value=SimpleNamespace(
+                    codex_home=root / "chatgpt-home",
+                    workspace=root / "chatgpt-workspace",
+                    provider_env_key=None,
+                ),
+            ):
+                with (
+                    patch.object(uat_web_script.sys, "argv", arguments),
+                    redirect_stderr(io.StringIO()),
+                    self.assertRaises(SystemExit),
+                ):
+                    uat_web_script.main()
+
+            missing_key_arguments = [
+                argument
+                for argument in arguments
+                if argument not in {"--codex-provider-api-key-file", str(key_path)}
+            ]
+            with (
+                patch.object(
+                    uat_web_script,
+                    "validate_codex_runtime_state",
+                    return_value=runtime_paths,
+                ),
+                patch.object(uat_web_script.sys, "argv", missing_key_arguments),
+                redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                uat_web_script.main()
+
+            key_path.chmod(0o644)
+            with self.assertRaises(ValueError):
+                uat_web_script._read_codex_provider_api_key(key_path)
+            key_path.chmod(0o600)
+            symlink_path = root / "provider-link"
+            symlink_path.symlink_to(key_path)
+            with self.assertRaises(ValueError):
+                uat_web_script._read_codex_provider_api_key(symlink_path)
+            with self.assertRaises(ValueError):
+                uat_web_script._read_codex_provider_api_key(Path("provider.key"))
+            key_path.write_text("", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                uat_web_script._read_codex_provider_api_key(key_path)
+            key_path.write_bytes(b"x" * (uat_web_script._MAX_PROVIDER_API_KEY_BYTES + 1))
+            with self.assertRaises(ValueError):
+                uat_web_script._read_codex_provider_api_key(key_path)
+
+    def test_temporary_lan_uses_real_sealed_source_normal_mcp_and_opt_in_log(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            with patch.object(
+                sealed_fixture,
+                "WORKSPACE_PERMISSION_SCOPE",
+                _PERMISSION_SCOPE,
+            ):
+                package = _prepare_package(root / "sealed")
+            supplemental_path, parent_path = _write_supplemental_partition(
+                root,
+                package,
+            )
+            environment = dict(__import__("os").environ)
+            environment.update(_loader_environment(package))
+            environment.update(
+                {
+                    "FORMOWL_ISSUE56_SUPPLEMENTAL_OBSERVATION_ARTIFACT_PATH": str(
+                        supplemental_path
+                    ),
+                    "FORMOWL_ISSUE56_SUPPLEMENTAL_OBSERVATION_ARTIFACT_SHA256": (
+                        _sha256_path(supplemental_path)
+                    ),
+                    "FORMOWL_ISSUE56_SUPPLEMENTAL_PARENT_SNAPSHOT_PATH": str(parent_path),
+                    "FORMOWL_ISSUE56_SUPPLEMENTAL_PARENT_SNAPSHOT_SHA256": (
+                        _sha256_path(parent_path)
+                    ),
+                }
+            )
+            greeting = "你好"
+            prompt = f"麻煩幫我確認一下 {_IDENTIFIER} 這筆的 {_HEADER}，謝謝。"
+            standalone_query = f"有{_IDENTIFIER}的{_HEADER}呢？"
+            conversation_model = _RecordingGptQueryAgent(
+                standalone_query=standalone_query,
+            )
+            access_code = "synthetic-lan-access-731"
+            basic_authorization = (
+                "Basic " + base64.b64encode(f"formowl-uat:{access_code}".encode()).decode()
+            )
+            wrong_authorization = (
+                "Basic " + base64.b64encode(f"formowl-uat:{access_code}-wrong".encode()).decode()
+            )
+            behavior_log = root / "consented-behavior.jsonl"
+            handler_arguments: list[dict[str, object]] = []
+            loader_build_count = 0
+            cached_handler = None
+            original_builder = (
+                uat_runtime_module.build_issue56_production_semantic_retrieval_handler
+            )
+
+            def build_once():
+                nonlocal cached_handler, loader_build_count
+                if cached_handler is None:
+                    loader_build_count += 1
+                    real_handler = original_builder()
+
+                    def observed_handler(arguments):
+                        handler_arguments.append(dict(arguments))
+                        return real_handler(arguments)
+
+                    cached_handler = observed_handler
+                return cached_handler
+
+            def browser_request(
+                server,
+                method,
+                path,
+                *,
+                prompt=None,
+                authorization=None,
+            ):
+                body = (
+                    json.dumps({"prompt": prompt}, ensure_ascii=False).encode()
+                    if prompt is not None
+                    else None
+                )
+                headers = {}
+                if body is not None:
+                    host, port = server.server_address
+                    headers.update(
+                        {
+                            "Content-Type": "application/json",
+                            "Content-Length": str(len(body)),
+                            "Origin": f"http://{host}:{port}",
+                        }
+                    )
+                if authorization is not None:
+                    headers["Authorization"] = authorization
+                connection = http.client.HTTPConnection(
+                    *server.server_address,
+                    timeout=30,
+                )
+                try:
+                    connection.request(method, path, body=body, headers=headers)
+                    response = connection.getresponse()
+                    return response, response.read()
+                finally:
+                    connection.close()
+
+            with (
+                patch.dict(__import__("os").environ, environment, clear=True),
+                patch.object(
+                    uat_runtime_module,
+                    "build_issue56_production_semantic_retrieval_handler",
+                    side_effect=build_once,
+                ),
+            ):
+                with create_issue56_temporary_lan_query_service(
+                    conversation_model,
+                    behavior_log_path=behavior_log,
+                    record_raw_uat_interactions=True,
+                ) as query_service:
+                    server = create_mail_human_uat_http_server(
+                        "127.0.0.1",
+                        0,
+                        query_service,
+                        temporary_access_code=access_code,
+                    )
+                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    try:
+                        denied_responses = (
+                            browser_request(server, "GET", "/")[0],
+                            browser_request(
+                                server,
+                                "GET",
+                                "/",
+                                authorization=wrong_authorization,
+                            )[0],
+                            browser_request(
+                                server,
+                                "POST",
+                                "/api/chat",
+                                prompt=prompt,
+                            )[0],
+                            browser_request(
+                                server,
+                                "POST",
+                                "/api/chat",
+                                prompt=prompt,
+                                authorization=wrong_authorization,
+                            )[0],
+                        )
+                        self.assertEqual(query_service.request_count, 0)
+                        self.assertFalse(behavior_log.exists())
+                        page_response, page_body = browser_request(
+                            server,
+                            "GET",
+                            "/",
+                            authorization=basic_authorization,
+                        )
+                        greeting_response, greeting_body = browser_request(
+                            server,
+                            "POST",
+                            "/api/chat",
+                            prompt=greeting,
+                            authorization=basic_authorization,
+                        )
+                        greeting_request_count = query_service.request_count
+                        response, body = browser_request(
+                            server,
+                            "POST",
+                            "/api/chat",
+                            prompt=prompt,
+                            authorization=basic_authorization,
+                        )
+                        source_request_count = query_service.request_count
+                    finally:
+                        server.shutdown()
+                        server.server_close()
+                        thread.join(timeout=5)
+
+                page = page_body.decode()
+                greeting_payload = json.loads(greeting_body)
+                payload = json.loads(body)
+                for denied in denied_responses:
+                    self.assertEqual(denied.status, 401)
+                    self.assertEqual(
+                        denied.getheader("WWW-Authenticate"),
+                        'Basic realm="FormOwl temporary UAT", charset="UTF-8"',
+                    )
+                self.assertEqual(page_response.status, 200)
+                self.assertIn('data-authenticated="true"', page)
+                self.assertIn('id="login-link" href="/auth/start" hidden', page)
+                self.assertNotIn('id="chat-form" hidden', page)
+                self.assertIsNone(page_response.getheader("Set-Cookie"))
+                self.assertEqual(greeting_response.status, 200)
+                self.assertEqual(greeting_payload["status"], "complete")
+                self.assertTrue(greeting_payload["answer"])
+                self.assertEqual(greeting_payload["citation_count"], 0)
+                self.assertEqual(greeting_request_count, 0)
+                self.assertEqual(response.status, 200)
+                self.assertIsNone(response.getheader("Set-Cookie"))
+                self.assertIn(payload["status"], {"complete", "partial"})
+                self.assertTrue(payload["answer"])
+                self.assertIn(_VALUE, payload["answer"])
+                self.assertGreater(payload["citation_count"], 0)
+                self.assertGreaterEqual(source_request_count, 1)
+                self.assertLessEqual(source_request_count, 3)
+                self.assertEqual(
+                    conversation_model.user_texts,
+                    [greeting, prompt],
+                )
+                self.assertEqual(
+                    conversation_model.tool_queries,
+                    [standalone_query],
+                )
+                self.assertNotEqual(prompt, standalone_query)
+                assert_no_public_raw_references(
+                    payload,
+                    "issue56_temporary_lan_web_response",
+                )
+                self.assertEqual(loader_build_count, 1)
+
+            self.assertEqual(loader_build_count, 1)
+            self.assertTrue(conversation_model.closed)
+            self.assertEqual(len(handler_arguments), 1)
+            for arguments in handler_arguments:
+                self.assertEqual(arguments["query_text"], standalone_query)
+                self.assertNotEqual(arguments["query_text"], prompt)
+                self.assertEqual(
+                    arguments["requester_user_id"],
+                    sealed_source.APPROVER_ACTOR,
+                )
+                self.assertEqual(
+                    arguments["workspace_id"],
+                    sealed_source.WORKSPACE_ID,
+                )
+                self.assertNotIn("tenant_id", arguments)
+
+            self.assertEqual(stat.S_IMODE(behavior_log.stat().st_mode), 0o600)
+            log_lines = behavior_log.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(log_lines), 2)
+            records = tuple(json.loads(line) for line in log_lines)
+            for record, recorded_prompt, recorded_payload in zip(
+                records,
+                (greeting, prompt),
+                (greeting_payload, payload),
+                strict=True,
+            ):
+                self.assertEqual(
+                    set(record),
+                    {
+                        "elapsed_ms",
+                        "mcp_statuses",
+                        "prompt",
+                        "request_count",
+                        "result",
+                        "timestamp",
+                    },
+                )
+                self.assertEqual(record["prompt"], recorded_prompt)
+                self.assertEqual(
+                    record["result"],
+                    {
+                        key: recorded_payload.get(key)
+                        for key in ("status", "answer", "clarification", "citations")
+                    },
+                )
+                self.assertEqual(
+                    set(record["result"]),
+                    {"answer", "citations", "clarification", "status"},
+                )
+                self.assertEqual(record["request_count"], len(record["mcp_statuses"]))
+                assert_no_public_raw_references(
+                    record,
+                    "issue56_temporary_lan_behavior_log",
+                )
+            rendered_log = json.dumps(records, ensure_ascii=False).casefold()
+            for forbidden in (
+                "synthetic-provider-key-never-public",
+                access_code.casefold(),
+                basic_authorization.casefold(),
+                "authorization",
+                "bearer",
+                "cookie",
+                "formowl-uat",
+                "object_uri",
+                "session_id",
+                "tenant_id",
+                str(root).casefold(),
+                "/tmp/",
+                "/workspace/",
+            ):
+                self.assertNotIn(forbidden, rendered_log)
 
     def test_real_sealed_source_over_browser_and_normal_mcp(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -96,7 +559,11 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 root,
                 package,
             )
-            prompt = f"有{_IDENTIFIER}的{_HEADER}呢？"
+            prompt = f"可以幫忙查一下 {_IDENTIFIER} 對應的 {_HEADER} 嗎？"
+            standalone_query = f"有{_IDENTIFIER}的{_HEADER}呢？"
+            conversation_model = _RecordingGptQueryAgent(
+                standalone_query=standalone_query,
+            )
             environment = dict(__import__("os").environ)
             environment.update(_loader_environment(package))
             environment.update(
@@ -200,6 +667,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 Issue56UatQueryService(
                     runtime,
                     public_base_url=public_base_url,
+                    conversation_model=conversation_model,
                 ) as query_service,
             ):
                 server = create_mail_human_uat_http_server(
@@ -400,6 +868,11 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 self.assertGreaterEqual(query_service.request_count, 1)
                 self.assertLessEqual(query_service.request_count, 3)
                 self.assertNotIn("mcp_failed", query_service.last_mcp_statuses)
+                self.assertEqual(
+                    conversation_model.tool_queries,
+                    [standalone_query],
+                )
+                self.assertNotEqual(prompt, standalone_query)
                 self.assertTrue(payload["answer"])
                 self.assertIn(_VALUE, payload["answer"])
                 self.assertGreater(payload["citation_count"], 0)
