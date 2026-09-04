@@ -47,12 +47,16 @@ source completeness, accepted execution-fingerprint binding, same-pipeline
 real-source ablation, and independent final-answer acceptance. The target
 method and tokenizer remain pinned, but no formal all-four-gate evidence exists
 to promote.
+## Step-4 Browser Codex UAT Checkpoint — 2026-09-04
+Commit `03798e8` is pushed. Browser → Codex GPT → expanded dynamic tool → normal
+`/mcp` → citation-bound answer passed focused container `7/7` and browser E2E
+`3/3`. Custom-provider state uses secretless config with fail-closed env-key/key-file
+injection. A true provider turn remains blocked because the self-hosted instance
+offers only a dashboard administrator password and no inbound `/v1` bearer has
+been obtained; the operator must provide an existing inbound bearer. Authority
+remains `authority_valid=false`/`methodology_ready=false` with four gates blocked.
+This is diagnostic UAT only, not production, readiness, or Issue #56 close.
 ## Step-4 Attachment-Table Checkpoint — 2026-09-02
-The earlier bounded candidate-table slice remains noncanonical/nonexact:
-normal ASGI `/mcp` returned HTTP `200`, `candidate_interpretation`, four
-governed citations, and about `908.085 ms`; ambiguity remains
-fail-closed and cross-session lookup reuse is rejected.
-
 The structural-blank plus sparse focused normal `/mcp` E2E passed `1/1` in
 `66.026 s`. Exactly-once mode
 `issue56-after-structural-blank-diagnostic-20260902-v1` was consumed with exit
@@ -65,16 +69,11 @@ The structural-blank plus sparse focused normal `/mcp` E2E passed `1/1` in
 Within the authorized sealed-source scope, the requested projection fields
 materialized as explicit blanks; another unrequested field was not semantically
 equivalent and was not used as an alias.
-Safe runner/wrapper/log/exit-receipt hashes are respectively
-`sha256:4fb18f...394`, `sha256:846a82...d96`, `sha256:194d04...66d`, and
-`sha256:9a271f...86aa`.
 
 This is an exploratory diagnostic POC only—not formal UAT, production,
 readiness, Issue #56 completion, or comparative-superiority evidence. Step 4
 remains `in-progress`; the same four authority gates remain blocked. The
-earlier participant inventory also remains independently `incomplete`:
-authorized scope `2793` = `2069` matches + `174` proven nonmatches + `550`
-unresolved.
+earlier participant inventory also remains independently `incomplete`.
 ## Step-4 Connected Route-A Planner Checkpoint — 2026-09-03
 Commit `f4a18e5` is pushed, and scoped canonical verification passed `23/23`.
 Route A keeps planning in the connected ChatGPT/workspace client across at most

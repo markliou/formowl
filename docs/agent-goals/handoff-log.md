@@ -9,6 +9,17 @@ This is a bounded active window. Earlier entries are immutable history under
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
+## 2026-09-04 — Browser Codex provider UAT checkpoint
+- Commit `03798e8` is pushed; Browser → Codex GPT → expanded dynamic tool →
+  normal `/mcp` → citation-bound answer passed focused container `7/7` plus
+  browser E2E `3/3`.
+- Custom-provider state uses secretless config and fail-closed env-key/key-file
+  injection; no key enters config, logs, or browser output.
+- A true provider turn remains blocked: the self-hosted instance exposes only a
+  dashboard administrator password and no inbound `/v1` bearer. The operator
+  must provide an existing inbound bearer.
+- Authority remains `authority_valid=false`/`methodology_ready=false` with four
+  gates blocked; diagnostic UAT only, not production/readiness/Issue #56 close.
 ## 2026-09-03 — Connected Route-A planner checkpoint
 - Commit `f4a18e5` is pushed; scoped canonical verification passed `23/23`.
 - Safe v3 log `sha256:013aa643f17ac30e358800517d62268e8f5fbb3049747530f0004dd260b10b11` used `workspace_only_v1`/`workspace_formowl`, approved actor/approver, and no tenant.
@@ -266,35 +277,3 @@ This is a bounded active window. Earlier entries are immutable history under
 - Plan step 4 and all corresponding board tasks remain unchecked. The sole next
   action is a governance/specification decision plus a read-only postmortem;
   another execution is prohibited.
-## 2026-08-19 — Issue #56 step-4 development diagnostic status
-- The pinned methodology authority is valid but blocked. The normal runtime-method
-  gate is passed; four gates remain blocked: source completeness, accepted
-  execution-fingerprint binding, same-pipeline real-source ablation, and independent final-answer acceptance.
-- The `node-term-lineage-v3` development run remains diagnostic: Hybrid `60/100`,
-  graph-required paired gain `+60` percentage points with the paired-CI check passing,
-  citation precision `98.74%`, and authorized hop evidence `4083/4083`.
-- Acceptance is still blocked by positive-case no-answer false positives `3 > 1`
-  and Hybrid p95 latency `4036.462 ms > 3000 ms`; Hybrid p50 was `2782.821 ms`.
-- Phase timing was strict projection p50/p95 `33.084/33.823 ms`, fallback repair
-  p50/p95 `0/1287.977 ms`, and graph traversal p50/p95 `2126.683/2155.965 ms`.
-  Strict proof passed `62` cases and failed `38`; fallback ran `38` times and targeted retraversal ran `4` times.
-- The behavior-neutral three-case `v5` diagnostic preserved the corresponding
-  `v3` runtime results. Across 30 paths, rejection counts were
-  `path_term_support_missing=29` and
-  `support_only_on_connected_off_path_node=1`; evidence-budget rejection was
-  zero. This localizes the remaining family to incomplete selected-path
-  projection of source-bound required-slot support, not a budget rejection.
-- Safe artifacts:
-  `issue56-node-term-lineage-v5.diagnostic.safe.json`
-  (`sha256:a053bf9252fa642373fba326474b08aab51e4090b5df6471359f42186de720c7`)
-  and `issue56-node-term-lineage-v5.trace.safe.json`
-  (`sha256:2d3a3952005dbac94c5b434bf818aa70d2dab3d0a30077064d4d654e2ab75490`).
-  They are diagnostic-only and cannot support quality, budget, completion, or
-  methodology claims.
-- Copernicus dispatch as the required `gpt-5.6-sol`, `reasoning_effort=ultra`
-  second worker failed twice with `prompt_cache_retention`; the team did not
-  substitute a model, add a worker, or let the Master implement.
-- Plan step 4 remains `in-progress`; the existing five-step wording is
-  unchanged. Next, after restoring the second-worker slot, split disjoint work
-  into a per-query projection cache and bounded source-backed proof-completion
-  E2E. Do not execute a sealed independent holdout yet.
