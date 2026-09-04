@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 from pathlib import Path
 import sys
 
@@ -26,8 +27,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8766)
+    parser.add_argument(
+        "--public-base-url",
+        default=os.environ.get("FORMOWL_ISSUE56_UAT_PUBLIC_BASE_URL"),
+    )
     args = parser.parse_args()
-    with asyncio.run(create_issue56_uat_query_service()) as query_service:
+    if not args.public_base_url:
+        parser.error("--public-base-url or FORMOWL_ISSUE56_UAT_PUBLIC_BASE_URL is required")
+    with asyncio.run(
+        create_issue56_uat_query_service(public_base_url=args.public_base_url)
+    ) as query_service:
         server = create_mail_human_uat_http_server(
             args.host,
             args.port,

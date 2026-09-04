@@ -644,6 +644,9 @@ class ConnectedRuntimeConfig:
                 google_redirect_uri=values["google_redirect_uri"],
                 state_encryption_key=secrets.state_encryption_key,
                 allow_loopback_http=environ.get("FORMOWL_OAUTH_ALLOW_LOOPBACK_HTTP") == "1",
+                allow_standalone_uat_https_redirect=(
+                    environ.get("FORMOWL_OAUTH_ALLOW_STANDALONE_UAT_HTTPS_REDIRECT") == "1"
+                ),
             )
         except Exception:
             raise ConnectedRuntimeError("connected_oauth_config_invalid") from None
@@ -852,11 +855,17 @@ class ConnectedRuntime:
             and oauth.google_redirect_uri == f"{oauth.issuer}/oauth/google/callback"
             and oauth.scopes == ("formowl.use",)
             and oauth.chatgpt_callback_mode
-            in {"production_exact", "discovery_only", "loopback_test"}
+            in {
+                "production_exact",
+                "discovery_only",
+                "loopback_test",
+                "standalone_uat_exact",
+            }
         )
         checks["oauth_callback"] = oauth.chatgpt_callback_mode in {
             "production_exact",
             "loopback_test",
+            "standalone_uat_exact",
         }
         try:
             jwks = self.config.signing_key_set.public_jwks(now=datetime.now(timezone.utc))

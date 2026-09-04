@@ -38,6 +38,7 @@ class OAuthBridgeConfig:
     google_client_secret: str = field(repr=False)
     state_encryption_key: str = field(repr=False)
     allow_loopback_http: bool = False
+    allow_standalone_uat_https_redirect: bool = False
     chatgpt_callback_mode: str = field(init=False)
     scopes: tuple[str, ...] = ("formowl.use",)
     access_token_lifetime_seconds: int = 3600
@@ -48,6 +49,8 @@ class OAuthBridgeConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.allow_loopback_http, bool):
             raise ContractValidationError("allow_loopback_http must be boolean")
+        if not isinstance(self.allow_standalone_uat_https_redirect, bool):
+            raise ContractValidationError("allow_standalone_uat_https_redirect must be boolean")
         _validate_endpoint_url(
             self.issuer,
             "issuer",
@@ -118,6 +121,8 @@ class OAuthBridgeConfig:
             and callback_segment not in {".", ".."}
         ):
             callback_mode = "production_exact"
+        elif self.allow_standalone_uat_https_redirect and parsed_chatgpt_redirect.scheme == "https":
+            callback_mode = "standalone_uat_exact"
         elif (
             self.allow_loopback_http
             and parsed_chatgpt_redirect.scheme == "http"
@@ -127,7 +132,8 @@ class OAuthBridgeConfig:
         else:
             raise ContractValidationError(
                 "ChatGPT redirect URI must be an exact ChatGPT callback, the reserved "
-                "discovery-only sentinel, or explicit development loopback HTTP"
+                "discovery-only sentinel, explicit standalone UAT HTTPS redirect, "
+                "or explicit development loopback HTTP"
             )
         object.__setattr__(self, "chatgpt_callback_mode", callback_mode)
         if self.scopes != ("formowl.use",):
@@ -183,6 +189,9 @@ class OAuthBridgeConfig:
         return cls(
             **values,
             allow_loopback_http=environ.get("FORMOWL_OAUTH_ALLOW_LOOPBACK_HTTP") == "1",
+            allow_standalone_uat_https_redirect=(
+                environ.get("FORMOWL_OAUTH_ALLOW_STANDALONE_UAT_HTTPS_REDIRECT") == "1"
+            ),
         )
 
     @property
@@ -222,6 +231,7 @@ class OAuthBridgeConfig:
             ),
             "secrets_redacted": True,
             "allow_loopback_http": self.allow_loopback_http,
+            "allow_standalone_uat_https_redirect": (self.allow_standalone_uat_https_redirect),
         }
 
 

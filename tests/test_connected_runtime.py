@@ -1337,6 +1337,51 @@ class ConnectedRuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(http_client.close_calls, 1)
         self.assertEqual(repository.close_calls, 1)
 
+    async def test_standalone_uat_https_callback_requires_opt_in_and_can_be_ready(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            environment = _write_runtime_environment(Path(temporary_directory))
+            environment["FORMOWL_CHATGPT_REDIRECT_URI"] = "https://uat.example.test/auth/callback"
+            with self.assertRaisesRegex(
+                ConnectedRuntimeError,
+                "connected_oauth_config_invalid",
+            ):
+                ConnectedRuntimeConfig.from_env_and_secrets(environment)
+
+            environment["FORMOWL_OAUTH_ALLOW_STANDALONE_UAT_HTTPS_REDIRECT"] = "1"
+            config = ConnectedRuntimeConfig.from_env_and_secrets(environment)
+            repository = _FakeRepository()
+            http_client = _FakeHttpClient()
+            manager = _CountingSessionManager()
+            with (
+                patch.object(
+                    runtime_module.PostgreSQLOAuthRepository,
+                    "connect",
+                    return_value=repository,
+                ),
+                patch.object(runtime_module.httpx, "AsyncClient", return_value=http_client),
+                patch.object(
+                    runtime_module,
+                    "create_connected_mcp_application",
+                    return_value=_fake_application(manager),
+                ),
+            ):
+                runtime = await ConnectedRuntime.compose(config)
+            runtime.google_client.load_provider_metadata = AsyncMock(return_value={})
+            runtime.google_client.load_jwks = AsyncMock(
+                return_value={"keys": [{"kid": "google", "kty": "RSA"}]}
+            )
+
+            preflight = await runtime.preflight()
+
+            self.assertTrue(config.oauth.allow_standalone_uat_https_redirect)
+            self.assertEqual(config.oauth.chatgpt_callback_mode, "standalone_uat_exact")
+            self.assertEqual(preflight["status"], "ready")
+            self.assertEqual(preflight["mode"], "standalone_uat_exact")
+            self.assertTrue(all(preflight["checks"].values()))
+            await runtime.aclose()
+
     async def test_migrate_and_bootstrap_wrappers_return_safe_results(self) -> None:
         repository = _FakeRepository()
         http_client = _FakeHttpClient()

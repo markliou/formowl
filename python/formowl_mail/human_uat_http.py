@@ -1,18 +1,42 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from typing import Any, Protocol
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 _MAX_REQUEST_BYTES = 64 * 1024
 _MAX_PROMPT_CHARS = 8_000
+_PRE_AUTH_COOKIE = "formowl_uat_pre_auth"
+_SESSION_COOKIE = "formowl_uat_session"
 
 
 class MailHumanUatQueryService(Protocol):
-    def ask(self, prompt: str) -> Mapping[str, Any]: ...
+    secure_cookie: bool
+
+    def begin_browser_authorization(self) -> tuple[str, str, int]: ...
+
+    def complete_browser_authorization(
+        self,
+        *,
+        state: str,
+        code: str,
+        browser_nonce: str | None,
+    ) -> tuple[str, int]: ...
+
+    def is_browser_session_authenticated(self, session_id: str | None) -> bool: ...
+
+    def logout_browser_session(self, session_id: str | None) -> None: ...
+
+    def ask(
+        self,
+        prompt: str,
+        *,
+        session_id: str | None,
+    ) -> Mapping[str, Any]: ...
 
 
 def create_mail_human_uat_http_server(
@@ -35,9 +59,80 @@ def _build_mail_human_uat_http_handler(
         server_version = "FormOwlMailHumanUAT/0.1"
 
         def do_GET(self) -> None:  # noqa: N802
-            route = urlparse(self.path).path
+            parsed = urlparse(self.path)
+            route = parsed.path
             if route == "/":
-                self._send_html(HTTPStatus.OK, _PAGE)
+                authenticated = query_service.is_browser_session_authenticated(self._session_id())
+                self._send_html(HTTPStatus.OK, _render_page(authenticated))
+                return
+            if route == "/auth/start":
+                try:
+                    location, browser_nonce, max_age = query_service.begin_browser_authorization()
+                except Exception:
+                    self._send_error(
+                        HTTPStatus.INTERNAL_SERVER_ERROR,
+                        "auth_start_failed",
+                    )
+                    return
+                self._send_redirect(
+                    HTTPStatus.FOUND,
+                    location,
+                    set_cookies=(
+                        _browser_cookie(
+                            _PRE_AUTH_COOKIE,
+                            browser_nonce,
+                            max_age=max_age,
+                            secure=query_service.secure_cookie,
+                        ),
+                    ),
+                )
+                return
+            if route == "/auth/callback":
+                try:
+                    parameters = parse_qs(
+                        parsed.query,
+                        keep_blank_values=True,
+                        strict_parsing=True,
+                    )
+                    if set(parameters) != {"state", "code"} or any(
+                        len(values) != 1 or not values[0] for values in parameters.values()
+                    ):
+                        raise ValueError("invalid callback")
+                    session_id, max_age = query_service.complete_browser_authorization(
+                        state=parameters["state"][0],
+                        code=parameters["code"][0],
+                        browser_nonce=self._cookie_value(_PRE_AUTH_COOKIE),
+                    )
+                except (ValueError, TypeError):
+                    self._send_error(
+                        HTTPStatus.BAD_REQUEST,
+                        "auth_callback_rejected",
+                    )
+                    return
+                except Exception:
+                    self._send_error(
+                        HTTPStatus.INTERNAL_SERVER_ERROR,
+                        "auth_callback_failed",
+                    )
+                    return
+                self._send_redirect(
+                    HTTPStatus.SEE_OTHER,
+                    "/",
+                    set_cookies=(
+                        _browser_cookie(
+                            _PRE_AUTH_COOKIE,
+                            "",
+                            max_age=0,
+                            secure=query_service.secure_cookie,
+                        ),
+                        _browser_cookie(
+                            _SESSION_COOKIE,
+                            session_id,
+                            max_age=max_age,
+                            secure=query_service.secure_cookie,
+                        ),
+                    ),
+                )
                 return
             if route == "/api/health":
                 self._send_json(
@@ -52,11 +147,31 @@ def _build_mail_human_uat_http_handler(
             self._send_error(HTTPStatus.NOT_FOUND, "route_not_found")
 
         def do_POST(self) -> None:  # noqa: N802
-            if urlparse(self.path).path != "/api/chat":
+            route = urlparse(self.path).path
+            if route not in {"/api/chat", "/auth/logout"}:
                 self._send_error(HTTPStatus.NOT_FOUND, "route_not_found")
                 return
             if not self._same_origin_allowed():
                 self._send_error(HTTPStatus.FORBIDDEN, "same_origin_required")
+                return
+            session_id = self._session_id()
+            if route == "/auth/logout":
+                query_service.logout_browser_session(session_id)
+                self._send_redirect(
+                    HTTPStatus.SEE_OTHER,
+                    "/",
+                    set_cookies=(
+                        _browser_cookie(
+                            _SESSION_COOKIE,
+                            "",
+                            max_age=0,
+                            secure=query_service.secure_cookie,
+                        ),
+                    ),
+                )
+                return
+            if not query_service.is_browser_session_authenticated(session_id):
+                self._send_error(HTTPStatus.UNAUTHORIZED, "auth_required")
                 return
             try:
                 payload = self._read_json()
@@ -67,7 +182,12 @@ def _build_mail_human_uat_http_handler(
                     or len(prompt) > _MAX_PROMPT_CHARS
                 ):
                     raise ValueError("invalid prompt")
-                response = _normalize_query_response(query_service.ask(prompt))
+                response = _normalize_query_response(
+                    query_service.ask(prompt, session_id=session_id)
+                )
+            except PermissionError:
+                self._send_error(HTTPStatus.UNAUTHORIZED, "auth_required")
+                return
             except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
                 self._send_error(HTTPStatus.BAD_REQUEST, "request_rejected")
                 return
@@ -125,6 +245,21 @@ def _build_mail_human_uat_http_handler(
                 },
             )
 
+        def _session_id(self) -> str | None:
+            return self._cookie_value(_SESSION_COOKIE)
+
+        def _cookie_value(self, name: str) -> str | None:
+            raw_cookie = self.headers.get("Cookie")
+            if not raw_cookie:
+                return None
+            try:
+                cookie = SimpleCookie()
+                cookie.load(raw_cookie)
+            except Exception:
+                return None
+            value = cookie.get(name)
+            return value.value if value is not None and value.value else None
+
         def _send_html(self, status: HTTPStatus, body: str) -> None:
             encoded = body.encode("utf-8")
             self.send_response(status)
@@ -141,6 +276,21 @@ def _build_mail_human_uat_http_handler(
             self.end_headers()
             self.wfile.write(encoded)
 
+        def _send_redirect(
+            self,
+            status: HTTPStatus,
+            location: str,
+            *,
+            set_cookies: Sequence[str] = (),
+        ) -> None:
+            self.send_response(status)
+            self._send_common_headers("text/plain; charset=utf-8")
+            self.send_header("Location", location)
+            for set_cookie in set_cookies:
+                self.send_header("Set-Cookie", set_cookie)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def _send_common_headers(self, content_type: str) -> None:
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store, max-age=0")
@@ -155,6 +305,24 @@ def _build_mail_human_uat_http_handler(
             )
 
     return MailHumanUatHttpHandler
+
+
+def _browser_cookie(
+    name: str,
+    value: str,
+    *,
+    max_age: int,
+    secure: bool,
+) -> str:
+    cookie = SimpleCookie()
+    cookie[name] = value
+    cookie[name]["httponly"] = True
+    cookie[name]["samesite"] = "Lax"
+    cookie[name]["path"] = "/"
+    cookie[name]["max-age"] = str(max_age)
+    if secure:
+        cookie[name]["secure"] = True
+    return cookie.output(header="").strip()
 
 
 def _normalize_query_response(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -214,6 +382,8 @@ _PAGE = """<!doctype html>
     main { width: min(760px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0; }
     h1 { margin: 0 0 8px; }
     .muted { color: var(--muted); }
+    #auth-controls { display: flex; gap: 16px; align-items: center; }
+    #logout-form { margin: 0; padding: 0; border: 0; background: transparent; }
     form, article {
       margin-top: 24px; padding: 20px; border: 1px solid var(--line);
       border-radius: 16px; background: white;
@@ -238,7 +408,13 @@ _PAGE = """<!doctype html>
   <main>
     <h1>FormOwl</h1>
     <div id="health-status" class="muted" role="status">檢查服務中…</div>
-    <form id="chat-form">
+    <nav id="auth-controls" data-authenticated="__AUTHENTICATED__">
+      <a id="login-link" href="/auth/start" __LOGIN_HIDDEN__>登入</a>
+      <form id="logout-form" action="/auth/logout" method="post" __LOGOUT_HIDDEN__>
+        <button type="submit">登出</button>
+      </form>
+    </nav>
+    <form id="chat-form" __CHAT_HIDDEN__>
       <label for="prompt-input"><strong>問題</strong></label>
       <textarea id="prompt-input" name="prompt" required></textarea>
       <button id="send-button" type="submit">送出</button>
@@ -335,3 +511,12 @@ _PAGE = """<!doctype html>
 </body>
 </html>
 """
+
+
+def _render_page(authenticated: bool) -> str:
+    return (
+        _PAGE.replace("__AUTHENTICATED__", "true" if authenticated else "false")
+        .replace("__LOGIN_HIDDEN__", "hidden" if authenticated else "")
+        .replace("__LOGOUT_HIDDEN__", "" if authenticated else "hidden")
+        .replace("__CHAT_HIDDEN__", "" if authenticated else "hidden")
+    )
