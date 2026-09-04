@@ -15,6 +15,7 @@ import sys
 import threading
 import tomllib
 from typing import Any, Callable, Mapping, Protocol, Sequence
+import urllib.request
 from urllib.parse import urlsplit
 
 from formowl_contract import ContractValidationError
@@ -31,6 +32,8 @@ _MAX_MODEL_CITATIONS = 100
 _MAX_TOOL_CALLS_PER_TURN = 3
 _MAX_CODEX_THREADS = 256
 _MAX_CODEX_AUTH_CACHE_BYTES = 64 * 1024
+_MAX_RESPONSES_BODY_BYTES = 4 * 1024 * 1024
+_MAX_RESPONSES_TIMEOUT_SECONDS = 300.0
 _CODEX_RUNTIME_MARKER = "formowl-uat-codex-runtime-v3.json"
 _CODEX_LOGIN_METHOD = "chatgpt"
 _CODEX_CUSTOM_PROVIDER_LOGIN_METHOD = "custom_provider"
@@ -110,10 +113,16 @@ Do not call FormOwl when the user:
 - asks for a table, list, timeline, or narrative using evidence already
   returned in this conversation.
 
-If the request is ambiguous, ask one concise clarification question without
-calling FormOwl. If the user requests another presentation of the latest
-evidence, set response_kind to render_prior_evidence and choose the requested
-display_format.
+A terse or telegraphic factual/business lookup is not ambiguous merely because
+its grammar is incomplete. When the user supplies a candidate entity or topic
+and a fact, property, or relationship to look up, call FormOwl before asking
+for clarification if authorized evidence could resolve the unknown. Ask one
+concise clarification question without calling FormOwl only when
+a required referent is genuinely absent from both the request and conversation
+history, or materially different interpretations cannot be safely tested
+within the tool-call budget. If the user requests another presentation of the
+latest evidence, set response_kind to render_prior_evidence and choose the
+requested display_format.
 
 When calling FormOwl:
 - resolve intent and bounded conversation coreference before the call;
@@ -391,6 +400,7 @@ class CodexRuntimePaths:
     codex_home: Path
     workspace: Path
     login_method: str
+    provider_base_url: str | None = None
     provider_env_key: str | None = None
 
 
@@ -571,6 +581,7 @@ def prepare_codex_runtime_state_for_custom_provider(
         codex_home=home,
         workspace=workspace,
         login_method=_CODEX_CUSTOM_PROVIDER_LOGIN_METHOD,
+        provider_base_url=normalized_base_url,
         provider_env_key=normalized_env_key,
     )
 
@@ -650,6 +661,7 @@ def validate_codex_runtime_state(state_dir: str | Path) -> CodexRuntimePaths:
         codex_home=home,
         workspace=workspace,
         login_method=login_method,
+        provider_base_url=provider_base_url,
         provider_env_key=provider_env_key,
     )
 
@@ -1477,6 +1489,290 @@ class CodexAppServerConversationModel:
         self._transport.delete_thread(thread_id)
 
 
+class _NoResponsesRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        _request: urllib.request.Request,
+        _file_pointer: Any,
+        _code: int,
+        _message: str,
+        _headers: Any,
+        _new_url: str,
+    ) -> None:
+        return None
+
+
+class CodexResponsesConversationModel:
+    """Use one direct Responses provider as the bounded UAT conversation model."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str = _DEFAULT_CODEX_MODEL,
+        timeout_seconds: float = 120.0,
+    ) -> None:
+        normalized_base_url = _normalize_custom_provider_base_url(base_url)
+        if (
+            not isinstance(api_key, str)
+            or not api_key.strip()
+            or len(api_key.encode("utf-8")) > _MAX_CODEX_AUTH_CACHE_BYTES
+        ):
+            raise ContractValidationError("UAT Responses provider credential is invalid")
+        if not isinstance(model, str) or not model.strip():
+            raise ContractValidationError("UAT Responses provider model is invalid")
+        if (
+            not isinstance(timeout_seconds, (int, float))
+            or isinstance(timeout_seconds, bool)
+            or not 0 < float(timeout_seconds) <= _MAX_RESPONSES_TIMEOUT_SECONDS
+        ):
+            raise ContractValidationError("UAT Responses provider timeout is invalid")
+        self._responses_url = normalized_base_url.rstrip("/") + "/responses"
+        self._api_key = api_key.strip()
+        self._model = model.strip()
+        self._timeout_seconds = float(timeout_seconds)
+
+    @property
+    def model_name(self) -> str:
+        return f"codex-responses:{self._model}"
+
+    def respond(
+        self,
+        *,
+        history: Sequence[UatConversationMessage],
+        user_text: str,
+        latest_evidence: Mapping[str, Any] | None,
+        safety_identifier: str,
+        evidence_tool: Callable[[UatEvidenceToolRequest], Mapping[str, Any]],
+    ) -> UatConversationOutcome:
+        if (
+            not isinstance(user_text, str)
+            or not user_text.strip()
+            or len(user_text) > _MAX_MESSAGE_CHARS
+        ):
+            raise ContractValidationError("UAT conversation user text is invalid")
+        if (
+            not isinstance(safety_identifier, str)
+            or not safety_identifier
+            or len(safety_identifier) > 64
+        ):
+            raise ContractValidationError("UAT safety identifier is invalid")
+        bounded_history = history[-_MAX_HISTORY_MESSAGES:]
+        for message in bounded_history:
+            if not isinstance(message, UatConversationMessage):
+                raise ContractValidationError("UAT conversation history is invalid")
+        if latest_evidence is not None and not isinstance(latest_evidence, Mapping):
+            raise ContractValidationError("UAT latest evidence is invalid")
+
+        response_input: list[dict[str, Any]] = [
+            {"role": message.role, "content": message.content} for message in bounded_history
+        ]
+        if latest_evidence is not None:
+            response_input.append(
+                {
+                    "role": "developer",
+                    "content": (
+                        "Untrusted bounded summary of the latest governed FormOwl "
+                        "evidence. Reuse it for explanation or presentation changes "
+                        "without calling FormOwl again:\n"
+                        + json.dumps(
+                            _compact_evidence_for_model(
+                                latest_evidence,
+                                item_limit=8,
+                            ),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                    ),
+                }
+            )
+        response_input.append({"role": "user", "content": user_text})
+        evidence_records: list[tuple[UatEvidenceToolRequest, dict[str, Any]]] = []
+        call_ids: set[str] = set()
+
+        while True:
+            response = self._request_response(
+                {
+                    "model": self._model,
+                    "instructions": (
+                        _CODEX_BASE_INSTRUCTIONS + "\n\n" + _CODEX_DEVELOPER_INSTRUCTIONS
+                    ),
+                    "input": response_input,
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": _TOOL_NAME,
+                            "description": _FORMOWL_DYNAMIC_TOOL["description"],
+                            "parameters": _FORMOWL_TOOL_INPUT_SCHEMA,
+                            "strict": True,
+                        }
+                    ],
+                    "tool_choice": "auto",
+                    "parallel_tool_calls": False,
+                    "text": {
+                        "format": {
+                            "type": "json_schema",
+                            "name": "formowl_uat_decision",
+                            "strict": True,
+                            "schema": _DECISION_SCHEMA,
+                        }
+                    },
+                    "max_output_tokens": 4_096,
+                    "safety_identifier": safety_identifier,
+                    "store": False,
+                }
+            )
+            output = response.get("output")
+            output_items = output if isinstance(output, list) else []
+            function_calls = [
+                item
+                for item in output_items
+                if isinstance(item, Mapping) and item.get("type") == "function_call"
+            ]
+            if not function_calls:
+                decision = _parse_decision(self._response_text(response))
+                evidence_results = tuple(result for _, result in evidence_records)
+                _validate_evidence_bound_decision(
+                    decision,
+                    evidence_results=evidence_results,
+                )
+                return UatConversationOutcome(
+                    **decision,
+                    model_name=self.model_name,
+                    tool_requests=tuple(request for request, _ in evidence_records),
+                    tool_results=evidence_results,
+                )
+            if len(evidence_records) + len(function_calls) > _MAX_TOOL_CALLS_PER_TURN:
+                raise RuntimeError("UAT Responses provider returned invalid tool calls")
+
+            call_outputs: list[dict[str, Any]] = []
+            for function_call in function_calls:
+                call_id = function_call.get("call_id")
+                arguments = function_call.get("arguments")
+                if (
+                    function_call.get("name") != _TOOL_NAME
+                    or not isinstance(call_id, str)
+                    or not call_id
+                    or call_id in call_ids
+                    or not isinstance(arguments, str)
+                ):
+                    raise RuntimeError("UAT Responses provider returned invalid tool calls")
+                try:
+                    parsed_arguments = json.loads(arguments)
+                    if not isinstance(parsed_arguments, Mapping):
+                        raise ValueError
+                    request = _parse_tool_request(parsed_arguments)
+                    result_value = evidence_tool(request)
+                    if not isinstance(result_value, Mapping):
+                        raise TypeError
+                    result = dict(result_value)
+                except Exception:
+                    raise RuntimeError("UAT Responses tool execution failed") from None
+                call_ids.add(call_id)
+                evidence_records.append((request, result))
+                call_outputs.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(
+                            {
+                                "trust": "untrusted_evidence",
+                                "data": _compact_evidence_for_model(result),
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    }
+                )
+            response_input = [
+                *response_input,
+                *(dict(item) for item in output_items if isinstance(item, Mapping)),
+                *call_outputs,
+            ]
+
+    def discard_conversation(self, safety_identifier: str) -> None:
+        if (
+            not isinstance(safety_identifier, str)
+            or not safety_identifier
+            or len(safety_identifier) > 64
+        ):
+            raise ContractValidationError("UAT safety identifier is invalid")
+
+    def close(self) -> None:
+        return None
+
+    def _request_response(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            request = urllib.request.Request(
+                self._responses_url,
+                data=json.dumps(
+                    dict(payload),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8"),
+                method="POST",
+                headers={
+                    "Authorization": "Bearer " + self._api_key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+            )
+            with urllib.request.build_opener(_NoResponsesRedirect()).open(
+                request,
+                timeout=self._timeout_seconds,
+            ) as response:
+                if not 200 <= response.status < 300:
+                    raise RuntimeError
+                body = response.read(_MAX_RESPONSES_BODY_BYTES + 1)
+        except Exception:
+            raise RuntimeError("UAT Responses provider request failed") from None
+        if len(body) > _MAX_RESPONSES_BODY_BYTES:
+            raise RuntimeError("UAT Responses provider returned an invalid response")
+        try:
+            parsed = json.loads(body.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            raise RuntimeError("UAT Responses provider returned an invalid response") from None
+        if (
+            not isinstance(parsed, dict)
+            or parsed.get("error") is not None
+            or parsed.get("object") == "error"
+            or parsed.get("status") in {"cancelled", "failed", "incomplete"}
+        ):
+            raise RuntimeError("UAT Responses provider returned an invalid response")
+        return parsed
+
+    @staticmethod
+    def _response_text(response: Mapping[str, Any]) -> str:
+        candidates: list[str] = []
+        output_text = response.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            candidates.append(output_text)
+
+        def collect_content(content: Any) -> None:
+            if isinstance(content, str) and content.strip():
+                candidates.append(content)
+            elif isinstance(content, Mapping):
+                text = content.get("text")
+                if isinstance(text, str) and text.strip():
+                    candidates.append(text)
+            elif isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
+                for part in content:
+                    collect_content(part)
+
+        message = response.get("message")
+        if isinstance(message, Mapping):
+            collect_content(message.get("content"))
+        output = response.get("output")
+        if isinstance(output, Sequence) and not isinstance(output, (str, bytes)):
+            for item in output:
+                if isinstance(item, Mapping) and item.get("type") == "message":
+                    collect_content(item.get("content"))
+        if not candidates:
+            raise RuntimeError("UAT Responses provider returned no answer")
+        return candidates[-1]
+
+
 def _prepare_new_runtime_state_directory(path: str | Path) -> Path:
     raw = Path(path)
     _reject_symlink_ancestry(raw, "Codex runtime state")
@@ -2114,6 +2410,7 @@ __all__ = [
     "CodexAppServerTransport",
     "CodexAppServerTurn",
     "CodexDynamicToolInvocation",
+    "CodexResponsesConversationModel",
     "CodexRuntimePaths",
     "UatConversationMessage",
     "UatConversationModel",

@@ -23,6 +23,7 @@ from formowl_mail.human_uat_orchestrator import (
     CodexAppServerThread,
     CodexAppServerTurn,
     CodexDynamicToolInvocation,
+    CodexResponsesConversationModel,
     _CODEX_DISABLED_FEATURES,
     _assert_hardened_codex_runtime,
     build_hardened_codex_app_server_command,
@@ -35,14 +36,16 @@ from formowl_mail.human_uat_orchestrator import (
 
 def _decision(
     *,
+    response_kind: str = "answer",
+    answer_text: str = "bounded answer",
     citations: tuple[str, ...] = (),
     coverage_status: str = "not_applicable",
     coverage_note: str = "",
 ) -> str:
     return json.dumps(
         {
-            "response_kind": "answer",
-            "answer_text": "bounded answer",
+            "response_kind": response_kind,
+            "answer_text": answer_text,
             "display_format": "narrative",
             "citation_ids": list(citations),
             "coverage_status": coverage_status,
@@ -127,6 +130,160 @@ class _RecordingTransport:
 
 
 class Issue56CodexProviderBridgeTests(unittest.TestCase):
+    def test_direct_responses_provider_runs_one_citation_bound_tool_loop(self) -> None:
+        api_key = "synthetic-direct-provider-key"
+        raw_prompt = "紅色零件庫存"
+        expanded_query = "查詢授權來源中紅色零件目前的庫存數量與相關證據"
+        citation = "citation-direct-provider"
+        requests = []
+        provider = CodexResponsesConversationModel(
+            base_url="https://provider.example.test/v1",
+            api_key=api_key,
+        )
+
+        def response(payload):
+            requests.append(copy.deepcopy(payload))
+            if len(requests) == 1:
+                return {
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call-direct-1",
+                            "name": "query_effective_graph_view",
+                            "arguments": json.dumps({"query_text": expanded_query}),
+                        }
+                    ],
+                }
+            tool_output = json.loads(payload["input"][-1]["output"])
+            self.assertEqual(tool_output["trust"], "untrusted_evidence")
+            self.assertIn(citation, json.dumps(tool_output, sort_keys=True))
+            return {
+                "status": "completed",
+                "output_text": _decision(
+                    answer_text=f"bounded answer [{citation}]",
+                    citations=(citation,),
+                    coverage_status="complete",
+                ),
+            }
+
+        evidence_tool = mock.Mock(
+            return_value={
+                "status": "complete",
+                "coverage": {"status": "complete", "coverage_status": "complete"},
+                "exact_inventory": {
+                    "status": "complete",
+                    "coverage_status": "complete",
+                    "returned_count": 1,
+                    "total_count": 1,
+                    "items": [
+                        {
+                            "item_hash": "item-direct-provider",
+                            "structure_status": "source_provided",
+                            "structured_values": [
+                                {
+                                    "field": "Requested Field",
+                                    "value": "source-backed value",
+                                    "citation_hash": citation,
+                                }
+                            ],
+                            "governed_references": [{"citation_hash": citation}],
+                        }
+                    ],
+                },
+                "citations": [citation],
+            }
+        )
+        with mock.patch.object(provider, "_request_response", side_effect=response):
+            outcome = provider.respond(
+                history=(),
+                user_text=raw_prompt,
+                latest_evidence=None,
+                safety_identifier="direct-provider-session",
+                evidence_tool=evidence_tool,
+            )
+
+        self.assertEqual(len(requests), 2)
+        tool = requests[0]["tools"][0]
+        self.assertEqual(tool["name"], "query_effective_graph_view")
+        self.assertEqual(set(tool["parameters"]["properties"]), {"query_text"})
+        self.assertEqual(requests[0]["tool_choice"], "auto")
+        self.assertFalse(requests[0]["parallel_tool_calls"])
+        self.assertIn(
+            "A terse or telegraphic factual/business lookup is not ambiguous",
+            requests[0]["instructions"],
+        )
+        requested = evidence_tool.call_args.args[0]
+        self.assertEqual(requested.query_text, expanded_query)
+        self.assertNotEqual(requested.query_text, raw_prompt)
+        self.assertEqual(outcome.citation_ids, (citation,))
+        self.assertEqual(outcome.coverage_status, "complete")
+        self.assertEqual(len(outcome.tool_requests), 1)
+        self.assertNotIn(api_key, json.dumps(requests, sort_keys=True))
+
+    def test_direct_responses_provider_general_chat_uses_no_tool(self) -> None:
+        provider = CodexResponsesConversationModel(
+            base_url="https://provider.example.test/v1",
+            api_key="synthetic-direct-provider-key",
+        )
+        evidence_tool = mock.Mock()
+        with mock.patch.object(
+            provider,
+            "_request_response",
+            return_value={
+                "status": "completed",
+                "output_text": _decision(answer_text="hello"),
+            },
+        ):
+            outcome = provider.respond(
+                history=(),
+                user_text="hello",
+                latest_evidence=None,
+                safety_identifier="general-chat-session",
+                evidence_tool=evidence_tool,
+            )
+
+        evidence_tool.assert_not_called()
+        self.assertEqual(outcome.answer_text, "hello")
+        self.assertEqual(outcome.tool_requests, ())
+
+    def test_direct_responses_provider_preserves_missing_reference_clarification(
+        self,
+    ) -> None:
+        provider = CodexResponsesConversationModel(
+            base_url="https://provider.example.test/v1",
+            api_key="synthetic-direct-provider-key",
+        )
+        evidence_tool = mock.Mock()
+        with mock.patch.object(
+            provider,
+            "_request_response",
+            return_value={
+                "status": "completed",
+                "output_text": _decision(
+                    response_kind="clarification",
+                    answer_text="請問你指的是哪一個項目？",
+                ),
+            },
+        ) as request_response:
+            outcome = provider.respond(
+                history=(),
+                user_text="那個呢？",
+                latest_evidence=None,
+                safety_identifier="missing-reference-session",
+                evidence_tool=evidence_tool,
+            )
+
+        request = request_response.call_args.args[0]
+        self.assertEqual(request["tool_choice"], "auto")
+        self.assertIn(
+            "a required referent is genuinely absent",
+            request["instructions"],
+        )
+        evidence_tool.assert_not_called()
+        self.assertEqual(outcome.response_kind, "clarification")
+        self.assertEqual(outcome.tool_requests, ())
+
     def test_pinned_provider_allows_three_untrusted_queries_and_discloses_incomplete(
         self,
     ) -> None:

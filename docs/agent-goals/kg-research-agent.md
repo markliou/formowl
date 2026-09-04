@@ -47,15 +47,15 @@ source completeness, accepted execution-fingerprint binding, same-pipeline
 real-source ablation, and independent final-answer acceptance. The target
 method and tokenizer remain pinned, but no formal all-four-gate evidence exists
 to promote.
-## Step-4 Browser Codex UAT Checkpoint — 2026-09-04
-Commit `03798e8` is pushed. Browser → Codex GPT → expanded dynamic tool → normal
-`/mcp` → citation-bound answer passed focused container `7/7` and browser E2E
-`3/3`. Custom-provider state uses secretless config with fail-closed env-key/key-file
-injection. A true provider turn remains blocked because the self-hosted instance
-offers only a dashboard administrator password and no inbound `/v1` bearer has
-been obtained; the operator must provide an existing inbound bearer. Authority
-remains `authority_valid=false`/`methodology_ready=false` with four gates blocked.
-This is diagnostic UAT only, not production, readiness, or Issue #56 close.
+## Step-4 Browser Direct-Responses LAN UAT Checkpoint — 2026-09-04
+The trusted same-LAN no-auth UAT on port `8088` used the direct Responses
+provider and approved sealed-source route. One terse self-test reached the
+provider and made three normal `/mcp` calls; all returned `replan_required`,
+and multi-row ambiguity ended in `clarification_required` with no answer or citations.
+Authority remains `authority_valid=false`/`methodology_ready=false` with source
+completeness, execution-fingerprint binding, same-pipeline real-source
+ablation, and independent final-answer acceptance blocked. This is diagnostic
+UAT only, not production, readiness, Issue #56 completion, or superiority.
 ## Step-4 Attachment-Table Checkpoint — 2026-09-02
 The structural-blank plus sparse focused normal `/mcp` E2E passed `1/1` in
 `66.026 s`. Exactly-once mode

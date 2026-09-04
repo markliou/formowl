@@ -26,6 +26,7 @@ from formowl_mail.human_uat_http import (  # noqa: E402
 from formowl_mail.human_uat_orchestrator import (  # noqa: E402
     CodexAppServerConversationModel,
     CodexAppServerStdioTransport,
+    CodexResponsesConversationModel,
     build_hardened_codex_app_server_command,
     validate_codex_runtime_state,
 )
@@ -89,8 +90,6 @@ def main() -> int:
     )
     parser.add_argument("--codex-provider-api-key-file", type=Path)
     args = parser.parse_args()
-    if args.temporary_lan_diagnostic and not args.temporary_access_code:
-        parser.error("--temporary-access-code is required for temporary LAN diagnostics")
     if args.temporary_access_code is not None and not args.temporary_lan_diagnostic:
         parser.error("--temporary-access-code is temporary-LAN-only")
     if bool(args.behavior_log) != args.record_raw_uat_interactions:
@@ -108,33 +107,32 @@ def main() -> int:
         )
     runtime_paths = validate_codex_runtime_state(args.codex_runtime_state_dir)
     provider_env_key = runtime_paths.provider_env_key
-    transport_options = {}
     if provider_env_key is None:
         if args.codex_provider_api_key_file is not None:
             parser.error("Codex provider API key file is invalid for ChatGPT runtime state")
+        conversation_model = CodexAppServerConversationModel(
+            CodexAppServerStdioTransport(
+                command=build_hardened_codex_app_server_command(args.codex_command),
+                cwd=runtime_paths.workspace,
+                codex_home=runtime_paths.codex_home,
+                runtime_workspace=runtime_paths.workspace,
+            ),
+            workspace_dir=runtime_paths.workspace,
+            model=_MODEL,
+            reasoning_effort="ultra",
+        )
     else:
-        if args.codex_provider_api_key_file is None:
+        if runtime_paths.provider_base_url is None or args.codex_provider_api_key_file is None:
             parser.error("Codex provider API key file is required")
         try:
             provider_api_key = _read_codex_provider_api_key(args.codex_provider_api_key_file)
         except ValueError as exc:
             parser.error(str(exc))
-        transport_options = {
-            "environment": {provider_env_key: provider_api_key},
-            "provider_env_key": provider_env_key,
-        }
-    conversation_model = CodexAppServerConversationModel(
-        CodexAppServerStdioTransport(
-            command=build_hardened_codex_app_server_command(args.codex_command),
-            cwd=runtime_paths.workspace,
-            codex_home=runtime_paths.codex_home,
-            runtime_workspace=runtime_paths.workspace,
-            **transport_options,
-        ),
-        workspace_dir=runtime_paths.workspace,
-        model=_MODEL,
-        reasoning_effort="ultra",
-    )
+        conversation_model = CodexResponsesConversationModel(
+            base_url=runtime_paths.provider_base_url,
+            api_key=provider_api_key,
+            model=_MODEL,
+        )
     if args.temporary_lan_diagnostic:
         print(
             f"Temporary LAN diagnostic: http://{args.host}:{args.port}/",

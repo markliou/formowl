@@ -34,6 +34,7 @@ from formowl_gateway.issue56_uat_runtime import (
 from formowl_gateway.runtime import ConnectedRuntime, ConnectedRuntimeConfig
 from formowl_mail.human_uat_http import create_mail_human_uat_http_server
 from formowl_mail.human_uat_orchestrator import (
+    CodexResponsesConversationModel,
     UatConversationOutcome,
     UatEvidenceToolRequest,
 )
@@ -144,6 +145,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             runtime_paths = SimpleNamespace(
                 codex_home=root / "codex-home",
                 workspace=root / "workspace",
+                provider_base_url="https://provider.example.test/v1",
                 provider_env_key=provider_env_key,
             )
             transport = MagicMock()
@@ -154,8 +156,6 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             arguments = [
                 "issue56_uat_web.py",
                 "--temporary-lan-diagnostic",
-                "--temporary-access-code",
-                "synthetic-access-code",
                 "--codex-runtime-state-dir",
                 str(root / "runtime"),
                 "--codex-provider-api-key-file",
@@ -175,8 +175,12 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 patch.object(
                     uat_web_script,
                     "CodexAppServerConversationModel",
+                ) as app_server_model_factory,
+                patch.object(
+                    uat_web_script,
+                    "CodexResponsesConversationModel",
                     return_value=conversation_model,
-                ),
+                ) as responses_model_factory,
                 patch.object(
                     uat_web_script,
                     "create_issue56_temporary_lan_query_service",
@@ -193,15 +197,13 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             ):
                 self.assertEqual(uat_web_script.main(), 0)
 
-            transport_arguments = transport_factory.call_args.kwargs
-            self.assertEqual(
-                transport_arguments["environment"],
-                {provider_env_key: provider_api_key},
+            responses_model_factory.assert_called_once_with(
+                base_url=runtime_paths.provider_base_url,
+                api_key=provider_api_key,
+                model="gpt-5.6-sol",
             )
-            self.assertEqual(
-                transport_arguments["provider_env_key"],
-                provider_env_key,
-            )
+            transport_factory.assert_not_called()
+            app_server_model_factory.assert_not_called()
             self.assertNotIn(
                 provider_api_key,
                 standard_output.getvalue() + standard_error.getvalue(),
@@ -214,6 +216,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 return_value=SimpleNamespace(
                     codex_home=root / "chatgpt-home",
                     workspace=root / "chatgpt-workspace",
+                    provider_base_url=None,
                     provider_env_key=None,
                 ),
             ):
@@ -292,9 +295,76 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             greeting = "你好"
             prompt = f"麻煩幫我確認一下 {_IDENTIFIER} 這筆的 {_HEADER}，謝謝。"
             standalone_query = f"有{_IDENTIFIER}的{_HEADER}呢？"
-            conversation_model = _RecordingGptQueryAgent(
-                standalone_query=standalone_query,
+            provider_api_key = "synthetic-direct-provider-key-never-public"
+            conversation_model = CodexResponsesConversationModel(
+                base_url="https://provider.example.test/v1",
+                api_key=provider_api_key,
             )
+            provider_requests: list[dict[str, object]] = []
+
+            def provider_response(request):
+                provider_requests.append(json.loads(json.dumps(request)))
+                response_input = request["input"]
+                if response_input[-1].get("role") == "user":
+                    if response_input[-1]["content"] == greeting:
+                        return {
+                            "status": "completed",
+                            "output_text": json.dumps(
+                                {
+                                    "response_kind": "answer",
+                                    "answer_text": "你好，請告訴我想查詢的資料。",
+                                    "display_format": "narrative",
+                                    "citation_ids": [],
+                                    "coverage_status": "not_applicable",
+                                    "coverage_note": "",
+                                }
+                            ),
+                        }
+                    return {
+                        "status": "completed",
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "call_id": "browser-source-call",
+                                "name": "query_effective_graph_view",
+                                "arguments": json.dumps(
+                                    {"query_text": standalone_query},
+                                    ensure_ascii=False,
+                                ),
+                            }
+                        ],
+                    }
+                tool_output = json.loads(response_input[-1]["output"])
+                evidence = tool_output["data"]
+                inventory = evidence["exact_inventory"]
+                values = inventory["items"][0]["structured_values"]
+                citations = evidence["citations"]
+                answer = "\n".join(f"{value['field']}: {value['value']}" for value in values)
+                return {
+                    "status": "completed",
+                    "output_text": json.dumps(
+                        {
+                            "response_kind": "answer",
+                            "answer_text": f"{answer} [{citations[0]}]",
+                            "display_format": "narrative",
+                            "citation_ids": [citations[0]],
+                            "coverage_status": (
+                                "complete"
+                                if evidence["status"] == "complete"
+                                and inventory["coverage_status"] == "complete"
+                                else "incomplete"
+                            ),
+                            "coverage_note": (
+                                ""
+                                if evidence["status"] == "complete"
+                                and inventory["coverage_status"] == "complete"
+                                else "來源涵蓋範圍仍不完整。"
+                            ),
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+
             access_code = "synthetic-lan-access-731"
             basic_authorization = (
                 "Basic " + base64.b64encode(f"formowl-uat:{access_code}".encode()).decode()
@@ -362,6 +432,16 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             with (
                 patch.dict(__import__("os").environ, environment, clear=True),
                 patch.object(
+                    conversation_model,
+                    "_request_response",
+                    side_effect=provider_response,
+                ),
+                patch.object(
+                    conversation_model,
+                    "close",
+                    wraps=conversation_model.close,
+                ) as model_close,
+                patch.object(
                     uat_runtime_module,
                     "build_issue56_production_semantic_retrieval_handler",
                     side_effect=build_once,
@@ -372,31 +452,34 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                     behavior_log_path=behavior_log,
                     record_raw_uat_interactions=True,
                 ) as query_service:
-                    server = create_mail_human_uat_http_server(
+                    protected_server = create_mail_human_uat_http_server(
                         "127.0.0.1",
                         0,
                         query_service,
                         temporary_access_code=access_code,
                     )
-                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread = threading.Thread(
+                        target=protected_server.serve_forever,
+                        daemon=True,
+                    )
                     thread.start()
                     try:
                         denied_responses = (
-                            browser_request(server, "GET", "/")[0],
+                            browser_request(protected_server, "GET", "/")[0],
                             browser_request(
-                                server,
+                                protected_server,
                                 "GET",
                                 "/",
                                 authorization=wrong_authorization,
                             )[0],
                             browser_request(
-                                server,
+                                protected_server,
                                 "POST",
                                 "/api/chat",
                                 prompt=prompt,
                             )[0],
                             browser_request(
-                                server,
+                                protected_server,
                                 "POST",
                                 "/api/chat",
                                 prompt=prompt,
@@ -406,25 +489,42 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                         self.assertEqual(query_service.request_count, 0)
                         self.assertFalse(behavior_log.exists())
                         page_response, page_body = browser_request(
-                            server,
+                            protected_server,
                             "GET",
                             "/",
                             authorization=basic_authorization,
                         )
                         greeting_response, greeting_body = browser_request(
-                            server,
+                            protected_server,
                             "POST",
                             "/api/chat",
                             prompt=greeting,
                             authorization=basic_authorization,
                         )
                         greeting_request_count = query_service.request_count
+                    finally:
+                        protected_server.shutdown()
+                        protected_server.server_close()
+                        thread.join(timeout=5)
+
+                    server = create_mail_human_uat_http_server(
+                        "127.0.0.1",
+                        0,
+                        query_service,
+                    )
+                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    try:
+                        open_page_response, open_page_body = browser_request(
+                            server,
+                            "GET",
+                            "/",
+                        )
                         response, body = browser_request(
                             server,
                             "POST",
                             "/api/chat",
                             prompt=prompt,
-                            authorization=basic_authorization,
                         )
                         source_request_count = query_service.request_count
                     finally:
@@ -433,6 +533,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                         thread.join(timeout=5)
 
                 page = page_body.decode()
+                open_page = open_page_body.decode()
                 greeting_payload = json.loads(greeting_body)
                 payload = json.loads(body)
                 for denied in denied_responses:
@@ -451,6 +552,9 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 self.assertTrue(greeting_payload["answer"])
                 self.assertEqual(greeting_payload["citation_count"], 0)
                 self.assertEqual(greeting_request_count, 0)
+                self.assertEqual(open_page_response.status, 200)
+                self.assertIn('data-authenticated="true"', open_page)
+                self.assertIsNone(open_page_response.getheader("Set-Cookie"))
                 self.assertEqual(response.status, 200)
                 self.assertIsNone(response.getheader("Set-Cookie"))
                 self.assertIn(payload["status"], {"complete", "partial"})
@@ -459,14 +563,6 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 self.assertGreater(payload["citation_count"], 0)
                 self.assertGreaterEqual(source_request_count, 1)
                 self.assertLessEqual(source_request_count, 3)
-                self.assertEqual(
-                    conversation_model.user_texts,
-                    [greeting, prompt],
-                )
-                self.assertEqual(
-                    conversation_model.tool_queries,
-                    [standalone_query],
-                )
                 self.assertNotEqual(prompt, standalone_query)
                 assert_no_public_raw_references(
                     payload,
@@ -475,7 +571,24 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 self.assertEqual(loader_build_count, 1)
 
             self.assertEqual(loader_build_count, 1)
-            self.assertTrue(conversation_model.closed)
+            model_close.assert_called_once_with()
+            self.assertEqual(len(provider_requests), 3)
+            self.assertEqual(
+                provider_requests[0]["input"][-1]["content"],
+                greeting,
+            )
+            self.assertEqual(
+                provider_requests[1]["input"][-1]["content"],
+                prompt,
+            )
+            self.assertEqual(
+                json.loads(provider_requests[2]["input"][-1]["output"])["trust"],
+                "untrusted_evidence",
+            )
+            self.assertNotIn(
+                provider_api_key,
+                json.dumps(provider_requests, ensure_ascii=False),
+            )
             self.assertEqual(len(handler_arguments), 1)
             for arguments in handler_arguments:
                 self.assertEqual(arguments["query_text"], standalone_query)
@@ -531,6 +644,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             rendered_log = json.dumps(records, ensure_ascii=False).casefold()
             for forbidden in (
                 "synthetic-provider-key-never-public",
+                provider_api_key,
                 access_code.casefold(),
                 basic_authorization.casefold(),
                 "authorization",

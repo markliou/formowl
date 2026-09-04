@@ -9,6 +9,17 @@ This is a bounded active window. Earlier entries are immutable history under
 - Archive a complete dated entry before trimming it.
 - Record only current facts, blockers, verification, and next action.
 - Historical pointers are not restart instructions.
+## 2026-09-04 — Direct-Responses temporary LAN UAT diagnostic
+- The trusted same-LAN no-auth UAT on port `8088` used the direct Responses
+  provider and approved sealed source. One terse self-test reached the provider
+  and made three normal `/mcp` calls; all returned `replan_required`.
+- Multi-row ambiguity ended in `clarification_required` with no answer or
+  citations. No query-specific retry or prompt tuning occurred.
+- Authority remains `authority_valid=false`/`methodology_ready=false`; source
+  completeness, execution-fingerprint binding, same-pipeline real-source
+  ablation, and independent final-answer acceptance remain blocked.
+- This is diagnostic UAT only, not production/readiness, Issue #56 completion,
+  or comparative-superiority evidence.
 ## 2026-09-04 — Browser Codex provider UAT checkpoint
 - Commit `03798e8` is pushed; Browser → Codex GPT → expanded dynamic tool →
   normal `/mcp` → citation-bound answer passed focused container `7/7` plus
