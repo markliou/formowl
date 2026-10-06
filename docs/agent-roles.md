@@ -11,33 +11,60 @@ user explicitly reassigns it.
 
 ## Current Execution Topology
 
-The current thread has one Master and exactly two implementation subagents.
-Each subagent uses `gpt-5.6-sol` with `reasoning_effort=ultra`; no silent model
-fallback or additional implementation worker is allowed.
+The latest 2026-10-06 authorization requires exactly two ordinary
+implementation workers using `gpt-6.1-sol` with `reasoning_effort=high`.
+Stale current worker-specific assignments, earlier sol/xhigh and luna/max
+tiers, and any “no recreation” work order are not current authority.
+Inherited contexts and historical proofs are not current configuration proof.
+No descendants, substitution, duplication, or additional worker is authorized.
+The UAT provider remains `gpt-5.5`/`high`; the tier alone grants no provider/build/index actions.
+Goal ACTIVE: restore UAT promptly, only UAT-critical work. A's eight-doc slice finished;
+B sequentially checks mounts/no-build startup, then only existing PostgreSQL/UAT recovery
+with bounded pg_isready/health/home/listener checks. No data/config/secrets/settings changes,
+other-container starts or provider/browser tests; Master inspects before ordinary-chat-first testing.
+Any model unavailability or missing/mismatched persisted metadata is a blocker;
+no silent substitution is permitted. First dispatch and every future resume
+must explicitly configure model and effort as sol/high; no unpinned
+`send_input`. Each worker verifies its own native task-owned session_meta/task_started/turn_context before actions. The user authorizes
+minimal read-only metadata inspection; retain only safe task/turn IDs, model,
+effort, UTC timestamp and verification outcome, never raw rollout content,
+paths, prompts or secrets. Message text and inherited contexts are not proof.
+
+Current explicit user assignments govern bounded write sets and actions; see
+the goal-registry README for this bounded operational recovery. Dated completed-task paths,
+closure reports and “no further work authorized” statements are historical
+slice boundaries, not new assignments or indefinite bans on later authorized
+work. They never resume a prior task implicitly or prove a current model turn.
+Diagnostic evidence is centralized in the handoff: the later narrow cap-fixture
+repair supersedes the earlier unresolved cap case, not whole-module/full-suite
+verification. Feature 待測, step 4 `in-progress`, F841, non-green full regression,
+live UAT, three reviewers and four methodology gates remain open.
 
 The Master is an orchestration role, not an implementation role. It:
 
 - keeps one global plan with at most five steps and, after creation, changes
   only step status unless a newly evidenced blocker requires revision;
-- assigns disjoint scopes and all repository edits, including operating-spec
-  documentation, to the two subagents;
+- assigns bounded sequential scopes and repository edits, including operating
+  documentation, only to the explicitly authorized worker/temporary reviewer;
 - inspects progress, diffs, and evidence; detects repeated failure paths; and
   responds by repartitioning, changing validation, or stopping the route;
-- while implementation workers are active, inspects them at least every 15
-  minutes for overengineering, scope or file-count growth, parallel
+- during active turns, inspects progress and reports at least every 15 minutes
+  for overengineering, scope or file-count growth, parallel
   abstractions, repeated failed routes, and unnecessary broad tests or
-  hardening, then stops, shrinks, or repartitions as needed; this cadence does
-  not imply background monitoring when no worker is active;
+  hardening, then stops, shrinks, or repartitions as needed; reports newly
+  observed errors, resource danger, and pre-E5 decision checkpoints promptly.
+  This does not imply autonomous wake-ups, background monitoring, or scheduled
+  messages after a final response; historical 2-second safety watcher and
+  60-second heartbeat settings are not fresh evidence of a running build;
 - performs integration review and final acceptance without directly writing
   or modifying implementation code or repository documents.
 
-The two subagents implement and verify their bounded assignments. They must not
-duplicate work, edit overlapping ownership, or repeat the same failed approach
-without a changed hypothesis or validation method. These are implementation
-workers; the release reviewer gate remains separate when a completed slice is
-claimed.
+The two authorized implementers verify bounded assignments sequentially,
+without duplicating work or repeating failed approaches without a changed
+hypothesis or validation method. The independent three-reviewer release gate
+remains separate when a completed slice is claimed.
 
-For the current pre-outage time box, acceptance prioritizes the smallest real
+For an explicitly authorized POC time box, acceptance prioritizes the smallest real
 end-to-end user journey. API, contract, and unit wiring are diagnostic only.
 Hardening, onboarding, broad negative matrices, and production reinforcement
 may be recorded as deferred follow-up until POC feasibility is established;
@@ -104,6 +131,11 @@ Non-negotiable boundaries:
 - Holdout questions and answers cannot tune tokenizer, aliases, ontology,
   graph rules, thresholds, prompts, or models.
 - PostgreSQL/pgvector remains the canonical storage baseline.
+- 2026-10-06: validated `evidence_lookup` + nonempty validated requested fields ALL lacking verified support => one materially different same-authorized-scope bounded recheck, subject to existing safety/eligibility/budgets. Partial misses MUST be disclosed and MUST NOT trigger; source-backed blanks count as verified coverage. Empty sets resolve the validated evidence-need plan or clarify. Zero citations/status/projection failure alone cannot trigger or establish eligibility. Eligible immutable source lookup works without failed projection, preserving source/hash/lineage/revision/permission checks/no-inline-rebuild. Missing diagnostic identity metadata => incomparable is separate from business-field coverage.
+- Missing, unsealed, or unactivated retrieval projections are distinct from
+  an independently validated immutable source snapshot. A fallback may use
+  that snapshot without failed projection when eligible, preserving authorized
+  source/hash/lineage/revision checks/no inline rebuild. Projection failure alone is not eligibility.
 
 Near-term KG priorities:
 

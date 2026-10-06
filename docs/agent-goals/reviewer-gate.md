@@ -12,12 +12,85 @@ Reviewer composition:
 
 - 3 Codex/GPT reviewers.
 
-## Issue #56 Time-Boxed POC Proof — 2026-08-18
+## Current Issue #56 Worker/UAT Model — user override
 
-The current issue #56 operating team is one Master plus exactly two
-implementation subagents. Both workers use `gpt-5.6-sol` with
-`reasoning_effort=ultra`; they are implementers, not substitutes for the
-independent release reviewers below.
+- The latest 2026-10-06 authorization retains exactly two ordinary `gpt-6.1-sol`
+  workers with `reasoning_effort=high`, superseding earlier worker tiers.
+  Each verifies its own native task-owned turn; dated A/B evidence is not
+  current verification. Safe B recovery proof and Master-inspected A proof are in the handoff.
+- No descendants, substitution, duplication, or additional worker is authorized.
+  No prior task resumes implicitly.
+  Hubble is not an active release reviewer.
+- Master remains orchestration-only/no repository writes. The current bounded
+  existing-service recovery and permitted checks are in the registry README. A finished;
+  B sequentially active, overall UAT goal ACTIVE, only UAT-critical work. Dated
+  completed-task write sets/closures constrain only their recorded slice, not
+  later explicit user authorization; historical metadata is not current proof.
+- Unique diagnostic evidence is retained in the handoff. The later narrow
+  cap-fixture repair supersedes the earlier unresolved cap case, not the
+  unrerun whole module/full suite. Diagnostic passes are not reviewer credit.
+  Feature 待測, step 4 `in-progress`, F841, non-green full regression, live UAT,
+  three-reviewer acceptance and four methodology gates remain unresolved.
+- First dispatch and every future resume explicitly configure model and effort
+  as sol/high; no unpinned `send_input`. Each worker verifies its own persisted
+  native task-owned session_meta/task_started/turn_context before actions.
+  Minimal read-only metadata inspection is authorized; retain safe IDs,
+  model/effort/UTC timestamp/outcome only, never raw paths/content, prompts or
+  secrets. Missing/mismatched metadata blocks work; inherited contexts or
+  message text are not proof. Implementation evidence is not reviewer approval.
+- The UAT provider runtime remains pinned to `gpt-5.5` with
+  `reasoning_effort=high`.
+- The independent release gate remains three effective read-only Codex/GPT
+  reviewers across engineering, governance/safety, and research methodology.
+- `agy` is not available or authorized for the current run; do not invoke,
+  dispatch, wait for, or count it.
+
+## Issue #56 All-Requested-Fields Source Recheck — 待測
+
+Review against [SPEC §7.3.1](../../SPEC.md#731-source-neutral-evidence-double-check--待測),
+not old citation-count or any-one-field triggers:
+
+- 2026-10-06: validated `evidence_lookup` + **nonempty validated requested fields,
+  ALL lacking verified support (所有要求欄位都缺少)** => one materially different
+  same-authorized-scope recheck when existing safety/eligibility/budgets permit.
+- Partial misses MUST be disclosed and MUST NOT trigger this automatic recheck.
+  Source-backed explicit blanks count as verified coverage. Empty sets resolve
+  the validated evidence-need plan or clarify; never vacuous all-missing.
+  Zero citations/status/projection failure alone cannot trigger or establish eligibility.
+- Eligible immutable source lookup works without failed projection, preserving
+  source/hash/lineage/revision/permission checks and remaining budgets; no rebuild.
+- Errors/denial remain errors; incomplete never establishes absence; exact
+  claims retain deterministic execution. Mail and independent documents share
+  the core. Docs sync is not runtime/test/UAT proof: all-fields predicate,
+  regression, UAT and independent review remain 待測, four gates blocked.
+
+## Issue #56 Diagnostic Comparability/Observability — 待測
+
+- **Positive check:** bind the loaded deployment to frozen code/build/source
+  fingerprints and retain top-level and per-attempt canonical request-shape,
+  full tool-descriptor fingerprint, upstream HTTP status, terminal outcome, and
+  valid-attempt marker without raw query/source/header/secret output.
+- **Negative check:** if deployment identity or any required field is missing,
+  mismatched, or reduced to names-only tool hashing, classify the evidence as
+  `diagnostic_only/incomparable`; it cannot support loaded-code mismatch,
+  no-data, provider-success, root-cause, or UAT acceptance.
+- **Semantic guard:** UI HTTP `200` is separate from upstream status; an empty
+  provider response or other provider/operational failure remains a failure, not
+  absence or `not_found`.
+- ANY required diagnostic identity metadata missing => incomparable is separate
+  from ALL requested business fields missing => eligible source recheck.
+  Loaded deployment/build/code producers remain absent; source identity only
+  from explicitly supplied validated ingestion_revision, never arbitrary hashes.
+- These are evidence-admissibility checks only, not a fifth authority gate and
+  not a change to the existing four methodology gates or `--require-ready`.
+
+## Issue #56 Time-Boxed POC Proof — 2026-08-18 (historical; worker model superseded 2026-09-21)
+
+The issue #56 operating team at that time was one Master plus exactly two
+implementation subagents. Both implementation workers used `gpt-5.5` with
+`reasoning_effort=high`; they were implementers, not substitutes for the
+independent release reviewers below. The UAT provider runtime was likewise
+pinned to `gpt-5.5` with `reasoning_effort=high`.
 
 During the approximately six-hour pre-outage window, the Master may advance a
 bounded POC after both workers provide inspectable evidence for their
@@ -43,29 +116,28 @@ changes that reviewer count explicitly. Evidence produced by the two
 implementation workers remains implementation evidence and does not count as
 those three reviewer decisions.
 
-## Temporary Agy Quota Suspension
+## Agy Availability — current suspension as of 2026-09-21
 
-As of 2026-08-11, the user temporarily removed Antigravity/`agy` from the
-worker, reviewer, implementation-subagent, UAT, and subagent-coordinator pool
-because its quota is exhausted. Do not invoke it, dispatch Herdr work to it,
-wait for it, or count it toward a reviewer gate. Use the default 3 effective
-Codex/GPT reviewers instead.
+The recorded 2026-08-11 quota suspension remains current as of 2026-09-21:
+the user removed Antigravity/`agy` from the worker, reviewer,
+implementation-subagent, UAT, and subagent-coordinator pool. Do not invoke it,
+dispatch Herdr work to it, wait for it, or count it toward a reviewer gate.
+Use the default 3 effective Codex/GPT reviewers instead.
 
-This temporary suspension overrides the later historical 2026-08-05
+This temporary suspension overrides the earlier historical 2026-08-05
 authorization text until the user explicitly confirms that quota is restored
 and re-enables `agy`.
 
-As of 2026-08-05, the user explicitly re-enabled Antigravity/`agy` as a normal
-FormOwl worker/subagent through the verified Herdr file bus. It may perform
+Historical 2026-08-05 authorization: the user explicitly re-enabled
+Antigravity/`agy` as a normal FormOwl worker/subagent through the verified
+Herdr file bus. It could perform
 bounded review, diagnosis, implementation, UAT, or coordination of its own
 bounded subagents. Its descendants inherit the same evidence scope, write
 scope, claim boundary, and acceptance criteria.
 
-The default release count remains 3 effective read-only Codex/GPT reviewers
-unless the user changes the composition for a slice. An `agy` review may count
-when it was explicitly assigned as one of those reviewers, inspected the
-relevant packet, and returned the required decision. `agy` output never
-replaces local diff inspection and canonical verification.
+The default release count remains 3 effective read-only Codex/GPT reviewers.
+The historical `agy` counting rule is superseded by the current suspension;
+`agy` output never replaces local diff inspection and canonical verification.
 
 ## Cost Control And Staging
 
@@ -104,9 +176,10 @@ whether the next agent can execute the plan without chat memory.
 
 Do not substitute Antigravity/Gemini reviewers with fake `agy` results,
 Codex `multi_agent_v1` agents labeled as Antigravity, GPT model overrides, or
-an "agy folder" substitute. Use the real Herdr-connected `agy` worker when an
-assignment calls for it, and do not duplicate the same implementation across
-agent systems.
+an "agy folder" substitute. While suspension is active, do not use `agy`;
+only explicit user re-enablement can restore that route. The historical
+commands and delegation records below are evidence, not current instructions
+or permission for descendants.
 
 Historical direct-CLI command shape when the Herdr relay is unavailable:
 
@@ -120,7 +193,7 @@ Observed CLI path:
 /home/markliou/.local/bin/agy
 ```
 
-## Historical Agy Blocker And Current Authorization
+## Historical Agy Blocker And Authorization Record
 
 The user authorized `agy` / Antigravity reviewer use on 2026-06-27, but later
 requested that the FormOwl KG workflow stop wasting time on a route that could
@@ -134,8 +207,9 @@ credentials, raw private source payloads, raw backend paths, raw SQL, NAS
 paths, object-store admin endpoints, worker scratch paths, or unrelated
 private data.
 
-Current rule: `agy` may be used as a bounded reviewer, worker, implementation
-subagent, UAT agent, or coordinator of its own bounded subagents. Sandboxed
+Historical rule: `agy` could be used as a bounded reviewer, worker,
+implementation subagent, UAT agent, or coordinator of its own bounded
+subagents. Sandboxed
 Codex should communicate through atomic JSON files under
 `/tmp/herdr-bus/outbox/` rather than attempting the Herdr Unix socket.
 
@@ -159,7 +233,7 @@ Antigravity session, but this Codex environment currently has no MCP path for
 Codex to call Antigravity/`agy`. This does not change the prior tenant-policy
 blocker for sending bounded FormOwl KG reviewer packets through the `agy` CLI.
 
-### Standing Scoped Authorization
+### Historical Standing Scoped Authorization
 
 For historical FormOwl Knowledge Graph goal reviewer gates, the user explicitly
 authorized Codex to:
@@ -178,18 +252,20 @@ raw private source payloads, raw backend paths, NAS or object-store admin
 endpoints, raw SQL, database dumps, worker scratch paths, local filesystem
 internals, or unrelated private data.
 
-This authorization is active as of 2026-08-05. Slow `agy` runs must still be
-monitored until completion; silence does not count as approval. A delivery or
-tenant-policy rejection for one task must not be bypassed through a broader
-packet, another external channel, Codex `multi_agent_v1`, a GPT model override,
-or an "agy folder" substitute.
+This authorization record is historical as of 2026-08-05 and is not active for
+the current run. Slow `agy` runs must still be monitored until completion;
+silence does not count as approval. A delivery or tenant-policy rejection for
+one task must not be bypassed through a broader packet, another external
+channel, Codex `multi_agent_v1`, a GPT model override, or an "agy folder"
+substitute.
 
-### Bounded Write Delegation
+### Historical Bounded Write Delegation
 
-The user permits Codex to ask Antigravity to write code or docs for bounded
-implementation tasks. This path is active as of 2026-08-05. `agy` may further
-delegate to its own subagents only within the parent assignment's exact write
-scope, evidence scope, claim boundary, and acceptance criteria.
+Historical record: the user permitted Codex to ask Antigravity to write code or
+docs for bounded implementation tasks as of 2026-08-05. That path is not active
+for the current run. `agy` could further delegate to its own subagents only
+within the parent assignment's exact write scope, evidence scope, claim
+boundary, and acceptance criteria.
 
 Use `--new-project --add-dir <smallest-scope>` for bounded write delegation.
 Observed testing showed that plain one-shot `--add-dir` may not create an

@@ -1,32 +1,35 @@
 # Implementation Task Breakdown
-
-This is the bounded active work board. Lossless history is indexed in
-`docs/archive/README.md`; archived files are not current instructions.
-
+This is the bounded active work board. 2026-10-06 source-only recovery finalized the retained first-PST export, succeeded through existing ingestion and source-start preparation, and remains explicitly partial (second PST pending; MSG unsupported/unparsed). The current artifact is diagnostic only: no UAT/readiness/release claim, no provider/DB/service/browser/embedding/KG/index action. Frozen method/tokenizer, §7.3.1, strong RAG, permissions, candidate-before-canonical, UAT/readiness/reviewer gates and all unchecked work remain unchanged. Lossless history is indexed in `docs/archive/README.md`; archived files are not current instructions.
 ## Retention Rule
-
 - Keep every unchecked checklist item.
 - Keep current phase summaries and at most five concise recent completions.
 - Keep this file at or below 400 lines; archive before 500.
 - Never edit an existing dated archive.
-
 ## Status Legend
-
 - `[x]` complete and verified for its stated scope.
 - `[ ]` incomplete, blocked, or not verified.
 - Goal files hold durable role state; this board holds task completion.
-
-## Current Phase Summary — 2026-08-29
-
-- The active KG program is GitHub issue #56, not the historical issue #33 plan
-  or issue #55 document-first POC.
-- Frozen method and tokenizer remain
-  `evidence_to_knowledge_kg_ontology_v2_hybrid_v1` and
-  `jieba_sentencepiece_frozen_profile_candidate_admission_v1`.
-- Pinned methodology authority is valid but blocked. The normal runtime-method
-  gate is passed; source completeness, accepted execution-fingerprint binding,
-  same-pipeline real-source ablation, and independent final-answer acceptance
-  remain blocked.
+## Source-neutral descriptor + evidence double-check — 待測
+- [ ] Implement and verify the approved shared contract in [SPEC §7.3.1](../SPEC.md#731-source-neutral-evidence-double-check--待測); not yet 標準功能.
+  - Mail and independent Markdown/plain-text lookup share one core; attachments are not independent documents. 2026-10-06 SPEC §7.3.1: validated `evidence_lookup` + nonempty validated requested fields **ALL lack verified support (所有要求欄位都缺少)** => one materially different same-authorized-scope recheck when safety/eligibility/budgets permit, even with unrelated citations. Partial misses MUST be disclosed/MUST NOT trigger; blanks are verified coverage; empty resolve validated plan/clarify. Zero citations/status/projection failure alone cannot trigger/establish eligibility. Eligible immutable source lookup needs no failed projection, keeps source/hash/lineage/revision/permission/no-rebuild. ANY missing diagnostic identity => incomparable is separate. Exact stays deterministic; errors/denial stay errors, incomplete never means absence. Docs fixed; runtime all-fields predicate/tests/UAT remain 待測.
+  - Acceptance verifies citations against source/content, not counts alone; retain ordinary-chat MCP=0, both mail and independent-document paths, reload/reset, and contextless-chat MCP=0. Promotion still requires safety/exact/incomplete checks, full regression, three reviewers, and authority gates.
+  - Historical 2026-10-04 Master-reported checkpoint (not current task verification/work orders): replacement B was verified sol/high and total topology remains A+B only; old B task was closed and never resumed. B changed only `python/formowl_graph/index/records.py` and `tests/test_graph_index_stores.py`, combining checkpoint/candidate helper reads; focused canonical `test_graph_index_stores` was `18` total / `17` passed / `1` skipped. Helper payload-id validation is included and the change is complete locally; live impact remains unproved. Browser business MCP1 remains approximately `3.4s` without exception but `pending_review`/citations0; latest recovery `deadline`/scanned0 is not a proved cause.
+  - Manual stop/trace fixtures passed, but actual `_call → TestClient → MCP` first exposed excluded `unsupported/planner_stopped_partial`; the narrow provenance-bound correction passed focused bridge checks and remains undeployed. Synthetic browser checks are not live business acceptance.
+  - Historical 2026-10-04 read-only sample: projection is approximately `2.1 GiB` RSS with an active PostgreSQL writer; the latest log is around `139,872` candidates at `177,316.998s`. Projection has been running approximately two days, UAT remains running, and PostgreSQL is healthy. The build remains unsealed/unactivated; no completion or acceptance claim.
+  - Historical 2026-10-04 Master verification of active-revision CLI digest/reopen seal: helper `125`, candidate `125`, posting `3015`; shortlist is bound to active revision `125`, while out-of-index fallback is bounded sequential sealed refs, not full-source indexed search. EXPLAIN uses full MD5 token/helper observation_hash keys; warm synthetic-neutral SQL `3.23ms`, count `0`; do not apply COLLATE patch because its diagnostic variant lost the hash Index Cond. Earlier cold `QueryCanceled` (`450ms`, wall `818.166ms`) remains observed, not one proved cause. Three read-only PG samples showed graph_records SELECT/INSERT/INSERT with DataFileRead; indexes valid/ready, no single bottleneck proved.
+  - The frozen Chromium runner correction has SHA256 `29e8c7ad273681906eaaaa255d15f0e3ac7059b0482102a6e716073a80e5b02e`; Master’s network-none runner self-check/basic/source-neutral browser checks passed `3/3` in `34.401s`. This is not live provider acceptance; the subsequent full regression failed as recorded below.
+  - Shared graph-entry mail-selector/document source phase is `500ms`/`8192`, bounded by trusted remaining-turn deadline, preserving per-observation source bindings and field-bearing cited text. Citations do not upgrade field coverage; exact/errors remain excluded and incomplete is not absence. No query-specific tuning or budget increases.
+  - Historical 2026-10-04 Master's canonical dev-container authority `--check` was valid=true, ready=false, errors=[], CJK=true, execution `sha256:9ed246b559b9399685fc5e5e72dd1441d83b528c6e5db2e44a5603101c91654b`; four methodology gates remain blocked. The host check lacks dependencies and is supplemental only. Full regression remains non-green: `2317` tests, `91` failures, `49` errors, `19` skips; no pass count or pre-existing label is inferred, and no claim is made that all four focused cases or all 49 errors are fixtures. The untyped enumeration finding was a value-only combined-provider fixture lacking the distinct projection binding; B's first narrow-test correction then passed canonical focused `1/1` in `1.824s` after a source-bound fixture plus value-only rejection. Provider controls recorded one local reporter RuntimeError (not a provider failure), corrected forced-function and strict-text probes passed, and synthetic first planning selected one FormOwl function in 23.313s with private reads/MCP calls 0/0; the full-schema synthetic first-planning control completed; both non-stream/SSE controls selected one FormOwl function; no MCP was executed, but the paired controls are not exact live replay because history/capability metadata differ. Two browser attempts passed ordinary MCP0 then failed mail with empty_response_body, tool/citations 0/0; HTTP200 is UI/browser status only, no mail MCP, absence, or reload/reset. Workspace files are newer than the UAT start and loaded-code identity is unverified; this is a comparability blocker, not a proved cause. Historical 2026-10-03 A resume observed astra/xhigh; native-luna preflight completed at xhigh, received no write assignment; closure was unproved, while B native retained max; not current tier authority. This is diagnostic only; exact and fail-closed contracts remain unchanged. Historical docs-only handoff made no runtime/test/service/provider/live calls. Historical 2026-10-04 override required exactly two ordinary `gpt-6.1-sol` workers with `reasoning_effort=high` (not xhigh), Master orchestration-only/no writes. A verified its own dated persisted sol/high turn at `2026-10-04T21:06:27.375Z`, not current A proof; earlier A/B xhigh records are historical, safe IDs in handoff, not current B proof. First dispatch/future resume explicitly configure both model and effort, no unpinned `send_input`; each worker verifies its own metadata before edits. Then A owned bounded tier/status docs and B bounded lexical optimization code/tests; historical only, superseded by later explicit assignments. Model unavailability or missing/mismatched persisted metadata blocks work; no silent substitution. This tier switch grants no provider/build/service/activation/browser action or acceptance claim.
+  - Dated 2026-10-05 source-start/CLI evidence is retained in the handoff (110-test integration, actual CLI 4-test pass, frozen 12-test integration and real pre-patch regression proof). Later cap-fixture repair supersedes the earlier unresolved narrow cap report: 9+5 focused tests passed; whole loader module/full regression not rerun. Fixture-only/provider-free, not live UAT or reviewer credit. That closed docs-only assignment is historical; the later 2026-10-06 runtime/tests assignment is now historical and current operational recovery governs, and completed-task paths/closures are not current work orders or indefinite bans on later authorized work. F841, non-green full regression, live UAT, three reviewers and four gates remain open; 待測/active-blocked/step4 in-progress, no checkbox or completion claim.
+  - Historical follow-up probe dropped upstream HTTP status/top+attempt shape and hashed tool names only; absent fields did not prove old loaded code. Historical direct `send_input` B luna/max was not current resume authority. 2026-10-06 bounded A runtime+B tests: real baseline overlay six methods RED (5 failures/25 errors including subtests); canonical offline/read-only/network-none2g2cpu two-module GREEN `97/97` in `7.202s`, Ruff/compile2 passed. Top+attempt shape/upstream status/full-descriptor kind/derived valid marker, UI200 vs upstream201/408, unknown/stale/concurrent status, cap6/latest3 and malformed/leak regressions covered; exact methods/safe B identity in handoff. This is diagnostic implementation evidence only; loaded deployment/code/build/source binding remains a separate unchecked task; 待測/step4in-progress/four gates/three reviewers/live UAT/full regression remain open. Later binding-precondition: baseline RED6/4.659s/1 failure/20 errors; Worker frozen GREEN105/21.345s and Master independent frozen-six GREEN105/21.336s/OK/no skips, all432 Python hashes unchanged/six equal workspace; Ruff/compile3/hash stability passed. Safe exact inner commands/setup/hashes/own native IDs in handoff. Factory source identity only explicitly supplied validated ingestion_revision; loaded deployment/build/code producers absent, always diagnostic_only/incomparable (producer gap, not permission blockade or completion). Real synthetic mail+independent text preparation/normal MCP/HTTP, reload/chatMCP0/reporting-no-fetch/no-rebuild are diagnostic progress, not live UAT/release; prior B cleanup was doc-only and closed. Retained stopped B diagnosis:3/3 originals24304351232bytes durably copied/hash-verified06:25:50Z/preserved, never recopy/delete. Existing recovery `formowl-source-recovery-b-20261006-0614` / `eb751cf90056` stopped exit1/OOMfalse06:28:26.521468059Z; first manifest failed with AssertionError/html_marked_section_unknown_status_keyword from PST HTML parser close, not hash/OOM. At B checkpoint PST owner was ungranted: B stopped/no restart/no code edits or relaxed seals;8181 native files2833476868bytes retained, second archive not exported/2 new jobs pending/MSG unresolved, source-start not ready. Master provider preflight passed—not browser acceptance; B no provider calls. Latest own sol/high native proof and error hash in handoff; goal ACTIVE/four gates/three reviewers/full regression open. Prior source-only recovery grant: A final handoff finished/sequential B only, existing source owners and parser CLI, durable ignored `.formowl/uat-recovery-20261006/**` plus these three status docs; readonly workspace/source, `/uat-state` writable, offline4GiB memory/swap2CPU/one bulk process. No code/test/config/embeddings/KG/index/DB/provider/web actions, no old-pin or oracle substitution. B verified fresh own sol/high native turn (handoff); original3files24304351232bytes, initial .formowl/scratch found none; later bounded wider scan141 completed candidates/3 source-hash matches,1 marker/0 matches,3 skipped/incomplete—not validated full-source reuse, dev readpst available, conservative export estimate146GB versus~4TB free. Launched06:14:08Z, container `formowl-source-recovery-b-20261006-0614` / `eb751cf90056`; MSG body adapter absent, incomplete corpus must remain explicit. Prior current 2026-10-06 goal ACTIVE: UAT-critical recovery only; A8docs+B7docs reviewed15docs, scoped diffcheck/432Python+54archive hashes unchanged (Master-provided). B recovery attempt FINISHED/terminal with missing-mount blocker; A final three-doc record only/no restart/rebuild, two sol/high slots/no descendants/Master no writes. At05:46:30Z both existing services exited255/OOMfalse/error empty; PG1 missing bind/UAT5of7, loopback8088 refused, starts0/GET not attempted/provider0. B host PG_VERSION PermissionError retained as permission-limited. Master verified named PG volume read-only/network-none/postgres-user/no entrypoint initialization: PG_VERSION/global/pg_control/base all present, exit0; supersedes unverified volume proof only, PG data NOT proved lost. UAT5of7 tmp-backed binds/PG password bind and original pinned artifact files absent. Master bounded ALL269 candidates/336189384bytes/fourSHA256 comparison found no exact match; not global backup absence. Two older UAT volumes yielded no matching revision/config backups; original mail archives24304351232bytes remain/not parsed or rebuilt. Both stopped services untouched/no guessed credentials, empty DB, image/settings/index/source rebuild or historical/oracle substitution. Start/browser impossible; At that checkpoint the backup question awaited answer; current user confirms none. Next restore exact artifacts/settings+validate bindings, or separately authorized bounded source-only reconstruction if no backup, then ordinary-chat-first real browser/MCP test. Durable layout must replace temporary dependencies during future recovery; not built. Seven operational docs aligned, no code/test/config/full-suite actions; old docs-only bans constrain closed slices only. Master prior canonical valid=true/ready=false/errors=[]/CJK=true, `sha256:b8b54df7e8c2a5695231410883716307abf663cc7f686cd9ae761fe13b968698`; latest same blocked state `sha256:3cf08a73fd043a7623ba86a0232d1fa1665a5fb4c5430cd455b586b0d2049477`, four gates blocked; native proof/safe recovery details in handoff. Not online/chat/mail/browser acceptance or release; feature待測/step4in-progress. Current A explicit patch-only grant: deterministic governed mail-root source-ref admission repair: exact pre-patch owner overlay RED6tests/6failure events/0errors/1.007s (genuine feed+close), focused GREEN6/0.984s plus header2/0.055s; final selected9/9/0.098s/0skips, AST2 passed. Safe incomplete/header-redacted warnings, literal/before/after text retained; malformed/unterminated section contents cannot yield trusted tables, healthy tables/MIME alternatives/attachments/source hashes and normal headers preserved. No unrelated assertions swallowed, no private snippets/query fitting, bulk/readpst/provider/DB/service actions or UAT/reviewer/full-suite claim. Next separately authorized operational step: prove trustworthy original parser exit0 before reusing preserved successful readpst output via build_manifest_from_existing_export; never invent an old seal or blindly repeat export. This patch preserves all originals/new registrations/failed export and does not establish source-start readiness.
+  - [ ] Verify the diagnostic comparability/observability precondition: bind loaded deployment/code/build/source fingerprints and preserve top-level/per-attempt canonical request-shape, full tool-descriptor fingerprint, upstream HTTP status, terminal outcome, and valid-attempt marker. This is not a fifth methodology gate; missing evidence yields `diagnostic_only/incomparable`, and provider failure never becomes absence/`not_found`.
+## Phase Summary — 2026-08-29 baseline
+- Historical 2026-10-02 worker setting retained under this 2026-08-29 baseline, not current dispatch authority: user-supplied two ordinary `gpt-5.6-luna`/`max` workers differed from older disk one `gpt-6-luna`/`max` A; requested model was unavailable, with no substitution/dispatch. A was paused, B closed; temporary `gpt-6-astra`/`xhigh` reviewer had bounded authority only, no descendants or independent release credit for its code. Master was orchestration-only/15-minute active monitoring; UAT `gpt-5.5`/`high`. See [roles](agent-roles.md).
+- Dated worker settings and operational snapshots below are historical, not current dispatch/restart authority; the current five-step plan and independent three-reviewer gate remain unchanged.
+- The active KG program is GitHub issue #56, not the historical issue #33 plan or issue #55 document-first POC.
+- Frozen method and tokenizer remain `evidence_to_knowledge_kg_ontology_v2_hybrid_v1` and `jieba_sentencepiece_frozen_profile_candidate_admission_v1`.
+- Pinned methodology authority is valid but blocked. The normal runtime-method gate is passed;
+  source completeness, accepted execution-fingerprint binding, same-pipeline real-source ablation, and independent final-answer acceptance remain blocked.
 - The existing safe source-completeness report passes its own sealed contract:
   `8,443` raw/source inventory units reconcile to `8,443` Observations with
   unexplained loss `0`. Its report/snapshot fingerprints are
@@ -77,8 +80,82 @@ This is the bounded active work board. Lossless history is indexed in
   joins, bounded topology, time, contradiction, provenance, and coverage.
   Ontology is scoped/data-first/capped soft scoring. Exact sets use a
   deterministic executor.
-- The existing five-step POC plan is unchanged and step 4 remains
-  `in-progress`.
+- The existing five-step POC plan is unchanged and step 4 remains `in-progress`.
+- Actual ingestion now composes `11,386,691` Observations into `2,688,156`
+  retrieval units with `668,391` unique dense texts. Replacement v3 completed
+  preprocessing and waits resident before E5 at `36.95 GiB`; its marker is
+  absent and all source/preparation checkpoints remain preserved.
+- The original eager v3 `48 GiB` route is not bounded through completion: measured vector
+  objects require `7.694 GiB` retained/`9.699 GiB` minimum overlap, while graph
+  construction, full serialization, and reload add whole-corpus copies and
+  reload loses vector sharing while ignoring the written graph artifact. The
+  isolated `13.2 h` embedding extrapolation is not an ETA.
+- Old UAT is unchanged. Step 4 earns no checkbox, quality/readiness claim, or
+  #56 close. September 8 user authorized wider existing-owner compact/lazy
+  integration through first MCP query; heavy run/staging awaits resource review.
+- September 8 existing-owner compact/lazy diagnostic uses isolated FormOwl PG
+  with existing five migrations/schema installed and container memory limit `2 GiB`.
+  Source-neutral `64` prepared refs -> `61` candidates/`57` real pinned-E5 unique
+  texts; stored build passed in `145.968 s`, peak `1.606 GB`; fresh reload
+  passed, peak `2.127 GB`. This is not a full-source result.
+- Initial normal MCP rejected provider scope whole-collection iteration; A
+  fixed keyed validation. Preserved replay: HTTP `200`, tool error false,
+  owner exceptions `0`, status `replan_required`, class `global_summarization`,
+  citations `0`, coverage `incomplete`, stop `external_replan_required` /
+  `review_authorized_capabilities`. No actual browser-GPT prompt completed.
+  Master September 8 09:46 read-only check: full v3 running/unpaused/OOM false
+  at `48 GiB`, resume marker absent; old UAT and isolated PG (`2 GiB`) running;
+  separate canary browserstagev2 running/OOM false at `2 GiB`, not an activated
+  replacement. No services were stopped or restarted for this handoff.
+- September 9 05:10 +08 supersedes earlier capacity/canary waits: same-model
+  B resumed; batch-store fixture passed, SQL calls `29->15`, contents equal.
+  Metadata-repaired browser canary reached two MCP replans then clarification,
+  `0` citations: pipeline diagnostic only, not cited-answer/UAT acceptance.
+- Full helper v2 completed reference indexing of the composed preparation/revision:
+  ALL `2710511/2710511` refs committed at `60729.727 s`, RSS `1.02 GiB`.
+  Metadata/child-parent closure remains pending; no metadata-ready/pre-E5 event.
+  Helper/PG running/OOM false; `8 GiB`/no swap helper cap, all markers absent.
+  V1 intentional stop was exit `137`, OOM false; stopped, PG-postrestart and
+  actual v2-reader cursors all `648448`, at most `256` idempotent replay refs.
+- Isolated PG initially had `2 GiB`; after one approved settings restart
+  (`shared_buffers=512MiB`, `max_wal_size=4GiB`, durability ON), measured cgroup
+  pressure justified a live cap-only increase to `8 GiB`/no swap at 12:36:34.
+  That update restarted nothing; helper, PG, original v3 and old8088 retain
+  their process starts and are running/OOM false. Host available was `16.85 GiB`
+  at 13:03. Adjacent 32768-ref windows `727.628->538.773 s` are not a validated ETA.
+- Original v3 remains resident pre-E5; all three release markers are absent.
+  Helper safetywatch pauses at RSS/anon `6 GiB` or host available below `8 GiB`.
+  No raw-source rerun, E5, graph, activation, additional tuning or code changes
+  are authorized. PG restart invalidated private-canary connections; artifacts
+  remain preserved, not query-ready. At 16:40 all four services remain running,
+  OOM false, original PIDs/start times; all three release markers absent. Helper
+  and safetywatch run independently; workers idle without pending actions. Master
+  checks only during active turns, not after final. Notify pre-E5, do not release.
+- September 9 06:11: one-line owner ORDER parentheses fix plus exact page-index
+  C-collation deployment aligned; A guard/lint passed, corrected EXPLAIN no Sort.
+  V2 intentional stop exit137/OOMfalse; same-revision helper v3 launched06:08.
+  Actual refs resume2710511/zero replay and saved metadata cursor verified;
+  subsequent exact-PK cursor advanced. Only corrected public index remains.
+  September9 09:49:40 Master-approved pre-E5 ONLY released after verified closure.
+  First32vectors/49152bytes durable, then32candidates persisted;09:51 snapshot
+  323uniquevectors/352candidates/496128bytes,firstblockchecksum verified. RSS1.22GiB;
+  CPU E5profile39185d72...,batch32/threads4/safety unchanged; no validated ETA.
+  CURRENT Sept9 10:44: helperv3 exited1/OOMfalse10:29:45, frozen text-lineage
+  mismatch; A owns fix. Durable5232vectors/8036352bytes,6688candidates preserved.
+  BbulkDMLworkspaceONLY: samefixturebefore/afterPASS;upserts3->1/4->1/4->2.
+  Integrated2/2PASS8.098s+lint; approvedv4 launchedSept9 11:42:44+08/runningOOMfalse.
+  Refs2710511/finalmetadataresume verified;192candidates replayed by11:47 using
+  preserved5232-vectorcache;6688boundary pending. Pregraph/original gates absent.
+  Samecaps/watchers; fourmethodologygatesblocked, no graph/UAT/ETAclaim.
+- The 2026-09-06 integrated real Chromium LAN UAT preserved five turns and
+  reload, returned `12` browser-visible same-row CRI part-number/L/T pairs with
+  `24` citations, retained the pairs through table reformat, and cleared real
+  server state before a contextless clarification. Request timings were
+  `29.062`, `58.304`, and `32.187 s`; the post-reset clarification was
+  `4.854 s`. Temporary bounds are `64` visible turns, `8` model messages, and
+  `1` hour without cross-restart persistence. Focused checks passed `4/4` and
+  `8/8`; the full suite remains interrupted/non-green. This is a bounded POC,
+  not a checkbox, production/readiness, generality, or superiority result.
 - The sealed workspace-only development package over exactly `456`
   Observations passed its artifact/identity-scope contract. Its mode is
   `workspace_only_v1`, and no `tenant_id` field or key exists.

@@ -33,7 +33,11 @@ blocked gate.
 ## 2. Product Purpose
 
 FormOwl is a source-preserving, graph-governed knowledge system for integrating
-heterogeneous evidence.
+heterogeneous evidence in its source-native forms. Product sources include
+mail, standalone documents and spreadsheets/XLSX, tables and databases,
+images, speech and non-speech audio including music, video, and connected
+business systems. Each enters the same evidence, permission, governance, and
+query architecture while retaining its native structure and modality.
 
 It turns source material into knowledge that is:
 
@@ -45,10 +49,11 @@ It turns source material into knowledge that is:
 - projectable into cited answers, reports, dashboards, wiki drafts, review
   queues, or authorized action proposals.
 
-FormOwl is not an email system, a document parser, a graph database product, or
-a wiki generator. Mail, documents, calendars, tickets, project systems,
-databases, finance systems, media, and future adapters are source families over
-one common method.
+Mail is the first diagnostic source fixture for the active research program.
+It does not define product scope or require other sources to become mail or
+plain text. Native evidence remains usable when it has no semantic annotation
+or graph match. Product requirements and currently verified adapter capability
+are distinct; §14 records the limited implemented slices.
 
 ---
 
@@ -63,11 +68,17 @@ heterogeneous sources
   -> Asset / EvidenceSnapshot
   -> ExtractorRun
   -> source-preserving Observation
-  -> candidate mentions, entities, claims, relations, and frames
-  -> review and governance
-  -> canonical KG + scoped ontology revisions
-  -> permission-filtered EffectiveGraphView
+       -> authorized source evidence for retrieval and structured execution
+       -> optional candidate mentions, entities, claims, relations, and frames
+            -> review and governance
+            -> canonical KG + scoped ontology revisions
+            -> permission-filtered EffectiveGraphView
 ```
+
+Evidence preservation precedes semantic interpretation. The graph and ontology
+are governed reusable overlays linked to Observations; creating those overlays
+is not an admission prerequisite for direct evidence retrieval or source-native
+table execution. Candidate review remains mandatory before canonical commit.
 
 ### 3.2 Query execution
 
@@ -75,7 +86,8 @@ heterogeneous sources
 user prompt + bounded conversation state
   -> core Query Agent
   -> intent and coreference resolution
-  -> actual source-schema, scoped-ontology, and current MCP-capability discovery
+  -> actual source-schema, modality, and current MCP-capability discovery
+     plus scoped ontology and EffectiveGraphView bindings when used
   -> candidate query expansion
   -> one or more validated SemanticQueryPlans and tool plans
   -> authorized execution
@@ -92,16 +104,43 @@ Coreference must be resolved before an MCP query is issued, or transmitted as
 validated explicit state when the tool contract supports it. An MCP tool must
 never infer hidden conversation history from an under-specified `query_text`.
 
+Human office-agent surfaces present a server-authoritative conversation
+transcript rather than replacing one result panel on every turn. The visible
+transcript and the model conversation-state envelope are separate bounded
+records: display retention may be longer than model context, but neither is
+infinite memory. Reload restores the current transcript through an opaque
+server session; the browser does not supply trusted history. Pending,
+successful, partial, clarification, and safe failure states remain attributable
+to their own turns. Starting a new conversation clears retained model history,
+prior evidence, and visible transcript state, and invalidates the old session
+binding. A temporary UAT may retain this state only in memory and may lose it
+after expiry, capacity eviction, or restart when that limitation is displayed.
+The current issue #56 temporary LAN UAT profile retains at most `64` visible
+turns, supplies at most `8` messages to the answer model, and expires an idle
+browser session after `1` hour. These are diagnostic implementation bounds,
+not permanent product defaults or a cross-restart persistence guarantee.
+Its runtime defaults are `0.0.0.0:8088` for `--temporary-lan-diagnostic` and
+`127.0.0.1:8766` for normal UAT. Explicit `--host` and `--port` values
+override those defaults. A temporary access code is optional; the temporary
+LAN UAT remains usable when no access code is supplied.
+
 The method remains intentionally hybrid:
 
-- strong RAG recovers source evidence;
+- strong RAG recovers source evidence through modality-appropriate retrieval;
 - the KG contributes identity, cross-source joins, bounded topology, temporal
   structure, contradiction, provenance, and reusable integration semantics;
 - the ontology contributes scoped vocabulary, reviewed mappings, plan
   validation, and a capped ranking prior;
-- deterministic structured execution owns exact-set and completeness claims;
+- deterministic structured execution over validated source-native records owns
+  exact-set, table calculation, and completeness claims;
 - the answer model explains the authorized result and does not invent missing
   evidence.
+
+Direct lookup can execute over authorized source evidence without a matching
+graph node, edge, or ontology annotation. Relation reasoning uses the governed
+overlay and verifies its hops against source evidence. Absence of an overlay
+entry cannot establish absence in the source; projection availability and
+source validity are separate conditions, governed by §7.2 and §7.3.1.
 
 The Query Agent does not place every authorized record into model context. It
 selects and stops retrieval according to requested-field coverage, evidence
@@ -129,10 +168,11 @@ Source families may include:
 mail and mail archives
 calendar and meeting systems
 tickets and project systems
-documents, PDFs, slides, and spreadsheets
+documents, PDFs, slides, standalone spreadsheets/XLSX, and native tables
 databases, ERP, CRM, HR, legal, and finance systems
 wiki and documentation systems
-images, OCR, audio, video, and transcripts
+images and diagrams, speech, non-speech audio/music, and video
+derived OCR, transcripts, captions, and other source-linked representations
 source repositories and operational records
 sensor and machine observations
 captured ChatGPT or other conversations
@@ -163,8 +203,9 @@ Examples include:
 ```text
 document paragraph or table cell range
 PDF page block or OCR region
-spreadsheet row
-transcript segment or video scene
+spreadsheet cell, row, or bounded range with workbook/sheet coordinates
+image region, audio/music interval, video frame or scene
+source-linked OCR or transcript segment
 project comment or ticket event
 calendar occurrence
 ERP transaction row
@@ -180,12 +221,28 @@ asset_id or evidence_snapshot_id
 source_ref and source occurrence
 observation type and source family
 raw and normalized extracted value
+modality and governed reference to native content where applicable
 source-native locator
 extractor run, version, configuration, and model metadata
 captured_at, observed_at, and source time where available
 permission scope
 confidence, warnings, and review requirement
 ```
+
+An Observation may retain text, structured values, or a governed reference to
+binary evidence. OCR, transcripts, captions, summaries, embeddings, and graph
+annotations are derived representations with their own provenance and limits;
+they do not exhaust an image, recording, music passage, or video. Verification
+must address the native region or interval needed for the claim. A text proxy
+can support its extracted text within its accuracy limits, but cannot alone
+prove a visual, acoustic, musical, or motion-dependent fact.
+
+Spreadsheet evidence preserves raw values separately from displayed values,
+source types, precision, units, explicit blanks/nulls, formulas and any cached
+results, merged cells/header paths, row association, and workbook/sheet/table/
+cell coordinates as applicable. A formula, its cached value, and a formatted
+display are distinct evidence. Unsupported or unverified features must be
+reported; a parser that reads only XML values cannot claim this full contract.
 
 Deterministic extraction and semantic interpretation are separate operations.
 Hashes, identifiers, timestamps, table coordinates, and source locators should
@@ -211,7 +268,12 @@ unknown unexplained loss
 
 Only intentional policy redaction may be absent without failing the source
 completeness gate. Each adapter preserves its source-native occurrence identity
-while mapping shared semantics into the graph.
+whether or not shared semantics are mapped into the graph. Completeness is
+measured against the authorized source inventory and required native features,
+not the number of text chunks, annotations, graph nodes, or indexed results.
+Unsupported media regions or spreadsheet formula/type semantics remain source
+coverage gaps. A missing graph/ontology or retrieval projection is a separate
+derived-state condition and does not establish missing source content.
 
 Detailed extraction rules are in `RESOURCE_EXTRACTION_SPEC.md`.
 
@@ -354,8 +416,12 @@ structure. It supplies:
 - reusable provenance and lifecycle semantics; and
 - permission-aware effective views.
 
-The graph never replaces source evidence. Every answer-relevant node, edge, or
-hop must resolve to authorized Observations.
+The graph is an identity and relation overlay, with links back to evidence.
+Every answer-relevant node, edge, or hop must resolve to authorized
+Observations. Node properties do not replace native cell values or media
+content. Evidence may be retrieved and cited with no graph entry; unrepresented
+or unmatched evidence remains evidence. Missing nodes or edges cannot support
+a closed-world negative about the source.
 
 ### 6.2 Stable core and scoped packs
 
@@ -389,15 +455,20 @@ StateTransition
 Location
 ```
 
-A source-specific record retains its local source type and occurrence identity
-while mapping to shared concepts. Email, calendar, ticket, document, and
-database records do not become a single flattened source type.
+A source-specific record retains its local source type, modality, structure,
+and occurrence identity while optionally mapping to shared concepts. Email,
+calendar, ticket, document, spreadsheet, database, and media records retain
+their native evidence representations.
 
-Ontology constrains and compresses the vocabulary, arity, and allowed shapes of
-candidate and canonical relation types so edge semantics and graph complexity
-remain governed. It does not cap how many source-addressed annotations or
-candidates a document or Observation may produce, and it does not collapse
-distinct source occurrences merely to reduce edge count.
+Ontology governs the vocabulary, arity, and allowed shapes of candidate and
+canonical relation types. Applying that vocabulary produces optional
+zero-to-many source-addressed annotations: one Observation may have none or
+many, and an annotation may bind several Observations while retaining every
+source locator. Ontology is not an exhaustive evidence index or a mandatory
+one-annotation-per-evidence layer. It does not cap annotation cardinality or
+collapse source occurrences to reduce edge count. No annotation, type mapping,
+or compatible ontology path is required to admit otherwise authorized evidence,
+and their absence cannot establish that a requested fact is absent.
 
 ### 6.3 Hard invariants and soft semantics
 
@@ -452,7 +523,8 @@ The core Query Agent accepts:
 current user prompt
 bounded validated conversation state
 authenticated actor and workspace context
-current permission-filtered source and EffectiveGraphView bindings
+current permission-filtered source bindings and available native capabilities
+EffectiveGraphView bindings when graph signals are used
 frozen execution budgets and policy revisions
 ```
 
@@ -464,11 +536,18 @@ arguments. If a reference remains missing or ambiguous, it asks for
 clarification or fails closed; an MCP tool may not guess what an earlier turn
 meant.
 
+The server owns both conversation-state and transcript selection. Client
+payloads may carry the current prompt, but cannot inject, replace, or extend
+trusted prior turns. A failed turn may remain visible as a sanitized transcript
+event while leaving the last valid model history and evidence state unchanged.
+Transcript retention and model-context retention are independently bounded and
+reported by the active surface.
+
 Every query routes to one of four classes:
 
 | Query class | Required execution |
 | --- | --- |
-| `evidence_lookup` | strong lexical+dense retrieval with optional entity grouping and bounded evidence expansion |
+| `evidence_lookup` | modality-appropriate strong RAG over source-preserving Observations, with optional entity grouping and bounded source-context expansion |
 | `relation_reasoning` | provenance-constrained typed traversal with source evidence for every hop |
 | `exact_set_or_inventory` | deterministic structured enumeration with an explicit coverage contract |
 | `global_summarization` | explicitly bounded, permission-filtered source/evidence set with incompleteness disclosure |
@@ -483,9 +562,9 @@ Before planning execution, the Query Agent discovers and pins the actual
 current capabilities available to the request:
 
 ```text
-authorized source schemas and source-provided field capabilities
+authorized source schemas, modalities, native locators, and field capabilities
 current permission-filtered source occurrence providers
-current EffectiveGraphView and scoped ontology revisions
+current EffectiveGraphView and scoped ontology revisions when used
 current MCP tools and their actual input/output schemas
 ```
 
@@ -500,6 +579,16 @@ a validated `SemanticQueryPlan` or an equivalently governed tool plan, with
 explicit dependencies and a mapping to the requested fields it is intended to
 cover.
 
+The Query Agent must expand and validate a user request before forming a tool
+query when intent, identifier, field, source, or schema semantics require
+resolution. It must not forward the raw prompt or an under-specified
+`query_text` in that case. Tool use is a bounded iteration: after each
+governed call, the agent inspects result and requested-field coverage, then
+stops, asks for clarification, or issues another newly validated expanded or
+refined query/tool plan. Every iteration consumes the pinned attempt,
+tool-call, evidence, token, time, and repair budgets; it never rebuilds the
+KG or index.
+
 An LLM may propose plans, but validation and execution limits are
 deterministic. Every executable plan pins:
 
@@ -507,7 +596,8 @@ deterministic. Every executable plan pins:
 plan schema version
 query class and maximum claim strength
 actor, workspace, task, source, and permission scope
-effective-view, graph, ontology, and policy revisions
+source/provider and policy revisions
+effective-view, graph, and ontology revisions when used
 entity, relation, temporal, and evidence slots
 allowed edge kinds and directions
 hop, fan-out, candidate, evidence, token, time, and repair budgets
@@ -533,6 +623,44 @@ access, authorize an external or canonical write, mutate canonical KG state, or
 replace source-grounded deterministic exact execution and its coverage
 contract.
 
+The KG, EffectiveGraphView, lexical/dense indexes, and any modality-specific
+indexes are persistent, version-pinned derived projections. A normal request
+reuses activated revisions; it must not rebuild, re-extract, re-embed, or re-materialize them
+per prompt. A missing, stale, unsealed, unactivated, or unavailable projection
+is an explicit runtime/configuration condition, distinct from an independently
+validated immutable source snapshot and its authorized provider manifest.
+
+For validated `evidence_lookup`, automatic source recheck follows the
+2026-10-06 rule in §7.3.1: a nonempty validated requested-field set with all
+fields lacking verified support triggers one materially different bounded
+recheck when existing safety/eligibility and remaining budgets permit.
+Partial misses must be disclosed and must not trigger this automatic recheck;
+an empty field set uses the validated evidence-need plan or clarification.
+Source-backed explicit blanks count as verified coverage; citation count or
+status alone cannot trigger recheck. Projection failure grants no independent
+eligibility. Eligible fallback uses the same request's
+permission-filtered Observation/source providers without requiring the failed
+projection. It retains authorized source/hash/lineage/revision validation,
+ActorContext, workspace/source/permission scope, citation contract, and remaining
+deadline, attempt, tool-call, evidence, token, and repair budgets. It may not
+widen scope, select an unbound provider, or rebuild inline.
+
+An identifier-plus-field request is a typed exact lookup: the protected
+identifier is matched as an identifier, and the requested field is selected
+from the current authorized source schema. Exact lookup runs before broader
+semantic expansion and preserves row association and source citations. If it
+misses, the bounded recovery path may expand validated aliases or field terms
+and run the applicable source-native strong-RAG branch over the same authorized
+Observation snapshot. For text this includes lexical+dense retrieval. Recovery
+cannot substitute semantic similarity for an exact result or its coverage
+contract. This is bounded query expansion, not a per-query index or KG rebuild.
+
+The runtime distinguishes evidence outcomes from operational failures.
+`no_authorized_evidence`, an explicit source blank, and permission denial are
+not the same as a provider error or timeout. A provider error or timeout must
+return a safe operational failure/stop reason and must never be projected as a
+legitimate no-answer or as evidence that the requested fact is absent.
+
 Every Query Agent run records versioned fingerprints for:
 
 ```text
@@ -549,9 +677,37 @@ final compact evidence-context bundle
 deterministic result or cited-answer input
 ```
 
+Each executed semantic phase and tool-call iteration also emits a safe phase
+trace containing its phase/iteration identity, elapsed time, bounded outcome,
+and stop/error reason. The trace is bound to the run fingerprint and must not
+expose raw prompts, source content, credentials, SQL, filesystem paths, or
+worker internals.
+
 ### 7.3 Strong RAG and bounded adaptive execution
 
-The minimum competitive retrieval control is:
+Strong RAG is retrieval over source-preserving Observations using the
+representations and capabilities appropriate to the requested evidence. Text
+retrieval is one branch; converting every source into text does not satisfy
+the product's multimodal contract. Applicable branches include:
+
+| Evidence | Retrieval and verification requirement |
+| --- | --- |
+| Text, OCR text, or transcripts | Lexical+dense retrieval, fusion, reranking, and source-linked citations; disclose extraction accuracy and coverage limits |
+| Spreadsheet/table | Native schema, identifier, row, cell, and range access; preserve source value/structure semantics and use §7.5 for exact operations |
+| Image, chart, or diagram | Region-aware visual retrieval or inspection with image/page coordinates and verification of the relevant source crop |
+| Speech, non-speech audio, or music | Task-appropriate audio retrieval/inspection with track or segment identity, time spans, and verified source clips; a transcript cannot establish nonverbal or musical properties |
+| Video | Temporal/visual retrieval over the relevant frame, scene, or clip, joined to audio/transcript evidence where needed and verified against native content |
+
+The validated plan discovers actual adapter/model support and pins the
+applicable modality, representation, model/index revisions, and coverage
+limits. Unsupported native access is disclosed as unsupported or incomplete;
+it cannot silently become a successful text-only interpretation. Derived
+captions or descriptions remain candidate interpretations. Real-source
+verification and modality-specific acceptance are required before claiming a
+branch works; the current fixture limits are in §14.
+
+For the frozen issue #56 text-evidence control, the minimum competitive
+retrieval path remains:
 
 ```text
 BM25 or equivalent lexical retrieval
@@ -562,6 +718,12 @@ BM25 or equivalent lexical retrieval
 ```
 
 A substring or regex-only retriever is not an adequate strong RAG baseline.
+This product clarification does not change the frozen method/tokenizer,
+comparison arms, or authority gates. Adding or evaluating a modality-specific
+implementation requires its own authorized scope and evidence; mail/text
+diagnostics cannot establish universal multimodal capability. The specific
+mail and independent Markdown/plain-text recheck/promotion scope in §7.3.1
+remains bounded to those functions.
 
 After each authorized execution step, the Query Agent inspects coverage for
 every requested field and evidence need. Coverage distinguishes at least
@@ -575,13 +737,326 @@ Repair or requery is allowed only under a frozen attempt, tool-call, evidence,
 token, and time budget. It may select another validated field, source, or tool
 candidate; narrow or split a plan; or request clarification. It must not widen
 authorization, silently invent an alias, promote candidate knowledge, write
-canonical state, or treat public-web content as workspace evidence.
+canonical state, or treat public-web content as workspace evidence. This general
+plan repair is distinct from §7.3.1 automatic source recheck and must not be
+used to bypass its all-requested-fields-missing eligibility rule.
 
 Execution stops when the requested fields have support sufficient for the
 allowed claim, deterministic coverage is complete, no new authorized and
 materially useful evidence is available, clarification is required, or a
 budget or permission boundary is reached. The stop reason is explicit and
 audited.
+
+#### 7.3.1 Source-neutral evidence double-check — 待測
+
+Contract reconciled to the **2026-10-06** user rule; feature **待測**, role
+active-blocked, existing plan step 4
+in-progress. Same-scope recovery diagnostics do not establish standard
+functionality, whole-source search, business-answer success, or independent
+release approval. Detailed results and earlier cited-but-partial mail/failure
+evidence remain in the [dated handoff](docs/agent-goals/handoff-log.md).
+
+Dated UAT, implementation, and verification records remain centralized in the
+[dated handoff](docs/agent-goals/handoff-log.md); they are diagnostic evidence,
+not current work orders or acceptance. The latest handoff supersedes the earlier
+unresolved single-case report only for the narrow source-cap fixture: that
+fixture was repaired and its focused checks passed. This does not establish the
+whole loader module or the full regression suite; neither was rerun. Projection-
+independent source start, live mail/document acceptance, three reviewers, and
+all four methodology gates remain open. Feature remains **待測** and step 4 is
+in progress; no runtime, full-suite, UAT, readiness, completion, or reviewer
+acceptance claim is made.
+
+**Historical diagnostic-only authority record (not fresh readiness or model
+authority):** `valid=true`, `ready=false`, `errors=[]`, `CJK=true`, with four
+methodology gates blocked; execution fingerprint
+`sha256:a1ef525bcd80cb381ea3f1e0c54b5ef8231036d60b50cb6dc444c10c31b645dc`.
+
+Evidence presentation has a shared `16 KiB` UTF-8 evidence-data budget:
+provenance-linked groups stay whole and exact inventory is all-or-none. This
+does not cap the entire provider request/context size. Provider diagnostics
+carry the authoritative count (maximum `6`, derived from existing execution
+budgets) and latest `3` attempt/timing records; no timeout, execution budget,
+or retry allowance was increased.
+
+The source recheck uses sealed job/hash/permission/scope references outside
+the canary; valid out-of-index document observations need not be canary
+members. Each observation binds to its own authorized selector, source,
+lineage and revision, not a guessed single selector for a multi-source request.
+Original intent, claim ceiling, scope, and exact-output grammar stay bound.
+Field-focused graph evidence retains supporting text beyond a 400-character
+preamble with its source/citation group; citations alone cannot satisfy a
+business field or upgrade missing-field/coverage metadata.
+Inherited source pins and visual citation samples are not independent oracle
+proof; the historical browser's `source_binding_verified=false` remains
+recorded in the handoff. Raw terms/query text are not retained in safe traces;
+known prompts remain development smoke only and unseen questions stay frozen.
+
+The same implementation must serve at least these two distinct functions:
+
+| Function | Illustrative request | Evidence and citation contract |
+| --- | --- | --- |
+| Mail evidence organization | 整理某人的相關信件 | Authorized mail Observations with governed message/occurrence references |
+| Independent document evidence lookup | 找出專案 A 的驗收條件並附引用 | Independently uploaded Markdown/plain-text Assets and Observations, with document revision and `line_start`/`line_end` citations |
+
+The document case must not depend on a mail session, sender, message, or mail
+attachment. Use the real `PlainTextObservationExtractor` in
+`python/formowl_ingestion/extractors/text.py`; fixture-only document parsing
+does not prove PDF/DOCX support. Examples illustrate intent, not runtime
+keyword rules, aliases, expected answers, or holdout-tuning inputs.
+
+**Development POC boundary versus security review**
+
+The shared implementation records an explicit execution boundary through
+`SourceEvidenceExecutionPolicy` in
+`python/formowl_retrieval/gateway.py`:
+
+| Boundary | Permitted evidence | Claim permitted | Required promotion evidence |
+| --- | --- | --- | --- |
+| `development_poc_v1` | Provider-free fixtures, local dev-container checks, and explicitly authorized source reads for `mail` or `document_text`; public outputs are safe summaries, statuses, counts, citations, and fingerprints only | Bounded diagnostic behavior and implementation progress; never methodology readiness, comparative superiority, production security, or default-path replacement | No global readiness/reviewer prerequisite for an ordinary authorized diagnostic read; existing safety, audit, and fail-closed rules still apply |
+| `security_review_v1` | The same shared core, same authorized source scope, and the same source-neutral mail/document adapters; no synthetic fixture or POC result is sufficient by itself | Security-review evidence only, after all required gates pass; it is not inferred from a functional POC | `--require-ready`, source completeness, accepted execution-fingerprint binding, same-pipeline real-source ablation, independent final-answer acceptance, and exactly three effective reviewer agreements |
+
+The POC boundary does not weaken authentication, authorization, provenance,
+candidate-before-canonical, fail-closed, audit, redaction, no-secret, or
+no-raw-path rules. When requested and authorized, a bounded query may search
+all mail within the connected account's current permission-filtered scope;
+this does not authorize a full-corpus dump to a model/provider. Only compact,
+query-relevant, verified evidence and safe citations/summaries may be projected.
+Ordinary authorized POC reads do not wait on methodology readiness, source-
+completeness research gates, or broad review; those remain prerequisites for
+methodology/security-review claims and promotion. The existing §10.3 audit
+obligations remain in force, and an audit failure cannot produce an unaudited
+success. This document does not itself authorize or perform live private-mail
+or external-provider UAT; that operation requires separate authorization.
+Requesting `security_review_v1` without its required evidence fails closed for
+that review classification. Changing the label does not promote a POC artifact.
+
+The known mail prompt for the first live UAT is a development smoke case only.
+Future user questions remain unseen and frozen for acceptance; do not tune names,
+aliases, expected answers, routes, or success logic to the smoke or holdout.
+Before acceptance testing, freeze and fingerprint code, prompts/settings,
+models, source snapshot/revisions, and applicable budgets. Any tuning prompted
+by observed acceptance questions or outcomes requires a new version and a new
+holdout.
+
+**Discovery and shared execution**
+
+1. Ordinary conversation stays with the LLM and makes zero MCP calls. Data
+   requests select the appropriate currently exposed FormOwl MCP capability.
+   Tool descriptions must state supported intents/source families, required
+   authorized selectors, citation/coverage semantics, and when not to use the
+   tool. Validate arguments against actual schemas; preserve names, identifiers,
+   scope, requested fields, and quantifiers without adding “all”.
+2. Resolve intent and authorization, validate the plan, and run the initial
+   graph/hybrid retrieval. A graph miss alone does not establish absent data.
+3. For a validated `evidence_lookup` with a nonempty validated requested-field
+   set, **all** fields lacking verified supporting evidence triggers **one**
+   materially different, same-authorized-scope bounded source recheck when
+   existing safety/eligibility and remaining budgets permit, even if unrelated
+   citations exist. Partial misses must be disclosed and **must not trigger**
+   this automatic recheck. An empty requested-field set is not vacuously all
+   missing: use the existing validated evidence-need
+   plan or ask for clarification. A source-backed explicit blank counts as
+   verified coverage; citation count or status alone cannot trigger recheck.
+   When eligible, change the route materially by reading the matching immutable,
+   authorized Observation/source snapshot rather than repeating the same
+   index/KG lookup or merely rewording the prompt.
+4. Revalidate access, source occurrence, content hash, lineage, snapshot seal
+   and revision bindings before projecting governed citations. Return only
+   supported evidence with explicit coverage, warnings, and stop reason.
+
+**2026-10-06 automatic recheck decisions.** These are business-field coverage
+decisions, not diagnostic identity-metadata checks.
+
+| Validated requested business fields | Automatic source recheck |
+| --- | --- |
+| Nonempty; all lack verified support, even with unrelated citations | One materially different same-authorized-scope recheck, when existing safety/eligibility and remaining budgets permit |
+| Some supported, some missing | Disclose missing fields; must not trigger automatic recheck |
+| A source-backed explicit blank | Counts as verified coverage for that field, not a miss |
+| Empty set | Resolve via validated evidence-need plan or clarify; never vacuous all-missing |
+| Citation count/status or projection failure alone | No trigger or independent eligibility |
+
+**Required miss/incomplete fallback contract.** An `index_miss`,
+`index_incomplete`, `graph_miss`, or `graph_incomplete` outcome is not
+`no_authorized_evidence`. A missing, stale, incomplete, unavailable, unsealed,
+or unactivated retrieval projection is **not** an independent permission to
+bypass the automatic recheck eligibility above. For a lookup that satisfies
+that rule and the existing safety/eligibility and remaining-budget checks,
+source-grounded fallback may use the strong-RAG lexical+dense path or its
+source-native equivalent directly from an independently validated immutable
+source snapshot, without requiring the failed projection. An empty field set
+must first be resolved via the validated evidence-need plan or clarification;
+projection failure cannot supply a vacuous field condition.
+
+The fallback retains the original `ActorContext`, workspace and source scope,
+authorized immutable source/hash/lineage/revision checks, permissions and
+grants, requested-field coverage, citation contract, and remaining execution
+budgets. It does not require the failed projection and never rebuilds one
+inline. Every outcome records whether the index/graph path and the
+source-grounded fallback were searched, together with coverage and citation
+status. A source-backed explicit blank is a verified field outcome, not
+retrieval missing; it must be reported as blank and does not itself trigger a
+recheck. Citation count, including zero citations, is not field coverage.
+Only `fallback_complete_no_match`, meaning the authorized source coverage was
+completely examined and no matching evidence was found, may be projected as
+`no_authorized_evidence` (or the existing complete-scan `not_found` contract).
+`fallback_incomplete` and `fallback_timeout` must expose `retrieval_incomplete` and
+`pending_review` (as applicable), must not be phrased as “no data” or
+`no_authorized_evidence`, and may not be converted into a definitive
+no-answer. A cited partial answer remains required to disclose its incomplete
+coverage.
+
+The UI and answer contract must show whether the source was searched and must
+show governed citations when available; otherwise it must visibly report
+`retrieval_incomplete`/`pending_review` rather than imply that no data exists.
+The current POC's shared `500 ms` / `8192` source-fallback budget is only a
+bounded diagnostic budget, not a guarantee of full-source retrieval or
+complete coverage. It must not be used to claim `fallback_complete_no_match`
+unless completeness is independently established.
+
+One source-neutral core owns eligibility, budgets, validation, and outcome
+semantics; source adapters supply authorized reads and native citation
+locations. Its required inputs must not contain mail-only session/sender
+fields. Reuse the existing retrieval/evidence-resolver owners in
+`python/formowl_retrieval/gateway.py` and `kg_first.py`, with integration through
+`python/formowl_gateway/semantic.py` and the actual
+`python/formowl_gateway/issue56_uat_runtime.py` composition. Adapt the existing
+mail handler in `python/formowl_mail/query.py`; do not create two independent
+fallbacks, parallel services, schemas, indexes, or truth stores. An older
+fixture gateway alone is not proof of live composition.
+
+For mail and eligible graph `evidence_lookup` recovery, the bounded
+`required_terms` list contains `1–8` terms of
+at most `80` characters. The request binder accepts only terms that occur as
+contiguous spans in the original request under NFKC/casefold normalization,
+then freezes the first valid set for that turn; retries cannot remove or
+replace it. The same AND predicate applies to initial cited observations and
+the same-scope source recheck. These terms constrain relevance, not
+authorization; no name list, alias, or smoke-specific rule is permitted.
+This does not require every graph relation/summary plan to use same-item AND
+or provide terms for this recovery route. Generic source-family-only term
+rejection remains mail-only, not graph/document. Without explicit grounded
+terms, legacy mail calls retain all-lexical-term matching; standalone document
+lookup retains protected-identifier checks plus lexical token intersection,
+not full-natural-language-query subset matching.
+
+**Eligibility, limits, and outcome contract**
+
+- Preserve the same actor, workspace, grants, authorized selector/source
+  scope, query meaning, and revision pins. Entity matching cannot grant access;
+  recheck cannot rebuild an index/KG, re-extract sources, or write canonical state.
+- Preserve the existing mail eligibility statuses:
+  `ok/not_found/no_answer/incomplete/partial/pending_review/unsupported`, with
+  a validated evidence-only plan and field-level coverage metadata. Zero
+  citations alone is not the trigger and does not establish field coverage.
+  Error, permission denial, exact intent/typed-binding warnings, and
+  `replan_required` do not
+  enter this source scan merely by status reinterpretation. For graph recovery,
+  an outer adaptive public-replan marker must not hide a validated underlying
+  eligible miss; retain actual subquery status and failure provenance. Genuine
+  provider, schema, permission and operational failures remain failures, not
+  no-data. No duplicate full semantic retrieval or exact fallback is permitted.
+- Exact sets, counts, inventories, aggregation, and definitive negatives stay
+  with deterministic structured execution, never top-k fallback. Unresolved
+  exact intent/binding requires clarification (`pending_review`), not guessing.
+- Pin attempt, tool-call, observation, evidence, token, time, and repair limits
+  before execution; no recursive fallback, timeout inflation, or budget reset.
+  Semantic budget remains `1500 ms`; source recheck is one shared `500 ms` /
+  `8192` scanned-Observation phase across applicable mail selectors and
+  independent document families, not a fresh budget per family/selector.
+  Give applicable readers bounded opportunity; unfinished scans remain
+  incomplete. At most `128` evidence items or a smaller request cap survive.
+- The shared helper accepts an optional trusted finite numeric absolute
+  `deadline_monotonic` and `source_evidence_deadline_scope(...)` using a
+  token-reset ContextVar. The earliest explicit/scoped/current 500ms deadline
+  governs; None/no scope preserves the existing bound. Check before/after
+  preparation, reads and callbacks; an already expired deadline invokes no
+  callbacks. Runtime captures the active turn deadline before thread handoff
+  and scopes normal TestClient `client.post`; this is server-owned state,
+  never provider/public arguments or headers. Shared-helper tests alone do
+  not prove propagation; synthetic actual-TestClient coverage is separate.
+  These phase checks are not a guaranteed total wall-clock timeout.
+- Missing reader, zero result limit, exhausted budget, or incomplete source
+  coverage with no citations yields `pending_review`, not “the data does not
+  exist”. Only a complete bounded scan AND complete sealed-source coverage may
+  yield `not_found`, meaning no verified match by that method in that scope.
+- Verified citations may support `ok` with explicit incomplete warnings; this
+  does not prove an exhaustive set or total. Permission/operational failures
+  and invalid hash/lineage/seal fail closed, never success or legitimate absence.
+- Provider replan is separate: at most one changed plan when existing execution
+  controls/budgets allow it, not a guaranteed second provider/MCP call.
+  Attempted, bound evidence-lookup recovery with zero citations and explicit
+  terminal/incomplete scan metadata stops safely without redundant provider
+  continuation; incomplete stop requests clarification, not an absence claim.
+  This separate provider plan repair must not bypass the automatic all-fields
+  source-recheck rule. For graph results, outer
+  `unsupported/planner_stopped_partial` qualifies
+  only with validated eligible subquery provenance and the matching recovery,
+  query, original-request, scope and scan bindings. This is not blanket
+  admission of unsupported/errors; non-attempted graph replans, genuine
+  operational/permission failures and exact plans keep their exclusions.
+  Private graph recovery tracing derives only enums/counts/hashes from
+  validated responses, never raw text, terms or identifiers.
+  Public diagnostics contain safe statuses/counts/timings/fingerprints only,
+  never raw paths, private source payloads, secrets, or hidden-source internals.
+
+**Diagnostic comparability/observability precondition — 待測**
+
+Before a browser/provider result may support root-cause attribution or
+promotion, bind the loaded deployment to the frozen code/build/source
+fingerprints and retain, at both request top level and each provider attempt,
+the canonical request-shape, full tool-descriptor fingerprint (not names only),
+upstream HTTP status, terminal outcome, and valid-attempt marker. UI HTTP
+status is separate from upstream provider status.
+
+If any required binding or field is missing, classify the artifact as
+`diagnostic_only/incomparable`; it must not support a loaded-code mismatch,
+no-data, provider-success, root-cause, or UAT-acceptance claim. Do not output
+raw queries, source payloads, headers, or secrets.
+
+This **ANY required diagnostic identity metadata missing → incomparable**
+predicate is separate from **ALL requested business fields missing → source
+recheck**; the business-field rule does not relax metadata safety.
+
+**Promotion gate: 待測 → 標準功能**
+
+- [ ] Both functions use the same core through the actual browser -> provider
+  -> normal MCP -> authorized evidence -> cited answer path. For each, retain
+  first-pass-miss evidence and successful source-recheck recovery evidence.
+- [ ] Browser order: benign everyday chat (correct nonempty LLM response,
+  MCP=0), mail request, independent-document request, reload, real server-state
+  reset, then contextless chat (MCP=0). Verify citation content and source
+  identity, not just HTTP success or nonzero citation counts.
+- [ ] Both adapters pass incomplete/unavailable/deadline/cap, permission denial,
+  invalid lineage/revision, exact-query exclusion, no-mutation, and leak checks;
+  ordinary chat must not be forced through MCP.
+- [ ] Freeze scope, source and code revisions, model/settings, budgets, and safe
+  trace fingerprints; record commands, outcomes, timing, citation validation,
+  and shared-core execution evidence. No question-specific fitting or consumed
+  diagnostic/holdout reruns.
+- [ ] Required canonical dev-container focused/full regression, changed-Python
+  compilation, `git diff --check`, and existing three-reviewer gate pass;
+  synchronize the specification, work board, role goal, and handoff with the
+  acceptance evidence before changing the label.
+
+Provider continuation after a `function_call_output` uses bounded SSE and
+passes only a complete `response.completed`, `response.failed`, or
+`response.incomplete` terminal object to existing response validation; an
+error or EOF without a terminal object fails. The final-answer runner requires
+the latest raw finalization validation to be `passed` and the final model to
+cite at least one source; when provider attempts are present, the last record
+must be valid and completed. A malformed trailing record cannot be skipped in
+favor of an older success. Incomplete source coverage may still accompany a
+valid cited answer. Synthetic SSE/runner tests are protocol diagnostics, not
+live-provider acceptance.
+
+Existing mail composition/provider `97/97` (12.317 s), `py_compile`, and
+adaptive `3/3` results are historical partial diagnostics, not generic/browser
+acceptance. Later bounded diagnostic tests above do not promote the feature.
+The four methodology gates remain unpassed. Before
+methodology-quality UAT or standard/default-path promotion, `--require-ready`
+must pass; diagnostic implementation/testing can only retain the blocked claim
+boundary. A functional diagnostic pass alone cannot claim research completion.
 
 ### 7.4 Graph-guided expansion
 
@@ -602,13 +1077,35 @@ capped ontology bonus
 ```
 
 Evidence bundles, not isolated chunks, are the reranking unit. Hidden or denied
-nodes are not materialized and do not influence results. Query-time fallback or
-repair creates no hidden candidate or canonical writes.
+nodes are not materialized and do not influence results. Authorized source
+evidence with no linked node or annotation remains available to the validated
+retrieval plan. Graph and ontology signals may guide selection, but their
+absence is not a source-coverage result. Query-time fallback or repair creates
+no hidden candidate or canonical writes.
 
 ### 7.5 Deterministic exact execution
 
 Ranked top-k retrieval cannot prove a complete set, total count, inventory, or
 definitive negative.
+
+Spreadsheet/table lookup, filtering, joins, sorting, aggregation, and counts
+execute deterministically over the validated authorized source-native rows,
+cells, and schema, or a faithful revision-bound structured projection with
+proved lineage and coverage. A graph node property, generated summary, or
+top-k chunk is not the authoritative value for such an operation. Preserve
+same-row association, identifiers, header paths including merged headers,
+coordinates, source types/precision/units, null/blank semantics, and the
+distinction between raw value, formula, cached result, and displayed value.
+
+The plan states which value representation and calculation semantics it uses.
+A formula-dependent answer must verify the source formula and applicable
+result/recalculation provenance; a cached XML value alone does not prove a
+fresh formula result. Ambiguous headers, unsupported formula/type/display
+features, incomplete rows, and permission-redacted ranges weaken or block the
+corresponding exact claim. Native cell/range citations and completeness proof
+are required even when graph links help identify the table. A definitive
+negative requires complete authorized source coverage for the requested
+predicate, independent of annotation or graph coverage.
 
 An exact result reports:
 
@@ -624,16 +1121,34 @@ evidence lineage per item
 coverage status
 ```
 
-Incomplete coverage produces a partial result and a weaker claim.
+Incomplete coverage produces a partial result and a weaker claim. Missing
+graph or ontology entries cannot turn that partial result into a complete set
+or a definitive negative.
 
 ### 7.6 Compact evidence context and answer generation
 
-The Query Agent assembles a compact rich evidence-context bundle rather than
-dumping the authorized corpus into the model context. The bundle contains only
-the validated plans, requested-field coverage, selected source evidence,
-provenance and citation bindings, conflicts, explicit blanks, and relevant
-graph or ontology explanations needed for the answer. Its schema, contents,
-ordering, budget, and fingerprint are recorded.
+The Query Agent assembles a compact, modality-appropriate evidence-context
+bundle containing the validated plans, requested-field coverage, selected
+source evidence, provenance/citation bindings, conflicts, explicit blanks,
+and relevant graph or ontology explanations. Its schema, contents, ordering,
+budget, and fingerprint are recorded.
+
+Bounded source-context augmentation may include an adjacent paragraph or
+heading, a table header plus the relevant cell range, an image crop, or an
+audio/music/video clip or frame needed to verify the selected evidence. Each
+augmentation revalidates source occurrence, hash, revision, lineage,
+permissions, native locator, and remaining evidence/token/time budgets. A
+governed pointer and supported content representation retain the original
+region/range/time span and any transformation metadata. An evidence-snippet
+grant does not grant whole-asset access; graph visibility does not authorize
+the crop, clip, or cells. No whole large asset or authorized-corpus dump enters
+model context by default, and unsupported model/modality access remains an
+explicit limitation. These reads reuse valid sources and projections rather
+than starting inline extraction or rebuilding indexes. Automatic source
+recheck remains governed by the unchanged §7.3.1 eligibility contract. That
+section's `16 KiB` evidence-presentation cap belongs to the current mail/text
+diagnostic profile; it is not a universal image/audio/music/video context
+limit or proof that those modalities are supported.
 
 The final answer model receives only this authorized bundle and the maximum
 claim contract. It must:
@@ -678,6 +1193,36 @@ create a new experiment.
 External parsers, embedding models, rerankers, and LLMs are replaceable
 candidate-generation or answer components. Their output is never ontology,
 authorization, or canonical truth by itself.
+
+#### 8.1.1 Development worker tier and metadata verification
+
+As reaffirmed by the **2026-10-06 user authorization**, development uses an
+orchestration-only Master and exactly two ordinary implementation workers, both
+`gpt-6.1-sol` with `reasoning_effort=high`. Current explicit bounded
+assignments govern the disjoint worker write sets; the orchestration-only Master
+makes no implementation or durable repository-document edits. Dated task
+scopes, closure records, old metadata, and “no further work” statements are
+historical evidence, not future work bans. No descendants, substitution,
+duplication, or additional workers are authorized.
+UAT remains `gpt-5.5`/`high`, and the methodology authority and independent
+three-reviewer gate remain unchanged.
+
+Every dispatch and resume must explicitly configure model and effort as sol/high;
+unpinned `send_input` is not a permitted resume path. Each worker verifies its
+own persisted native `turn_context` by task ID, worker-owned turn ID, model,
+effort, and UTC timestamp before edits. Inherited parent turns, requested
+configuration, prompt text, or running status are not configuration proof.
+Missing or mismatched metadata or model/dispatch unavailability is a blocker,
+never permission to substitute. Durable records retain only safe task/turn IDs,
+model, effort, UTC timestamp, and verification outcome; no raw rollout paths,
+content, prompts, credentials, or source payloads.
+
+No provider, deployment, source/index rebuild, live UAT, full-suite, or reviewer
+acceptance action is granted here. Feature remains **待測**, step 4 is
+in-progress, F841/full regression/live UAT/three reviewers/four methodology
+gates remain open, and no standard functionality, readiness, completion, or
+reviewer acceptance is established. Permission, privacy, audit, provenance,
+and candidate-before-canonical protections remain unchanged.
 
 ### 8.2 Data split
 
@@ -724,22 +1269,37 @@ coverage are not ontology gains.
 
 ### 9.1 End-to-end lineage
 
-Every result is traceable through:
+Every result is traceable to its authorized source and executed plan. Direct
+source retrieval and source-native structured execution use:
 
 ```text
 Source / Asset / EvidenceSnapshot
   -> ExtractorRun
   -> Observation
-  -> Candidate Knowledge
-  -> Review Decision
-  -> CanonicalGraphRevision and OntologyRevision
-  -> EffectiveGraphView
   -> SemanticQueryPlan and execution
   -> EvidenceBundle or deterministic result
   -> cited answer or projection
 ```
 
-Required stable identifiers include:
+When candidate, graph, or ontology interpretation contributes to a result,
+its additional lineage is recorded:
+
+```text
+Observation(s)
+  -> Candidate Knowledge
+  -> Review Decision before canonical commit
+  -> CanonicalGraphRevision / OntologyRevision as applicable
+  -> permission-filtered EffectiveGraphView when used
+  -> the bound query execution and source-linked EvidenceBundle
+```
+
+The source chain is mandatory; derived chains are mandatory for the derived
+signals actually used. Candidate, review, canonical-object, graph, ontology,
+and effective-view IDs are conditional on those stages participating, not
+preconditions for citing unannotated source evidence. Candidate-only
+interpretation retains its source lineage and review state without implying
+a canonical commit. Stable identifiers,
+as applicable to the source and execution, include:
 
 ```text
 asset_id
@@ -885,6 +1445,15 @@ run outside MCP request handling. Runtime indexes and projections are
 versioned, rebuildable from authorized Observations, and never become source
 truth.
 
+The request path reuses activated projections where available and may use an
+independently validated immutable authorized Observation/source snapshot for
+fallback eligible under §7.3.1 without the failed projection. Projection
+failure grants no independent eligibility. Source/hash/lineage/revision
+checks remain required. Rebuilds are explicit offline or
+governed lifecycle jobs triggered by source, policy, model, tokenizer, schema,
+or operator changes; a KG miss, exact-lookup miss, or prompt retry never starts
+one.
+
 Detailed infrastructure requirements are in `docs/infra-spec.md`.
 
 ---
@@ -1008,6 +1577,22 @@ Current tested compatibility paths do not prove source-complete heterogeneous
 integration, automatic canonical commits, universal parser coverage,
 enterprise-scale readiness, or KG + ontology superiority.
 
+Current source support must be read at the following granularity:
+
+| Source slice | Current code evidence and limit |
+| --- | --- |
+| Mail and independent text | Mail is the first diagnostic fixture; the real `PlainTextObservationExtractor` handles independent Markdown/plain-text. §7.3.1 retains its mail/text-only diagnostic and promotion boundary, with live acceptance still open. |
+| XLSX and delimited attachment tables | [`AttachmentDocumentExtractor`](python/formowl_ingestion/extractors/document/attachment.py) reads bounded XLSX ZIP/XML values (`<v>`, shared strings, inline strings), emits row/cell Observations and coordinates, reads formal table metadata, and derives bounded candidate header paths using merged ranges. It does not retain `<f>` formulas or cell styles/display formatting and does not prove formula, displayed-value, native-type/unit/null, or whole-workbook completeness. Candidate header structure is not verified source-provided schema. Standalone spreadsheet/XLSX is a first-class product requirement; this attachment slice does not establish its complete end-to-end path. |
+| OCR/images | [`FixtureOcrExtractor`](python/formowl_ingestion/extractors/ocr/fixture.py) reads text-backed fixtures with page/bbox locators via `read_text()`. It proves fixture contracts, not real-image OCR, visual retrieval, or source-region understanding. |
+| Audio | [`FixtureAudioTranscriptExtractor`](python/formowl_ingestion/extractors/audio/fixture.py) reads text-backed timestamp/speaker/transcript fixtures via `read_text()`. Real-audio decoding, ASR, acoustic retrieval/verification, and a music or non-speech audio path are not proven. |
+| Video | [`FixtureVideoSceneExtractor`](python/formowl_ingestion/extractors/video/fixture.py) reads text-backed scene/keyframe descriptions and locators via `read_text()`. Real-video decoding, temporal/visual retrieval, and native clip/frame verification are not proven. |
+
+MIME declarations, modality labels, fixture coordinates/timestamps, and cited
+text proxies do not establish native media support. These are implementation
+limits within the wider product architecture, not a restriction of the product
+to mail/text and not permission to infer source absence from unsupported
+features or missing projections.
+
 The active research target is:
 
 ```text
@@ -1015,13 +1600,18 @@ method: evidence_to_knowledge_kg_ontology_v2_hybrid_v1
 tokenizer: jieba_sentencepiece_frozen_profile_candidate_admission_v1
 ```
 
-The current runtime still reports:
+Historical runtime on August 18, 2026 (not current runtime authority):
 
 ```text
 method: mail_candidate_kg_broad_ontology_diagnostic_v1
 tokenizer: ascii_identifier_regex_v1
 CJK support: false
 ```
+
+The recorded October 2, 2026 canonical dev-container probe matches the frozen
+method/tokenizer with CJK support true; this is a dated diagnostic, not
+production or completion evidence. Current readiness is determined by the
+executable authority, not this historical runtime block.
 
 Before methodology-quality UAT, comparative claims, default-path replacement,
 or methodology completion, run:
@@ -1045,7 +1635,11 @@ occurrence, retention, purge, transfer, and authorization semantics.
 ### 15.1 Method and source
 
 - multiple source families produce citeable Observations through adapters;
+- standalone spreadsheet/XLSX and image/audio/music/video requirements retain
+  native structure, modality, locators, and authorized source references;
 - source completeness is reconciled against an independent oracle;
+- completeness includes the source-native features needed for the claim,
+  with unsupported formulas, display/type semantics, or media content disclosed;
 - source occurrences survive deduplication and entity resolution;
 - deterministic and semantic extraction remain separate;
 - candidate output cannot silently mutate canonical state.
@@ -1054,6 +1648,8 @@ occurrence, retention, purge, transfer, and authorization semantics.
 
 - canonical commits are scoped, reviewed, revisioned, and source-backed;
 - every answer-relevant graph hop resolves to authorized Observations;
+- zero-to-many source-addressed annotations are optional; unannotated evidence
+  remains retrievable, and missing graph/ontology entries never prove absence;
 - the stable ontology core transfers across at least two materially different
   source/domain families;
 - inferred ontology mismatch does not remove admitted evidence;
@@ -1061,21 +1657,58 @@ occurrence, retention, purge, transfer, and authorization semantics.
 
 ### 15.3 Query and answer
 
-- strong RAG is implemented over the same source-complete Observations;
+- strong RAG uses modality-appropriate retrieval over the same source-complete
+  Observations; lexical+dense text retrieval is one branch, and real native
+  media verification is required for visual/acoustic/musical/video claims;
 - the core Query Agent accepts the user prompt plus bounded, versioned
   conversation state and resolves intent and coreference before MCP execution;
+- a human office-agent surface appends attributable per-turn results, restores
+  its bounded server transcript after reload, preserves sanitized failed turns,
+  and starts a new conversation by clearing server state rather than only the
+  page;
+- visible transcript retention is distinct from the smaller bounded model
+  context, and the UI discloses temporary expiry, eviction, and restart limits;
 - ambiguous references fail closed or request clarification, and MCP tools do
   not infer hidden history from `query_text`;
-- actual authorized source schemas, scoped ontology revisions, and current MCP
-  capabilities are discovered, pinned, and revalidated before tool calls;
+- actual authorized source schemas, native modalities/locators, current MCP
+  capabilities, and graph/ontology revisions when used are discovered, pinned,
+  and revalidated before tool calls;
+- activated KG/index revisions are reused across requests; a validated evidence
+  lookup eligible under §7.3.1 may fall back after an index/graph miss or
+  projection failure
+  to the same authorized Observation/source scope without a per-query rebuild;
+  a KG miss alone does not establish absent data;
+- identifier-plus-field requests use typed exact lookup before agent-expanded,
+  bounded iterative query-expansion/strong-RAG recovery, while preserving row
+  association, citations, permission scope, and the remaining deadline/budget;
 - query expansions remain candidates, and every executed subquery or tool plan
   is independently validated, permission-bounded, versioned, and audited;
-- requested-field coverage and evidence diversity govern bounded repair,
-  requery, context selection, and the recorded stop reason;
+- requested-field coverage and evidence diversity govern bounded iterative
+  repair/requery, context selection, phase tracing, and the recorded stop
+  reason;
+- for validated `evidence_lookup`, a nonempty validated requested-field set
+  with all fields lacking verified support triggers one materially different
+  same-authorized-scope bounded source recheck when existing safety/eligibility
+  and remaining budgets permit, even with unrelated citations; partial misses
+  must be disclosed and must not trigger this automatic recheck, empty sets
+  use the validated evidence-need plan or clarification, and source-backed
+  explicit blanks count as verified coverage;
+- retrieval-projection availability is independent of authorized immutable
+  source snapshot validation; fallback does not require the failed projection
+  or rebuild inline, but projection failure grants no independent eligibility;
+  citation count/status alone cannot trigger, and incomplete/timeouts never
+  establish absence;
 - the final model context is a compact, fingerprinted, citation-bound evidence
-  bundle rather than an authorized-corpus dump;
-- exact-set claims use deterministic enumeration and coverage evidence;
+  bundle; bounded authorized source context may include crops, clips, or cell
+  ranges with native provenance and separate raw-access checks;
+- native spreadsheet/table operations use validated rows/cells and source
+  semantics, preserving formula/raw/display distinctions, types, units,
+  nulls, merged headers, coordinates, row association, and completeness;
+- exact-set claims use deterministic enumeration and coverage evidence, with
+  no graph-property or top-k substitution for source-native values;
 - answers cite evidence and disclose conflict or incompleteness;
+- provider errors and timeouts remain operational failures distinct from
+  no-authorized-evidence or legitimate no-answer outcomes;
 - no-answer and permission-denied behavior fail safely; and
 - unseen pre-registered prompts pass without question-specific identifiers,
   aliases, expected answers, or success-pattern fitting.
@@ -1087,6 +1720,9 @@ occurrence, retention, purge, transfer, and authorization semantics.
 - holdout content cannot influence construction or tuning;
 - final-answer, citation, identity, relation, temporal, exact-set, no-answer,
   privacy, latency, and cost metrics are reported by stratum;
+- native source/modality capability is verified separately from text-proxy or
+  fixture behavior; new modality evidence cannot silently change the frozen
+  issue #56 comparison scope, profiles, or gates;
 - every accepted report binds one execution fingerprint;
 - independent holdout and transfer-domain evidence pass the pre-registered
   decision gate before a superiority claim.
@@ -1126,18 +1762,26 @@ require a graph database before a demonstrated infrastructure need
 claim methodology readiness while executable authority is blocked
 ```
 
-The center of FormOwl is:
+The center of FormOwl is reusable source evidence with governed overlays:
 
 ```text
 Any Source
-  -> Source-Preserving Observation
-  -> Evidence-Backed Candidate Knowledge
-  -> Governed Canonical KG + Scoped Ontology
-  -> Permission-Aware Effective View
-  -> Core Query Agent + Validated Adaptive Hybrid Execution
+  -> Governed Asset / EvidenceSnapshot
+  -> Source-Preserving Observation (text, structured, or native media reference)
+       -> Authorized Modality-Appropriate Retrieval / Native Structured Execution
+       -> Optional Evidence-Backed Candidate Knowledge
+            -> Review -> Canonical KG + Scoped Ontology -> EffectiveGraphView
+
+Core Query Agent + Validated Plan
+  -> Authorized Source Execution with Governed Graph/Ontology Signals When Used
+  -> Bounded Verified EvidenceBundle / Deterministic Result
   -> Cited Answer, Projection, or Reviewed Action Proposal
 ```
 
-The graph earns its place by integrating evidence across sources and improving
-measured graph-required tasks over a strong RAG control. It does not earn that
-place merely by existing.
+Direct authorized retrieval and exact table execution do not require a graph
+match or ontology annotation. Graph-required relation reasoning retains the
+source-backed governed path. The frozen issue #56 program still evaluates
+graph-guided hybrid execution against its strong RAG control under the same
+authority and acceptance gates; this schematic makes no methodology-change,
+readiness, or superiority claim. The graph earns its place through measured
+integration benefits with source evidence, permission, and provenance intact.
