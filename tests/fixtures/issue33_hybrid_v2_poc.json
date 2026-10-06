@@ -1,0 +1,211 @@
+{
+  "schema_version": 1,
+  "fixture_id": "issue33_hybrid_v2_safe_observation_fixture_v1",
+  "workspace_id": "workspace_issue33",
+  "owner_user_id": "user_issue33",
+  "source_asset_id": "asset_issue33_existing_observations",
+  "archive_sha256": "sha256:1fe3395098b52323e207ef78a133a0149f1f1678f948932202fef8a8f7c49c84",
+  "upload_session_id": "upload_issue33_existing_observations",
+  "created_at": "2026-08-11T00:00:00+00:00",
+  "observations": [
+    {
+      "observation_id": "obs_issue33_folder",
+      "extractor_run_id": "extractor_run_issue33_existing",
+      "observation_type": "mail_folder_occurrence",
+      "modality": "mail",
+      "location": {
+        "archive_id": "archive_issue33_safe",
+        "mailbox_id": "mailbox_issue33_safe",
+        "folder_path_hash": "sha256:05587dc0e5e2c1178549567afcf6ec78d45f526222495449199d6cc3e96c8610",
+        "folder_index": 1
+      },
+      "confidence": 1.0,
+      "permission_scope": {
+        "scope_type": "project",
+        "visibility": "restricted",
+        "scope_id": "project_issue33"
+      },
+      "created_at": "2026-08-11T00:00:00+00:00",
+      "asset_id": "asset_issue33_existing_observations",
+      "text": "Diagnostic",
+      "payload": {
+        "archive_id": "archive_issue33_safe",
+        "mailbox_id": "mailbox_issue33_safe",
+        "folder_path_hash": "sha256:05587dc0e5e2c1178549567afcf6ec78d45f526222495449199d6cc3e96c8610",
+        "folder_label": "Diagnostic"
+      }
+    },
+    {
+      "observation_id": "obs_issue33_message",
+      "extractor_run_id": "extractor_run_issue33_existing",
+      "observation_type": "email_message",
+      "modality": "mail",
+      "location": {
+        "archive_id": "archive_issue33_safe",
+        "mailbox_id": "mailbox_issue33_safe",
+        "folder_path_hash": "sha256:05587dc0e5e2c1178549567afcf6ec78d45f526222495449199d6cc3e96c8610",
+        "message_id": "issue33-safe-001@example.test",
+        "message_occurrence_id": "mailocc_issue33_safe_001",
+        "thread_id": "thread_issue33_safe",
+        "message_index": 1
+      },
+      "confidence": 1.0,
+      "permission_scope": {
+        "scope_type": "project",
+        "visibility": "restricted",
+        "scope_id": "project_issue33"
+      },
+      "created_at": "2026-08-11T00:00:00+00:00",
+      "asset_id": "asset_issue33_existing_observations",
+      "text": "Issue 33 safe diagnostic",
+      "payload": {
+        "archive_id": "archive_issue33_safe",
+        "mailbox_id": "mailbox_issue33_safe",
+        "message_id": "issue33-safe-001@example.test",
+        "message_occurrence_id": "mailocc_issue33_safe_001",
+        "thread_id": "thread_issue33_safe",
+        "subject": "Issue 33 safe diagnostic",
+        "normalized_subject": "issue 33 safe diagnostic",
+        "sender": "supplier@example.test",
+        "sent_at": "2026-08-11T00:00:00+00:00",
+        "body_hash": "sha256:fd74840b5747823d064f7ef60491fe428407766495afe47d9b45fe7c7724042a",
+        "message_fingerprint": "sha256:16bf757089e70acd43325984a845084b2c43080a8b88a5756f0a222b18fe8a3e",
+        "fingerprint_policy": "formowl_mail_fingerprint_v1"
+      }
+    },
+    {
+      "observation_id": "obs_issue33_delivery",
+      "extractor_run_id": "extractor_run_issue33_existing",
+      "observation_type": "email_body_segment",
+      "modality": "mail",
+      "location": {
+        "archive_id": "archive_issue33_safe",
+        "mailbox_id": "mailbox_issue33_safe",
+        "folder_path_hash": "sha256:05587dc0e5e2c1178549567afcf6ec78d45f526222495449199d6cc3e96c8610",
+        "message_id": "issue33-safe-001@example.test",
+        "message_occurrence_id": "mailocc_issue33_safe_001",
+        "thread_id": "thread_issue33_safe",
+        "body_segment_index": 1
+      },
+      "confidence": 1.0,
+      "permission_scope": {
+        "scope_type": "project",
+        "visibility": "restricted",
+        "scope_id": "project_issue33"
+      },
+      "created_at": "2026-08-11T00:00:00+00:00",
+      "asset_id": "asset_issue33_existing_observations",
+      "text": "PO470002002 目前交期為 2026-09-30。",
+      "payload": {
+        "archive_id": "archive_issue33_safe",
+        "mailbox_id": "mailbox_issue33_safe",
+        "message_id": "issue33-safe-001@example.test",
+        "message_occurrence_id": "mailocc_issue33_safe_001",
+        "thread_id": "thread_issue33_safe",
+        "body_segment_index": 1,
+        "candidate_core_supertype_id": "Artifact",
+        "candidate_type_confidence": 0.95
+      }
+    },
+    {
+      "observation_id": "obs_issue33_origin",
+      "extractor_run_id": "extractor_run_issue33_existing",
+      "observation_type": "email_body_segment",
+      "modality": "mail",
+      "location": {
+        "archive_id": "archive_issue33_safe",
+        "mailbox_id": "mailbox_issue33_safe",
+        "folder_path_hash": "sha256:05587dc0e5e2c1178549567afcf6ec78d45f526222495449199d6cc3e96c8610",
+        "message_id": "issue33-safe-001@example.test",
+        "message_occurrence_id": "mailocc_issue33_safe_001",
+        "thread_id": "thread_issue33_safe",
+        "body_segment_index": 2
+      },
+      "confidence": 1.0,
+      "permission_scope": {
+        "scope_type": "project",
+        "visibility": "restricted",
+        "scope_id": "project_issue33"
+      },
+      "created_at": "2026-08-11T00:00:00+00:00",
+      "asset_id": "asset_issue33_existing_observations",
+      "text": "料號 03.80503G301 的產地為台灣。",
+      "payload": {
+        "archive_id": "archive_issue33_safe",
+        "mailbox_id": "mailbox_issue33_safe",
+        "message_id": "issue33-safe-001@example.test",
+        "message_occurrence_id": "mailocc_issue33_safe_001",
+        "thread_id": "thread_issue33_safe",
+        "body_segment_index": 2,
+        "candidate_core_supertype_id": "Organization",
+        "candidate_type_confidence": 0.95
+      }
+    },
+    {
+      "observation_id": "obs_issue33_status",
+      "extractor_run_id": "extractor_run_issue33_existing",
+      "observation_type": "email_body_segment",
+      "modality": "mail",
+      "location": {
+        "archive_id": "archive_issue33_safe",
+        "mailbox_id": "mailbox_issue33_safe",
+        "folder_path_hash": "sha256:05587dc0e5e2c1178549567afcf6ec78d45f526222495449199d6cc3e96c8610",
+        "message_id": "issue33-safe-001@example.test",
+        "message_occurrence_id": "mailocc_issue33_safe_001",
+        "thread_id": "thread_issue33_safe",
+        "body_segment_index": 3
+      },
+      "confidence": 1.0,
+      "permission_scope": {
+        "scope_type": "project",
+        "visibility": "restricted",
+        "scope_id": "project_issue33"
+      },
+      "created_at": "2026-08-11T00:00:00+00:00",
+      "asset_id": "asset_issue33_existing_observations",
+      "text": "供應商仍在確認付款條件，尚未承諾完成日期。",
+      "payload": {
+        "archive_id": "archive_issue33_safe",
+        "mailbox_id": "mailbox_issue33_safe",
+        "message_id": "issue33-safe-001@example.test",
+        "message_occurrence_id": "mailocc_issue33_safe_001",
+        "thread_id": "thread_issue33_safe",
+        "body_segment_index": 3
+      }
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "cjk_delivery",
+      "query_text": "目前交期",
+      "expected_outcome": "evidence",
+      "required_observation_ids": [
+        "obs_issue33_delivery"
+      ],
+      "query_core_supertype_id": "Artifact",
+      "query_type_confidence": 0.95
+    },
+    {
+      "case_id": "mixed_identifier_origin",
+      "query_text": "03.80503G301 的產地",
+      "expected_outcome": "evidence",
+      "required_observation_ids": [
+        "obs_issue33_origin"
+      ],
+      "query_core_supertype_id": "Artifact",
+      "query_type_confidence": 0.95
+    },
+    {
+      "case_id": "protected_identifier_near_miss",
+      "query_text": "03.80503G302 的產地",
+      "expected_outcome": "no_match",
+      "required_observation_ids": []
+    },
+    {
+      "case_id": "cjk_no_answer",
+      "query_text": "採購已取消",
+      "expected_outcome": "no_match",
+      "required_observation_ids": []
+    }
+  ]
+}

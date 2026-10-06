@@ -1,329 +1,323 @@
 # Implementation Task Breakdown
 
-This is the bounded active work board. The lossless board before issue #40
-archival is preserved at
-`docs/archive/2026-07-11/implementation-task-breakdown.md`.
+This is the bounded active work board. Lossless history is indexed in
+`docs/archive/README.md`; archived files are not current instructions.
 
 ## Retention Rule
 
-- Keep every unchecked checklist item, current phase summaries, and at most five
-  concise recent-completion summaries in this active file.
-- Keep this file at or below 400 lines; archive before it exceeds 500 lines.
-- Move older completed detail into a new dated immutable snapshot under
-  `docs/archive/`; never delete or rewrite archived history.
-- Preserve existing checklist states mechanically during archival. Historical
-  `[x]` and `[ ]` states change only through the normal completion workflow.
+- Keep every unchecked checklist item.
+- Keep current phase summaries and at most five concise recent completions.
+- Keep this file at or below 400 lines; archive before 500.
+- Never edit an existing dated archive.
 
 ## Status Legend
 
-- `[x]` complete in the current repository.
-- `[ ]` not started or not verified.
+- `[x]` complete and verified for its stated scope.
+- `[ ]` incomplete, blocked, or not verified.
 - Goal files hold durable role state; this board holds task completion.
-- Archived proof remains authoritative for historical completed details.
 
-## Current Phase Summary
+## Current Phase Summary — 2026-08-29
 
-- Phase 0 and the resource-extraction small core are complete.
-- Identity, upload/session capture, extractor adapters, semantic candidates,
-  graph governance, user graph, wiki projection, infrastructure, mail evidence,
-  and completed-slice test hardening have completed tracked slices.
-- One pre-existing broad objective remains unchecked: full KG real-evidence
-  acceptance. Its complete historical proof requirements remain in the archive.
-- Issue #38 authority state isolation and clean-clone reproducibility are
-  complete; four explicit real-evidence gates remain blocked by missing
-  accepted evidence rather than harness drift.
-- Issue #39 MCP protocol and shadow-workflow consolidation is complete in this
-  working tree.
-- Issue #40 archival maintenance is complete in this working tree.
-- Pre-feature production cleanup is complete: test-only gateway scenarios no
-  longer ship as public production APIs, mail evidence permission helpers are
-  shared, and deprecated Python import/query surfaces retain explicit
-  compatibility boundaries.
-- Pre-feature structural cleanup is complete: repeated evaluator validation,
-  HTTP smoke orchestration, PostgreSQL smoke lifecycle, mail payload
-  validation, and atomic JSON persistence now use shared implementations.
-- The general Candidate Assertion and Domain Pack minimum core is complete:
-  procurement and finance fixtures use one candidate-only, source-neutral
-  Observation pipeline with atomic persistence and no canonical writes.
-- Issue #16 temporal-evidential POC is complete: the same procurement and
-  finance pipeline now produces normalized temporal context, independent
-  epistemic/lifecycle state, and fail-closed candidate temporal views without
-  canonical writes.
-- The source-neutral Candidate evidence retrieval iteration is complete:
-  logical-source identity/cardinality, access-before-vocabulary filtering,
-  chronology/context boundaries, and capped additive ontology reranking reach
-  the bounded MAY target without canonical writes.
-- Default Candidate Evidence Retrieval is now the enforced onboarding path for
-  new hardness and harness work. It counts a stable logical source item;
-  historical chunk-count, transitive-component, regex-only, and ontology
-  hard-pruning methods remain ablation-only.
-  A structured text policy binding proves Unicode/protected-ASCII/Jieba/
-  corpus-bound SentencePiece/frozen-profile admission and its
-  admission/model/corpus hashes; free-form hashes fail closed. The index-owned
-  `CandidateEvidenceTextPolicyRuntime` is the only default query-token source,
-  and the binding pins its runtime id and tokenizer implementation hash.
-  Default callers provide query text only, explicit context/time admissibility
-  precedes tokenization, and non-default transforms use `retrieve_ablation`.
-  Raw query text may identify only control intent, evidence count, and
-  chronology syntax. Retrieval anchors and supported content terms come only
-  from runtime-produced tokens or a named `retrieve_ablation` extension.
-  Access uses a real `CandidateEvidenceAccessBinding` with four immutable
-  `frozenset` collections of exact nonblank strings, and cross-context
-  comparison authorization must be an actual boolean.
-- Issue #51 Gate 0 is complete on clean integration commit `79bc129`: the
-  authority guard is valid-but-blocked, the exact baseline suites pass, and the
-  three-reviewer execution contract is posted as GitHub comment `5070970116`.
+- The active KG program is GitHub issue #56, not the historical issue #33 plan
+  or issue #55 document-first POC.
+- Frozen method and tokenizer remain
+  `evidence_to_knowledge_kg_ontology_v2_hybrid_v1` and
+  `jieba_sentencepiece_frozen_profile_candidate_admission_v1`.
+- Pinned methodology authority is valid but blocked. The normal runtime-method
+  gate is passed; source completeness, accepted execution-fingerprint binding,
+  same-pipeline real-source ablation, and independent final-answer acceptance
+  remain blocked.
+- The existing safe source-completeness report passes its own sealed contract:
+  `8,443` raw/source inventory units reconcile to `8,443` Observations with
+  unexplained loss `0`. Its report/snapshot fingerprints are
+  `sha256:9bf59781bb846f87934511fe7378626eddd380cbe9e1acea201aa0625f11f8b6`
+  and
+  `sha256:55df0dc7d96a7822271f4b7f4509b4da1bbb94f26bb7710e3919f8134d28f2d1`.
+  The authority gate remains blocked because no formal all-four-gate evidence
+  bundle has been authored and atomically promoted.
+- Commits `6e4663a` and `ad08b22` implement the current source-to-promotion
+  binding slice: the source evidence author validates the exact complete
+  execution bundle against report, source, counts, and authority before
+  output, while promotion preflight accepts the existing v3
+  `execution_binding` and cross-binds it to the single validated dependency.
+- Pinned-E5 focused E2E passed `48/48`; both cross-reviews returned `AGREE`
+  after one private-helper dependency blocker was corrected to use the public
+  bundle loader.
+- The generic participant-any deterministic inventory now runs an actual-user
+  request through `ConnectedRuntime`, OAuth, and normal ASGI `/mcp` with typed
+  intent. The raw request is not retained; its request fingerprint is
+  `sha256:ace0484e2706d363d53a4733e269e1c0814fc9629d5ad8ebf2f1a645f4621d1d`.
+- The run completed `21` bound-cursor pages with
+  returned/total/union `2069/2069/2069`, duplicate count `0`, and `2086`
+  governed references/citations. Per-page HTTP latency was
+  `260.323–319.288 ms`, total query HTTP time was `6415.888 ms`, and one-time
+  compose/load time was `600090.276 ms`.
+- Coverage correctly remains `incomplete`: the full permission-authorized
+  scope is `2793`, partitioned into `2069` matches, `174` proven nonmatches,
+  and `550` unresolved occurrences, with unsupported/redacted `0/0`. The
+  unresolved source gap is primarily legacy or malformed participant evidence
+  that the standard mailbox parser cannot recover. Therefore neither “all”
+  nor production readiness is supported.
+- The source-native conversation-closure experiment was removed. This run did
+  not use the `317` oracle; that count belongs to a different private prompt
+  and cannot be compared with this actual-user request.
+- Full coverage is measured against the permission-authorized sealed-source
+  occurrence scope, not the smaller retrieval projection. The lineage
+  crosswalk cache key and owner/gateway validation bind the same
+  index/graph/source-session fingerprints.
+- The latest focused pinned-E5 verification passed `62` tests with `0`
+  skipped. `authority_valid=true` and `methodology_ready=false`; the authority
+  execution fingerprint is
+  `sha256:78cebbb2af8c6e4bcde3f2819436c6f62bd34e957f381dff610bf8a0a477711d`.
+- No formal evidence was authored or promoted, and no methodology-quality UAT,
+  independent holdout, transfer, or v1-v7 diagnostic rerun occurred. The same
+  four authority gates remain blocked; no readiness, superiority, or
+  completion claim is supported.
+- Strong RAG is a required component/control. KG adds heterogeneous identity,
+  joins, bounded topology, time, contradiction, provenance, and coverage.
+  Ontology is scoped/data-first/capped soft scoring. Exact sets use a
+  deterministic executor.
+- The existing five-step POC plan is unchanged and step 4 remains
+  `in-progress`.
+- The sealed workspace-only development package over exactly `456`
+  Observations passed its artifact/identity-scope contract. Its mode is
+  `workspace_only_v1`, and no `tenant_id` field or key exists.
+- Read-only source tracing established that the earlier synthetic fixed
+  prompt did not bind to the approved source: both requested terms had zero
+  occurrences in raw source, parser-native output, and sealed retrieval.
+  This was a prompt-to-source mismatch, not a graph traversal defect.
+- The development diagnostic one-shot claim
+  `issue56-development-workspace-only-diagnostic-one-shot-20260820-v1` was
+  consumed. It must not be rerun, retried, or parameter-tuned. Its report is
+  blocked: Hybrid `0/100`, graph paired CI `[0,0]`, citation support `0%`,
+  no-answer false positives `100`, p95 `1510.841 ms`, and permission leakage
+  `0`.
+- The user separately approved a versioned, non-claim-bearing minimum E2E plus
+  phase-tracing diagnostic slice. Its synthetic, non-sealed path passed:
+  prompt -> ASGI `/mcp` -> synthetic preverified workspace-only principal ->
+  dispatcher actor injection -> `SemanticMcpGateway` ->
+  `AuthorizedSemanticMailSession` -> deterministic cited response, with `2`
+  citations and `2` graph paths. Canonical focused evidence is `25+5` passing
+  tests, including the new five-test slice.
+- The deterministic
+  `issue56_source_backed_connected_identifier_prompt_selection_v1` selector
+  now chooses only real protected identifiers with authorized exact-term and
+  lexical lineage plus an existing source-backed connected path. Its focused
+  selector/gateway E2E evidence passed `11/11`.
+- One canonical full regression ran `1873` total / `1781` passed /
+  `54` failures / `23` errors / `15` skips. Primary blockers were the
+  `formowl-dev` Python 3.13 versus pinned E5 runtime mismatch and existing
+  Issue #20/#33/authority drift. The sole directly related stale v3 test
+  expectation was corrected and passed in pinned E5 `11/11`; the full suite
+  was not rerun and remains non-green. The real V4 POC diagnostic passed, but
+  repository-wide completion cannot be claimed.
+- Immutable mode
+  `issue56-sealed-source-real-prompt-phase-traced-diagnostic-20260823-v4`
+  consumed one real-source diagnostic claim over the same `456` Observations.
+  It ran as `workspace_only_v1` for `workspace_formowl`, actor/approver
+  `user_full_pst_domain_hard_case_eval_owner`, with no tenant dimension.
+- V4 passed its bounded path with `2` lexical anchors, `10` graph paths, and
+  `1` citation. Query/gateway/HTTP timings were `951.148333`, `953.544449`,
+  and `982.203990 ms`; `relation_projection` was the largest semantic phase at
+  `717.357210 ms`, and `deadline_exhausted_phase` was null.
+- Loader time was `678625.866681 ms` for one-time sealed source loading,
+  precompute, and prompt selection outside the request. It is not request
+  latency.
+- V4 immutable hashes are claim
+  `sha256:2b092814194dd90d597161dfcd04822be75c97fc5c5364478bbc8b52307098cb`
+  (byte seal
+  `sha256:76dda5b18801a7587b212631b0d4d7ae0544646910e143ced0883f14e5db69b8`),
+  report byte seal
+  `sha256:40f48fea0145d523f5d14e2943b41750a48923e111cdf6e6c5e3cd265903a458`,
+  trace `sha256:4b518dd33bc406027f2fe0104559ead2cdb27a096b3357d9470acdac34e09ef4`,
+  and execution
+  `sha256:031cfe6f04c9b595bed6fd24375590a78df18dd03e07b68821c955bc03ad0b94`.
+- Source, gateway selection, owner selection, result, and answer bindings are
+  `sha256:b3959bba1267879ba3bcc6889fd063363f899987722b2447685aad844f6b53ae`,
+  `sha256:5c6bbbac6df98afb061d5aa4b21a7802fdcab7d9d09d32dadaec2f1ac0ab3c1a`,
+  `sha256:84857528eb34f4e03e343c078f5a9f89e6c8278a6807a6d84cc72fdc2d59b543`,
+  `sha256:cd4791354b612ae652da2f76d9733c28946bc18c63856b2a08f6e0a9bab63670`,
+  and `sha256:025d02916a7c0c1a816fba06754d9578a327a7e442ff9d1e34b2f273d2af20f7`.
+- Formal v6 mode
+  `issue56-sealed-source-real-prompt-relation-projection-equivalence-phase-traced-diagnostic-20260825-v6`
+  consumed its canonical claim over the same `456` Observations as
+  `workspace_only_v1` for `workspace_formowl`, approved actor
+  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
+- V6 is blocked. Outside request execution, sealed loading, before-arm graph
+  content preseal, and owner relation-base precompute took `677442.490893`,
+  `60990.781102`, and `4245.079389 ms`.
+- The before arm completed `graph_snapshot` in `0.036742 ms` and Strong RAG in
+  `90.802575 ms`, then exhausted the `1500 ms` budget in
+  `relation_projection` after `1415.389724 ms`. Query/HTTP were
+  `1520.515069`/`1555.417065 ms`; it returned `0` graph paths, citations, and
+  scores.
+- The after arm completed every required semantic phase. Relation projection,
+  query, and HTTP took `57.939772`, `291.040282`, and `346.270890 ms`; it
+  returned `10` graph paths, `1` citation, and `48` scores.
+- Relation binding/base cache entries moved before `0/0 -> 1/0` and after
+  `1/1 -> 1/1`. Graph, index, permission, plan, and runtime gates passed; the
+  remaining equivalence groups failed because the before arm exhausted its
+  deadline before traversal and result production.
+- V6 claim/claim-byte/report-byte hashes are
+  `sha256:6b045800e19d82fa187ff4271ab2d854189726a3449bcd4cedf1c03c47c2639e`,
+  `sha256:65b3b3d1f9889e1d82ec47ade77fb7dc44b4a9a3711f7bd37a538cdc9e986b61`,
+  and `sha256:ae10a358242f6f44b1f92267a80e48eac296ebd677eb1ac27bcc24f6111909f1`.
+  Execution/source/preseal/trace bindings are
+  `sha256:7ecf2c31901116ddb32d2a8a7cb41b0e3b504648006a68b3e23e89ee22b2c1cf`,
+  `sha256:bbc67d7fc7051a597488034d277c772a4a5c68bc09dc8ce696bfd2bcc0d8db8b`,
+  `sha256:4900fd366f300af097de355b59feeb6059a06b41574d01d9834e51576c4eed27`,
+  and `sha256:040cb86b70af99fd6f0467306423e0e556a6dfc41b1ed734227b613248c27a93`.
+- Temporary v6 tests passed `6/6`, the combined focused suite passed `31/31`,
+  and independent cross-review found no blocker. The formal v6 root is
+  consumed; this diagnostic-only evidence does not establish methodology
+  readiness, quality, or KG/ontology superiority.
+- Formal v7 mode
+  `issue56-sealed-source-real-prompt-relation-projection-offline-equivalence-phase-traced-diagnostic-20260825-v7`
+  consumed its canonical claim and passed over the same `456` Observations as
+  `workspace_only_v1` for `workspace_formowl`, approved actor
+  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
+- The two isolated presealed views each bound `10281` nodes and `29748` edges.
+  Cold/after graph preseal took `61825.028571`/`61485.804325 ms`; the after-arm
+  relation precompute took `4344.986693 ms`.
+- After the persistent claim, the cold binding snapshot and base builder took
+  `633.968035` and `3196.093676 ms`; offline precompute total was
+  `35771.614738 ms`, and its cache moved exactly `0/0 -> 1/1`.
+- Both arms then used the normal `1500 ms` budget through complete ASGI `/mcp`.
+  Cold/after query times were `290.941898`/`298.654947 ms`, HTTP times were
+  `366.720007`/`361.008008 ms`, and relation projection was
+  `57.473886`/`58.790683 ms`. Each returned `10` paths, `1` citation, and `48`
+  scores with no exhausted deadline.
+- All `13` timing-free semantic equivalence groups, all `5` cache acceptance
+  checks, and every applicable boundary gate passed.
+- V7 claim/claim-byte/report-byte hashes are
+  `sha256:879e903599e95d38d52e0bd1fb0d29fb6266371e7168289547d0bbc23a1d643b`,
+  `sha256:4de4d694f042f46b3a0d6c68dd93101ca7c7610a0b3f97496f44be34f20b7a0c`,
+  and `sha256:5b34d191244391c560cda849c0666c2f7e41be1d220fd3799108b6ca738a99d0`;
+  claim/report sizes are `1508`/`30893` bytes.
+- Trace/execution/source/preflight/offline-evidence/owner/precompute/cache bindings are
+  `sha256:9af61b1918c6ef2c31a91a8d6f73a875e796bbf678b13c49f7db44530189e6d6`,
+  `sha256:a99e1fa89b01d2d383209ae09f742ee55cfddcd2095992c9391878d73b00c649`,
+  `sha256:b5a8112dd88eb829b26ec7b795a6071ca81a6327362a0d265c1749d41c5f002e`,
+  `sha256:10c44440e0cde947591af7c8ad9797ba47b755d50d027d280c0cfa464dd8baf0`,
+  `sha256:bd6d0e962d07ba10f273caa83996a6e57114d6801d56660c551d3728a655fdf1`,
+  `sha256:8f63bdcf6baa4d18b6574071905900baf002318d9227e0d0da0523bf297a293e`,
+  `sha256:b2edcd214a19a6b3283abc475a8b67abd984753653a6136396b1630bfbfecf3b`,
+  and `sha256:d15cf0214e9112b1a28130496dc5ea0c554587606e32dd423886ee14364e110f`.
+- Temporary v7 evidence passed `51/51`; final cross-review found no blocker.
+  Together with v6's latency-necessity evidence, v7 establishes the bounded,
+  behavior-neutral, same-real-source relation-precompute POC. It is not
+  methodology, UAT, holdout, readiness, completion, or superiority evidence.
+- Diagnostic versions v1 through v7 are consumed and must never be rerun,
+  retried, or tuned. The four methodology authority gates remain blocked.
+- V4 is neither an independent holdout nor promotion evidence and
+  cannot support KG/ontology superiority. The sealed 41-case and additive
+  59-case mail holdouts and the GitHub transfer holdout remain unexecuted.
+- The v3 gate-evidence-to-atomic-promotion contract is implemented and focused
+  tests pass, but no formal all-four-gate evidence bundle exists to promote.
+- PostgreSQL/pgvector remains canonical. Neo4j work is not active.
+- Pre-rewrite KG/methodology/coordination documents were preserved losslessly
+  under `docs/archive/2026-08-18/` before active documents were rewritten.
 
 ## Current Unchecked Work
 
-- [ ] Align the real runtime with the active methodology authority before any
-  further methodology-quality UAT or KG-versus-ontology claim; implement issue
-  #51's source-neutral raw-inventory, structural-observation, coverage-ledger,
-  bounded-fallback, and four-state answer-claim pipeline.
-  - Owner paths: `formowl_contract`, canonical PST extraction, mail
-    bundle/PostgreSQL persistence, existing retrieval gateways, Task Answering,
-    MCP/JSON-RPC/UAT convergence, generalized fixtures, and durable docs.
-  - Contract authority: GitHub issue #51 comment `5070970116`; implementation
-    branches from clean commit `79bc129` and preserves the valid-but-blocked
-    methodology guard. OAuth migration `005` is reserved; #51 begins at `006+`.
-  - Ordered gates: WP1 contracts/persistence; WP2 independent raw-oracle
-    inventory parity; WP3 indexed retrieval/fallback; WP4 central claim
-    enforcement; reviewed issue #53 lifecycle prerequisite; WP5 one canonical
-    runtime/UAT path; WP6 manifest, parity, restart, revocation, budgets, full
-    container verification, and three read-only reviewers.
-  - WP1 contracts, persistence, and interface freeze are complete and integrated
-    at `9e8a5f6`: code `0f2e69b`, reviewed packet head `eac8473d`,
-    `docs/issue51-wp1-interface-freeze.md`, Russell/Herschel `AGREE`, exact
-    8-module suite 118 tests OK, targeted Ruff/format, diff checks, and
-    valid-but-blocked authority evidence.
-  - The sole UAT PST bridge is
-    `formowl_mail.import_workflow.run_upload_session_mail_import`; no alternate
-    UAT Asset, parser, bundle, index, coverage, claim, or hidden task truth.
-  - Keep unchecked until code, tests, docs, canonical container evidence, and
-    reviewers agree. Completion means only **ready for issue #52 independent
-    evidence**, never methodology-quality UAT or launch readiness while
-    `scripts/methodology_authority_check.py --require-ready` is nonzero.
+- [ ] Implement issue #20 Google-backed ChatGPT MCP OAuth identity mapping and
+  gateway-controlled `ActorContext`.
+  - Owner: System Backbone Agent.
+  - Repository implementation and local harness slices are extensive, but
+    validator blockers; seven external layers remain `not_supplied`, so #20
+  stays open.
+  - This bounded batch reviewer
+    gate is not the Issue #20-wide reviewer external layer, which remains
+    `not_supplied`.
+  - Remaining state: issue #20 stays unchecked and open. Repository authority is
+    the existing Issue #20 runbook, evidence packet, and completion transition.
+  - External state: `live_postgresql`, `operator_cli_postgresql`,
+    `production_container_lifecycle`, `mcp_inspector`, `live_chatgpt_google`,
+    `reviewer_gate`, and `completion_audit` remain `not_supplied`.
+  - Next: freeze docs/local harness, run all seven external layers, and keep #20 unchecked.
 
-- [ ] Complete Issue #49: source-neutral tokenizer replay and full-chat UAT
-  evidence.
-  - The July 23, 2026 answer-fallback correction removed the observed
-    intermittent full-chat failure. Three fresh anonymous sessions through the
-    deployed LAN page returned HTTP 200 three out of three, each with 87 total
-    sources, 10 displayed sources, 10 primary citations, exhaustive
-    `all_matching` coverage, and one FormOwl tool call. No fallback or
-    `chat_failure` event was recorded.
-  - The three full-chat runs completed in 10.281-11.178 seconds. FormOwl
-    orchestration took 1.447 seconds on the first post-start query and
-    0.670/0.684 seconds on the next two. The formerly failing
-    `03.80503G301` COO/origin prompt also returned HTTP 200 with the identifier
-    present, 17 total sources, 10 displayed sources, and 10 primary citations.
-  - The same 28,036-message cold start now uses four Linux `fork` workers for
-    tokenization and a deterministic parent merge. Cold readiness improved from
-    2368.108 seconds to 859.372 seconds: 2.76x faster and 63.71% less elapsed
-    time. The indexed build itself reported 541146.486ms; sampled parallel CPU
-    averaged 409% and peaked at 501%, peak memory was 17.38GiB, steady ready
-    memory was approximately 16.5GiB, and no OOM occurred.
-  - Exact single-process/multiprocess index parity, required-term result and
-    citation parity, fork-unavailable fallback, thread-safety fallback,
-    worker-failure fail-closed behavior, injected-gateway bundle binding, and
-    health metrics are covered by focused tests.
-  - The source-neutral implementation indexes once and queries many times.
-    Bundle/source identity collision and missing required-term supporting
-    citations were fixed and re-reviewed.
-    Private post-index retrieval took 664.132ms and 662.973ms, both below the
-    bounded 10-second target, with zero index rebuilds.
-  - The exhaustive oracle's 87 sources exactly matched verified and gateway
-    identifiers plus citation hash. Permission denial occurred before
-    retrieval, and supporting evidence was complete.
-  - The explicitly approved OpenAI Codex sidecar chat on July 23, 2026 returned
-    HTTP 200 in 10093.685ms, below the bounded 30-second target, invoked FormOwl
-    once, and reported 87 total sources, 10 displayed sources, and 10 citations.
-    It preserved the exact required-term individual hash match, included every
-    timing field, and did not reach the 120-second timeout.
-  - `all_matching` direct runtime coverage was total/returned 87, displayed 10,
-    `is_exhaustive=true`, `coverage.has_more=false`, and
-    `projection.has_more=true`. Chat deterministically copied the original tool
-    coverage unchanged; Faraday's re-review agreed that this is proof.
-  - Hume (high), Noether (medium), and Faraday (max) each returned
-    `RELEASE_DECISION: AGREE` with no blockers after the correctness fixes.
-  - Focused UAT-image verification passes gateway 38/38, orchestrator 20/20,
-    HTTP 43/43, targeted Ruff check/format, and the isolated Node 20 UI smoke.
-    `git diff --check` passes. Keep this item unchecked until the final
-    post-change reviewer gate agrees; do not reuse the earlier reviewer gate as
-    proof for the new multiprocessing and fallback changes.
-  - Methodology authority remains valid-but-blocked. This POC evidence does not
-    establish methodology-quality UAT, a KG-vs-ontology result, general
-    production readiness, or a general latency claim.
+- [ ] Implement issue #41 generic Core Asset Storage identity binding, tenant
+  isolation, lifecycle, retention, and authorization.
+  - Owner: System Backbone Agent.
+  - Preserve one generic Asset/Occurrence/permission boundary across every
+    source family; duplicate bytes must not merge authorization.
+  - Completion requires cross-tenant denial, upload/rollback/orphan/transfer/
+    redaction/purge/retention proof in the canonical dev container.
 
-- [x] Complete GitHub issue #44: add a source-neutral UAT conversation
-  orchestrator that treats FormOwl as governed MCP-style tools.
-  - Isolated branch/worktree: `uat/issue-44-orchestrator` at
-    `/tmp/formowl-uat-orchestrator`, based on pushed/live baseline `5dffd68`.
-  - Current implementation: `/api/chat` reaches a pinned Codex app-server
-    sidecar through a private Unix socket and a narrow JSONL/WebSocket bridge.
-    Codex owns the persistent thread and decides whether to answer, clarify,
-    re-render prior evidence, or invoke the single structured
-    `search_formowl_evidence` dynamic tool. FormOwl remains the governed
-    read-only evidence capability rather than the chatbot. Required terms are
-    generic literal source-item constraints, not procurement routing heuristics.
-    Final agent output is consumed from the protocol's `item/completed`
-    notification because pinned Codex returns `turn/completed.itemsView` as
-    `notLoaded`; persistent threads make failed-turn deletion enforceable.
-  - Preserved boundaries: `/api/query` remains the lower-level compatibility
-    evidence surface; uploads, citations, permission filtering, evidence
-    coverage, private UAT logs, no-login sharing, and read-only business-system
-    behavior remain intact. The HTTP and Codex processes run in separate
-    non-root containers; the sidecar sees neither repository, corpus, evidence
-    cache, upload state, nor authentication input while serving. Runtime attestation
-    rejects unsafe config, MCP servers, enabled skills, accessible apps, or a
-    non-empty/symlinked workspace before a conversation starts.
-  - Verification: 951 canonical dev-container tests passed, full Ruff passed,
-    275 files passed format check, the Node 20 UI smoke passed, the dedicated
-    UAT image built with pinned `codex-cli 0.144.6`, real direct and Unix-socket
-    app-server attestation passed, a non-root three-container init/serve/client
-    smoke passed, and `git diff --check` passed. Plato, Volta, and Mencius
-    returned 3/3 `RELEASE_DECISION: AGREE` after full disabled-feature
-    attestation and failed-turn thread rollback were added.
-  - Authenticated live proof on the deployed `8088` surface used the explicitly
-    authorized server Codex ChatGPT login in isolated sidecar state. A greeting
-    returned `answer_without_tool` with zero FormOwl calls. The source-backed
-    文顥/pull-in question invoked `search_formowl_evidence` exactly once and
-    returned six governed evidence items. The test thread was then deleted.
-- [ ] Complete the source-neutral Task Answering methodology slice.
-  - Owner paths: `python/formowl_graph/task_answering.py`,
-    `python/formowl_graph/candidate_retrieval.py`, task-answering tests, and
-    affected canonical specifications.
-  - Current implementation: `TaskFrame` revisions preserve follow-up context;
-    `EvidenceRequirement` supports sufficient, exact, at-least, and
-    all-matching cardinality; retrieval reports total/returned source counts
-    plus exhaustive/has-more state; permission-filtered source-item evidence
-    assembly feeds content-first projection; and answerability distinguishes
-    permission denial, missing target, absent property, partial evidence,
-    conflict, and sufficiency.
-  - Scope boundary: one method applies to mail, document, table, application,
-    and future source shapes. No procurement-specific aliases, source-specific
-    query path, canonical graph/type write, user-graph write, wiki write, or
-    external action is authorized.
-  - Verification: 895 canonical dev-container tests passed; full Ruff and
-    345-file format checks passed; `git diff --check` passed.
-  - Remaining gate: the required 3-reviewer gate. Keep unchecked until reviewer
-    agreement is complete.
 - [ ] Complete the full KG real-evidence objective across sessions.
-  - Owner paths: `docs/agent-goals/`, `.formowl/kg-eval/`, KG-owned graph,
-    ontology, evaluation, and test files.
-  - Current state: blocked on four real-evidence gates. The state-independent
-    authority harness now reports that blocked state consistently; do not
-    reinterpret harness completion as KG objective completion.
-  - Completion proof: canonical authority reports must agree on 12 passed gates,
-    zero failed gates, zero remaining gates, and a complete objective audit;
-    canonical dev-container checks and the required reviewer gate must pass.
-  - Full historical requirements and checkpoint evidence:
+  - Owner: Knowledge Graph Research Agent.
+  - Historical broad-objective requirements remain at
     `docs/archive/2026-07-11/implementation-task-breakdown.md`.
+  - This objective now closes only through issue #56's strong-RAG comparison,
+    independent holdout, transfer domain, final-answer review, executable
+    authority, and reviewer gate.
+
+- [ ] Align the real runtime with the active methodology authority before any further methodology-quality UAT or KG-versus-ontology claim.
+  - Implement the frozen tokenizer/profile and same-profile query/evidence
+    index without fallback.
+  - Prove raw/source-system-to-Observation completeness.
+  - Bind source, index, graph, ontology, model, prompt, evaluator, code, image,
+    and authority revisions into one execution fingerprint.
+  - Keep `python3 scripts/methodology_authority_check.py --require-ready`
+    fail-closed until all remaining gates pass.
+  - The `2026-08-20` workspace-only development diagnostic was a consumed,
+    blocked one-shot, not authority evidence. Do not execute it again.
+
+- [ ] Implement GitHub issue #56 graph-guided Hybrid KG + Ontology v2 and make it earn a measurable win over strong RAG.
+  - Work A: immutable Jieba + SentencePiece profile and re-index.
+  - Work B: source-complete, source-preserving graph input.
+  - Work C: small-core scoped ontology with capped soft scoring.
+  - Work D: typed router, validated plan, bounded traversal, evidence bundles,
+    and deterministic exact execution.
+  - Step 4 / Work D status remains `in-progress`; no checkbox is earned by the
+    bounded v4/v7 POC diagnostics or blocked v5/v6 diagnostics.
+  - The participant-any inventory sub-slice is generic and verified, but its
+    actual-user execution remains incomplete over the full authorized scope:
+    `2069` matches, `174` proven nonmatches, and `550` unresolved occurrences.
+    Work D therefore stays unchecked; no conversation expansion or comparison
+    with the unrelated private-prompt `317` oracle is authorized.
+  - The next action remains inside step 4; v1-v7 must not be rerun, and all four
+    blocked authority gates still require legitimate production evidence.
+  - Work E: controlled, citation-grounded LLM roles with the same answer model
+    across arms.
+  - Work F: strong RAG control, anti-fitting split, diagnostic evaluation,
+    independent holdout, and transfer-domain final-answer evaluation.
+    The 41-case and 59-case mail holdouts and GitHub transfer holdout have not
+    executed.
+  - Implementation completion is not comparative close. Keep the issue open
+    until the pre-registered quality/safety/cost gates and executable authority
+    pass.
 
 ## Recent Completions
 
-- [x] Complete GitHub issue #50: keep authorized mail evidence readable without
-  weakening denied-path or implementation-detail protections.
-  - Authorized `subject`, `snippet`, `text`, and assistant evidence now use a
-    dedicated evidence boundary. Ordinary HTTPS links, dates, slash prose, and
-    user document paths remain readable; credentials, authorization headers,
-    FormOwl/backend locators, scratch paths, SQL, and tracebacks are redacted
-    only at the matching span. Generic control/metadata fields remain strict,
-    and denied users still receive no mail content.
-  - Live verification exposed a separate one-call conversation constraint:
-    the PO prompt needed a second materially different refinement after its
-    first successful retrieval. Codex may now make at most three bounded
-    FormOwl calls per turn, identical requests reuse the prior result, and the
-    latest governed refinement drives the displayed evidence.
-  - Proof: 127 focused dev-container tests, targeted Ruff check/format, Node 20
-    UI smoke, and `git diff --check` pass. The July 24, 2026 LAN replay returned
-    HTTP 200 for both PO-delivery and COO/origin chat, with 87 and 17 exhaustive
-    source items, zero full-body placeholders, zero local redaction markers,
-    and no chat errors. The PO turn used two bounded tool queries; COO used one.
-  - Methodology authority remains valid-but-blocked. This display/safety POC
-    does not establish methodology-quality UAT, a KG-vs-ontology result, or
-    production readiness.
-- [x] General Candidate Assertion, Domain Pack, and Issue #16
-  temporal-evidential POC completed.
-  Procurement mail-shaped and finance ERP/application fixtures use the same
-  `Observation -> CandidateBusinessObject -> CandidateAssertion` pipeline and
-  all five assertion kinds. Domain Packs are scoped and content-hash-pinned and
-  map local dates into one `TemporalContext`. Candidate temporal views separate
-  world time, source knowledge time, materialization time, epistemic status,
-  and lifecycle status; missing knowledge boundaries fail closed. Persistence
-  remains atomic and candidate-only. Proof: 774 canonical dev-container tests,
-  full Ruff check and 338-file format check, `git diff --check`, and 3/3
-  reviewer agreement. GitHub target Issue #16 is recorded here, but its remote
-  comment remains unsent because both the GitHub connector and local `gh` token
-  are invalidated.
-- [x] Issue #21 governed mail evidence reading milestones completed through the
-  tracked local deterministic checkpoints; no production-readiness claim.
-- [x] Source-neutral Candidate evidence retrieval and bounded ontology rerank
-  completed without canonical graph/type/user-graph/wiki/external writes.
-  The final 100-case MAY run scored 93/100 for both Candidate and ontology:
-  73/80 answerable, 10/10 no-match, and 10/10 permission; validators returned
-  `blockers=[]`. Anti-overfitting coverage includes finance, quality,
-  PDF/PPT/table/OCR/application shapes, English/Chinese cardinality and
-  duration handling, identifier exclusion, four-axis access binding,
-  access-before-query-vocabulary behavior, chronology/context isolation, and
-  label-independent permission evaluation. Proof: 147 focused tests including
-  the exact 11-test hardness/harness onboarding command, 884 full canonical
-  dev-container tests, full Ruff/264-file format checks, `git diff --check`,
-  and 3/3 agreement from Herschel, Popper, and Boole.
-- [x] Remaining backbone storage, worker, folder-ingestion, readiness-smoke,
-  completed-slice test hardening, and required reviewer-gate history is
-  complete and archived.
-
-## Issues #38-#40 Maintenance Completion
-
-- [x] Complete issues #38, #39, and #40 without weakening authority, MCP, or
-  durable-history boundaries.
-  - Proof: state-independent KG authority fixtures pass in operator and clean
-    layouts, including a read-only repository mount for enterprise/preflight.
-  - Proof: one shared MCP protocol engine and JSONL runner preserve entrypoints,
-    fail closed on missing identity, reject identity forgery, and require
-    injected semantic handlers.
-  - Proof: byte-identical snapshots and SHA-256 manifest under
-    `docs/archive/2026-07-11/`.
-  - Proof: active-file retention rules, archive-integrity tests, canonical
-    dev-container suites, and a 3/3 read-only reviewer gate pass.
+- [x] Methodology authority guard/runtime tokenizer probe and candidate,
+  canonical, lifecycle, user/effective graph, scoped ontology, and projection
+  contract slices exist; authority remains valid but blocked.
+- [x] The bounded deterministic source-backed prompt selector and immutable
+  v4/v7 real-source diagnostic POC slices passed their stated non-claim-bearing
+  scopes.
+- [x] Source/Asset/Observation, mail evidence, Project MCP, Wiki MCP, connected
+  gateway, and container-first backbone slices exist within their documented
+  claim boundaries.
+- [x] Historical issue #55 document-first POC completed as a bounded non-KG
+  smoke; it is no longer an active methodology direction.
+- [x] Active KG/methodology documentation was losslessly archived and rewritten
+  around issue #56 on 2026-08-18.
 
 ## Pre-Feature Production Cleanup
 
-- [x] Remove high-confidence dead and duplicate production code without
-  changing KG, MCP, permission, or compatibility behavior.
-  - Production Python changed by 103 additions and 256 deletions: net `-153`
-    lines. Test scenarios moved out of `formowl_gateway`; mail bundle selection,
-    grant normalization, and grant expiry now have one shared implementation.
-  - Empty readiness markers and an unused JSON-RPC response helper were
-    removed. Retrieval uses one private implementation while preserving the
-    deprecated alias signature and canonical effective-view requirement.
-  - Project and Wiki servers use shared observability directly; legacy import
-    paths remain as documented deprecated re-exports.
-  - Proof: canonical dev-container suite 726 tests OK, full Ruff check passed,
-    325 files passed format check, and the 3/3 reviewer gate agreed.
+The completed production-cleanup record remains immutable history in
+`docs/archive/2026-08-18/active/docs/implementation-task-breakdown.md`. It is
+retained as a completion boundary for Issue #20 finalization tooling, not as a
+new KG task.
 
 ## Pre-Feature Structural Cleanup
 
-- [x] Consolidate high-cost duplicated validation and smoke harness behavior
-  before the next feature slice.
-  - Eleven evaluator and smoke entrypoints now delegate common exact-key,
-    SHA-256, privacy, HTTP, multipart, gateway-command, and report validation to
-    shared evaluator modules while preserving their CLI and output contracts.
-  - PostgreSQL live-smoke entrypoints share one startup, readiness, migration,
-    and cleanup harness. Mail workflow payload checks and atomic JSON file
-    persistence also have one implementation per architectural layer.
-  - Real adapters, interfaces, and migrations are the primary tested surfaces.
-    Previously exported name-list helpers remain thin compatibility wrappers so
-    this maintenance pass does not introduce an unannounced package API break.
-  - Total change: 1,334 additions and 1,514 deletions, net `-180` lines. Script
-    and experiment entrypoints are net `-893` lines; the added production code
-    is shared infrastructure replacing those repeated implementations.
-  - Proof: canonical dev-container suite 730 tests OK, full Ruff check passed,
-    331 files passed format check, `git diff --check`, and 3/3 reviewer gate passed.
+The completed structural-cleanup record is preserved in the same archive. No
+historical cleanup item is reopened by the issue #56 documentation rewrite.
 
-## Agent Dispatch Notes
+## Dispatch
 
-Choose the current unchecked task only when it belongs to the active role,
-unless the user explicitly assigns cross-role work. Read dated archives only
-when historical implementation detail or proof is needed.
+Choose an unchecked item owned by the active role unless the user explicitly
+assigns cross-role work. Do not use archived or historical-pointer documents as
+next-action authority.

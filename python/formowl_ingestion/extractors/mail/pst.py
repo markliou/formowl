@@ -1,5 +1,26 @@
 from __future__ import annotations
 
+
+# Reconciliation imports from Track 2
+from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
+import json
+import time
+from formowl_contract import (
+    Observation,
+    SourceRef,
+    SourceInventory,
+    SourceInventoryItem,
+    SourceInventoryProcessingState,
+    SourceInventoryRawRetentionState,
+    assert_no_public_raw_references,
+    now_iso,
+    sha256_json,
+    stable_observation_id,
+    stable_resource_contract_hash,
+    stable_resource_contract_id,
+)
+
 from dataclasses import dataclass, field, replace
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import base64
@@ -15188,3 +15209,238 @@ __all__ = [
     "rehydrate_pst_observation_stream",
     "rehydrate_pst_source_unit_observations",
 ]
+
+
+# Reconciled top-level API from Track 2
+
+@dataclass(frozen=True)
+
+@dataclass(frozen=True)
+
+@dataclass(frozen=True)
+
+@dataclass(frozen=True)
+
+@dataclass(frozen=True)
+
+@dataclass(frozen=True)
+
+@dataclass(frozen=True)
+
+def parse_native_pst_message_exports(
+    message_exports: Sequence[NativePstMessageExport],
+    *,
+    source_inventory: SourceInventory,
+    source_asset_id: str,
+    source_asset_sha256: str,
+    extractor_run_id: str,
+    permission_scope: Mapping[str, Any],
+    provenance_fingerprint: str,
+    created_at: str,
+    body_segment_max_chars: int = 4000,
+    max_body_segments_per_message: int = 3,
+    max_message_file_bytes: int = 8 * 1024 * 1024,
+
+def _native_bound_mail_observation(
+    *,
+    source_asset_id: str,
+    extractor_run_id: str,
+    observation_type: str,
+    text: str | None,
+    location: Mapping[str, Any],
+    payload: Mapping[str, Any],
+    permission_scope: Mapping[str, Any],
+    created_at: str,
+
+def run_bounded_pst_source_completeness_poc(
+    pst_path: str | Path,
+    *,
+    inventory_path: str | Path,
+    source_asset_id: str,
+    permission_scope: Mapping[str, Any],
+    extractor_run_id: str,
+    created_at: str,
+    parser_command: str = "readpst",
+    scratch_parent: str | Path | None = None,
+    max_exported_files: int = 4,
+    max_exported_bytes: int = 16 * 1024 * 1024,
+    timeout_seconds: int = 30,
+    max_message_file_bytes: int = 4 * 1024 * 1024,
+
+def _diagnostic_extraction_input(
+    *,
+    source_path: Path,
+    source_asset_id: str,
+    source_fingerprint: str,
+    permission_scope: Mapping[str, Any],
+    extractor_run_id: str,
+    created_at: str,
+
+def _bounded_source_fingerprint(path: Path, *, sample_bytes: int = 1024 * 1024) -> str:
+    with path.open("rb") as handle:
+        prefix = handle.read(sample_bytes)
+    return sha256_json(
+        {
+            "diagnostic_prefix_sha256": "sha256:" + hashlib.sha256(prefix).hexdigest(),
+            "size_bytes": path.stat().st_size,
+            "sample_bytes": len(prefix),
+        }
+    )
+
+def _bounded_readpst_export(
+    *,
+    parser_command: str,
+    pst_path: Path,
+    output_dir: Path,
+    max_exported_files: int,
+    max_exported_bytes: int,
+    timeout_seconds: int,
+
+def _safe_file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+def _terminate_process(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=2)
+
+def _classify_exported_source_units(
+    candidate_paths: Sequence[Path],
+    *,
+    export_root: Path,
+    config: _PstParserConfig,
+
+def _pst_source_inventory_from_classified_units(
+    units: Sequence[_PstClassifiedSourceUnit],
+    *,
+    source_asset_id: str,
+    source_fingerprint: str,
+    parser_fingerprint: str,
+    permission_scope: Mapping[str, Any],
+    created_at: str,
+
+def _persist_source_inventory_round_trip(
+    source_inventory: SourceInventory,
+    inventory_path: Path,
+
+def reconcile_pst_source_inventory(
+    source_inventory: SourceInventory,
+    observations: Sequence[Observation],
+    *,
+    bounded_source_unit_count: int,
+    bounded_overflow_count: int,
+    parser_stop_reason: str,
+    parser_completed: bool,
+    persisted_round_trip_verified: bool,
+
+def _iter_exported_files(export_root: Path) -> Iterable[Path]:
+    stack = [export_root]
+    while stack:
+        current = stack.pop()
+        try:
+            children = sorted(current.iterdir(), key=lambda item: item.name.lower())
+        except OSError:
+            continue
+        for child in reversed(children):
+            if child.is_dir():
+                stack.append(child)
+            elif child.is_file():
+                yield child
+
+def _safe_relative_parent(candidate_path: Path, export_root: Path) -> Path:
+    try:
+        relative = candidate_path.parent.relative_to(export_root)
+    except ValueError:
+        return Path("mailbox")
+    return relative if str(relative) not in {"", "."} else Path("mailbox")
+
+def _folder_label(relative_parent: Path) -> str:
+    label = " / ".join(part for part in relative_parent.parts if part not in {"", "."})
+    return _safe_mail_text(label or "Mailbox", "folder_label")
+
+def _exported_message_source_local_key(
+    candidate_path: Path,
+    *,
+    export_root: Path,
+    message_index: int,
+
+def _safe_date(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return _safe_mail_text(text, "date")
+    return parsed.isoformat()
+
+def _safe_header_tokens(value: str, field_name: str) -> list[str]:
+    tokens = [item for item in re.split(r"\s+", str(value or "").strip()) if item]
+    return [_safe_mail_text(token, field_name) for token in tokens[:25]]
+
+def _safe_optional_header(value: str | None, field_name: str) -> str | None:
+    if value in (None, ""):
+        return None
+    return _safe_mail_text(str(value), field_name)
+
+def _plain_body(message: EmailMessage) -> str:
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
+    for part in message.walk() if message.is_multipart() else [message]:
+        if part.is_multipart():
+            continue
+        disposition = part.get_content_disposition()
+        if disposition == "attachment":
+            continue
+        content_type = part.get_content_type()
+        try:
+            content = part.get_content()
+        except Exception:
+            continue
+        if not isinstance(content, str):
+            continue
+        if content_type == "text/plain":
+            plain_parts.append(content)
+        elif content_type == "text/html":
+            html_parts.append(_html_to_text(content))
+    body = "\n\n".join(part.strip() for part in plain_parts if part.strip())
+    if body:
+        return body
+    return "\n\n".join(part.strip() for part in html_parts if part.strip())
+
+def _body_paragraphs(text: str) -> list[str]:
+    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    paragraphs = [item.strip() for item in re.split(r"\n\s*\n", normalized) if item.strip()]
+    if paragraphs:
+        return paragraphs
+    single = normalized.strip()
+    return [single] if single else []
+
+def _chunks(value: str, size: int) -> Iterable[str]:
+    for start in range(0, len(value), size):
+        chunk = value[start : start + size].strip()
+        if chunk:
+            yield chunk
+
+def _pst_source_inventory(
+    messages: Sequence[_ParsedMessage],
+    *,
+    extraction_input: ExtractionInput,
+    parser_name: str,
+    parser_version: str,
+    config: _PstParserConfig,
+
+def _message_occurrence_id(
+    message: _ParsedMessage,
+    *,
+    message_index: int,
+    archive_id: str,
+    mailbox_id: str,

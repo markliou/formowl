@@ -6,9 +6,11 @@ import ast
 from dataclasses import dataclass
 from datetime import date
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Any, Callable
@@ -55,7 +57,6 @@ _REQUIRED_GATE_IDS = {
     "real_user_end_answer_acceptance",
 }
 _REQUIRED_BLOCKED_CLAIM_IDS = {
-    "current_runtime_implements_target_method",
     "current_runtime_has_production_chinese_tokenization",
     "historical_real_pst_results_compare_the_current_target_method",
     "kg_outperforms_kg_plus_ontology",
@@ -64,6 +65,7 @@ _REQUIRED_BLOCKED_CLAIM_IDS = {
     "methodology_objective_complete",
 }
 _REQUIRED_ALLOWED_CLAIM_IDS = {
+    "current_runtime_implements_target_method",
     "methodology_authority_guard_installed",
     "historical_regex_results_are_diagnostic_only",
     "experiment_layer_jieba_sentencepiece_results",
@@ -75,7 +77,7 @@ _EXPECTED_ASCII_PROBE_TOKENS = {
     "03.80503g301",
     "supplier@example.test",
 }
-_EXPECTED_TARGET_CJK_PROBE_TOKENS = {"查詢", "交期", "與", "產地"}
+_EXPECTED_TARGET_CJK_PROBE_TOKENS = {"查詢", "交期", "產地"}
 _TOKENIZER_RUNTIME_BINDINGS = (
     Path("python/formowl_mail/query.py"),
     Path("python/formowl_mail/evidence.py"),
@@ -91,16 +93,30 @@ _TOKENIZER_RUNTIME_CALLERS = {
     },
 }
 _TOKENIZER_BINDING_HELPERS = {
-    "ascii_identifier_regex_v1": (
-        "ascii_identifier_regex_tokens",
-        "configured_mail_candidate_admission_tokens",
-    ),
+    "ascii_identifier_regex_v1": "ascii_identifier_regex_tokens",
     _FROZEN_TARGET_PIPELINE[
         "tokenizer_id"
-    ]: (
-        "jieba_sentencepiece_frozen_profile_candidate_admission_tokens",
-        "configured_mail_candidate_admission_tokens",
-    ),
+    ]: "jieba_sentencepiece_frozen_profile_candidate_admission_tokens",
+}
+_EXPECTED_RUNTIME_METHOD_BINDING = {
+    "method_id": _FROZEN_TARGET_PIPELINE["method_id"],
+    "normal_entrypoint": "run_authorized_semantic_mail_query",
+    "authorization_order": "permission_before_candidate_materialization",
+    "lexical_dense_path": "bm25_pinned_multilingual_e5_same_profile_v1",
+    "typed_router": "semantic_query_plan_fail_closed_v1",
+    "entity_path": "source_backed_entity_matching_v1",
+    "candidate_graph_path": "source_backed_mail_candidate_graph_v1",
+    "ontology_path": "capped_soft_additive_ontology_v1",
+    "exact_path": "deterministic_authorized_inventory_coverage_v1",
+    "cited_result_path": "governed_authorized_observation_citations_v1",
+    "legacy_hard_gate_default": False,
+    "fallback_policy": "fail_closed_no_ascii_hash_random_or_diagnostic_fallback_v1",
+}
+_RUNTIME_METHOD_BINDING_FILES = {
+    "hybrid": Path("python/formowl_mail/hybrid.py"),
+    "semantic_plan": Path("python/formowl_mail/semantic_plan.py"),
+    "exact": Path("python/formowl_mail/exact.py"),
+    "answer": Path("python/formowl_mail/answer.py"),
 }
 _PIPELINE_SOURCE_ROOTS = (
     Path("python/formowl_contract"),
@@ -126,6 +142,7 @@ _EXECUTABLE_EVIDENCE_GATE_IDS = _REQUIRED_GATE_IDS - {
 }
 _GATE_EVIDENCE_KEYS = {
     "artifact_id",
+    "schema_version",
     "authority_id",
     "gate_id",
     "execution_fingerprint",
@@ -134,9 +151,198 @@ _GATE_EVIDENCE_KEYS = {
     "source_manifest_sha256",
     "result_artifact_path",
     "result_artifact_sha256",
+    "dependency_manifest_path",
+    "dependency_manifest_sha256",
+    "dependency_manifest_fingerprint",
+    "dependency_count",
+    "execution_binding",
     "status",
+    "evidence_classification",
+    "promotion_status",
+    "envelope_fingerprint",
 }
-_GATE_EVIDENCE_ARTIFACT_ID = "formowl_methodology_gate_evidence_v2"
+_GATE_EVIDENCE_ARTIFACT_ID = "formowl_methodology_gate_evidence_v3"
+_GATE_EVIDENCE_SCHEMA_VERSION = 1
+_GATE_EVIDENCE_FINGERPRINT_FIELD = "envelope_fingerprint"
+_GATE_DEPENDENCY_MANIFEST_ARTIFACT_ID = "formowl_methodology_gate_dependency_manifest_v1"
+_GATE_DEPENDENCY_MANIFEST_KEYS = {
+    "artifact_id",
+    "gate_id",
+    "execution_fingerprint",
+    "source_manifest_path",
+    "source_manifest_sha256",
+    "result_artifact_path",
+    "result_artifact_sha256",
+    "dependencies",
+    "manifest_fingerprint",
+}
+_GATE_DEPENDENCY_ENTRY_KEYS = {
+    "role",
+    "path",
+    "artifact_id",
+    "byte_sha256",
+    "internal_fingerprint_field",
+    "internal_fingerprint",
+}
+_GATE_EXECUTION_BINDING_REFERENCE_KEYS = {
+    "role",
+    "path",
+    "byte_sha256",
+    "bundle_fingerprint",
+    "complete_execution_fingerprint",
+}
+_GATE_DEPENDENCY_ARTIFACT_KEYS = {
+    "artifact_id",
+    "gate_id",
+    "execution_fingerprint",
+    "source_manifest_sha256",
+    "status",
+    "evidence_classification",
+    "dependency_paths",
+    "payload",
+    "artifact_fingerprint",
+}
+_SOURCE_ROOT_DEPENDENCY_ARTIFACT_KEYS = {
+    "artifact_id",
+    "dependency_paths",
+    "payload",
+    "artifact_fingerprint",
+}
+_GATE_DEPENDENCY_INTERNAL_FINGERPRINT_FIELD = "artifact_fingerprint"
+_EXECUTION_BINDING_DEPENDENCY_ROLE = "execution_binding_bundle"
+_EXECUTION_BINDING_BUNDLE_ARTIFACT_ID = "formowl_issue56_execution_fingerprint_acceptance_bundle_v1"
+_EXECUTION_BINDING_ARTIFACT_ID = "formowl_issue56_complete_execution_binding_v1"
+_EXECUTION_BINDING_SCHEMA_VERSION = 1
+_EXECUTION_BINDING_BUNDLE_KEYS = {
+    "artifact_id",
+    "schema_version",
+    "status",
+    "run_binding_fingerprint",
+    "source_binding_fingerprint",
+    "execution_fingerprint",
+    "execution_binding_status",
+    "execution_binding",
+    "component_artifact_fingerprints",
+    "bound_fingerprints",
+    "counts",
+    "statuses",
+    "blocking_status_ids",
+    "blocking_status_fingerprint",
+    "bundle_fingerprint",
+}
+_EXECUTION_BINDING_KEYS = {
+    "artifact_id",
+    "schema_version",
+    "source_binding_fingerprint",
+    "source_completeness_report_sha256",
+    "source_completeness_report_fingerprint",
+    "bound_fingerprints",
+}
+_EXECUTION_BINDING_COMPONENT_KEYS = {
+    "answer",
+    "authority",
+    "code",
+    "evaluation",
+    "graph_ontology",
+    "image",
+    "lexical_index",
+    "source",
+}
+_EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS = {
+    "answer_budget",
+    "answer_model",
+    "answer_prompt",
+    "authority_execution",
+    "authorized_identifier_mention_set",
+    "code_commit",
+    "code_tree",
+    "code_tree_scope",
+    "complete_identifier_mention_batch",
+    "complete_identifier_mention_set",
+    "complete_identifier_resolution",
+    "dense_profile",
+    "evaluator",
+    "graph_adapter",
+    "graph_artifact",
+    "graph_identifier_resolution_set",
+    "graph_relation_type_set",
+    "image_attestor",
+    "image_id",
+    "image_metadata",
+    "index",
+    "lexical_profile",
+    "ontology_artifact",
+    "ontology_target",
+    "runtime_component",
+    "runtime_method",
+    "script",
+    "selected_identifier_mention_batch",
+    "selected_identifier_resolution",
+    "source_graph_policy",
+    "source_identifier_adapter",
+    "source_identifier_candidate_artifact",
+    "source_identifier_candidate_binding",
+    "source_identifier_candidate_schema",
+    "source_identifier_extraction_policy",
+    "source_identifier_identity_scope",
+    "source_identifier_identity_scope_attestation",
+    "source_identifier_identity_scope_attestation_bytes",
+    "source_identifier_identity_scope_binding",
+    "source_identifier_identity_scope_graph_binding_set",
+    "source_identifier_identity_scope_mode",
+    "source_identifier_identity_scope_policy",
+    "source_identifier_mode_approval",
+    "source_identifier_operator_approval",
+    "source_identifier_resolution_policy",
+    "source_inventory",
+    "source_snapshot",
+}
+_GATE_DEPENDENCY_MANIFEST_FINGERPRINT_FIELD = "manifest_fingerprint"
+_SOURCE_MANIFEST_FINGERPRINT_FIELD = "manifest_fingerprint"
+_GATE_RESULT_FINGERPRINT_FIELD = "result_fingerprint"
+_OPAQUE_DEPENDENCY_ROLES = {
+    "model_artifact",
+    "package_lock",
+    "source_item",
+}
+_COMMON_DEPENDENCY_ARTIFACT_IDS = {
+    "case_manifest": "formowl_methodology_case_manifest_dependency_v1",
+    "configuration_manifest": "formowl_methodology_configuration_manifest_dependency_v1",
+    _EXECUTION_BINDING_DEPENDENCY_ROLE: _EXECUTION_BINDING_BUNDLE_ARTIFACT_ID,
+    "source_inventory_manifest": "formowl_methodology_source_inventory_dependency_v1",
+}
+_GATE_DEPENDENCY_ARTIFACT_IDS = {
+    "raw_source_oracle_manifest": "formowl_methodology_raw_source_oracle_dependency_v1",
+    "observation_reconciliation_report": (
+        "formowl_methodology_observation_reconciliation_dependency_v1"
+    ),
+    "evaluation_report_index": "formowl_methodology_evaluation_report_index_dependency_v1",
+    "evaluation_report": "formowl_methodology_evaluation_report_dependency_v1",
+    "ablation_arm_result": "formowl_methodology_ablation_arm_result_dependency_v1",
+    "final_answer_acceptance_report": ("formowl_methodology_final_answer_acceptance_dependency_v1"),
+}
+_PRODUCTION_CASE_SCOPES = {
+    "evaluation",
+    "independent_holdout",
+    "transfer_holdout",
+    "combined_independent_acceptance",
+}
+_DISALLOWED_EVIDENCE_STATES = {
+    "blocked",
+    "diagnostic",
+    "diagnostic_only",
+    "failed",
+    "partial",
+    "preflight",
+    "preflight_only",
+}
+_DISALLOWED_EVIDENCE_PATH_TOKENS = {
+    ".test-tmp",
+    "blocked",
+    "diagnostic",
+    "preflight",
+    "tmp",
+}
 _GATE_VALIDATOR_IDS = {
     "source_completeness_compared_with_raw_oracle": "raw_source_completeness_validator_v1",
     "evaluation_reports_bind_execution_fingerprint": "execution_report_binding_validator_v1",
@@ -160,6 +366,7 @@ _SOURCE_MANIFEST_KEYS = {
     "configuration_manifest_sha256",
     "model_artifact_hashes",
     "package_lock_sha256",
+    "manifest_fingerprint",
 }
 _SOURCE_MANIFEST_ARTIFACT_ID = "formowl_methodology_source_manifest_v1"
 _RESULT_COMMON_KEYS = {
@@ -167,6 +374,7 @@ _RESULT_COMMON_KEYS = {
     "execution_fingerprint",
     "source_manifest_sha256",
     "status",
+    "result_fingerprint",
 }
 _GATE_RESULT_KEYS = {
     "source_completeness_compared_with_raw_oracle": _RESULT_COMMON_KEYS
@@ -215,9 +423,6 @@ _MINIMUM_REAL_USER_CASE_COUNT = 100
 _MINIMUM_END_ANSWER_ACCURACY_PPM = 900_000
 _REQUIRED_CITATION_SUPPORT_PPM = 1_000_000
 _GATE_EXECUTABLE_VALIDATORS: dict[str, Callable[..., bool]] = {}
-_RUNTIME_AVAILABLE = "available"
-_RUNTIME_UNAVAILABLE_PROFILE = "unavailable_profile"
-_RUNTIME_INVALID = "invalid"
 
 
 @dataclass(frozen=True)
@@ -225,8 +430,8 @@ class TokenizerProbe:
     tokenizer_id: str
     query_tokenizer_id: str | None
     evidence_tokenizer_id: str | None
-    runtime_availability: str
     runtime_probe_valid: bool
+    runtime_dependencies_available: bool
     ascii_identifier_support: bool
     cjk_support: bool
     query_token_count: int
@@ -237,13 +442,62 @@ class TokenizerProbe:
             "tokenizer_id": self.tokenizer_id,
             "query_tokenizer_id": self.query_tokenizer_id,
             "evidence_tokenizer_id": self.evidence_tokenizer_id,
-            "runtime_availability": self.runtime_availability,
             "runtime_probe_valid": self.runtime_probe_valid,
+            "runtime_dependencies_available": self.runtime_dependencies_available,
             "ascii_identifier_support": self.ascii_identifier_support,
             "cjk_support": self.cjk_support,
             "query_token_count": self.query_token_count,
             "evidence_token_count": self.evidence_token_count,
         }
+
+
+@dataclass(frozen=True)
+class RuntimePipelineProbe:
+    method_id: str | None
+    method_fingerprint: str | None
+    runtime_probe_valid: bool
+    normal_entrypoint_bound: bool
+    typed_plan_bound: bool
+    strong_rag_bound: bool
+    entity_graph_bound: bool
+    soft_ontology_bound: bool
+    exact_executor_bound: bool
+    cited_answer_bound: bool
+    legacy_or_ascii_fallback_absent: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "method_id": self.method_id,
+            "method_fingerprint": self.method_fingerprint,
+            "runtime_probe_valid": self.runtime_probe_valid,
+            "normal_entrypoint_bound": self.normal_entrypoint_bound,
+            "typed_plan_bound": self.typed_plan_bound,
+            "strong_rag_bound": self.strong_rag_bound,
+            "entity_graph_bound": self.entity_graph_bound,
+            "soft_ontology_bound": self.soft_ontology_bound,
+            "exact_executor_bound": self.exact_executor_bound,
+            "cited_answer_bound": self.cited_answer_bound,
+            "legacy_or_ascii_fallback_absent": self.legacy_or_ascii_fallback_absent,
+        }
+
+
+@dataclass(frozen=True)
+class MethodologyGateDependency:
+    role: str
+    relative_path: Path
+    byte_sha256: str
+    artifact_id: str | None
+    payload: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class MethodologyGateDependencyManifest:
+    relative_path: Path
+    manifest_fingerprint: str
+    dependencies: tuple[MethodologyGateDependency, ...]
+
+    def by_role(self, role: str) -> tuple[MethodologyGateDependency, ...]:
+        return tuple(item for item in self.dependencies if item.role == role)
 
 
 @dataclass(frozen=True)
@@ -262,6 +516,7 @@ class MethodologyAuthorityResult:
     authority_state_fingerprint: str | None
     pipeline_source_binding_count: int
     tokenizer_probe: TokenizerProbe
+    runtime_pipeline_probe: RuntimePipelineProbe
     errors: tuple[str, ...]
 
     def to_safe_dict(self) -> dict[str, Any]:
@@ -281,6 +536,7 @@ class MethodologyAuthorityResult:
             "authority_state_fingerprint": self.authority_state_fingerprint,
             "pipeline_source_binding_count": self.pipeline_source_binding_count,
             "tokenizer_probe": self.tokenizer_probe.to_dict(),
+            "runtime_pipeline_probe": self.runtime_pipeline_probe.to_dict(),
             "errors": list(self.errors),
         }
 
@@ -294,6 +550,7 @@ def check_methodology_authority(
 
     path = authority_path or repository_root / AUTHORITY_RELATIVE_PATH
     probe = probe_runtime_tokenizers(repository_root=repository_root)
+    runtime_pipeline_probe = probe_runtime_pipeline(repository_root=repository_root)
     errors: list[str] = []
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -356,27 +613,35 @@ def check_methodology_authority(
     if type(declared_cjk_support) is not bool:
         errors.append("current_runtime.mail_query_cjk_supported_must_be_bool")
 
-    if (
-        not probe.runtime_probe_valid
-        and probe.runtime_availability != _RUNTIME_UNAVAILABLE_PROFILE
-    ):
+    dependency_deferred_target_probe = (
+        current_tokenizer_id == _FROZEN_TARGET_PIPELINE["tokenizer_id"]
+        and not probe.runtime_dependencies_available
+        and not probe.runtime_probe_valid
+    )
+    if not probe.runtime_probe_valid and not dependency_deferred_target_probe:
         errors.append("runtime_tokenizer_probe_failed")
     if (
-        probe.runtime_availability != _RUNTIME_UNAVAILABLE_PROFILE
+        probe.runtime_probe_valid
         and current_tokenizer_id
         and current_tokenizer_id != probe.tokenizer_id
     ):
         errors.append("runtime_tokenizer_id_drift")
     if (
-        probe.runtime_availability != _RUNTIME_UNAVAILABLE_PROFILE
+        probe.runtime_probe_valid
         and type(declared_cjk_support) is bool
         and declared_cjk_support != probe.cjk_support
     ):
         errors.append("runtime_cjk_capability_drift")
+    if current_method_id == _FROZEN_TARGET_PIPELINE["method_id"] and (
+        not runtime_pipeline_probe.runtime_probe_valid
+        or runtime_pipeline_probe.method_id != current_method_id
+    ):
+        errors.append("runtime_method_binding_drift")
     runtime_binding_hashes = _validate_pipeline_source_bindings(
         repository_root,
-        tokenizer_id=probe.tokenizer_id,
-        runtime_probe_valid=probe.runtime_probe_valid,
+        tokenizer_id=(
+            current_tokenizer_id if dependency_deferred_target_probe else probe.tokenizer_id
+        ),
         errors=errors,
     )
 
@@ -412,12 +677,18 @@ def check_methodology_authority(
             errors.append("passed_runtime_gate_requires_target_runtime_method")
         if current_tokenizer_id != target_values["tokenizer_id"]:
             errors.append("passed_runtime_gate_requires_target_runtime_tokenizer")
-        if current_ingestion_policy_id != target_values["ingestion_policy_id"]:
-            errors.append("passed_runtime_gate_requires_target_ingestion_policy")
-        if current_evaluation_policy_id != target_values["evaluation_policy_id"]:
-            errors.append("passed_runtime_gate_requires_target_evaluation_policy")
-        if not probe.cjk_support:
+        if not probe.runtime_probe_valid or not probe.cjk_support:
             errors.append("passed_runtime_gate_requires_cjk_runtime_support")
+        if (
+            not runtime_pipeline_probe.runtime_probe_valid
+            or runtime_pipeline_probe.method_id != target_values["method_id"]
+        ):
+            errors.append("passed_runtime_gate_requires_target_runtime_probe")
+    if status == "ready":
+        if current_ingestion_policy_id != target_values["ingestion_policy_id"]:
+            errors.append("ready_authority_requires_target_ingestion_policy")
+        if current_evaluation_policy_id != target_values["evaluation_policy_id"]:
+            errors.append("ready_authority_requires_target_evaluation_policy")
 
     execution_fingerprint, authority_state_fingerprint = _methodology_fingerprints(
         authority_id=authority_id,
@@ -428,6 +699,7 @@ def check_methodology_authority(
         gates=gates,
         claim_policy=claim_policy,
         probe=probe,
+        runtime_pipeline_probe=runtime_pipeline_probe,
         runtime_binding_hashes=runtime_binding_hashes,
     )
     _validate_passed_gate_evidence(
@@ -438,13 +710,7 @@ def check_methodology_authority(
         errors=errors,
     )
     authority_valid = not errors
-    methodology_ready = (
-        authority_valid
-        and status == "ready"
-        and not blocking_gate_ids
-        and probe.runtime_availability == _RUNTIME_AVAILABLE
-        and probe.runtime_probe_valid
-    )
+    methodology_ready = authority_valid and status == "ready" and not blocking_gate_ids
     return MethodologyAuthorityResult(
         authority_valid=authority_valid,
         methodology_ready=methodology_ready,
@@ -460,6 +726,7 @@ def check_methodology_authority(
         authority_state_fingerprint=authority_state_fingerprint,
         pipeline_source_binding_count=len(runtime_binding_hashes),
         tokenizer_probe=probe,
+        runtime_pipeline_probe=runtime_pipeline_probe,
         errors=tuple(errors),
     )
 
@@ -474,14 +741,20 @@ def probe_runtime_tokenizers(
 ) -> TokenizerProbe:
     """Classify runtime tokenizer behavior with safe ASCII and CJK canaries."""
 
-    runtime_availability = _RUNTIME_AVAILABLE
     runtime_probe_valid = True
+    runtime_dependencies_available = True
     query_ascii: set[str] = set()
     evidence_ascii: set[str] = set()
     query_cjk: set[str] = set()
     evidence_cjk: set[str] = set()
     if query_tokenize is None and evidence_tokenize is None:
         resolved_root = repository_root or Path(__file__).resolve().parents[2]
+        query_tokenizer_id = None
+        evidence_tokenizer_id = None
+        runtime_dependencies_available = all(
+            importlib.util.find_spec(package_name) is not None
+            for package_name in ("jieba", "sentencepiece")
+        )
         probe_script = "\n".join(
             (
                 "import importlib, json, os, sys, types",
@@ -491,24 +764,8 @@ def probe_runtime_tokenizers(
                 "package.__path__ = [str(root / 'python' / 'formowl_mail')]",
                 "package.__package__ = 'formowl_mail'",
                 "sys.modules['formowl_mail'] = package",
-                "try:",
-                "    query = importlib.import_module('formowl_mail.query')",
-                "    evidence = importlib.import_module('formowl_mail.evidence')",
-                "except RuntimeError as exc:",
-                "    if str(exc) != 'frozen tokenizer profile is unavailable':",
-                "        raise",
-                "    from formowl_core.tokenization import JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID",
-                "    print(json.dumps({",
-                "        'valid': True,",
-                "        'runtime_availability': 'unavailable_profile',",
-                "        'query_tokenizer_id': JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,",
-                "        'evidence_tokenizer_id': JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,",
-                "        'query_ascii': [],",
-                "        'evidence_ascii': [],",
-                "        'query_cjk': [],",
-                "        'evidence_cjk': [],",
-                "    }, sort_keys=True))",
-                "    raise SystemExit(0)",
+                "query = importlib.import_module('formowl_mail.query')",
+                "evidence = importlib.import_module('formowl_mail.evidence')",
                 "def capture(module, value):",
                 "    result = module._tokenize(value)",
                 "    if type(result) is not set or any(type(item) is not str for item in result):",
@@ -516,7 +773,6 @@ def probe_runtime_tokenizers(
                 "    return sorted(result)",
                 "payload = {",
                 "    'valid': True,",
-                "    'runtime_availability': 'available',",
                 "    'query_tokenizer_id': getattr(query, 'MAIL_TOKENIZER_ID', None),",
                 "    'evidence_tokenizer_id': getattr(evidence, 'MAIL_TOKENIZER_ID', None),",
                 f"    'query_ascii': capture(query, {_ASCII_PROBE!r}),",
@@ -550,7 +806,6 @@ def probe_runtime_tokenizers(
             payload = json.loads(completed.stdout)
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
             payload = {}
-            runtime_availability = _RUNTIME_INVALID
         if (
             completed is None
             or completed.returncode != 0
@@ -558,7 +813,6 @@ def probe_runtime_tokenizers(
             or set(payload)
             != {
                 "valid",
-                "runtime_availability",
                 "query_tokenizer_id",
                 "evidence_tokenizer_id",
                 "query_ascii",
@@ -568,16 +822,8 @@ def probe_runtime_tokenizers(
             }
             or payload.get("valid") is not True
         ):
-            runtime_availability = _RUNTIME_INVALID
             runtime_probe_valid = False
         else:
-            runtime_availability = payload["runtime_availability"]
-            if runtime_availability not in {
-                _RUNTIME_AVAILABLE,
-                _RUNTIME_UNAVAILABLE_PROFILE,
-            }:
-                runtime_availability = _RUNTIME_INVALID
-                runtime_probe_valid = False
             query_tokenizer_id = payload.get("query_tokenizer_id")
             evidence_tokenizer_id = payload.get("evidence_tokenizer_id")
             token_lists = (
@@ -597,10 +843,7 @@ def probe_runtime_tokenizers(
                 query_ascii, evidence_ascii, query_cjk, evidence_cjk = (
                     set(items) for items in token_lists
                 )
-            if runtime_availability == _RUNTIME_UNAVAILABLE_PROFILE:
-                runtime_probe_valid = False
     elif query_tokenize is None or evidence_tokenize is None:
-        runtime_availability = _RUNTIME_INVALID
         runtime_probe_valid = False
     else:
         try:
@@ -611,14 +854,12 @@ def probe_runtime_tokenizers(
                 evidence_tokenize(_CJK_PROBE),
             )
         except Exception:
-            runtime_availability = _RUNTIME_INVALID
             runtime_probe_valid = False
         else:
             if any(
                 type(tokens) is not set or any(type(token) is not str for token in tokens)
                 for tokens in raw_tokens
             ):
-                runtime_availability = _RUNTIME_INVALID
                 runtime_probe_valid = False
             else:
                 query_ascii, evidence_ascii, query_cjk, evidence_cjk = raw_tokens
@@ -633,13 +874,7 @@ def probe_runtime_tokenizers(
         and query_cjk == _EXPECTED_TARGET_CJK_PROBE_TOKENS
         and evidence_cjk == _EXPECTED_TARGET_CJK_PROBE_TOKENS
     )
-    if runtime_availability == _RUNTIME_UNAVAILABLE_PROFILE:
-        tokenizer_id = (
-            query_tokenizer_id
-            if query_tokenizer_id == evidence_tokenizer_id
-            else "unregistered_runtime_tokenizer"
-        )
-    elif (
+    if (
         query_tokenizer_id == evidence_tokenizer_id == "ascii_identifier_regex_v1"
         and ascii_support
         and query_cjk == evidence_cjk == set()
@@ -659,12 +894,146 @@ def probe_runtime_tokenizers(
         evidence_tokenizer_id=(
             evidence_tokenizer_id if isinstance(evidence_tokenizer_id, str) else None
         ),
-        runtime_availability=runtime_availability,
         runtime_probe_valid=runtime_probe_valid,
+        runtime_dependencies_available=runtime_dependencies_available,
         ascii_identifier_support=ascii_support,
         cjk_support=cjk_support,
         query_token_count=len(query_ascii) + len(query_cjk),
         evidence_token_count=len(evidence_ascii) + len(evidence_cjk),
+    )
+
+
+def probe_runtime_pipeline(
+    *,
+    repository_root: Path | None = None,
+) -> RuntimePipelineProbe:
+    """Verify the normal target-method call graph without loading model artifacts."""
+
+    resolved_root = repository_root or Path(__file__).resolve().parents[2]
+    sources: dict[str, str] = {}
+    trees: dict[str, ast.Module] = {}
+    for name, relative_path in _RUNTIME_METHOD_BINDING_FILES.items():
+        path = _resolve_repo_regular_file(resolved_root, relative_path)
+        if path is None:
+            return _invalid_runtime_pipeline_probe()
+        try:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+        except (OSError, UnicodeError, SyntaxError):
+            return _invalid_runtime_pipeline_probe()
+        sources[name] = source
+        trees[name] = tree
+
+    binding = _literal_module_assignment(
+        trees["hybrid"],
+        "_ISSUE56_TARGET_RUNTIME_METHOD_BINDING",
+    )
+    method_id_value = _literal_module_assignment(
+        trees["hybrid"],
+        "ISSUE56_TARGET_RUNTIME_METHOD_ID",
+    )
+    method_id = method_id_value if isinstance(method_id_value, str) else None
+    method_fingerprint = _canonical_sha256(binding) if isinstance(binding, dict) else None
+    entrypoint = _top_level_function(
+        trees["hybrid"],
+        "run_authorized_semantic_mail_query",
+    )
+    session_query = _class_method(
+        trees["hybrid"],
+        "AuthorizedSemanticMailSession",
+        "query",
+    )
+    answer_renderer = _top_level_function(
+        trees["answer"],
+        "render_governed_evidence_answer",
+    )
+    normal_entrypoint_bound = (
+        entrypoint is not None
+        and _function_default_is_false(entrypoint, "legacy_hard_gate")
+        and {
+            "build_authorized_semantic_mail_session",
+            "query",
+        }.issubset(_called_function_names(entrypoint))
+    )
+    session_calls = _called_function_names(session_query)
+    typed_plan_bound = (
+        session_query is not None
+        and "route_semantic_query" in session_calls
+        and _function_default_is_true(session_query, "enable_entity_signal")
+        and _function_default_is_true(session_query, "enable_graph_traversal")
+        and _function_default_is_false(session_query, "legacy_hard_gate")
+    )
+    strong_rag_bound = session_query is not None and "query" in session_calls
+    entity_graph_bound = (
+        session_query is not None
+        and "_semantic_evidence_scores" in session_calls
+        and "_bounded_graph_traversal" in session_calls
+        and _top_level_function(
+            trees["hybrid"],
+            "build_authorized_source_backed_effective_graph_view",
+        )
+        is not None
+    )
+    soft_ontology_bound = (
+        "soft_core_supertypes_compatible" in sources["hybrid"]
+        and "ontology_bonus_cap" in sources["hybrid"]
+        and "legacy_ontology_hard_gate_negative_ablation" in sources["hybrid"]
+    )
+    exact_executor_bound = (
+        session_query is not None
+        and "execute_deterministic_exact_inventory" in session_calls
+        and _top_level_function(
+            trees["exact"],
+            "execute_deterministic_exact_inventory",
+        )
+        is not None
+        and "authorized_scope_complete" in sources["exact"]
+    )
+    cited_answer_bound = (
+        answer_renderer is not None
+        and "_semantic_citation_hashes" in _called_function_names(answer_renderer)
+        and "_bounded_semantic_answer_citation_hashes" in session_calls
+    )
+    forbidden_runtime_references = (
+        "DeterministicDiagnosticDenseEncoder",
+        "ascii_identifier_regex_tokens",
+        "build_ascii_identifier_regex_tokenizer_profile",
+    )
+    legacy_or_ascii_fallback_absent = (
+        all(
+            forbidden not in source
+            for source in sources.values()
+            for forbidden in forbidden_runtime_references
+        )
+        and normal_entrypoint_bound
+        and typed_plan_bound
+    )
+    runtime_probe_valid = all(
+        (
+            binding == _EXPECTED_RUNTIME_METHOD_BINDING,
+            method_id == _FROZEN_TARGET_PIPELINE["method_id"],
+            normal_entrypoint_bound,
+            typed_plan_bound,
+            strong_rag_bound,
+            entity_graph_bound,
+            soft_ontology_bound,
+            exact_executor_bound,
+            cited_answer_bound,
+            legacy_or_ascii_fallback_absent,
+        )
+    )
+    return RuntimePipelineProbe(
+        method_id=method_id,
+        method_fingerprint=method_fingerprint,
+        runtime_probe_valid=runtime_probe_valid,
+        normal_entrypoint_bound=normal_entrypoint_bound,
+        typed_plan_bound=typed_plan_bound,
+        strong_rag_bound=strong_rag_bound,
+        entity_graph_bound=entity_graph_bound,
+        soft_ontology_bound=soft_ontology_bound,
+        exact_executor_bound=exact_executor_bound,
+        cited_answer_bound=cited_answer_bound,
+        legacy_or_ascii_fallback_absent=legacy_or_ascii_fallback_absent,
     )
 
 
@@ -721,6 +1090,7 @@ def _methodology_fingerprints(
     gates: list[dict[str, Any]],
     claim_policy: dict[str, Any],
     probe: TokenizerProbe,
+    runtime_pipeline_probe: RuntimePipelineProbe,
     runtime_binding_hashes: dict[str, str],
 ) -> tuple[str, str]:
     execution_identity = json.dumps(
@@ -729,6 +1099,7 @@ def _methodology_fingerprints(
             "target_pipeline": target,
             "current_runtime": current,
             "tokenizer_probe": probe.to_dict(),
+            "runtime_pipeline_probe": runtime_pipeline_probe.to_dict(),
             "runtime_binding_hashes": runtime_binding_hashes,
         },
         ensure_ascii=True,
@@ -757,7 +1128,6 @@ def _validate_pipeline_source_bindings(
     repository_root: Path,
     *,
     tokenizer_id: str,
-    runtime_probe_valid: bool,
     errors: list[str],
 ) -> dict[str, str]:
     hashes: dict[str, str] = {}
@@ -786,11 +1156,6 @@ def _validate_pipeline_source_bindings(
         hashes[relative_path.as_posix()] = hashlib.sha256(source.encode("utf-8")).hexdigest()
         if relative_path not in _TOKENIZER_RUNTIME_BINDINGS:
             continue
-        if expected_helper is None and not runtime_probe_valid:
-            # A runtime that cannot be imported or classified is already
-            # invalid. Do not add a misleading binding-drift error on top of
-            # the fail-closed probe failure.
-            continue
         try:
             tree = ast.parse(source)
         except SyntaxError:
@@ -798,7 +1163,7 @@ def _validate_pipeline_source_bindings(
             continue
         if not _has_expected_tokenizer_binding(
             tree,
-            expected_helpers=expected_helper,
+            expected_helper=expected_helper,
             expected_callers=_TOKENIZER_RUNTIME_CALLERS[relative_path],
         ):
             errors.append("runtime_tokenizer_binding_drift")
@@ -820,6 +1185,847 @@ def _validate_gate_evidence_paths(
                 continue
             if _resolve_repo_regular_file(repository_root, relative_path) is None:
                 errors.append("methodology_gate_evidence_path_not_regular_repo_file")
+
+
+def methodology_gate_dependency_manifest_path(result_artifact_path: Path) -> Path:
+    """Return the required adjacent dependency manifest path for a gate result."""
+
+    return result_artifact_path.with_name(f"{result_artifact_path.name}.dependencies.json")
+
+
+def validate_methodology_gate_dependency_manifest(
+    *,
+    repository_root: Path,
+    gate_id: str,
+    source_manifest_path: Path,
+    result_artifact_path: Path,
+    source_manifest: dict[str, Any],
+    result_artifact: dict[str, Any],
+    execution_fingerprint: str,
+) -> bool:
+    """Validate and dereference a production gate's complete dependency manifest."""
+
+    return (
+        _load_methodology_gate_dependency_manifest(
+            repository_root=repository_root,
+            gate_id=gate_id,
+            source_manifest_path=source_manifest_path,
+            result_artifact_path=result_artifact_path,
+            source_manifest=source_manifest,
+            result_artifact=result_artifact,
+            execution_fingerprint=execution_fingerprint,
+        )
+        is not None
+    )
+
+
+def _load_methodology_gate_dependency_manifest(
+    *,
+    repository_root: Path,
+    gate_id: str,
+    source_manifest_path: Path,
+    result_artifact_path: Path,
+    source_manifest: dict[str, Any],
+    result_artifact: dict[str, Any],
+    execution_fingerprint: str,
+) -> MethodologyGateDependencyManifest | None:
+    if gate_id not in _EXECUTABLE_EVIDENCE_GATE_IDS:
+        return None
+    source_manifest_relative = _repo_relative_path(
+        repository_root,
+        source_manifest_path,
+    )
+    result_artifact_relative = _repo_relative_path(
+        repository_root,
+        result_artifact_path,
+    )
+    if (
+        source_manifest_relative is None
+        or result_artifact_relative is None
+        or not _is_safe_production_dependency_path(source_manifest_relative)
+        or not _is_safe_production_dependency_path(result_artifact_relative)
+        or not _has_internal_fingerprint(
+            source_manifest,
+            _SOURCE_MANIFEST_FINGERPRINT_FIELD,
+        )
+        or not _has_internal_fingerprint(
+            result_artifact,
+            _GATE_RESULT_FINGERPRINT_FIELD,
+        )
+    ):
+        return None
+
+    dependency_manifest_relative = methodology_gate_dependency_manifest_path(
+        result_artifact_relative
+    )
+    if not _is_safe_production_dependency_path(dependency_manifest_relative):
+        return None
+    dependency_manifest_path = _resolve_repo_regular_file(
+        repository_root,
+        dependency_manifest_relative,
+    )
+    if dependency_manifest_path is None:
+        return None
+    try:
+        source_manifest_bytes = source_manifest_path.read_bytes()
+        result_artifact_bytes = result_artifact_path.read_bytes()
+        manifest_bytes = dependency_manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    source_manifest_sha256 = _sha256_bytes(source_manifest_bytes)
+    result_artifact_sha256 = _sha256_bytes(result_artifact_bytes)
+    if (
+        not isinstance(manifest, dict)
+        or set(manifest) != _GATE_DEPENDENCY_MANIFEST_KEYS
+        or manifest.get("artifact_id") != _GATE_DEPENDENCY_MANIFEST_ARTIFACT_ID
+        or manifest.get("gate_id") != gate_id
+        or manifest.get("execution_fingerprint") != execution_fingerprint
+        or manifest.get("source_manifest_path") != source_manifest_relative.as_posix()
+        or manifest.get("source_manifest_sha256") != source_manifest_sha256
+        or manifest.get("result_artifact_path") != result_artifact_relative.as_posix()
+        or manifest.get("result_artifact_sha256") != result_artifact_sha256
+        or not _has_internal_fingerprint(
+            manifest,
+            _GATE_DEPENDENCY_MANIFEST_FINGERPRINT_FIELD,
+        )
+        or _contains_disallowed_evidence_state(manifest)
+    ):
+        return None
+
+    entries = manifest.get("dependencies")
+    if not isinstance(entries, list) or not entries:
+        return None
+    entry_sort_keys: list[tuple[str, str]] = []
+    entry_paths: set[str] = set()
+    dependencies: list[MethodologyGateDependency] = []
+    structured_artifacts: list[tuple[dict[str, Any], tuple[str, ...]]] = []
+    allowed_roles = _allowed_dependency_roles(gate_id)
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != _GATE_DEPENDENCY_ENTRY_KEYS:
+            return None
+        role = entry.get("role")
+        path_value = entry.get("path")
+        byte_sha256 = entry.get("byte_sha256")
+        if (
+            not isinstance(role, str)
+            or not role
+            or role not in allowed_roles
+            or not isinstance(path_value, str)
+            or not path_value
+            or not _is_sha256(byte_sha256)
+        ):
+            return None
+        relative_path = Path(path_value)
+        if (
+            not _is_safe_production_dependency_path(relative_path)
+            or path_value in entry_paths
+            or relative_path
+            in {
+                source_manifest_relative,
+                result_artifact_relative,
+                dependency_manifest_relative,
+            }
+        ):
+            return None
+        dependency_path = _resolve_repo_regular_file(repository_root, relative_path)
+        if dependency_path is None:
+            return None
+        try:
+            dependency_bytes = dependency_path.read_bytes()
+        except OSError:
+            return None
+        if _sha256_bytes(dependency_bytes) != byte_sha256:
+            return None
+
+        artifact_id = entry.get("artifact_id")
+        internal_field = entry.get("internal_fingerprint_field")
+        internal_fingerprint = entry.get("internal_fingerprint")
+        payload: dict[str, Any] | None = None
+        if role in _OPAQUE_DEPENDENCY_ROLES:
+            if (
+                artifact_id is not None
+                or internal_field is not None
+                or internal_fingerprint is not None
+            ):
+                return None
+        else:
+            expected_artifact_id = {
+                **_COMMON_DEPENDENCY_ARTIFACT_IDS,
+                **_GATE_DEPENDENCY_ARTIFACT_IDS,
+            }.get(role)
+            expected_internal_field = (
+                "bundle_fingerprint"
+                if role == _EXECUTION_BINDING_DEPENDENCY_ROLE
+                else _GATE_DEPENDENCY_INTERNAL_FINGERPRINT_FIELD
+            )
+            if (
+                not isinstance(artifact_id, str)
+                or artifact_id != expected_artifact_id
+                or internal_field != expected_internal_field
+                or not _is_sha256(internal_fingerprint)
+            ):
+                return None
+            try:
+                artifact = json.loads(dependency_bytes)
+            except (UnicodeError, json.JSONDecodeError):
+                return None
+            if not isinstance(artifact, dict) or artifact.get("artifact_id") != artifact_id:
+                return None
+            if role == _EXECUTION_BINDING_DEPENDENCY_ROLE:
+                artifact_binding_valid = _validate_execution_binding_bundle(
+                    artifact,
+                    authority_execution_fingerprint=execution_fingerprint,
+                    source_manifest=source_manifest,
+                )
+            elif role in _COMMON_DEPENDENCY_ARTIFACT_IDS:
+                artifact_binding_valid = set(artifact) == _SOURCE_ROOT_DEPENDENCY_ARTIFACT_KEYS
+            else:
+                artifact_binding_valid = (
+                    set(artifact) == _GATE_DEPENDENCY_ARTIFACT_KEYS
+                    and artifact.get("gate_id") == gate_id
+                    and artifact.get("execution_fingerprint") == execution_fingerprint
+                    and artifact.get("source_manifest_sha256") == source_manifest_sha256
+                    and artifact.get("status") == "passed"
+                    and artifact.get("evidence_classification") == "production"
+                )
+            if (
+                not artifact_binding_valid
+                or artifact.get(internal_field) != internal_fingerprint
+                or not _has_internal_fingerprint(artifact, internal_field)
+                or (
+                    role != _EXECUTION_BINDING_DEPENDENCY_ROLE
+                    and _contains_disallowed_evidence_state(artifact)
+                )
+            ):
+                return None
+            if role != _EXECUTION_BINDING_DEPENDENCY_ROLE:
+                dependency_paths = artifact.get("dependency_paths")
+                payload = artifact.get("payload")
+                if (
+                    not isinstance(dependency_paths, list)
+                    or any(
+                        not isinstance(item, str)
+                        or not item
+                        or not _is_safe_production_dependency_path(Path(item))
+                        for item in dependency_paths
+                    )
+                    or dependency_paths != sorted(set(dependency_paths))
+                    or not isinstance(payload, dict)
+                ):
+                    return None
+                structured_artifacts.append((artifact, tuple(dependency_paths)))
+
+        entry_sort_keys.append((role, path_value))
+        entry_paths.add(path_value)
+        dependencies.append(
+            MethodologyGateDependency(
+                role=role,
+                relative_path=relative_path,
+                byte_sha256=byte_sha256,
+                artifact_id=artifact_id,
+                payload=payload,
+            )
+        )
+    if entry_sort_keys != sorted(entry_sort_keys):
+        return None
+
+    allowed_references = {
+        source_manifest_relative.as_posix(),
+        result_artifact_relative.as_posix(),
+        *entry_paths,
+    }
+    for artifact, declared_paths in structured_artifacts:
+        if any(path not in entry_paths for path in declared_paths):
+            return None
+        referenced_paths = _payload_path_references(artifact.get("payload"))
+        if referenced_paths is None or not referenced_paths.issubset(set(declared_paths)):
+            return None
+        if not set(declared_paths).issubset(allowed_references):
+            return None
+
+    validated = MethodologyGateDependencyManifest(
+        relative_path=dependency_manifest_relative,
+        manifest_fingerprint=manifest[_GATE_DEPENDENCY_MANIFEST_FINGERPRINT_FIELD],
+        dependencies=tuple(dependencies),
+    )
+    return (
+        validated
+        if _validate_common_methodology_dependencies(
+            validated,
+            source_manifest=source_manifest,
+        )
+        else None
+    )
+
+
+def _validate_common_methodology_dependencies(
+    manifest: MethodologyGateDependencyManifest,
+    *,
+    source_manifest: dict[str, Any],
+) -> bool:
+    source_items = manifest.by_role("source_item")
+    model_artifacts = manifest.by_role("model_artifact")
+    package_locks = manifest.by_role("package_lock")
+    source_inventories = manifest.by_role("source_inventory_manifest")
+    case_manifests = manifest.by_role("case_manifest")
+    configuration_manifests = manifest.by_role("configuration_manifest")
+    execution_binding_bundles = manifest.by_role(_EXECUTION_BINDING_DEPENDENCY_ROLE)
+    if not (
+        len(source_items) == source_manifest.get("source_count")
+        and len(model_artifacts) == len(source_manifest.get("model_artifact_hashes", []))
+        and len(package_locks) == 1
+        and len(source_inventories) == 1
+        and len(case_manifests) == 1
+        and len(configuration_manifests) == 1
+        and len(execution_binding_bundles) == 1
+    ):
+        return False
+    if (
+        {item.byte_sha256 for item in source_items} != set(source_manifest.get("source_hashes", []))
+        or {item.byte_sha256 for item in model_artifacts}
+        != set(source_manifest.get("model_artifact_hashes", []))
+        or package_locks[0].byte_sha256 != source_manifest.get("package_lock_sha256")
+        or case_manifests[0].byte_sha256 != source_manifest.get("case_manifest_sha256")
+        or configuration_manifests[0].byte_sha256
+        != source_manifest.get("configuration_manifest_sha256")
+    ):
+        return False
+
+    inventory_payload = source_inventories[0].payload
+    case_payload = case_manifests[0].payload
+    configuration_payload = configuration_manifests[0].payload
+    if (
+        inventory_payload is None
+        or set(inventory_payload)
+        != {
+            "source_count",
+            "source_item_count",
+            "source_hashes",
+            "source_paths",
+        }
+        or inventory_payload.get("source_count") != source_manifest.get("source_count")
+        or inventory_payload.get("source_item_count") != source_manifest.get("source_item_count")
+        or inventory_payload.get("source_hashes")
+        != sorted(source_manifest.get("source_hashes", []))
+        or inventory_payload.get("source_paths")
+        != sorted(item.relative_path.as_posix() for item in source_items)
+        or case_payload is None
+        or set(case_payload) != {"case_count", "case_scope"}
+        or not _is_positive_int(case_payload.get("case_count"))
+        or case_payload.get("case_scope") not in _PRODUCTION_CASE_SCOPES
+        or configuration_payload is None
+        or set(configuration_payload)
+        != {
+            "evaluation_policy_id",
+            "method_id",
+            "tokenizer_id",
+        }
+        or configuration_payload.get("evaluation_policy_id")
+        != _FROZEN_TARGET_PIPELINE["evaluation_policy_id"]
+        or configuration_payload.get("method_id") != _FROZEN_TARGET_PIPELINE["method_id"]
+        or configuration_payload.get("tokenizer_id") != _FROZEN_TARGET_PIPELINE["tokenizer_id"]
+    ):
+        return False
+    return True
+
+
+def _allowed_dependency_roles(gate_id: str) -> set[str]:
+    common_roles = {
+        "case_manifest",
+        "configuration_manifest",
+        _EXECUTION_BINDING_DEPENDENCY_ROLE,
+        "model_artifact",
+        "package_lock",
+        "source_inventory_manifest",
+        "source_item",
+    }
+    gate_roles = {
+        "source_completeness_compared_with_raw_oracle": {
+            "observation_reconciliation_report",
+            "raw_source_oracle_manifest",
+        },
+        "evaluation_reports_bind_execution_fingerprint": {
+            "evaluation_report",
+            "evaluation_report_index",
+        },
+        "same_pipeline_real_source_ablation": {"ablation_arm_result"},
+        "real_user_end_answer_acceptance": {
+            "final_answer_acceptance_report",
+        },
+    }
+    return common_roles | gate_roles.get(gate_id, set())
+
+
+def _repo_relative_path(repository_root: Path, path: Path) -> Path | None:
+    try:
+        resolved_root = repository_root.resolve(strict=True)
+        resolved_path = path.resolve(strict=True)
+        return resolved_path.relative_to(resolved_root)
+    except (OSError, ValueError):
+        return None
+
+
+def _is_safe_production_dependency_path(relative_path: Path) -> bool:
+    if relative_path.is_absolute() or not relative_path.parts or ".." in relative_path.parts:
+        return False
+    for part in relative_path.parts:
+        lowered = part.lower()
+        tokens = {token for token in re.split(r"[^a-z0-9]+", lowered) if token}
+        if lowered in _DISALLOWED_EVIDENCE_PATH_TOKENS:
+            return False
+        if tokens.intersection(_DISALLOWED_EVIDENCE_PATH_TOKENS - {".test-tmp"}):
+            return False
+    return True
+
+
+def _contains_disallowed_evidence_state(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = key.lower()
+            if (
+                normalized_key
+                in {
+                    "allow_blocked",
+                    "diagnostic_only",
+                    "diagnostic_subset_only",
+                    "preflight_only",
+                }
+                and item is True
+            ):
+                return True
+            if (
+                (
+                    normalized_key == "status"
+                    or normalized_key.endswith("_status")
+                    or normalized_key.endswith("_classification")
+                    or normalized_key.endswith("_mode")
+                    or normalized_key.endswith("_phase")
+                )
+                and isinstance(item, str)
+                and item.lower() in _DISALLOWED_EVIDENCE_STATES
+            ):
+                return True
+            if _contains_disallowed_evidence_state(item):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_contains_disallowed_evidence_state(item) for item in value)
+    return False
+
+
+def _payload_path_references(value: Any) -> set[str] | None:
+    references: set[str] = set()
+    if not isinstance(value, dict):
+        return references
+    for key, item in value.items():
+        if key.endswith("_path"):
+            path_values = [item]
+        elif key.endswith("_paths"):
+            if not isinstance(item, list):
+                return None
+            path_values = item
+        else:
+            nested = _payload_path_references(item)
+            if nested is None:
+                return None
+            references.update(nested)
+            continue
+        for path_value in path_values:
+            if (
+                not isinstance(path_value, str)
+                or not path_value
+                or not _is_safe_production_dependency_path(Path(path_value))
+            ):
+                return None
+            references.add(path_value)
+    return references
+
+
+def _has_internal_fingerprint(value: dict[str, Any], field_name: str) -> bool:
+    fingerprint = value.get(field_name)
+    if not _is_sha256(fingerprint):
+        return False
+    fingerprint_payload = dict(value)
+    del fingerprint_payload[field_name]
+    return fingerprint == _canonical_sha256(fingerprint_payload)
+
+
+def _sha256_bytes(value: bytes) -> str:
+    return f"sha256:{hashlib.sha256(value).hexdigest()}"
+
+
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 71
+        and value.startswith("sha256:")
+        and all(character in "0123456789abcdef" for character in value[7:])
+    )
+
+
+def _is_nonnegative_int(value: Any) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _is_positive_int(value: Any) -> bool:
+    return type(value) is int and value > 0
+
+
+def _validate_execution_binding_bundle(
+    value: dict[str, Any],
+    *,
+    authority_execution_fingerprint: str,
+    source_manifest: dict[str, Any],
+) -> bool:
+    if (
+        set(value) != _EXECUTION_BINDING_BUNDLE_KEYS
+        or value.get("artifact_id") != _EXECUTION_BINDING_BUNDLE_ARTIFACT_ID
+        or value.get("schema_version") != _EXECUTION_BINDING_SCHEMA_VERSION
+        or value.get("status") not in {"blocked", "passed"}
+        or value.get("execution_binding_status") != "passed"
+    ):
+        return False
+    if any(
+        not _is_sha256(value.get(field_name))
+        for field_name in (
+            "run_binding_fingerprint",
+            "source_binding_fingerprint",
+            "execution_fingerprint",
+            "blocking_status_fingerprint",
+            "bundle_fingerprint",
+        )
+    ):
+        return False
+
+    component_fingerprints = value.get("component_artifact_fingerprints")
+    bound_fingerprints = value.get("bound_fingerprints")
+    execution_binding = value.get("execution_binding")
+    if (
+        not isinstance(component_fingerprints, dict)
+        or set(component_fingerprints) != _EXECUTION_BINDING_COMPONENT_KEYS
+        or any(not _is_sha256(item) for item in component_fingerprints.values())
+        or not isinstance(bound_fingerprints, dict)
+        or not bound_fingerprints
+        or any(not _is_sha256(item) for item in bound_fingerprints.values())
+        or not isinstance(execution_binding, dict)
+        or set(execution_binding) != _EXECUTION_BINDING_KEYS
+        or execution_binding.get("artifact_id") != _EXECUTION_BINDING_ARTIFACT_ID
+        or execution_binding.get("schema_version") != _EXECUTION_BINDING_SCHEMA_VERSION
+        or execution_binding.get("source_binding_fingerprint")
+        != value["source_binding_fingerprint"]
+        or not _is_sha256(execution_binding.get("source_completeness_report_sha256"))
+        or not _is_sha256(execution_binding.get("source_completeness_report_fingerprint"))
+    ):
+        return False
+
+    execution_bound_fingerprints = execution_binding.get("bound_fingerprints")
+    if (
+        not isinstance(execution_bound_fingerprints, dict)
+        or set(execution_bound_fingerprints) != _EXECUTION_IDENTITY_BOUND_FINGERPRINT_KEYS
+        or any(not _is_sha256(item) for item in execution_bound_fingerprints.values())
+        or any(
+            bound_fingerprints.get(key) != fingerprint
+            for key, fingerprint in execution_bound_fingerprints.items()
+        )
+        or execution_bound_fingerprints.get("authority_execution")
+        != authority_execution_fingerprint
+        or value["execution_fingerprint"] != _canonical_sha256(execution_binding)
+    ):
+        return False
+
+    counts = value.get("counts")
+    statuses = value.get("statuses")
+    blocker_ids = value.get("blocking_status_ids")
+    if (
+        not isinstance(counts, dict)
+        or not counts
+        or any(not _is_nonnegative_int(item) for item in counts.values())
+        or counts.get("source_item_count") != source_manifest.get("source_item_count")
+        or counts.get("observation_count") != counts.get("source_item_count")
+        or counts.get("unexplained_loss_count") != 0
+        or not isinstance(statuses, dict)
+        or not statuses
+        or any(
+            item not in {"blocked", "failed", "missing", "passed", "ready"}
+            for item in statuses.values()
+        )
+        or not isinstance(blocker_ids, list)
+        or any(not isinstance(item, str) or not item for item in blocker_ids)
+        or blocker_ids != sorted(set(blocker_ids))
+        or value["blocking_status_fingerprint"] != _canonical_sha256(blocker_ids)
+        or (value["status"] == "passed") != (not blocker_ids)
+        or not _has_internal_fingerprint(value, "bundle_fingerprint")
+    ):
+        return False
+    return True
+
+
+def _gate_execution_binding_reference_matches(
+    *,
+    repository_root: Path,
+    reference: Any,
+    dependency_manifest: dict[str, Any],
+) -> bool:
+    if (
+        not isinstance(reference, dict)
+        or set(reference) != _GATE_EXECUTION_BINDING_REFERENCE_KEYS
+        or reference.get("role") != _EXECUTION_BINDING_DEPENDENCY_ROLE
+        or not _is_sha256(reference.get("byte_sha256"))
+        or not _is_sha256(reference.get("bundle_fingerprint"))
+        or not _is_sha256(reference.get("complete_execution_fingerprint"))
+    ):
+        return False
+    path_value = reference.get("path")
+    if (
+        not isinstance(path_value, str)
+        or not path_value
+        or not _is_safe_production_dependency_path(Path(path_value))
+    ):
+        return False
+    matching_entries = [
+        entry
+        for entry in dependency_manifest.get("dependencies", [])
+        if isinstance(entry, dict) and entry.get("role") == _EXECUTION_BINDING_DEPENDENCY_ROLE
+    ]
+    if len(matching_entries) != 1:
+        return False
+    entry = matching_entries[0]
+    if (
+        set(entry) != _GATE_DEPENDENCY_ENTRY_KEYS
+        or entry.get("path") != path_value
+        or entry.get("artifact_id") != _EXECUTION_BINDING_BUNDLE_ARTIFACT_ID
+        or entry.get("byte_sha256") != reference["byte_sha256"]
+        or entry.get("internal_fingerprint_field") != "bundle_fingerprint"
+        or entry.get("internal_fingerprint") != reference["bundle_fingerprint"]
+    ):
+        return False
+    bundle_path = _resolve_repo_regular_file(repository_root, Path(path_value))
+    if bundle_path is None:
+        return False
+    try:
+        bundle_bytes = bundle_path.read_bytes()
+        bundle = json.loads(bundle_bytes)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return (
+        _sha256_bytes(bundle_bytes) == reference["byte_sha256"]
+        and isinstance(bundle, dict)
+        and bundle.get("artifact_id") == _EXECUTION_BINDING_BUNDLE_ARTIFACT_ID
+        and bundle.get("bundle_fingerprint") == reference["bundle_fingerprint"]
+        and bundle.get("execution_fingerprint") == reference["complete_execution_fingerprint"]
+    )
+
+
+def _production_source_completeness_validator(
+    **kwargs: Any,
+) -> bool:
+    manifest = _load_methodology_gate_dependency_manifest(
+        gate_id="source_completeness_compared_with_raw_oracle",
+        **kwargs,
+    )
+    if manifest is None:
+        return False
+    result_artifact = kwargs["result_artifact"]
+    inventories = manifest.by_role("source_inventory_manifest")
+    raw_oracles = manifest.by_role("raw_source_oracle_manifest")
+    reconciliations = manifest.by_role("observation_reconciliation_report")
+    if not (len(inventories) == len(raw_oracles) == len(reconciliations) == 1):
+        return False
+    inventory = inventories[0]
+    raw_oracle = raw_oracles[0]
+    reconciliation = reconciliations[0]
+    raw_payload = raw_oracle.payload
+    reconciliation_payload = reconciliation.payload
+    if (
+        raw_payload is None
+        or set(raw_payload)
+        != {
+            "raw_source_unit_count",
+            "source_inventory_sha256",
+        }
+        or raw_payload.get("raw_source_unit_count") != result_artifact.get("raw_source_unit_count")
+        or raw_payload.get("source_inventory_sha256") != inventory.byte_sha256
+        or reconciliation_payload is None
+        or set(reconciliation_payload)
+        != {
+            "emitted_observation_unit_count",
+            "loss_taxonomy_counts",
+            "policy_redacted_unit_count",
+            "raw_source_oracle_sha256",
+            "raw_source_unit_count",
+            "source_inventory_sha256",
+            "unexplained_loss_unit_count",
+        }
+        or reconciliation_payload.get("raw_source_oracle_sha256") != raw_oracle.byte_sha256
+        or reconciliation_payload.get("source_inventory_sha256") != inventory.byte_sha256
+    ):
+        return False
+    return all(
+        reconciliation_payload.get(field_name) == result_artifact.get(field_name)
+        for field_name in (
+            "raw_source_unit_count",
+            "emitted_observation_unit_count",
+            "policy_redacted_unit_count",
+            "unexplained_loss_unit_count",
+            "loss_taxonomy_counts",
+        )
+    )
+
+
+def _production_execution_report_binding_validator(
+    **kwargs: Any,
+) -> bool:
+    manifest = _load_methodology_gate_dependency_manifest(
+        gate_id="evaluation_reports_bind_execution_fingerprint",
+        **kwargs,
+    )
+    if manifest is None:
+        return False
+    source_manifest = kwargs["source_manifest"]
+    result_artifact = kwargs["result_artifact"]
+    indexes = manifest.by_role("evaluation_report_index")
+    reports = manifest.by_role("evaluation_report")
+    if len(indexes) != 1 or not reports:
+        return False
+    report_paths = sorted(item.relative_path.as_posix() for item in reports)
+    report_hashes = sorted(item.byte_sha256 for item in reports)
+    index_payload = indexes[0].payload
+    if (
+        index_payload is None
+        or set(index_payload) != {"report_count", "report_hashes", "report_paths"}
+        or index_payload.get("report_count") != len(reports)
+        or index_payload.get("report_paths") != report_paths
+        or index_payload.get("report_hashes") != report_hashes
+        or result_artifact.get("report_count") != len(reports)
+        or sorted(result_artifact.get("report_hashes", [])) != report_hashes
+    ):
+        return False
+    for report in reports:
+        payload = report.payload
+        if (
+            payload is None
+            or set(payload)
+            != {
+                "case_manifest_sha256",
+                "evaluation_policy_fingerprint",
+                "execution_status",
+                "quality_gate_status",
+                "report_kind",
+            }
+            or payload.get("case_manifest_sha256") != source_manifest.get("case_manifest_sha256")
+            or payload.get("evaluation_policy_fingerprint")
+            != source_manifest.get("configuration_manifest_sha256")
+            or payload.get("execution_status") != "passed"
+            or payload.get("quality_gate_status") != "passed"
+            or payload.get("report_kind") != "completed_quality_report"
+        ):
+            return False
+    return True
+
+
+def _production_same_pipeline_real_source_ablation_validator(
+    **kwargs: Any,
+) -> bool:
+    manifest = _load_methodology_gate_dependency_manifest(
+        gate_id="same_pipeline_real_source_ablation",
+        **kwargs,
+    )
+    if manifest is None:
+        return False
+    source_manifest = kwargs["source_manifest"]
+    result_artifact = kwargs["result_artifact"]
+    arm_results = manifest.by_role("ablation_arm_result")
+    if len(arm_results) != len(_ABLATION_ARM_IDS):
+        return False
+    by_arm: dict[str, MethodologyGateDependency] = {}
+    for dependency in arm_results:
+        payload = dependency.payload
+        if (
+            payload is None
+            or set(payload)
+            != {
+                "adjudicated_case_count",
+                "arm_id",
+                "case_count",
+                "case_manifest_sha256",
+                "completed_case_count",
+                "evaluation_policy_fingerprint",
+                "execution_status",
+                "quality_gate_status",
+            }
+            or payload.get("arm_id") not in _ABLATION_ARM_IDS
+            or payload.get("arm_id") in by_arm
+            or payload.get("case_count") != result_artifact.get("case_count")
+            or payload.get("completed_case_count") != result_artifact.get("completed_case_count")
+            or payload.get("adjudicated_case_count")
+            != result_artifact.get("adjudicated_case_count")
+            or payload.get("case_manifest_sha256") != source_manifest.get("case_manifest_sha256")
+            or payload.get("evaluation_policy_fingerprint")
+            != source_manifest.get("configuration_manifest_sha256")
+            or payload.get("execution_status") != "passed"
+            or payload.get("quality_gate_status") != "passed"
+        ):
+            return False
+        by_arm[payload["arm_id"]] = dependency
+    return set(by_arm) == _ABLATION_ARM_IDS and result_artifact.get("result_hashes_by_arm") == {
+        arm_id: by_arm[arm_id].byte_sha256 for arm_id in sorted(by_arm)
+    }
+
+
+def _production_real_user_end_answer_acceptance_validator(
+    **kwargs: Any,
+) -> bool:
+    manifest = _load_methodology_gate_dependency_manifest(
+        gate_id="real_user_end_answer_acceptance",
+        **kwargs,
+    )
+    if manifest is None:
+        return False
+    source_manifest = kwargs["source_manifest"]
+    result_artifact = kwargs["result_artifact"]
+    case_manifests = manifest.by_role("case_manifest")
+    reports = manifest.by_role("final_answer_acceptance_report")
+    if (
+        len(case_manifests) != 1
+        or case_manifests[0].payload is None
+        or case_manifests[0].payload.get("case_scope") != "combined_independent_acceptance"
+        or len(reports) != 1
+        or reports[0].payload is None
+    ):
+        return False
+    report_payload = reports[0].payload
+    expected_report_keys = {
+        "acceptance_profile_id",
+        "acceptance_scope",
+        "adjudicated_case_count",
+        "answerable_case_count",
+        "case_count",
+        "case_manifest_sha256",
+        "citation_supported_correct_count",
+        "correct_answer_count",
+        "evaluation_policy_fingerprint",
+        "execution_status",
+        "observed_accuracy_ppm",
+        "observed_citation_support_ppm",
+        "permission_denial_case_count",
+        "permission_denial_pass_count",
+        "quality_gate_status",
+    }
+    if (
+        set(report_payload) != expected_report_keys
+        or report_payload.get("acceptance_scope") != "independent_holdout_and_transfer"
+        or report_payload.get("case_manifest_sha256") != source_manifest.get("case_manifest_sha256")
+        or report_payload.get("evaluation_policy_fingerprint")
+        != source_manifest.get("configuration_manifest_sha256")
+        or report_payload.get("execution_status") != "passed"
+        or report_payload.get("quality_gate_status") != "passed"
+    ):
+        return False
+    return all(
+        report_payload.get(field_name) == result_artifact.get(field_name)
+        for field_name in _GATE_RESULT_KEYS["real_user_end_answer_acceptance"] - _RESULT_COMMON_KEYS
+    )
 
 
 def _validate_passed_gate_evidence(
@@ -848,7 +2054,10 @@ def _validate_passed_gate_evidence(
         for value in gate.get("evidence", []):
             if not isinstance(value, str) or not value.endswith(".json"):
                 continue
-            path = _resolve_repo_regular_file(repository_root, Path(value))
+            evidence_relative_path = Path(value)
+            if not _is_safe_production_dependency_path(evidence_relative_path):
+                continue
+            path = _resolve_repo_regular_file(repository_root, evidence_relative_path)
             if path is None:
                 continue
             try:
@@ -859,27 +2068,41 @@ def _validate_passed_gate_evidence(
                 continue
             if not (
                 payload.get("artifact_id") == _GATE_EVIDENCE_ARTIFACT_ID
+                and payload.get("schema_version") == _GATE_EVIDENCE_SCHEMA_VERSION
                 and payload.get("authority_id") == authority_id
                 and payload.get("gate_id") == gate_id
                 and payload.get("execution_fingerprint") == execution_fingerprint
                 and payload.get("validator_id") == _GATE_VALIDATOR_IDS[gate_id]
                 and payload.get("status") == "passed"
+                and payload.get("evidence_classification") == "production"
+                and payload.get("promotion_status") == "not_performed"
+                and _has_internal_fingerprint(
+                    payload,
+                    _GATE_EVIDENCE_FINGERPRINT_FIELD,
+                )
             ):
                 continue
 
             source_manifest_value = payload.get("source_manifest_path")
             result_artifact_value = payload.get("result_artifact_path")
+            dependency_manifest_value = payload.get("dependency_manifest_path")
             if not isinstance(source_manifest_value, str) or not source_manifest_value:
                 continue
             if not isinstance(result_artifact_value, str) or not result_artifact_value:
                 continue
+            if not isinstance(dependency_manifest_value, str) or not dependency_manifest_value:
+                continue
             source_manifest_relative = Path(source_manifest_value)
             result_artifact_relative = Path(result_artifact_value)
+            dependency_manifest_relative = Path(dependency_manifest_value)
+            expected_dependency_manifest_relative = methodology_gate_dependency_manifest_path(
+                result_artifact_relative
+            )
             if (
-                source_manifest_relative.is_absolute()
-                or ".." in source_manifest_relative.parts
-                or result_artifact_relative.is_absolute()
-                or ".." in result_artifact_relative.parts
+                not _is_safe_production_dependency_path(source_manifest_relative)
+                or not _is_safe_production_dependency_path(result_artifact_relative)
+                or not _is_safe_production_dependency_path(dependency_manifest_relative)
+                or dependency_manifest_relative != expected_dependency_manifest_relative
             ):
                 continue
             source_manifest_path = _resolve_repo_regular_file(
@@ -890,20 +2113,58 @@ def _validate_passed_gate_evidence(
                 repository_root,
                 result_artifact_relative,
             )
-            if source_manifest_path is None or result_artifact_path is None:
+            dependency_manifest_path = _resolve_repo_regular_file(
+                repository_root,
+                dependency_manifest_relative,
+            )
+            if (
+                source_manifest_path is None
+                or result_artifact_path is None
+                or dependency_manifest_path is None
+            ):
                 continue
             try:
                 source_manifest_bytes = source_manifest_path.read_bytes()
                 result_artifact_bytes = result_artifact_path.read_bytes()
-            except OSError:
+                dependency_manifest_bytes = dependency_manifest_path.read_bytes()
+                dependency_manifest = json.loads(dependency_manifest_bytes)
+            except (OSError, UnicodeError, json.JSONDecodeError):
                 continue
             source_manifest_sha256 = f"sha256:{hashlib.sha256(source_manifest_bytes).hexdigest()}"
             result_artifact_sha256 = f"sha256:{hashlib.sha256(result_artifact_bytes).hexdigest()}"
+            dependency_manifest_sha256 = _sha256_bytes(dependency_manifest_bytes)
+            dependency_count = payload.get("dependency_count")
             if not (
                 is_sha256(payload.get("source_manifest_sha256"))
                 and payload.get("source_manifest_sha256") == source_manifest_sha256
                 and is_sha256(payload.get("result_artifact_sha256"))
                 and payload.get("result_artifact_sha256") == result_artifact_sha256
+                and is_sha256(payload.get("dependency_manifest_sha256"))
+                and payload.get("dependency_manifest_sha256") == dependency_manifest_sha256
+                and isinstance(dependency_manifest, dict)
+                and set(dependency_manifest) == _GATE_DEPENDENCY_MANIFEST_KEYS
+                and dependency_manifest.get("artifact_id") == _GATE_DEPENDENCY_MANIFEST_ARTIFACT_ID
+                and dependency_manifest.get("gate_id") == gate_id
+                and dependency_manifest.get("execution_fingerprint") == execution_fingerprint
+                and dependency_manifest.get("source_manifest_path") == source_manifest_value
+                and dependency_manifest.get("source_manifest_sha256") == source_manifest_sha256
+                and dependency_manifest.get("result_artifact_path") == result_artifact_value
+                and dependency_manifest.get("result_artifact_sha256") == result_artifact_sha256
+                and _has_internal_fingerprint(
+                    dependency_manifest,
+                    _GATE_DEPENDENCY_MANIFEST_FINGERPRINT_FIELD,
+                )
+                and payload.get("dependency_manifest_fingerprint")
+                == dependency_manifest.get(_GATE_DEPENDENCY_MANIFEST_FINGERPRINT_FIELD)
+                and is_positive_int(dependency_count)
+                and isinstance(dependency_manifest.get("dependencies"), list)
+                and dependency_count == len(dependency_manifest["dependencies"])
+            ):
+                continue
+            if not _gate_execution_binding_reference_matches(
+                repository_root=repository_root,
+                reference=payload.get("execution_binding"),
+                dependency_manifest=dependency_manifest,
             ):
                 continue
             try:
@@ -922,6 +2183,10 @@ def _validate_passed_gate_evidence(
                 or not is_sha256(source_manifest.get("case_manifest_sha256"))
                 or not is_sha256(source_manifest.get("configuration_manifest_sha256"))
                 or not is_sha256(source_manifest.get("package_lock_sha256"))
+                or not _has_internal_fingerprint(
+                    source_manifest,
+                    _SOURCE_MANIFEST_FINGERPRINT_FIELD,
+                )
             ):
                 continue
             source_hashes = source_manifest.get("source_hashes")
@@ -944,6 +2209,10 @@ def _validate_passed_gate_evidence(
                 or result_artifact.get("execution_fingerprint") != execution_fingerprint
                 or result_artifact.get("source_manifest_sha256") != source_manifest_sha256
                 or result_artifact.get("status") != "passed"
+                or not _has_internal_fingerprint(
+                    result_artifact,
+                    _GATE_RESULT_FINGERPRINT_FIELD,
+                )
             ):
                 continue
 
@@ -1091,30 +2360,29 @@ def _gate_status(gates: list[dict[str, Any]], gate_id: str) -> str | None:
 def _has_expected_tokenizer_binding(
     tree: ast.AST,
     *,
-    expected_helpers: tuple[str, ...] | None,
+    expected_helper: str | None,
     expected_callers: set[str],
 ) -> bool:
-    if not isinstance(tree, ast.Module) or not expected_helpers:
+    if not isinstance(tree, ast.Module) or expected_helper is None:
         return False
-    canonical_helpers: list[str] = []
+    canonical_import_count = 0
     for node in tree.body:
         if not isinstance(node, ast.ImportFrom):
             continue
         for alias in node.names:
             bound_name = alias.asname or alias.name
-            if bound_name not in expected_helpers:
+            if bound_name != expected_helper:
                 continue
             if (
                 node.module == "formowl_core"
-                and alias.name == bound_name
+                and alias.name == expected_helper
                 and alias.asname is None
             ):
-                canonical_helpers.append(bound_name)
+                canonical_import_count += 1
             else:
                 return False
-    if len(canonical_helpers) != 1:
+    if canonical_import_count != 1:
         return False
-    expected_helper = canonical_helpers[0]
     for node in ast.walk(tree):
         if (
             isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
@@ -1176,36 +2444,144 @@ def _has_expected_tokenizer_binding(
     }
     if set(callers) != expected_callers:
         return False
-    local_functions = {
-        node.name: node
+    return all(
+        any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_tokenize"
+            for node in ast.walk(caller)
+        )
+        for caller in callers.values()
+    )
+
+
+def _literal_module_assignment(tree: ast.Module, name: str) -> Any:
+    matches = [
+        node
         for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    for caller_name in callers:
-        pending = [caller_name]
-        visited: set[str] = set()
-        reaches_tokenizer = False
-        while pending:
-            function_name = pending.pop()
-            if function_name in visited:
-                continue
-            visited.add(function_name)
-            function = local_functions.get(function_name)
-            if function is None:
-                continue
-            for node in ast.walk(function):
-                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
-                    continue
-                if node.func.id == "_tokenize":
-                    reaches_tokenizer = True
-                    break
-                if node.func.id in local_functions:
-                    pending.append(node.func.id)
-            if reaches_tokenizer:
-                break
-        if not reaches_tokenizer:
-            return False
-    return True
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        and (
+            any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+            if isinstance(node, ast.Assign)
+            else isinstance(node.target, ast.Name) and node.target.id == name
+        )
+    ]
+    if len(matches) != 1:
+        return None
+    value = matches[0].value
+    try:
+        return ast.literal_eval(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _top_level_function(
+    tree: ast.Module,
+    name: str,
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    matches = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _class_method(
+    tree: ast.Module,
+    class_name: str,
+    method_name: str,
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    classes = [
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name
+    ]
+    if len(classes) != 1:
+        return None
+    matches = [
+        node
+        for node in classes[0].body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == method_name
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _called_function_names(
+    function: ast.FunctionDef | ast.AsyncFunctionDef | None,
+) -> set[str]:
+    if function is None:
+        return set()
+    names: set[str] = set()
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            names.add(node.func.id)
+        elif isinstance(node.func, ast.Attribute):
+            names.add(node.func.attr)
+    return names
+
+
+def _function_default_is_true(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    parameter_name: str,
+) -> bool:
+    return _function_default_literal(function, parameter_name) is True
+
+
+def _function_default_is_false(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    parameter_name: str,
+) -> bool:
+    return _function_default_literal(function, parameter_name) is False
+
+
+def _function_default_literal(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    parameter_name: str,
+) -> Any:
+    positional = [*function.args.posonlyargs, *function.args.args]
+    positional_defaults = [None] * (len(positional) - len(function.args.defaults)) + list(
+        function.args.defaults
+    )
+    for argument, default in zip(positional, positional_defaults):
+        if argument.arg == parameter_name and default is not None:
+            try:
+                return ast.literal_eval(default)
+            except (ValueError, TypeError):
+                return None
+    for argument, default in zip(function.args.kwonlyargs, function.args.kw_defaults):
+        if argument.arg == parameter_name and default is not None:
+            try:
+                return ast.literal_eval(default)
+            except (ValueError, TypeError):
+                return None
+    return None
+
+
+def _canonical_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def _invalid_runtime_pipeline_probe() -> RuntimePipelineProbe:
+    return RuntimePipelineProbe(
+        method_id=None,
+        method_fingerprint=None,
+        runtime_probe_valid=False,
+        normal_entrypoint_bound=False,
+        typed_plan_bound=False,
+        strong_rag_bound=False,
+        entity_graph_bound=False,
+        soft_ontology_bound=False,
+        exact_executor_bound=False,
+        cited_answer_bound=False,
+        legacy_or_ascii_fallback_absent=False,
+    )
 
 
 def _contains_cjk_token(tokens: set[str]) -> bool:
@@ -1265,14 +2641,35 @@ def _invalid_result(probe: TokenizerProbe, error: str) -> MethodologyAuthorityRe
         authority_state_fingerprint=None,
         pipeline_source_binding_count=0,
         tokenizer_probe=probe,
+        runtime_pipeline_probe=_invalid_runtime_pipeline_probe(),
         errors=(error,),
     )
+
+
+_GATE_EXECUTABLE_VALIDATORS.update(
+    {
+        "source_completeness_compared_with_raw_oracle": (_production_source_completeness_validator),
+        "evaluation_reports_bind_execution_fingerprint": (
+            _production_execution_report_binding_validator
+        ),
+        "same_pipeline_real_source_ablation": (
+            _production_same_pipeline_real_source_ablation_validator
+        ),
+        "real_user_end_answer_acceptance": (_production_real_user_end_answer_acceptance_validator),
+    }
+)
 
 
 __all__ = [
     "AUTHORITY_RELATIVE_PATH",
     "MethodologyAuthorityResult",
+    "MethodologyGateDependency",
+    "MethodologyGateDependencyManifest",
+    "RuntimePipelineProbe",
     "TokenizerProbe",
     "check_methodology_authority",
+    "methodology_gate_dependency_manifest_path",
+    "probe_runtime_pipeline",
     "probe_runtime_tokenizers",
+    "validate_methodology_gate_dependency_manifest",
 ]

@@ -26,6 +26,11 @@ class ActorContext:
     workspace_memberships: list[WorkspaceMember] = field(default_factory=list)
     active_grants: list[Grant] = field(default_factory=list)
     pending_access_requests: list[AccessRequest] = field(default_factory=list)
+    current_workspace_id: str | None = None
+    current_workspace_role: str | None = None
+    external_identity_id: str | None = None
+    oauth_client_id: str | None = None
+    oauth_token_session_id: str | None = None
     auth_mode: str = "manual_trusted_internal"
     production_authentication: bool = False
     authentication_note: str = (
@@ -91,8 +96,17 @@ class ManualTrustedInternalAuthProvider:
             active_grants=self._active_grants_for(user.user_id, selected_at=timestamp),
             pending_access_requests=self._pending_requests_for(user.user_id),
         )
-        self._selected_context = context
-
+        if context.workspace_memberships:
+            current = context.workspace_memberships[0]
+            context = ActorContext(
+                user=context.user,
+                session_identity=context.session_identity,
+                workspace_memberships=context.workspace_memberships,
+                active_grants=context.active_grants,
+                pending_access_requests=context.pending_access_requests,
+                current_workspace_id=current.workspace_id,
+                current_workspace_role=current.role,
+            )
         if self.audit_store is not None:
             record_actor_selection(
                 self.audit_store,
@@ -102,6 +116,9 @@ class ManualTrustedInternalAuthProvider:
                 timestamp=timestamp,
             )
 
+        # Commit the in-memory actor only after its audit record is durable so
+        # an audit failure cannot leave a partially selected identity.
+        self._selected_context = context
         return context
 
     def whoami(self) -> ActorContext | None:

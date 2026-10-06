@@ -1,0 +1,83 @@
+services:
+  connected-migrate:
+    environment:
+      FORMOWL_OAUTH_ALLOW_STANDALONE_UAT_HTTPS_REDIRECT: "1"
+
+  connected-mcp:
+    environment:
+      FORMOWL_OAUTH_ALLOW_STANDALONE_UAT_HTTPS_REDIRECT: "1"
+
+  issue56-uat:
+    image: ${FORMOWL_RUNTIME_IMAGE:?set the immutable FormOwl runtime image id}
+    command:
+      - python
+      - /workspace/scripts/issue56_uat_web.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8766"
+      - --public-base-url
+      - ${FORMOWL_ISSUE56_UAT_PUBLIC_BASE_URL:?set the root HTTPS UAT origin}
+    env_file:
+      - ${FORMOWL_ISSUE56_UAT_SEALED_ENV_FILE:?set the operator-controlled sealed-source environment file}
+    environment:
+      FORMOWL_AUTH_MODE: oauth_google
+      FORMOWL_OAUTH_ISSUER: ${FORMOWL_OAUTH_ISSUER:?set the canonical public HTTPS origin}
+      FORMOWL_MCP_RESOURCE: ${FORMOWL_MCP_RESOURCE:?set the canonical public HTTPS /mcp URL}
+      FORMOWL_CHATGPT_CLIENT_ID: ${FORMOWL_CHATGPT_CLIENT_ID:?set the exact predefined client id}
+      FORMOWL_CHATGPT_REDIRECT_URI: ${FORMOWL_CHATGPT_REDIRECT_URI:?set the exact root-origin UAT callback}
+      FORMOWL_GOOGLE_CLIENT_ID: ${FORMOWL_GOOGLE_CLIENT_ID:?set the Google OAuth client id}
+      FORMOWL_GOOGLE_REDIRECT_URI: ${FORMOWL_GOOGLE_REDIRECT_URI:?set the exact FormOwl Google callback}
+      FORMOWL_OWNER_BOOTSTRAP_OPERATOR_SERVICE_ID: ${FORMOWL_OWNER_BOOTSTRAP_OPERATOR_SERVICE_ID:?set the deployment operator id}
+      FORMOWL_DATABASE_DSN_FILE: /run/secrets/formowl_database_dsn
+      FORMOWL_GOOGLE_CLIENT_SECRET_FILE: /run/secrets/formowl_google_client_secret
+      FORMOWL_OAUTH_STATE_ENCRYPTION_KEY_FILE: /run/secrets/formowl_state_encryption_key
+      FORMOWL_OAUTH_SIGNING_KEY_SET_FILE: /run/secrets/formowl_signing_key_set
+      FORMOWL_DATA_DIR: /data
+      FORMOWL_CONTAINER_STAGE_SECRETS: "1"
+      FORMOWL_ISSUE56_PRODUCTION_SEMANTIC_ENABLED: "1"
+      FORMOWL_ISSUE56_UAT_PUBLIC_BASE_URL: ${FORMOWL_ISSUE56_UAT_PUBLIC_BASE_URL:?set the root HTTPS UAT origin}
+      FORMOWL_OAUTH_ALLOW_STANDALONE_UAT_HTTPS_REDIRECT: "1"
+      FORMOWL_CONNECTED_HOST: 0.0.0.0
+      FORMOWL_CONNECTED_PORT: "8000"
+      FORMOWL_LOG_LEVEL: ${FORMOWL_LOG_LEVEL:-info}
+    secrets:
+      - formowl_database_dsn
+      - formowl_google_client_secret
+      - formowl_state_encryption_key
+      - formowl_signing_key_set
+      - formowl_signing_key_current
+      - formowl_signing_key_previous
+    volumes:
+      - formowl-data:/data
+      - .:/workspace:ro
+      - ${FORMOWL_ISSUE56_UAT_SOURCE_ROOT:?set the operator-controlled sealed-source root}:/issue56-source:ro
+    depends_on:
+      connected-mcp:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${FORMOWL_ISSUE56_UAT_PUBLISH_PORT:-8766}:8766"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /run/formowl-secrets:size=1m,mode=0700
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - SETPCAP
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  public-tls:
+    environment:
+      FORMOWL_ISSUE56_UAT_PUBLISH_PORT: ${FORMOWL_ISSUE56_UAT_PUBLISH_PORT:-8766}
+    volumes:
+      - ./deploy/connected/Caddyfile.issue56-uat.example:/etc/caddy/Caddyfile:ro
+    depends_on:
+      issue56-uat:
+        condition: service_started

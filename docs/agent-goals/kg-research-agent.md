@@ -1,117 +1,179 @@
 # Knowledge Graph Research Agent Goal
-
 ## Lifecycle
-
-- Label: `active`
-- Lossless history: `../archive/2026-07-11/kg-research-agent.md`
-- Retention: keep role, current objective, status, blockers, and next action
-  only; target at most 180 lines and archive before 250 lines.
-
+- Label: `active-blocked`
+- Active program: GitHub issue #56
+- Historical pre-rewrite state:
+  `../archive/2026-08-18/active/docs/agent-goals/kg-research-agent.md`
+- Retention: keep this file at or below 180 lines.
 ## Role
-
-Knowledge Graph Research Agent.
-
-Durable role definition: `../agent-roles.md`.
-
-## Current Objective
-
-Implement GitHub issue #51 as one source-neutral, end-to-end evidence
-completeness repair rather than a sequence of private-query patches.
-
-The governed path is:
+Knowledge Graph Research Agent. Durable role: `../agent-roles.md`.
+## Active Execution Model
+Issue #56 uses one Master and exactly two implementation subagents:
 
 ```text
-Raw Asset
-  -> SourceInventory
-  -> StructuralObservation
-  -> persisted normalized evidence and versioned index
-  -> query-scoped CoverageLedger
-  -> bounded fallback
-  -> TaskAnsweringEngine-owned AnswerClaimState
-  -> MCP / JSON-RPC / UAT projection
-  -> durable task lifecycle
+Master: global plan, decomposition, monitoring, integration review, acceptance
+Worker A: gpt-5.6-sol, reasoning_effort=ultra
+Worker B: gpt-5.6-sol, reasoning_effort=ultra
+```
+The Master does not implement or take over assigned edits. Workers receive
+non-overlapping write sets. The five-step plan changes only for a concrete new
+blocker; repeated failed routes require a changed decomposition or validation
+method, not another retry.
+## Objective
+Implement and fairly evaluate
+`evidence_to_knowledge_kg_ontology_v2_hybrid_v1` so FormOwl can use a governed
+graph for heterogeneous-data integration and demonstrate a measurable
+final-answer advantage over strong RAG on graph-required tasks.
+
+The intended path is:
+
+```text
+source-complete authorized Observations
+  -> strong RAG control
+  -> conservative entity linking
+  -> reviewed candidate/canonical graph topology
+  -> temporal/provenance/coverage constraints
+  -> scoped ontology with capped soft scoring
+  -> deterministic exact executor or cited answer
+```
+Mail is the first source fixture. The method must transfer to a materially
+different source family without question-specific core types or aliases.
+## Status
+`blocked` for methodology-quality UAT, comparative superiority, default-path
+replacement, and objective completion. Current authority is fail-closed with
+`authority_valid=false`, `methodology_ready=false`, runtime error
+`passed_runtime_gate_requires_cjk_runtime_support`, and four blocking gates:
+source completeness, accepted execution-fingerprint binding, same-pipeline
+real-source ablation, and independent final-answer acceptance. The target
+method and tokenizer remain pinned, but no formal all-four-gate evidence exists
+to promote.
+## Step-4 Browser Direct-Responses LAN UAT Checkpoint — 2026-09-04
+The trusted same-LAN no-auth UAT on port `8088` used the direct Responses
+provider and approved sealed-source route. One terse self-test reached the
+provider and made three normal `/mcp` calls; all returned `replan_required`,
+and multi-row ambiguity ended in `clarification_required` with no answer or citations.
+Authority remains `authority_valid=false`/`methodology_ready=false` with source
+completeness, execution-fingerprint binding, same-pipeline real-source
+ablation, and independent final-answer acceptance blocked. This is diagnostic
+UAT only, not production, readiness, Issue #56 completion, or superiority.
+## Step-4 Attachment-Table Checkpoint — 2026-09-02
+The structural-blank plus sparse focused normal `/mcp` E2E passed `1/1` in
+`66.026 s`. Exactly-once mode
+`issue56-after-structural-blank-diagnostic-20260902-v1` was consumed with exit
+`0` as `workspace_only_v1`/`workspace_formowl`, actor/approver
+`user_full_pst_domain_hard_case_eval_owner`, and no tenant. It returned HTTP
+`200`, no MCP error, request count `1`, request/compose
+`531.524261`/`607917.660851 ms`, authorized scope `1799`, exact returned/total
+`2/2`, complete coverage, candidate-only `0`, and `7` citations.
+
+Within the authorized sealed-source scope, the requested projection fields
+materialized as explicit blanks; another unrequested field was not semantically
+equivalent and was not used as an alias.
+
+This is an exploratory diagnostic POC only—not formal UAT, production,
+readiness, Issue #56 completion, or comparative-superiority evidence. Step 4
+remains `in-progress`; the same four authority gates remain blocked. The
+earlier participant inventory also remains independently `incomplete`.
+## Step-4 Connected Route-A Planner Checkpoint — 2026-09-03
+Commit `f4a18e5` is pushed, and scoped canonical verification passed `23/23`.
+Route A keeps planning in the connected ChatGPT/workspace client across at most
+two follow-ups; no inline/server-side model client was added.
+Safe v3 log `sha256:013aa643f17ac30e358800517d62268e8f5fbb3049747530f0004dd260b10b11`
+used `workspace_only_v1`/`workspace_formowl`, the approved actor/approver, and
+no tenant. Transport succeeded with exact `12/12`, all `source_provided`, and
+`36` citations/lineages, but five distinct value fingerprints plus
+`incomplete`/`context_budget_reached` kept `answerable=false`; clarification is
+required.
+Tool guidance now requires a remaining follow-up to use one unique authorized
+row discriminator in a combined projection; a synthetic formal-XLSX E2E proves
+same-response row association, citation, and lineage. The v4 pre-run is blocked
+by multiple equally valid discriminators: do not tune or rerun the query; ask
+the user for an item/identifier field or let the real calling agent clarify.
+Authority remains invalid/not ready with the same four gates; no general UAT, production, readiness, Issue #56-completion, or methodology claim is earned.
+## Non-Negotiable Method
+
+- Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence
+  reranking over the same Observations.
+- KG adds reviewed identity, cross-source joins, bounded traversal, temporal
+  state, contradiction, provenance, and coverage.
+- Ontology is small-core, scoped, data-first, versioned, and capped additive.
+  Inferred mismatch cannot prune admitted evidence.
+- Permission, schema/arity, lineage, revision pins, canonical-write
+  preconditions, and exact-set coverage remain hard invariants.
+- Exact set/count/inventory/aggregation/definitive-negative queries use a
+  deterministic executor, not top-k inference.
+- The final answer model, prompt, reasoning effort, schema, and context budget
+  are identical across comparison arms.
+- Independent holdout content cannot tune tokenizer, aliases, ontology,
+  graph rules, thresholds, prompts, or models.
+- PostgreSQL/pgvector remains canonical; no Neo4j work is authorized.
+
+## Current Blockers
+
+The authority blocks source completeness, execution-fingerprint binding,
+same-pipeline real-source ablation, and real-user final-answer acceptance.
+Historical, candidate-only, synthetic, and consumed diagnostics cannot satisfy
+them.
+
+## Current Five-Step POC Plan
+
+1. The Master freezes two disjoint worker write sets and one real end-to-end
+   success path, then records only status changes unless evidence reveals a new
+   blocker.
+2. Worker A implements the immutable target tokenizer/profile and same-profile
+   query/evidence indexing without fallback, including the smallest runnable
+   path that proves the profile is actually used.
+3. Worker B implements the complementary source-preserving strong-RAG/control
+   path needed to carry an authorized Observation through real retrieval and
+   result production; contract-only wiring is insufficient.
+4. The workers extend their non-overlapping slices into one bounded issue #56
+   path covering typed routing, deterministic exact execution where applicable,
+   conservative graph expansion, and capped soft ontology scoring.
+5. The Master integrates and inspects the end-to-end evidence, redirects any
+   repeated blocker instead of retrying blindly, and accepts only the claim
+   actually proven. Independent holdout, transfer evaluation, broad hardening,
+   and release review remain later gates.
+
+Plan status: step 4 is `in-progress`; the five-step wording remains frozen. No
+further execution of the consumed development one-shot is authorized.
+
+## Acceptance Boundary
+
+Implementation completion and comparative close are distinct.
+
+POC evidence must cover this real path:
+
+```text
+authorized source/Observation
+  -> frozen query/evidence profile and index
+  -> strong RAG plus bounded graph/ontology execution
+  -> deterministic result or cited answer
 ```
 
-The reviewed execution contract is GitHub issue #51 comment `5070970116`.
-Gate 0 is the clean integration branch `issue/51-integration-baseline` at
-`79bc129081597f8733317e587243c7db3e2ff816`. Implementation must use its
-ordered, disjoint work packages and must not use the dirty repository root as
-evidence.
+Contracts, schemas, mocks, or isolated tests alone are insufficient. POC
+evidence never relaxes permission, privacy, provenance, candidate-before-
+canonical, no-secret/no-raw-path, fail-closed authority, or public-output
+boundaries, and cannot earn readiness, superiority, or completion claims.
 
-Default Candidate Evidence Retrieval remains the only default retrieval
-method: it counts a logical source item, uses capped additive ontology
-reranking, and keeps regex-only, hard-pruning, and other alternatives
-ablation-only through `retrieve_ablation`. The index-owned
-`CandidateEvidenceTextPolicyRuntime` accepts query text only and binds the
-runtime id, tokenizer implementation hash, and frozen profile; a free-form hash
-is rejected. Context/time admissibility and `CandidateEvidenceAccessBinding`
-filtering precede tokenization. Raw query text may express only control intent;
-retrieval anchors come from runtime-produced tokens. All four access
-collections are immutable `frozenset` values, and cross-context permission is
-an actual boolean.
+Implementation completion requires target runtime, source-complete graph input,
+strong RAG, typed plans, deterministic exact execution, graph/ontology path,
+generalized tests, frozen diagnostic artifacts, synchronized docs, canonical
+container verification, and 3/3 reviewer agreement.
 
-## Status
+Comparative close additionally requires the independent holdout and transfer
+domain to pass pre-registered correctness, citation, no-answer, privacy,
+latency, and cost gates, plus:
 
-`active` — WP1 is frozen and integrated. The code freeze is
-`0f2e69b065d082fdb5fb43506f309b1dc2efc1f1`; the reviewed code-plus-packet
-head is `eac8473d`, and integration merge `9e8a5f6` has parents `bed52a4` and
-`eac8473d`. The durable packet is
-`docs/issue51-wp1-interface-freeze.md`.
+```sh
+python3 scripts/methodology_authority_check.py --require-ready
+```
 
-## Acceptance Criteria
-
-- One shared contract module owns `SourceInventory`, structural observations,
-  claim requirements, `CoverageLedger`, and the four answer-claim states.
-- The canonical PST adapter inventories every raw structure and preserves
-  table topology, blank/populated distinctions, version/quote depth, MIME
-  alternatives, attachments, failures, and explicit exclusions.
-- File and PostgreSQL persistence round-trip deterministically; migration
-  numbering does not collide with OAuth `005_oauth_identity.sql`.
-- Existing indexed candidate intersection searches structured evidence,
-  enforces authorization before vocabulary/candidates/counting, rejects stale
-  fingerprints, and uses only bounded fallback.
-- `TaskAnsweringEngine` alone constructs, validates, enforces, and serializes
-  claims. MCP, JSON-RPC, UAT HTTP, and the conversation orchestrator may not
-  infer a second claim state.
-- `human_uat_upload._parse_uat_uploaded_pst` delegates only to
-  `run_upload_session_mail_import`; UAT does not fabricate a parallel Asset,
-  parser, bundle, index, coverage model, or answer service.
-- Issue #53 lands first as a dedicated reviewed lifecycle commit with the exact
-  API/path/ancestry gate in the contract, then WP5 integrates it.
-- UAT-L1 through UAT-L10, generalized structural/metamorphic cases,
-  file/PostgreSQL/cold-warm-rebuilt parity, restart, refresh, revocation, and
-  numeric budget behavior pass in the canonical dev container.
-- Full unit tests, Ruff check/format, migration replay, diff checks, and three
-  independent read-only reviewers agree.
-- The board stays unchecked until all implementation proof exists. #51 can
-  claim only “ready for #52,” not independent acceptance, methodology
-  readiness, comparative superiority, or launch readiness.
-
-## Blockers
-
-- `scripts/methodology_authority_check.py --check` is valid but blocked.
-  The methodology authority guard observes current runtime
-  `ascii_identifier_regex_v1`, not the frozen target.
-  Authority fingerprint is
-  `sha256:c8e3fc5ec13d690f33d27797942a3b9b090319d4be8f269c77bccd646d787177`;
-  execution fingerprint is
-  `sha256:291c7ea5c5737079cc9ae9d4100fd9ce94f926adfff1a112235ed0aa93cf9665`;
-  pipeline source binding count is `64`.
-- `--require-ready` exits nonzero. No methodology-quality UAT,
-  KG-versus-ontology claim, methodology completion, or launch-readiness claim
-  is permitted.
-- Issue #53 is open and its dedicated prerequisite commit does not yet exist.
-  WP5 cannot start until the exact seam is implemented, reviewed, and recorded.
-- Issue #52 remains the sole independent raw-PST oracle acceptance authority.
-  #51 implementation and its agents cannot self-certify it.
-- The broad KG real-evidence objective remains separately blocked; #51 does not
-  close or weaken its remaining evidence gates.
+exiting zero.
 
 ## Next Action
 
-Begin WP2: complete raw inventory and structural extraction, then reconcile it
-against an independent raw oracle. Consume the frozen WP1 interface without
-mutating it; freeze and review each upstream interface before its consumer
-starts. Issue #53 must land as a dedicated reviewed lifecycle prerequisite
-before WP5, and Issue #52 remains the only independent acceptance authority.
-Keep all acceptance and methodology claims fail-closed.
+Remain within step 4. Close the source-selection/artifact-binding scope gap and
+obtain source-backed or reviewed semantic header evidence before any
+canonical-KG or deterministic-exact promotion. Do not treat candidate-only
+interpretation as formal UAT, run blocked holdouts, or claim readiness,
+superiority, production status, or Issue #56 completion.

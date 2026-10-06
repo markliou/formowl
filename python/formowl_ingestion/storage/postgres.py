@@ -104,6 +104,18 @@ class _PostgreSQLIngestionRecordStore(Generic[T]):
         )
         return [self.factory(_row_payload(row)) for row in self.connection.query_all(statement)]
 
+    def delete(self, record_id: str) -> None:
+        _validate_record_id(record_id, self.id_field)
+        self.connection.execute(
+            SQLStatement(
+                sql=(
+                    "DELETE FROM formowl_ingestion_records "
+                    "WHERE record_type = %(record_type)s AND record_id = %(record_id)s"
+                ),
+                parameters={"record_type": self.record_type, "record_id": record_id},
+            )
+        )
+
     def validate_record_id(self, record_id: str) -> None:
         _validate_record_id(record_id, self.id_field)
 
@@ -133,6 +145,9 @@ class PostgreSQLAssetStore:
 
     def list(self) -> list[Asset]:
         return self._store.list()
+
+    def delete(self, asset_id: str) -> None:
+        self._store.delete(asset_id)
 
 
 class PostgreSQLJobStore:

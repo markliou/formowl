@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "authority_id": "formowl_methodology_authority_v1",
+  "updated_at": "2026-07-22",
+  "status": "blocked",
+  "target_pipeline": {
+    "method_id": "evidence_to_knowledge_kg_ontology_v2_hybrid_v1",
+    "tokenizer_id": "jieba_sentencepiece_frozen_profile_candidate_admission_v1",
+    "ingestion_policy_id": "complete_source_evidence_output_redaction_v1",
+    "evaluation_policy_id": "raw_source_oracle_same_pipeline_end_answer_v1"
+  },
+  "current_runtime": {
+    "method_id": "mail_candidate_kg_broad_ontology_diagnostic_v1",
+    "mail_query_tokenizer_id": "ascii_identifier_regex_v1",
+    "mail_query_cjk_supported": false,
+    "ingestion_policy_id": "bounded_observation_segments_v1",
+    "evaluation_policy_id": "observation_retrieval_diagnostic_v1"
+  },
+  "required_gates": [
+    {
+      "gate_id": "runtime_pipeline_matches_target_method",
+      "status": "blocked",
+      "reason_code": "runtime_method_and_tokenizer_not_migrated",
+      "evidence": [
+        "python/formowl_mail/query.py",
+        "python/formowl_mail/evidence.py"
+      ]
+    },
+    {
+      "gate_id": "source_completeness_compared_with_raw_oracle",
+      "status": "blocked",
+      "reason_code": "raw_source_to_observation_loss_not_measured",
+      "evidence": [
+        "RESOURCE_EXTRACTION_SPEC.md"
+      ]
+    },
+    {
+      "gate_id": "evaluation_reports_bind_execution_fingerprint",
+      "status": "blocked",
+      "reason_code": "historical_reports_do_not_bind_one_runtime_pipeline",
+      "evidence": [
+        "experiments/kg_ontology_v2_coordination/results/procurement_full_pst_domain_hard_summary_2026-07-09.json"
+      ]
+    },
+    {
+      "gate_id": "same_pipeline_real_source_ablation",
+      "status": "blocked",
+      "reason_code": "hybrid_v2_not_rerun_on_same_real_source_pipeline",
+      "evidence": [
+        "experiments/kg_ontology_v2_coordination/results/procurement_full_pst_domain_hard_summary_2026-07-09.json"
+      ]
+    },
+    {
+      "gate_id": "real_user_end_answer_acceptance",
+      "status": "blocked",
+      "reason_code": "retrieval_scores_do_not_establish_final_answer_correctness",
+      "evidence": [
+        "docs/agent-goals/kg-research-agent.md"
+      ]
+    }
+  ],
+  "claim_policy": {
+    "allowed_claim_ids": [
+      "methodology_authority_guard_installed",
+      "historical_regex_results_are_diagnostic_only",
+      "experiment_layer_jieba_sentencepiece_results"
+    ],
+    "blocked_claim_ids": [
+      "current_runtime_implements_target_method",
+      "current_runtime_has_production_chinese_tokenization",
+      "historical_real_pst_results_compare_the_current_target_method",
+      "kg_outperforms_kg_plus_ontology",
+      "kg_plus_ontology_outperforms_kg_on_real_sources",
+      "methodology_ready_for_quality_uat",
+      "methodology_objective_complete"
+    ]
+  }
+}

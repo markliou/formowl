@@ -1,5 +1,43 @@
 from __future__ import annotations
 
+
+# Reconciliation imports from Track 2
+from .primitives import (
+    ContractValidationError,
+    JsonValue,
+    canonical_json as canonical_json,
+    from_plain as from_plain,
+    now_iso as now_iso,
+    sha256_json as sha256_json,
+    stable_asset_id as stable_asset_id,
+    stable_asset_metadata_hash as stable_asset_metadata_hash,
+    stable_candidate_atom_id as stable_candidate_atom_id,
+    stable_candidate_relation_id as stable_candidate_relation_id,
+    stable_canonical_atom_id as stable_canonical_atom_id,
+    stable_canonical_entity_id as stable_canonical_entity_id,
+    stable_canonical_graph_revision_id as stable_canonical_graph_revision_id,
+    stable_canonical_relation_id as stable_canonical_relation_id,
+    stable_external_graph_import_id as stable_external_graph_import_id,
+    stable_extractor_run_id as stable_extractor_run_id,
+    stable_ingestion_job_id as stable_ingestion_job_id,
+    stable_observation_id as stable_observation_id,
+    stable_policy_id as stable_policy_id,
+    stable_resource_contract_hash as stable_resource_contract_hash,
+    stable_resource_contract_id as stable_resource_contract_id,
+    stable_semantic_metadata_id as stable_semantic_metadata_id,
+    stable_storage_backend_id as stable_storage_backend_id,
+    stable_type_alias_id as stable_type_alias_id,
+    stable_type_alignment_candidate_id as stable_type_alignment_candidate_id,
+    stable_type_definition_id as stable_type_definition_id,
+    stable_type_mapping_id as stable_type_mapping_id,
+    stable_upload_session_id as stable_upload_session_id,
+    stable_user_graph_assembly_policy_id as stable_user_graph_assembly_policy_id,
+    stable_user_graph_profile_id as stable_user_graph_profile_id,
+    stable_user_knowledge_graph_revision_id as stable_user_knowledge_graph_revision_id,
+    stable_wiki_projection_spec_id as stable_wiki_projection_spec_id,
+    to_plain,
+)
+
 from dataclasses import dataclass, field, is_dataclass
 from datetime import datetime
 import re
@@ -5025,3 +5063,115 @@ def validate_upload_session(value: Any) -> dict[str, Any]:
         raise ContractValidationError("UploadSession.status is not supported")
     validate_permission_scope(upload_session["permission_scope"])
     return upload_session
+
+
+# Reconciled top-level API from Track 2
+
+AUDIT_ACTOR_TYPE_VALUES = ("user", "service", "external_unauthenticated")
+
+_AUDIT_SECRET_KEYS = {
+    "access_token",
+    "authorization_code",
+    "bearer_token",
+    "client_secret",
+    "code_verifier",
+    "google_code",
+    "id_token",
+    "nonce",
+    "private_key",
+    "refresh_token",
+    "state",
+    "token",
+
+_AUDIT_SECRET_VALUE_PATTERN = re.compile(
+    r"(?<!\w)(?:"
+    r"bearer\s+\S+|"
+    r"(?:access[_-]?token|authorization[_-]?code|bearer[_-]?token|client[_-]?secret|"
+    r"code[_-]?verifier|google[_-]?code|id[_-]?token|nonce|private[_-]?key|"
+    r"refresh[_-]?token|state|token|secret)\s*[\"']?\s*[:=]\s*[\"']?\S+"
+    r")",
+    re.IGNORECASE,
+
+_AUDIT_SECRET_IDENTIFIER_PATTERN = re.compile(
+    r"(?:^|[._-])(?:"
+    r"access[._-]token|authorization[._-]code|bearer[._-]token|client[._-]secret|"
+    r"code[._-]verifier|google[._-]code|id[._-]token|nonce|private[._-]key|"
+    r"refresh[._-]token|state|token"
+    r")(?:$|[._-])",
+    re.IGNORECASE,
+
+_AUDIT_SAFE_COMPOUND_SECRET_COUNT_KEYS = frozenset({"revoked_token_session_count"})
+
+_AUDIT_MEMBERSHIP_STATE_VALUES = frozenset({"active", "removed"})
+
+_TOKEN_SESSION_AUDIT_STATUS_VALUES = frozenset({"active", "expired", "revoked"})
+
+def _validate_coordination_object_supertype(value: Any, field_name: str) -> None:
+    if value not in COORDINATION_OBJECT_SUPERTYPE_IDS:
+        raise ContractValidationError(f"{field_name} must be a coordination object supertype")
+
+def _validate_audit_metadata(value: Any) -> None:
+    if isinstance(value, str):
+        _validate_no_raw_public_reference(value, "AuditLog.metadata")
+        if _AUDIT_SECRET_VALUE_PATTERN.search(value):
+            raise ContractValidationError("AuditLog.metadata contains secret material")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = re.sub(
+                r"([A-Z]+)([A-Z][a-z])",
+                r"\1_\2",
+                str(key),
+            )
+            normalized_key = re.sub(
+                r"([a-z0-9])([A-Z])",
+                r"\1_\2",
+                normalized_key,
+            )
+            normalized_key = (
+                re.sub(
+                    r"[^A-Za-z0-9]+",
+                    "_",
+                    normalized_key,
+                )
+                .strip("_")
+                .lower()
+            )
+            secret_identifier_match = _AUDIT_SECRET_IDENTIFIER_PATTERN.search(normalized_key)
+            safe_secret_count = (
+                secret_identifier_match is not None
+                and (
+                    normalized_key[secret_identifier_match.end() :] == "count"
+                    or normalized_key in _AUDIT_SAFE_COMPOUND_SECRET_COUNT_KEYS
+                )
+                and isinstance(item, int)
+                and not isinstance(item, bool)
+                and item >= 0
+            )
+            safe_token_session_issued = normalized_key == "token_session_issued" and isinstance(
+                item, bool
+            )
+            safe_token_session_status = (
+                normalized_key == "token_session_status"
+                and isinstance(item, str)
+                and item in _TOKEN_SESSION_AUDIT_STATUS_VALUES
+            )
+            safe_membership_state = (
+                normalized_key == "membership_state"
+                and isinstance(item, str)
+                and item in _AUDIT_MEMBERSHIP_STATE_VALUES
+            )
+            if normalized_key in _AUDIT_SECRET_KEYS or (
+                secret_identifier_match is not None
+                and not (
+                    safe_secret_count
+                    or safe_token_session_issued
+                    or safe_token_session_status
+                    or safe_membership_state
+                )
+            ):
+                raise ContractValidationError("AuditLog.metadata contains a secret field")
+            _validate_audit_metadata(item)
+        _validate_no_raw_public_reference(value, "AuditLog.metadata")
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _validate_audit_metadata(item)

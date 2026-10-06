@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+
+# Reconciliation imports from Track 2
+import base64
+import binascii
+from collections.abc import Mapping, Sequence
+from http.cookies import SimpleCookie
+from typing import Any, Protocol
+from urllib.parse import parse_qs, urlparse
+
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -4244,3 +4253,101 @@ __all__ = [
     "render_mail_human_uat_page",
     "render_mail_human_uat_upload_page",
 ]
+
+
+# Reconciled top-level API from Track 2
+
+_MAX_PROMPT_CHARS = 8_000
+
+_PRE_AUTH_COOKIE = "formowl_uat_pre_auth"
+
+_SESSION_COOKIE = "formowl_uat_session"
+
+_TEMPORARY_BASIC_USERNAME = b"formowl-uat"
+
+_TEMPORARY_BASIC_CHALLENGE = 'Basic realm="FormOwl temporary UAT", charset="UTF-8"'
+
+class MailHumanUatQueryService(Protocol):
+    secure_cookie: bool
+
+    def begin_browser_authorization(self) -> tuple[str, str, int]: ...
+
+    def complete_browser_authorization(
+        self,
+        *,
+        state: str,
+        code: str,
+        browser_nonce: str | None,
+    ) -> tuple[str, int]: ...
+
+    def is_browser_session_authenticated(self, session_id: str | None) -> bool: ...
+
+    def logout_browser_session(self, session_id: str | None) -> None: ...
+
+    def ask(
+        self,
+        prompt: str,
+        *,
+        session_id: str | None,
+    ) -> Mapping[str, Any]: ...
+
+def _build_mail_human_uat_http_handler(
+    query_service: MailHumanUatQueryService,
+    *,
+    temporary_access_code: str | None,
+
+def _browser_cookie(
+    name: str,
+    value: str,
+    *,
+    max_age: int,
+    secure: bool,
+
+def _normalize_query_response(value: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TypeError("query response must be a mapping")
+    status = _optional_text(value.get("status"), default="complete")
+    answer = _optional_text(value.get("answer"), default="")
+    clarification_value = value.get("clarification")
+    clarification = (
+        None if clarification_value is None else _optional_text(clarification_value, default="")
+    )
+    citation_values = value.get("citations", ())
+    if isinstance(citation_values, (str, bytes)) or not isinstance(citation_values, Sequence):
+        raise TypeError("citations must be a sequence")
+    citations: list[str] = []
+    for citation in citation_values:
+        if isinstance(citation, str):
+            label = citation
+        elif isinstance(citation, Mapping):
+            label = citation.get("label")
+            if not isinstance(label, str):
+                raise TypeError("citation label must be text")
+        else:
+            raise TypeError("citation must be text or a mapping")
+        if label.strip():
+            citations.append(label)
+    return {
+        "status": status,
+        "answer": answer,
+        "citations": citations,
+        "citation_count": len(citations),
+        "clarification": clarification,
+    }
+
+def _optional_text(value: Any, *, default: str) -> str:
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise TypeError("response text must be a string")
+    return value
+
+_PAGE = """<!doctype html>
+
+def _render_page(authenticated: bool) -> str:
+    return (
+        _PAGE.replace("__AUTHENTICATED__", "true" if authenticated else "false")
+        .replace("__LOGIN_HIDDEN__", "hidden" if authenticated else "")
+        .replace("__LOGOUT_HIDDEN__", "" if authenticated else "hidden")
+        .replace("__CHAT_HIDDEN__", "" if authenticated else "hidden")
+    )

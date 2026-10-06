@@ -1,5 +1,33 @@
 from __future__ import annotations
 
+
+# Reconciliation imports from Track 2
+from typing import Any, Mapping, Sequence, TypeAlias
+from formowl_contract import (
+    ContractValidationError,
+    Grant,
+    Observation,
+    redact_public_raw_references,
+    sha256_json,
+    to_plain,
+)
+from formowl_core import (
+    jieba_sentencepiece_frozen_profile_candidate_admission_tokens,
+    load_default_mail_candidate_admission_tokenizer_profile,
+)
+from formowl_core.tokenization import (
+    ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT,
+    JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
+    MailCandidateAdmissionTokenizerProfile,
+)
+from ._guards import assert_public_payload_safe, safe_public_string
+from .semantic_plan import (
+    AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
+    GITHUB_PROJECT_OBSERVATION_SOURCE_KIND,
+    AuthorizedSemanticSource,
+    authorized_permission_scope_matches,
+)
+
 from dataclasses import dataclass, field
 import multiprocessing
 import re
@@ -1972,3 +2000,117 @@ __all__ = [
     "build_mail_evidence_read_handler",
     "execute_authorized_structured_set",
 ]
+
+
+# Reconciled top-level API from Track 2
+
+MAIL_TOKENIZER_PROFILE_FINGERPRINT = ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT
+
+_SEMANTIC_GATEWAY_TEXT_REDACTIONS = (
+    re.compile(r"\bwith\s+.+\s+as\s*\(", re.IGNORECASE),
+    re.compile(r"\bcopy\s+.+\s+from\b", re.IGNORECASE),
+    re.compile(r"\bTraceback \(most recent call last\):", re.IGNORECASE),
+
+@dataclass(frozen=True)
+
+@dataclass(frozen=True)
+
+@dataclass(frozen=True)
+
+@dataclass(frozen=True)
+
+@dataclass(frozen=True)
+
+@dataclass(frozen=True)
+
+_ATTACHMENT_CHILD_OBSERVATION_TYPES = {
+    "table_row",
+    "table_cell",
+
+def normalized_authorized_observation_lineages(
+    observations: Sequence[Observation],
+    *,
+    authorized_source: AuthorizedSemanticSource,
+    occurrence_lineages: Sequence[SourceOccurrenceLineage] = (),
+
+def _normalized_authorized_observation_lineages_from_snapshot(
+    observation_by_id: Mapping[str, Observation],
+    *,
+    authorized_source: AuthorizedSemanticSource,
+    occurrence_lineages: Sequence[SourceOccurrenceLineage],
+
+def _attachment_child_lineages(
+    observation_by_id: Mapping[str, Observation],
+
+def validate_source_neutral_attachment_observation_coverage(
+    observations: Sequence[Observation],
+    *,
+    matched_child_observation_hashes: Sequence[str] = (),
+
+def _validate_source_neutral_attachment_observation_coverage_from_snapshot(
+    observation_by_id: Mapping[str, Observation],
+    *,
+    observation_hash_by_id: Mapping[str, str],
+    matched_child_observation_hashes: Sequence[str],
+
+@dataclass(frozen=True)
+
+def source_occurrence_lineage_from_observation(
+    observation: Observation,
+    *,
+    authorized_source: AuthorizedSemanticSource,
+
+def _source_occurrence_lineage_from_snapshot(
+    validated: Observation,
+    *,
+    authorized_source: AuthorizedSemanticSource,
+
+def build_authorized_observation_snippet_index(
+    observations: Sequence[Observation],
+    *,
+    authorized_source: AuthorizedSemanticSource,
+    occurrence_lineages: Sequence[SourceOccurrenceLineage],
+    authorized_observation_hash_by_id: Mapping[str, str],
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+
+def _validate_observation_source_scope(
+    observation: Observation,
+    *,
+    authorized_source: AuthorizedSemanticSource,
+
+def _source_neutral_searchable_text(
+    observation: Observation,
+    *,
+    source_kind: str,
+
+def build_existing_observation_snippet_index(
+    observations: Sequence[Observation],
+    *,
+    bundle: MailEvidenceBundle,
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+
+def authorize_mail_evidence_bundles(
+    bundles: Sequence[MailEvidenceBundle],
+    *,
+    requester_user_id: str,
+    workspace_id: str,
+    grants: Sequence[Grant | dict[str, Any]] = (),
+    now: str | None = None,
+
+def require_issue56_target_tokenizer_profile(
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,
+    *,
+    expected_profile_fingerprint: str,
+
+def _load_mail_tokenizer_profile() -> MailCandidateAdmissionTokenizerProfile:
+    profile = load_default_mail_candidate_admission_tokenizer_profile()
+    if not _is_target_mail_tokenizer_profile(profile):
+        raise RuntimeError("frozen tokenizer profile is unavailable")
+    return profile
+
+def _is_target_mail_tokenizer_profile(
+    profile: MailCandidateAdmissionTokenizerProfile,
+
+def _require_matching_profile(
+    snippet_index: _MailSnippetIndex,
+    tokenizer_profile: MailCandidateAdmissionTokenizerProfile,

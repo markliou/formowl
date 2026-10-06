@@ -28,6 +28,7 @@ class KGResearchAcceptanceTests(unittest.TestCase):
             "production_adapter_candidate_only_boundary": "passed",
             "production_adapter_readiness": "failed",
             "metrics_ablations_error_analysis": "passed",
+            "methodology_runtime_alignment": "blocked",
             "latency_scalability_enterprise_claims": "blocked",
         }
 
@@ -35,15 +36,35 @@ class KGResearchAcceptanceTests(unittest.TestCase):
         self.assertEqual(data["known_failed_requirement_ids"], ["production_adapter_readiness"])
         self.assertEqual(
             data["known_blocked_requirement_ids"],
+            [
+                "methodology_runtime_alignment",
+                "latency_scalability_enterprise_claims",
+            ],
+        )
+        self.assertEqual(
+            data["expected_blocked_requirement_ids"],
             ["latency_scalability_enterprise_claims"],
+        )
+        self.assertEqual(
+            data["required_gate_requirement_ids"],
+            ["methodology_runtime_alignment"],
+        )
+        self.assertEqual(
+            data["blocking_required_gate_requirement_ids"],
+            ["methodology_runtime_alignment"],
         )
         self.assertEqual(data["unexpected_failed_requirement_ids"], [])
         self.assertEqual(data["unexpected_blocked_requirement_ids"], [])
         self.assertEqual(data["missing_expected_limit_requirement_ids"], [])
-        self.assertEqual(data["overall_status"], "passed_with_explicit_limits")
+        self.assertEqual(data["overall_status"], "blocked")
         metrics_item = _item(data, "metrics_ablations_error_analysis")
         self.assertEqual(metrics_item["metrics"]["ablation_count"], 4)
         self.assertEqual(metrics_item["metrics"]["error_case_count"], 4)
+        self.assertEqual(
+            metrics_item["metrics"]["evidence_level"],
+            "contract_diagnostic",
+        )
+        self.assertFalse(metrics_item["metrics"]["real_source_methodology_ablation_complete"])
         self.assertEqual(
             set(metrics_item["metrics"]["error_cases"]),
             {
@@ -53,6 +74,23 @@ class KGResearchAcceptanceTests(unittest.TestCase):
                 "alignment_without_provenance",
             },
         )
+        methodology_ready = AcceptanceItem(
+            requirement_id="methodology_runtime_alignment",
+            status="passed",
+            summary="Synthetic ready-state report.",
+            evidence=["docs/methodology-authority.json"],
+            metrics={"methodology_ready": True},
+        )
+        with patch(
+            "formowl_graph.research_acceptance._methodology_runtime_alignment_item",
+            return_value=methodology_ready,
+        ):
+            ready_data = run_kg_research_acceptance_suite().to_dict()
+        self.assertEqual(
+            ready_data["blocking_required_gate_requirement_ids"],
+            [],
+        )
+        self.assertEqual(ready_data["overall_status"], "passed_with_explicit_limits")
 
     def test_acceptance_suite_fails_overall_on_unexpected_failed_requirement(self) -> None:
         unexpected_item = AcceptanceItem(
@@ -72,6 +110,23 @@ class KGResearchAcceptanceTests(unittest.TestCase):
         self.assertIn(
             "external_recent_literature_comparison",
             data["unexpected_failed_requirement_ids"],
+        )
+        invalid_methodology = AcceptanceItem(
+            requirement_id="methodology_runtime_alignment",
+            status="failed",
+            summary="Synthetic invalid authority.",
+            evidence=["docs/methodology-authority.json"],
+            metrics={"authority_valid": False},
+        )
+        with patch(
+            "formowl_graph.research_acceptance._methodology_runtime_alignment_item",
+            return_value=invalid_methodology,
+        ):
+            invalid_data = run_kg_research_acceptance_suite().to_dict()
+        self.assertEqual(invalid_data["overall_status"], "failed")
+        self.assertEqual(
+            invalid_data["blocking_required_gate_requirement_ids"],
+            ["methodology_runtime_alignment"],
         )
 
     def test_acceptance_report_is_json_and_does_not_leak_raw_backend_text(self) -> None:
@@ -111,6 +166,7 @@ class KGResearchAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(strict.returncode, 1)
         self.assertIn("production_adapter_readiness", strict.stdout)
+        self.assertIn("methodology_runtime_alignment", strict.stdout)
 
 
 def _item(data: dict[str, object], requirement_id: str) -> dict[str, object]:

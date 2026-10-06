@@ -1,5 +1,17 @@
 """Source-neutral evidence coverage and answer-claim contracts.
 
+
+# Reconciliation imports from Track 2
+from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
+from .primitives import (
+    ContractValidationError,
+    sha256_json,
+    stable_resource_contract_id,
+    to_plain,
+)
+
 These contracts are deliberately independent from mail, retrieval, MCP, and
 task-answering implementations.  They are the durable boundary between
 source onboarding, evidence persistence, and any later consumer.
@@ -6695,3 +6707,135 @@ __all__ = [
     "fingerprint_manifest",
     "validate_fingerprint_binding",
 ]
+
+
+# Reconciled top-level API from Track 2
+
+class SourceInventoryProcessingState(StrEnum):
+    PARSED = "parsed"
+    PRESERVED_UNPARSED = "preserved_unparsed"
+    UNSUPPORTED = "unsupported"
+    FAILED = "failed"
+    INTENTIONALLY_EXCLUDED = "intentionally_excluded"
+
+class SourceInventoryRawRetentionState(StrEnum):
+    RETAINED = "retained"
+    DELETED_BY_POLICY = "deleted_by_policy"
+    EXTERNALLY_MANAGED = "externally_managed"
+
+_FINGERPRINT_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+_UNSAFE_LOCATION_PARTS = {
+    "backend",
+    "directory",
+    "filename",
+    "object",
+    "path",
+    "raw",
+    "scratch",
+    "uri",
+    "url",
+
+_EXCLUSION_FIELD_NAMES = {
+    "exclusion_policy_id",
+    "exclusion_policy_version",
+    "exclusion_authorized_actor_id",
+    "exclusion_reason",
+    "exclusion_out_of_scope_proof_fingerprint",
+
+def _source_inventory_item_identity(
+    *,
+    source_asset_id: str,
+    structure_kind: str,
+    ordinal: int,
+    source_fingerprint: str,
+    permission_fingerprint: str,
+    location: Mapping[str, Any],
+    exclusion_policy_id: str | None,
+    exclusion_policy_version: str | None,
+    exclusion_authorized_actor_id: str | None,
+    exclusion_reason: str | None,
+    exclusion_out_of_scope_proof_fingerprint: str | None,
+
+def _source_inventory_identity(
+    *,
+    source_asset_id: str,
+    source_fingerprint: str,
+    parser_fingerprint: str,
+    permission_fingerprint: str,
+    items: Sequence[SourceInventoryItem],
+
+def _canonical_mapping(value: Any, field_name: str) -> dict[str, Any]:
+    plain = to_plain(value)
+    if not isinstance(plain, dict):
+        raise ContractValidationError(f"{field_name} must be an object")
+    return {str(key): item for key, item in plain.items()}
+
+def _require_keys(
+    value: Mapping[str, Any],
+    *,
+    required: set[str],
+    optional: set[str] | None = None,
+    context: str,
+
+def _nonempty_string(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ContractValidationError(f"{field_name} must be a non-empty string")
+    assert_no_public_raw_references(value, field_name)
+    return value
+
+def _timestamp(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ContractValidationError(f"{field_name} must be a non-empty ISO timestamp")
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ContractValidationError(f"{field_name} must be an ISO timestamp") from exc
+    return value
+
+def _processing_state(value: Any) -> SourceInventoryProcessingState:
+    try:
+        return SourceInventoryProcessingState(value)
+    except (TypeError, ValueError) as exc:
+        raise ContractValidationError(
+            "SourceInventoryItem.processing_state must be one of "
+            + ", ".join(state.value for state in SourceInventoryProcessingState)
+        ) from exc
+
+def _raw_retention_state(value: Any) -> SourceInventoryRawRetentionState:
+    try:
+        return SourceInventoryRawRetentionState(value)
+    except (TypeError, ValueError) as exc:
+        raise ContractValidationError(
+            "SourceInventoryItem.raw_retention_state must be one of "
+            + ", ".join(state.value for state in SourceInventoryRawRetentionState)
+        ) from exc
+
+def _validate_exclusion_contract(
+    *,
+    processing_state: SourceInventoryProcessingState,
+    exclusion_policy_id: Any,
+    exclusion_policy_version: Any,
+    exclusion_authorized_actor_id: Any,
+    exclusion_reason: Any,
+    exclusion_out_of_scope_proof_fingerprint: Any,
+    source_fingerprint: str,
+    parser_fingerprint: str,
+    permission_fingerprint: str,
+
+def _validate_location_keys(location: Mapping[str, Any]) -> None:
+    for key in location:
+        normalized_key = re.sub(r"[^A-Za-z0-9]+", "_", str(key)).strip("_").lower()
+        if (
+            normalized_key in _EXCLUSION_FIELD_NAMES
+            or normalized_key.startswith("exclusion_")
+            or "out_of_scope" in normalized_key
+        ):
+            raise ContractValidationError(
+                "SourceInventoryItem exclusion proof must use canonical typed fields"
+            )
+        normalized_parts = {part for part in normalized_key.split("_") if part}
+        if normalized_parts & _UNSAFE_LOCATION_PARTS and not str(key).endswith("_fingerprint"):
+            raise ContractValidationError(
+                f"SourceInventoryItem.location field {key!r} may expose a raw locator"
+            )

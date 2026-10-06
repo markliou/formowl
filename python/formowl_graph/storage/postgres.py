@@ -8,22 +8,14 @@ from typing import Any, Protocol
 from formowl_contract import ContractValidationError, sha256_json, to_plain
 
 _MIGRATION_DIR = Path(__file__).resolve().parent / "migrations"
+_MIGRATION_ID = re.compile(r"^(?P<version>[0-9]{3,})_[a-z0-9_]+$")
+_MIGRATION_RUNNER_VERSION = 1
+# A transaction-scoped lock serializes schema changes across replicas without
+# leaving a session lock behind when a migration fails or a process exits.
+_MIGRATION_ADVISORY_LOCK_KEY = 0x466F726D4F776C
 _SAFE_PUBLIC_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
 _DSN_PATTERN = re.compile(r"postgres(?:ql)?://", re.IGNORECASE)
 _RAW_PATH_PATTERN = re.compile(r"^(?:/|\\\\|[A-Za-z]:[\\/]|file://)", re.IGNORECASE)
-_MIGRATION_FILENAME = re.compile(r"^(?P<slot>[0-9]{3})_[A-Za-z0-9][A-Za-z0-9_.-]*\.sql$")
-_RESERVED_MIGRATION_FILENAMES = {
-    5: "005_oauth_identity.sql",
-    6: "006_evidence_coverage.sql",
-    7: "007_task_lifecycle.sql",
-}
-_REQUIRED_MIGRATION_FILENAMES = {
-    1: "001_metadata_store.sql",
-    2: "002_vector_index.sql",
-    3: "003_ingestion_records.sql",
-    4: "004_mail_evidence.sql",
-    6: "006_evidence_coverage.sql",
-}
 
 
 @dataclass(frozen=True)
@@ -85,21 +77,32 @@ class PostgresMigration:
     def from_file(cls, path: Path) -> "PostgresMigration":
         if not path.name.endswith(".sql") or not path.is_file():
             raise ContractValidationError("PostgresMigration requires a SQL migration file")
-        return cls.from_text(filename=path.name, text=path.read_text(encoding="utf-8"))
-
-    @classmethod
-    def from_text(cls, *, filename: str, text: str) -> "PostgresMigration":
-        if not isinstance(filename, str) or not filename.endswith(".sql"):
-            raise ContractValidationError("PostgresMigration requires a SQL migration filename")
-        if not isinstance(text, str):
-            raise ContractValidationError("PostgresMigration SQL text must be a string")
-        statement_count = len(_split_sql_statements(text))
+        text = path.read_text(encoding="utf-8")
         return cls(
-            migration_id=Path(filename).stem,
-            filename=filename,
-            sql_sha256=sha256_json({"filename": filename, "sql": text}),
-            statement_count=statement_count,
+            migration_id=path.stem,
+            filename=path.name,
+            sql_sha256=sha256_json({"filename": path.name, "sql": text}),
+            statement_count=len(_split_sql_statements(text)),
         )
+
+
+@dataclass(frozen=True)
+class PostgreSQLMigrationResult:
+    ledger_version: int
+    applied_migration_ids: tuple[str, ...]
+    skipped_migration_ids: tuple[str, ...]
+    applied_statement_count: int
+    latest_migration_version: int
+
+    def to_safe_dict(self) -> dict[str, int | str]:
+        return {
+            "status": "ok",
+            "migration_ledger_version": self.ledger_version,
+            "applied_migration_count": len(self.applied_migration_ids),
+            "skipped_migration_count": len(self.skipped_migration_ids),
+            "applied_statement_count": self.applied_statement_count,
+            "latest_migration_version": self.latest_migration_version,
+        }
 
 
 @dataclass(frozen=True)
@@ -179,13 +182,9 @@ class PostgreSQLUnitOfWork:
     def __init__(self, connection: PostgreSQLConnection) -> None:
         self.connection = connection
         self.committed = False
-        self._active = False
 
     def __enter__(self) -> "PostgreSQLUnitOfWork":
-        if self._active:
-            raise ContractValidationError("PostgreSQLUnitOfWork cannot be entered twice")
         self.connection.begin()
-        self._active = True
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
@@ -193,56 +192,35 @@ class PostgreSQLUnitOfWork:
             self.connection.commit()
         else:
             self.connection.rollback()
-        self._active = False
         return False
 
     def commit(self) -> None:
-        if not self._active:
-            raise ContractValidationError("PostgreSQLUnitOfWork.commit requires an active scope")
         self.committed = True
-
-    @property
-    def active(self) -> bool:
-        """Whether this unit of work currently owns an open transaction."""
-
-        return self._active
 
 
 class PostgreSQLMigrationRunner:
-    """Replay locked SQL migrations through the internal connection protocol."""
+    """Apply immutable SQL migrations under a transaction-scoped ledger lock."""
 
-    def __init__(
-        self,
-        connection: PostgreSQLConnection,
-        migration_dir: Path | None = None,
-    ) -> None:
+    def __init__(self, connection: PostgreSQLConnection) -> None:
         self.connection = connection
-        self.migration_dir = Path(migration_dir) if migration_dir is not None else _MIGRATION_DIR
 
     def migration_replay(
         self, migrations: tuple[PostgresMigration, ...] | None = None
     ) -> list[SQLStatement]:
-        manifest = _validate_migration_manifest(
-            migration_files(self.migration_dir) if migrations is None else migrations
-        )
-        resolved_paths: list[tuple[PostgresMigration, Path]] = []
-        resolved_files: list[tuple[PostgresMigration, tuple[str, ...]]] = []
-        for migration in manifest:
-            path = self.migration_dir / migration.filename
-            if not path.is_file():
-                raise ContractValidationError("migration file missing from locked manifest")
-            resolved_paths.append((migration, path))
+        """Compatibility replay helper for isolated adapter tests.
 
-        for migration, path in resolved_paths:
-            text = path.read_text(encoding="utf-8")
-            derived = PostgresMigration.from_text(filename=path.name, text=text)
-            if migration != derived:
-                raise ContractValidationError("migration manifest metadata does not match file")
-            resolved_files.append((migration, _split_sql_statements(text)))
+        Production startup must use :meth:`apply_pending`, which records the
+        immutable checksum/version ledger and serializes concurrent runners.
+        """
 
         statements = []
-        for migration, migration_statements in resolved_files:
-            for index, sql in enumerate(migration_statements, start=1):
+        for migration in migrations or migration_files():
+            path = _MIGRATION_DIR / migration.filename
+            if not path.is_file():
+                raise ContractValidationError("migration file missing from locked manifest")
+            for index, sql in enumerate(
+                _split_sql_statements(path.read_text(encoding="utf-8")), start=1
+            ):
                 statement = SQLStatement(
                     sql=sql,
                     parameters={
@@ -253,6 +231,86 @@ class PostgreSQLMigrationRunner:
                 self.connection.execute(statement)
                 statements.append(statement)
         return statements
+
+    def apply_pending(
+        self,
+        migrations: tuple[PostgresMigration, ...] | None = None,
+    ) -> PostgreSQLMigrationResult:
+        manifest = _validated_migration_manifest(migrations or migration_files())
+        self.connection.execute(
+            SQLStatement(
+                sql="SELECT pg_advisory_xact_lock(%(lock_key)s)",
+                parameters={"lock_key": _MIGRATION_ADVISORY_LOCK_KEY},
+            )
+        )
+        self.connection.execute(SQLStatement(sql=_migration_ledger_sql()))
+        ledger_rows = self.connection.query_all(
+            SQLStatement(
+                sql=(
+                    "SELECT migration_id, migration_version, filename, sql_sha256, "
+                    "statement_count, runner_version FROM formowl_schema_migrations "
+                    "ORDER BY migration_version"
+                )
+            )
+        )
+        ledger = _validated_migration_ledger(ledger_rows, manifest=manifest)
+        applied: list[str] = []
+        skipped: list[str] = []
+        applied_statement_count = 0
+        missing_seen = False
+        for migration in manifest:
+            existing = ledger.get(migration.migration_id)
+            if existing is not None:
+                if missing_seen:
+                    raise ContractValidationError("migration ledger contains a version gap")
+                _validate_applied_migration(existing, migration)
+                skipped.append(migration.migration_id)
+                continue
+            missing_seen = True
+            path = _MIGRATION_DIR / migration.filename
+            if not path.is_file():
+                raise ContractValidationError("migration file missing from locked manifest")
+            statements = _split_sql_statements(path.read_text(encoding="utf-8"))
+            if len(statements) != migration.statement_count:
+                raise ContractValidationError("migration statement count changed")
+            for index, sql in enumerate(statements, start=1):
+                self.connection.execute(
+                    SQLStatement(
+                        sql=sql,
+                        parameters={
+                            "migration_id": migration.migration_id,
+                            "statement_index": index,
+                        },
+                    )
+                )
+                applied_statement_count += 1
+            self.connection.execute(
+                SQLStatement(
+                    sql=(
+                        "INSERT INTO formowl_schema_migrations "
+                        "(migration_id, migration_version, filename, sql_sha256, "
+                        "statement_count, runner_version) VALUES "
+                        "(%(migration_id)s, %(migration_version)s, %(filename)s, "
+                        "%(sql_sha256)s, %(statement_count)s, %(runner_version)s)"
+                    ),
+                    parameters={
+                        "migration_id": migration.migration_id,
+                        "migration_version": _migration_version(migration),
+                        "filename": migration.filename,
+                        "sql_sha256": migration.sql_sha256,
+                        "statement_count": migration.statement_count,
+                        "runner_version": _MIGRATION_RUNNER_VERSION,
+                    },
+                )
+            )
+            applied.append(migration.migration_id)
+        return PostgreSQLMigrationResult(
+            ledger_version=_MIGRATION_RUNNER_VERSION,
+            applied_migration_ids=tuple(applied),
+            skipped_migration_ids=tuple(skipped),
+            applied_statement_count=applied_statement_count,
+            latest_migration_version=_migration_version(manifest[-1]),
+        )
 
 
 class PostgreSQLMetadataRepository:
@@ -322,56 +380,112 @@ class PostgreSQLMetadataRepository:
         raise ContractValidationError("canonical commits require governed review backend")
 
 
-def migration_files(
-    migration_dir: Path | None = None,
-) -> tuple[PostgresMigration, ...]:
-    root = Path(migration_dir) if migration_dir is not None else _MIGRATION_DIR
-    paths = list(root.glob("*.sql"))
-    slots: dict[int, Path] = {}
-    for path in paths:
-        slot = _migration_slot(path.name)
-        if slot in slots:
-            raise ContractValidationError("migration manifest contains duplicate numeric slots")
-        slots[slot] = path
-    migrations = tuple(PostgresMigration.from_file(slots[slot]) for slot in sorted(slots))
-    return _validate_migration_manifest(migrations)
+def migration_files() -> tuple[PostgresMigration, ...]:
+    return tuple(PostgresMigration.from_file(path) for path in sorted(_MIGRATION_DIR.glob("*.sql")))
 
 
-def _migration_slot(filename: str) -> int:
-    match = _MIGRATION_FILENAME.fullmatch(filename)
-    if match is None:
-        raise ContractValidationError("migration filename must use a three-digit numeric slot")
-    slot = int(match.group("slot"))
-    if slot == 0:
-        raise ContractValidationError("migration numeric slot must be positive")
-    reserved_filename = _RESERVED_MIGRATION_FILENAMES.get(slot)
-    if reserved_filename is not None and filename != reserved_filename:
-        raise ContractValidationError("reserved migration slot has an unexpected filename")
-    return slot
-
-
-def _validate_migration_manifest(
+def _validated_migration_manifest(
     migrations: tuple[PostgresMigration, ...],
 ) -> tuple[PostgresMigration, ...]:
-    slots: list[int] = []
+    if not migrations:
+        raise ContractValidationError("migration manifest must not be empty")
+    versions: list[int] = []
+    ids: set[str] = set()
+    filenames: set[str] = set()
     for migration in migrations:
-        if not isinstance(migration, PostgresMigration):
-            raise ContractValidationError("migration manifest contains an invalid record")
-        if migration.migration_id != Path(migration.filename).stem:
-            raise ContractValidationError("migration manifest ID does not match filename")
-        slot = _migration_slot(migration.filename)
-        if slot in slots:
-            raise ContractValidationError("migration manifest contains duplicate numeric slots")
-        slots.append(slot)
-    if slots != sorted(slots):
-        raise ContractValidationError("migration manifest must be ordered by numeric slot")
-    filenames_by_slot = dict(
-        zip(slots, (migration.filename for migration in migrations), strict=True)
+        version = _migration_version(migration)
+        if migration.migration_id in ids or migration.filename in filenames:
+            raise ContractValidationError("migration manifest contains duplicates")
+        if migration.filename != f"{migration.migration_id}.sql":
+            raise ContractValidationError("migration filename and id do not match")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", migration.sql_sha256):
+            raise ContractValidationError("migration checksum is invalid")
+        if migration.statement_count <= 0:
+            raise ContractValidationError("migration statement count is invalid")
+        ids.add(migration.migration_id)
+        filenames.add(migration.filename)
+        versions.append(version)
+    if versions != sorted(versions) or len(versions) != len(set(versions)):
+        raise ContractValidationError("migration versions must be strictly increasing")
+    return tuple(migrations)
+
+
+def _validated_migration_ledger(
+    rows: list[dict[str, Any]],
+    *,
+    manifest: tuple[PostgresMigration, ...],
+) -> dict[str, dict[str, Any]]:
+    expected_ids = {migration.migration_id for migration in manifest}
+    ledger: dict[str, dict[str, Any]] = {}
+    versions: set[int] = set()
+    filenames: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ContractValidationError("migration ledger row is invalid")
+        migration_id = row.get("migration_id")
+        version = row.get("migration_version")
+        filename = row.get("filename")
+        if (
+            not isinstance(migration_id, str)
+            or migration_id not in expected_ids
+            or isinstance(version, bool)
+            or not isinstance(version, int)
+            or version <= 0
+            or not isinstance(filename, str)
+            or migration_id in ledger
+            or version in versions
+            or filename in filenames
+        ):
+            raise ContractValidationError("migration ledger is incompatible with this release")
+        ledger[migration_id] = dict(row)
+        versions.add(version)
+        filenames.add(filename)
+    missing_seen = False
+    for migration in manifest:
+        if migration.migration_id not in ledger:
+            missing_seen = True
+        elif missing_seen:
+            raise ContractValidationError("migration ledger contains a version gap")
+    return ledger
+
+
+def _validate_applied_migration(
+    row: dict[str, Any],
+    migration: PostgresMigration,
+) -> None:
+    expected = {
+        "migration_version": _migration_version(migration),
+        "filename": migration.filename,
+        "sql_sha256": migration.sql_sha256,
+        "statement_count": migration.statement_count,
+        "runner_version": _MIGRATION_RUNNER_VERSION,
+    }
+    if any(row.get(key) != value for key, value in expected.items()):
+        raise ContractValidationError("applied migration checksum or version mismatch")
+
+
+def _migration_version(migration: PostgresMigration) -> int:
+    match = _MIGRATION_ID.fullmatch(migration.migration_id)
+    if match is None:
+        raise ContractValidationError("migration id must start with a numeric version")
+    version = int(match.group("version"))
+    if version <= 0:
+        raise ContractValidationError("migration version must be positive")
+    return version
+
+
+def _migration_ledger_sql() -> str:
+    return (
+        "CREATE TABLE IF NOT EXISTS formowl_schema_migrations ("
+        "migration_id TEXT PRIMARY KEY, "
+        "migration_version INTEGER NOT NULL UNIQUE CHECK (migration_version > 0), "
+        "filename TEXT NOT NULL UNIQUE, "
+        "sql_sha256 TEXT NOT NULL CHECK (sql_sha256 ~ '^sha256:[0-9a-f]{64}$'), "
+        "statement_count INTEGER NOT NULL CHECK (statement_count > 0), "
+        "runner_version INTEGER NOT NULL CHECK (runner_version > 0), "
+        "applied_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+        ")"
     )
-    for slot, filename in _REQUIRED_MIGRATION_FILENAMES.items():
-        if filenames_by_slot.get(slot) != filename:
-            raise ContractValidationError(f"migration manifest requires {filename}")
-    return migrations
 
 
 def postgre_sql_backed_repository_interfaces() -> tuple[str, ...]:
@@ -568,3 +682,35 @@ def _validate_safe_fields(value: dict[str, Any], name: str) -> None:
                     raise ContractValidationError(f"{name}.{key}[{index}] must be a safe id")
         elif isinstance(item, dict):
             _validate_safe_fields(item, f"{name}.{key}")
+
+
+# Reconciled top-level API from Track 1
+
+_MIGRATION_FILENAME = re.compile(r"^(?P<slot>[0-9]{3})_[A-Za-z0-9][A-Za-z0-9_.-]*\.sql$")
+
+_RESERVED_MIGRATION_FILENAMES = {
+    5: "005_oauth_identity.sql",
+    6: "006_evidence_coverage.sql",
+    7: "007_task_lifecycle.sql",
+
+_REQUIRED_MIGRATION_FILENAMES = {
+    1: "001_metadata_store.sql",
+    2: "002_vector_index.sql",
+    3: "003_ingestion_records.sql",
+    4: "004_mail_evidence.sql",
+    6: "006_evidence_coverage.sql",
+
+def _migration_slot(filename: str) -> int:
+    match = _MIGRATION_FILENAME.fullmatch(filename)
+    if match is None:
+        raise ContractValidationError("migration filename must use a three-digit numeric slot")
+    slot = int(match.group("slot"))
+    if slot == 0:
+        raise ContractValidationError("migration numeric slot must be positive")
+    reserved_filename = _RESERVED_MIGRATION_FILENAMES.get(slot)
+    if reserved_filename is not None and filename != reserved_filename:
+        raise ContractValidationError("reserved migration slot has an unexpected filename")
+    return slot
+
+def _validate_migration_manifest(
+    migrations: tuple[PostgresMigration, ...],

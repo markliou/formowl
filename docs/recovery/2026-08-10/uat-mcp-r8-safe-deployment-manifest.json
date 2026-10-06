@@ -1,0 +1,122 @@
+{
+  "artifact_id": "formowl_uat_mcp_r8_safe_deployment_manifest_v1",
+  "scope": "internal_diagnostic_uat_only",
+  "action_boundary": {
+    "allowed_runtime_mutation": ["formowl-mcp-uat only"],
+    "must_not_build_deploy_restart_or_reconfigure": [
+      "formowl-mail-diagnostic-uat",
+      "formowl-codex-uat-sidecar",
+      "repository",
+      "web",
+      "sidecar"
+    ],
+    "candidate_binding_path": "__CANDIDATE_BINDING_PATH__",
+    "candidate_binding_sha256": "__CANDIDATE_BINDING_SHA256__"
+  },
+  "read_only_inputs": {
+    "container_inspect_snapshot_sha256": "sha256:614227fe991d3f9361f4f00a639aff51da87dc8dfdfbbc3e45c7ac3cff75797d",
+    "reviewed_image_metadata_sha256": "sha256:845a37c9322e162b0d79f61e6b8834a50402d6180e35c1250f4a5d8bbc7b2f3f",
+    "direct_mcp_canary_sha256": "sha256:da29d474561d451c6c6e06fb812f3acf251c1dce19e962f6ba5dbbab3ebf6716",
+    "build_context_source_manifest_sha256": "sha256:5eb9959ee3be1cfea292b6d1b2b329ed29dd1176ef82c139d04eefa9cda5bfa8",
+    "build_context_dockerfile_sha256": "sha256:5dfd9e618eb1d94e2af25a3eda8fb89260c37cac8a3a145bb6f5a2482de1da05",
+    "root_compose_sha256": "sha256:34d374eb565b9a6d83b93c57d5f6ca6f21872b2b903985e77cac91968924b553"
+  },
+  "baseline": {
+    "mcp_container": {
+      "name": "formowl-mcp-uat",
+      "observed_state": "exited",
+      "observed_exit_code": 137,
+      "observed_oom_killed": false,
+      "image_tag": "formowl-may-uat:candidate-kg-semantic-structured-native-aggregate-v4-20260807-r6",
+      "network": "formowl-diagnostic-uat",
+      "port_binding": "127.0.0.1:8091->8090/tcp",
+      "volume_roles": ["bridge:read_only", "private_directory:read_only"],
+      "environment_key_names": [
+        "FORMOWL_MAIL_TOKENIZER_MODE",
+        "GPG_KEY",
+        "PATH",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONPATH",
+        "PYTHONUNBUFFERED",
+        "PYTHON_SHA256",
+        "PYTHON_VERSION"
+      ]
+    },
+    "preserved_containers": [
+      {
+        "name": "formowl-mail-diagnostic-uat",
+        "image_digest": "sha256:64d4c5775242442956243ae107c81217b74bb9c3ccc68dae59eff5c2a76f1fdc",
+        "network": "formowl-diagnostic-uat",
+        "port_binding": "8088/tcp",
+        "volume_roles": ["tokenizer_model", "run_state", "uat_state"],
+        "environment_key_names": [
+          "FORMOWL_MAIL_TOKENIZER_MODE",
+          "FORMOWL_UAT_CODEX_MODEL",
+          "FORMOWL_UAT_CODEX_REASONING_EFFORT",
+          "GPG_KEY",
+          "PATH",
+          "PYTHONDONTWRITEBYTECODE",
+          "PYTHONPATH",
+          "PYTHONUNBUFFERED",
+          "PYTHON_SHA256",
+          "PYTHON_VERSION"
+        ]
+      },
+      {
+        "name": "formowl-codex-uat-sidecar",
+        "image_digest": "sha256:64d4c5775242442956243ae107c81217b74bb9c3ccc68dae59eff5c2a76f1fdc",
+        "network": "formowl-diagnostic-uat",
+        "port_binding": "8787/tcp",
+        "volume_roles": ["tokenizer_model", "codex_state", "run_state"],
+        "environment_key_names": [
+          "FORMOWL_MAIL_TOKENIZER_MODE",
+          "GPG_KEY",
+          "PATH",
+          "PYTHONDONTWRITEBYTECODE",
+          "PYTHONPATH",
+          "PYTHONUNBUFFERED",
+          "PYTHON_SHA256",
+          "PYTHON_VERSION"
+        ]
+      }
+    ],
+    "reviewed_base_image": {
+      "tag": "formowl-may-uat:diagnostic-reviewed-v24-20260809-r1",
+      "image_id": "sha256:d5a7eaab66fc61dbbdac447d9e9e98c854940bbe4c6decd9346faec5f602dcec",
+      "repository_digest": null,
+      "platform": "linux/amd64"
+    }
+  },
+  "candidate": {
+    "image_tag": "formowl-may-uat:diagnostic-reviewed-v24-20260810-r8",
+    "image_digest": "created_at_execution_and_recorded_after_build",
+    "network": "formowl-diagnostic-uat",
+    "port_binding": "127.0.0.1:8091->8090/tcp",
+    "volume_roles": [
+      "bridge:read_only:preserved_from_baseline",
+      "private_directory:read_only:preserved_from_baseline",
+      "reviewed_structural_bindings_file:read_only:overlay_from_explicit_placeholder"
+    ],
+    "environment_key_names": ["FORMOWL_MAIL_TOKENIZER_MODE"],
+    "container_runtime_identity": {"user": "65532:65532", "working_directory": "/opt/formowl"}
+  },
+  "acceptance_contract": {
+    "query_class": "attribute_filter",
+    "retrieval_path": "mail_authorized_structured_set",
+    "claim_state": "CANDIDATE_MATCHES",
+    "execution_mode": "authorized_structured_set",
+    "canonical_kg": false,
+    "citation_count": 0,
+    "source_count": 0,
+    "distinct_projection_count": 77,
+    "fingerprint": "sha256:d791cfcd424910ed766f4092b51c6a9c1f1b756943935544134e626301e7c705",
+    "single_mcp_query_call": 1,
+    "wall_timeout_seconds_strictly_less_than": 360
+  },
+  "rollback": {
+    "strategy": "rename_preserved_stopped_baseline_back_after_removing_candidate",
+    "baseline_state_preserved": "stopped",
+    "warning": "The observed baseline had exit code 137 and was not healthy; rollback restores its configuration and stopped state, not a known-good service."
+  },
+  "claim_boundary": "Diagnostic UAT only. This manifest does not change methodology authority, deploy anything, or assert production readiness."
+}
