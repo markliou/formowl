@@ -144,7 +144,9 @@ def load_or_rebuild_may_mail_evidence_bundle(
     if cache_path is not None and cache_path.exists():
         if cache_path.is_symlink() or not cache_path.is_file():
             raise ContractValidationError("MAY bundle cache path is unsafe")
-        bundle = MailEvidenceBundle.from_dict(json.loads(cache_path.read_text(encoding="utf-8")))
+        bundle = MailEvidenceBundle.from_persistence_dict(
+            json.loads(cache_path.read_text(encoding="utf-8"))
+        )
         _validate_bundle_manifest_binding(bundle, private_manifest)
         return bundle
     bundle = rebuild_may_mail_evidence_bundle(corpus_root, private_manifest)
@@ -158,7 +160,7 @@ def load_or_rebuild_may_mail_evidence_bundle(
             with temporary.open("x", encoding="utf-8") as handle:
                 os.chmod(temporary, 0o600)
                 json.dump(
-                    bundle.to_dict(),
+                    bundle.to_persistence_dict(),
                     handle,
                     ensure_ascii=False,
                     separators=(",", ":"),

@@ -1,5 +1,68 @@
 """Mail evidence workflow helpers for the FormOwl synthetic mail phase."""
 
+
+# Reconciliation imports from Track 2
+from .query import (
+    ExistingObservationIndexBuildManifest,
+    IndexedMailSnippet,
+    MailEvidenceQueryGateway,
+    MailEvidenceQueryResult,
+    MailSnippetIndex,
+    authorize_mail_evidence_bundles,
+    build_existing_observation_snippet_index,
+    build_mail_evidence_query_handler,
+    require_issue56_target_tokenizer_profile,
+)
+from .hybrid import (
+    AuthorizedHybridMailIndex,
+    AuthorizedSemanticMailSession,
+    BoundedGraphPath,
+    DenseEncoder,
+    EffectiveGraphContentSnapshotPrecompute,
+    GovernedHybridRagResult,
+    GovernedSemanticExecutionResult,
+    GraphTraversalHop,
+    HybridRagBundleScore,
+    HybridRagCandidateScore,
+    ISSUE56_TARGET_RUNTIME_METHOD_FINGERPRINT,
+    ISSUE56_TARGET_RUNTIME_METHOD_ID,
+    RelationProjectionBaseColdDiagnostic,
+    SemanticEvidenceScore,
+    SourceBackedGraphBuild,
+    build_authorized_hybrid_mail_index,
+    build_authorized_semantic_mail_session,
+    build_authorized_source_backed_effective_graph_view,
+    precompute_effective_graph_content_snapshot,
+    precompute_relation_projection_base_cold_diagnostic,
+    run_authorized_hybrid_mail_query,
+    run_authorized_semantic_mail_query,
+)
+from .answer import (
+    EvidenceAnswerBudget,
+    GovernedEvidenceAnswer,
+    ISSUE56_DETERMINISTIC_ANSWER_MODEL_ID,
+    ISSUE56_DETERMINISTIC_ANSWER_PROMPT_FINGERPRINT,
+    ISSUE56_DETERMINISTIC_ANSWER_PROMPT_ID,
+    build_authorized_candidate_table_lookup,
+    interpret_authorized_candidate_table_query,
+    render_governed_evidence_answer,
+)
+from .exact import (
+    DeterministicExactExecutionResult,
+    ExactCoverageContract,
+    ExactInventoryItem,
+    execute_deterministic_exact_inventory,
+)
+from .semantic_plan import (
+    DEFAULT_SEMANTIC_PLAN_LIMITS,
+    SEMANTIC_QUERY_CLASSES,
+    SemanticPlanLimits,
+    SemanticQueryPlan,
+    deterministic_query_class,
+    route_semantic_query,
+    validate_semantic_query_plan,
+)
+
 from .candidates import (
     MailCandidateBridgeResult,
     extract_and_store_mail_candidates,
@@ -60,7 +123,9 @@ from .upload_http import (
 from .query import (
     MailEvidenceQueryGateway,
     MailEvidenceQueryResult,
+    MailEvidenceReadResult,
     build_mail_evidence_query_handler,
+    build_mail_evidence_read_handler,
 )
 from .postgres import (
     PostgreSQLMailEvidenceConnection,
@@ -98,6 +163,7 @@ __all__ = [
     "MailEvidencePackStore",
     "MailEvidenceQueryGateway",
     "MailEvidenceQueryResult",
+    "MailEvidenceReadResult",
     "MailEvidenceRecord",
     "MailFolderOccurrence",
     "MailImportSession",
@@ -118,6 +184,7 @@ __all__ = [
     "build_mail_evidence_bundle",
     "build_mail_evidence_pack",
     "build_mail_evidence_query_handler",
+    "build_mail_evidence_read_handler",
     "build_mail_preflight_readiness_review",
     "build_mail_upload_http_surface_handler",
     "build_mail_upload_session_handler",

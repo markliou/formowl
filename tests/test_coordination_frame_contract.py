@@ -111,7 +111,7 @@ class CoordinationFrameContractTests(unittest.TestCase):
             extractor_run_id="run_coordination_001",
         )
         self.assertTrue(mention_id.startswith("cmention_"))
-        self.assertTrue(object_id.startswith("cbobj_"))
+        self.assertEqual(object_id, "cbobj_a1bc268580091168cd751abc")
 
     def test_canonical_frame_contract_is_review_target_not_store_write_path(self) -> None:
         candidate = _candidate_frame([], [])

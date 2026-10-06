@@ -1,18 +1,36 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Sequence
+from dataclasses import dataclass, field, is_dataclass, replace
+from typing import Any, Mapping, Sequence
 
 from formowl_contract import (
+    AnswerClaim,
+    ClaimRequirement,
     ContractValidationError,
+    CoverageAuthorizationBinding,
+    CoverageLedger,
+    CoverageScopeAuthority,
     Observation,
+    SourceInventory,
+    SourceInventoryItem,
+    StructuralObservation,
+    StructuralPublicScopeDecision,
+    VersionManifest,
     now_iso,
     sha256_json,
     stable_resource_contract_id,
     to_plain,
 )
+from formowl_contract.evidence_coverage import (
+    _EVIDENCE_PERSISTENCE_CONSUME_CAPABILITY,
+)
 
-from ._guards import assert_public_payload_safe, safe_public_string
+from ._guards import (
+    assert_authorized_evidence_payload_safe,
+    assert_authorized_evidence_text_safe,
+    assert_public_payload_safe,
+    safe_public_string,
+)
 
 _RETENTION_POLICIES = {
     "delete_after_successful_extract",
@@ -26,6 +44,78 @@ _RETENTION_DECISIONS = _RETENTION_POLICIES | {
     "retained_by_policy",
 }
 _PRODUCER_TYPES = {"server_side_parser", "local_companion_parser", "fixture_parser"}
+_WP1_PERSISTENCE_FIELD = "wp1_persistence"
+_WP1_PERSISTENCE_SCHEMA = "formowl_mail_evidence_wp1_v1"
+_MAIL_EVIDENCE_PERSISTENCE_CONSUME_CAPABILITY = object()
+
+
+def _mail_persistence_consume_requested(
+    consume_input: Any,
+    consume_capability: object | None,
+) -> bool:
+    if type(consume_input) is not bool:
+        raise ContractValidationError("mail evidence consume_input must be a boolean")
+    if consume_input:
+        if consume_capability is not _MAIL_EVIDENCE_PERSISTENCE_CONSUME_CAPABILITY:
+            raise ContractValidationError(
+                "destructive mail evidence restore requires private ownership"
+            )
+        return True
+    if consume_capability is not None:
+        raise ContractValidationError(
+            "mail evidence ownership capability requires destructive restore"
+        )
+    return False
+
+
+_WP1_PERSISTENCE_FAMILY_FIELDS = (
+    "source_inventory",
+    "source_inventory_items",
+    "structural_observations",
+    "claim_requirements",
+    "coverage_ledgers",
+    "answer_claims",
+    "version_manifests",
+)
+_CANONICAL_ORDER_ID_FIELDS = {
+    "archive_occurrences": "mail_archive_occurrence_id",
+    "folder_occurrences": "mail_folder_occurrence_id",
+    "messages": "email_message_id",
+    "message_occurrences": "email_message_occurrence_id",
+    "attachments": "email_attachment_id",
+    "attachment_occurrences": "email_attachment_occurrence_id",
+    "quoted_message_candidates": "quoted_message_candidate_id",
+    "embedded_message_relations": "embedded_message_relation_id",
+    "parse_runs": "mail_parse_run_id",
+    "parse_warnings": "mail_parse_warning_id",
+    "source_inventory": "source_inventory_id",
+    "source_inventory_items": "source_inventory_item_id",
+    "structural_observations": "structural_observation_id",
+    "claim_requirements": "claim_requirement_id",
+    "coverage_ledgers": "coverage_ledger_id",
+    "answer_claims": "answer_claim_id",
+    "version_manifests": "version_manifest_id",
+}
+_CANONICAL_TABLE_FAMILIES = {
+    "mail_archive_occurrence": "archive_occurrences",
+    "mail_folder_occurrence": "folder_occurrences",
+    "email_message": "messages",
+    "email_message_occurrence": "message_occurrences",
+    "email_body_segment": "body_segments",
+    "email_attachment": "attachments",
+    "email_attachment_occurrence": "attachment_occurrences",
+    "quoted_message_candidate": "quoted_message_candidates",
+    "embedded_message_relation": "embedded_message_relations",
+    "mail_parse_warning": "parse_warnings",
+    "mail_parse_run": "parse_runs",
+    "source_inventory": "source_inventory",
+    "source_inventory_item": "source_inventory_items",
+    "structural_observation": "structural_observations",
+    "claim_requirement": "claim_requirements",
+    "coverage_ledger": "coverage_ledgers",
+    "answer_claim": "answer_claims",
+    "version_manifest": "version_manifests",
+}
 
 
 @dataclass(frozen=True)
@@ -148,13 +238,21 @@ class EmailMessage:
     body_hash: str | None = None
     thread_id: str | None = None
     fingerprint_policy: str = "formowl_mail_fingerprint_v1"
+    source_body_char_count: int | None = None
+    stored_body_char_count: int | None = None
+    body_segment_count: int | None = None
+    body_evidence_state: str = "unknown"
+    body_redacted_segment_count: int = 0
+    unresolved_attachment_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
-        return _public_payload(self, "email_message")
+        payload = to_plain(self)
+        assert_authorized_evidence_payload_safe(payload, "email_message")
+        return payload
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "EmailMessage":
-        item = _require_dict(value, "email_message")
+        item = _require_authorized_evidence_dict(value, "email_message")
         message = cls(
             email_message_id=_required_str(item, "email_message_id"),
             message_fingerprint=_required_str(item, "message_fingerprint"),
@@ -162,14 +260,23 @@ class EmailMessage:
             archive_id=_required_str(item, "archive_id"),
             mailbox_id=_required_str(item, "mailbox_id"),
             source_observation_ids=_str_list(item.get("source_observation_ids")),
-            subject=_optional_str(item, "subject"),
-            normalized_subject=_optional_str(item, "normalized_subject"),
-            sender=_optional_str(item, "sender"),
+            subject=_optional_authorized_evidence_str(item, "subject"),
+            normalized_subject=_optional_authorized_evidence_str(
+                item,
+                "normalized_subject",
+            ),
+            sender=_optional_authorized_evidence_str(item, "sender"),
             sent_at=_optional_str(item, "sent_at"),
             body_hash=_optional_str(item, "body_hash"),
             thread_id=_optional_str(item, "thread_id"),
             fingerprint_policy=_optional_str(item, "fingerprint_policy")
             or "formowl_mail_fingerprint_v1",
+            source_body_char_count=_optional_int(item, "source_body_char_count"),
+            stored_body_char_count=_optional_int(item, "stored_body_char_count"),
+            body_segment_count=_optional_int(item, "body_segment_count"),
+            body_evidence_state=_optional_str(item, "body_evidence_state") or "unknown",
+            body_redacted_segment_count=_optional_int(item, "body_redacted_segment_count") or 0,
+            unresolved_attachment_count=_optional_int(item, "unresolved_attachment_count") or 0,
         )
         message.to_dict()
         return message
@@ -219,21 +326,40 @@ class EmailBodySegment:
     text: str
     body_segment_hash: str
     body_segment_index: int | None = None
+    segment_source_type: str = "message_body"
+    attachment_id: str | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+    body_segment_count: int | None = None
+    source_body_char_count: int | None = None
+    stored_body_char_count: int | None = None
+    body_evidence_state: str = "unknown"
+    content_publicly_unsafe: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return _public_payload(self, "email_body_segment")
+        return _private_payload(self)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "EmailBodySegment":
-        item = _require_dict(value, "email_body_segment")
+        item = _require_private_dict(value, "email_body_segment")
+        _assert_private_body_segment_envelope_safe(item)
         segment = cls(
             email_body_segment_id=_required_str(item, "email_body_segment_id"),
             email_message_id=_required_str(item, "email_message_id"),
             message_occurrence_id=_required_str(item, "message_occurrence_id"),
             source_observation_id=_required_str(item, "source_observation_id"),
-            text=_required_str(item, "text"),
+            text=_required_private_str(item, "text"),
             body_segment_hash=_required_str(item, "body_segment_hash"),
             body_segment_index=_optional_int(item, "body_segment_index"),
+            segment_source_type=_optional_str(item, "segment_source_type") or "message_body",
+            attachment_id=_optional_str(item, "attachment_id"),
+            char_start=_optional_int(item, "char_start"),
+            char_end=_optional_int(item, "char_end"),
+            body_segment_count=_optional_int(item, "body_segment_count"),
+            source_body_char_count=_optional_int(item, "source_body_char_count"),
+            stored_body_char_count=_optional_int(item, "stored_body_char_count"),
+            body_evidence_state=_optional_str(item, "body_evidence_state") or "unknown",
+            content_publicly_unsafe=_optional_bool(item, "content_publicly_unsafe") or False,
         )
         segment.to_dict()
         return segment
@@ -412,6 +538,242 @@ class MailParseWarning:
         return warning
 
 
+def canonical_order_records(
+    family: str,
+    records: Sequence[Any],
+) -> list[Any]:
+    """Return one deterministic order for a bundle record family.
+
+    The order is semantic for body segments and source-inventory items and
+    stable-ID based for the other families.  The private payload hash is only
+    a deterministic tie-breaker for malformed duplicate identities.
+    """
+
+    if family == "body_segments":
+
+        def semantic_key(record: Any) -> tuple[Any, ...]:
+            return (
+                record.email_message_id,
+                record.segment_source_type,
+                record.attachment_id or "",
+                record.body_segment_index or 0,
+                record.email_body_segment_id,
+            )
+    elif family == "source_inventory_items":
+
+        def semantic_key(record: Any) -> tuple[Any, ...]:
+            return (
+                record.source_inventory_id or "",
+                record.ordinal,
+                record.source_inventory_item_id,
+            )
+    else:
+        try:
+            id_field = _CANONICAL_ORDER_ID_FIELDS[family]
+        except KeyError as exc:
+            raise ContractValidationError(
+                f"unsupported canonical mail evidence record family: {family}"
+            ) from exc
+
+        def semantic_key(record: Any) -> tuple[Any, ...]:
+            return (str(getattr(record, id_field)),)
+
+    return sorted(
+        records,
+        key=lambda record: (*semantic_key(record), sha256_json(_private_plain(record))),
+    )
+
+
+def canonical_table_family(table_name: str) -> str:
+    try:
+        return _CANONICAL_TABLE_FAMILIES[table_name]
+    except KeyError as exc:
+        raise ContractValidationError(
+            f"unsupported canonical mail evidence table: {table_name}"
+        ) from exc
+
+
+def canonical_family_for_id_field(id_field: str) -> str:
+    for family, field_name in _CANONICAL_ORDER_ID_FIELDS.items():
+        if field_name == id_field:
+            return family
+    raise ContractValidationError(f"unsupported canonical mail evidence identifier: {id_field}")
+
+
+def _canonical_source_inventory(inventory: SourceInventory) -> SourceInventory:
+    return replace(
+        inventory,
+        items=tuple(canonical_order_records("source_inventory_items", inventory.items)),
+    )
+
+
+def _canonical_record_families(
+    *,
+    archive_occurrences: Sequence[MailArchiveOccurrence],
+    folder_occurrences: Sequence[MailFolderOccurrence],
+    messages: Sequence[EmailMessage],
+    message_occurrences: Sequence[EmailMessageOccurrence],
+    body_segments: Sequence[EmailBodySegment],
+    attachments: Sequence[EmailAttachment],
+    attachment_occurrences: Sequence[EmailAttachmentOccurrence],
+    quoted_message_candidates: Sequence[QuotedMessageCandidate],
+    embedded_message_relations: Sequence[EmbeddedMessageRelation],
+    parse_warnings: Sequence[MailParseWarning],
+    source_inventory: Sequence[SourceInventory],
+    structural_observations: Sequence[StructuralObservation],
+    claim_requirements: Sequence[ClaimRequirement],
+    coverage_ledgers: Sequence[CoverageLedger],
+    answer_claims: Sequence[AnswerClaim],
+    version_manifests: Sequence[VersionManifest],
+) -> dict[str, list[Any]]:
+    canonical_inventories = canonical_order_records(
+        "source_inventory",
+        [_canonical_source_inventory(inventory) for inventory in source_inventory],
+    )
+    return {
+        "archive_occurrences": canonical_order_records("archive_occurrences", archive_occurrences),
+        "folder_occurrences": canonical_order_records("folder_occurrences", folder_occurrences),
+        "messages": canonical_order_records("messages", messages),
+        "message_occurrences": canonical_order_records("message_occurrences", message_occurrences),
+        "body_segments": canonical_order_records("body_segments", body_segments),
+        "attachments": canonical_order_records("attachments", attachments),
+        "attachment_occurrences": canonical_order_records(
+            "attachment_occurrences", attachment_occurrences
+        ),
+        "quoted_message_candidates": canonical_order_records(
+            "quoted_message_candidates", quoted_message_candidates
+        ),
+        "embedded_message_relations": canonical_order_records(
+            "embedded_message_relations", embedded_message_relations
+        ),
+        "parse_warnings": canonical_order_records("parse_warnings", parse_warnings),
+        "source_inventory": canonical_inventories,
+        "source_inventory_items": canonical_order_records(
+            "source_inventory_items",
+            [item for inventory in canonical_inventories for item in inventory.items],
+        ),
+        "structural_observations": canonical_order_records(
+            "structural_observations", structural_observations
+        ),
+        "claim_requirements": canonical_order_records("claim_requirements", claim_requirements),
+        "coverage_ledgers": canonical_order_records("coverage_ledgers", coverage_ledgers),
+        "answer_claims": canonical_order_records("answer_claims", answer_claims),
+        "version_manifests": canonical_order_records("version_manifests", version_manifests),
+    }
+
+
+def _scope_authority_for_component(
+    expected_scope_authorities: Mapping[str, CoverageScopeAuthority],
+    *,
+    ledger: CoverageLedger,
+    claim_requirement_id: str,
+    source_inventory_id: str,
+) -> CoverageScopeAuthority | None:
+    """Resolve one trusted authority without collapsing aggregate identity."""
+
+    candidate_keys = (
+        f"{ledger.coverage_ledger_id}:{source_inventory_id}",
+        f"{claim_requirement_id}:{source_inventory_id}",
+        source_inventory_id,
+        ledger.coverage_ledger_id,
+        claim_requirement_id,
+    )
+    for key in candidate_keys:
+        authority = expected_scope_authorities.get(key)
+        if (
+            isinstance(authority, CoverageScopeAuthority)
+            and authority.claim_requirement_id == claim_requirement_id
+            and authority.source_inventory_id == source_inventory_id
+        ):
+            return authority
+    for authority in expected_scope_authorities.values():
+        if (
+            isinstance(authority, CoverageScopeAuthority)
+            and authority.claim_requirement_id == claim_requirement_id
+            and authority.source_inventory_id == source_inventory_id
+        ):
+            return authority
+    return None
+
+
+def _aggregate_claim_bindings(
+    *,
+    ledger: CoverageLedger,
+    inventories_by_id: Mapping[str, SourceInventory],
+    manifests_by_id: Mapping[str, VersionManifest],
+    expected_scope_authorities: Mapping[str, CoverageScopeAuthority],
+) -> tuple[
+    tuple[SourceInventory, ...],
+    tuple[VersionManifest, ...],
+    tuple[CoverageScopeAuthority, ...],
+    tuple[CoverageAuthorizationBinding, ...],
+    CoverageScopeAuthority | None,
+]:
+    """Return canonical aggregate claim components and the trusted first authority."""
+
+    if not ledger.is_aggregate:
+        raise ContractValidationError("aggregate claim bindings require an aggregate ledger")
+    if not (
+        len(ledger.source_inventory_ids)
+        == len(ledger.version_bindings)
+        == len(ledger.authorization_bindings)
+        == len(ledger.scope_authorities)
+        == len(ledger.scope_partitions)
+    ):
+        raise ContractValidationError("aggregate ledger component bindings are incomplete")
+    inventories: list[SourceInventory] = []
+    manifests: list[VersionManifest] = []
+    authorities: list[CoverageScopeAuthority] = []
+    for index, inventory_id in enumerate(ledger.source_inventory_ids):
+        inventory = inventories_by_id.get(inventory_id)
+        if inventory is None:
+            raise ContractValidationError("aggregate claim references an orphan inventory")
+        manifest_id = ledger.version_bindings[index].version_manifest_id
+        manifest = manifests_by_id.get(manifest_id)
+        authority = ledger.scope_authorities[index]
+        if manifest is None or manifest.source_fingerprint != inventory.source_fingerprint:
+            raise ContractValidationError("aggregate claim component manifest is missing")
+        if (
+            manifest.parser_fingerprint != inventory.parser_fingerprint
+            or authority.source_inventory_id != inventory_id
+            or authority.claim_requirement_id != ledger.claim_requirement_id
+            or authority.authorization_binding != ledger.authorization_bindings[index]
+            or authority.version_binding != ledger.version_bindings[index]
+            or ledger.scope_partitions[index].source_inventory_id != inventory_id
+        ):
+            raise ContractValidationError("aggregate claim component binding is inconsistent")
+        inventories.append(inventory)
+        manifests.append(manifest)
+        authorities.append(authority)
+    trusted_authorities = tuple(
+        _scope_authority_for_component(
+            expected_scope_authorities,
+            ledger=ledger,
+            claim_requirement_id=ledger.claim_requirement_id,
+            source_inventory_id=inventory.source_inventory_id,
+        )
+        for inventory in inventories
+    )
+    if all(authority is not None for authority in trusted_authorities):
+        canonical_trusted = tuple(
+            authority for authority in trusted_authorities if authority is not None
+        )
+        return (
+            tuple(inventories),
+            tuple(manifests),
+            canonical_trusted,
+            tuple(ledger.authorization_bindings),
+            canonical_trusted[0],
+        )
+    return (
+        tuple(inventories),
+        tuple(manifests),
+        tuple(authorities),
+        tuple(ledger.authorization_bindings),
+        None,
+    )
+
+
 @dataclass(frozen=True)
 class MailEvidenceBundle:
     mail_evidence_bundle_id: str
@@ -429,57 +791,564 @@ class MailEvidenceBundle:
     mail_parse_run: MailParseRun
     parse_warnings: list[MailParseWarning] = field(default_factory=list)
     created_at: str = field(default_factory=now_iso)
+    source_inventory: list[SourceInventory] = field(default_factory=list)
+    structural_observations: list[StructuralObservation] = field(default_factory=list)
+    claim_requirements: list[ClaimRequirement] = field(default_factory=list)
+    coverage_ledgers: list[CoverageLedger] = field(default_factory=list)
+    answer_claims: list[AnswerClaim] = field(default_factory=list)
+    version_manifests: list[VersionManifest] = field(default_factory=list)
+    _expected_scope_authorities: Mapping[str, CoverageScopeAuthority] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        expected_scope_authorities = dict(self._expected_scope_authorities)
+        if any(
+            not isinstance(key, str) or not isinstance(authority, CoverageScopeAuthority)
+            for key, authority in expected_scope_authorities.items()
+        ):
+            raise ContractValidationError(
+                "mail bundle scope authorities must be keyed typed authorities"
+            )
+        inventory_by_id: dict[str, SourceInventory] = {}
+        item_by_id: dict[str, SourceInventoryItem] = {}
+        for inventory in self.source_inventory:
+            if not isinstance(inventory, SourceInventory):
+                raise ContractValidationError(
+                    "mail bundle source_inventory must contain aggregates"
+                )
+            if inventory.source_inventory_id in inventory_by_id:
+                raise ContractValidationError("mail bundle source inventories must be unique")
+            if inventory.source_asset_id != self.mail_import_session.source_asset_id:
+                raise ContractValidationError(
+                    "mail bundle source inventory asset does not match import session"
+                )
+            inventory_by_id[inventory.source_inventory_id] = inventory
+            for item in inventory.items:
+                if item.source_inventory_item_id in item_by_id:
+                    raise ContractValidationError("mail bundle inventory item ids must be unique")
+                item_by_id[item.source_inventory_item_id] = item
+
+        requirement_ids = {item.claim_requirement_id for item in self.claim_requirements}
+        requirement_by_id = {item.claim_requirement_id: item for item in self.claim_requirements}
+        ledger_by_id = {item.coverage_ledger_id: item for item in self.coverage_ledgers}
+        if len(ledger_by_id) != len(self.coverage_ledgers):
+            raise ContractValidationError("mail bundle coverage ledger ids must be unique")
+        for observation in self.structural_observations:
+            item = item_by_id.get(observation.source_inventory_item_id)
+            if item is None:
+                raise ContractValidationError(
+                    "structural observation references an orphan inventory item"
+                )
+            if (
+                observation.source_asset_id != item.source_asset_id
+                or observation.source_fingerprint != item.source_fingerprint
+                or observation.parser_fingerprint != item.parser_fingerprint
+            ):
+                raise ContractValidationError(
+                    "structural observation inventory relationships are inconsistent"
+                )
+        for ledger in self.coverage_ledgers:
+            if ledger.claim_requirement_id not in requirement_ids:
+                raise ContractValidationError(
+                    "coverage ledger references an orphan claim requirement"
+                )
+            requirement = requirement_by_id[ledger.claim_requirement_id]
+            if ledger.is_aggregate:
+                (
+                    aggregate_inventories,
+                    aggregate_manifests,
+                    aggregate_authorities,
+                    aggregate_authorizations,
+                    trusted_first_authority,
+                ) = _aggregate_claim_bindings(
+                    ledger=ledger,
+                    inventories_by_id=inventory_by_id,
+                    manifests_by_id={
+                        item.version_manifest_id: item for item in self.version_manifests
+                    },
+                    expected_scope_authorities=expected_scope_authorities,
+                )
+                if set(ledger.relevant_inventory_item_ids) != {
+                    item_id
+                    for partition in ledger.scope_partitions
+                    for item_id in partition.authorized_relevant_item_ids
+                }:
+                    raise ContractValidationError(
+                        "aggregate coverage ledger relevant scope is inconsistent"
+                    )
+                if ledger.complete_authorized_scope and trusted_first_authority is not None:
+                    if not ledger.aggregate_usable_for_claim(
+                        aggregate_inventories,
+                        requirement,
+                        aggregate_manifests,
+                        aggregate_authorizations,
+                        tuple(
+                            _scope_authority_for_component(
+                                expected_scope_authorities,
+                                ledger=ledger,
+                                claim_requirement_id=requirement.claim_requirement_id,
+                                source_inventory_id=inventory.source_inventory_id,
+                            )
+                            for inventory in aggregate_inventories
+                        ),
+                    ):
+                        raise ContractValidationError(
+                            "aggregate coverage ledger does not match trusted evidence"
+                        )
+                continue
+            inventory = inventory_by_id.get(ledger.source_inventory_id)
+            if inventory is None:
+                raise ContractValidationError("coverage ledger references an orphan inventory")
+            inventory_item_ids = {item.source_inventory_item_id for item in inventory.items}
+            if not set(ledger.relevant_inventory_item_ids).issubset(inventory_item_ids):
+                raise ContractValidationError(
+                    "coverage ledger references inventory items outside its aggregate"
+                )
+            if ledger.scope_partition is not None:
+                if ledger.version_binding is None:
+                    raise ContractValidationError(
+                        "coverage ledger scope partition requires a version binding"
+                    )
+                manifest = next(
+                    (
+                        item
+                        for item in self.version_manifests
+                        if item.version_manifest_id == ledger.version_binding.version_manifest_id
+                    ),
+                    None,
+                )
+                expected_scope_authority = _scope_authority_for_component(
+                    expected_scope_authorities,
+                    ledger=ledger,
+                    claim_requirement_id=requirement.claim_requirement_id,
+                    source_inventory_id=inventory.source_inventory_id,
+                )
+                if manifest is None or (
+                    expected_scope_authority is not None
+                    and not ledger.binding_valid_for_claim(
+                        inventory,
+                        requirement,
+                        manifest,
+                        ledger.authorization_binding,
+                        expected_scope_authority,
+                    )
+                ):
+                    raise ContractValidationError(
+                        "coverage ledger scope partition does not match bundle evidence"
+                    )
+        for claim in self.answer_claims:
+            ledger = ledger_by_id.get(claim.coverage_ledger_id)
+            if ledger is None:
+                raise ContractValidationError("answer claim references an orphan coverage ledger")
+            if claim.claim_requirement_id != ledger.claim_requirement_id:
+                raise ContractValidationError(
+                    "answer claim and coverage ledger claim requirements differ"
+                )
+        canonical = _canonical_bundle_records(self)
+        for field_name, records in canonical.items():
+            if field_name == "source_inventory_items":
+                continue
+            object.__setattr__(self, field_name, records)
+
+    @property
+    def source_inventory_items(self) -> tuple[SourceInventoryItem, ...]:
+        return tuple(_canonical_bundle_records(self)["source_inventory_items"])
 
     def to_dict(self) -> dict[str, Any]:
-        return _public_payload(self, "mail_evidence_bundle")
+        return self.to_public_dict()
+
+    def to_public_dict(
+        self,
+        *,
+        scope_decision: StructuralPublicScopeDecision | None = None,
+        include_answer_claims: bool = False,
+    ) -> dict[str, Any]:
+        if not isinstance(include_answer_claims, bool):
+            raise ContractValidationError("include_answer_claims must be a boolean")
+        canonical = _canonical_bundle_records(self)
+        has_structural_records = bool(
+            canonical["source_inventory"]
+            or canonical["structural_observations"]
+            or canonical["source_inventory_items"]
+        )
+        requires_scope_decision = has_structural_records or include_answer_claims
+        if requires_scope_decision and not isinstance(
+            scope_decision,
+            StructuralPublicScopeDecision,
+        ):
+            raise ContractValidationError(
+                "public mail bundle serialization requires a typed scope decision"
+            )
+        payload: dict[str, Any] = {
+            "public_schema": "mail_evidence_bundle_v1",
+            "producer_type": self.producer_type,
+            "created_at": self.created_at,
+            "mail_import": {
+                "status": self.mail_import_session.status,
+                "retention_policy": self.mail_import_session.retention_policy,
+                "raw_archive_retention_decision": (
+                    self.mail_import_session.raw_archive_retention_decision
+                ),
+                "import_profile": self.mail_import_session.import_profile,
+            },
+            "parse_status": self.mail_parse_run.status,
+        }
+        denied_scope = (
+            isinstance(scope_decision, StructuralPublicScopeDecision)
+            and scope_decision.decision_state == "denied"
+        )
+        if denied_scope:
+            payload["structural_evidence"] = _structural_denial()
+        elif not has_structural_records:
+            payload["structural_evidence"] = {"status": "not_present"}
+        else:
+            assert scope_decision is not None
+            item_by_id = {
+                item.source_inventory_item_id: item
+                for inventory in canonical["source_inventory"]
+                for item in inventory.items
+            }
+            payload["structural_evidence"] = {
+                "status": "authorized",
+                "source_inventory": [
+                    inventory.to_public_dict(scope_decision=scope_decision)
+                    for inventory in canonical["source_inventory"]
+                ],
+                "source_inventory_items": [
+                    item.to_public_dict(scope_decision=scope_decision)
+                    for item in canonical["source_inventory_items"]
+                ],
+                "structural_observations": [
+                    observation.to_public_dict(
+                        scope_decision=scope_decision,
+                        source_inventory_item=item_by_id.get(observation.source_inventory_item_id),
+                    )
+                    for observation in canonical["structural_observations"]
+                ],
+            }
+        assert_public_payload_safe(payload, "mail_evidence_bundle.public")
+        if include_answer_claims:
+            assert scope_decision is not None
+            if scope_decision.decision_state == "denied":
+                payload["answer_claims"] = _structural_denial()
+                return payload
+            ledger_by_id = {
+                ledger.coverage_ledger_id: ledger for ledger in canonical["coverage_ledgers"]
+            }
+            for claim in canonical["answer_claims"]:
+                ledger = ledger_by_id.get(claim.coverage_ledger_id)
+                if ledger is None:
+                    raise ContractValidationError(
+                        "public answer claim projection references an unknown ledger"
+                    )
+                if (
+                    ledger.authorization_binding is not None
+                    and scope_decision.authorization_binding != ledger.authorization_binding
+                ):
+                    raise ContractValidationError(
+                        "public answer claim scope decision does not match ledger authorization"
+                    )
+            # AnswerClaim.to_dict() is the separately approved nine-field
+            # wire contract.  The generic mail guard intentionally does not
+            # reinterpret its approved fingerprint/index field names.
+            payload["answer_claims"] = [claim.to_dict() for claim in canonical["answer_claims"]]
+        return payload
+
+    def to_persistence_dict(self) -> dict[str, Any]:
+        payload = _private_payload(self)
+        _assert_private_mail_bundle_envelope_safe(payload)
+        return payload
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "MailEvidenceBundle":
-        item = _require_dict(value, "mail_evidence_bundle")
-        bundle = cls(
-            mail_evidence_bundle_id=_required_str(item, "mail_evidence_bundle_id"),
-            producer_type=_required_choice(item, "producer_type", _PRODUCER_TYPES),
-            mail_import_session=MailImportSession.from_dict(item["mail_import_session"]),
-            archive_occurrences=_record_list(
-                item,
-                "archive_occurrences",
-                MailArchiveOccurrence,
-            ),
-            folder_occurrences=_record_list(item, "folder_occurrences", MailFolderOccurrence),
-            messages=_record_list(item, "messages", EmailMessage),
-            message_occurrences=_record_list(
-                item,
-                "message_occurrences",
-                EmailMessageOccurrence,
-            ),
-            body_segments=_record_list(item, "body_segments", EmailBodySegment),
-            attachments=_record_list(item, "attachments", EmailAttachment),
-            attachment_occurrences=_record_list(
-                item,
-                "attachment_occurrences",
-                EmailAttachmentOccurrence,
-            ),
-            quoted_message_candidates=_record_list(
-                item,
-                "quoted_message_candidates",
-                QuotedMessageCandidate,
-            ),
-            embedded_message_relations=_record_list(
-                item,
-                "embedded_message_relations",
-                EmbeddedMessageRelation,
-            ),
-            mail_parse_run=MailParseRun.from_dict(item["mail_parse_run"]),
-            parse_warnings=_record_list(
-                item,
-                "parse_warnings",
-                MailParseWarning,
-                required=False,
-            ),
-            created_at=_required_str(item, "created_at"),
+        raise ContractValidationError(
+            "public mail bundle projections are not persistence records; "
+            "use from_persistence_dict"
         )
-        bundle.to_dict()
+
+    @classmethod
+    def from_persistence_dict(
+        cls,
+        value: dict[str, Any],
+        *,
+        expected_scope_authorities: Mapping[str, CoverageScopeAuthority] | None = None,
+        consume_input: bool = False,
+        _consume_capability: object | None = None,
+    ) -> "MailEvidenceBundle":
+        consume_input = _mail_persistence_consume_requested(
+            consume_input,
+            _consume_capability,
+        )
+        item = _require_private_dict(value, "mail_evidence_bundle")
+        _assert_private_mail_bundle_envelope_safe(item)
+        if expected_scope_authorities is not None and not isinstance(
+            expected_scope_authorities, Mapping
+        ):
+            raise ContractValidationError(
+                "mail evidence expected scope authorities must be a mapping"
+            )
+        expected_scope_authority_map = dict(expected_scope_authorities or {})
+        if any(
+            not isinstance(key, str) or not isinstance(authority, CoverageScopeAuthority)
+            for key, authority in expected_scope_authority_map.items()
+        ):
+            raise ContractValidationError(
+                "mail evidence scope authorities must be keyed typed authorities"
+            )
+        wp1_persistence = _validate_wp1_persistence_state(item.get(_WP1_PERSISTENCE_FIELD))
+        for field_name in _WP1_PERSISTENCE_FAMILY_FIELDS:
+            if field_name not in item:
+                raise ContractValidationError(f"{field_name} is required for WP1 persistence")
+        mail_evidence_bundle_id = _required_str(item, "mail_evidence_bundle_id")
+        producer_type = _required_choice(item, "producer_type", _PRODUCER_TYPES)
+        created_at = _required_str(item, "created_at")
+        mail_import_session = MailImportSession.from_dict(item["mail_import_session"])
+        mail_parse_run = MailParseRun.from_dict(item["mail_parse_run"])
+        source_inventories = _record_list(
+            item,
+            "source_inventory",
+            SourceInventory,
+            factory=lambda payload: SourceInventory.from_persistence_dict(
+                payload,
+                consume_input=consume_input,
+                _consume_capability=(
+                    _EVIDENCE_PERSISTENCE_CONSUME_CAPABILITY if consume_input else None
+                ),
+            ),
+            consume_input=consume_input,
+        )
+        source_inventory_items = _record_list(
+            item,
+            "source_inventory_items",
+            SourceInventoryItem,
+            factory=SourceInventoryItem.from_persistence_dict,
+            consume_input=consume_input,
+        )
+        _validate_source_inventory_item_projection(source_inventories, source_inventory_items)
+        del source_inventory_items
+        claim_requirements = _record_list(
+            item,
+            "claim_requirements",
+            ClaimRequirement,
+            consume_input=consume_input,
+        )
+        coverage_ledgers = _record_list(
+            item,
+            "coverage_ledgers",
+            CoverageLedger,
+            factory=lambda payload: CoverageLedger.from_persistence_dict(
+                payload,
+                consume_input=consume_input,
+                _consume_capability=(
+                    _EVIDENCE_PERSISTENCE_CONSUME_CAPABILITY if consume_input else None
+                ),
+            ),
+            consume_input=consume_input,
+        )
+        version_manifests = _record_list(
+            item,
+            "version_manifests",
+            VersionManifest,
+            consume_input=consume_input,
+        )
+        inventory_by_id = {record.source_inventory_id: record for record in source_inventories}
+        requirement_by_id = {record.claim_requirement_id: record for record in claim_requirements}
+        ledger_by_id = {record.coverage_ledger_id: record for record in coverage_ledgers}
+        manifest_by_id = {record.version_manifest_id: record for record in version_manifests}
+
+        def restore_answer_claim(payload: Mapping[str, Any]) -> AnswerClaim:
+            ledger = ledger_by_id.get(payload.get("coverage_ledger_id"))
+            requirement = requirement_by_id.get(payload.get("claim_requirement_id"))
+            if ledger is None or requirement is None:
+                return AnswerClaim.from_persistence_dict(
+                    payload,
+                    coverage_ledger=ledger,
+                    claim_requirement=requirement,
+                )
+            if ledger.is_aggregate:
+                (
+                    aggregate_inventories,
+                    aggregate_manifests,
+                    aggregate_authorities,
+                    aggregate_authorizations,
+                    trusted_first_authority,
+                ) = _aggregate_claim_bindings(
+                    ledger=ledger,
+                    inventories_by_id=inventory_by_id,
+                    manifests_by_id=manifest_by_id,
+                    expected_scope_authorities=expected_scope_authority_map,
+                )
+                trusted_for_claim = (
+                    None
+                    if payload.get("state") == "INSUFFICIENT_COVERAGE"
+                    else trusted_first_authority
+                )
+                return AnswerClaim.from_persistence_dict(
+                    payload,
+                    coverage_ledger=ledger,
+                    claim_requirement=requirement,
+                    source_inventory=aggregate_inventories[0],
+                    version_manifest=aggregate_manifests[0],
+                    expected_scope_authority=trusted_for_claim,
+                    authorization_binding=aggregate_authorizations[0],
+                    source_inventories=aggregate_inventories,
+                    version_manifests=aggregate_manifests,
+                    scope_authorities=aggregate_authorities,
+                    authorization_bindings=aggregate_authorizations,
+                )
+            inventory = inventory_by_id.get(ledger.source_inventory_id)
+            manifest = manifest_by_id.get(payload.get("version_manifest_id")) or (
+                manifest_by_id.get(ledger.version_binding.version_manifest_id)
+                if ledger.version_binding is not None
+                else None
+            )
+            authority = _scope_authority_for_component(
+                expected_scope_authority_map,
+                ledger=ledger,
+                claim_requirement_id=requirement.claim_requirement_id,
+                source_inventory_id=ledger.source_inventory_id,
+            )
+            return AnswerClaim.from_persistence_dict(
+                payload,
+                coverage_ledger=ledger,
+                claim_requirement=requirement,
+                source_inventory=inventory,
+                version_manifest=manifest,
+                expected_scope_authority=authority,
+                authorization_binding=ledger.authorization_binding,
+            )
+
+        archive_occurrences = _record_list(
+            item,
+            "archive_occurrences",
+            MailArchiveOccurrence,
+            consume_input=consume_input,
+        )
+        folder_occurrences = _record_list(
+            item,
+            "folder_occurrences",
+            MailFolderOccurrence,
+            consume_input=consume_input,
+        )
+        messages = _record_list(
+            item,
+            "messages",
+            EmailMessage,
+            consume_input=consume_input,
+        )
+        message_occurrences = _record_list(
+            item,
+            "message_occurrences",
+            EmailMessageOccurrence,
+            consume_input=consume_input,
+        )
+        body_segments = _record_list(
+            item,
+            "body_segments",
+            EmailBodySegment,
+            consume_input=consume_input,
+        )
+        attachments = _record_list(
+            item,
+            "attachments",
+            EmailAttachment,
+            consume_input=consume_input,
+        )
+        attachment_occurrences = _record_list(
+            item,
+            "attachment_occurrences",
+            EmailAttachmentOccurrence,
+            consume_input=consume_input,
+        )
+        quoted_message_candidates = _record_list(
+            item,
+            "quoted_message_candidates",
+            QuotedMessageCandidate,
+            consume_input=consume_input,
+        )
+        embedded_message_relations = _record_list(
+            item,
+            "embedded_message_relations",
+            EmbeddedMessageRelation,
+            consume_input=consume_input,
+        )
+        parse_warnings = _record_list(
+            item,
+            "parse_warnings",
+            MailParseWarning,
+            required=False,
+            consume_input=consume_input,
+        )
+        structural_observations = _record_list(
+            item,
+            "structural_observations",
+            StructuralObservation,
+            factory=StructuralObservation.from_persistence_dict,
+            consume_input=consume_input,
+        )
+        answer_claims = _record_list(
+            item,
+            "answer_claims",
+            AnswerClaim,
+            factory=restore_answer_claim,
+            consume_input=consume_input,
+        )
+        if consume_input:
+            item.clear()
+        bundle = cls(
+            mail_evidence_bundle_id=mail_evidence_bundle_id,
+            producer_type=producer_type,
+            mail_import_session=mail_import_session,
+            archive_occurrences=archive_occurrences,
+            folder_occurrences=folder_occurrences,
+            messages=messages,
+            message_occurrences=message_occurrences,
+            body_segments=body_segments,
+            attachments=attachments,
+            attachment_occurrences=attachment_occurrences,
+            quoted_message_candidates=quoted_message_candidates,
+            embedded_message_relations=embedded_message_relations,
+            mail_parse_run=mail_parse_run,
+            parse_warnings=parse_warnings,
+            created_at=created_at,
+            source_inventory=source_inventories,
+            structural_observations=structural_observations,
+            claim_requirements=claim_requirements,
+            coverage_ledgers=coverage_ledgers,
+            answer_claims=answer_claims,
+            version_manifests=version_manifests,
+            _expected_scope_authorities=expected_scope_authority_map,
+        )
+        _validate_wp1_persistence_state(
+            wp1_persistence,
+            expected_counts=_wp1_family_counts(bundle),
+        )
+        bundle.to_persistence_dict()
         return bundle
+
+
+def _canonical_bundle_records(value: MailEvidenceBundle) -> dict[str, list[Any]]:
+    return _canonical_record_families(
+        archive_occurrences=value.archive_occurrences,
+        folder_occurrences=value.folder_occurrences,
+        messages=value.messages,
+        message_occurrences=value.message_occurrences,
+        body_segments=value.body_segments,
+        attachments=value.attachments,
+        attachment_occurrences=value.attachment_occurrences,
+        quoted_message_candidates=value.quoted_message_candidates,
+        embedded_message_relations=value.embedded_message_relations,
+        parse_warnings=value.parse_warnings,
+        source_inventory=value.source_inventory,
+        structural_observations=value.structural_observations,
+        claim_requirements=value.claim_requirements,
+        coverage_ledgers=value.coverage_ledgers,
+        answer_claims=value.answer_claims,
+        version_manifests=value.version_manifests,
+    )
 
 
 def build_mail_evidence_bundle(
@@ -504,13 +1373,18 @@ def build_mail_evidence_bundle(
     _required_choice({"producer_type": producer_type}, "producer_type", _PRODUCER_TYPES)
     if producer_type == "server_side_parser" and not upload_session_id:
         raise ContractValidationError("server_side_parser mail import requires upload_session_id")
-    observation_payloads = [observation.to_dict() for observation in observations]
-    for observation_payload in observation_payloads:
-        assert_public_payload_safe(observation_payload, "mail_evidence_bundle.observation")
-    normalized = [Observation.from_dict(observation) for observation in observation_payloads]
-    mail_observations = [
-        observation for observation in normalized if observation.modality == "mail"
-    ]
+    mail_observations: list[Observation] = []
+    for observation in observations:
+        observation_payload = observation.to_dict()
+        try:
+            _assert_private_observation_envelope_safe(observation_payload)
+            normalized_observation = Observation.from_dict(observation_payload)
+        finally:
+            # Do not keep a second full serialized observation graph live while
+            # the normalized mail observations are assembled.
+            del observation_payload
+        if normalized_observation.modality == "mail":
+            mail_observations.append(normalized_observation)
     if not mail_observations:
         raise ContractValidationError("mail evidence bundle requires mail observations")
     first_mail = mail_observations[0]
@@ -618,7 +1492,7 @@ def build_mail_evidence_bundle(
         parse_warnings=warnings,
         created_at=resolved_created_at,
     )
-    bundle.to_dict()
+    bundle.to_persistence_dict()
     return bundle
 
 
@@ -782,6 +1656,12 @@ def _messages_and_occurrences(
                 "thread_id": payload.get("thread_id"),
                 "fingerprint_policy": payload.get("fingerprint_policy")
                 or "formowl_mail_fingerprint_v1",
+                "source_body_char_count": payload.get("source_body_char_count"),
+                "stored_body_char_count": payload.get("stored_body_char_count"),
+                "body_segment_count": payload.get("body_segment_count"),
+                "body_evidence_state": payload.get("body_evidence_state") or "unknown",
+                "body_redacted_segment_count": payload.get("body_redacted_segment_count") or 0,
+                "unresolved_attachment_count": payload.get("unresolved_attachment_count") or 0,
             },
         )
         record["source_observation_ids"].append(observation.observation_id)
@@ -833,7 +1713,10 @@ def _body_segments(
 ) -> list[EmailBodySegment]:
     segments: dict[str, EmailBodySegment] = {}
     for observation in observations:
-        if observation.observation_type != "email_body_segment":
+        if observation.observation_type not in {
+            "email_body_segment",
+            "email_attachment_text_segment",
+        }:
             continue
         email_message_id = _email_message_id_for_observation(
             observation,
@@ -841,11 +1724,24 @@ def _body_segments(
             message_ids_by_occurrence_id,
         )
         message_occurrence_id = _observation_location(observation, "message_occurrence_id")
-        text = safe_public_string(observation.text or "", "email_body_segment.text")
+        text = _private_observation_text(observation)
+        payload = observation.payload or {}
+        segment_source_type = (
+            "attachment_text"
+            if observation.observation_type == "email_attachment_text_segment"
+            else "message_body"
+        )
+        segment_index = (
+            observation.location.get("attachment_text_segment_index")
+            if segment_source_type == "attachment_text"
+            else observation.location.get("body_segment_index")
+        )
         body_segment_hash = sha256_json(
             {
                 "email_message_id": email_message_id,
-                "body_segment_index": observation.location.get("body_segment_index"),
+                "segment_source_type": segment_source_type,
+                "attachment_id": observation.location.get("attachment_id"),
+                "body_segment_index": segment_index,
                 "text": text,
             }
         )
@@ -867,11 +1763,32 @@ def _body_segments(
                     "source_observation_id": observation.observation_id,
                     "text": text,
                     "body_segment_hash": body_segment_hash,
-                    "body_segment_index": observation.location.get("body_segment_index"),
+                    "body_segment_index": segment_index,
+                    "segment_source_type": segment_source_type,
+                    "attachment_id": observation.location.get("attachment_id"),
+                    "char_start": observation.location.get("char_start"),
+                    "char_end": observation.location.get("char_end"),
+                    "body_segment_count": payload.get("body_segment_count")
+                    or payload.get("attachment_text_segment_count"),
+                    "source_body_char_count": payload.get("source_body_char_count"),
+                    "stored_body_char_count": payload.get("stored_body_char_count"),
+                    "body_evidence_state": payload.get("body_evidence_state")
+                    or payload.get("text_extraction_state")
+                    or "unknown",
+                    "content_publicly_unsafe": payload.get("content_publicly_unsafe") is True,
                 }
             ),
         )
-    return sorted(segments.values(), key=lambda item: item.email_body_segment_id)
+    return sorted(
+        segments.values(),
+        key=lambda item: (
+            item.email_message_id,
+            item.segment_source_type,
+            item.attachment_id or "",
+            item.body_segment_index or 0,
+            item.email_body_segment_id,
+        ),
+    )
 
 
 def _attachments(
@@ -1023,16 +1940,198 @@ def _safe_payload_str(payload: dict[str, Any], field_name: str) -> str | None:
     return safe_public_string(value, field_name)
 
 
+def _private_observation_text(observation: Observation) -> str:
+    value = observation.text
+    if not isinstance(value, str) or not value:
+        raise ContractValidationError("email evidence segment text must be a non-empty string")
+    return value
+
+
+def _assert_private_observation_envelope_safe(value: Mapping[str, Any]) -> None:
+    safe_view = dict(value)
+    observation_type = safe_view.get("observation_type")
+    if observation_type in {
+        "email_body_segment",
+        "email_attachment_text_segment",
+    }:
+        safe_view["text"] = "[governed_private_mail_text]"
+    elif observation_type == "pst_source_inventory_carrier":
+        # The carrier is private persistence evidence and is excluded from
+        # bundle records below.  Check only a non-sensitive envelope here;
+        # public projections remain guarded by their own fail-closed boundary.
+        safe_view["payload"] = {"carrier": "[governed_private_inventory]"}
+    assert_public_payload_safe(safe_view, "mail_evidence_bundle.observation_envelope")
+
+
+def _assert_private_body_segment_envelope_safe(value: Mapping[str, Any]) -> None:
+    safe_view = dict(value)
+    safe_view["text"] = "[governed_private_mail_text]"
+    assert_public_payload_safe(safe_view, "email_body_segment.private_envelope")
+
+
+def _assert_private_mail_bundle_envelope_safe(value: Mapping[str, Any]) -> None:
+    safe_view = dict(value)
+    body_segments = value.get("body_segments")
+    safe_view["body_segments"] = []
+    # WP1 contract records validate their own public wire fields.  Keep the
+    # legacy mail-envelope guard focused on the phase-1 mail payload so
+    # approved ``tokenizer_*`` version fields are not mistaken for secrets.
+    for field_name in (
+        "source_inventory",
+        "source_inventory_items",
+        "structural_observations",
+        "claim_requirements",
+        "coverage_ledgers",
+        "answer_claims",
+        "version_manifests",
+    ):
+        safe_view.pop(field_name, None)
+    assert_authorized_evidence_payload_safe(
+        safe_view,
+        "mail_evidence_bundle.private_envelope",
+    )
+    if isinstance(body_segments, list):
+        for segment in body_segments:
+            if isinstance(segment, Mapping):
+                _assert_private_body_segment_envelope_safe(segment)
+
+
 def _public_payload(value: Any, context: str) -> dict[str, Any]:
     payload = to_plain(value)
     assert_public_payload_safe(payload, context)
     return payload
 
 
+def _structural_denial() -> dict[str, Any]:
+    return {"status": "denied", "reason_code": "scope_denied"}
+
+
+def _private_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, MailEvidenceBundle):
+        # Build canonical record families directly.  Serializing the dataclass
+        # generically first would create one complete non-canonical bundle
+        # payload and then retain it while every canonical family replaced the
+        # corresponding field.
+        payload = {
+            "mail_evidence_bundle_id": value.mail_evidence_bundle_id,
+            "producer_type": value.producer_type,
+            "mail_import_session": _private_plain(value.mail_import_session),
+            "mail_parse_run": _private_plain(value.mail_parse_run),
+            "created_at": value.created_at,
+        }
+        canonical = _canonical_bundle_records(value)
+        for field_name, records in canonical.items():
+            if field_name == "source_inventory_items":
+                payload[field_name] = [item.to_persistence_dict() for item in records]
+            elif field_name == "answer_claims":
+                payload[field_name] = [item.to_persistence_dict() for item in records]
+            elif field_name in {
+                "source_inventory",
+                "structural_observations",
+                "coverage_ledgers",
+            }:
+                payload[field_name] = [item.to_persistence_dict() for item in records]
+            else:
+                payload[field_name] = [_private_plain(item) for item in records]
+        payload[_WP1_PERSISTENCE_FIELD] = _wp1_persistence_state(value)
+        return payload
+    payload = _private_plain(value)
+    if not isinstance(payload, dict):
+        raise ContractValidationError("private mail evidence payload must be an object")
+    return payload
+
+
+def _wp1_family_counts(value: MailEvidenceBundle) -> dict[str, int]:
+    return {
+        field_name: len(getattr(value, field_name)) for field_name in _WP1_PERSISTENCE_FAMILY_FIELDS
+    }
+
+
+def _wp1_persistence_state(value: MailEvidenceBundle) -> dict[str, Any]:
+    return {
+        "schema": _WP1_PERSISTENCE_SCHEMA,
+        "family_counts": _wp1_family_counts(value),
+    }
+
+
+def _validate_wp1_persistence_state(
+    value: Any,
+    *,
+    expected_counts: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ContractValidationError("WP1 persistence marker is required")
+    if set(value) != {"schema", "family_counts"}:
+        raise ContractValidationError("WP1 persistence marker has an invalid shape")
+    if value.get("schema") != _WP1_PERSISTENCE_SCHEMA:
+        raise ContractValidationError("WP1 persistence marker is unsupported")
+    family_counts = value.get("family_counts")
+    if not isinstance(family_counts, Mapping) or set(family_counts) != set(
+        _WP1_PERSISTENCE_FAMILY_FIELDS
+    ):
+        raise ContractValidationError("WP1 persistence family counts are incomplete")
+    normalized_counts: dict[str, int] = {}
+    for field_name in _WP1_PERSISTENCE_FAMILY_FIELDS:
+        count = family_counts[field_name]
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise ContractValidationError("WP1 persistence family counts are invalid")
+        normalized_counts[field_name] = count
+    if expected_counts is not None and normalized_counts != dict(expected_counts):
+        raise ContractValidationError("WP1 persistence family counts are inconsistent")
+    return {
+        "schema": _WP1_PERSISTENCE_SCHEMA,
+        "family_counts": normalized_counts,
+    }
+
+
+def _private_plain(value: Any) -> Any:
+    if isinstance(value, AnswerClaim):
+        return value.to_persistence_dict()
+    if isinstance(value, ClaimRequirement):
+        return value.to_persistence_dict()
+    if isinstance(value, CoverageLedger):
+        return value.to_persistence_dict()
+    if isinstance(value, SourceInventory):
+        return value.to_persistence_dict()
+    if isinstance(value, SourceInventoryItem):
+        return value.to_persistence_dict()
+    if isinstance(value, StructuralObservation):
+        return value.to_persistence_dict()
+    if isinstance(value, VersionManifest):
+        return value.to_persistence_dict()
+    if is_dataclass(value):
+        return {
+            key: _private_plain(item)
+            for key, item in value.__dict__.items()
+            if item is not None and key != "_expected_scope_authorities"
+        }
+    if isinstance(value, Mapping):
+        return {str(key): _private_plain(item) for key, item in value.items() if item is not None}
+    if isinstance(value, (list, tuple)):
+        return [_private_plain(item) for item in value]
+    return value
+
+
 def _require_dict(value: Any, context: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ContractValidationError(f"{context} must be an object")
     assert_public_payload_safe(value, context)
+    return value
+
+
+def _require_authorized_evidence_dict(
+    value: Any,
+    context: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ContractValidationError(f"{context} must be an object")
+    assert_authorized_evidence_payload_safe(value, context)
+    return value
+
+
+def _require_private_dict(value: Any, context: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ContractValidationError(f"{context} must be an object")
     return value
 
 
@@ -1043,12 +2142,30 @@ def _required_str(value: dict[str, Any], field_name: str) -> str:
     return safe_public_string(item, field_name)
 
 
+def _required_private_str(value: dict[str, Any], field_name: str) -> str:
+    item = value.get(field_name)
+    if not isinstance(item, str) or not item:
+        raise ContractValidationError(f"{field_name} must be a non-empty string")
+    return item
+
+
 def _optional_str(value: dict[str, Any], field_name: str) -> str | None:
     item = value.get(field_name)
     if item is None:
         return None
     text = safe_public_string(item, field_name)
     return text or None
+
+
+def _optional_authorized_evidence_str(
+    value: dict[str, Any],
+    field_name: str,
+) -> str | None:
+    item = value.get(field_name)
+    if item is None:
+        return None
+    assert_authorized_evidence_text_safe(item, field_name)
+    return item or None
 
 
 def _required_choice(
@@ -1068,6 +2185,15 @@ def _optional_int(value: dict[str, Any], field_name: str) -> int | None:
         return None
     if not isinstance(item, int) or isinstance(item, bool):
         raise ContractValidationError(f"{field_name} must be an integer")
+    return item
+
+
+def _optional_bool(value: dict[str, Any], field_name: str) -> bool | None:
+    item = value.get(field_name)
+    if item is None:
+        return None
+    if not isinstance(item, bool):
+        raise ContractValidationError(f"{field_name} must be a boolean")
     return item
 
 
@@ -1092,6 +2218,8 @@ def _record_list(
     record_type: Any,
     *,
     required: bool = True,
+    factory: Any | None = None,
+    consume_input: bool = False,
 ) -> list[Any]:
     if field_name not in value:
         if required:
@@ -1100,7 +2228,42 @@ def _record_list(
     items = value[field_name]
     if not isinstance(items, list):
         raise ContractValidationError(f"{field_name} must be a list")
-    return [record_type.from_dict(item) for item in items]
+    parser = factory or record_type.from_dict
+    records: list[Any] = []
+    for index, item in enumerate(items):
+        records.append(parser(item))
+        if consume_input:
+            items[index] = None
+    if consume_input:
+        items.clear()
+        value.pop(field_name, None)
+    return records
+
+
+def _validate_source_inventory_item_projection(
+    inventories: Sequence[SourceInventory],
+    projected_items: Sequence[SourceInventoryItem],
+) -> None:
+    projected_by_id: dict[str, SourceInventoryItem] = {}
+    for item in projected_items:
+        if item.source_inventory_item_id in projected_by_id:
+            raise ContractValidationError(
+                "mail bundle source inventory child projection does not match aggregates"
+            )
+        projected_by_id[item.source_inventory_item_id] = item
+    expected_count = 0
+    for inventory in inventories:
+        for item in inventory.items:
+            expected_count += 1
+            projected = projected_by_id.pop(item.source_inventory_item_id, None)
+            if projected is None or projected.to_persistence_dict() != item.to_persistence_dict():
+                raise ContractValidationError(
+                    "mail bundle source inventory child projection does not match aggregates"
+                )
+    if expected_count != len(projected_items) or projected_by_id:
+        raise ContractValidationError(
+            "mail bundle source inventory child projection does not match aggregates"
+        )
 
 
 def _from_required_fields(

@@ -1,5 +1,28 @@
 # KG Ontology v2 Coordination-Frame Experiment
 
+## Default Candidate Evidence Retrieval
+
+This directory contains historical and current ablation artifacts, but new
+harnesses must start from `CandidateEvidenceIndex`: stable logical source item
+counting, access/context/time before query planning, no lexical transitive
+closure, and capped additive ontology reranking. Regex-only, parser-chunk,
+component-union, and ontology hard-pruning paths are ablation-only and must not
+be treated as the active default.
+The active index owns a `CandidateEvidenceTextPolicyRuntime` for the
+Unicode-NFKC/protected-ASCII/Jieba/corpus-bound SentencePiece/frozen-profile
+stack and exact admission/model/corpus SHA-256 hashes. The binding also pins
+the runtime id and tokenizer implementation hash; runtime code mismatch fails
+closed. Default callers provide query text only; raw tokens and free-form
+hashes are not accepted. Access and explicit context/time admissibility
+precedes tokenization; experiments use `retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
+
 This experiment is the issue #28 candidate-layer slice. It compares the current
 flat atom path with an additive coordination-frame ontology path over synthetic
 email-first cross-domain fixtures.
@@ -114,7 +137,9 @@ Current 10,000-case generated stress result:
 
 ## Operator-Provided Procurement PST Follow-Up
 
-The procurement real-case follow-up summary is tracked at:
+The active original-question rerun uses the normative protected-ASCII + Jieba +
+corpus-bound SentencePiece + frozen-profile candidate-admission stack. The
+legacy regex-only aggregate remains historical evidence at:
 
 ```text
 results/procurement_full_pst_domain_hard_summary_2026-07-09.json
@@ -124,19 +149,34 @@ This artifact is a redacted aggregate summary only. It does not include raw
 mail content, query text, message identifiers, subjects, senders, attachment
 names, private manifest rows, PST hashes, or private paths.
 
-Result summary:
+The first tokenizer-only rerun produced the historical 17/100 and 20/100
+results recorded in earlier aggregate artifacts. The active retrieval method
+has since replaced the transitive component and ontology hard-pruning logic
+while preserving the same tokenizer/admission default.
+
+Current formal 100-case result:
 
 | Arm | Passed | Positive passed | No-match passed | Permission-denied passed |
 | --- | ---: | ---: | ---: | ---: |
 | Baseline retrieval | 11/100 | 1/80 | 0/10 | 10/10 |
-| Candidate KG fusion | 19/100 | 9/80 | 0/10 | 10/10 |
-| Ontology-guided KG | 19/100 | 9/80 | 0/10 | 10/10 |
-| Best ordered ontology factorial arm | 19/100 | 9/80 | 0/10 | 10/10 |
+| Source-neutral Candidate KG | 93/100 | 73/80 | 10/10 | 10/10 |
+| Contract-bound capped ontology rerank | 93/100 | 73/80 | 10/10 | 10/10 |
 
-Interpretation: candidate KG structure helped on the procurement corpus, but
-the current ontology-guided arm did not improve beyond KG-only. The 326-arm
-ordered ontology factorial search found 0 arms better than KG-only, 2 tied
-KG-only, and 324 worse; the best arm used zero ontology operators.
+Both current public reports and independent validators completed with
+`blockers=[]`; logical-source recall was 95.00%, exact Observation citation
+recall was 94.37%, citation precision was 93.78%, and the largest component
+size was 6. The current method applies
+permission/context/version/time/status admissibility before planning, counts
+logical source items instead of parser chunks, derives evidence cardinality
+from the question, aggregates anchors only inside one source item, and binds
+ontology revision/signal vocabulary/type-mapping content before a capped
+additive rerank. Primary pass/fail uses stable logical-source gold stored in
+the manifest; current Observation chunk ids only affect citation diagnostics.
+
+Interpretation: the tokenizer/admission policy was necessary but the quality
+lift came from correcting evidence planning and graph topology rather than
+adding a mail- or procurement-specific ontology. The ontology arm is safe but
+adds no measured lift on this run.
 
 This is an operator-provided full-PST domain-hard retrieval and candidate-only
 KG/ontology measurement. It is not business answer generation, not a general
@@ -167,15 +207,12 @@ Result summary:
 | Jieba + SentencePiece admission + candidate KG | 16,811/50,000 | 11,811/40,000 | 0/5,000 | 5,000/5,000 |
 | Jieba + SentencePiece admission + type-compatibility proxy | 16,811/50,000 | 11,811/40,000 | 0/5,000 | 5,000/5,000 |
 
-Interpretation: the lexical tokenizer plan has a real positive-retrieval
-effect versus regex-only matching, but it is not yet stable enough. It created
-very large lexical components and failed every no-match guard case. The
-type-compatibility proxy arm tied the lexical KG arm exactly, so this run does
-not show an incremental type-compatibility or frame-semantic effect. The next method step is not
-to promote this tokenizer output directly; it is to add data-driven term
-quality scoring, IDF or document-spread caps, component splitting/community
-detection, and no-match calibration before ontology promotion or any
-production retrieval claim.
+Interpretation: raw Jieba plus SentencePiece output has a real
+positive-retrieval effect versus regex-only matching, but raw output is not an
+admission policy. It created very large lexical components and failed every
+no-match guard case. This arm is now retained as an ablation. The active
+default is the later frozen-profile admission policy applied before graph
+construction.
 
 ## EXM Weak-Label Candidate-Admission 50,000-Case Follow-Up
 
@@ -186,8 +223,8 @@ results/exm_programmatic_ontology_50000_summary_2026-07-09.json
 ```
 
 This historical artifact predates the issue #33 report-schema correction. It
-keeps `jieba + SentencePiece` as an upstream candidate generator, then compiles
-a candidate-admission policy before KG edge construction:
+uses `Jieba + SentencePiece` as candidate generation, then applies a
+candidate-admission policy before KG edge construction:
 
 - document-frequency gates reject low-value or over-broad terms;
 - protected mention typing keeps explicit organization, contact, and business
@@ -212,9 +249,10 @@ Interpretation: the revised candidate-admission and graph-construction bundle
 has measured effect. This does not isolate type compatibility or coordination-
 frame semantics. The raw lexical arms still fail every no-match
 guard; the programmatic policy keeps all no-match and permission-denied guards
-while recovering most positive cases. The largest programmatic component
-remains large, so community detection or stricter component splitting is still
-needed before production retrieval claims.
+while recovering most positive cases. Its large component is historical
+failure evidence, not a request to tune or split that component. Default
+Candidate Evidence Retrieval has replaced component topology with logical
+source item ranking and must be used for any current end-task claim.
 
 ## EXM No-Training Candidate-Admission 50,000-Case Follow-Up
 
@@ -249,12 +287,11 @@ Result summary:
 Interpretation: both no-training programmatic controls beat raw lexical
 ontology while preserving no-match and permission-denied guards. The
 zero-training frozen profile scored `607` more passed cases than the weak-label
-MLP on the same generated EXM benchmark. The current default recommendation is
-therefore the hashable frozen-profile programmatic policy, not a self-trained
-weak-label MLP. BGE-M3 through FlagEmbedding remains the preferred future
-optional true frozen neural adapter, but it was not executed in the default dev
-container because that container intentionally does not include torch,
-transformers, FlagEmbedding, GLiNER, HanLP, or CKIP.
+MLP on the same generated EXM benchmark. The active default is therefore
+protected ASCII extraction plus Jieba and corpus-bound SentencePiece candidate
+generation followed by the hashable frozen-profile admission policy. Regex-only
+and raw lexical arms remain explicit ablations. BGE-M3 through FlagEmbedding
+remains an optional neural experiment, not the default.
 
 ## Issue #33 Work Package A Report Boundary
 

@@ -6,7 +6,14 @@ import json
 import unittest
 
 import _paths  # noqa: F401
-from formowl_contract import ContractValidationError, Observation, PermissionScope, SourceRef
+from formowl_contract import (
+    ContractValidationError,
+    Observation,
+    PermissionScope,
+    SourceInventory,
+    SourceInventoryItem,
+    SourceRef,
+)
 from formowl_ingestion.assets import register_asset_from_local_file
 from formowl_ingestion.extraction import run_extractor
 from formowl_ingestion.extractors import FixtureMailArchiveExtractor
@@ -18,6 +25,7 @@ from formowl_ingestion.storage import (
     StorageBackendRegistry,
 )
 from formowl_mail import MailEvidenceBundle, build_mail_evidence_bundle
+from formowl_mail.persistence import FileMailEvidenceBundleStore
 
 
 class MailEvidenceBundleTests(unittest.TestCase):
@@ -59,10 +67,12 @@ class MailEvidenceBundleTests(unittest.TestCase):
         )
 
         self.assertEqual(bundle.mail_evidence_bundle_id, rebuilt.mail_evidence_bundle_id)
-        self.assertEqual(bundle.to_dict(), rebuilt.to_dict())
+        self.assertEqual(bundle.to_persistence_dict(), rebuilt.to_persistence_dict())
         self.assertEqual(
-            MailEvidenceBundle.from_dict(bundle.to_dict()).to_dict(),
-            bundle.to_dict(),
+            MailEvidenceBundle.from_persistence_dict(
+                bundle.to_persistence_dict()
+            ).to_persistence_dict(),
+            bundle.to_persistence_dict(),
         )
         self.assertEqual(bundle.producer_type, "server_side_parser")
         self.assertEqual(
@@ -358,15 +368,93 @@ class MailEvidenceBundleTests(unittest.TestCase):
         ]
         for field_name in required_arrays:
             with self.subTest(field_name=field_name):
-                payload = bundle.to_dict()
+                payload = bundle.to_persistence_dict()
                 payload.pop(field_name)
                 with self.assertRaises(ContractValidationError):
-                    MailEvidenceBundle.from_dict(payload)
+                    MailEvidenceBundle.from_persistence_dict(payload)
 
-        payload_without_optional_warnings = bundle.to_dict()
+        payload_without_optional_warnings = bundle.to_persistence_dict()
         payload_without_optional_warnings.pop("parse_warnings")
-        parsed = MailEvidenceBundle.from_dict(payload_without_optional_warnings)
+        parsed = MailEvidenceBundle.from_persistence_dict(payload_without_optional_warnings)
         self.assertEqual(parsed.parse_warnings, [])
+
+    def test_private_persistence_consume_requires_store_owned_capability(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-bundle-owned-consume")
+        stored = _run_mail_fixture(temp_dir, _duplicate_mail_archive())
+        bundle = build_mail_evidence_bundle(
+            stored.observations,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            source_asset_id=stored.extractor_run.asset_id,
+            archive_sha256="sha256:archive-launch",
+            upload_session_id="upload_session_mail_001",
+            created_at="2026-07-05T10:00:00+00:00",
+        )
+        canonical_payload = bundle.to_persistence_dict()
+
+        for consume_input, capability in (
+            (True, None),
+            (True, object()),
+            (False, object()),
+            ("true", None),
+        ):
+            with self.subTest(consume_input=consume_input, capability=capability is not None):
+                payload = copy.deepcopy(canonical_payload)
+                with self.assertRaises(ContractValidationError):
+                    MailEvidenceBundle.from_persistence_dict(
+                        payload,
+                        consume_input=consume_input,  # type: ignore[arg-type]
+                        _consume_capability=capability,
+                    )
+                self.assertEqual(payload, canonical_payload)
+
+        inventory_item = SourceInventoryItem.create(
+            source_asset_id="asset_owned_consume",
+            structure_kind="message",
+            content_type="message/rfc822",
+            ordinal=0,
+            processing_state="parsed",
+            raw_retention_state="retained",
+            source_fingerprint="sha256:" + "a" * 64,
+            parser_fingerprint="sha256:" + "b" * 64,
+            permission_scope={"scope_type": "asset", "scope_id": "asset_owned_consume"},
+            source_observation_ids=("observation_owned_consume",),
+        )
+        inventory = SourceInventory.create(
+            source_asset_id="asset_owned_consume",
+            source_fingerprint="sha256:" + "a" * 64,
+            parser_fingerprint="sha256:" + "b" * 64,
+            items=(inventory_item,),
+            created_at="2026-08-12T00:00:00+00:00",
+        )
+        inventory_payload = inventory.to_persistence_dict()
+        with self.assertRaises(ContractValidationError):
+            SourceInventory.from_persistence_dict(
+                inventory_payload,
+                consume_input=True,
+                _consume_capability=object(),
+            )
+        self.assertIn("items", inventory_payload)
+
+        store = FileMailEvidenceBundleStore(temp_dir / "state")
+        publication = store.publish_verified_bundle(
+            bundle,
+            verify=lambda restored: {
+                "mail_evidence_bundle_id": restored.mail_evidence_bundle_id,
+            },
+        )
+        self.assertTrue(publication.created)
+        self.assertEqual(
+            publication.owner_query,
+            {"mail_evidence_bundle_id": bundle.mail_evidence_bundle_id},
+        )
+        restored = store.get_bundle(mail_evidence_bundle_id=bundle.mail_evidence_bundle_id)
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored.to_persistence_dict(), canonical_payload)
+        self.assertEqual(
+            [item.mail_evidence_bundle_id for item in store.list_bundles()],
+            [bundle.mail_evidence_bundle_id],
+        )
 
     def test_builder_rejects_empty_mixed_and_orphan_mail_observations(self) -> None:
         temp_dir = _paths.fresh_test_dir("mail-evidence-bundle-lineage-reject")
@@ -436,7 +524,7 @@ class MailEvidenceBundleTests(unittest.TestCase):
         with self.assertRaises(ContractValidationError):
             build_mail_evidence_bundle(orphan_attachment, **base_kwargs)
 
-    def test_raw_backend_values_are_rejected_without_graph_or_wiki_side_effects(self) -> None:
+    def test_private_body_is_preserved_but_unsafe_envelope_values_are_rejected(self) -> None:
         temp_dir = _paths.fresh_test_dir("mail-evidence-bundle-raw-reject")
         stored = _run_mail_fixture(temp_dir, _duplicate_mail_archive())
         before_failure_snapshot = _tree_snapshot(temp_dir)
@@ -454,16 +542,19 @@ class MailEvidenceBundleTests(unittest.TestCase):
         )
         observations[body_index] = unsafe
 
-        with self.assertRaises(ContractValidationError):
-            build_mail_evidence_bundle(
-                observations,
-                workspace_id="workspace_formowl",
-                owner_user_id="user_yifan",
-                source_asset_id=stored.extractor_run.asset_id,
-                archive_sha256="sha256:archive-launch",
-                upload_session_id="upload_session_mail_001",
-                created_at="2026-07-05T10:00:00+00:00",
-            )
+        private_bundle = build_mail_evidence_bundle(
+            observations,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            source_asset_id=stored.extractor_run.asset_id,
+            archive_sha256="sha256:archive-launch",
+            upload_session_id="upload_session_mail_001",
+            created_at="2026-07-05T10:00:00+00:00",
+        )
+        self.assertIn(
+            "Investigate object://mail/raw/private-archive",
+            [segment.text for segment in private_bundle.body_segments],
+        )
         self.assertEqual(_tree_snapshot(temp_dir), before_failure_snapshot)
         with self.assertRaises(ContractValidationError):
             build_mail_evidence_bundle(
@@ -485,16 +576,19 @@ class MailEvidenceBundleTests(unittest.TestCase):
                 "text": "SELECT * FROM mailbox_messages",
             }
         )
-        with self.assertRaises(ContractValidationError):
-            build_mail_evidence_bundle(
-                sql_observations,
-                workspace_id="workspace_formowl",
-                owner_user_id="user_yifan",
-                source_asset_id=stored.extractor_run.asset_id,
-                archive_sha256="sha256:archive-launch",
-                upload_session_id="upload_session_mail_001",
-                created_at="2026-07-05T10:00:00+00:00",
-            )
+        sql_bundle = build_mail_evidence_bundle(
+            sql_observations,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            source_asset_id=stored.extractor_run.asset_id,
+            archive_sha256="sha256:archive-launch",
+            upload_session_id="upload_session_mail_001",
+            created_at="2026-07-05T10:00:00+00:00",
+        )
+        self.assertIn(
+            "SELECT * FROM mailbox_messages",
+            [segment.text for segment in sql_bundle.body_segments],
+        )
         self.assertEqual(_tree_snapshot(temp_dir), before_failure_snapshot)
 
         with self.assertRaises(ContractValidationError):
@@ -519,10 +613,14 @@ class MailEvidenceBundleTests(unittest.TestCase):
             upload_session_id="upload_session_mail_001",
             created_at="2026-07-05T10:00:00+00:00",
         )
-        unsafe_payload = copy.deepcopy(bundle.to_dict())
+        unsafe_payload = copy.deepcopy(bundle.to_persistence_dict())
         unsafe_payload["messages"][0]["api_key"] = "not-public"
         with self.assertRaises(ContractValidationError):
-            MailEvidenceBundle.from_dict(unsafe_payload)
+            MailEvidenceBundle.from_persistence_dict(unsafe_payload)
+        unsafe_segment_payload = copy.deepcopy(bundle.to_persistence_dict())
+        unsafe_segment_payload["body_segments"][0]["api_key"] = "not-public"
+        with self.assertRaises(ContractValidationError):
+            MailEvidenceBundle.from_persistence_dict(unsafe_segment_payload)
         self.assertEqual(_tree_snapshot(temp_dir), before_failure_snapshot)
 
         self.assertFalse((temp_dir / "mail").exists())

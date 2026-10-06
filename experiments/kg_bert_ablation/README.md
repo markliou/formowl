@@ -12,6 +12,30 @@ The experiment is intentionally candidate-only:
 - it records dataset hash, thresholds, package availability, runtime, and
   quality metrics in JSON artifacts.
 
+## Default Candidate Evidence Retrieval
+
+This embedding experiment is an ablation over candidate generation and
+similarity, not the default retrieval harness. Any end-task evaluation must
+first use logical source item cardinality, access/context/time before planning,
+no lexical transitive closure, and capped additive ontology reranking.
+Parser-chunk counts, component unions, regex-only retrieval, and ontology hard
+gates remain explicit ablation arms.
+The end-task index owns a `CandidateEvidenceTextPolicyRuntime` for the
+Unicode-NFKC/protected-ASCII/Jieba/corpus-bound SentencePiece/frozen-profile
+stack and exact admission/model/corpus SHA-256 hashes. The binding also pins
+the runtime id and tokenizer implementation hash; runtime code mismatch fails
+closed. Default callers pass query text only; raw tokens and free-form hashes
+cannot promote this experiment into the default. Access and explicit
+context/time admissibility precede tokenization; experiments use
+`retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
+
 ## Run
 
 Non-BERT baseline plus optional BERT/SentenceTransformer run:

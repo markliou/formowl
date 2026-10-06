@@ -1,0 +1,1951 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import textwrap
+import threading
+import unittest
+from unittest import mock
+
+import _paths  # noqa: F401
+from formowl_contract import ContractValidationError, sha256_json
+from formowl_mail._guards import assert_public_payload_safe
+from formowl_mail.human_uat_orchestrator import (
+    CodexAppServerConversationModel,
+    CodexAppServerStdioTransport,
+    CodexAppServerThread,
+    CodexAppServerTurn,
+    CodexDynamicToolInvocation,
+    UatConversationMessage,
+    _CODEX_DISABLED_FEATURES,
+    _assert_hardened_codex_runtime,
+    build_codex_app_server_proxy_command,
+    build_hardened_codex_app_server_command,
+    prepare_codex_runtime_state,
+    prepare_codex_runtime_state_from_auth_cache,
+    validate_codex_runtime_state,
+)
+from formowl_mail.document_uat_mcp import validate_document_uat_payload
+
+
+def _decision(
+    *,
+    response_kind: str = "answer",
+    answer_text: str = "完成。",
+    display_format: str = "narrative",
+) -> str:
+    return json.dumps(
+        {
+            "response_kind": response_kind,
+            "answer_text": answer_text,
+            "display_format": display_format,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _document_payload(content: str) -> dict[str, object]:
+    encoded = content.encode("utf-8")
+    result = {
+        "source_label": "authorized-document-0001",
+        "segment_label": "table-0001-rows-0001-0001",
+        "subject": "Authorized document table 1",
+        "snippet": content,
+        "content": content,
+        "content_char_count": len(content),
+        "content_utf8_bytes": len(encoded),
+        "content_sha256": "sha256:" + hashlib.sha256(encoded).hexdigest(),
+        "sent_at": None,
+        "source_kind": "authorized_document_export",
+    }
+    without_commitment = {
+        "status": "ok",
+        "query_hash": sha256_json("synthetic document query"),
+        "source_commitment": "sha256:" + ("1" * 64),
+        "result_count": 1,
+        "total_result_count": 1,
+        "displayed_result_count": 1,
+        "results": [result],
+        "warnings": [],
+        "notice": "Authorized document/table segments were read for model synthesis.",
+        "coverage": {
+            "cardinality_mode": "bounded_document_segments",
+            "total_source_item_count": 1,
+            "returned_source_item_count": 1,
+            "displayed_source_item_count": 1,
+            "is_exhaustive": True,
+            "has_more": False,
+        },
+        "answerability": {
+            "status": "sufficient_evidence",
+            "reason_codes": ["authorized_document_segments_available"],
+        },
+        "projection": {
+            "output_format": "narrative",
+            "primary_fields": ["content"],
+            "secondary_fields": ["source_label", "segment_label"],
+            "page_size": 5,
+            "page_offset": 0,
+            "has_more": False,
+        },
+        "timings_ms": {"document_read": 1.0},
+        "claim_boundary": {
+            "existing_export_only": True,
+            "document_first": True,
+            "read_only": True,
+            "pst_or_extractor_invoked": False,
+            "kg_or_ontology_invoked": False,
+            "oracle_or_expected_answer_used": False,
+            "canonical_graph_write_performed": False,
+            "production_ready": False,
+        },
+    }
+    return {
+        **without_commitment,
+        "mcp_response_commitment": sha256_json(without_commitment),
+    }
+
+
+def _all_mapping_keys(value: object) -> set[str]:
+    if isinstance(value, dict):
+        return set(value).union(
+            *(map(_all_mapping_keys, value.values())),
+        )
+    if isinstance(value, (list, tuple)):
+        return set().union(*(map(_all_mapping_keys, value)))
+    return set()
+
+
+class _RecordingCodexTransport:
+    def __init__(self, turns: list[dict[str, object]]) -> None:
+        self.turns = list(turns)
+        self.thread_starts: list[dict[str, object]] = []
+        self.turn_calls: list[dict[str, object]] = []
+        self.deleted_threads: list[str] = []
+        self.closed = False
+
+    def start_thread(
+        self,
+        *,
+        model,
+        cwd,
+        base_instructions,
+        developer_instructions,
+        dynamic_tools,
+    ):
+        thread_id = f"thread_{len(self.thread_starts) + 1}"
+        self.thread_starts.append(
+            {
+                "model": model,
+                "cwd": cwd,
+                "base_instructions": base_instructions,
+                "developer_instructions": developer_instructions,
+                "dynamic_tools": tuple(dynamic_tools),
+                "thread_id": thread_id,
+            }
+        )
+        return CodexAppServerThread(
+            thread_id=thread_id,
+            model_name=model or "gpt-test-default",
+        )
+
+    def run_turn(
+        self,
+        *,
+        thread_id,
+        user_text,
+        additional_context,
+        output_schema,
+        reasoning_effort,
+        client_metadata,
+        tool_handler,
+    ):
+        step = self.turns.pop(0)
+        turn_id = f"turn_{len(self.turn_calls) + 1}"
+        self.turn_calls.append(
+            {
+                "thread_id": thread_id,
+                "user_text": user_text,
+                "additional_context": dict(additional_context),
+                "output_schema": dict(output_schema),
+                "reasoning_effort": reasoning_effort,
+                "client_metadata": dict(client_metadata),
+            }
+        )
+        invocations = []
+        for index, tool_call in enumerate(step.get("tool_calls", []), start=1):
+            tool_name = tool_call["tool_name"]
+            arguments = tool_call["arguments"]
+            result = tool_handler(tool_name, arguments)
+            invocations.append(
+                CodexDynamicToolInvocation(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    call_id=f"call_{index}",
+                    tool_name=tool_name,
+                    arguments=dict(arguments),
+                    result=dict(result),
+                )
+            )
+        if step.get("raise_after_tools"):
+            raise RuntimeError(str(step["raise_after_tools"]))
+        if step.get("drop_invocations"):
+            invocations = []
+        return CodexAppServerTurn(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            final_message=str(step["final_message"]),
+            tool_invocations=tuple(invocations),
+        )
+
+    def delete_thread(self, thread_id):
+        self.deleted_threads.append(thread_id)
+
+    def close(self):
+        self.closed = True
+
+
+_FAKE_APP_SERVER = textwrap.dedent(
+    r"""
+    import json
+    from pathlib import Path
+    import sys
+
+    trace_path = Path(sys.argv[1])
+
+    def trace(message):
+        with trace_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(message, ensure_ascii=False) + "\n")
+
+    def send(message):
+        print(json.dumps(message, ensure_ascii=False), flush=True)
+
+    for line in sys.stdin:
+        message = json.loads(line)
+        trace(message)
+        method = message.get("method")
+        request_id = message.get("id")
+        if method == "initialize":
+            send({"id": request_id, "result": {"serverInfo": {"name": "fake"}}})
+        elif method == "initialized":
+            continue
+        elif method == "thread/start":
+            send(
+                {
+                    "id": request_id,
+                    "result": {
+                        "thread": {"id": "thread_stdio"},
+                        "model": "gpt-test-stdio",
+                    },
+                }
+            )
+        elif method == "turn/start":
+            send(
+                {
+                    "id": request_id,
+                    "result": {"turn": {"id": "turn_stdio"}},
+                }
+            )
+            send(
+                {
+                    "id": "server_tool_1",
+                    "method": "item/tool/call",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turnId": "turn_stdio",
+                        "callId": "call_stdio",
+                        "tool": "search_formowl_evidence",
+                        "arguments": {
+                            "query_text": "source-neutral question",
+                            "required_terms": ["ID-42"],
+                            "sort": "relevance",
+                            "limit": 20,
+                        },
+                    },
+                }
+            )
+        elif method == "thread/delete":
+            send({"id": request_id, "result": {}})
+        elif request_id == "server_tool_1":
+            result = message.get("result", {})
+            valid = (
+                result.get("success") is True
+                and result.get("contentItems", [{}])[0].get("type") == "inputText"
+            )
+            final_message = json.dumps(
+                {
+                    "response_kind": "answer",
+                    "answer_text": "stdio tool complete" if valid else "invalid tool response",
+                    "display_format": "table",
+                },
+                separators=(",", ":"),
+            )
+            send(
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turnId": "turn_stdio",
+                        "completedAtMs": 1,
+                        "item": {
+                            "id": "message_stdio",
+                            "type": "agentMessage",
+                            "text": final_message,
+                            "phase": "final_answer",
+                        },
+                    },
+                }
+            )
+            send(
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turn": {
+                            "id": "turn_stdio",
+                            "status": "completed",
+                            "error": None,
+                            "items": [],
+                            "itemsView": "notLoaded",
+                        },
+                    },
+                }
+            )
+    """
+)
+
+_FAKE_APP_SERVER_TOOL_PROTOCOL_VIOLATION = textwrap.dedent(
+    r"""
+    import json
+    import sys
+
+    scenario = sys.argv[1]
+
+    def send(message):
+        print(json.dumps(message, ensure_ascii=False), flush=True)
+
+    def tool_request(request_id, *, turn_id, call_id):
+        send(
+            {
+                "id": request_id,
+                "method": "item/tool/call",
+                "params": {
+                    "threadId": "thread_stdio",
+                    "turnId": turn_id,
+                    "callId": call_id,
+                    "tool": "search_formowl_evidence",
+                    "arguments": {
+                        "query_text": "source-neutral question",
+                        "required_terms": [],
+                        "sort": "relevance",
+                        "limit": 20,
+                    },
+                },
+            }
+        )
+
+    for line in sys.stdin:
+        message = json.loads(line)
+        method = message.get("method")
+        request_id = message.get("id")
+        if method == "initialize":
+            send({"id": request_id, "result": {"serverInfo": {"name": "fake"}}})
+        elif method == "initialized":
+            continue
+        elif method == "thread/start":
+            send(
+                {
+                    "id": request_id,
+                    "result": {
+                        "thread": {"id": "thread_stdio"},
+                        "model": "gpt-test-stdio",
+                    },
+                }
+            )
+        elif method == "turn/start":
+            send({"id": request_id, "result": {"turn": {"id": "turn_stdio"}}})
+            if scenario == "mismatched_turn":
+                tool_request(
+                    "server_tool_mismatch",
+                    turn_id="turn_stale",
+                    call_id="call_1",
+                )
+            else:
+                tool_request(
+                    "server_tool_first",
+                    turn_id="turn_stdio",
+                    call_id="call_1",
+                )
+        elif request_id in {"server_tool_mismatch", "server_tool_duplicate"}:
+            send(
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turn": {
+                            "id": "turn_stdio",
+                            "status": "completed",
+                            "error": None,
+                            "items": [
+                                {
+                                    "id": "message_stdio",
+                                    "type": "agentMessage",
+                                    "text": "{}",
+                                }
+                            ],
+                        },
+                    },
+                }
+            )
+        elif request_id == "server_tool_first":
+            tool_request(
+                "server_tool_duplicate",
+                turn_id="turn_stdio",
+                call_id="call_1",
+            )
+    """
+)
+
+_FAKE_APP_SERVER_COMPLETION_DURING_TOOL = textwrap.dedent(
+    r"""
+    import json
+    from pathlib import Path
+    import sys
+
+    started_path = Path(sys.argv[1])
+    completion_path = Path(sys.argv[2])
+
+    def send(message):
+        print(json.dumps(message, ensure_ascii=False), flush=True)
+
+    for line in sys.stdin:
+        message = json.loads(line)
+        method = message.get("method")
+        request_id = message.get("id")
+        if method == "initialize":
+            send({"id": request_id, "result": {"serverInfo": {"name": "fake"}}})
+        elif method == "initialized":
+            continue
+        elif method == "thread/start":
+            send(
+                {
+                    "id": request_id,
+                    "result": {
+                        "thread": {"id": "thread_stdio"},
+                        "model": "gpt-test-stdio",
+                    },
+                }
+            )
+        elif method == "turn/start":
+            send({"id": request_id, "result": {"turn": {"id": "turn_stdio"}}})
+            send(
+                {
+                    "id": "server_tool_slow",
+                    "method": "item/tool/call",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turnId": "turn_stdio",
+                        "callId": "call_slow",
+                        "tool": "search_formowl_evidence",
+                        "arguments": {
+                            "query_text": "synthetic slow-tool question",
+                            "required_terms": [],
+                            "sort": "relevance",
+                            "limit": 5,
+                        },
+                    },
+                }
+            )
+            with started_path.open("rb") as marker:
+                marker.read(1)
+            send(
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turnId": "turn_stdio",
+                        "completedAtMs": 1,
+                        "item": {
+                            "id": "message_stdio",
+                            "type": "agentMessage",
+                            "text": (
+                                '{"response_kind":"answer",'
+                                '"answer_text":"slow tool complete",'
+                                '"display_format":"narrative"}'
+                            ),
+                            "phase": "final_answer",
+                        },
+                    },
+                }
+            )
+            send(
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turn": {
+                            "id": "turn_stdio",
+                            "status": "completed",
+                            "error": None,
+                            "items": [],
+                            "itemsView": "notLoaded",
+                        },
+                    },
+                }
+            )
+            with completion_path.open("wb", buffering=0) as marker:
+                marker.write(b"1")
+        elif method == "thread/delete":
+            send({"id": request_id, "result": {}})
+        elif request_id == "server_tool_slow":
+            continue
+    """
+)
+
+_FAKE_APP_SERVER_STALLED_TOOL = textwrap.dedent(
+    r"""
+    import json
+    import sys
+
+    def send(message):
+        print(json.dumps(message, ensure_ascii=False), flush=True)
+
+    for line in sys.stdin:
+        message = json.loads(line)
+        method = message.get("method")
+        request_id = message.get("id")
+        if method == "initialize":
+            send({"id": request_id, "result": {"serverInfo": {"name": "fake"}}})
+        elif method == "initialized":
+            continue
+        elif method == "thread/start":
+            send(
+                {
+                    "id": request_id,
+                    "result": {
+                        "thread": {"id": "thread_stdio"},
+                        "model": "gpt-test-stdio",
+                    },
+                }
+            )
+        elif method == "turn/start":
+            send({"id": request_id, "result": {"turn": {"id": "turn_stdio"}}})
+            send(
+                {
+                    "id": "server_tool_stalled",
+                    "method": "item/tool/call",
+                    "params": {
+                        "threadId": "thread_stdio",
+                        "turnId": "turn_stdio",
+                        "callId": "call_stalled",
+                        "tool": "search_formowl_evidence",
+                        "arguments": {
+                            "query_text": "synthetic stalled-tool question",
+                            "required_terms": [],
+                            "sort": "relevance",
+                            "limit": 5,
+                        },
+                    },
+                }
+            )
+        elif method == "turn/interrupt":
+            send({"id": request_id, "result": {}})
+        elif method == "thread/delete":
+            send({"id": request_id, "result": {}})
+        elif request_id == "server_tool_stalled":
+            continue
+    """
+)
+
+
+class MailHumanUatOrchestratorTests(unittest.TestCase):
+    def test_direct_answer_does_not_call_formowl(self) -> None:
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "final_message": _decision(
+                        answer_text="這個問題不需要調閱來源。",
+                    )
+                }
+            ]
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+                model="gpt-test",
+                reasoning_effort="low",
+            )
+            tool_calls = []
+
+            outcome = model.respond(
+                history=(),
+                user_text="你好",
+                latest_evidence=None,
+                safety_identifier="formowl_uat_" + "1" * 48,
+                evidence_tool=lambda request: tool_calls.append(request),
+            )
+
+        self.assertEqual(outcome.response_kind, "answer")
+        self.assertEqual(outcome.answer_text, "這個問題不需要調閱來源。")
+        self.assertIsNone(outcome.tool_request)
+        self.assertEqual(tool_calls, [])
+        self.assertEqual(len(transport.thread_starts), 1)
+        thread_start = transport.thread_starts[0]
+        self.assertEqual(thread_start["model"], "gpt-test")
+        dynamic_tool = thread_start["dynamic_tools"][0]
+        self.assertEqual(dynamic_tool["name"], "search_formowl_evidence")
+        self.assertFalse(dynamic_tool["inputSchema"]["additionalProperties"])
+        turn = transport.turn_calls[0]
+        self.assertEqual(turn["reasoning_effort"], "low")
+        self.assertFalse(turn["output_schema"]["additionalProperties"])
+        self.assertEqual(turn["additional_context"], {})
+
+    def test_dynamic_tool_is_executed_and_returned_with_original_evidence(self) -> None:
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "tool_name": "search_formowl_evidence",
+                            "arguments": {
+                                "query_text": "ID-42 delivery",
+                                "required_terms": ["ID-42"],
+                                "sort": "recent",
+                                "limit": 50,
+                            },
+                        }
+                    ],
+                    "final_message": _decision(
+                        answer_text="來源證據已整理完成。",
+                        display_format="table",
+                    ),
+                }
+            ]
+        )
+        evidence_result = {
+            "status": "ok",
+            "total_result_count": 1,
+            "displayed_result_count": 1,
+            "results": [
+                {
+                    "subject": "Delivery",
+                    "snippet": "ID-42 delivery is 2026-08-01.",
+                    "sent_at": "2026-07-20T08:00:00+00:00",
+                    "citation": {"citation_id": "mailcitation_test"},
+                }
+            ],
+        }
+        requests = []
+
+        def evidence_tool(request):
+            requests.append(request)
+            return evidence_result
+
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            outcome = model.respond(
+                history=(),
+                user_text="查 ID-42 的交期",
+                latest_evidence=None,
+                safety_identifier="formowl_uat_" + "2" * 48,
+                evidence_tool=evidence_tool,
+            )
+
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].query_text, "ID-42 delivery")
+        self.assertEqual(requests[0].required_terms, ("ID-42",))
+        self.assertEqual(requests[0].sort, "recent")
+        self.assertEqual(outcome.answer_text, "來源證據已整理完成。")
+        self.assertEqual(outcome.display_format, "table")
+        self.assertEqual(outcome.tool_result, evidence_result)
+
+    def test_document_mcp_result_is_reinjected_unchanged_for_same_thread_synthesis(
+        self,
+    ) -> None:
+        raw_content_sentinel = "SYNTHETIC_RAW_DOCUMENT_SENTINEL_A_7f8c1d"
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "tool_name": "search_formowl_evidence",
+                            "arguments": {
+                                "query_text": "read the authorized table",
+                                "required_terms": [],
+                                "sort": "relevance",
+                                "limit": 5,
+                            },
+                        }
+                    ],
+                    "final_message": _decision(
+                        answer_text="The authorized table says the task is complete.",
+                    ),
+                }
+            ]
+        )
+        evidence_result = _document_payload(raw_content_sentinel)
+        self.assertEqual(validate_document_uat_payload(evidence_result), evidence_result)
+        observed_reinjection: list[dict[str, object]] = []
+        original_run_turn = transport.run_turn
+
+        def run_turn_and_capture(**kwargs):
+            original_handler = kwargs["tool_handler"]
+
+            def capture(tool_name, arguments):
+                result = dict(original_handler(tool_name, arguments))
+                observed_reinjection.append(result)
+                return result
+
+            return original_run_turn(**{**kwargs, "tool_handler": capture})
+
+        transport.run_turn = run_turn_and_capture
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            outcome = model.respond(
+                history=(),
+                user_text="Read the table and answer the task.",
+                latest_evidence=None,
+                safety_identifier="formowl_uat_" + "d" * 48,
+                evidence_tool=lambda _request: evidence_result,
+            )
+
+        self.assertEqual(observed_reinjection, [evidence_result])
+        self.assertEqual(
+            observed_reinjection[0]["results"][0]["content"],
+            raw_content_sentinel,
+        )
+        self.assertTrue({"content", "snippet"}.isdisjoint(_all_mapping_keys(outcome.tool_result)))
+        self.assertEqual(outcome.mcp_attempted_call_count, 1)
+        self.assertEqual(outcome.mcp_successful_call_count, 1)
+        self.assertEqual(
+            outcome.mcp_response_commitment,
+            evidence_result["mcp_response_commitment"],
+        )
+        self.assertEqual(
+            outcome.tool_result_reinject_commitment,
+            evidence_result["mcp_response_commitment"],
+        )
+        canonical_reinjected_content = dict(observed_reinjection[0])
+        canonical_reinjected_content.pop("mcp_response_commitment")
+        self.assertEqual(
+            outcome.mcp_response_commitment,
+            outcome.tool_result_reinject_commitment,
+        )
+        self.assertEqual(
+            outcome.tool_result_reinject_commitment,
+            sha256_json(canonical_reinjected_content),
+        )
+        self.assertEqual(
+            outcome.final_response_commitment,
+            sha256_json(
+                {
+                    "response_kind": "answer",
+                    "answer_text": "The authorized table says the task is complete.",
+                    "display_format": "narrative",
+                }
+            ),
+        )
+        self.assertEqual(
+            outcome.answer_text,
+            "The authorized table says the task is complete.",
+        )
+
+    def test_document_unsafe_content_fails_before_codex_reinjection(self) -> None:
+        for raw_path in ("/etc/passwd", "/mnt/private/export.json"):
+            with self.assertRaises(ContractValidationError):
+                assert_public_payload_safe({"content": raw_path})
+        for unsafe_content in (
+            "read /etc/passwd",
+            "read /mnt/private/export.json",
+            "source formowl://object/private/export",
+            "credential=synthetic-placeholder",
+            "SELECT private_value FROM internal_table",
+            "Traceback (most recent call last):\n  synthetic failure",
+        ):
+            with self.subTest(unsafe_content=unsafe_content):
+                transport = _RecordingCodexTransport(
+                    [
+                        {
+                            "tool_calls": [
+                                {
+                                    "tool_name": "search_formowl_evidence",
+                                    "arguments": {
+                                        "query_text": "read authorized content",
+                                        "required_terms": [],
+                                        "sort": "relevance",
+                                        "limit": 5,
+                                    },
+                                }
+                            ],
+                            "final_message": _decision(),
+                        }
+                    ]
+                )
+                observed_reinjection: list[dict[str, object]] = []
+                original_run_turn = transport.run_turn
+
+                def run_turn_and_capture(**kwargs):
+                    original_handler = kwargs["tool_handler"]
+
+                    def capture(tool_name, arguments):
+                        result = dict(original_handler(tool_name, arguments))
+                        observed_reinjection.append(result)
+                        return result
+
+                    return original_run_turn(**{**kwargs, "tool_handler": capture})
+
+                transport.run_turn = run_turn_and_capture
+                with tempfile.TemporaryDirectory() as workspace:
+                    model = CodexAppServerConversationModel(
+                        transport,
+                        workspace_dir=workspace,
+                    )
+                    with self.assertRaises(ContractValidationError):
+                        model.respond(
+                            history=(),
+                            user_text="Read the document.",
+                            latest_evidence=None,
+                            safety_identifier="formowl_uat_" + "f" * 48,
+                            evidence_tool=lambda _request, value=unsafe_content: (
+                                _document_payload(value)
+                            ),
+                        )
+                self.assertEqual(observed_reinjection, [])
+
+    def test_document_first_invalid_final_message_fails_closed_without_evidence_fallback(
+        self,
+    ) -> None:
+        evidence_result = _document_payload("bounded authorized document content")
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "tool_name": "search_formowl_evidence",
+                            "arguments": {
+                                "query_text": "read authorized content",
+                                "required_terms": [],
+                                "sort": "relevance",
+                                "limit": 5,
+                            },
+                        }
+                    ],
+                    "final_message": "not-json",
+                }
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            with self.assertRaisesRegex(RuntimeError, "invalid UAT answer"):
+                model.respond(
+                    history=(),
+                    user_text="Read the document and synthesize.",
+                    latest_evidence=None,
+                    safety_identifier="formowl_uat_" + "e" * 48,
+                    evidence_tool=lambda _request: evidence_result,
+                )
+
+        self.assertEqual(transport.deleted_threads, ["thread_1"])
+
+    def test_successful_evidence_survives_codex_answer_generation_failures(self) -> None:
+        tool_call = {
+            "tool_name": "search_formowl_evidence",
+            "arguments": {
+                "query_text": "source-neutral evidence question",
+                "required_terms": ["DOC-42"],
+                "sort": "relevance",
+                "limit": 10,
+            },
+        }
+        evidence_result = {
+            "status": "ok",
+            "total_result_count": 87,
+            "displayed_result_count": 10,
+            "projection": {"output_format": "narrative"},
+            "results": [{"snippet": "bounded evidence"} for _ in range(10)],
+        }
+        for step in (
+            {
+                "tool_calls": [tool_call],
+                "final_message": "not-json",
+            },
+            {
+                "tool_calls": [tool_call],
+                "final_message": json.dumps(
+                    {
+                        "response_kind": ["answer"],
+                        "answer_text": "invalid structured answer",
+                        "display_format": "narrative",
+                    }
+                ),
+            },
+            {
+                "tool_calls": [tool_call],
+                "raise_after_tools": "Codex app-server turn failed",
+                "final_message": _decision(),
+            },
+        ):
+            with self.subTest(step=step):
+                transport = _RecordingCodexTransport([step])
+                with tempfile.TemporaryDirectory() as workspace:
+                    model = CodexAppServerConversationModel(
+                        transport,
+                        workspace_dir=workspace,
+                    )
+                    outcome = model.respond(
+                        history=(),
+                        user_text="查 DOC-42",
+                        latest_evidence=None,
+                        safety_identifier="session-fallback",
+                        evidence_tool=lambda request: evidence_result,
+                    )
+
+                self.assertEqual(
+                    outcome.answer_text,
+                    "已找到 87 筆符合條件的來源，目前先顯示 10 筆，以下依相關性列出內容。",
+                )
+                self.assertEqual(outcome.response_kind, "answer")
+                self.assertEqual(outcome.display_format, "narrative")
+                self.assertEqual(outcome.tool_result, evidence_result)
+                self.assertIsNotNone(outcome.fallback_reason)
+                self.assertEqual(transport.deleted_threads, ["thread_1"])
+
+    def test_codex_answer_accepts_json_code_fence(self) -> None:
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "final_message": (
+                        "```json\n" + _decision(answer_text="格式仍可解析") + "\n```"
+                    ),
+                }
+            ]
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            outcome = model.respond(
+                history=(),
+                user_text="一般問題",
+                latest_evidence=None,
+                safety_identifier="session-fenced-json",
+                evidence_tool=lambda request: {},
+            )
+
+        self.assertEqual(outcome.answer_text, "格式仍可解析")
+        self.assertIsNone(outcome.fallback_reason)
+
+    def test_same_safety_identifier_reuses_thread_and_new_identifier_does_not(self) -> None:
+        transport = _RecordingCodexTransport(
+            [
+                {"final_message": _decision(answer_text="first")},
+                {"final_message": _decision(answer_text="second")},
+                {"final_message": _decision(answer_text="third")},
+            ]
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            for safety_identifier in ("session-a", "session-a", "session-b"):
+                model.respond(
+                    history=(),
+                    user_text="test",
+                    latest_evidence=None,
+                    safety_identifier=safety_identifier,
+                    evidence_tool=lambda request: {},
+                )
+
+        self.assertEqual(len(transport.thread_starts), 2)
+        self.assertEqual(
+            [call["thread_id"] for call in transport.turn_calls],
+            ["thread_1", "thread_1", "thread_2"],
+        )
+
+    def test_new_thread_receives_bounded_recovery_history_and_prior_evidence(self) -> None:
+        transport = _RecordingCodexTransport(
+            [{"final_message": _decision(answer_text="recovered")}]
+        )
+        prior_evidence = {
+            "status": "ok",
+            "results": [{"subject": "S", "snippet": "body"}],
+        }
+        history = (
+            UatConversationMessage(role="user", content="之前的問題"),
+            UatConversationMessage(role="assistant", content="之前的答案"),
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            model.respond(
+                history=history,
+                user_text="換個說法",
+                latest_evidence=prior_evidence,
+                safety_identifier="session-recovery",
+                evidence_tool=lambda request: {},
+            )
+
+        context = transport.turn_calls[0]["additional_context"]
+        self.assertEqual(context["formowl_latest_evidence"]["kind"], "untrusted")
+        self.assertIn("body", context["formowl_latest_evidence"]["value"])
+        self.assertEqual(context["formowl_recovery_history"]["kind"], "untrusted")
+        self.assertIn("之前的答案", context["formowl_recovery_history"]["value"])
+
+    def test_unknown_malformed_multiple_and_inconsistent_tools_fail_closed(self) -> None:
+        cases = [
+            {
+                "tool_calls": [{"tool_name": "unknown", "arguments": {}}],
+                "final_message": _decision(),
+                "expected_evidence_calls": 0,
+            },
+            {
+                "tool_calls": [
+                    {
+                        "tool_name": "search_formowl_evidence",
+                        "arguments": {"query_text": "missing fields"},
+                    }
+                ],
+                "final_message": _decision(),
+                "expected_evidence_calls": 0,
+            },
+            {
+                "tool_calls": [
+                    {
+                        "tool_name": "search_formowl_evidence",
+                        "arguments": {
+                            "query_text": "valid",
+                            "required_terms": [],
+                            "sort": "relevance",
+                            "limit": 10,
+                        },
+                    }
+                ],
+                "drop_invocations": True,
+                "final_message": _decision(),
+                "expected_evidence_calls": 1,
+            },
+        ]
+        for index, step in enumerate(cases):
+            with self.subTest(index=index):
+                transport = _RecordingCodexTransport([step])
+                evidence_calls = []
+                with tempfile.TemporaryDirectory() as workspace:
+                    model = CodexAppServerConversationModel(
+                        transport,
+                        workspace_dir=workspace,
+                    )
+                    with self.assertRaises((RuntimeError, ValueError)):
+                        model.respond(
+                            history=(),
+                            user_text="test",
+                            latest_evidence=None,
+                            safety_identifier=f"session-{index}",
+                            evidence_tool=lambda request: (evidence_calls.append(request) or {}),
+                        )
+                self.assertEqual(
+                    len(evidence_calls),
+                    step["expected_evidence_calls"],
+                )
+                self.assertEqual(transport.deleted_threads, ["thread_1"])
+
+    def test_second_formowl_call_is_rejected_before_a_refinement_executes(
+        self,
+    ) -> None:
+        first_call = {
+            "tool_name": "search_formowl_evidence",
+            "arguments": {
+                "query_text": "ID-42 delivery",
+                "required_terms": ["ID-42"],
+                "sort": "relevance",
+                "limit": 30,
+            },
+        }
+        refined_call = {
+            "tool_name": "search_formowl_evidence",
+            "arguments": {
+                "query_text": "ID-42 confirmed delivery date",
+                "required_terms": ["ID-42"],
+                "sort": "recent",
+                "limit": 30,
+            },
+        }
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "tool_calls": [first_call, refined_call],
+                    "final_message": _decision(answer_text="已依較精確的證據回答。"),
+                }
+            ]
+        )
+        evidence_calls = []
+
+        def evidence_tool(request):
+            evidence_calls.append(request)
+            marker = "refined" if request.sort == "recent" else "broad"
+            return {
+                "status": "ok",
+                "results": [{"snippet": marker}],
+            }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            with self.assertRaisesRegex(RuntimeError, "too many UAT tools"):
+                model.respond(
+                    history=(),
+                    user_text="查 ID-42 的確認交期",
+                    latest_evidence=None,
+                    safety_identifier="session-multiple-tools",
+                    evidence_tool=evidence_tool,
+                )
+
+        self.assertEqual(len(evidence_calls), 1)
+        self.assertEqual(evidence_calls[0].query_text, "ID-42 delivery")
+        self.assertEqual(len(transport.turn_calls), 1)
+        self.assertEqual(transport.deleted_threads, ["thread_1"])
+
+    def test_identical_second_formowl_call_is_rejected_without_requerying_backend(self) -> None:
+        tool_call = {
+            "tool_name": "search_formowl_evidence",
+            "arguments": {
+                "query_text": "ID-42 delivery",
+                "required_terms": ["ID-42"],
+                "sort": "relevance",
+                "limit": 30,
+            },
+        }
+        transport = _RecordingCodexTransport(
+            [
+                {
+                    "tool_calls": [tool_call, tool_call],
+                    "final_message": _decision(answer_text="完成。"),
+                }
+            ]
+        )
+        evidence_calls = []
+        evidence_result = {
+            "status": "ok",
+            "results": [{"snippet": "bounded evidence"}],
+        }
+
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            with self.assertRaisesRegex(RuntimeError, "too many UAT tools"):
+                model.respond(
+                    history=(),
+                    user_text="查 ID-42",
+                    latest_evidence=None,
+                    safety_identifier="session-duplicate-tool",
+                    evidence_tool=lambda request: (
+                        evidence_calls.append(request) or evidence_result
+                    ),
+                )
+
+        self.assertEqual(len(evidence_calls), 1)
+        self.assertEqual(len(transport.turn_calls), 1)
+
+    def test_more_than_one_tool_call_fails_closed(self) -> None:
+        tool_calls = [
+            {
+                "tool_name": "search_formowl_evidence",
+                "arguments": {
+                    "query_text": f"refinement {index}",
+                    "required_terms": [],
+                    "sort": "relevance",
+                    "limit": 10,
+                },
+            }
+            for index in range(4)
+        ]
+        transport = _RecordingCodexTransport(
+            [{"tool_calls": tool_calls, "final_message": _decision()}]
+        )
+        evidence_calls = []
+
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            with self.assertRaisesRegex(RuntimeError, "too many UAT tools"):
+                model.respond(
+                    history=(),
+                    user_text="test",
+                    latest_evidence=None,
+                    safety_identifier="session-too-many-tools",
+                    evidence_tool=lambda request: (
+                        evidence_calls.append(request) or {"status": "ok"}
+                    ),
+                )
+
+        self.assertEqual(len(evidence_calls), 1)
+        self.assertEqual(transport.deleted_threads, ["thread_1"])
+
+    def test_invalid_final_message_discards_thread(self) -> None:
+        transport = _RecordingCodexTransport([{"final_message": "not-json"}])
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            with self.assertRaisesRegex(RuntimeError, "invalid UAT answer"):
+                model.respond(
+                    history=(),
+                    user_text="test",
+                    latest_evidence=None,
+                    safety_identifier="session-invalid",
+                    evidence_tool=lambda request: {},
+                )
+        self.assertEqual(transport.deleted_threads, ["thread_1"])
+
+    def test_service_can_discard_advanced_conversation_thread(self) -> None:
+        transport = _RecordingCodexTransport(
+            [
+                {"final_message": _decision(answer_text="first")},
+                {"final_message": _decision(answer_text="retry")},
+            ]
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+            )
+            identifier = "formowl_uat_" + "9" * 48
+            model.respond(
+                history=(),
+                user_text="first",
+                latest_evidence=None,
+                safety_identifier=identifier,
+                evidence_tool=lambda request: {},
+            )
+            model.discard_conversation(identifier)
+            retry = model.respond(
+                history=(
+                    UatConversationMessage(role="user", content="first"),
+                    UatConversationMessage(role="assistant", content="local answer"),
+                ),
+                user_text="retry",
+                latest_evidence=None,
+                safety_identifier=identifier,
+                evidence_tool=lambda request: {},
+            )
+
+        self.assertEqual(retry.answer_text, "retry")
+        self.assertEqual(transport.deleted_threads, ["thread_1"])
+        self.assertEqual(len(transport.thread_starts), 2)
+        self.assertIn(
+            "formowl_recovery_history",
+            transport.turn_calls[1]["additional_context"],
+        )
+
+    def test_thread_lru_deletes_oldest_inactive_thread(self) -> None:
+        transport = _RecordingCodexTransport(
+            [
+                {"final_message": _decision(answer_text="one")},
+                {"final_message": _decision(answer_text="two")},
+                {"final_message": _decision(answer_text="three")},
+            ]
+        )
+        with tempfile.TemporaryDirectory() as workspace:
+            model = CodexAppServerConversationModel(
+                transport,
+                workspace_dir=workspace,
+                max_threads=2,
+            )
+            for identifier in ("one", "two", "three"):
+                model.respond(
+                    history=(),
+                    user_text=identifier,
+                    latest_evidence=None,
+                    safety_identifier=identifier,
+                    evidence_tool=lambda request: {},
+                )
+            model.close()
+        self.assertEqual(transport.deleted_threads, ["thread_1"])
+        self.assertTrue(transport.closed)
+
+    def test_stdio_transport_performs_v2_dynamic_tool_protocol(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            trace_path = root / "trace.jsonl"
+            transport = CodexAppServerStdioTransport(
+                command=(
+                    sys.executable,
+                    "-u",
+                    "-c",
+                    _FAKE_APP_SERVER,
+                    str(trace_path),
+                ),
+                cwd=root / "workspace",
+                codex_home=root / "codex-home",
+                timeout_seconds=5,
+                environment={"PATH": os.environ.get("PATH", "")},
+                attest_runtime=False,
+            )
+            try:
+                thread = transport.start_thread(
+                    model=None,
+                    cwd=root / "workspace",
+                    base_instructions="base",
+                    developer_instructions="developer",
+                    dynamic_tools=(
+                        {
+                            "type": "function",
+                            "name": "search_formowl_evidence",
+                            "description": "Search evidence.",
+                            "inputSchema": {
+                                "type": "object",
+                                "additionalProperties": False,
+                            },
+                        },
+                    ),
+                )
+                tool_calls = []
+
+                def tool_handler(tool_name, arguments):
+                    tool_calls.append((tool_name, dict(arguments)))
+                    return {"status": "ok", "results": [{"content": "bounded"}]}
+
+                turn = transport.run_turn(
+                    thread_id=thread.thread_id,
+                    user_text="find evidence",
+                    additional_context={"prior": {"kind": "untrusted", "value": "prior evidence"}},
+                    output_schema={
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                    },
+                    reasoning_effort="low",
+                    client_metadata={"surface": "test"},
+                    tool_handler=tool_handler,
+                )
+                transport.delete_thread(thread.thread_id)
+            finally:
+                transport.close()
+
+            trace = [
+                json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(thread.model_name, "gpt-test-stdio")
+        self.assertEqual(
+            turn.final_message,
+            _decision(
+                answer_text="stdio tool complete",
+                display_format="table",
+            ),
+        )
+        self.assertEqual(tool_calls[0][0], "search_formowl_evidence")
+        self.assertEqual(tool_calls[0][1]["required_terms"], ["ID-42"])
+        self.assertEqual(turn.tool_invocations[0].thread_id, "thread_stdio")
+        self.assertEqual(turn.tool_invocations[0].turn_id, "turn_stdio")
+        self.assertEqual(turn.tool_invocations[0].call_id, "call_stdio")
+        initialize = next(item for item in trace if item.get("method") == "initialize")
+        self.assertTrue(initialize["params"]["capabilities"]["experimentalApi"])
+        thread_start = next(item for item in trace if item.get("method") == "thread/start")
+        self.assertEqual(thread_start["params"]["sandbox"], "read-only")
+        self.assertFalse(thread_start["params"]["ephemeral"])
+        self.assertNotIn("runtimeWorkspaceRoots", thread_start["params"])
+        self.assertNotIn("historyMode", thread_start["params"])
+        self.assertNotIn("environments", thread_start["params"])
+        self.assertEqual(
+            thread_start["params"]["dynamicTools"][0]["name"],
+            "search_formowl_evidence",
+        )
+        turn_start = next(item for item in trace if item.get("method") == "turn/start")
+        self.assertNotIn("runtimeWorkspaceRoots", turn_start["params"])
+        self.assertNotIn("environments", turn_start["params"])
+        self.assertNotIn("responsesapiClientMetadata", turn_start["params"])
+        self.assertEqual(
+            turn_start["params"]["sandboxPolicy"]["type"],
+            "readOnly",
+        )
+        self.assertFalse(turn_start["params"]["sandboxPolicy"]["networkAccess"])
+        tool_response = next(item for item in trace if item.get("id") == "server_tool_1")
+        self.assertTrue(tool_response["result"]["success"])
+        self.assertEqual(
+            tool_response["result"]["contentItems"][0]["type"],
+            "inputText",
+        )
+
+    def test_stdio_transport_rejects_mismatched_turn_and_duplicate_call_id(self) -> None:
+        for scenario, expected_error, expected_tool_calls in (
+            ("mismatched_turn", "does not match active turn", 0),
+            ("duplicate_call", "was duplicated", 1),
+        ):
+            with self.subTest(scenario=scenario):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    root = Path(temp_dir)
+                    transport = CodexAppServerStdioTransport(
+                        command=(
+                            sys.executable,
+                            "-u",
+                            "-c",
+                            _FAKE_APP_SERVER_TOOL_PROTOCOL_VIOLATION,
+                            scenario,
+                        ),
+                        cwd=root / "workspace",
+                        codex_home=root / "codex-home",
+                        timeout_seconds=5,
+                        environment={"PATH": os.environ.get("PATH", "")},
+                        attest_runtime=False,
+                    )
+                    tool_calls = []
+                    try:
+                        thread = transport.start_thread(
+                            model=None,
+                            cwd=root / "workspace",
+                            base_instructions="base",
+                            developer_instructions="developer",
+                            dynamic_tools=(),
+                        )
+                        with self.assertRaisesRegex(RuntimeError, expected_error):
+                            transport.run_turn(
+                                thread_id=thread.thread_id,
+                                user_text="find evidence",
+                                additional_context={},
+                                output_schema={
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                },
+                                reasoning_effort="low",
+                                client_metadata={"surface": "test"},
+                                tool_handler=lambda tool_name, arguments: (
+                                    tool_calls.append((tool_name, dict(arguments)))
+                                    or {"status": "ok", "results": []}
+                                ),
+                            )
+                    finally:
+                        transport.close()
+                self.assertEqual(len(tool_calls), expected_tool_calls)
+
+    def test_stdio_transport_waits_for_slow_tool_before_turn_returns(self) -> None:
+        class _ObservingTransport(CodexAppServerStdioTransport):
+            def __init__(self, *args, **kwargs):
+                self.completion_delivered = threading.Event()
+                self.allow_completion = threading.Event()
+                self.tool_response_sent = threading.Event()
+                super().__init__(*args, **kwargs)
+
+            def _deliver_turn_completion(self, params):
+                super()._deliver_turn_completion(params)
+                self.completion_delivered.set()
+                if not self.allow_completion.wait(5):
+                    raise RuntimeError("test completion observer timed out")
+
+            def _send_tool_result(self, *args, **kwargs):
+                super()._send_tool_result(*args, **kwargs)
+                self.tool_response_sent.set()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            started_fifo = root / "tool-started.fifo"
+            completion_fifo = root / "completion-sent.fifo"
+            os.mkfifo(started_fifo)
+            os.mkfifo(completion_fifo)
+            completion_sent = threading.Event()
+
+            def observe_completion_send():
+                with completion_fifo.open("rb") as marker:
+                    marker.read(1)
+                completion_sent.set()
+
+            completion_watcher = threading.Thread(
+                target=observe_completion_send,
+                name="test-completion-sent-watcher",
+                daemon=True,
+            )
+            completion_watcher.start()
+            transport = _ObservingTransport(
+                command=(
+                    sys.executable,
+                    "-u",
+                    "-c",
+                    _FAKE_APP_SERVER_COMPLETION_DURING_TOOL,
+                    str(started_fifo),
+                    str(completion_fifo),
+                ),
+                cwd=root / "workspace",
+                codex_home=root / "codex-home",
+                timeout_seconds=5,
+                environment={"PATH": os.environ.get("PATH", "")},
+                attest_runtime=False,
+            )
+            release_tool = threading.Event()
+            tool_started = threading.Event()
+            run_done = threading.Event()
+            run_state = {}
+
+            def tool_handler(tool_name, arguments):
+                self.assertEqual(tool_name, "search_formowl_evidence")
+                self.assertEqual(arguments["query_text"], "synthetic slow-tool question")
+                tool_started.set()
+                with started_fifo.open("wb", buffering=0) as marker:
+                    marker.write(b"1")
+                if not release_tool.wait(5):
+                    raise RuntimeError("test tool release timed out")
+                return {
+                    "status": "ok",
+                    "total_result_count": 1,
+                    "displayed_result_count": 1,
+                    "results": [{"snippet": "synthetic bounded evidence"}],
+                }
+
+            thread = transport.start_thread(
+                model=None,
+                cwd=root / "workspace",
+                base_instructions="base",
+                developer_instructions="developer",
+                dynamic_tools=(),
+            )
+
+            def run_turn():
+                try:
+                    run_state["turn"] = transport.run_turn(
+                        thread_id=thread.thread_id,
+                        user_text="synthetic slow-tool turn",
+                        additional_context={},
+                        output_schema={
+                            "type": "object",
+                            "additionalProperties": False,
+                        },
+                        reasoning_effort="low",
+                        client_metadata={"surface": "test"},
+                        tool_handler=tool_handler,
+                    )
+                except BaseException as exc:
+                    run_state["error"] = exc
+                finally:
+                    run_done.set()
+
+            runner = threading.Thread(target=run_turn, name="test-run-turn")
+            runner.start()
+            try:
+                self.assertTrue(tool_started.wait(2))
+                self.assertTrue(completion_sent.wait(2))
+                self.assertTrue(transport.completion_delivered.wait(2))
+                self.assertFalse(
+                    run_done.wait(0.2),
+                    "turn/completed returned the turn while the tool was still running",
+                )
+                transport.allow_completion.set()
+                release_tool.set()
+                self.assertTrue(run_done.wait(2))
+                runner.join(2)
+                self.assertNotIn("error", run_state)
+                turn = run_state["turn"]
+                self.assertEqual(turn.final_message, _decision(answer_text="slow tool complete"))
+                self.assertEqual(len(turn.tool_invocations), 1)
+                self.assertEqual(
+                    turn.tool_invocations[0].result["results"][0]["snippet"],
+                    "synthetic bounded evidence",
+                )
+                self.assertTrue(transport.tool_response_sent.is_set())
+            finally:
+                transport.allow_completion.set()
+                release_tool.set()
+                runner.join(7)
+                transport.close()
+                completion_watcher.join(1)
+
+    def test_stdio_transport_stalled_tool_times_out_without_reader_deadlock(self) -> None:
+        class _ObservingTransport(CodexAppServerStdioTransport):
+            def __init__(self, *args, **kwargs):
+                self.tool_request_finished = threading.Event()
+                super().__init__(*args, **kwargs)
+
+            def _finish_tool_request(self, context):
+                super()._finish_tool_request(context)
+                self.tool_request_finished.set()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            transport = _ObservingTransport(
+                command=(
+                    sys.executable,
+                    "-u",
+                    "-c",
+                    _FAKE_APP_SERVER_STALLED_TOOL,
+                ),
+                cwd=root / "workspace",
+                codex_home=root / "codex-home",
+                timeout_seconds=0.2,
+                environment={"PATH": os.environ.get("PATH", "")},
+                attest_runtime=False,
+            )
+            release_tool = threading.Event()
+            tool_started = threading.Event()
+            run_done = threading.Event()
+            run_state = {}
+
+            def tool_handler(tool_name, arguments):
+                self.assertEqual(tool_name, "search_formowl_evidence")
+                self.assertEqual(arguments["query_text"], "synthetic stalled-tool question")
+                tool_started.set()
+                if not release_tool.wait(5):
+                    raise RuntimeError("test tool release timed out")
+                return {"status": "ok", "results": []}
+
+            thread = transport.start_thread(
+                model=None,
+                cwd=root / "workspace",
+                base_instructions="base",
+                developer_instructions="developer",
+                dynamic_tools=(),
+            )
+
+            def run_turn():
+                try:
+                    run_state["turn"] = transport.run_turn(
+                        thread_id=thread.thread_id,
+                        user_text="synthetic stalled-tool turn",
+                        additional_context={},
+                        output_schema={
+                            "type": "object",
+                            "additionalProperties": False,
+                        },
+                        reasoning_effort="low",
+                        client_metadata={"surface": "test"},
+                        tool_handler=tool_handler,
+                    )
+                except BaseException as exc:
+                    run_state["error"] = exc
+                finally:
+                    run_done.set()
+
+            runner = threading.Thread(target=run_turn, name="test-stalled-run-turn")
+            runner.start()
+            try:
+                self.assertTrue(tool_started.wait(2))
+                self.assertTrue(
+                    run_done.wait(2),
+                    "stalled dynamic tool caused an unbounded turn wait",
+                )
+                self.assertNotIn("turn", run_state)
+                self.assertIn("error", run_state)
+                self.assertIsInstance(run_state["error"], RuntimeError)
+                self.assertIn("timed out", str(run_state["error"]))
+                with transport._state_lock:
+                    self.assertIn(thread.thread_id, transport._active_turns)
+            finally:
+                release_tool.set()
+                self.assertTrue(transport.tool_request_finished.wait(2))
+                runner.join(7)
+                with transport._state_lock:
+                    self.assertNotIn(thread.thread_id, transport._active_turns)
+                transport.close()
+
+    def test_codex_command_disables_non_formowl_capabilities(self) -> None:
+        command = build_hardened_codex_app_server_command("codex")
+        web_command = build_hardened_codex_app_server_command(
+            "codex",
+            allow_public_web_search=True,
+        )
+
+        self.assertEqual(command[:4], ("codex", "app-server", "--listen", "stdio://"))
+        disabled = {
+            command[index + 1] for index, value in enumerate(command[:-1]) if value == "--disable"
+        }
+        self.assertTrue(
+            {
+                "apps",
+                "browser_use",
+                "computer_use",
+                "hooks",
+                "image_generation",
+                "multi_agent",
+                "plugins",
+                "remote_plugin",
+                "shell_tool",
+                "unified_exec",
+            }.issubset(disabled)
+        )
+        self.assertIn('sandbox_mode="read-only"', command)
+        self.assertNotIn('sandbox_mode="danger-full-access"', command)
+        self.assertIn("web_search=disabled", command)
+        self.assertIn("web_search=live", web_command)
+        self.assertNotIn("web_search=enabled", web_command)
+        self.assertIn("mcp_servers={}", command)
+        self.assertNotIn("OPENAI_API_KEY", " ".join(command))
+
+    def test_codex_proxy_command_uses_only_private_unix_socket(self) -> None:
+        command = build_codex_app_server_proxy_command(
+            socket_path="/run/formowl-codex/app-server.sock",
+            python_command="/usr/bin/python3",
+            proxy_script="/opt/formowl/python/formowl_mail/codex_unix_socket_proxy.py",
+        )
+
+        self.assertEqual(
+            command,
+            (
+                "/usr/bin/python3",
+                "/opt/formowl/python/formowl_mail/codex_unix_socket_proxy.py",
+                "--socket",
+                "/run/formowl-codex/app-server.sock",
+            ),
+        )
+
+    def test_prepare_codex_runtime_uses_stdin_and_sanitized_environment(self) -> None:
+        secret = "super-secret-key"
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            def fake_login(*_args, **kwargs):
+                auth_path = Path(kwargs["env"]["CODEX_HOME"]) / "auth.json"
+                auth_path.write_text('{"auth_mode":"apikey"}\n', encoding="utf-8")
+                auth_path.chmod(0o600)
+                return subprocess.CompletedProcess([], 0)
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "PATH": os.environ.get("PATH", ""),
+                    "OPENAI_API_KEY": "ambient-secret",
+                    "UNRELATED_PRIVATE_VALUE": "do-not-inherit",
+                },
+                clear=True,
+            ):
+                with mock.patch(
+                    "formowl_mail.human_uat_orchestrator.subprocess.run",
+                    side_effect=fake_login,
+                ) as run:
+                    paths = prepare_codex_runtime_state(
+                        codex_command="codex",
+                        state_dir=Path(temp_dir) / "runtime",
+                        api_key=secret,
+                    )
+                    config = (paths.codex_home / "config.toml").read_text(encoding="utf-8")
+                    validated_paths = validate_codex_runtime_state(paths.state_dir)
+
+        positional = run.call_args.args
+        keyword = run.call_args.kwargs
+        self.assertNotIn(secret, " ".join(positional[0]))
+        self.assertEqual(keyword["input"], secret + "\n")
+        self.assertNotIn("OPENAI_API_KEY", keyword["env"])
+        self.assertNotIn("UNRELATED_PRIVATE_VALUE", keyword["env"])
+        self.assertEqual(keyword["env"]["HOME"], keyword["env"]["CODEX_HOME"])
+        self.assertEqual(paths.codex_home, paths.state_dir / "codex-home")
+        self.assertEqual(paths.workspace, paths.state_dir / "codex-workspace")
+        self.assertEqual(paths.login_method, "api")
+        self.assertIn('sandbox_mode = "read-only"', config)
+        self.assertIn('web_search = "disabled"', config)
+        self.assertIn("[mcp_servers]", config)
+        self.assertEqual(config.count("[[skills.config]]"), 5)
+        self.assertEqual(validated_paths, paths)
+
+    def test_prepare_codex_runtime_copies_only_valid_chatgpt_auth_cache(self) -> None:
+        secret = "never-print-this-token"
+        auth_cache = json.dumps(
+            {
+                "OPENAI_API_KEY": None,
+                "auth_mode": "chatgpt",
+                "last_refresh": "2026-07-21T00:00:00Z",
+                "tokens": {
+                    "access_token": secret,
+                    "account_id": "00000000-0000-0000-0000-000000000000",
+                    "id_token": "id-token",
+                    "refresh_token": "refresh-token",
+                },
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            paths = prepare_codex_runtime_state_from_auth_cache(
+                state_dir=Path(temp_dir) / "runtime",
+                auth_cache=auth_cache,
+                allow_public_web_search=True,
+            )
+            config = (paths.codex_home / "config.toml").read_text(encoding="utf-8")
+            copied = json.loads((paths.codex_home / "auth.json").read_text(encoding="utf-8"))
+            validated_paths = validate_codex_runtime_state(
+                paths.state_dir,
+                allow_public_web_search=True,
+            )
+
+        self.assertEqual(paths.login_method, "chatgpt")
+        self.assertEqual(copied["tokens"]["access_token"], secret)
+        self.assertIn('forced_login_method = "chatgpt"', config)
+        self.assertIn('web_search = "live"', config)
+        self.assertNotIn('web_search = "enabled"', config)
+        self.assertEqual(validated_paths, paths)
+
+    def test_prepare_codex_runtime_rejects_invalid_chatgpt_auth_without_leak(self) -> None:
+        secret = "never-print-this-token"
+        auth_cache = json.dumps(
+            {
+                "OPENAI_API_KEY": None,
+                "auth_mode": "api",
+                "tokens": {"access_token": secret},
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(
+                ValueError,
+                "^Codex ChatGPT auth cache is invalid$",
+            ) as captured:
+                prepare_codex_runtime_state_from_auth_cache(
+                    state_dir=Path(temp_dir) / "runtime",
+                    auth_cache=auth_cache,
+                )
+        self.assertNotIn(secret, str(captured.exception))
+
+    def test_prepare_codex_runtime_errors_do_not_leak_key(self) -> None:
+        secret = "super-secret-key"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with mock.patch(
+                "formowl_mail.human_uat_orchestrator.subprocess.run",
+                side_effect=OSError(f"{secret} private detail"),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "^Codex authentication setup failed$",
+                ) as captured:
+                    prepare_codex_runtime_state(
+                        codex_command="codex",
+                        state_dir=Path(temp_dir) / "runtime",
+                        api_key=secret,
+                    )
+        self.assertNotIn(secret, str(captured.exception))
+
+    def test_prepare_codex_runtime_rejects_reused_or_symlinked_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            reused = root / "reused"
+            reused.mkdir()
+            (reused / "foreign-auth.json").write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "must be empty"):
+                prepare_codex_runtime_state(
+                    codex_command="codex",
+                    state_dir=reused,
+                    api_key="secret",
+                )
+
+            target = root / "target"
+            target.mkdir()
+            symlink = root / "symlink"
+            symlink.symlink_to(target, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                prepare_codex_runtime_state(
+                    codex_command="codex",
+                    state_dir=symlink,
+                    api_key="secret",
+                )
+
+    def test_runtime_attestation_rejects_enabled_skills_or_mcp(self) -> None:
+        safe_config = {
+            "forced_login_method": "chatgpt",
+            "cli_auth_credentials_store": "file",
+            "approval_policy": "never",
+            "sandbox_mode": "read-only",
+            "web_search": "disabled",
+            "mcp_servers": {},
+            "analytics": {"enabled": False},
+            "apps": {
+                "_default": {
+                    "enabled": False,
+                    "destructive_enabled": False,
+                    "open_world_enabled": False,
+                }
+            },
+            "features": {name: False for name in _CODEX_DISABLED_FEATURES},
+            "agents": None,
+            "hooks": None,
+            "memories": None,
+            "plugins": {},
+            "marketplaces": {},
+        }
+        workspace = Path("/codex-state/codex-workspace")
+        safe_skills = {
+            "data": [
+                {
+                    "cwd": str(workspace),
+                    "errors": [],
+                    "skills": [{"name": "imagegen", "enabled": False}],
+                }
+            ]
+        }
+        _assert_hardened_codex_runtime(
+            config_response={"config": safe_config, "layers": []},
+            mcp_response={"data": [], "nextCursor": None},
+            skills_response=safe_skills,
+            apps_response={"data": [], "nextCursor": None},
+            runtime_workspace=workspace,
+        )
+        web_config = json.loads(json.dumps(safe_config))
+        web_config["web_search"] = "live"
+        web_config["features"]["web_search"] = True
+        _assert_hardened_codex_runtime(
+            config_response={"config": web_config, "layers": []},
+            mcp_response={"data": [], "nextCursor": None},
+            skills_response=safe_skills,
+            apps_response={"data": [], "nextCursor": None},
+            runtime_workspace=workspace,
+            allow_public_web_search=True,
+        )
+        with self.assertRaisesRegex(RuntimeError, "unsafe configuration"):
+            _assert_hardened_codex_runtime(
+                config_response={"config": safe_config, "layers": []},
+                mcp_response={"data": [], "nextCursor": None},
+                skills_response=safe_skills,
+                apps_response={"data": [], "nextCursor": None},
+                runtime_workspace=workspace,
+                allow_public_web_search=True,
+            )
+
+        enabled_skills = json.loads(json.dumps(safe_skills))
+        enabled_skills["data"][0]["skills"][0]["enabled"] = True
+        with self.assertRaisesRegex(RuntimeError, "enabled skills"):
+            _assert_hardened_codex_runtime(
+                config_response={"config": safe_config, "layers": []},
+                mcp_response={"data": [], "nextCursor": None},
+                skills_response=enabled_skills,
+                apps_response={"data": [], "nextCursor": None},
+                runtime_workspace=workspace,
+            )
+        with self.assertRaisesRegex(RuntimeError, "MCP servers"):
+            _assert_hardened_codex_runtime(
+                config_response={"config": safe_config, "layers": []},
+                mcp_response={"data": [{"name": "unexpected"}], "nextCursor": None},
+                skills_response=safe_skills,
+                apps_response={"data": [], "nextCursor": None},
+                runtime_workspace=workspace,
+            )
+        for feature in _CODEX_DISABLED_FEATURES:
+            with self.subTest(feature=feature):
+                unsafe_config = json.loads(json.dumps(safe_config))
+                unsafe_config["features"][feature] = True
+                with self.assertRaisesRegex(RuntimeError, "enabled capabilities"):
+                    _assert_hardened_codex_runtime(
+                        config_response={"config": unsafe_config, "layers": []},
+                        mcp_response={"data": [], "nextCursor": None},
+                        skills_response=safe_skills,
+                        apps_response={"data": [], "nextCursor": None},
+                        runtime_workspace=workspace,
+                    )
+
+
+if __name__ == "__main__":
+    unittest.main()

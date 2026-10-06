@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "profile_contract": "formowl_issue56_packaged_tokenizer_profile_v1",
+  "tokenizer_id": "jieba_sentencepiece_frozen_profile_candidate_admission_v1",
+  "source_partition": "calibration",
+  "source_policy": {
+    "content_kind": "tracked_synthetic_cross_domain_calibration_text",
+    "contains_private_source": false,
+    "contains_oracle": false,
+    "contains_uat_or_holdout_questions": false
+  },
+  "artifacts": {
+    "calibration_corpus": {
+      "path": "calibration_corpus.txt",
+      "sha256": "sha256:d11c34f5d3135b74eea4f87b71c768ee4bae28ee4960df9a380ef4f209f3fda7"
+    },
+    "jieba_user_dictionary": {
+      "path": "jieba_user_dictionary.txt",
+      "sha256": "sha256:7b8ee63cc50f7a77164bd37da34a745dab37de922b5b92f90d86a1a09db7566e"
+    },
+    "sentencepiece_model": {
+      "path": "sentencepiece.model",
+      "sha256": "sha256:5a0e556c76be569d775b2efdcd3e0e82dfac75e797dbdb4768bbac43e44c612e"
+    },
+    "sentencepiece_vocabulary": {
+      "path": "sentencepiece.vocab",
+      "sha256": "sha256:8e214b1214d67d61342bfebbf3e796c5a86f357d63119d25efe4db31c56e2f62"
+    }
+  },
+  "dependencies": {
+    "formowl": {
+      "requirement": "formowl==0.1.0",
+      "version": "0.1.0"
+    },
+    "jieba": {
+      "dictionary_sha256": "sha256:7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8",
+      "requirement": "jieba>=0.42.1,<0.43",
+      "version": "0.42.1"
+    },
+    "sentencepiece": {
+      "requirement": "sentencepiece>=0.2,<0.3",
+      "version": "0.2.2"
+    }
+  },
+  "policies": {
+    "candidate_admission_policy_id": "formowl_mail_frozen_candidate_admission_v1",
+    "normalization_id": "unicode_nfkc_casefold_v1",
+    "protected_identifier_policy_id": "formowl_mail_protected_identifier_policy_v1"
+  },
+  "training": {
+    "character_coverage": 1.0,
+    "hard_vocab_limit": false,
+    "model_type": "bpe",
+    "normalization_rule_name": "nmt_nfkc",
+    "num_threads": 1,
+    "shuffle_input_sentence": false,
+    "trainer": "sentencepiece.SentencePieceTrainer",
+    "vocab_size": 192
+  }
+}

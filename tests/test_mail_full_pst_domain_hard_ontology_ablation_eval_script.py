@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import copy
+from dataclasses import replace
 import importlib.util
 import json
 import os
@@ -80,7 +81,7 @@ class MailFullPstDomainHardOntologyAblationEvalScriptTests(unittest.TestCase):
         self.assertEqual(report["safe_outputs"]["positive_case_count"], 80)
         self.assertEqual(report["safe_outputs"]["permission_denied_case_count"], 10)
         self.assertTrue(report["metrics"]["uses_formal_formowl_ontology_contracts"])
-        self.assertTrue(report["metrics"]["uses_domain_lens_to_core_supertype_mappings"])
+        self.assertTrue(report["metrics"]["uses_source_neutral_evidence_facet_mappings"])
         self.assertTrue(report["metrics"]["uses_type_evidence"])
         self.assertTrue(report["metrics"]["no_bert_or_neural_dependency_used"])
         self.assertEqual(report["safe_outputs"]["ontology_type_definition_count"], 10)
@@ -100,6 +101,121 @@ class MailFullPstDomainHardOntologyAblationEvalScriptTests(unittest.TestCase):
         self.assertNotIn(".test-tmp", rendered)
         self.assertFalse((work_dir / "data" / "graph").exists())
         self.assertFalse((work_dir / "data" / "wiki").exists())
+
+    def test_denied_request_is_bound_before_ontology_query_vocabulary(self) -> None:
+        module = _load_eval_module()
+        kg_index = kg_tests._minimal_kg_index(module.kg_eval, {"obs_a": "record_a"})
+        ontology_index = module._OntologyIndex(
+            evidence_index=kg_index.evidence_index,
+            ontology_contract_hash="sha256:" + "b" * 64,
+            ontology_signal_vocabulary_hash="sha256:" + "c" * 64,
+            supported_signals=frozenset({"concept_evidence"}),
+            signals_by_observation_id={},
+            signal_scores_by_component={},
+            component_ids_by_signal={},
+        )
+        case = {
+            "case_id": "permission_case",
+            "query_text": "private placeholder",
+            "requester_user_id": "denied_user",
+            "result_kind": "permission_denied",
+            "required_source_observation_ids": [],
+            "required_source_item_ids": [],
+            "required_match_count": 0,
+        }
+        original_query_tokens = module.kg_eval._query_tokens
+
+        def fail_query_tokens(*_args, **_kwargs):
+            raise AssertionError("denied request must not tokenize query text")
+
+        module.kg_eval._query_tokens = fail_query_tokens
+        try:
+            row = module._score_case_with_ontology(
+                case,
+                kg_index=kg_index,
+                ontology_index=ontology_index,
+                baseline_row=None,
+            )
+        finally:
+            module.kg_eval._query_tokens = original_query_tokens
+
+        self.assertEqual(row["ontology_status"], "passed")
+        self.assertEqual(row["ontology_selected_evidence_count"], 0)
+
+    def test_context_time_rejection_does_not_retokenize_for_diagnostics(self) -> None:
+        module = _load_eval_module()
+
+        def fail_query_tokens(_value: str):
+            raise AssertionError("inadmissible evidence must not tokenize query text")
+
+        kg_index = kg_tests._minimal_kg_index(
+            module.kg_eval,
+            {"obs_a": "record_a"},
+            tokenize_query=fail_query_tokens,
+        )
+        kg_index = replace(
+            kg_index,
+            known_as_of="2026-07-06T12:30:00+00:00",
+            as_of_world_time="2026-07-06T12:30:00+00:00",
+        )
+        ontology_index = module._OntologyIndex(
+            evidence_index=kg_index.evidence_index,
+            ontology_contract_hash="sha256:" + "b" * 64,
+            ontology_signal_vocabulary_hash="sha256:" + "c" * 64,
+            supported_signals=frozenset({"concept_evidence"}),
+            signals_by_observation_id={},
+            signal_scores_by_component={},
+            component_ids_by_signal={},
+        )
+        case = {
+            "case_id": "future_case",
+            "query_text": "release",
+            "requester_user_id": "owner_user",
+            "result_kind": "owner_match",
+            "required_source_observation_ids": ["obs_a"],
+            "required_source_item_ids": ["record_a"],
+            "required_match_count": 1,
+        }
+
+        broad_binding = module.kg_eval._access_binding_for_records(
+            kg_index.evidence_index.records,
+            binding_context="ontology_context_time_test",
+        )
+        original_binding = module.kg_eval._access_binding_for_requester
+        module.kg_eval._access_binding_for_requester = lambda *_args, **_kwargs: broad_binding
+        try:
+            row = module._score_case_with_ontology(
+                case,
+                kg_index=kg_index,
+                ontology_index=ontology_index,
+                baseline_row=None,
+            )
+        finally:
+            module.kg_eval._access_binding_for_requester = original_binding
+
+        self.assertEqual(row["ontology_selected_evidence_count"], 0)
+        self.assertEqual(row["ontology_query_domain_count"], 0)
+
+    def test_eval_blocks_when_baseline_and_private_manifest_do_not_match(self) -> None:
+        module = _load_eval_module()
+        temp_dir = _paths.fresh_test_dir("mail-domain-hard-ontology-manifest-mismatch")
+        baseline_path, work_dir = kg_tests._write_synthetic_inputs(module.kg_eval, temp_dir)
+        manifest_path = work_dir / module.kg_eval.PRIVATE_MANIFEST_RELATIVE
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["cases"][0]["private_fingerprint"] = sha256_json("different-case")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        report = _run_with_opt_in(
+            module,
+            baseline_path=baseline_path,
+            work_dir=work_dir,
+        )
+
+        self.assertEqual(
+            report["metrics"]["blocked_reason"],
+            "baseline_manifest_binding_mismatch",
+        )
+        self.assertTrue(report["validation"]["passed"], report["validation"]["blockers"])
 
     def test_report_binds_all_three_arms_to_same_case_rows(self) -> None:
         module = _load_eval_module()

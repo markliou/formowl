@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+import tempfile
 import unittest
 
 import _paths  # noqa: F401
@@ -20,6 +23,7 @@ from formowl_graph.storage import (
     PostgreSQLMigrationRunner,
     PostgreSQLMetadataRepository,
     PostgreSQLUnitOfWork,
+    PostgresMigration,
     ReviewDecision,
     UserGraphRevision,
     build_permission_query_index_sql,
@@ -29,6 +33,7 @@ from formowl_graph.storage import (
     postgre_sql_connection_configuration,
     transaction_rollback_tests_against_postgre_sql,
 )
+from formowl_graph.storage.postgres import _split_sql_statements
 
 
 class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
@@ -68,13 +73,9 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         manifest = migration_files()
         index_names = grant_audit_query_indexes()
 
-        migration_replay = len(manifest) == 4 and all(
-            item.statement_count >= 3 for item in manifest
-        )
-        migration_files_marker = manifest[0].filename == "001_metadata_store.sql"
-        vector_migration_marker = manifest[1].filename == "002_vector_index.sql"
-        ingestion_migration_marker = manifest[2].filename == "003_ingestion_records.sql"
-        mail_migration_marker = manifest[3].filename == "004_mail_evidence.sql"
+        migration_filenames = tuple(item.filename for item in manifest)
+        wp1_migrations = [item for item in manifest if item.filename == "006_evidence_coverage.sql"]
+        migration_replay = all(item.statement_count >= 3 for item in manifest)
         grant_audit_query_indexes_marker = {
             "idx_formowl_graph_records_scope",
             "idx_formowl_ingestion_records_scope",
@@ -83,11 +84,12 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
             "idx_formowl_audit_log_actor_target",
         }.issubset(set(index_names))
 
+        self.assertEqual(migration_filenames, tuple(sorted(migration_filenames)))
+        self.assertEqual(
+            tuple(item.filename for item in wp1_migrations), ("006_evidence_coverage.sql",)
+        )
+        self.assertGreaterEqual(wp1_migrations[0].statement_count, 12)
         self.assertTrue(migration_replay)
-        self.assertTrue(migration_files_marker)
-        self.assertTrue(vector_migration_marker)
-        self.assertTrue(ingestion_migration_marker)
-        self.assertTrue(mail_migration_marker)
         self.assertTrue(grant_audit_query_indexes_marker)
         self.assertEqual(
             postgre_sql_backed_repository_interfaces(),
@@ -102,6 +104,188 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
             "scripts/postgres_transaction_rollback_live_smoke.py",
             transaction_rollback_tests_against_postgre_sql(),
         )
+
+    def test_migration_chain_composes_reserved_005_and_007_without_fabricating_them(
+        self,
+    ) -> None:
+        source_dir = Path("python/formowl_graph/storage/migrations")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            migration_dir = Path(temporary_directory)
+            for path in source_dir.glob("*.sql"):
+                (migration_dir / path.name).write_text(
+                    path.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            oauth_fixture = Path("tests/fixtures/postgres/005_oauth_identity.sql")
+            self.assertEqual(
+                hashlib.sha256(oauth_fixture.read_bytes()).hexdigest(),
+                "5af3eff6d1cf774483c3ac30c6db5da4a1baf28f814066a92bc1d1b28826d2e7",
+            )
+            (migration_dir / "005_oauth_identity.sql").write_text(
+                oauth_fixture.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (migration_dir / "007_task_lifecycle.sql").write_text(
+                "CREATE TABLE IF NOT EXISTS synthetic_task_lifecycle (id text PRIMARY KEY);",
+                encoding="utf-8",
+            )
+
+            manifest = migration_files(migration_dir)
+            self.assertEqual(
+                tuple(item.filename for item in manifest),
+                (
+                    "001_metadata_store.sql",
+                    "002_vector_index.sql",
+                    "003_ingestion_records.sql",
+                    "004_mail_evidence.sql",
+                    "005_oauth_identity.sql",
+                    "006_evidence_coverage.sql",
+                    "007_task_lifecycle.sql",
+                ),
+            )
+            connection = _RecordingConnection()
+            statements = PostgreSQLMigrationRunner(
+                connection,
+                migration_dir=migration_dir,
+            ).migration_replay()
+            replay_order = [statement.parameters["migration_id"] for statement in statements]
+            self.assertEqual(
+                replay_order,
+                sorted(replay_order, key=lambda migration_id: int(migration_id[:3])),
+            )
+            self.assertEqual(
+                {migration_id for migration_id in replay_order},
+                {item.migration_id for item in manifest},
+            )
+            self.assertEqual(
+                len(statements),
+                sum(item.statement_count for item in manifest),
+            )
+            oauth_statements = [
+                statement.sql
+                for statement in statements
+                if statement.parameters["migration_id"] == "005_oauth_identity"
+            ]
+            self.assertEqual(
+                len(oauth_statements),
+                next(
+                    item.statement_count
+                    for item in manifest
+                    if item.filename == "005_oauth_identity.sql"
+                ),
+            )
+            self.assertEqual(
+                sum(sql.count("DO $formowl_migration$") for sql in oauth_statements),
+                2,
+            )
+            self.assertFalse(any(sql.strip().startswith("END IF") for sql in oauth_statements))
+            self.assertEqual(connection.actions, ["execute"] * len(statements))
+            self.assertNotIn("postgresql://", str(statements).lower())
+
+    def test_sql_splitter_respects_lexical_boundaries_and_rejects_unterminated_input(
+        self,
+    ) -> None:
+        statements = _split_sql_statements(
+            """
+            -- top-level comment with a ; semicolon
+            SELECT 'single;quoted''value';
+            /* block comment with a ; semicolon */
+            SELECT "double;quoted""value";
+            DO $formowl_migration$
+            BEGIN
+                RAISE NOTICE 'dollar;quoted';
+            END
+            $formowl_migration$;
+            """
+        )
+        self.assertEqual(len(statements), 3)
+        self.assertIn("single;quoted''value", statements[0])
+        self.assertIn('double;quoted""value', statements[1])
+        self.assertIn("DO $formowl_migration$", statements[2])
+        self.assertIn("END", statements[2])
+        self.assertNotIn("END", statements[0])
+        self.assertNotIn("END", statements[1])
+
+        for malformed in (
+            "SELECT 'unterminated;",
+            'SELECT "unterminated;',
+            "DO $$ BEGIN RAISE NOTICE 'unterminated';",
+            "/* unterminated comment SELECT 1;",
+        ):
+            with self.subTest(malformed=malformed):
+                with self.assertRaises(ContractValidationError):
+                    _split_sql_statements(malformed)
+
+    def test_migration_chain_rejects_invalid_manifests_before_replay(self) -> None:
+        source_dir = Path("python/formowl_graph/storage/migrations")
+
+        def seeded_directory() -> tuple[tempfile.TemporaryDirectory[str], Path]:
+            temporary_directory = tempfile.TemporaryDirectory()
+            migration_dir = Path(temporary_directory.name)
+            for path in source_dir.glob("*.sql"):
+                (migration_dir / path.name).write_text(
+                    path.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            return temporary_directory, migration_dir
+
+        temporary_directory, migration_dir = seeded_directory()
+        try:
+            (migration_dir / "bad_name.sql").write_text("SELECT 1;", encoding="utf-8")
+            with self.assertRaises(ContractValidationError):
+                migration_files(migration_dir)
+        finally:
+            temporary_directory.cleanup()
+
+        temporary_directory, migration_dir = seeded_directory()
+        try:
+            (migration_dir / "005_wrong_name.sql").write_text("SELECT 1;", encoding="utf-8")
+            with self.assertRaises(ContractValidationError):
+                migration_files(migration_dir)
+        finally:
+            temporary_directory.cleanup()
+
+        temporary_directory, migration_dir = seeded_directory()
+        try:
+            (migration_dir / "006_evidence_coverage.sql").unlink()
+            with self.assertRaises(ContractValidationError):
+                migration_files(migration_dir)
+        finally:
+            temporary_directory.cleanup()
+
+        temporary_directory, migration_dir = seeded_directory()
+        try:
+            (migration_dir / "008_first.sql").write_text("SELECT 1;", encoding="utf-8")
+            (migration_dir / "008_second.sql").write_text("SELECT 1;", encoding="utf-8")
+            with self.assertRaises(ContractValidationError):
+                migration_files(migration_dir)
+        finally:
+            temporary_directory.cleanup()
+
+        manifest = migration_files()
+        for missing_filename in (
+            "001_metadata_store.sql",
+            "002_vector_index.sql",
+            "003_ingestion_records.sql",
+            "004_mail_evidence.sql",
+            "006_evidence_coverage.sql",
+        ):
+            with self.subTest(missing_filename=missing_filename):
+                invalid_manifest = tuple(
+                    migration for migration in manifest if migration.filename != missing_filename
+                )
+                connection = _RecordingConnection()
+                with self.assertRaises(ContractValidationError):
+                    PostgreSQLMigrationRunner(connection).migration_replay(invalid_manifest)
+                self.assertEqual(connection.actions, [])
+
+        connection = _RecordingConnection()
+        with self.assertRaises(ContractValidationError):
+            PostgreSQLMigrationRunner(connection).migration_replay(tuple(reversed(manifest)))
+        self.assertEqual(connection.actions, [])
+
+        connection = _RecordingConnection()
+        with self.assertRaises(ContractValidationError):
+            PostgreSQLMigrationRunner(connection).migration_replay(manifest + (manifest[-1],))
+        self.assertEqual(connection.actions, [])
 
     def test_migration_runner_replays_locked_manifest_without_public_connection_details(
         self,
@@ -122,6 +306,57 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         self.assertTrue(
             all("postgresql://" not in str(item.to_dict()).lower() for item in statements)
         )
+
+    def test_migration_replay_rejects_forged_file_metadata_before_execute(self) -> None:
+        manifest = migration_files()
+        forged = tuple(
+            PostgresMigration(
+                migration_id=migration.migration_id,
+                filename=migration.filename,
+                sql_sha256=(
+                    "sha256:" + "0" * 64
+                    if migration.filename == "006_evidence_coverage.sql"
+                    else migration.sql_sha256
+                ),
+                statement_count=(
+                    migration.statement_count + 1
+                    if migration.filename == "004_mail_evidence.sql"
+                    else migration.statement_count
+                ),
+            )
+            for migration in manifest
+        )
+        connection = _RecordingConnection()
+
+        with self.assertRaises(ContractValidationError):
+            PostgreSQLMigrationRunner(connection).migration_replay(forged)
+
+        self.assertEqual(connection.actions, [])
+
+    def test_migration_replay_uses_validated_file_snapshot(self) -> None:
+        source_dir = Path("python/formowl_graph/storage/migrations")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            migration_dir = Path(temporary_directory)
+            for path in source_dir.glob("*.sql"):
+                (migration_dir / path.name).write_text(
+                    path.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            manifest = migration_files(migration_dir)
+            target = migration_dir / "006_evidence_coverage.sql"
+            target.write_text(
+                target.read_text(encoding="utf-8")
+                + "\nCREATE TABLE forged_after_manifest (id text);",
+                encoding="utf-8",
+            )
+            connection = _RecordingConnection()
+
+            with self.assertRaises(ContractValidationError):
+                PostgreSQLMigrationRunner(
+                    connection,
+                    migration_dir=migration_dir,
+                ).migration_replay(manifest)
+
+            self.assertEqual(connection.actions, [])
 
     def test_transactional_write_and_rollback_on_partial_failure(self) -> None:
         connection = _RecordingConnection()

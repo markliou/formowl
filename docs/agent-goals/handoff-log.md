@@ -1,187 +1,290 @@
 # Agent Handoff Log
-
-This active log is a bounded recent window. Lossless prior history is preserved
-at `../archive/2026-07-11/handoff-log.md`.
-
 Lifecycle label: `active`.
-
+This is a bounded active window. Earlier entries are immutable history under
+`docs/archive/`; the complete pre-trim log is at
+`../archive/2026-08-25/handoff-log.md`, and the pre-rewrite log remains at
+`../archive/2026-08-18/active/docs/agent-goals/handoff-log.md`.
 ## Retention Rule
-
-- Keep entries from the latest 14 calendar days, with a hard cap of 300 lines.
-- If either limit is exceeded, archive the oldest complete dated entries into a
-  new immutable dated snapshot before appending more.
-- Never split a dated entry, discard content, or rewrite archive history.
-- Append only concise cross-agent facts, blockers, verification, and next action.
-
-## 2026-07-10
-
-- Issue #33 Work Package A completed on `issue-33-work-package-a` from merged
-  Ontology v2 PR #31. The EXM evaluator now uses candidate-admission arm names,
-  declares KG/type/frame stage boundaries, uses development/evaluation labels
-  instead of same-corpus holdout language, excludes permission-denied
-  auto-passes from primary retrieval accuracy, and emits eight closed-schema
-  report sections. Reviewer fixes removed unsupported private-row recomputation
-  and ontology/frame-semantic claims, bound frame/type/evidence/topology fields
-  to exact derived values, and reject coherent permission-case reclassification
-  that changes the configured evaluation mix. Canonical dev-container
-  verification passes: focused evaluator tests 29 OK, full unittest 638 OK,
-  full Ruff check passed, 303 files pass format-check, and `git diff --check`
-  passed. The 3/3 read-only gate passed with explicit `RELEASE_DECISION: AGREE`
-  from `Dalton` (engineering), `Kepler` (governance/safety), and `Faraday`
-  (research method); no blocking findings remain.
-
-- No-training candidate-admission ablation completed for the accepted active
-  goal. The EXM/PST 50,000-case evaluator compared regex, raw
-  `jieba + SentencePiece`, frequency-rule admission, frozen-profile admission,
-  and the prior weak-label MLP admission policy in
-  one run over the same generated benchmark shape. Safe tracked aggregate:
-  `experiments/kg_ontology_v2_coordination/results/exm_no_training_programmatic_ontology_50000_summary_2026-07-10.json`.
-  Result: regex admission 10,000/50,000; raw `jieba + SentencePiece`
-  admission 18,176/50,000 with 0/5,000 no-match guards; frequency-rule
-  admission 33,277/50,000 with all guards passing; frozen-profile admission
-  43,976/50,000 with 33,976/40,000 positive cases,
-  5,000/5,000 no-match guards, and 5,000/5,000 denied guards; weak-label MLP
-  weak-label MLP admission 43,369/50,000 with 33,369/40,000 positives and all
-  guards passing. Current method judgment: the bundled candidate-admission and
-  graph-construction policy is effective on this generated benchmark, but this
-  does not establish a type-compatibility or frame-semantic effect. The self-trained MLP is not
-  justified as the stable default because the zero-training frozen profile is
-  +607 passed cases better in this run. Engineering reviewer `Meitner` blocked
-  once because the frozen profile model hash did not include the actual
-  scoring coefficients; the blocker was fixed by data-binding
-  `_FROZEN_PROFILE_SCORE_RULES` into both scoring and `model_hash`, then
-  rerunning the 50,000-case evaluation. Verification after the fix:
-  dev-container focused lexical ontology tests 21 OK, full 50,000-case
-  evaluation completed, saved public report validation blockers=[], full
-  unittest 630 OK, Ruff check/format-check passed, KG acceptance
-  `passed_with_explicit_limits`, tracked summary JSON parse passed, and
-  `git diff --check` passed. Reviewer gate passed 3/3: `Meitner`
-  engineering agreed after the hash-binding fix, `Singer` governance/safety
-  agreed, and `Gibbs` research method agreed. BGE-M3 through FlagEmbedding is
-  documented as the preferred future optional true frozen neural adapter, but
-  it was not executed in this default-dev-container slice. Claim remains
-  candidate-only and excludes raw mail content, query payloads, private rows or
-  paths, canonical graph/type/user-graph/wiki mutation, BGE execution evidence,
-  parser readiness, business answer generation, and production readiness.
-
-# 2026-07-10 — KG Research Agent — issue #36 release gate passed
-
-- Completed the evidence-grounded MAY ChatGPT × FormOwl MCP evaluation with
-  100 unique reviewer-grounded evidence cases and 50,000 rendered interaction
-  variants. Production v4 and the standalone source-rebuild validator both
-  passed with `blockers=[]`.
-- The evaluator now binds closed `tools/list` schemas, recursively rejects
-  caller-controlled identity/session/grant keys, separates expected outcomes
-  from actual MCP semantics, executes same-session response-derived follow-ups,
-  and validates private replay roots against an external trust anchor.
-- Structured-answer gold and prediction use methodologically independent
-  lifecycle/action/deadline/dependency extraction. Answerable false negatives
-  score case/thread scope as an applicable zero, and standalone validation
-  rebuilds grounded rows from the private manifest, trusted replay, and evidence
-  bundle so coherent rehashing cannot pass.
-- Safe results: governed mail retrieval 11/100, candidate KG 19/100, ontology
-  KG 19/100; 326 retrieval-only factorial arms produced zero better than
-  KG-only, two equal, and 324 worse. The replay exposed 10 expected no-match
-  false positives while enforcing all 10 expected permission denials.
-- Response-conditioned trajectory accounting records 60,000 tool calls per
-  FormOwl arm. Non-triggered correction/refinement/permission conditions do not
-  add a second call, turn, or simulated cost.
-- Canonical final verification passed 713 dev-container tests, full Ruff check,
-  316-file format check, and `git diff --check`. Reviewer gate passed 3/3 with
-  explicit `RELEASE_DECISION: AGREE` from the product-usefulness,
-  evidence/citation, and engineering/governance reviewers.
-- Claim boundary remains deterministic offline replay/usefulness evaluation:
-  no live ChatGPT execution, production-readiness claim, autonomous business
-  judgment, raw-mail MCP access, or canonical KG/type/user-graph/wiki writes.
-
-## 2026-07-11
-
-- Completed a user-requested whole-repository maintenance review across
-  production Python, tests/scripts, research harnesses, containers, MCP
-  boundaries, and durable documentation. Static import analysis found no
-  orphan production module; canonical root verification passed 713 tests plus
-  Ruff check and format check.
-- Removed four unused projection acceptance markers, one unused OpenProject
-  mapper wrapper, and one unreferenced incomplete benchmark. The older Wiki
-  projection builder and forbidden-tool marker exports were reviewed but kept
-  as public compatibility surfaces. Consolidated identical Project and Wiki
-  JSONL logger implementations and identical CPU/GPU neural dependency files
-  while preserving compatibility imports and container entrypoints.
-- Deleted the obsolete MCP abstract after moving current service/tool truth into
-  `docs/mcp-boundaries.md`, and labeled ontology/mail documents by lifecycle.
-  The duplicate KG restart history remains unchanged in this patch; issue #40
-  tracks its safe archival together with the canonical durable registry.
-- The independent `.formowl/kg-eval` suite is currently not state-independent:
-  a clean archive lacks ignored result snapshots, while the operator workspace
-  contains ignored evidence that rebuilds validator output to 12/12 although
-  tracked tests/checklists and the durable goal still assert the historical
-  8/12 state. Do not report that harness as passing until issue #38 resolves the
-  state-drift and clean-clone reproducibility contract.
-- Follow-up issues: #38 for KG authority state-independent tests, #39 for MCP
-  protocol/shadow-workflow consolidation, and #40 for durable history archival.
-- Final cleanup reviewer gate passed 3/3 after compatibility and documentation
-  blockers were fixed: dead-code/evidence, runtime compatibility, and
-  docs/governance reviewers all returned `RELEASE_DECISION: AGREE`. Public Wiki
-  projection and forbidden-tool marker surfaces were retained; the authority
-  harness state-drift remains isolated to #38 and is not claimed as passing.
-
-## 2026-07-11 — Issues #38–#40 completion update
-
-- Issue #38 now isolates blocked and completed authority fixtures, cleans up
-  partial fixture setup failures, avoids writes to operator-controlled ignored
-  state, and passes the authority suite from both operator and clean-clone
-  layouts. The four broad real-evidence gates remain intentionally blocked;
-  harness reproducibility does not complete those evidence requirements.
-- Issue #39 now uses one shared MCP JSON-RPC engine and JSONL compatibility
-  runner, fails closed without authenticated session identity, binds Project,
-  Wiki, and semantic calls to gateway-controlled identity, records rejected and
-  denied transcript status, delegates semantic work only to injected handlers,
-  and exposes the effective-graph alias deprecation policy.
-- Issue #40 moved prior board, role-goal, and handoff history into immutable
-  dated snapshots with manifest hashes and bounded active startup files. A
-  deterministic archive-integrity test enforces hashes, links, retention limits,
-  checklist preservation, and current-versus-archive authority boundaries.
-- Final issues #38-#40 reviewer gate passed 3/3. Franklin verified shared
-  protocol and fixture cleanup correctness; Carver verified identity,
-  transcript, alias, and no-new-capability governance; Helmholtz verified
-  clean-state authority, completed fixture coherence, archive integrity, and
-  status honesty. All returned `RELEASE_DECISION: AGREE` with no blockers.
-- Final canonical evidence before publication: root suite 725 tests OK, KG
-  authority suite 589 tests OK, MCP focused 132 tests OK, read-only repository
-  enterprise/preflight 60 tests OK, archive integrity 4 tests OK, and full Ruff
-  check/format check passed for 323 files.
-
-## 2026-07-11 — Pre-feature production cleanup
-
-- Removed test-only MCP gateway scenarios and assertion markers from production,
-  deleted unused retrieval/JSON-RPC marker helpers, and centralized mail bundle
-  selection, grant normalization, and grant-expiry behavior in one private mail
-  access helper. Production Python is net 153 lines smaller.
-- Retrieval now has one private implementation while the deprecated
-  `query_effective_graph` alias retains its full keyword-only signature and the
-  canonical `query_effective_graph_view` still requires an effective graph
-  view. Shared observability is canonical; Project/Wiki legacy imports remain
-  deprecated compatibility re-exports and `SPEC.md` documents that boundary.
-- Canonical dev-container verification passed 726 tests, full Ruff check, and
-  325-file format check. Engineering, governance/safety, and maintainability
-  reviewers returned 3/3 `RELEASE_DECISION: AGREE` after signature and
-  specification compatibility blockers were fixed.
-
-## 2026-07-11 — Pre-feature structural cleanup
-
-- Consolidated duplicated evaluator validation, ChatGPT intake validation,
-  HTTP smoke orchestration, PostgreSQL container lifecycle, mail payload
-  validation, and atomic JSON persistence. Eleven evaluation/smoke entrypoints
-  are thinner while retaining their CLI, report schema, error, privacy, and
-  claim-boundary contracts.
-- Tests now validate real adapters, interfaces, and migration content as the
-  primary surfaces. Previously exported name-list helpers remain thin
-  compatibility wrappers to avoid an unannounced API break. A private
-  graph-storage write seam remains as an alias to the shared atomic writer so
-  rollback failure injection stays testable without restoring duplicate
-  persistence code.
-- The second cleanup phase changes 1,334 lines added and 1,514 deleted, net
-  `-180`; scripts and experiment entrypoints are net `-893`. Canonical
-  dev-container verification passed 730 tests, full Ruff check, 331-file format
-  check, and `git diff --check`. Production/API, evaluator/privacy, and
-  shell/safety reviewers returned 3/3 `RELEASE_DECISION: AGREE`.
+- Keep the latest 14 calendar days and at most 300 lines.
+- Archive a complete dated entry before trimming it.
+- Record only current facts, blockers, verification, and next action.
+- Historical pointers are not restart instructions.
+## 2026-09-04 — Direct-Responses temporary LAN UAT diagnostic
+- The trusted same-LAN no-auth UAT on port `8088` used the direct Responses
+  provider and approved sealed source. One terse self-test reached the provider
+  and made three normal `/mcp` calls; all returned `replan_required`.
+- Multi-row ambiguity ended in `clarification_required` with no answer or
+  citations. No query-specific retry or prompt tuning occurred.
+- Authority remains `authority_valid=false`/`methodology_ready=false`; source
+  completeness, execution-fingerprint binding, same-pipeline real-source
+  ablation, and independent final-answer acceptance remain blocked.
+- This is diagnostic UAT only, not production/readiness, Issue #56 completion,
+  or comparative-superiority evidence.
+## 2026-09-04 — Browser Codex provider UAT checkpoint
+- Commit `03798e8` is pushed; Browser → Codex GPT → expanded dynamic tool →
+  normal `/mcp` → citation-bound answer passed focused container `7/7` plus
+  browser E2E `3/3`.
+- Custom-provider state uses secretless config and fail-closed env-key/key-file
+  injection; no key enters config, logs, or browser output.
+- A true provider turn remains blocked: the self-hosted instance exposes only a
+  dashboard administrator password and no inbound `/v1` bearer. The operator
+  must provide an existing inbound bearer.
+- Authority remains `authority_valid=false`/`methodology_ready=false` with four
+  gates blocked; diagnostic UAT only, not production/readiness/Issue #56 close.
+## 2026-09-03 — Connected Route-A planner checkpoint
+- Commit `f4a18e5` is pushed; scoped canonical verification passed `23/23`.
+- Safe v3 log `sha256:013aa643f17ac30e358800517d62268e8f5fbb3049747530f0004dd260b10b11` used `workspace_only_v1`/`workspace_formowl`, approved actor/approver, and no tenant.
+- Generic external-rescue transport succeeded: exact `12/12`, all `12` `source_provided`, with `36` citations/lineages.
+- Five distinct value fingerprints and `incomplete`/`context_budget_reached` kept `answerable=false`; the user request still requires clarification.
+- Tool guidance now requires one remaining call to use a unique authorized row
+  discriminator in a combined projection; synthetic formal-XLSX E2E proves
+  same-response row association, citation, and lineage.
+- V4 pre-run is blocked by multiple equally valid discriminators. Do not issue a
+  query-specific rerun; ask for an item/identifier field or let the real caller clarify.
+- Authority remains invalid/not ready with the same four gates; this remains
+  bounded diagnostic evidence, not general UAT, production, readiness, or completion.
+## 2026-09-02 — Step-4 attachment and Core Query Agent POCs
+- Structural-blank/sparse normal `/mcp` passed `1/1` in `66.026 s`; its exactly-once workspace-only mode exited `0` with HTTP `200`, one request, exact `2/2`, complete coverage, candidate-only `0`, seven citations, approved actor/approver, and no tenant.
+- Requested fields were explicit source blanks; an unrequested field was not an alias. Runner/wrapper/log/exit hashes: `sha256:4fb18f...394`, `sha256:846a82...d96`, `sha256:194d04...66d`, `sha256:9a271f...86aa`.
+- The Core Query Agent spec/orchestration POC passed normal `/mcp` `1/1` in about `65.5 s`; its candidate-table regression passed `1/1` in `3.3 s`, and review returned `AGREE`.
+- Zero-arg planning remained `not_connected`; coreference required upstream resolution. Authority remained invalid/four-gate blocked and step 4 in progress; no UAT, production, readiness, completion, or superiority claim was earned.
+## 2026-09-01 — Candidate attachment-table answer checkpoint
+- Checkpoint `dfaf38b` passed `43` focused tests and one real normal `/mcp`: HTTP `200`, `candidate_interpretation`, four citations, about `908.085 ms`, and no deadline exhaustion.
+- Missing semantic header markup kept it candidate-only/noncanonical/nonexact, with no exact result and ambiguity fail-closed; the gap was source-selection/artifact binding.
+- The seal binds session, authorization, requester, workspace, scopes, Observations, and index; cross-session reuse rejects and result types are private.
+- Identity was workspace-only with the approved actor and no tenant; authority was four-gate blocked and no broader claim was earned.
+## 2026-08-29 — Actual-user participant inventory remains incomplete
+- Normal `/mcp` completed `21` bound-cursor pages: returned/total/union
+  `2069/2069/2069`, duplicates `0`, and `2086` governed references/citations.
+- Authorized scope `2793` = `2069` matches + `174` proven nonmatches + `550`
+  unresolved; coverage remains incomplete and supports neither “all” nor production readiness.
+- The same four gates remained blocked; Work D and step 4 stayed in progress.
+  This was not UAT, readiness, completion, or superiority evidence.
+## 2026-08-28 — Direct-source deterministic inventory remains incomplete
+- The generic direct-source business-identifier deterministic inventory now
+  traverses normal ASGI `/mcp` with typed intent, query-hash provider
+  selection, source-occurrence preservation, bound cursor pagination, and
+  governed citation/lineage references. No private query alias or oracle branch
+  was added.
+- Coverage uses the full permission-authorized sealed-source occurrence scope.
+  The lineage cache key and owner/gateway checks bind the same index, graph,
+  and source-session fingerprints.
+- The production-local real E2E enumerated exactly `125` source-backed
+  occurrences against the UAT oracle `317` and correctly ended `incomplete`
+  with `192` unresolved. The remainder lacks an approved source-backed
+  identity/conversation provider contract; no thread/reply/quote/forward
+  expansion is authorized.
+- Focused pinned-E5 verification passed `52` tests with `1` skipped. Its
+  canonical execution fingerprint is
+  `sha256:6327d552a86d3d41b91ee68efc81229a8697bbb202c3ae91cad6de47839e53ea`;
+  both final read-only reviewers returned `AGREE`.
+- Work D and plan step 4 remain unchecked/in progress. The same four
+  methodology authority gates remain blocked; no formal evidence was promoted,
+  no holdout/transfer/v1-v7 rerun occurred, and no production readiness,
+  methodology readiness, superiority, or completion claim is supported.
+## 2026-08-27 — Complete execution binding reaches promotion preflight
+- Commits `6e4663a` and `ad08b22` implement the current source-to-promotion
+  contract slice. The source evidence author now validates the exact complete
+  execution bundle against its sealed report, source, counts, and authority
+  before output; promotion preflight accepts the existing v3
+  `execution_binding` and cross-binds it to the single validated dependency.
+- Pinned-E5 focused E2E passed `48/48`. Both cross-reviews returned `AGREE`
+  after one private-helper dependency blocker was corrected to use the public
+  bundle loader.
+- Methodology authority remains valid but blocked on source completeness,
+  accepted execution binding, same-pipeline real-source ablation, and
+  independent final-answer acceptance. No formal evidence was authored or
+  promoted; no UAT, holdout, transfer, or v1-v7 rerun occurred, and no
+  readiness, superiority, or completion claim is supported.
+- Step 4 remains `in-progress`; the existing five-step wording is unchanged.
+## 2026-08-25 — Source completeness and execution binding checkpoint
+- The existing sealed safe source report is passed at its own boundary: `8,443`
+  source inventory units reconcile to `8,443` Observations with unexplained
+  loss `0`. Report/snapshot fingerprints are
+  `sha256:9bf59781bb846f87934511fe7378626eddd380cbe9e1acea201aa0625f11f8b6`
+  and `sha256:55df0dc7d96a7822271f4b7f4509b4da1bbb94f26bb7710e3919f8134d28f2d1`.
+- Commits `9955df0`, `3b7ee0d`, `ad4364c`, `12575a1`, and `a85604c` provide
+  sealed evidence rebinding without reparsing, remove execution-fingerprint
+  circularity, make the complete execution bundle a mandatory durable
+  promotion dependency, and cover authoring/core integration.
+- Integrated pinned-E5 E2E passed `45/45`. No formal all-four-gate evidence was
+  authored or promoted, so the canonical authority remains valid but blocked
+  on source completeness, accepted execution binding, same-pipeline real-source
+  ablation, and independent final-answer acceptance.
+- The active identity boundary remains `workspace_only_v1` for
+  `workspace_formowl`, approved actor
+  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
+- No v1-v7 diagnostic was rerun. No UAT, holdout, transfer, or formal evidence
+  execution occurred. Work D and plan step 4 remain in progress.
+- Next: assemble production-safe component, source, and evaluation artifacts on
+  one stable execution fingerprint; do not run holdouts or claim readiness.
+## 2026-08-25 — Offline relation-precompute v7 consumed and passed
+- Formal mode `issue56-sealed-source-real-prompt-relation-projection-offline-equivalence-phase-traced-diagnostic-20260825-v7`
+  consumed one claim over `456` Observations as `workspace_only_v1` for `workspace_formowl`; approved
+  actor `user_full_pst_domain_hard_case_eval_owner`; no tenant exists.
+- Both isolated views held `10281` nodes/`29748` edges; cold/after graph preseal
+  was `61825.028571`/`61485.804325 ms`, and after relation precompute was `4344.986693 ms`.
+- Post-claim cold binding/base/total was `633.968035`/`3196.093676`/`35771.614738 ms`,
+  with exact cache transition `0/0 -> 1/1`.
+- Both normal `1500 ms` ASGI `/mcp` arms completed: cold/after relation was
+  `57.473886`/`58.790683 ms`, query `290.941898`/`298.654947 ms`, and HTTP
+  `366.720007`/`361.008008 ms`; each had `10` paths, `1` citation, `48` scores,
+  and null deadline exhaustion. All `13` timing-free equivalence groups, all
+  cache acceptance checks, and all applicable boundary gates passed.
+- Claim/claim-byte/report-byte are `sha256:879e903599e95d38d52e0bd1fb0d29fb6266371e7168289547d0bbc23a1d643b`,
+  `sha256:4de4d694f042f46b3a0d6c68dd93101ca7c7610a0b3f97496f44be34f20b7a0c`,
+  `sha256:5b34d191244391c560cda849c0666c2f7e41be1d220fd3799108b6ca738a99d0`; claim/report sizes are `1508`/`30893` bytes.
+- Trace/execution/source/preflight are `sha256:9af61b1918c6ef2c31a91a8d6f73a875e796bbf678b13c49f7db44530189e6d6`,
+  `sha256:a99e1fa89b01d2d383209ae09f742ee55cfddcd2095992c9391878d73b00c649`,
+  `sha256:b5a8112dd88eb829b26ec7b795a6071ca81a6327362a0d265c1749d41c5f002e`,
+  `sha256:10c44440e0cde947591af7c8ad9797ba47b755d50d027d280c0cfa464dd8baf0`.
+- Offline-evidence/owner/precompute/cache are `sha256:bd6d0e962d07ba10f273caa83996a6e57114d6801d56660c551d3728a655fdf1`,
+  `sha256:8f63bdcf6baa4d18b6574071905900baf002318d9227e0d0da0523bf297a293e`,
+  `sha256:b2edcd214a19a6b3283abc475a8b67abd984753653a6136396b1630bfbfecf3b`,
+  `sha256:d15cf0214e9112b1a28130496dc5ea0c554587606e32dd423886ee14364e110f`.
+- Temporary evidence passed `51/51`; final cross-review found no blocker.
+  With v6 latency necessity, this accepts only the behavior-neutral same-source
+  relation-precompute POC. V1-v7 cannot be rerun; four authority gates remain
+  blocked, Work D stays in progress, and no broader claim is earned.
+## 2026-08-25 — Graph-presealed relation-projection v6 consumed and blocked
+- Formal v6 consumed the same workspace-only `456` Observations with no tenant.
+  Loader/preseal/owner precompute were `677442.490893`/`60990.781102`/`4245.079389 ms`.
+  Cold relation exhausted at `1415.389724 ms` (`1520.515069` query/
+  `1555.417065` HTTP; `0` paths/citations/scores); primed relation/query/HTTP
+  were `57.939772`/`291.040282`/`346.270890 ms` with `10` paths/`1` citation/
+  `48` scores. Caches were `0/0 -> 1/0` versus `1/1 -> 1/1`.
+- Claim/claim-byte/report-byte were `sha256:6b045800e19d82fa187ff4271ab2d854189726a3449bcd4cedf1c03c47c2639e`,
+  `sha256:65b3b3d1f9889e1d82ec47ade77fb7dc44b4a9a3711f7bd37a538cdc9e986b61`,
+  `sha256:ae10a358242f6f44b1f92267a80e48eac296ebd677eb1ac27bcc24f6111909f1`;
+  execution/source/preseal/trace were `sha256:7ecf2c31901116ddb32d2a8a7cb41b0e3b504648006a68b3e23e89ee22b2c1cf`,
+  `sha256:bbc67d7fc7051a597488034d277c772a4a5c68bc09dc8ce696bfd2bcc0d8db8b`,
+  `sha256:4900fd366f300af097de355b59feeb6059a06b41574d01d9834e51576c4eed27`,
+  `sha256:040cb86b70af99fd6f0467306423e0e556a6dfc41b1ed734227b613248c27a93`.
+- Tests passed `6/6` and `31/31`; review found no blocker. V6 is immutable,
+  blocked, and earns no readiness or superiority claim.
+## 2026-08-23 — Source-backed real-prompt v4 diagnostic passed
+- Source tracing found both synthetic fixed-prompt terms at count `0` in
+  raw/parser/retrieval; the cause was prompt-to-approved-source mismatch.
+- The deterministic source-backed connected selector passed `11/11`. V4 then
+  consumed one claim over the same workspace-only `456` Observations with no
+  tenant and passed with `2` anchors, `10` paths, and `1` citation.
+- Query/gateway/HTTP were `951.148333`/`953.544449`/`982.203990 ms`;
+  relation projection was `717.357210 ms`, deadline exhaustion was null, and
+  one-time loader time was `678625.866681 ms`.
+- Claim/claim-byte/report-byte were `sha256:2b092814194dd90d597161dfcd04822be75c97fc5c5364478bbc8b52307098cb`,
+  `sha256:76dda5b18801a7587b212631b0d4d7ae0544646910e143ced0883f14e5db69b8`,
+  `sha256:40f48fea0145d523f5d14e2943b41750a48923e111cdf6e6c5e3cd265903a458`;
+  trace/execution/source were `sha256:4b518dd33bc406027f2fe0104559ead2cdb27a096b3357d9470acdac34e09ef4`,
+  `sha256:031cfe6f04c9b595bed6fd24375590a78df18dd03e07b68821c955bc03ad0b94`,
+  `sha256:b3959bba1267879ba3bcc6889fd063363f899987722b2447685aad844f6b53ae`.
+- Full regression remains non-green (`1873` total / `1781` passed / `54`
+  failures / `23` errors / `15` skips); V4 passed but earned no broad claim.
+## 2026-08-21 — Sealed-source v3 diagnostic consumed and blocked
+- Mode `issue56-sealed-source-phase-traced-diagnostic-20260821-v3` consumed its
+  claim exactly once over `456` Observations as `workspace_only_v1` for
+  `workspace_formowl` and approved actor
+  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
+- Cold lineage-crosswalk and relation-base precomputes completed outside the
+  query in `1814.676079` and `5742.217351 ms`. The query crosswalk cache hit,
+  Strong RAG, and relation projection completed in `0.039415`, `78.995342`, and
+  `755.393432 ms`.
+- The query completed in `935.503846 ms`, HTTP in `999.641434 ms`, and loading
+  in `616997.490158 ms`. No deadline was exhausted; every semantic phase
+  completed except skipped deterministic exact execution.
+- The safe cited response remained blocked with `0` citations and `0` graph
+  paths. Relation-base precompute succeeded, but relation projection remains
+  the largest query phase and no cited graph proof was produced.
+- Immutable bindings: claim
+  `sha256:31e2c3dd9d401790ca202ed8d9caa35a30195880e4007cb6813b7b13852ecb47`
+  (`916` bytes; byte seal
+  `sha256:793a801d7786413211979c13218c4795cb71210c65dd36024c37fa3b1dfd6946`);
+  report `10144` bytes,
+  `sha256:29ebb91fed63f288a88eae6f966d30fa5b125c5da5b70cf35f5940b810dd0f57`;
+  safe trace `sha256:c71ca6d55b1f911043ce50e9fb5c7fcceefd7965a6495eb1e6cce81f9f108dc8`;
+  source binding
+  `sha256:eb384e63374c72ee18509f5f396ca9a134b7a667447308effbf906409ee35249`.
+- V3 must never be rerun, retried, or tuned. It is diagnostic-only evidence:
+  no quality, holdout, transfer, readiness, completion, or superiority claim is
+  earned. Issue #56 Work D and plan step 4 remain incomplete/in progress.
+- Canonical authority remains valid but blocked on source completeness,
+  accepted execution-fingerprint binding, same-pipeline real-source ablation,
+  and independent final-answer acceptance.
+- Next: stay in step 4; diagnose the generalized zero-path/zero-citation result
+  and remaining relation-projection cost only under separate approval.
+## 2026-08-21 — Sealed-source v2 diagnostic consumed and blocked
+- Mode `issue56-sealed-source-phase-traced-diagnostic-20260821-v2` consumed its
+  claim exactly once over `456` Observations. It ran as `workspace_only_v1` for
+  `workspace_formowl`, approved actor
+  `user_full_pst_domain_hard_case_eval_owner`, with no tenant dimension.
+- Cold lineage crosswalk precompute completed outside the query in
+  `1806.696423 ms`; the query cache hit took `0.027371 ms`. Strong RAG completed
+  in `75.098477 ms`. `relation_projection` then exhausted the `1500 ms` budget
+  after `1421.788584 ms`.
+- Query, HTTP, and loader totals were `1508.602094`, `1536.543591`, and
+  `612559.303406 ms`. The blocked result had `0` citations and `0` graph paths;
+  traversal, scoring, proof/citation, fallback, lineage audit, and result
+  projection were skipped.
+- Safe bindings: claim
+  `sha256:6f88dc0c21ba3323fa17e015f014a79603351d4ed52b5dbedb98b5f63a97e1a1`;
+  claim bytes
+  `sha256:24c81028643d8e959f2b3897a78ce70fdf702767a4ff7b4cdf842511718c94ab`;
+  report bytes
+  `sha256:13b8fa56d803c055c861ad029619fa822da4e5746d471d0570336f61053c3399`;
+  safe trace
+  `sha256:c0427da8cf969fe2d46cdbef4c2f971026334cf13cc3095beed6a33fc6123fbb`;
+  source binding
+  `sha256:362ed66da7ba3a8a3b9ebc4fd46d3b0c29ebf0340851961b108a8544f2fd6379`.
+- Crosswalk optimization succeeded for this diagnostic and exposed
+  `relation_projection` as the next bottleneck. It does not retroactively prove
+  the earlier one-shot's `1510.841 ms` p95 cause.
+- V2 is consumed and must never be rerun, retried, or tuned. This is diagnostic
+  evidence only: no checkbox, readiness, completion, or superiority claim is
+  earned. Authority remains valid but blocked on four gates; holdouts and
+  transfer remain unexecuted.
+- Next: stay in step 4 and require separate approval for any generalized
+  relation-projection optimization/diagnostic version.
+## 2026-08-20 — Versioned minimum MCP-to-Hybrid diagnostic passed
+- The user approved a versioned, non-claim-bearing minimum E2E plus
+  phase-tracing diagnostic slice. It used only a `synthetic_non_sealed`
+  workspace-only fixture.
+- The passing path was prompt -> Starlette/ASGI HTTP POST `/mcp` -> synthetic
+  preverified principal -> `RemoteMcpDispatcher` actor-context injection ->
+  `SemanticMcpGateway` -> `AuthorizedSemanticMailSession` -> deterministic
+  safe cited response. It returned `2` citations and `2` graph paths.
+- Canonical focused evidence records the existing `25` tests plus the new `5`
+  tests passing. The safe phase trace can identify
+  `deadline_exhausted_phase` for a new execution.
+- This evidence does not retroactively identify the exact phase behind the
+  consumed one-shot's `1510.841 ms` p95, and that 100-case execution remains
+  consumed and prohibited from rerun, retry, or result-driven tuning.
+- Sealed source assets, external Google OAuth exchange, browser UI, production
+  store, production connected-tool policy, and a real LLM were not exercised.
+- Methodology authority remains valid but blocked on source completeness,
+  accepted execution-fingerprint binding, same-pipeline real-source ablation,
+  and independent final-answer acceptance. No issue #56 checkbox, production
+  readiness, methodology readiness, or superiority claim is earned.
+## 2026-08-20 — Workspace-only development one-shot consumed and blocked
+- The sealed development work root
+  `.test-tmp/issue56-development-uat-v2-workspace-only-work` passed its exact
+  `456`-Observation artifact and identity-scope contract.
+- Identity scope is `workspace_only_v1` for `workspace_formowl`. No
+  `tenant_id` field or key exists; none may be inferred or fabricated.
+- The development diagnostic claim
+  `issue56-development-workspace-only-diagnostic-one-shot-20260820-v1` has been
+  consumed. It is exactly-once state and must not be rerun, retried, or tuned.
+- Its safe report is blocked: Hybrid `0/100`, graph paired CI `[0,0]`, citation
+  support `0%`, no-answer false positives `100`, p95 latency `1510.841 ms`,
+  and permission leakage `0`.
+- This execution was a development diagnostic, not an independent holdout. It
+  cannot support authority promotion, KG/ontology superiority, methodology
+  readiness, or completion.
+- The methodology authority remains valid but blocked on source completeness,
+  accepted execution-fingerprint binding, same-pipeline real-source ablation,
+  and real-user final-answer acceptance.
+- The production v3 gate-evidence/atomic-promotion contract blocker is fixed
+  and focused tests pass. No passed gate evidence currently exists to promote.
+- The sealed 41-case and additive 59-case independent mail holdouts and the
+  GitHub transfer holdout have not executed.
+- Plan step 4 and all corresponding board tasks remain unchecked. The sole next
+  action is a governance/specification decision plus a read-only postmortem;
+  another execution is prohibited.

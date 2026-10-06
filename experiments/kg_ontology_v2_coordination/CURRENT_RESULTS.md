@@ -18,6 +18,26 @@ A historical experiment remains valid evidence for its own tuple, but it must
 not be promoted as the current method result merely because it is easy to find
 or uses a real PST corpus.
 
+## Default Candidate Evidence Retrieval boundary
+
+All current and future result interpretation uses the Default Candidate
+Evidence Retrieval contract as the retrieval baseline. It counts one logical
+source item rather than parser chunks and requires
+`CandidateEvidenceTextPolicyRuntime` to accept query text only through the
+bound Unicode/Jieba/SentencePiece/frozen-profile stack. The binding pins its
+runtime id, implementation hash, admission/model/corpus hashes, and rejects a
+free-form hash. Raw query text may control intent, cardinality, and chronology
+syntax only; retrieval anchors come from runtime-produced tokens. A named
+`retrieve_ablation` may extend, but never replace, the default token path.
+
+`CandidateEvidenceAccessBinding` is required before query vocabulary and uses
+exact immutable `frozenset` values across observation, source-identity,
+source-version, and permission axes. Context and time admissibility precede
+planning and ranking; cross-context authorization must be an actual boolean.
+Ontology remains a capped additive rerank, while regex-only retrieval,
+component union, parser-chunk counting, and ontology hard pruning are
+ablation-only methods.
+
 ## Current candidate-admission result
 
 The current method-selection result is the 50,000-case no-training

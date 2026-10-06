@@ -45,7 +45,7 @@ _SEMANTIC_TOOL_OBJECT_ARGUMENT_KEYS = {
     "permission_scope",
     "requested_scope",
 }
-_SEMANTIC_TOOL_INTEGER_ARGUMENT_KEYS = {"limit"}
+_SEMANTIC_TOOL_INTEGER_ARGUMENT_KEYS = {"limit", "page_size"}
 _SEMANTIC_TOOL_REQUIRED_ARGUMENT_KEYS = {
     "open_upload_session": {"intent", "intended_asset_type"},
     "create_ingestion_job": {"asset_locator", "extractor_profile"},
@@ -272,6 +272,34 @@ def _tool_to_json_rpc_schema(schema: dict[str, Any]) -> dict[str, Any]:
         )
     elif compatibility.get("status") == "canonical":
         description += "; canonical API"
+    if tool_name == "query_effective_graph_view":
+        description += (
+            "; connected planners must resolve intent and coreference before calling; "
+            "do not forward a terse or underspecified user prompt unchanged as one "
+            "attempt and stop. Form only a bounded clarified candidate query/tool plan, "
+            "and validate its query and arguments against this tool schema and actual "
+            "authorized capabilities before each call. After execution inspect "
+            "query_agent coverage and result; when status is replan_required or partial, "
+            "join external_replan.requested_projection_field_hashes to capability "
+            "field_hash values, and issue at most two follow-up calls using only "
+            "source_provided exact labels. When multiple candidates are each "
+            "authorization/schema-valid, non-redacted, source_provided exact-label "
+            "bindings, query them separately within that budget and compare coverage "
+            "and evidence without substring selection. When a first exact projection "
+            "is multi-valued, coverage-incomplete, or claim-ambiguous, never collapse "
+            "the result to one value by frequency or ordering. If one follow-up remains, "
+            "use the actual capabilities to choose exactly one unique authorized, "
+            "non-redacted, source_provided row discriminator and issue one combined "
+            "projection query containing the original projection and that discriminator, "
+            "so row association is retained in the same exact response. If no unique "
+            "safe discriminator exists or the combined result remains incomplete or "
+            "ambiguous, clarify or fail closed. Fail closed or clarify only "
+            "when bindings are absent, candidates exceed the budget without validated "
+            "narrowing, or final evidence or claims remain ambiguous; candidate_only "
+            "evidence is never deterministic exact; public "
+            "web may clarify only redacted terminology and must never supply "
+            "workspace evidence or authorization"
+        )
     return {
         "name": tool_name,
         "description": description,

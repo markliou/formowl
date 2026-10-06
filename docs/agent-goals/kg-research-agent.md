@@ -1,60 +1,179 @@
 # Knowledge Graph Research Agent Goal
-
 ## Lifecycle
-
 - Label: `active-blocked`
-- Lossless history: `../archive/2026-07-11/kg-research-agent.md`
-- Retention: keep role, current objective, status, blockers, and next action only;
-  target at most 180 lines and archive before 250 lines.
-
+- Active program: GitHub issue #56
+- Historical pre-rewrite state:
+  `../archive/2026-08-18/active/docs/agent-goals/kg-research-agent.md`
+- Retention: keep this file at or below 180 lines.
 ## Role
+Knowledge Graph Research Agent. Durable role: `../agent-roles.md`.
+## Active Execution Model
+Issue #56 uses one Master and exactly two implementation subagents:
 
-Knowledge Graph Research Agent.
+```text
+Master: global plan, decomposition, monitoring, integration review, acceptance
+Worker A: gpt-5.6-sol, reasoning_effort=ultra
+Worker B: gpt-5.6-sol, reasoning_effort=ultra
+```
+The Master does not implement or take over assigned edits. Workers receive
+non-overlapping write sets. The five-step plan changes only for a concrete new
+blocker; repeated failed routes require a changed decomposition or validation
+method, not another retry.
+## Objective
+Implement and fairly evaluate
+`evidence_to_knowledge_kg_ontology_v2_hybrid_v1` so FormOwl can use a governed
+graph for heterogeneous-data integration and demonstrate a measurable
+final-answer advantage over strong RAG on graph-required tasks.
 
-Durable role definition: `../agent-roles.md`.
+The intended path is:
 
-## Current Objective
-
-Complete the FormOwl Knowledge Graph method exploration and acceptance work:
-fill in external recent literature comparison, ontology integration method,
-multi-user KG and KG fusion experiments, multimodal enterprise-data validation,
-annotation/adjudication workflow through either legacy human evidence or a
-four-professional-specialist LLM subagent panel, production adapter gate, and a
-total acceptance suite that clearly marks passed and failed items.
-
-Historical source: Codex session `019eda5f-7dd6-74a2-ac56-4f84e5d58560`.
-
-Status: `blocked` for the broad KG real-evidence acceptance objective. Current
-repo-side tooling is synchronized, but four broad real-evidence gates still
-require operator-supplied or public reproducible evidence before completion can
-be claimed. Product-level production readiness, top-tier scientific validation,
-raw access, canonical graph writes, autonomous business judgment, and
-enterprise-scale latency/scalability remain outside any future completion
-claim.
-
+```text
+source-complete authorized Observations
+  -> strong RAG control
+  -> conservative entity linking
+  -> reviewed candidate/canonical graph topology
+  -> temporal/provenance/coverage constraints
+  -> scoped ontology with capped soft scoring
+  -> deterministic exact executor or cited answer
+```
+Mail is the first source fixture. The method must transfer to a materially
+different source family without question-specific core types or aliases.
 ## Status
+`blocked` for methodology-quality UAT, comparative superiority, default-path
+replacement, and objective completion. Current authority is fail-closed with
+`authority_valid=false`, `methodology_ready=false`, runtime error
+`passed_runtime_gate_requires_cjk_runtime_support`, and four blocking gates:
+source completeness, accepted execution-fingerprint binding, same-pipeline
+real-source ablation, and independent final-answer acceptance. The target
+method and tokenizer remain pinned, but no formal all-four-gate evidence exists
+to promote.
+## Step-4 Browser Direct-Responses LAN UAT Checkpoint — 2026-09-04
+The trusted same-LAN no-auth UAT on port `8088` used the direct Responses
+provider and approved sealed-source route. One terse self-test reached the
+provider and made three normal `/mcp` calls; all returned `replan_required`,
+and multi-row ambiguity ended in `clarification_required` with no answer or citations.
+Authority remains `authority_valid=false`/`methodology_ready=false` with source
+completeness, execution-fingerprint binding, same-pipeline real-source
+ablation, and independent final-answer acceptance blocked. This is diagnostic
+UAT only, not production, readiness, Issue #56 completion, or superiority.
+## Step-4 Attachment-Table Checkpoint — 2026-09-02
+The structural-blank plus sparse focused normal `/mcp` E2E passed `1/1` in
+`66.026 s`. Exactly-once mode
+`issue56-after-structural-blank-diagnostic-20260902-v1` was consumed with exit
+`0` as `workspace_only_v1`/`workspace_formowl`, actor/approver
+`user_full_pst_domain_hard_case_eval_owner`, and no tenant. It returned HTTP
+`200`, no MCP error, request count `1`, request/compose
+`531.524261`/`607917.660851 ms`, authorized scope `1799`, exact returned/total
+`2/2`, complete coverage, candidate-only `0`, and `7` citations.
 
-`blocked`
+Within the authorized sealed-source scope, the requested projection fields
+materialized as explicit blanks; another unrequested field was not semantically
+equivalent and was not used as an alias.
 
-## Current Acceptance State
+This is an exploratory diagnostic POC only—not formal UAT, production,
+readiness, Issue #56 completion, or comparative-superiority evidence. Step 4
+remains `in-progress`; the same four authority gates remain blocked. The
+earlier participant inventory also remains independently `incomplete`.
+## Step-4 Connected Route-A Planner Checkpoint — 2026-09-03
+Commit `f4a18e5` is pushed, and scoped canonical verification passed `23/23`.
+Route A keeps planning in the connected ChatGPT/workspace client across at most
+two follow-ups; no inline/server-side model client was added.
+Safe v3 log `sha256:013aa643f17ac30e358800517d62268e8f5fbb3049747530f0004dd260b10b11`
+used `workspace_only_v1`/`workspace_formowl`, the approved actor/approver, and
+no tenant. Transport succeeded with exact `12/12`, all `source_provided`, and
+`36` citations/lineages, but five distinct value fingerprints plus
+`incomplete`/`context_budget_reached` kept `answerable=false`; clarification is
+required.
+Tool guidance now requires a remaining follow-up to use one unique authorized
+row discriminator in a combined projection; a synthetic formal-XLSX E2E proves
+same-response row association, citation, and lineage. The v4 pre-run is blocked
+by multiple equally valid discriminators: do not tune or rerun the query; ask
+the user for an item/identifier field or let the real calling agent clarify.
+Authority remains invalid/not ready with the same four gates; no general UAT, production, readiness, Issue #56-completion, or methodology claim is earned.
+## Non-Negotiable Method
 
-Do not treat the broad KG real-evidence acceptance objective as complete in the
-current authority state. The stricter current state is blocked, and no broad
-completion claim is supported until the four remaining gates have accepted
-canonical packets and all authority reports are synchronized and passing.
+- Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence
+  reranking over the same Observations.
+- KG adds reviewed identity, cross-source joins, bounded traversal, temporal
+  state, contradiction, provenance, and coverage.
+- Ontology is small-core, scoped, data-first, versioned, and capped additive.
+  Inferred mismatch cannot prune admitted evidence.
+- Permission, schema/arity, lineage, revision pins, canonical-write
+  preconditions, and exact-set coverage remain hard invariants.
+- Exact set/count/inventory/aggregation/definitive-negative queries use a
+  deterministic executor, not top-k inference.
+- The final answer model, prompt, reasoning effort, schema, and context budget
+  are identical across comparison arms.
+- Independent holdout content cannot tune tokenizer, aliases, ontology,
+  graph rules, thresholds, prompts, or models.
+- PostgreSQL/pgvector remains canonical; no Neo4j work is authorized.
 
-## Blockers
+## Current Blockers
 
-- The broad KG real-evidence objective remains unchecked on the active board.
-- Issue #38's authority harness is state-independent and clean-clone
-  reproducible. Its explicit blocked fixture still correctly reports the four
-  unresolved real-evidence gates; that blocked evidence state is not harness
-  drift.
-- No canonical completion claim is valid until the required packets, reports,
-  dev-container checks, and reviewer gate agree.
+The authority blocks source completeness, execution-fingerprint binding,
+same-pipeline real-source ablation, and real-user final-answer acceptance.
+Historical, candidate-only, synthetic, and consumed diagnostics cannot satisfy
+them.
+
+## Current Five-Step POC Plan
+
+1. The Master freezes two disjoint worker write sets and one real end-to-end
+   success path, then records only status changes unless evidence reveals a new
+   blocker.
+2. Worker A implements the immutable target tokenizer/profile and same-profile
+   query/evidence indexing without fallback, including the smallest runnable
+   path that proves the profile is actually used.
+3. Worker B implements the complementary source-preserving strong-RAG/control
+   path needed to carry an authorized Observation through real retrieval and
+   result production; contract-only wiring is insufficient.
+4. The workers extend their non-overlapping slices into one bounded issue #56
+   path covering typed routing, deterministic exact execution where applicable,
+   conservative graph expansion, and capped soft ontology scoring.
+5. The Master integrates and inspects the end-to-end evidence, redirects any
+   repeated blocker instead of retrying blindly, and accepts only the claim
+   actually proven. Independent holdout, transfer evaluation, broad hardening,
+   and release review remain later gates.
+
+Plan status: step 4 is `in-progress`; the five-step wording remains frozen. No
+further execution of the consumed development one-shot is authorized.
+
+## Acceptance Boundary
+
+Implementation completion and comparative close are distinct.
+
+POC evidence must cover this real path:
+
+```text
+authorized source/Observation
+  -> frozen query/evidence profile and index
+  -> strong RAG plus bounded graph/ontology execution
+  -> deterministic result or cited answer
+```
+
+Contracts, schemas, mocks, or isolated tests alone are insufficient. POC
+evidence never relaxes permission, privacy, provenance, candidate-before-
+canonical, no-secret/no-raw-path, fail-closed authority, or public-output
+boundaries, and cannot earn readiness, superiority, or completion claims.
+
+Implementation completion requires target runtime, source-complete graph input,
+strong RAG, typed plans, deterministic exact execution, graph/ontology path,
+generalized tests, frozen diagnostic artifacts, synchronized docs, canonical
+container verification, and 3/3 reviewer agreement.
+
+Comparative close additionally requires the independent holdout and transfer
+domain to pass pre-registered correctness, citation, no-answer, privacy,
+latency, and cost gates, plus:
+
+```sh
+python3 scripts/methodology_authority_check.py --require-ready
+```
+
+exiting zero.
 
 ## Next Action
 
-Resume the single unchecked KG real-evidence board item from its archived proof
-requirements by collecting or selecting accepted evidence for the four blocked
-gates. Keep candidate-before-canonical and no-raw-path boundaries intact.
+Remain within step 4. Close the source-selection/artifact-binding scope gap and
+obtain source-backed or reviewed semantic header evidence before any
+canonical-KG or deterministic-exact promotion. Do not treat candidate-only
+interpretation as formal UAT, run blocked holdouts, or claim readiness,
+superiority, production status, or Issue #56 completion.

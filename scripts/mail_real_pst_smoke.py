@@ -201,7 +201,9 @@ def run_mail_real_pst_smoke(
     extraction_config: dict[str, Any] = {
         "timeout_seconds": 1800 if mode == "full" else 900,
         "body_segment_max_chars": 4000,
-        "max_body_segments_per_message": 3,
+        "max_body_segments_per_message": None,
+        "max_attachment_text_bytes": 5 * 1024 * 1024,
+        "preserve_private_body_text": True,
     }
     if mode == "sampled":
         extraction_config["max_messages"] = sample_message_limit

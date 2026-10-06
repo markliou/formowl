@@ -64,6 +64,10 @@ from formowl_kg_eval.structured_answer import (  # noqa: E402
     StructuredAnswerPrediction,
     score_structured_answer,
 )
+from formowl_graph import (  # noqa: E402
+    build_default_candidate_evidence_harness_contract,
+    require_default_candidate_evidence_harness_contract,
+)
 from formowl_mail import MailEvidenceBundle  # noqa: E402
 
 SCRIPTS_ROOT = ROOT / "scripts"
@@ -75,6 +79,9 @@ import mail_full_pst_domain_hard_kg_fusion_eval as kg_eval  # noqa: E402
 import mail_full_pst_domain_hard_ontology_ablation_eval as ontology_eval  # noqa: E402
 import mail_full_pst_domain_hard_ontology_factorial_eval as factorial_eval  # noqa: E402
 
+
+HARNESS_CONTRACT = build_default_candidate_evidence_harness_contract()
+require_default_candidate_evidence_harness_contract(HARNESS_CONTRACT)
 
 DEFAULT_PRIVATE_MANIFEST = (
     ROOT
@@ -878,7 +885,12 @@ def _build_grounded_answer_evaluation(
     }
     segments = kg_eval._load_mail_segments(corpus_root)
     kg_index = kg_eval._build_candidate_kg_index(segments)
-    ontology_index = ontology_eval._build_ontology_index(segments, kg_index)
+    ontology = ontology_eval._build_domain_ontology()
+    ontology_index = ontology_eval._build_ontology_index(
+        tuple(kg_index.segment_by_observation_id.values()),
+        kg_index,
+        ontology,
+    )
     rows: list[dict[str, Any]] = []
     for case in cases:
         fingerprint = str(case["private_fingerprint"])
@@ -904,28 +916,29 @@ def _build_grounded_answer_evaluation(
         mail_selected_ids = _selected_observation_ids(
             mail_data.get("evidence_snippets") if isinstance(mail_data, Mapping) else ()
         )
-        query_tokens = kg_eval._tokenize(query_text)
-        kg_components = kg_eval._rank_components(query_tokens, kg_index, limit=4)
-        kg_selected_ids = kg_eval._evidence_from_components(
-            kg_components,
-            query_tokens=query_tokens,
+        access_binding = kg_eval._access_binding_for_requester(
+            str(case.get("requester_user_id", "")),
             kg_index=kg_index,
-            limit=min(max(int(case.get("limit", 10)), 0), 10),
         )
-        query_domains = ontology_eval._domains_for_tokens(query_tokens)
-        ontology_components = ontology_eval._rank_components_with_ontology(
-            query_tokens,
-            query_domains=query_domains,
-            kg_index=kg_index,
-            ontology_index=ontology_index,
-            limit=4,
+        retrieval_limit = min(max(int(case.get("limit", 10)), 1), 10)
+        kg_retrieval = kg_index.evidence_index.retrieve(
+            query_text=query_text,
+            limit=retrieval_limit,
+            access_binding=access_binding,
+            **kg_eval._retrieval_scope(kg_index),
         )
-        ontology_selected_ids = kg_eval._evidence_from_components(
-            ontology_components,
-            query_tokens=query_tokens,
-            kg_index=kg_index,
-            limit=10,
+        ontology_retrieval = ontology_index.evidence_index.retrieve(
+            query_text=query_text,
+            limit=retrieval_limit,
+            enable_ontology_rerank=True,
+            access_binding=access_binding,
+            ontology_revision_id=kg_eval.EVIDENCE_ONTOLOGY_REVISION_ID,
+            ontology_signal_vocabulary_hash=(ontology_index.ontology_signal_vocabulary_hash),
+            ontology_contract_hash=ontology_index.ontology_contract_hash,
+            **kg_eval._retrieval_scope(kg_index),
         )
+        kg_selected_ids = kg_retrieval.selected_observation_ids
+        ontology_selected_ids = ontology_retrieval.selected_observation_ids
         selected_by_arm = {
             CHATGPT_WITHOUT_FORMOWL: (),
             CHATGPT_WITH_MAIL_EVIDENCE: mail_selected_ids,
@@ -973,8 +986,8 @@ def _build_grounded_answer_evaluation(
             "required_source_observation_ids": list(required_ids),
             "gold": gold_payload,
             "gold_hash": sha256_json(gold_payload),
-            "kg_selected_component_hash": sha256_json(kg_components),
-            "ontology_selected_component_hash": sha256_json(ontology_components),
+            "kg_retrieval_result_hash": _candidate_retrieval_result_hash(kg_retrieval),
+            "ontology_retrieval_result_hash": _candidate_retrieval_result_hash(ontology_retrieval),
             "arm_results": arm_rows,
         }
         rows.append({**row_without_hash, "row_hash": sha256_json(row_without_hash)})
@@ -985,6 +998,17 @@ def _build_grounded_answer_evaluation(
         "arm_aggregates": _aggregate_grounded_answer_rows(rows),
         "rows": rows,
     }
+
+
+def _candidate_retrieval_result_hash(retrieval: Any) -> str:
+    return sha256_json(
+        {
+            "plan": to_plain(retrieval.plan),
+            "selected_observation_ids": list(retrieval.selected_observation_ids),
+            "rejected": retrieval.rejected,
+            "rejection_reason": retrieval.rejection_reason,
+        }
+    )
 
 
 def _prediction_result_kind(

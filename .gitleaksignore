@@ -1,0 +1,8 @@
+# Frozen tokenizer/profile identifiers; not credentials.
+README.md:generic-api-key:77
+SPEC.md:generic-api-key:888
+tests/test_methodology_authority.py:generic-api-key:172
+
+# Immutable archive mirrors of frozen tokenizer/profile identifiers; not credentials.
+docs/archive/2026-08-18/active/docs/methodology-authority.json:generic-api-key:14
+docs/archive/2026-08-18/active/docs/kg-ontology-v2-runtime-evaluation-plan.md:generic-api-key:23

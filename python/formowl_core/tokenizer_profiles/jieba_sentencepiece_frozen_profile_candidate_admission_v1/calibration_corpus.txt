@@ -1,0 +1,36 @@
+採購團隊記錄供應商交期、原產地、承諾狀態與風險說明。
+採購單包含料號、數量、截止日期、責任人與證據來源。
+專案團隊追蹤里程碑、責任人、截止日期與依賴關係。
+客服案例描述客戶問題、處理狀態、後續行動與證據來源。
+合約審查記錄付款條件、交付條件、決策與未解阻礙。
+會議紀錄保存參與者、議題、決定、承諾與下一步行動。
+系統觀察只保存授權內容並保留來源、時間與權限範圍。
+候選知識必須保留證據，不得直接成為正式知識。
+查詢與證據索引使用相同的固定分詞設定與版本指紋。
+calibration corpus uses synthetic authorized observations only.
+candidate admission preserves identifiers before lexical segmentation.
+query and evidence indexes share one immutable tokenizer profile.
+source provenance permission scope and observation identity remain separate.
+project milestone owner deadline dependency decision blocker evidence.
+supplier commitment delivery schedule origin status risk explanation.
+customer case resolution follow up action citation and source evidence.
+document paragraph table row calendar event ticket comment and mail segment.
+exact inventory count and definitive absence require deterministic execution.
+採購團隊記錄供應商交期、原產地、承諾狀態與風險說明。
+採購單包含料號、數量、截止日期、責任人與證據來源。
+專案團隊追蹤里程碑、責任人、截止日期與依賴關係。
+客服案例描述客戶問題、處理狀態、後續行動與證據來源。
+合約審查記錄付款條件、交付條件、決策與未解阻礙。
+會議紀錄保存參與者、議題、決定、承諾與下一步行動。
+系統觀察只保存授權內容並保留來源、時間與權限範圍。
+候選知識必須保留證據，不得直接成為正式知識。
+查詢與證據索引使用相同的固定分詞設定與版本指紋。
+calibration corpus uses synthetic authorized observations only.
+candidate admission preserves identifiers before lexical segmentation.
+query and evidence indexes share one immutable tokenizer profile.
+source provenance permission scope and observation identity remain separate.
+project milestone owner deadline dependency decision blocker evidence.
+supplier commitment delivery schedule origin status risk explanation.
+customer case resolution follow up action citation and source evidence.
+document paragraph table row calendar event ticket comment and mail segment.
+exact inventory count and definitive absence require deterministic execution.

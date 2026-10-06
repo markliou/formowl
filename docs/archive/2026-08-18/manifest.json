@@ -1,0 +1,202 @@
+{
+  "archive_date": "2026-08-18",
+  "purpose": "pre-rewrite snapshot of active KG, ontology, retrieval, evaluation, and coordination documentation",
+  "files": [
+    {
+      "source": "AGENTS.md",
+      "archive": "docs/archive/2026-08-18/active/AGENTS.md",
+      "bytes": 5062,
+      "lines": 126,
+      "sha256": "43d7ffc65e9edabcaeb029ea31aa562fa473735e00a5de693e3f1a6e91438d0c"
+    },
+    {
+      "source": "README.md",
+      "archive": "docs/archive/2026-08-18/active/README.md",
+      "bytes": 63186,
+      "lines": 1094,
+      "sha256": "3cdaacab8667b9d968ba7c0eda56dc3a93562f651fb4d8f8cc085b425d2acd0f"
+    },
+    {
+      "source": "SPEC.md",
+      "archive": "docs/archive/2026-08-18/active/SPEC.md",
+      "bytes": 44162,
+      "lines": 1823,
+      "sha256": "ece12808cd5732dd958b2f903e04b0d5913a91f176308f7575813b649e05fd4e"
+    },
+    {
+      "source": "RESOURCE_EXTRACTION_SPEC.md",
+      "archive": "docs/archive/2026-08-18/active/RESOURCE_EXTRACTION_SPEC.md",
+      "bytes": 28411,
+      "lines": 1197,
+      "sha256": "dc7af91af9f0f8cd8bf60e9e22d8e7621e72040ffe92ab56c9d1d9ba071eaff0"
+    },
+    {
+      "source": "docs/agent-roles.md",
+      "archive": "docs/archive/2026-08-18/active/docs/agent-roles.md",
+      "bytes": 7674,
+      "lines": 177,
+      "sha256": "d8a5bf35a0c31f0ebeffd94f409eb76941e37f638dd0510ee2f1f9f92d598dc7"
+    },
+    {
+      "source": "docs/architecture.md",
+      "archive": "docs/archive/2026-08-18/active/docs/architecture.md",
+      "bytes": 12543,
+      "lines": 269,
+      "sha256": "0f771c08694af9bcfaa42d66ea9bb748ec5972982fa889fa6c4147bffb1b2658"
+    },
+    {
+      "source": "docs/workflows.md",
+      "archive": "docs/archive/2026-08-18/active/docs/workflows.md",
+      "bytes": 35605,
+      "lines": 703,
+      "sha256": "5f12abc7acd6677d44b7aaab76d5c01ab1d1446002c72d93f82e28fa8e844a25"
+    },
+    {
+      "source": "docs/mcp-boundaries.md",
+      "archive": "docs/archive/2026-08-18/active/docs/mcp-boundaries.md",
+      "bytes": 14493,
+      "lines": 336,
+      "sha256": "b5405eaf2186ab7117843f314d77ee272844fa57834f14525b32a461d7edd5e9"
+    },
+    {
+      "source": "docs/provenance.md",
+      "archive": "docs/archive/2026-08-18/active/docs/provenance.md",
+      "bytes": 4644,
+      "lines": 145,
+      "sha256": "e14249d5b49b0c9971a810ac2720a9587858cf4aedd070740155d7eb276c8131"
+    },
+    {
+      "source": "docs/infra-spec.md",
+      "archive": "docs/archive/2026-08-18/active/docs/infra-spec.md",
+      "bytes": 57754,
+      "lines": 1558,
+      "sha256": "0e1c75d181095f802bbc1d3c1de4e70cd5eaae642b59ac184bff3edf34c71789"
+    },
+    {
+      "source": "docs/kg-eval-package.md",
+      "archive": "docs/archive/2026-08-18/active/docs/kg-eval-package.md",
+      "bytes": 8973,
+      "lines": 258,
+      "sha256": "382d718aec87c06fe6ff374497b46f8f07bf3ec38b5fdc3de33d64783edde2d1"
+    },
+    {
+      "source": "docs/kg-research-method.md",
+      "archive": "docs/archive/2026-08-18/active/docs/kg-research-method.md",
+      "bytes": 37658,
+      "lines": 628,
+      "sha256": "22dbbc9e7a195ee3776008310c9fb6964a6802ebe3b47218945509197e788a93"
+    },
+    {
+      "source": "docs/kg-ontology-v2-rd-boundary.md",
+      "archive": "docs/archive/2026-08-18/active/docs/kg-ontology-v2-rd-boundary.md",
+      "bytes": 34190,
+      "lines": 541,
+      "sha256": "06b175270debfc295e7c092642b8e40139586144fb3c5fab432ee9f1ff522e4a"
+    },
+    {
+      "source": "docs/kg-ontology-v2-runtime-evaluation-plan.md",
+      "archive": "docs/archive/2026-08-18/active/docs/kg-ontology-v2-runtime-evaluation-plan.md",
+      "bytes": 50000,
+      "lines": 850,
+      "sha256": "50e8315e9daaff27f0cb99eccc97288427e9a4371a9ea930272ce992bbd3d0da"
+    },
+    {
+      "source": "docs/kg-bert-runtime.md",
+      "archive": "docs/archive/2026-08-18/active/docs/kg-bert-runtime.md",
+      "bytes": 18116,
+      "lines": 514,
+      "sha256": "2e6ad233118d5de53ec773dc6a8325fb513cc91411574a3d27fc1b7eb5495beb"
+    },
+    {
+      "source": "docs/kg-ontology-pretrained-model-explanation.md",
+      "archive": "docs/archive/2026-08-18/active/docs/kg-ontology-pretrained-model-explanation.md",
+      "bytes": 7968,
+      "lines": 404,
+      "sha256": "df83cd936adc9072915744587f79d92ef242e074f92e1201014a276955b82231"
+    },
+    {
+      "source": "docs/multimodal-ontology-term-extraction-decision.md",
+      "archive": "docs/archive/2026-08-18/active/docs/multimodal-ontology-term-extraction-decision.md",
+      "bytes": 11509,
+      "lines": 269,
+      "sha256": "ecff18f0ea80d7ea461300eb4d48d9d7434a6645bc1926dfb1210773fe5fff06"
+    },
+    {
+      "source": "docs/mail-ontology-native-factorial-design.md",
+      "archive": "docs/archive/2026-08-18/active/docs/mail-ontology-native-factorial-design.md",
+      "bytes": 15751,
+      "lines": 367,
+      "sha256": "df08fe2e60532670f5086a3ef3f10f760599e8a62d9a124ad41f86cb80ab17f2"
+    },
+    {
+      "source": "docs/ontology-v2-coordination-plan.md",
+      "archive": "docs/archive/2026-08-18/active/docs/ontology-v2-coordination-plan.md",
+      "bytes": 18289,
+      "lines": 555,
+      "sha256": "cb5f4598275c01b42cfd9fd2450cd230c2b005472b1aebd4c039ec0476fe880f"
+    },
+    {
+      "source": "docs/ontology-v2-coordination-frames.md",
+      "archive": "docs/archive/2026-08-18/active/docs/ontology-v2-coordination-frames.md",
+      "bytes": 14558,
+      "lines": 350,
+      "sha256": "79377ce27f4517069c7fe09a0114f7fe7072919e1dd60bb606d11f1ce7e83f99"
+    },
+    {
+      "source": "docs/ontology-v2-review-comments.md",
+      "archive": "docs/archive/2026-08-18/active/docs/ontology-v2-review-comments.md",
+      "bytes": 24182,
+      "lines": 445,
+      "sha256": "25365a6d6bfa6ff24a586407f6745ae194a6714153fce180eb7633fc68452fc8"
+    },
+    {
+      "source": "docs/agent-goals/README.md",
+      "archive": "docs/archive/2026-08-18/active/docs/agent-goals/README.md",
+      "bytes": 4491,
+      "lines": 104,
+      "sha256": "a3383e3aecc9abceb8ac1962e595c44b9c108780e41bcef0f0c1d90459ceed1b"
+    },
+    {
+      "source": "docs/agent-goals/kg-research-agent.md",
+      "archive": "docs/archive/2026-08-18/active/docs/agent-goals/kg-research-agent.md",
+      "bytes": 9486,
+      "lines": 177,
+      "sha256": "fe77bc759275d89eff60c6b36c31dae668c12326f1568251a4b3f7aa0a8fcafe"
+    },
+    {
+      "source": "docs/agent-goals/dual-track-uat-kg-coordinator.md",
+      "archive": "docs/archive/2026-08-18/active/docs/agent-goals/dual-track-uat-kg-coordinator.md",
+      "bytes": 4574,
+      "lines": 117,
+      "sha256": "d9e92071192747b1e5693643f3bc86f003f79c57dd62a60cb060c0bcdcb7219e"
+    },
+    {
+      "source": "docs/agent-goals/handoff-log.md",
+      "archive": "docs/archive/2026-08-18/active/docs/agent-goals/handoff-log.md",
+      "bytes": 10369,
+      "lines": 149,
+      "sha256": "a2b0157f0043b6ca9310704f2db02b9c6cd8698154bec78b2ccfa193d4c4216d"
+    },
+    {
+      "source": "docs/implementation-task-breakdown.md",
+      "archive": "docs/archive/2026-08-18/active/docs/implementation-task-breakdown.md",
+      "bytes": 28296,
+      "lines": 397,
+      "sha256": "7bd82d40623b66e8ae320ff511c97df1825ded1aebed30a77298aa918ad0d7c3"
+    },
+    {
+      "source": "docs/methodology-authority.json",
+      "archive": "docs/archive/2026-08-18/active/docs/methodology-authority.json",
+      "bytes": 2817,
+      "lines": 78,
+      "sha256": "9090d43762b6d49e27612cc3c5abd709b7be24c8e3f9e3979c09ae056c67e39f"
+    },
+    {
+      "source": "docs/archive/README.md",
+      "archive": "docs/archive/2026-08-18/active/docs/archive/README.md",
+      "bytes": 2389,
+      "lines": 54,
+      "sha256": "1d36461879d8b6181f25d9a0f1131db8b20c82fa7d09b0ebfe306adf3d0ba49b"
+    }
+  ]
+}

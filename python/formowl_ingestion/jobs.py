@@ -95,6 +95,7 @@ def run_ingestion_job(
     config: Mapping[str, Any] | None = None,
     started_at: str | None = None,
     completed_at: str | None = None,
+    attachment_asset_store: AssetRecordStore | None = None,
 ) -> IngestionJob:
     """Run a pending local ingestion job through deterministic extractors."""
 
@@ -144,7 +145,6 @@ def run_ingestion_job(
                 adapter=adapter,
                 config=config,
             )
-
             stored = run_extractor(
                 asset=asset,
                 object_store=object_store,
@@ -154,6 +154,7 @@ def run_ingestion_job(
                 config=config,
                 started_at=run_started_at,
                 completed_at=completed_at,
+                attachment_asset_store=attachment_asset_store,
             )
             extractor_run_ids.append(stored.extractor_run.extractor_run_id)
             if stored.extractor_run.status != "succeeded":

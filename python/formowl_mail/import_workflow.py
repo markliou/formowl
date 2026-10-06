@@ -558,7 +558,7 @@ def _upsert_bundle_after_verified_query(
     # store-backed query cannot see usable evidence, the rows are rolled back
     # before the UploadSession can be considered ready.
     with PostgreSQLUnitOfWork(mail_evidence_store.connection) as unit:
-        statements = mail_evidence_store.upsert_bundle(bundle)
+        statements = mail_evidence_store.upsert_bundle(bundle, transaction=unit)
         owner_query = _query_store_backed_jsonrpc(
             mail_evidence_store=mail_evidence_store,
             upload_session=upload_session,

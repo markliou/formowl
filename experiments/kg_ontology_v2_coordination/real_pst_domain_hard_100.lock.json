@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "artifact_id": "formowl_real_pst_domain_hard_100_lock_v1",
+  "status": "frozen_private_manifest_required",
+  "source_fixture": {
+    "archive_sha256": "sha256:7c8df5f089109997726521819bde6b5ac5d1484359fa57eb739d07e3a0aa4499",
+    "fixture_size_bytes": 21150409728,
+    "raw_content_included": false,
+    "private_path_included": false
+  },
+  "case_set": {
+    "case_count": 100,
+    "positive_case_count": 80,
+    "no_match_case_count": 10,
+    "permission_denied_case_count": 10,
+    "private_manifest_sha256_json": "sha256:1de5ab7f80529a76cadb808cb4cd234ce0c5fe355d6b67745cfef1ada7d8607d",
+    "case_definition_sha256_json": "sha256:2db5669f2cfb2296d642096f47d39b283e70aeaa4c0522ac4e580606ccaad12f",
+    "case_id_sequence_sha256_json": "sha256:b8891018cdfc74cac44960bcfe1de696ce0371e72ddcf467ffc0c6d257673792"
+  },
+  "policy": {
+    "case_policy_version": "formowl_full_pst_domain_hard_case_eval_v1",
+    "same_questions_required": true,
+    "question_regeneration_forbidden": true,
+    "failed_case_replacement_forbidden": true,
+    "easier_case_preselection_forbidden": true,
+    "observation_id_remap_only_after_complete_reingestion": true
+  },
+  "historical_reference": {
+    "baseline_retrieval_passed_case_count": 11,
+    "candidate_kg_passed_case_count": 19,
+    "ontology_guided_kg_passed_case_count": 19,
+    "claim": "historical diagnostic only"
+  }
+}

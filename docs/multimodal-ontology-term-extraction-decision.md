@@ -1,269 +1,167 @@
-# Multimodal Ontology Term Extraction Decision
+# Heterogeneous-Source Ontology Term and Mapping Decision
 
-Date: 2026-07-09
+**Active program:** GitHub issue #56
+**Decision date:** 2026-08-18
+**Status:** active design; runtime methodology authority remains blocked
 
-Status: design decision. This is not an implementation completion claim.
+This is the active decision for term extraction, multilingual tokenization,
+source mappings, and ontology candidate promotion. It replaces the earlier
+mail/OCR-centered active interpretation. Historical text is preserved under
+`docs/archive/2026-08-18/`.
 
 ## Decision
 
-FormOwl will add a data-driven mention and term extraction layer before
-ontology selection, entity resolution, frame extraction, and KG fusion.
-
-This layer is broader than a tokenizer. Tokenization is one replaceable adapter
-inside a governed pipeline:
+Use a data-first, source-preserving, scoped ontology process:
 
 ```text
-RawResource
-  -> modality extractor
-  -> Observation
-  -> normalized text/layout/time region
-  -> term and mention candidates
-  -> typed mention candidates
-  -> alias and entity candidates
-  -> candidate graph and frame extraction
-  -> ontology health report and type proposals
-  -> governed canonical ontology/type/graph changes
+heterogeneous Observations
+  -> protected identifier and multilingual term candidates
+  -> source-local mentions and relations
+  -> candidate core/domain mappings
+  -> evidence-backed review
+  -> versioned scoped OntologyRevision
 ```
 
-The initial policy is data-driven first:
+Do not create ontology terms from final UAT or independent holdout questions.
+Do not use source format labels as enterprise-wide semantic truth.
 
-- Use corpus statistics, layout and role context, gazetteers, weak labels, and
-  ablations as the primary source of term and ontology candidates.
-- Use LLMs only for low-confidence explanation, naming suggestions, ambiguity
-  notes, and candidate review assistance.
-- Do not let an LLM directly create canonical ontology, canonical type, entity,
-  relation, user-graph, grant, or wiki state.
-- Do not rely on a top-down company ontology or fixed department list.
-- Do not apply ontology as an early hard filter unless a high-confidence,
-  calibrated gate has passed end-task ablation.
+## Stable Core
 
-## Why This Is Needed
-
-The current mail query, evidence, KG-fusion, and entity-resolution paths use
-simple regex tokenization. That is usable for ASCII identifiers, emails,
-domains, and many part numbers, but it is not a Chinese mention extractor and
-does not reliably preserve terms such as Chinese company names.
-
-For example, a Chinese organization name should enter the KG pipeline as a
-`CandidateMention` or candidate entity instance typed as `Organization`. The
-organization name itself is not an ontology type. The ontology type is
-`Organization`; the name is an instance or alias candidate with source
-evidence.
-
-Future multimodal data makes this boundary more important. PDF, PowerPoint,
-OCR, audio, video, screenshots, and mail all produce different locators and
-error modes. FormOwl therefore needs one shared candidate layer that can compare
-evidence across modalities without turning a modality-specific parser output
-into ontology truth.
-
-## Multimodal Evidence Boundary
-
-Every modality-specific extractor must output `Observation` records first.
-Term and mention extraction reads observations, not raw backend paths or private
-parser internals.
-
-Supported locator styles include:
-
-- Mail: message occurrence, body segment, header, attachment occurrence.
-- PDF and document: page, section, paragraph, table, cell, bounding box.
-- PowerPoint: slide, shape, notes, embedded object, image region.
-- OCR and image: page or image id, text region, line, word, bounding box.
-- Audio: transcript segment, word timestamp, speaker segment.
-- Video: scene, keyframe, transcript segment, OCR region, timestamp.
-
-The same surface form can receive evidence from multiple modalities. A company
-name in an email, a supplier field in a PDF, an OCR block in a scanned quote,
-and a transcript mention in a meeting should become separate candidate mentions
-that may later support one candidate entity.
-
-## Term Extraction Policy
-
-The first production-quality direction is not to retrain a supervised segmenter
-from scratch. The first direction is a corpus-adapted term extraction stack:
-
-1. Unicode normalization and script-aware normalization.
-2. Existing regex tokenization retained for ASCII identifiers, email addresses,
-   domains, and part-number-like strings.
-3. CJK span generation that does not depend on whitespace.
-4. Corpus phrase mining using frequency, document/thread spread, left and right
-   entropy, accessor variety, PMI-like association, and repeated layout fields.
-5. Domain lexicon induction from high-stability phrases across documents,
-   threads, senders, departments, and attachments.
-6. Gazetteer and suffix rules for organization, person, location, document,
-   artifact, amount, quantity, date, and project candidates.
-7. Context-role scoring from nearby cues such as supplier, vendor, customer,
-   buyer, quotation, invoice, purchase order, payment, shipment, owner, and
-   approver.
-8. Alias clustering across spelling variants, abbreviations, OCR variants,
-   email domains, document fields, and repeated graph neighborhoods.
-
-The output is a scored candidate set, not a single irreversible segmentation:
+Keep a small cross-domain core. Initial candidates include:
 
 ```text
-surface: <redacted enterprise term>
-candidate_types:
-  Organization: 0.91
-  Artifact: 0.04
-  Project: 0.03
-  Unknown: 0.02
-evidence:
-  observation_count: ...
-  modality_count: ...
-  thread_or_document_spread: ...
-  role_contexts: ...
+Actor
+Person
+Organization
+Artifact
+Document
+Communication
+Event
+Claim
+Identifier
+Project
+Case
+WorkItem
+TimeInterval
+StateTransition
+Location
 ```
 
-Tracked public reports must aggregate or hash sensitive surface forms unless the
-surface is already a safe public fixture term.
+The core is intentionally smaller than any source schema. Email, calendar,
+ticket, project, document, database, audio, image, and other source types retain
+source-local identity and map into the core where evidence supports it.
 
-## Training Policy
+## Source and Domain Packs
 
-Large raw corpora are useful immediately, but they do not by themselves provide
-trusted typed labels.
-
-Use large raw corpora for:
-
-- tokenizer vocabulary adaptation;
-- phrase and terminology mining;
-- weak-label generation;
-- domain gazetteer induction;
-- alias and spelling-variant discovery;
-- hard-case selection for annotation or review.
-
-Do not claim a reliable supervised mention/type classifier from raw data alone.
-Typed training requires one or more governed label sources:
-
-- high-confidence weak labels with rule ids and error estimates;
-- reviewed `CandidateMention`, `TypeDefinition`, `TypeMapping`, and
-  `TypeAlignmentCandidate` outcomes;
-- active-learning review of low-confidence or high-impact spans;
-- sampled held-out annotations for term-boundary and type accuracy.
-
-Trained models may produce candidates only. Their outputs must record model
-version, training manifest hash, extraction policy id, confidence, and evidence
-links. They must not directly mutate canonical ontology or canonical graph
-state.
-
-## Ontology Selection Policy
-
-Ontology promotion must be decided by policy and data, not by a fixed number of
-types and not by LLM preference.
-
-Candidate types or domain packs may be promoted only when they pass configured
-selection thresholds such as:
-
-- corpus coverage across enough documents, threads, cases, modalities, or
-  departments;
-- stability across time windows;
-- positive KG retrieval or QA lift under ablation;
-- reduced false positives without unacceptable false rejects;
-- low permission-boundary risk;
-- low type conflict rate;
-- clear mapping to the closed core or an approved scoped promoted type;
-- reproducible provenance through source observations and candidate ids.
-
-The system should choose the smallest effective set. If adding more terms or
-types does not improve end-task quality, those candidates remain scoped,
-experimental, or archived.
-
-## Multimodal Evaluation Gates
-
-The layer is not effective until it improves measured behavior. Required
-evaluation families:
-
-- Term-boundary evaluation for Chinese, mixed Chinese/English, identifiers, and
-  OCR-noisy text.
-- Mention typing accuracy for core supertypes such as `Organization`, `Person`,
-  `Artifact`, `Document`, `Project`, `Location`, `Event`, and `Concept`.
-- Alias/entity clustering precision and recall.
-- KG retrieval and QA lift against KG-only and regex-tokenizer baselines.
-- Ontology ablation showing which term/type candidates actually contribute.
-- Cross-modality agreement tests, for example mail plus PDF plus transcript.
-- False-reject metrics for any hard gate.
-- Permission and redaction safety checks.
-
-No hard type or ontology gate should ship without false-reject instrumentation.
-
-## Relationship To Ontology v2
-
-Ontology v2 remains useful for coordination frames: request, commitment,
-decision, blocker, deadline, dependency, escalation, and follow-up semantics.
-
-This decision adds the missing upstream layer:
+A source pack defines deterministic local structure and mappings, for example:
 
 ```text
-term and mention extraction
-  -> typed candidate mentions/entities
-  -> coordination frames and business objects
-  -> candidate KG fusion
-  -> ontology health and promotion policy
+email_message -> Communication and Artifact
+calendar_event -> Event
+ticket -> WorkItem
+document_section -> Artifact / Document
+project_comment -> Claim or CoordinationFrame candidate
 ```
 
-The change is therefore not "replace v2". It is "make v2 data-driven and
-multimodal-ready before any broader ontology claim".
+A scoped domain pack may add reviewed types, relations, frames, aliases, and
+validation rules. It must not bypass candidate review, create another canonical
+graph, or grant access.
 
-## Current EXM Lexical Evaluation
+## Multilingual and Identifier Policy
 
-The 2026-07-09 EXM 50,000-case lexical candidate-admission run supports this decision.
-The `jieba + SentencePiece` lexical policy improved positive cross-message
-retrieval versus regex-only matching, but it also failed every no-match guard
-case because the lexical graph collapsed into very large components. The
-type-compatibility proxy arm tied the lexical KG arm, so the measured lift came
-from broader lexical matching, not from ontology selection.
+The target profile is
+`jieba_sentencepiece_frozen_profile_candidate_admission_v1`.
 
-This result means the tokenizer stack should remain an upstream candidate
-generator. It should not be promoted directly into production retrieval,
-canonical ontology, canonical type, or canonical graph state. The next stable
-method needs term-quality scores, document-spread or IDF caps, component
-splitting, alias/entity clustering checks, and no-match calibration before
-ontology promotion decisions use those terms.
+Before segmentation, preserve protected spans such as:
 
-The weak-label MLP candidate-admission follow-up implements that principle as
-an executable policy. The policy accepts or rejects candidate terms before KG
-edge construction using document-frequency gates, protected mention typing, a
-deterministic CPU-bounded weak-label MLP scorer, and exact-candidate-only
-category/type-proxy retrieval. On the 50,000-case EXM evaluation, this bundled policy
-keeps all no-match and permission-denied guards while improving positive
-retrieval over raw `jieba + SentencePiece`. This supports the design rule that
-candidate admission must be tested before graph construction. It does not
-establish a coordination-frame or ontology-semantic effect.
+- email addresses and URLs;
+- dates, time expressions, currency, and measurements;
+- part, purchase-order, invoice, ticket, project, and other configured business
+  identifiers;
+- mixed Chinese/English/alphanumeric identifiers;
+- exact reviewed aliases.
 
-The 2026-07-10 no-training control run further narrows the default method. A
-hashable fixed CJK scoring profile with zero training examples and zero
-training epochs scored 43,976/50,000 on the same generated EXM benchmark,
-while the weak-label MLP scored 43,369/50,000. The stable default should
-therefore be data-driven-first candidate admission with a frozen scoring
-profile, not a self-trained MLP. BGE-M3 through FlagEmbedding remains the best
-next optional true frozen neural adapter candidate, but it should run in a
-separate neural experiment/runtime image because the default dev container
-does not include torch, transformers, FlagEmbedding, GLiNER, HanLP, or CKIP.
+Query and evidence use the same immutable profile fingerprint. A profile
+records normalization, Jieba dictionaries, SentencePiece model/vocabulary,
+protected-span policy, and candidate-admission hashes.
 
-## Implementation Implications
+SentencePiece may be trained only on the calibration corpus. It is a tokenizer,
+not an ontology model and not a source of canonical semantics.
 
-Future implementation should introduce contracts and reports along these lines:
+## Candidate Extraction
 
-- `TermExtractionPolicy` or an extension of `ExtractionPolicy`.
-- `TermCandidateBatch` for corpus-level safe aggregate term candidates.
-- `TypedMentionCandidate` metadata, likely using or extending
-  `CandidateMention`.
-- `OntologyHealthReport` for coverage, conflict, stability, utility, and
-  boundary-risk metrics.
-- `OntologySelectionPolicy` for promotion thresholds and ablation requirements.
+Candidate terms and mappings may be generated through:
 
-These should remain separate from canonical ontology/type stores. Candidate
-generation, governance, canonical graph commits, user graph assembly, and wiki
-projection stay as separate layers.
+```text
+deterministic schema/field names
+frequency and contextual diversity
+termhood and phrase mining
+source-local identifiers
+NER and relation extraction
+embedding neighborhoods
+LLM structured proposals
+cross-source co-reference evidence
+reviewer corrections
+```
+
+Every candidate records source Observation ids, source family, scope,
+extractor/model/prompt revision, confidence, and proposed core/domain mapping.
+LLM output remains a candidate.
+
+## Promotion Rules
+
+A term or mapping may be promoted only when it has:
+
+- representative calibration/development evidence;
+- defined scope and source/domain applicability;
+- mapping to a stable core type where appropriate;
+- ambiguity and collision analysis;
+- provenance and revision pins;
+- reviewer approval;
+- no dependence on independent holdout content.
+
+Low-frequency terms may still be valid identifiers. Frequency alone neither
+promotes nor rejects a term.
+
+## Retrieval Use
+
+Ontology mappings support query planning, entity linking, evidence grouping,
+and capped reranking. Inferred type/frame mismatches must not prune admitted
+evidence. Hard ontology checks are reserved for governed schema, lineage,
+permission, revision, and canonical-write constraints.
+
+The legacy hard semantic gate is a negative ablation only.
+
+## Evaluation
+
+Evaluate separately:
+
+- protected identifier preservation;
+- Chinese/English token consistency;
+- term and mention precision/recall;
+- entity-link precision/recall;
+- type/frame mapping precision/recall;
+- false-reject count caused by ontology signals;
+- cross-source mapping quality;
+- transfer to a materially different source family;
+- retrieval and final-answer deltas over strong RAG.
+
+Splits are calibration, development, frozen evaluation, independent holdout,
+and transfer holdout. Holdout data cannot update vocabulary, aliases, ontology,
+or thresholds.
+
+## Model Boundary
+
+FormOwl does not train a foundation model. Existing embedding, NER, ASR,
+vision, or LLM services are replaceable candidate generators. Their outputs do
+not mutate canonical graph/type state or grant raw access.
+
+The final answer model is pinned separately and held constant across RAG and
+KG/ontology arms.
 
 ## Current Claim Boundary
 
-This document sets direction only.
-
-It does not claim that FormOwl currently has:
-
-- a production Chinese tokenizer;
-- a trained mention/type classifier;
-- production multimodal extraction quality;
-- canonical ontology auto-promotion;
-- business answer generation;
-- raw private data access through public tools;
-- production readiness.
+The current runtime still reports `ascii_identifier_regex_v1` with no CJK
+support. This decision describes the frozen target; it does not prove runtime
+migration, source completeness, same-pipeline superiority, or methodology
+readiness.
