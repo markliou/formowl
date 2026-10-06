@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 import hashlib
+from types import SimpleNamespace
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ from formowl_contract import (
     SourceInventory,
     SourceInventoryItem,
     sha256_json,
+    stable_resource_contract_id,
 )
 from formowl_gateway.issue56_diagnostic import Issue56SealedSourceDiagnosticInput
 from formowl_gateway import issue56_sealed_source_loader as gateway_loader
@@ -70,9 +72,196 @@ class _PreparedPackage:
 
 
 class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
+    def test_capability_families_use_the_indexed_runtime_authorized_scope(self) -> None:
+        class _RuntimeStore:
+            def reopen(self, seal):
+                self.asserted_seal = seal
+                return {
+                    "view_metadata": {
+                        "source_families": ["mail"],
+                    },
+                }
+
+        session = SimpleNamespace(
+            index=SimpleNamespace(
+                _runtime_store=_RuntimeStore(),
+                _runtime_store_seal="sealed-revision",
+            ),
+        )
+
+        self.assertEqual(
+            gateway_loader._authorized_runtime_source_families(session),
+            ("mail",),
+        )
+
+    def test_mock_index_does_not_reopen_storage_for_capability_families(self) -> None:
+        runtime_store = mock.Mock()
+        runtime_store.reopen.side_effect = TypeError("mock metadata is not subscriptable")
+        session = SimpleNamespace(
+            index=SimpleNamespace(
+                _runtime_store=runtime_store,
+                _runtime_store_seal="sealed-revision",
+            ),
+        )
+
+        self.assertEqual(
+            gateway_loader._authorized_runtime_source_families(session),
+            (),
+        )
+        runtime_store.reopen.assert_not_called()
+
+    def test_projection_open_failure_falls_through_to_authorized_source_reader(self) -> None:
+        runtime_store = mock.Mock()
+        runtime_store.reopen.side_effect = RuntimeError("projection is unavailable")
+        source_reader = object()
+        authorized_source = object()
+        source_binding = sha256_json("source-session")
+        revision = SimpleNamespace(
+            session=SimpleNamespace(
+                index=SimpleNamespace(
+                    _runtime_store=runtime_store,
+                    _runtime_store_seal="sha256:" + ("a" * 64),
+                ),
+                source_session_binding_fingerprint=source_binding,
+            ),
+            source_records=source_reader,
+            authorized_source=authorized_source,
+        )
+        fallback_handler = mock.Mock(name="source_fallback_handler")
+        with mock.patch.object(
+            gateway_loader,
+            "_build_source_start_semantic_handler",
+            return_value=fallback_handler,
+        ) as build_fallback:
+            returned = gateway_loader.build_issue56_production_semantic_retrieval_handler(
+                ingestion_revision=revision,
+            )
+
+        self.assertIs(returned, fallback_handler)
+        build_fallback.assert_called_once_with(revision, mail_tool=False)
+        runtime_store.reopen.assert_called_once_with(
+            "sha256:" + ("a" * 64),
+        )
+
+    def test_mail_selector_uses_owner_source_ref_without_mime_allowlist(self) -> None:
+        content_hash = "sha256:" + ("a" * 64)
+        mail_asset = SimpleNamespace(
+            asset_id="asset_mail_nonstandard_mime",
+            content_hash=content_hash,
+            mime_type="application/x-owner-defined-mail",
+            owner_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            source_ref={
+                "source_system": "formowl_upload_session",
+                "source_type": "mail_archive_upload",
+                "source_id": "upload-session-mail-001",
+                "source_key": "upload-session-mail-001",
+            },
+        )
+        non_mail_asset = SimpleNamespace(
+            asset_id="asset_document",
+            content_hash=content_hash,
+            mime_type="application/x-owner-defined-document",
+            owner_user_id="user_yifan",
+            workspace_id="workspace_formowl",
+            source_ref={
+                "source_system": "formowl_upload_session",
+                "source_type": "document_upload",
+                "source_id": "upload-session-document-001",
+                "source_key": "upload-session-document-001",
+            },
+        )
+
+        def records_for(asset):
+            authority = SimpleNamespace(asset=asset)
+            records = object.__new__(sealed_source.IngestionRevisionSourceRecords)
+            records.job_authorities = (authority,)
+            return records
+
+        mail_selectors = records_for(mail_asset).authorized_mail_import_session_ids
+        self.assertEqual(
+            mail_selectors,
+            (
+                stable_resource_contract_id(
+                    "mailimport",
+                    "MailImportSession",
+                    {
+                        "upload_session_id": "upload-session-mail-001",
+                        "workspace_id": "workspace_formowl",
+                        "owner_user_id": "user_yifan",
+                        "source_asset_id": "asset_mail_nonstandard_mime",
+                        "archive_sha256": content_hash,
+                    },
+                ),
+            ),
+        )
+        self.assertEqual(
+            records_for(non_mail_asset).authorized_mail_import_session_ids,
+            (),
+        )
+
+    def test_ingestion_revision_uses_its_bounded_larger_source_cap(self) -> None:
+        seal = "sha256:" + ("0" * 64)
+        manifest = {
+            "artifact_id": "formowl_issue56_ingestion_revision_v1",
+            "requester_user_id": sealed_source.APPROVER_ACTOR,
+            "workspace_id": sealed_source.WORKSPACE_ID,
+            "snapshot_sha256": seal,
+            "index_manifest_sha256": seal,
+        }
+        calls: list[dict[str, object]] = []
+
+        def read_json(path, **kwargs):
+            calls.append({"path": path, **kwargs})
+            if len(calls) == 1:
+                return b"{}", manifest
+            if len(calls) == 2:
+                return b"{}", {"observations": [], "bundles": [], "source_binding": {}}
+            raise RuntimeError("stop after cap inspection")
+
+        with tempfile.TemporaryDirectory() as revision_root:
+            revision_directory = Path(revision_root)
+            # The loader selects the source-start preparation when the
+            # finalized revision marker is absent.  Keep this fixture on the
+            # finalized-revision branch so the cap assertions exercise the
+            # intended snapshot/index reads without mocking branch selection.
+            (revision_directory / "revision.json").write_bytes(b"fixture")
+            with (
+                mock.patch.object(
+                    sealed_source, "_read_sealed_json", side_effect=read_json
+                ),
+                self.assertRaisesRegex(RuntimeError, "stop after cap inspection"),
+            ):
+                sealed_source.load_issue56_ingestion_revision(
+                    revision_directory,
+                    expected_revision_sha256=seal,
+                )
+
+        self.assertEqual(sealed_source._MAX_SOURCE_BYTES, 1024 * 1024 * 1024)
+        self.assertEqual(
+            sealed_source._MAX_INGESTION_REVISION_SOURCE_BYTES,
+            4 * 1024 * 1024 * 1024,
+        )
+        self.assertEqual(
+            [call["maximum_bytes"] for call in calls],
+            [
+                sealed_source._MAX_SAFE_BYTES,
+                sealed_source._MAX_INGESTION_REVISION_SOURCE_BYTES,
+                sealed_source._MAX_INGESTION_REVISION_SOURCE_BYTES,
+            ],
+        )
+
     def test_typed_exact_request_fails_closed_without_exact_result(self) -> None:
         loaded = mock.Mock()
         loaded.safe_binding = {}
+        # The production handler constructs its sealed fallback reader while
+        # composing the handler.  Keep this mock seam minimally valid for that
+        # reader, while the exact request below still proves that no fallback
+        # can turn an unavailable exact result into an answer.
+        loaded.observations = ()
+        loaded.query_bundle.mail_import_session.mail_import_session_id = (
+            "synthetic_mail_import_session"
+        )
         loaded.session.source_session_binding_fingerprint = sha256_json(
             "source_session"
         )
@@ -83,8 +272,24 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
         routed_session = mock.Mock(
             requester_user_id=sealed_source.APPROVER_ACTOR,
             workspace_id=sealed_source.WORKSPACE_ID,
+            selected_source_scope_ids=(),
+            authorized_source_scope_ids=(),
+            authorized_observation_hashes=(),
+            authorized_observations=(),
+            occurrence_lineages=(),
+            source_session_binding_fingerprint=sha256_json(
+                "source_session"
+            ),
+            source_occurrence_providers=(),
+            _source_occurrence_provider_provenance_seal=None,
         )
-        routed_session.query.return_value = mock.Mock(exact_result=None)
+        query_agent_payload = {
+            "status": "unsupported",
+            "context_bundle": {
+                "citation_hashes": [],
+                "lineage_fingerprints": [],
+            },
+        }
 
         with (
             mock.patch.object(
@@ -104,25 +309,33 @@ class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
             ),
             mock.patch.object(
                 gateway_loader,
-                "replace",
+                "attach_authorized_source_occurrence_providers",
                 return_value=routed_session,
+            ),
+            mock.patch.object(
+                gateway_loader,
+                "execute_bounded_adaptive_query",
+                return_value=(
+                    mock.Mock(exact_result=None),
+                    (),
+                    query_agent_payload,
+                ),
             ),
         ):
             handler = gateway_loader.build_issue56_production_semantic_retrieval_handler()
-
-        with self.assertRaisesRegex(
-            ContractValidationError,
-            "production exact inventory result is unavailable",
-        ):
-            handler(
-                {
-                    "query_text": "synthetic exact request",
-                    "requester_user_id": sealed_source.APPROVER_ACTOR,
-                    "session_id": "session",
-                    "workspace_id": sealed_source.WORKSPACE_ID,
-                    "exact_inventory_kind": "synthetic_exact_inventory",
-                }
-            )
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "production exact inventory result is unavailable",
+            ):
+                handler(
+                    {
+                        "query_text": "synthetic exact request",
+                        "requester_user_id": sealed_source.APPROVER_ACTOR,
+                        "session_id": "session",
+                        "workspace_id": sealed_source.WORKSPACE_ID,
+                        "exact_inventory_kind": "synthetic_exact_inventory",
+                    }
+                )
 
     def test_sealed_package_builds_existing_session_graph_and_gateway_contract(
         self,
