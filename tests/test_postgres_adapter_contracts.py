@@ -68,13 +68,14 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         manifest = migration_files()
         index_names = grant_audit_query_indexes()
 
-        migration_replay = len(manifest) == 4 and all(
+        migration_replay = len(manifest) == 5 and all(
             item.statement_count >= 3 for item in manifest
         )
         migration_files_marker = manifest[0].filename == "001_metadata_store.sql"
         vector_migration_marker = manifest[1].filename == "002_vector_index.sql"
         ingestion_migration_marker = manifest[2].filename == "003_ingestion_records.sql"
         mail_migration_marker = manifest[3].filename == "004_mail_evidence.sql"
+        oauth_migration_marker = manifest[4].filename == "005_oauth_identity.sql"
         grant_audit_query_indexes_marker = {
             "idx_formowl_graph_records_scope",
             "idx_formowl_ingestion_records_scope",
@@ -88,6 +89,7 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         self.assertTrue(vector_migration_marker)
         self.assertTrue(ingestion_migration_marker)
         self.assertTrue(mail_migration_marker)
+        self.assertTrue(oauth_migration_marker)
         self.assertTrue(grant_audit_query_indexes_marker)
         self.assertEqual(
             postgre_sql_backed_repository_interfaces(),

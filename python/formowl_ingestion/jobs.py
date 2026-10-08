@@ -157,6 +157,10 @@ def run_ingestion_job(
                 attachment_asset_store=attachment_asset_store,
             )
             extractor_run_ids.append(stored.extractor_run.extractor_run_id)
+            extractor_run_ids.extend(
+                run.extractor_run_id for run in stored.child_extractor_runs
+                if run.extractor_run_id not in extractor_run_ids
+            )
             if stored.extractor_run.status != "succeeded":
                 return _finish_job(
                     job_store,
@@ -169,9 +173,7 @@ def run_ingestion_job(
                 )
             # Failed extractor results do not persist observations, so only
             # successful runs may contribute observation lineage to the job.
-            observation_ids.extend(
-                observation.observation_id for observation in stored.observations
-            )
+            observation_ids.extend(stored.observation_ids)
     except Exception as exc:
         # run_extractor records failed runs for adapter exceptions before
         # raising. Preserve that run lineage on the failed job when it exists.

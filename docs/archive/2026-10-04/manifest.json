@@ -1,0 +1,13 @@
+{
+  "snapshot_date": "2026-10-04",
+  "snapshot_scope": "active handoff log immediately before retention trim",
+  "files": [
+    {
+      "source_path": "docs/agent-goals/handoff-log.md",
+      "archive_path": "docs/archive/2026-10-04/handoff-log.md",
+      "byte_count": 50181,
+      "line_count": 301,
+      "sha256": "aa6e2f02a4ee38e29ef2b0157c7c3ef2ba7ffefd5c7059a16279ca31ad733ce8"
+    }
+  ]
+}

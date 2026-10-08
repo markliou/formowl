@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Sequence
 
 from formowl_contract import (
     ContractValidationError,
     Observation,
     now_iso,
+    redact_public_raw_references,
     sha256_json,
     stable_resource_contract_id,
     to_plain,
@@ -506,13 +507,11 @@ def build_mail_evidence_bundle(
     _required_choice({"producer_type": producer_type}, "producer_type", _PRODUCER_TYPES)
     if producer_type == "server_side_parser" and not upload_session_id:
         raise ContractValidationError("server_side_parser mail import requires upload_session_id")
-    observation_payloads = [observation.to_dict() for observation in observations]
-    for observation_payload in observation_payloads:
-        assert_public_payload_safe(observation_payload, "mail_evidence_bundle.observation")
-    normalized = [Observation.from_dict(observation) for observation in observation_payloads]
-    mail_observations = [
-        observation for observation in normalized if observation.modality == "mail"
-    ]
+    mail_observations = []
+    for observation in observations:
+        validated = Observation.from_dict(observation.to_dict())
+        if validated.modality == "mail":
+            mail_observations.append(_mail_bundle_projection(validated))
     if not mail_observations:
         raise ContractValidationError("mail evidence bundle requires mail observations")
     first_mail = mail_observations[0]
@@ -622,6 +621,27 @@ def build_mail_evidence_bundle(
     )
     bundle.to_dict()
     return bundle
+
+
+def _mail_bundle_projection(observation: Observation) -> Observation:
+    """Redact display fields in a copy, never the governed input Observation.
+
+    Child document evidence is retained by the ingestion/index owner and is not
+    a mail bundle field. Structural identifiers still pass the existing strict
+    bundle validators; only source-authored display text is projected here.
+    """
+    payload = dict(observation.payload or {})
+    for name in ("subject", "normalized_subject", "sender", "folder_label", "filename"):
+        if isinstance(payload.get(name), str):
+            payload[name] = redact_public_raw_references(payload[name])[0]
+    return replace(
+        observation,
+        text=(
+            redact_public_raw_references(observation.text)[0]
+            if observation.text is not None else None
+        ),
+        payload=payload,
+    )
 
 
 def _archive_occurrence(

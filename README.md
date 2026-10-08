@@ -3,10 +3,10 @@
 <!-- Future agents: read AGENTS.md first. Current methodology authority lives in docs/methodology-authority.json, docs/kg-research-method.md, and GitHub issue #56. Historical files and archived snapshots are not current instructions. -->
 
 FormOwl is a source-preserving, graph-governed knowledge system for integrating
-heterogeneous enterprise evidence. Email is the first source fixture, not the
-product model. Calendar, ticket, project, document, database, media, and future
-source adapters must enter the same evidence, governance, permission, and query
-architecture.
+heterogeneous enterprise evidence in native forms: mail, documents, standalone
+spreadsheets/XLSX, tables/databases, images, speech, non-speech audio/music,
+video, and connected business systems. Email is the first diagnostic fixture.
+All adapters enter the same evidence, governance, permission, and query architecture.
 
 ## Active Architecture
 
@@ -17,42 +17,63 @@ heterogeneous sources
   -> Asset / EvidenceSnapshot
   -> ExtractorRun
   -> source-preserving Observation
-  -> candidate mentions, entities, claims, relations, and frames
-  -> reviewed canonical KG + scoped ontology mappings
-  -> permission-filtered EffectiveGraphView
+       -> authorized source retrieval / native structured execution
+       -> optional zero-to-many semantic annotations and candidate knowledge
+            -> review -> canonical KG + scoped ontology mappings
+            -> permission-filtered EffectiveGraphView
 ```
 
 Query execution:
 
 ```text
-user query
-  -> typed router
-  -> validated SemanticQueryPlan
-  -> BM25 + dense retrieval
-  -> entity linking + bounded graph traversal
+user prompt + bounded conversation state
+  -> Query Agent: intent/coreference and current capability discovery
+  -> expanded, validated SemanticQueryPlan / tool plans
+  -> authorized modality-appropriate retrieval / native structured execution
+  -> graph/ontology signals when used, each hop bound to source evidence
   -> temporal, provenance, and coverage filtering
   -> capped soft ontology scoring
   -> evidence-bundle reranking
+  -> bounded coverage inspection / repair / source-context selection
   -> deterministic executor or citation-grounded LLM answer
 ```
 
 The layers have different jobs:
 
-- **Strong RAG** retrieves source evidence and is both a required component and
-  the competitive control.
+- **Strong RAG** retrieves native source evidence and is both a required component
+  and the competitive control. The frozen issue #56 text control remains
+  lexical/BM25 + dense retrieval, fusion, and reranking.
 - **The KG** contributes reviewed identity, cross-source joins, bounded paths,
   temporal/current-state structure, contradiction, provenance, and reusable
   integration semantics.
 - **The ontology** is small-core, scoped, data-first, versioned, and a capped
   additive signal. An inferred mismatch does not remove admitted evidence.
 - **Deterministic execution** handles exact sets, counts, inventories,
-  aggregation, completeness, and definitive-negative claims.
+  native table lookups/calculations, aggregation, completeness, and
+  definitive-negative claims over validated source records and coverage.
 - **The answer model** may explain only the authorized evidence produced by a
   validated plan; it may not fill missing evidence from model memory.
 
 Sources and model output are not canonical truth. Extractors and LLMs may
 create reviewable candidates, but they may not silently mutate canonical graph
 or type state, user graph revisions, wiki revisions, or external systems.
+
+Ontology supplies vocabulary and optional zero-to-many source-addressed
+annotations; the reviewed KG supplies an identity/relation overlay linked to
+Observations. Direct authorized lookup and structured execution require no
+graph match or annotation. Missing annotations, nodes, or edges cannot prove
+absence in the source. Native image regions, audio/music intervals, and video
+frames/clips remain evidence; OCR, transcripts, and descriptions have their own
+accuracy and coverage limits.
+
+Answers receive bounded verified source context with native citations, such as
+an adjacent paragraph, table header/cell range, image crop, or media clip.
+Each read revalidates source/hash/revision/lineage/permission and remaining
+budgets; graph visibility or an evidence-snippet grant does not grant whole-asset
+access. Spreadsheet operations preserve raw values, formulas, cached results,
+displayed values, types/precision/units, blanks/nulls, merged headers,
+coordinates, and same-row association. Exact claims need source coverage;
+graph properties and top-k chunks cannot substitute for native values.
 
 ## Active KG Research Program
 
@@ -70,7 +91,7 @@ method: evidence_to_knowledge_kg_ontology_v2_hybrid_v1
 tokenizer: jieba_sentencepiece_frozen_profile_candidate_admission_v1
 ```
 
-Current runtime truth on August 18, 2026:
+Historical runtime truth on August 18, 2026 (not current instructions):
 
 ```text
 method: mail_candidate_kg_broad_ontology_diagnostic_v1
@@ -86,8 +107,10 @@ python3 scripts/methodology_authority_check.py --check
 python3 scripts/methodology_authority_check.py --require-ready
 ```
 
-`--check` is currently valid. `--require-ready` is expected to exit nonzero
-until runtime alignment, source completeness, execution-bound reports,
+The recorded October 2, 2026 canonical dev-container `--check` was valid with
+the target method/tokenizer and CJK support true; this is dated diagnostic
+evidence, not proof of current readiness. `--require-ready` remains blocked
+until source completeness, execution-bound reports,
 same-pipeline real-source ablation, and real-user final-answer acceptance all
 pass. Diagnostic implementation may continue, but no active document or report
 may claim that KG + ontology already beats strong RAG.
@@ -144,6 +167,21 @@ These slices do not establish production readiness, source-complete
 heterogeneous integration, automatic canonical writes, general parser
 coverage, or KG + ontology superiority.
 
+Current adapter limits are explicit in [SPEC §14](SPEC.md#14-current-implementation-and-methodology-status):
+
+| Slice | Evidence and remaining gap |
+| --- | --- |
+| Mail and independent Markdown/plain-text | Diagnostic mail and the real `PlainTextObservationExtractor`; §7.3.1 live mail/document acceptance remains open. |
+| XLSX/delimited attachment tables | `AttachmentDocumentExtractor` reads bounded ZIP/XML values, row/cell coordinates and formal table metadata, with candidate merged-header paths. It does not retain formulas or styles/display formatting, prove native types/units/nulls or full-workbook completeness, or establish the standalone XLSX end-to-end product path. |
+| OCR/images | `FixtureOcrExtractor` uses `read_text()` on page/bbox fixtures; real-image OCR, visual retrieval, and source-region verification are unproved. |
+| Audio/music | `FixtureAudioTranscriptExtractor` uses `read_text()` on timestamp/speaker/transcript fixtures; real decoding/ASR, acoustic verification, non-speech audio and music paths are unproved. |
+| Video | `FixtureVideoSceneExtractor` uses `read_text()` on scene/keyframe descriptions; real decoding, temporal/visual retrieval, and native clip/frame verification are unproved. |
+
+Unsupported native features remain coverage gaps. MIME/modality labels and
+cited text proxies do not establish native media capability. This SPEC/doc
+clarification changes no runtime, frozen methodology/tokenizer, comparison
+arms, UAT status, readiness, or independent reviewer acceptance.
+
 The connected closed-beta identity path uses one stable non-secret predefined
 client ID selected and recorded by the deployment operator before discovery.
 ChatGPT supplies and displays only the production callback
@@ -160,6 +198,30 @@ Issue #20 closure has not yet passed.
 Issue #41 separately owns generic Asset tenant/owner binding, byte storage,
 occurrence lineage, upload recovery, retention, purge, and authorization. A
 source adapter must not create a parallel asset or permission system.
+
+### Source-neutral evidence recheck — 待測
+
+The 2026-10-06 contract in `SPEC.md` §7.3.1 applies to validated
+`evidence_lookup` for both mail and independent Markdown/plain-text documents
+(not mail attachments). A nonempty validated requested-field set with **all
+fields** lacking verified support triggers one materially different,
+same-authorized-scope bounded source recheck when existing safety/eligibility
+and remaining budgets permit, even with unrelated citations. Partial misses
+must be disclosed and must not trigger this automatic recheck. An empty field
+set uses the validated evidence-need plan or clarification, never vacuous
+“all missing”; source-backed
+explicit blanks count as verified coverage. Citation count or status alone
+cannot trigger recheck.
+
+Missing, unsealed, or unactivated retrieval projections are distinct from an
+independently validated immutable source snapshot, not independent permission
+to bypass §7.3.1 eligibility. Eligible fallback may use that snapshot without
+the failed projection, but preserves authorized source/hash/lineage/
+revision checks, permission scope, and existing bounded budgets; no inline
+rebuild. Exact deterministic, permission, schema, and provider-error boundaries
+are unchanged. Incomplete scans/timeouts never prove absence; scoped complete
+negatives require complete coverage proof. Feature remains **待測**; this is
+not implementation, live UAT, review, or methodology acceptance evidence.
 
 ## Storage and Runtime Direction
 

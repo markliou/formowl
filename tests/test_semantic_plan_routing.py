@@ -120,6 +120,10 @@ class SemanticPlanRoutingTests(unittest.TestCase):
             "What is a supplier?",
             "Explain the data source.",
             "什麼是供應商？",
+            "What is country of origin?",
+            "What is country of origin for supplier?",
+            "How do I return a product?",
+            "How do I return rows from a Python function?",
         )
         for prompt in ordinary_prompts:
             with self.subTest(prompt=prompt):
@@ -130,6 +134,11 @@ class SemanticPlanRoutingTests(unittest.TestCase):
             "嘉值交期",
             "查詢嘉值交期",
             "查詢劉一帆與嘉值的關聯",
+            "麻煩幫我確認一下 SYN-PART-314 這筆的 玄地，謝謝。",
+            "What is the COO for SKU-314?",
+            "SKU-314 的 COO",
+            "Return the supported rows",
+            "Please return the cited evidence",
         )
         for prompt in evidence_prompts:
             with self.subTest(prompt=prompt):

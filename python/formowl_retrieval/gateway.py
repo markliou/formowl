@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+import inspect
+import math
 import re
-from typing import Any, Literal, Protocol, Sequence
+import time
+from typing import Any, Callable, Iterator, Literal, Protocol, Sequence
+import unicodedata
 
 from formowl_auth import FileAuditLogStore, write_audit_log
 from formowl_contract import (
     AuditLog,
     ContractValidationError,
     Grant,
+    Observation,
     now_iso,
     to_plain,
 )
@@ -67,6 +74,568 @@ _FORBIDDEN_PUBLIC_VALUE = re.compile(
 )
 _FORMOWL_ASSET_LOCATOR = re.compile(r"^formowl://asset/[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _FORMOWL_OBSERVATION_LOCATOR = re.compile(r"^formowl://observation/[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+SOURCE_EVIDENCE_OBSERVATION_LIMIT = 8_192
+SOURCE_EVIDENCE_TIME_BUDGET_MS = 500
+DEVELOPMENT_POC_SOURCE_EVIDENCE_BOUNDARY_ID = "development_poc_v1"
+SECURITY_REVIEW_SOURCE_EVIDENCE_BOUNDARY_ID = "security_review_v1"
+SOURCE_NEUTRAL_EVIDENCE_SOURCE_FAMILIES = ("mail", "document_text")
+_SOURCE_NEUTRAL_EVIDENCE_SOURCE_FAMILY_SET = frozenset(
+    SOURCE_NEUTRAL_EVIDENCE_SOURCE_FAMILIES
+)
+_SOURCE_EVIDENCE_ELIGIBLE_STATUSES = frozenset(
+    {"ok", "not_found", "no_answer", "incomplete", "partial", "pending_review", "unsupported"}
+)
+_SOURCE_EVIDENCE_PLAN_CLASSES = ("evidence_lookup", "relation_reasoning", "global_summarization")
+
+
+@dataclass(frozen=True)
+class SourceEvidenceExecutionPolicy:
+    """Explicit claim boundary for the shared mail/document source recheck.
+
+    The development POC policy is the only default.  A security-review policy
+    requires the executable authority gates and the independent three-reviewer
+    gate before the shared core may be labelled as review evidence.  This
+    policy changes no authorization, provenance, or source-reader behavior.
+    """
+
+    boundary_id: str = DEVELOPMENT_POC_SOURCE_EVIDENCE_BOUNDARY_ID
+    supported_source_families: tuple[str, ...] = SOURCE_NEUTRAL_EVIDENCE_SOURCE_FAMILIES
+    authority_ready: bool = False
+    source_completeness_verified: bool = False
+    execution_fingerprint_bound: bool = False
+    same_pipeline_ablation_verified: bool = False
+    final_answer_acceptance_verified: bool = False
+    reviewer_agreement_count: int = 0
+
+    @classmethod
+    def development_poc(
+        cls,
+        *,
+        supported_source_families: Sequence[str] = SOURCE_NEUTRAL_EVIDENCE_SOURCE_FAMILIES,
+    ) -> SourceEvidenceExecutionPolicy:
+        return cls(
+            boundary_id=DEVELOPMENT_POC_SOURCE_EVIDENCE_BOUNDARY_ID,
+            supported_source_families=tuple(supported_source_families),
+        ).validate()
+
+    @classmethod
+    def security_review(
+        cls,
+        *,
+        authority_ready: bool,
+        source_completeness_verified: bool,
+        execution_fingerprint_bound: bool,
+        same_pipeline_ablation_verified: bool,
+        final_answer_acceptance_verified: bool,
+        reviewer_agreement_count: int,
+        supported_source_families: Sequence[str] = SOURCE_NEUTRAL_EVIDENCE_SOURCE_FAMILIES,
+    ) -> SourceEvidenceExecutionPolicy:
+        return cls(
+            boundary_id=SECURITY_REVIEW_SOURCE_EVIDENCE_BOUNDARY_ID,
+            supported_source_families=tuple(supported_source_families),
+            authority_ready=authority_ready,
+            source_completeness_verified=source_completeness_verified,
+            execution_fingerprint_bound=execution_fingerprint_bound,
+            same_pipeline_ablation_verified=same_pipeline_ablation_verified,
+            final_answer_acceptance_verified=final_answer_acceptance_verified,
+            reviewer_agreement_count=reviewer_agreement_count,
+        ).validate()
+
+    def validate(self) -> SourceEvidenceExecutionPolicy:
+        if self.boundary_id not in {
+            DEVELOPMENT_POC_SOURCE_EVIDENCE_BOUNDARY_ID,
+            SECURITY_REVIEW_SOURCE_EVIDENCE_BOUNDARY_ID,
+        }:
+            raise ContractValidationError("source evidence execution boundary is invalid")
+        if not self.supported_source_families or any(
+            not isinstance(source_family, str)
+            or source_family not in _SOURCE_NEUTRAL_EVIDENCE_SOURCE_FAMILY_SET
+            for source_family in self.supported_source_families
+        ):
+            raise ContractValidationError("source evidence source family boundary is invalid")
+        if len(set(self.supported_source_families)) != len(self.supported_source_families):
+            raise ContractValidationError("source evidence source family boundary is invalid")
+        for field_name in (
+            "authority_ready",
+            "source_completeness_verified",
+            "execution_fingerprint_bound",
+            "same_pipeline_ablation_verified",
+            "final_answer_acceptance_verified",
+        ):
+            if type(getattr(self, field_name)) is not bool:
+                raise ContractValidationError(
+                    f"source evidence boundary field is invalid: {field_name}"
+                )
+        if (
+            type(self.reviewer_agreement_count) is not int
+            or self.reviewer_agreement_count < 0
+        ):
+            raise ContractValidationError("source evidence reviewer agreement count is invalid")
+        if self.boundary_id == SECURITY_REVIEW_SOURCE_EVIDENCE_BOUNDARY_ID:
+            required = (
+                self.authority_ready,
+                self.source_completeness_verified,
+                self.execution_fingerprint_bound,
+                self.same_pipeline_ablation_verified,
+                self.final_answer_acceptance_verified,
+            )
+            if not all(required) or self.reviewer_agreement_count != 3:
+                raise ContractValidationError(
+                    "security review source evidence boundary requires authority, "
+                    "four methodology gates, and three reviewer agreements"
+                )
+        return self
+
+    def to_safe_dict(self) -> dict[str, Any]:
+        return {
+            "boundary_id": self.boundary_id,
+            "supported_source_families": list(self.supported_source_families),
+            "claim_class": (
+                "development_diagnostic_only"
+                if self.boundary_id == DEVELOPMENT_POC_SOURCE_EVIDENCE_BOUNDARY_ID
+                else "security_review_evidence_candidate"
+            ),
+            "authority_ready": self.authority_ready,
+            "source_completeness_verified": self.source_completeness_verified,
+            "execution_fingerprint_bound": self.execution_fingerprint_bound,
+            "same_pipeline_ablation_verified": self.same_pipeline_ablation_verified,
+            "final_answer_acceptance_verified": self.final_answer_acceptance_verified,
+            "reviewer_agreement_count": self.reviewer_agreement_count,
+        }
+
+
+@dataclass(frozen=True)
+class SourceEvidenceScan:
+    """Internal result of one scope-bound, authorized Observation read."""
+
+    observations: tuple[tuple[Observation, str], ...]
+    scanned_observation_count: int
+    complete: bool
+    stop_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class SourceEvidenceDoubleCheckResult:
+    """Internal outcome; None leaves the initial adapter status unchanged."""
+
+    execution_boundary_id: str = DEVELOPMENT_POC_SOURCE_EVIDENCE_BOUNDARY_ID
+    supported_source_families: tuple[str, ...] = SOURCE_NEUTRAL_EVIDENCE_SOURCE_FAMILIES
+    status: str | None = None
+    evidence: tuple[dict[str, Any], ...] = ()
+    scan: SourceEvidenceScan | None = None
+    warnings: tuple[str, ...] = ()
+
+
+class _SourceEvidenceDeadlineExceeded(RuntimeError):
+    """Only this local budget stop is recoverable; security errors propagate."""
+
+
+_SOURCE_EVIDENCE_DEADLINE: ContextVar[float | None] = ContextVar(
+    "formowl_source_evidence_deadline", default=None,
+)
+_SOURCE_EVIDENCE_QUERY_TERMS: ContextVar[tuple[str, ...]] = ContextVar(
+    "formowl_source_evidence_query_terms", default=(),
+)
+
+
+def _validate_source_evidence_deadline(deadline_monotonic: float | None) -> None:
+    if deadline_monotonic is not None and (
+        type(deadline_monotonic) not in (int, float)
+        or (isinstance(deadline_monotonic, float) and not math.isfinite(deadline_monotonic))
+    ):
+        raise ContractValidationError("source evidence deadline is invalid")
+
+
+@contextmanager
+def source_evidence_deadline_scope(deadline_monotonic: float | None) -> Iterator[None]:
+    """Carry a trusted server deadline on this process's monotonic clock.
+
+    Nested scopes may shorten, never clear or extend, an inherited deadline.
+    Callers own context propagation across execution boundaries; this is not
+    a public/provider argument or a cancellation mechanism.
+    """
+
+    _validate_source_evidence_deadline(deadline_monotonic)
+    inherited = _SOURCE_EVIDENCE_DEADLINE.get()
+    if inherited is not None:
+        deadline_monotonic = (
+            inherited if deadline_monotonic is None else min(inherited, deadline_monotonic)
+        )
+    token = _SOURCE_EVIDENCE_DEADLINE.set(deadline_monotonic)
+    try:
+        yield
+    finally:
+        _SOURCE_EVIDENCE_DEADLINE.reset(token)
+
+
+def check_source_evidence_deadline(deadline_monotonic: float | None) -> None:
+    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+        raise _SourceEvidenceDeadlineExceeded()
+
+
+@contextmanager
+def source_evidence_query_terms_scope(query_terms: Sequence[str]) -> Iterator[None]:
+    """Carry normalized terms to an owner-bound sealed source reader.
+
+    Terms are metadata-only acceleration hints.  The source reader still
+    revalidates every selected helper, Observation hash, permission, and
+    lineage, and an index miss is never a no-match claim.
+    """
+
+    normalized = tuple(sorted({
+        term for term in query_terms
+        if isinstance(term, str) and term
+    }))
+    token = _SOURCE_EVIDENCE_QUERY_TERMS.set(normalized)
+    try:
+        yield
+    finally:
+        _SOURCE_EVIDENCE_QUERY_TERMS.reset(token)
+
+
+def current_source_evidence_query_terms() -> tuple[str, ...]:
+    """Return the current validated matcher terms for source acceleration."""
+
+    return _SOURCE_EVIDENCE_QUERY_TERMS.get()
+
+
+def _source_evidence_query_terms(
+    project_observation: Callable[..., Any],
+) -> tuple[str, ...]:
+    """Read the existing normalized matcher terms without accepting raw text."""
+
+    explicit = getattr(project_observation, "source_lookup_terms", None)
+    if isinstance(explicit, (list, tuple, set, frozenset)):
+        values = explicit
+    else:
+        try:
+            values = inspect.getclosurevars(project_observation).nonlocals.get(
+                "query_terms", ()
+            )
+        except (TypeError, ValueError):
+            values = ()
+    if not isinstance(values, (list, tuple, set, frozenset)):
+        return ()
+    if any(not isinstance(term, str) or not term for term in values):
+        return ()
+    normalized = tuple(sorted(set(values)))
+    return normalized if len(normalized) <= 256 else ()
+
+
+def _normalize_source_evidence_field_sequence(
+    value: Sequence[str],
+    *,
+    parameter_name: str,
+) -> tuple[str, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise ContractValidationError(
+            f"{parameter_name} must be a sequence of field names"
+        )
+    if len(value) > 128:
+        raise ContractValidationError(f"{parameter_name} is too large")
+    normalized: list[str] = []
+    for field_name in value:
+        if not isinstance(field_name, str) or not field_name.strip():
+            raise ContractValidationError(f"{parameter_name} contains an invalid field")
+        field = unicodedata.normalize("NFKC", field_name.strip())
+        if len(field) > 120:
+            raise ContractValidationError(f"{parameter_name} contains an invalid field")
+        if field in normalized:
+            raise ContractValidationError(f"{parameter_name} contains duplicate fields")
+        normalized.append(field)
+    return tuple(normalized)
+
+
+def source_evidence_supported_requested_fields(
+    requested_fields: Sequence[str],
+    *,
+    exact_result: Any = None,
+    answer_citation_hashes: Sequence[str] = (),
+    verified_citation_lineages: Sequence[tuple[str, str]] = (),
+) -> tuple[str, ...]:
+    """Derive source-backed field coverage from governed exact output only.
+
+    Free-text evidence, citation counts, and field mentions are deliberately
+    excluded.  A structured source value counts even when its value is an
+    explicit blank; the value must still be source-provided and tied to a
+    governed citation in the exact item and the retained, authorized evidence.
+    The adapter supplies lineage bindings only after projection validation.
+    """
+
+    normalized_requested = _normalize_source_evidence_field_sequence(
+        requested_fields,
+        parameter_name="requested_fields",
+    )
+    if not normalized_requested or exact_result is None:
+        return ()
+    if not isinstance(answer_citation_hashes, Sequence) or isinstance(
+        answer_citation_hashes, (str, bytes)
+    ):
+        raise ContractValidationError("answer_citation_hashes must be a sequence")
+    answer_citations = {
+        citation_hash
+        for citation_hash in answer_citation_hashes
+        if isinstance(citation_hash, str)
+    }
+    verified_bindings = set(verified_citation_lineages)
+    supported: set[str] = set()
+    items = getattr(exact_result, "items", ())
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+        return ()
+    for item in items:
+        if getattr(item, "structure_status", None) != "source_provided":
+            continue
+        item_citations = getattr(item, "cited_observation_hashes", ())
+        if not isinstance(item_citations, Sequence) or isinstance(
+            item_citations, (str, bytes)
+        ):
+            continue
+        item_citation_set = {
+            citation_hash
+            for citation_hash in item_citations
+            if isinstance(citation_hash, str)
+        }
+        structured_values = getattr(item, "structured_values", ())
+        if not isinstance(structured_values, Sequence) or isinstance(
+            structured_values, (str, bytes)
+        ):
+            continue
+        for binding in structured_values:
+            if not isinstance(binding, Sequence) or isinstance(binding, (str, bytes)):
+                continue
+            if len(binding) != 4:
+                continue
+            field_name, value, citation_hash, lineage_fingerprint = binding
+            if (
+                not isinstance(field_name, str)
+                or field_name not in normalized_requested
+                or not isinstance(value, str)
+                or not isinstance(citation_hash, str)
+                or citation_hash not in item_citation_set
+                or citation_hash not in answer_citations
+                or not isinstance(lineage_fingerprint, str)
+                or (citation_hash, lineage_fingerprint) not in verified_bindings
+            ):
+                continue
+            supported.add(field_name)
+    return tuple(field for field in normalized_requested if field in supported)
+
+
+def source_evidence_double_check(
+    *,
+    initial_status: str | None,
+    query_class: str,
+    result_query_class: str | None,
+    initial_warnings: Sequence[str],
+    verified_evidence_count: int,
+    evidence_limit: int,
+    sealed_coverage_complete: bool,
+    read_source: Callable[..., SourceEvidenceScan] | None,
+    project_observation: Callable[[Observation, str, float], tuple[str, dict[str, Any]] | None],
+    prepare: Callable[[], None] | None = None,
+    begin: Callable[[float], None] | None = None,
+    excluded_hashes: Sequence[str] = (),
+    execution_policy: SourceEvidenceExecutionPolicy | None = None,
+    deadline_monotonic: float | None = None,
+    requested_fields: Sequence[str] = (),
+    supported_requested_fields: Sequence[str] = (),
+) -> SourceEvidenceDoubleCheckResult:
+    """One source-neutral recheck, not a new retrieval or authorization path.
+
+    Callbacks close over the validated query, actor/workspace/grants, selector,
+    source revision and seal. The reader must enforce that binding; projection
+    must revalidate access, hash and lineage before returning (hash, evidence).
+    ``prepare`` reuses pinned runtime configuration before the phase clock;
+    ``begin`` and all reads/projections share the single 500ms deadline.
+    The earliest trusted explicit/scoped absolute monotonic deadline also
+    bounds preparation and can only shorten that phase. Neither deadline
+    preempts a blocking callback. With neither supplied, behavior is unchanged.
+    Only certified sealed coverage AND a complete bounded scan prove a miss.
+    """
+
+    policy = (execution_policy or SourceEvidenceExecutionPolicy.development_poc()).validate()
+    normalized_requested_fields = _normalize_source_evidence_field_sequence(
+        requested_fields,
+        parameter_name="requested_fields",
+    )
+    normalized_supported_fields = _normalize_source_evidence_field_sequence(
+        supported_requested_fields,
+        parameter_name="supported_requested_fields",
+    )
+    if not set(normalized_supported_fields).issubset(set(normalized_requested_fields)):
+        raise ContractValidationError(
+            "supported_requested_fields must be a subset of requested_fields"
+        )
+    if type(verified_evidence_count) is not int or verified_evidence_count < 0:
+        raise ContractValidationError("verified source evidence count is invalid")
+    if normalized_supported_fields and not verified_evidence_count:
+        raise ContractValidationError("requested field support requires verified evidence")
+
+    def result(**kwargs: Any) -> SourceEvidenceDoubleCheckResult:
+        return SourceEvidenceDoubleCheckResult(
+            execution_boundary_id=policy.boundary_id,
+            supported_source_families=policy.supported_source_families,
+            **kwargs,
+        )
+
+    exact = (
+        query_class == "exact_set_or_inventory"
+        or result_query_class == "exact_set_or_inventory"
+        or "exact_query_requires_structured_binding" in initial_warnings
+    )
+    skip = (
+        "skipped_exact"
+        if exact
+        else "skipped_replan"
+        if initial_status == "replan_required"
+        else None
+    )
+    if initial_status in {"permission_denied", "error"}:
+        return result(
+            status=initial_status, warnings=(skip,) if skip else ()
+        )
+    if skip:
+        if skip == "skipped_exact" and initial_status == "ok" and verified_evidence_count:
+            # A successful deterministic result stays deliverable. This is an
+            # exclusion from source recovery, not a downgrade of exact output.
+            return result(warnings=(skip,))
+        return result(status="pending_review", warnings=(skip,))
+    if query_class not in _SOURCE_EVIDENCE_PLAN_CLASSES or (
+        result_query_class is not None and result_query_class not in _SOURCE_EVIDENCE_PLAN_CLASSES
+    ):
+        return result(
+            status="pending_review", warnings=("skipped_invalid_plan",)
+        )
+    field_lookup = query_class == "evidence_lookup" and result_query_class in {
+        None, "evidence_lookup"
+    }
+    field_coverage_recheck_required = (
+        field_lookup and bool(normalized_requested_fields) and not normalized_supported_fields
+    )
+    if field_lookup and normalized_supported_fields:
+        return result()
+    if not field_coverage_recheck_required and verified_evidence_count:
+        return result()
+    if initial_status not in _SOURCE_EVIDENCE_ELIGIBLE_STATUSES:
+        return result()
+    if type(evidence_limit) is not int or evidence_limit < 0:
+        raise ContractValidationError("source evidence limit is invalid")
+    if evidence_limit <= 0:
+        return result(
+            status="pending_review", warnings=("skipped_zero_limit",)
+        )
+    evidence_limit = min(evidence_limit, 128)
+    evidence_limit -= verified_evidence_count
+    if evidence_limit <= 0:
+        return result(status="pending_review", warnings=("skipped_zero_limit",))
+    if not callable(read_source):
+        return result(status="pending_review", warnings=("unavailable",))
+
+    _validate_source_evidence_deadline(deadline_monotonic)
+    scoped_deadline = _SOURCE_EVIDENCE_DEADLINE.get()
+    if scoped_deadline is not None:
+        deadline_monotonic = (
+            scoped_deadline
+            if deadline_monotonic is None
+            else min(scoped_deadline, deadline_monotonic)
+        )
+    scan = SourceEvidenceScan((), 0, False, "deadline")
+    evidence: list[dict[str, Any]] = []
+    seen_hashes = set(excluded_hashes)
+    callback_count = 0
+    stop_reason: str | None = None
+
+    def consume(observation: Observation, source_scope: str) -> bool:
+        nonlocal callback_count, stop_reason
+        if stop_reason is not None:
+            return False
+        if callback_count >= SOURCE_EVIDENCE_OBSERVATION_LIMIT:
+            stop_reason = "observation_limit"
+            return False
+        callback_count += 1
+        try:
+            check_source_evidence_deadline(deadline)
+            projected = project_observation(observation, source_scope, deadline)
+            if projected is not None:
+                observation_hash, item = projected
+                if observation_hash not in seen_hashes:
+                    evidence.append(item)
+                    seen_hashes.add(observation_hash)
+            check_source_evidence_deadline(deadline)
+            if len(evidence) >= evidence_limit:
+                stop_reason = "callback"
+                return False
+            return True
+        except _SourceEvidenceDeadlineExceeded:
+            stop_reason = "deadline"
+            return False
+
+    try:
+        check_source_evidence_deadline(deadline_monotonic)
+        if prepare is not None:
+            prepare()
+        check_source_evidence_deadline(deadline_monotonic)
+        deadline = time.monotonic() + SOURCE_EVIDENCE_TIME_BUDGET_MS / 1000
+        if deadline_monotonic is not None:
+            deadline = min(deadline, deadline_monotonic)
+        check_source_evidence_deadline(deadline)
+        if begin is not None:
+            begin(deadline)
+        check_source_evidence_deadline(deadline)
+        with source_evidence_query_terms_scope(
+            _source_evidence_query_terms(project_observation)
+        ):
+            scan = read_source(
+                max_observations=SOURCE_EVIDENCE_OBSERVATION_LIMIT,
+                deadline_monotonic=deadline,
+                observation_callback=consume,
+            )
+        if not isinstance(scan, SourceEvidenceScan):
+            raise ContractValidationError("source evidence scan result is invalid")
+        if (
+            type(scan.complete) is not bool
+            or type(scan.scanned_observation_count) is not int
+            or scan.scanned_observation_count < 0
+        ):
+            raise ContractValidationError("source evidence scan coverage is invalid")
+        # Empty readers can overrun without ever invoking the callback.
+        check_source_evidence_deadline(deadline)
+        # Older authorized readers return a batch; never replay streamed items.
+        if callback_count == 0:
+            for observation, source_scope in scan.observations:
+                if not consume(observation, source_scope):
+                    break
+        if scan.scanned_observation_count > SOURCE_EVIDENCE_OBSERVATION_LIMIT:
+            stop_reason = "observation_limit"
+        if stop_reason is not None:
+            scan = replace(scan, complete=False, stop_reason=stop_reason)
+    except _SourceEvidenceDeadlineExceeded:
+        scan = replace(scan, complete=False, stop_reason="deadline")
+
+    warnings = ["used"]
+    if not scan.complete:
+        warnings.append("incomplete")
+    elif not evidence:
+        warnings.append(
+            "complete_requested_fields_unverified"
+            if verified_evidence_count
+            else "complete_no_match"
+            if sealed_coverage_complete is True
+            else "complete_coverage_incomplete"
+        )
+    return result(
+        status=(
+            "ok"
+            if evidence
+            else "not_found"
+            if scan.complete and sealed_coverage_complete is True and not verified_evidence_count
+            else "pending_review"
+        ),
+        evidence=tuple(evidence),
+        scan=scan,
+        warnings=tuple(warnings),
+    )
 
 
 @dataclass(frozen=True)

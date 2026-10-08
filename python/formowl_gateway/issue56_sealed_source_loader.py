@@ -845,15 +845,24 @@ def _source_start_capabilities(revision: Issue56IngestionRevision) -> dict[str, 
         ),
     }
     if "mail" in families:
-        core.update({
-            "mail_selector_kind": "mail_import_session_id",
-            "authorized_mail_import_session_ids": list(
-                getattr(revision.source_records, "authorized_mail_import_session_ids", ())
-            ),
-            "selector_count": len(
-                getattr(revision.source_records, "authorized_mail_import_session_ids", ())
-            ),
-        })
+        selector_ids = getattr(revision.source_records, "authorized_mail_import_session_ids", ())
+        if (
+            not isinstance(selector_ids, Sequence)
+            or isinstance(selector_ids, (str, bytes))
+            or len(selector_ids) > 128
+            or any(not isinstance(value, str) or not value.strip() for value in selector_ids)
+            or len(set(selector_ids)) != len(selector_ids)
+        ):
+            raise ContractValidationError("mail source selector binding is invalid")
+        core["selector_count"] = len(selector_ids)
+        # Captured mail can have no owner-bound import selector. Omit the
+        # optional binding so consumers retain fail-closed mail selection
+        # while ordinary chat can proceed.
+        if selector_ids:
+            core.update({
+                "mail_selector_kind": "mail_import_session_id",
+                "authorized_mail_import_session_ids": list(selector_ids),
+            })
     return {**core, "capability_fingerprint": sha256_json(core)}
 
 
@@ -968,7 +977,7 @@ def _build_source_start_semantic_handler(
         protected_terms: set[str] = set()
         active_family: str | None = None
         active_selector: str | None = selector
-        message_fingerprints_by_occurrence: dict[tuple[str, str], str] = {}
+        message_fingerprints_by_occurrence: dict[tuple[str, str, str, str], str] = {}
         unresolved_parent_binding = False
 
         def begin(deadline: float) -> None:
@@ -977,6 +986,17 @@ def _build_source_start_semantic_handler(
             analysis = tokenizer.analyze(query_text)
             query_terms = set(analysis.tokens)
             protected_terms = {item.exact_token for item in analysis.protected_identifiers}
+            # A Query Agent may add presentation instructions to query_text.
+            # Rank source candidates by the validated evidence constraints, not
+            # those instruction words. Multiword constraints use the same frozen
+            # profile as the source postings; the full matcher remains unchanged.
+            lookup_terms = set()
+            for term in required_terms:
+                check_source_evidence_deadline(deadline)
+                lookup_terms.update(tokenizer.analyze(term).tokens)
+            project.source_lookup_terms = tuple(sorted(
+                lookup_terms if required_terms else query_terms
+            ))
             check_source_evidence_deadline(deadline)
 
         def project(observation: Observation, scope_id: str, deadline: float):
@@ -1006,7 +1026,8 @@ def _build_source_start_semantic_handler(
                 occurrence_id = location.get("message_occurrence_id")
                 message_fingerprint = payload.get("message_fingerprint")
                 if (
-                    scope_id != active_selector
+                    (active_selector is not None and scope_id != active_selector)
+                    or (active_selector is None and scope_id not in source.source_scope_ids)
                     or observation.modality != "mail"
                     or observation.observation_type not in REVISION_SOURCE_FALLBACK_OBSERVATION_TYPES
                     or not authorized_permission_scope_matches(
@@ -1024,7 +1045,9 @@ def _build_source_start_semantic_handler(
                     and isinstance(message_fingerprint, str)
                     and isinstance(occurrence_id, str)
                 ):
-                    message_fingerprints_by_occurrence[(scope_id, occurrence_id)] = (
+                    message_fingerprints_by_occurrence[(
+                        scope_id, observation.asset_id, observation.extractor_run_id, occurrence_id,
+                    )] = (
                         message_fingerprint
                     )
                 if (
@@ -1040,19 +1063,18 @@ def _build_source_start_semantic_handler(
                     return None
                 if message_fingerprint is None and isinstance(occurrence_id, str):
                     message_fingerprint = message_fingerprints_by_occurrence.get(
-                        (scope_id, occurrence_id)
+                        (scope_id, observation.asset_id, observation.extractor_run_id, occurrence_id)
                     )
                 if not isinstance(message_fingerprint, str) or not isinstance(occurrence_id, str):
                     unresolved_parent_binding = True
                     return None
-                snippet = _safe_snippet({
+                snippet_payload = {
                     "source_type": {
                         "email_body_segment": "mail_body_segment",
                         "email_message": "mail_message",
                         "email_header": "mail_header",
                     }[observation.observation_type],
                     "source_observation_id": observation.observation_id,
-                    "mail_import_session_id": scope_id,
                     "email_message_id": stable_resource_contract_id(
                         "emailmsg", "EmailMessage",
                         {"message_fingerprint": message_fingerprint},
@@ -1072,7 +1094,10 @@ def _build_source_start_semantic_handler(
                             "source_session_binding_fingerprint"
                         ],
                     },
-                })
+                }
+                if active_selector is not None:
+                    snippet_payload["mail_import_session_id"] = active_selector
+                snippet = _safe_snippet(snippet_payload)
             elif active_family == "document_text":
                 if (
                     observation.modality != "text"
@@ -1141,7 +1166,7 @@ def _build_source_start_semantic_handler(
                 active_family = family
                 selectors = (
                     (selector,) if family == "mail" and mail_tool
-                    else selector_ids if family == "mail"
+                    else (selector_ids or (None,)) if family == "mail"
                     else (None,)
                 )
                 family_left = len(families) - family_index
@@ -1260,6 +1285,7 @@ def _build_source_start_semantic_handler(
         query_agent = {
             "status": "pending_review",
             "stop_reason": "retrieval_projection_unavailable",
+            "original_query_hash": request_contract["original_query_hash"],
             "request_contract": request_contract,
             "subqueries": [{
                 "status": "pending_review",
@@ -2356,7 +2382,9 @@ def build_issue56_production_semantic_retrieval_handler(
                 # The family dispatcher does not directly close over query_terms.
                 # Bind the normalized hint explicitly for the shared sealed reader;
                 # shortlist hashes still require the same authority and matcher checks.
-                project_source_observation.source_lookup_terms = tuple(sorted(query_terms))
+                project_source_observation.source_lookup_terms = tuple(sorted(
+                    required_terms if required_terms else query_terms
+                ))
 
             def project_document_source_observation(
                 observation: Observation,
@@ -3047,7 +3075,11 @@ def build_issue56_production_semantic_handlers(
                     )
                     if ingestion_revision.authorized_source.authorizes_source_kind(
                         AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND
-                    )
+                    ) and bool(getattr(
+                        ingestion_revision.source_records,
+                        "authorized_mail_import_session_ids",
+                        (),
+                    ))
                     else None
                 ),
             )
@@ -3066,7 +3098,11 @@ def build_issue56_production_semantic_handlers(
                 )
                 if ingestion_revision.authorized_source.authorizes_source_kind(
                     AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND
-                )
+                ) and bool(getattr(
+                    ingestion_revision.source_records,
+                    "authorized_mail_import_session_ids",
+                    (),
+                ))
                 else None
             ),
         )
@@ -3091,6 +3127,12 @@ def build_issue56_production_semantic_handlers(
             "authorized_source",
             None,
         )
+        if not getattr(
+            ingestion_revision.source_records,
+            "authorized_mail_import_session_ids",
+            (),
+        ):
+            return retrieval_handler, None
         if (
             authorized_source is not None
             and authorized_source.source_kind == AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND
@@ -3338,13 +3380,23 @@ class _IngestionExactCellLookup:
         )
         if revision.source_records is not None:
             reader = revision.source_records
+            def _source_observation_or_none(key: str) -> Observation | None:
+                try:
+                    return reader.get_observation(key)
+                except ContractValidationError:
+                    return None
+
+            def _source_lineage_or_none(key: str) -> Any | None:
+                try:
+                    return reader.lineage(key)
+                except ContractValidationError:
+                    return None
+
             self._base_observation_by_id = _KeyedIngestionLookup(
-                lambda key: reader.get_observation(key)
-                if reader.runtime_store.get_helper(key) is not None else None
+                _source_observation_or_none
             )
             self._base_lineage_by_id = _KeyedIngestionLookup(
-                lambda key: reader.lineage(key)
-                if reader.runtime_store.get_helper(key) is not None else None
+                _source_lineage_or_none
             )
             self._attachment_parent_by_child_asset = _KeyedIngestionLookup(
                 reader.attachment_parent_for_child_asset

@@ -30,6 +30,7 @@ from formowl_mail.exact import (
     authorized_source_occurrence_scope_fingerprint,
 )
 from formowl_mail.hybrid import (
+    attach_authorized_source_occurrence_providers,
     build_authorized_semantic_observation_session,
     build_authorized_source_backed_effective_graph_view,
 )
@@ -205,17 +206,85 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
         provider = replace(
             table_provider,
             provider_id="candidate_table_exact_guard_provider_v1",
-            filter_slot_policy="identifier_union_v1",
-            occurrences=(replace(candidate_occurrence, structured_column_bindings=()),),
+            occurrences=(candidate_occurrence,),
             unresolved_count=0,
             authorized_occurrence_scope_count=1,
             extractable_occurrence_scope_count=1,
             source_asset_reason_counts=(),
         )
+        exact_projection_field = next(
+            field for field, value, *_ in candidate_occurrence.projection_bindings
+            if value in {"REGION-X", "REGION-Y"}
+        )
         graph = build_authorized_source_backed_effective_graph_view(session=session,
             source_binding_fingerprint=sha256_json(
                 "candidate-table-answer-source")).effective_graph_view
-        loaded = SimpleNamespace(session=session, effective_graph_view=graph, safe_binding={})
+        routed_session = attach_authorized_source_occurrence_providers(
+            session, (provider,),
+        )
+        original_query = type(routed_session).query
+        for invalid_binding, error_pattern in (
+            ("hash", "provenance binding mismatch"),
+            ("lineage", "provenance binding mismatch"),
+            ("permission", "exact binding is invalid"),
+        ):
+            with self.subTest(fallback_authority=invalid_binding):
+                value_bindings = list(candidate_occurrence.value_bindings)
+                first_binding = list(value_bindings[0])
+                if invalid_binding in {"hash", "lineage"}:
+                    first_binding[2 if invalid_binding == "hash" else 3] = (
+                        sha256_json("unbound_candidate_reference")
+                    )
+                    value_bindings[0] = tuple(first_binding)
+                invalid_provider = replace(
+                    provider,
+                    requester_user_id=(
+                        "user_without_source_permission"
+                        if invalid_binding == "permission" else REQUESTER_ID
+                    ),
+                    occurrences=(replace(
+                        candidate_occurrence,
+                        value_bindings=tuple(value_bindings),
+                        projection_bindings=(),
+                        structured_column_bindings=(),
+                        structure_status=None,
+                    ),),
+                )
+                query_calls = []
+
+                def reject_invalid_fallback(bound_session, **kwargs):
+                    query_calls.append(kwargs)
+                    if kwargs.get("exact_inventory_kind") is not None:
+                        hybrid_module._validated_source_occurrence_providers(
+                            session=bound_session, providers=(invalid_provider,),
+                        )
+                    return original_query(bound_session, **kwargs)
+
+                with patch.object(
+                    type(routed_session), "query", new=reject_invalid_fallback,
+                ):
+                    with self.assertRaisesRegex(ContractValidationError, error_pattern):
+                        hybrid_module.execute_bounded_adaptive_query(
+                            session=routed_session,
+                            query_text="SYN-DUP-77 asks for OriginField",
+                            effective_graph_view=graph,
+                        )
+                self.assertEqual(len(query_calls), 2)
+                self.assertIs(
+                    query_calls[0]["execution_deadline"],
+                    query_calls[1]["execution_deadline"],
+                )
+        loaded = SimpleNamespace(
+            session=session,
+            effective_graph_view=graph,
+            safe_binding={},
+            observations=session.authorized_observations,
+            query_bundle=SimpleNamespace(
+                mail_import_session=SimpleNamespace(
+                    mail_import_session_id=SOURCE_SCOPE_ID,
+                ),
+            ),
+        )
         with (
             patch.object(gateway_loader, "APPROVER_ACTOR", REQUESTER_ID),
             patch.object(gateway_loader, "WORKSPACE_ID", WORKSPACE_ID),
@@ -322,7 +391,7 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                         "SYN-ITEM-42 asks for OriginField and SecondaryField")
                     exact = call(
                         client,
-                        f"list every {exact_identifier} row",
+                        f"{exact_identifier} 的 {exact_projection_field}",
                         exact_inventory_kind=provider.inventory_kind_alias,
                         exact_field=provider.normalized_field,
                     )
@@ -342,7 +411,7 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(candidate["exact_result"])
                 self.assertIsNone(success["exact_result"])
                 inventory = exact["exact_inventory"]
-                self.assertEqual(exact["status"], "replan_required")
+                self.assertEqual(exact["status"], "incomplete")
                 self.assertEqual(inventory["status"], "incomplete")
                 self.assertEqual(inventory["coverage_status"], "incomplete")
                 self.assertEqual(inventory["total_count"], 0)
@@ -364,6 +433,22 @@ class Issue56CandidateTableAnswerMcpE2ETests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("REGION-X", str(rejected))
                     self.assertNotIn("REGION-Y", str(rejected))
                     self.assertNotIn("REGION-ALPHA", str(rejected))
+                    self.assertIsNone(rejected.get("exact_result"))
+                    self.assertEqual(rejected["citations"], [])
+                    self.assertEqual(
+                        rejected["query_agent"]["external_replan"]["status"],
+                        "required",
+                    )
+                self.assertEqual(duplicate["status"], "pending_review")
+                self.assertEqual(duplicate["query_agent"]["status"], "pending_review")
+                self.assertEqual(
+                    duplicate["query_agent"]["stop_reason"],
+                    "source_binding_clarification_required",
+                )
+                self.assertEqual(
+                    duplicate["query_agent"]["external_replan"]["recommended_query_mode"],
+                    "clarify_source_binding",
+                )
                 self.assertEqual(lookup_builder.call_count, 1)
                 public = str((success, duplicate, multi_header))
                 self.assertNotIn("object_uri", public)

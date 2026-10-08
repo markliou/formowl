@@ -9,20 +9,26 @@ diagnostic dense fallback.
 from __future__ import annotations
 
 from collections import Counter, deque
-from collections.abc import Callable, Iterator
+from collections.abc import (
+    Callable, Collection, Iterator, Mapping as MappingABC, Sequence as SequenceABC,
+)
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
+import hashlib
+import heapq
+import json
 import math
 import re
 import struct
+from itertools import islice
 import unicodedata
 from threading import RLock
 from time import monotonic as _system_monotonic
 from time import perf_counter_ns as _system_perf_counter_ns
 from types import MappingProxyType
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from formowl_contract import (
     CandidateMention,
@@ -48,6 +54,12 @@ from formowl_core import (
     sha256_prefixed,
 )
 from formowl_core.tokenization import MailCandidateAdmissionTokenizerProfile
+from formowl_core.dense_embedding import (
+    DenseEvidenceVectorCache,
+    PackedDenseVector,
+    PackedEvidenceVectors,
+    configured_dense_evidence_batch_size,
+)
 from formowl_graph import EffectiveGraphView, soft_core_supertypes_compatible
 from formowl_graph.index import GraphProjectionEdge, GraphProjectionNode
 from formowl_graph.resolution import (
@@ -74,9 +86,16 @@ from .exact import (
     authorized_source_occurrence_scope_fingerprint,
     execute_deterministic_exact_inventory,
     execute_deterministic_source_occurrence_inventory,
+    normalize_source_occurrence_structured_surface,
+    source_occurrence_exact_cell_value_hash,
 )
 from .query import (
+    _redact_mail_public_text,
+    AuthorizedObservationIndexBuildManifest,
     GitHubProjectOccurrenceLineage,
+    MailAttachmentChildOccurrenceLineage,
+    MailInlineTableOccurrenceLineage,
+    MailMessageOccurrenceLineage,
     IndexedObservationSnippet,
     IndexedMailSnippet,
     MailSnippetIndex,
@@ -84,6 +103,7 @@ from .query import (
     SourceOccurrenceLineage,
     authorize_mail_evidence_bundles,
     build_authorized_observation_snippet_index,
+    build_authorized_observation_snippet_from_bound_record,
     build_existing_observation_snippet_index,
     normalized_authorized_observation_lineages,
     require_issue56_target_tokenizer_profile,
@@ -92,6 +112,7 @@ from .query import (
 from .semantic_plan import (
     _CJK_EXACT_OUTPUT_GRAMMAR_V1,
     AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
+    AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND,
     DEFAULT_SEMANTIC_PLAN_LIMITS,
     GITHUB_PROJECT_OBSERVATION_SOURCE_KIND,
     AuthorizedSemanticSource,
@@ -102,6 +123,7 @@ from .semantic_plan import (
     repair_relation_plan_once,
     route_semantic_query,
     validated_authorized_semantic_source,
+    validate_semantic_request_contract,
     validate_semantic_query_plan,
 )
 
@@ -125,9 +147,6 @@ _SOURCE_GRAPH_MAX_TERMS_PER_OBSERVATION = 32
 _SOURCE_GRAPH_MAX_TERM_HASHES_PER_ENTITY = 128
 _RELATION_FALLBACK_POLICY_ID = "strict_no_answer_connected_authorized_relation_repair_v1"
 _SEMANTIC_TIME_BUDGET_EXHAUSTED_WARNING = "semantic_query_time_budget_exhausted"
-_SOURCE_OCCURRENCE_IDENTIFIER_NOT_FOUND_WARNING = (
-    "source_occurrence_identifier_not_found"
-)
 _AUTHORIZED_EVIDENCE_IDENTIFIER_NOT_FOUND_WARNING = "authorized_evidence_identifier_not_found"
 _MONOTONIC_CLOCK: Callable[[], float] = _system_monotonic
 _SEMANTIC_PHASE_TRACE_CLOCK_NS: Callable[[], int] = _system_perf_counter_ns
@@ -939,6 +958,7 @@ class EvidenceIdentityLineageCrosswalk:
     graph_edge_bound_evidence_count: int
     entries: tuple[EvidenceIdentityLineageEntry, ...]
     crosswalk_fingerprint: str
+    _runtime_store: Any | None = field(default=None, repr=False, compare=False)
 
     def to_safe_dict(self) -> dict[str, Any]:
         payload = {
@@ -1327,7 +1347,223 @@ class _HybridCandidate:
     observation_tokens: frozenset[str]
     observation_protected_identifier_tokens: frozenset[str]
     dense_evidence_text_hash: str
-    dense_vector: tuple[float, ...]
+    dense_vector: Sequence[float]
+
+
+_STORED_CANDIDATE_TOKEN_FIELDS = (
+    "searchable_tokens", "protected_identifier_tokens", "observation_tokens",
+    "observation_protected_identifier_tokens",
+)
+_STORED_CANDIDATE_ID_FIELDS = (
+    "bundle_id", "coherence_group_hash", "source_observation_hash", "message_hash",
+    "message_occurrence_hash", "index_binding_hash", "dense_evidence_text_hash",
+)
+
+
+@dataclass(frozen=True)
+class _StoredDenseVector(SequenceABC[float]):
+    """A selected candidate may request its vector; reopen never expands it."""
+
+    store: Any = field(repr=False, compare=False)
+    text_hash: str
+
+    def __len__(self) -> int:
+        return ISSUE56_TARGET_DENSE_DIMENSION
+
+    def _load(self) -> Sequence[float]:
+        raw = self.store.get_dense_vector(self.text_hash)
+        if isinstance(raw, bytes):
+            if len(raw) != ISSUE56_TARGET_DENSE_DIMENSION * 4:
+                raise ContractValidationError("stored dense vector payload size mismatch")
+            vector = PackedDenseVector(raw, 0, ISSUE56_TARGET_DENSE_DIMENSION)
+        else:
+            vector = tuple(raw)
+        _validate_precomputed_dense_vector(vector)
+        return vector
+
+    def __getitem__(self, index):
+        return self._load()[index]
+
+    def __iter__(self):
+        return iter(self._load())
+
+
+def _hybrid_candidate_from_store_record(
+    record: Mapping[str, Any] | None, *, runtime_store: Any,
+) -> _HybridCandidate:
+    if not isinstance(record, Mapping):
+        raise ContractValidationError("stored hybrid candidate is unavailable")
+    values = {}
+    for name in _STORED_CANDIDATE_ID_FIELDS:
+        value = record.get(name)
+        if not isinstance(value, str) or not value:
+            raise ContractValidationError("stored hybrid candidate identity is invalid")
+        safe_public_string(value, "stored hybrid candidate identity")
+        values[name] = value
+    for name in _STORED_CANDIDATE_TOKEN_FIELDS:
+        raw = record.get(name)
+        if (
+            not isinstance(raw, (list, tuple))
+            or any(not isinstance(token, str) for token in raw)
+        ):
+            raise ContractValidationError("stored hybrid candidate tokens are invalid")
+        values[name] = frozenset(raw)
+    return _HybridCandidate(
+        **values,
+        dense_vector=_StoredDenseVector(runtime_store, values["dense_evidence_text_hash"]),
+    )
+
+
+@dataclass(frozen=True)
+class _StoredHybridCandidates(SequenceABC[_HybridCandidate]):
+    store: Any = field(repr=False, compare=False)
+    count: int
+
+    def __len__(self) -> int:
+        return self.count
+
+    def __getitem__(self, index):
+        if not isinstance(index, int):
+            raise ContractValidationError("stored candidate slicing is not bounded")
+        if index < 0:
+            index += self.count
+        if not 0 <= index < self.count:
+            raise IndexError(index)
+        record = self.store.candidate_by_ordinal(index)
+        if record is None or record.get("ordinal") != index:
+            raise ContractValidationError("stored candidate ordinal binding mismatch")
+        return _hybrid_candidate_from_store_record(record, runtime_store=self.store)
+
+    def __iter__(self):
+        # An accidental old full-corpus query loop fails before allocating it.
+        raise ContractValidationError("stored candidates require bounded indexed lookup")
+
+
+@dataclass(frozen=True)
+class _StoredReferenceCollection(SequenceABC):
+    store: Any = field(repr=False, compare=False)
+    count: int = field()
+    kind: str
+
+    def __len__(self):
+        return self.count
+
+    def __getitem__(self, index):
+        raise ContractValidationError("stored references require keyed authorized lookup")
+
+    def __iter__(self):
+        raise ContractValidationError("stored references require keyed authorized lookup")
+
+
+@dataclass(frozen=True)
+class _StoredObservationHashes(MappingABC):
+    store: Any = field(repr=False, compare=False)
+    count: int
+    family_scope: Any = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self):
+        object.__setattr__(self, "_helper_lookup", lru_cache(maxsize=256)(self.store.get_helper))
+
+    def __len__(self):
+        return self.count
+
+    def __iter__(self):
+        raise ContractValidationError("stored authorization requires keyed lookup")
+
+    def __getitem__(self, observation_id):
+        helper = self._helper_lookup(observation_id)
+        if helper is None:
+            raise KeyError(observation_id)
+        if self.family_scope is not None and helper["observation_hash"] not in self.family_scope:
+            raise KeyError(observation_id)
+        return helper["observation_hash"]
+
+
+@dataclass(frozen=True)
+class _StoredCandidatesByHash(MappingABC):
+    store: Any = field(repr=False, compare=False)
+    count: int
+    family_scope: Any = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self):
+        object.__setattr__(self, "_candidate_lookup", lru_cache(maxsize=256)(self._get_candidate))
+
+    def __len__(self):
+        return self.count
+
+    def __iter__(self):
+        raise ContractValidationError("stored candidates require indexed lookup")
+
+    def __getitem__(self, observation_hash):
+        return self._candidate_lookup(observation_hash)
+
+    def _get_candidate(self, observation_hash):
+        if self.family_scope is not None and observation_hash not in self.family_scope:
+            raise KeyError(observation_hash)
+        record = self.store.candidate_for_observation(observation_hash)
+        if record is None:
+            raise KeyError(observation_hash)
+        return _hybrid_candidate_from_store_record(record, runtime_store=self.store)
+
+
+@dataclass(frozen=True)
+class _StoredSourceFamilyHashes(Collection):
+    """SQL eligibility scope with keyed membership, never an expanded hash set."""
+    store: Any = field(repr=False, compare=False)
+    source_families: tuple[str, ...]
+    count: int = field()
+
+    def __post_init__(self):
+        object.__setattr__(self, "_membership_lookup", lru_cache(maxsize=256)(self._has_hash))
+
+    def __len__(self):
+        return self.count
+
+    def __iter__(self):
+        raise ContractValidationError("stored source families require SQL-scoped lookup")
+
+    def __contains__(self, observation_hash):
+        return self._membership_lookup(observation_hash)
+
+    def _has_hash(self, observation_hash):
+        helper = self.store.helper_for_hash(observation_hash)
+        if helper is None:
+            return False
+        families = set(helper.get("source_families", ()))
+        if "parent_message_observation_id" in helper.get("lineage", {}):
+            families.add("mail")
+        return bool(
+            families.intersection(self.source_families)
+            and self.store.candidate_for_observation(observation_hash) is not None
+        )
+
+
+def _index_candidates_by_hash(index, family_scope=None):
+    if index._runtime_store is not None:
+        return _StoredCandidatesByHash(
+            index._runtime_store,
+            len(index.candidates) if family_scope is None else len(family_scope),
+            family_scope,
+        )
+    return {item.source_observation_hash: item for item in index.candidates}
+
+
+def _stored_document_frequency(store, tokens):
+    result = {}
+    iterator = iter(tokens)
+    while batch := tuple(islice(iterator, 256)):
+        result.update(store.document_frequency(batch))
+    return result
+
+
+def _indexed_identifier_present(index, tokens):
+    if index._runtime_store is not None:
+        return index._runtime_store.identifier_present(tuple(sorted(tokens)))
+    return any(
+        tokens & candidate.protected_identifier_tokens
+        or tokens & candidate.observation_protected_identifier_tokens
+        for candidate in index.candidates
+    )
 
 
 @dataclass(frozen=True)
@@ -1520,6 +1756,159 @@ class _RelationQueryProjection:
     initial_query_anchor_node_ids: tuple[str, ...]
     completion_query_anchor_node_ids: tuple[str, ...]
     build_count: int = 1
+    _runtime_store: Any | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class _KeyedRelationValues(MappingABC):
+    lookup: Callable = field(repr=False, compare=False)
+    size: int
+
+    def __len__(self):
+        return self.size
+
+    def __iter__(self):
+        raise ContractValidationError("stored relation projection requires keyed lookup")
+
+    def __getitem__(self, key):
+        value = self.lookup(key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+
+@dataclass(frozen=True)
+class _StoredNodeEvidence:
+    store: Any = field(repr=False, compare=False)
+    node_id: str
+    family_scope: Any = field(default=None, repr=False, compare=False)
+
+    def __iter__(self):
+        raise ContractValidationError("stored node evidence requires membership lookup")
+
+    def __contains__(self, observation_hash):
+        if self.family_scope is not None and observation_hash not in self.family_scope:
+            return False
+        helper = self.store.helper_for_hash(observation_hash)
+        if helper is None:
+            return False
+        nodes = self.store.nodes_for_observation(helper["observation_id"], limit=64)
+        if len(nodes) == 64:
+            raise ContractValidationError("stored evidence node lookup exceeds bound")
+        return any(node.node_id == self.node_id for node in nodes)
+
+
+@dataclass(frozen=True)
+class _StoredNodeLineageSupport:
+    evidence: _StoredNodeEvidence
+    candidates: Mapping
+    identifiers: frozenset[str]
+    concepts: frozenset[str]
+
+    def __iter__(self):
+        raise ContractValidationError("stored lineage support requires cited evidence lookup")
+
+    def iter_members(self, required_identifiers, required_concepts, deadline):
+        after = None
+        while page := self.evidence.store.observation_ids_for_node(
+            self.evidence.node_id, after_id=after, limit=64,
+        ):
+            for oid in page:
+                _query_deadline_checkpoint(deadline)
+                helper = self.evidence.store.get_helper(oid)
+                if helper is None:
+                    raise ContractValidationError("stored node membership source is unavailable")
+                candidate = self.candidates.get(helper["observation_hash"])
+                if candidate is None:
+                    continue
+                identifiers = required_identifiers & self.identifiers & frozenset(
+                    _source_graph_term_hashes(tuple(candidate.observation_protected_identifier_tokens))
+                )
+                concepts = required_concepts & self.concepts & frozenset(
+                    _source_graph_term_hashes(tuple(candidate.observation_tokens))
+                )
+                coverage = frozenset(("identifier", value) for value in identifiers) | frozenset(
+                    ("concept", value) for value in concepts
+                )
+                if coverage:
+                    yield oid, helper["observation_hash"], coverage
+            after = page[-1]
+
+    def for_evidence(self, hashes):
+        for value in hashes:
+            if value not in self.evidence:
+                continue
+            candidate = self.candidates.get(value)
+            if candidate is None:
+                continue
+            identifiers = self.identifiers & frozenset(_source_graph_term_hashes(
+                tuple(candidate.observation_protected_identifier_tokens),
+            ))
+            concepts = self.concepts & frozenset(_source_graph_term_hashes(
+                tuple(candidate.observation_tokens),
+            ))
+            if identifiers or concepts:
+                yield value, identifiers, concepts
+
+
+@dataclass(frozen=True)
+class _StoredVocabularyBinding:
+    seal_hash: str
+    kind: str
+
+    def __iter__(self):
+        raise ContractValidationError("stored vocabulary requires indexed membership lookup")
+
+
+def _projected_node_support_for_evidence(node, hashes):
+    support = node.lineage_support_by_observation_hash
+    if isinstance(support, _StoredNodeLineageSupport):
+        return support.for_evidence(hashes)
+    return support
+
+
+def _stored_path_node_support(projection, node_hashes, identifiers, concepts, deadline):
+    streams = []
+    for node_hash in node_hashes:
+        node = projection.node_by_hash.get(node_hash)
+        if node is None:
+            raise ContractValidationError("stored path node binding is unavailable")
+        support = node.lineage_support_by_observation_hash
+        if isinstance(support, _StoredNodeLineageSupport):
+            streams.append(support.iter_members(identifiers, concepts, deadline))
+    previous_id = previous_hash = None
+    covered = frozenset()
+    # Merge by genuine source ID, not query rank or a repaired-subset ordinal.
+    # This joins support across nodes before any equivalent-coverage reduction.
+    for oid, observation_hash, coverage in heapq.merge(*streams, key=lambda item: item[0]):
+        _query_deadline_checkpoint(deadline)
+        if previous_id is not None and oid != previous_id:
+            yield previous_hash, covered
+            covered = frozenset()
+        if oid == previous_id and observation_hash != previous_hash:
+            raise ContractValidationError("stored path membership hash mismatch")
+        previous_id, previous_hash = oid, observation_hash
+        covered |= coverage
+    if previous_id is not None:
+        yield previous_hash, covered
+
+
+@dataclass(frozen=True)
+class _EvidenceSupportCount:
+    count: int
+
+    def __len__(self):
+        return self.count
+
+
+def _authorized_hash_subset(authorized_hashes, values):
+    if isinstance(authorized_hashes, _StoredObservationHashes):
+        return frozenset(
+            value for value in values
+            if (helper := authorized_hashes.store.helper_for_hash(value)) is not None
+            and authorized_hashes.get(helper["observation_id"]) == value
+        )
+    return frozenset(authorized_hashes.values())
 
 
 @dataclass(frozen=True)
@@ -1565,6 +1954,9 @@ _SOURCE_OCCURRENCE_PROJECTION_CONNECTOR_BOUNDARY_RULE = (
 _SOURCE_OCCURRENCE_SENTENCE_FINAL_PARTICLE_POLICY_ID = (
     "source_occurrence_sentence_final_particle_v1")
 _SOURCE_OCCURRENCE_SENTENCE_FINAL_PARTICLES = ("嗎", "呢", "吧", "麼")
+_SOURCE_OCCURRENCE_STRUCTURED_TABLE_QUERY_POLICY_ID = (
+    "source_occurrence_structured_table_query_v1"
+)
 _SOURCE_OCCURRENCE_CONTIGUOUS_PHRASE_POLICY_ID = (
     "source_occurrence_contiguous_lexical_particle_phrase_v1")
 _SOURCE_OCCURRENCE_CONTIGUOUS_PHRASE_BOUNDARY_RULE = (
@@ -1764,10 +2156,11 @@ class AuthorizedHybridMailIndex:
         compare=False,
     )
     _precomputed_graph_revision_fingerprint: str | None = field(
-        default=None,
         repr=False,
         compare=False,
     )
+    _runtime_store: Any | None = field(default=None, repr=False, compare=False)
+    _runtime_store_seal: str | None = field(default=None, repr=False, compare=False)
 
     def query(
         self,
@@ -1776,6 +2169,7 @@ class AuthorizedHybridMailIndex:
         query_class: str,
         candidate_limit: int = 12,
         result_limit: int = 5,
+        allowed_source_observation_hashes: Collection[str] | None = None,
         execution_deadline: _QueryExecutionDeadline | None = None,
     ) -> GovernedHybridRagResult:
         _query_deadline_checkpoint(execution_deadline)
@@ -1789,6 +2183,28 @@ class AuthorizedHybridMailIndex:
             result_limit=result_limit,
         )
         query_hash = sha256_json(query_text)
+        allowed_hashes = (
+            None
+            if allowed_source_observation_hashes is None
+            else (
+                allowed_source_observation_hashes
+                if isinstance(allowed_source_observation_hashes, _StoredSourceFamilyHashes)
+                else set(allowed_source_observation_hashes)
+            )
+        )
+        if isinstance(allowed_hashes, _StoredSourceFamilyHashes) and (
+            self._runtime_store is None or allowed_hashes.store is not self._runtime_store
+        ):
+            raise ContractValidationError("stored source-family store binding mismatch")
+        allowed_candidate_indexes = (
+            None
+            if allowed_hashes is None or self._runtime_store is not None
+            else {
+                index
+                for index, candidate in enumerate(self.candidates)
+                if candidate.source_observation_hash in allowed_hashes
+            }
+        )
         if query_class in _BLOCKED_QUERY_CLASSES:
             return _route_blocked_result(
                 query_hash=query_hash,
@@ -1847,7 +2263,10 @@ class AuthorizedHybridMailIndex:
             query_text,
             query_class=query_class,
             tokenizer_profile=tokenizer_profile,
-            document_frequency=dict(self.document_frequency),
+            document_frequency=(
+                self._runtime_store.document_frequency(tuple(sorted(query_tokens)))
+                if self._runtime_store is not None else dict(self.document_frequency)
+            ),
             document_count=len(self.candidates),
         )
         _query_deadline_checkpoint(execution_deadline)
@@ -1860,31 +2279,84 @@ class AuthorizedHybridMailIndex:
             )
         query_vector = dense_encoder.encode_query(query_text)
         _query_deadline_checkpoint(execution_deadline)
-        bm25_scores = self._bm25_scores(
-            query_tokens,
-            execution_deadline=execution_deadline,
-        )
-        dense_scores: list[float] = []
-        for candidate in self.candidates:
+        query_candidates: Mapping[int, _HybridCandidate] | None = None
+        if self._runtime_store is not None:
+            rows = self._runtime_store.hybrid_ranked(
+                query_tokens=tuple(sorted(query_tokens)),
+                query_vector=query_vector,
+                limit=candidate_limit,
+                timeout_ms=(
+                    max(1, int(execution_deadline.remaining_seconds() * 1000))
+                    if execution_deadline is not None else 1500
+                ),
+                allowed_source_observation_hashes=(
+                    None if isinstance(allowed_hashes, _StoredSourceFamilyHashes)
+                    else allowed_hashes
+                ),
+                **(
+                    {"requested_source_families": allowed_hashes.source_families}
+                    if isinstance(allowed_hashes, _StoredSourceFamilyHashes) else {}
+                ),
+            )
+            if len(rows) > 2 * candidate_limit:
+                raise ContractValidationError("indexed hybrid candidate bound exceeded")
+            query_candidates = {
+                row["ordinal"]: _hybrid_candidate_from_store_record(
+                    self._runtime_store.candidate_for_observation(
+                        row["source_observation_hash"]
+                    ),
+                    runtime_store=self._runtime_store,
+                )
+                for row in rows
+            }
+            bm25_scores = {row["ordinal"]: row["bm25_score"] for row in rows}
+            dense_scores = {row["ordinal"]: row["dense_score"] for row in rows}
+            bm25_ranks = {
+                row["ordinal"]: row["bm25_rank"]
+                for row in rows if row["bm25_rank"] is not None
+            }
+            dense_ranks = {
+                row["ordinal"]: row["dense_rank"]
+                for row in rows if row["dense_rank"] is not None
+            }
+            selected_candidate_indexes = set(query_candidates)
+            if len(query_candidates) != len(rows) or any(
+                query_candidates[row["ordinal"]].source_observation_hash
+                != row["source_observation_hash"]
+                or (
+                    allowed_hashes is not None
+                    and row["source_observation_hash"] not in allowed_hashes
+                )
+                for row in rows
+            ):
+                raise ContractValidationError("indexed hybrid candidate binding mismatch")
+        else:
+            bm25_scores = self._bm25_scores(
+                query_tokens,
+                execution_deadline=execution_deadline,
+            )
+            dense_scores = []
+            for candidate in self.candidates:
+                _query_deadline_checkpoint(execution_deadline)
+                dense_scores.append(_cosine_similarity(query_vector, candidate.dense_vector))
             _query_deadline_checkpoint(execution_deadline)
-            dense_scores.append(_cosine_similarity(query_vector, candidate.dense_vector))
-        _query_deadline_checkpoint(execution_deadline)
-        bm25_ranks = _positive_ranks(bm25_scores)
-        _query_deadline_checkpoint(execution_deadline)
-        dense_ranks = _positive_ranks(dense_scores)
-        _query_deadline_checkpoint(execution_deadline)
-        selected_candidate_indexes = set(
-            _top_ranked_indexes(
-                bm25_scores,
-                candidate_limit,
+            bm25_ranks = _positive_ranks(bm25_scores)
+            _query_deadline_checkpoint(execution_deadline)
+            dense_ranks = _positive_ranks(dense_scores)
+            _query_deadline_checkpoint(execution_deadline)
+            selected_candidate_indexes = set(
+                _top_ranked_indexes(
+                    bm25_scores, candidate_limit,
+                    allowed_indexes=allowed_candidate_indexes,
+                )
             )
-        )
-        selected_candidate_indexes.update(
-            _top_ranked_indexes(
-                dense_scores,
-                candidate_limit,
+            selected_candidate_indexes.update(
+                _top_ranked_indexes(
+                    dense_scores, candidate_limit,
+                    allowed_indexes=allowed_candidate_indexes,
+                )
             )
-        )
+        _query_deadline_checkpoint(execution_deadline)
         if not selected_candidate_indexes:
             return _no_answer_result(
                 index=self,
@@ -1897,7 +2369,10 @@ class AuthorizedHybridMailIndex:
         admitted_candidate_scores: list[HybridRagCandidateScore] = []
         for candidate_index in sorted(selected_candidate_indexes):
             _query_deadline_checkpoint(execution_deadline)
-            candidate = self.candidates[candidate_index]
+            candidate = (
+                query_candidates[candidate_index] if query_candidates is not None
+                else self.candidates[candidate_index]
+            )
             bm25_rank = bm25_ranks.get(candidate_index)
             dense_rank = dense_ranks.get(candidate_index)
             fusion_score = (1.0 / (_RRF_K + bm25_rank) if bm25_rank is not None else 0.0) + (
@@ -1938,7 +2413,10 @@ class AuthorizedHybridMailIndex:
         for coherence_group_hash, grouped_candidates in grouped.items():
             _query_deadline_checkpoint(execution_deadline)
             candidate_indexes = [item[0] for item in grouped_candidates]
-            candidates = [self.candidates[index] for index in candidate_indexes]
+            candidates = [
+                query_candidates[index] if query_candidates is not None
+                else self.candidates[index] for index in candidate_indexes
+            ]
             union_tokens = frozenset().union(
                 *(candidate.searchable_tokens for candidate in candidates)
             )
@@ -2022,7 +2500,10 @@ class AuthorizedHybridMailIndex:
             )
         answer_citation_hashes = _minimal_hybrid_answer_citation_hashes(
             ordered_results=ordered_results,
-            candidates=self.candidates,
+            candidates=(
+                tuple(query_candidates.values()) if query_candidates is not None
+                else self.candidates
+            ),
             proof_slots=proof_slots,
             evidence_budget=result_limit,
             execution_deadline=execution_deadline,
@@ -2099,6 +2580,508 @@ class AuthorizedHybridMailIndex:
         return scores
 
 
+_STORED_HYBRID_INDEX_FIELDS = (
+    "tokenizer_id", "profile_fingerprint", "index_fingerprint", "dense_encoder_id",
+    "dense_encoder_status", "dense_profile_fingerprint", "dense_model_id",
+    "dense_model_revision", "execution_component_fingerprint", "selected_bundle_count",
+    "authorized_bundle_count", "denied_bundle_count", "average_document_length",
+    "_integrity_fingerprint", "_precomputed_graph_revision_fingerprint",
+)
+
+
+def persist_authorized_hybrid_index(
+    *, index: AuthorizedHybridMailIndex, runtime_store: Any,
+) -> dict[str, Any]:
+    """Persist the existing index projection in bounded owner-store batches.
+
+    Returns metadata to include in the caller's atomic graph/source revision
+    seal. This does not publish a revision or grant access on its own.
+    """
+    _validate_hybrid_index_runtime(index)
+    candidate_iterator = enumerate(index.candidates)
+    while batch := tuple(islice(candidate_iterator, 32)):
+        records = []
+        vectors = {}
+        postings = []
+        for ordinal, candidate in batch:
+            record = {
+                name: getattr(candidate, name) for name in _STORED_CANDIDATE_ID_FIELDS
+            }
+            record.update({
+                name: sorted(getattr(candidate, name))
+                for name in _STORED_CANDIDATE_TOKEN_FIELDS
+            })
+            record["ordinal"] = ordinal
+            records.append(record)
+            vectors.setdefault(
+                candidate.dense_evidence_text_hash,
+                tuple(candidate.dense_vector),
+            )
+            postings.extend({
+                "token": token,
+                "source_observation_hash": candidate.source_observation_hash,
+                "document_length": len(candidate.searchable_tokens),
+            } for token in sorted(candidate.searchable_tokens))
+        runtime_store.put_dense_vectors([
+            {"text_hash": text_hash, "vector": vector}
+            for text_hash, vector in vectors.items()
+        ])
+        runtime_store.put_candidates(records)
+        for start in range(0, len(postings), 256):
+            runtime_store.put_postings(postings[start : start + 256])
+    statistics = iter(index.document_frequency)
+    while batch := tuple(islice(statistics, 256)):
+        runtime_store.put_token_statistics([
+            {"token": token, "document_frequency": count} for token, count in batch
+        ])
+    runtime_store.put_corpus_statistics({
+        "document_count": len(index.candidates),
+        "average_document_length": index.average_document_length,
+        "profile_fingerprint": index.profile_fingerprint,
+        "dense_profile_fingerprint": index.dense_profile_fingerprint,
+        "index_fingerprint": index.index_fingerprint,
+    })
+    return to_plain({
+        **{name: getattr(index, name) for name in _STORED_HYBRID_INDEX_FIELDS},
+        "candidate_count": len(index.candidates),
+    })
+
+
+def reopen_authorized_hybrid_index(
+    *, runtime_store: Any, expected_seal: str,
+    runtime_components: Issue56TargetRuntimeComponents,
+) -> AuthorizedHybridMailIndex:
+    """Reopen one sealed index without evidence encoding or candidate scans."""
+    manifest = runtime_store.reopen(expected_seal)
+    metadata = manifest.get("view_metadata", {}).get("hybrid_index")
+    if (
+        not isinstance(metadata, dict)
+        or set(metadata) != {
+            *(
+                name for name in _STORED_HYBRID_INDEX_FIELDS
+                if name != "_precomputed_graph_revision_fingerprint"
+            ),
+            "candidate_count",
+            *(
+                ("_precomputed_graph_revision_fingerprint",)
+                if "_precomputed_graph_revision_fingerprint" in metadata else ()
+            ),
+        }
+        or not isinstance(metadata["candidate_count"], int)
+        or isinstance(metadata["candidate_count"], bool)
+        or metadata["candidate_count"] <= 0
+        or manifest.get("counts", {}).get("candidate") != metadata["candidate_count"]
+    ):
+        raise ContractValidationError("stored hybrid index manifest is invalid")
+    candidates = _StoredHybridCandidates(runtime_store, metadata["candidate_count"])
+    index = AuthorizedHybridMailIndex(
+        **{name: metadata.get(name) for name in _STORED_HYBRID_INDEX_FIELDS},
+        candidates=candidates,
+        document_frequency=(),
+        _relation_projection_candidates_snapshot=candidates,
+        _runtime_components=runtime_components,
+        _runtime_store=runtime_store,
+        _runtime_store_seal=expected_seal,
+    )
+    _validate_hybrid_index_runtime(index)
+    return index
+
+
+def persist_authorized_semantic_observation_session(
+    *, session: AuthorizedSemanticObservationSession, graph_build: SourceBackedGraphBuild,
+    runtime_store: Any, source_references: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Persist validated runtime projections; raw evidence stays in its owner store.
+
+    The caller seals the returned metadata together with all projection records.
+    This adapter also supports the small existing in-memory build path; streaming
+    source/graph construction is a separate caller responsibility.
+    """
+    view = graph_build.effective_graph_view
+    _validate_source_neutral_semantic_session(session=session, effective_graph_view=view)
+    crosswalk = build_evidence_identity_lineage_crosswalk(
+        session=session, effective_graph_view=view,
+    )
+    entries = {entry.source_observation_hash: entry for entry in crosswalk.entries}
+    lineages = {item.source_observation_id: item for item in session.occurrence_lineages}
+    source_families = {
+        _source_occurrence_provider_family(provider)
+        for provider in session.source_occurrence_providers
+    }
+    helper_batch = []
+    for observation in session.authorized_observations:
+        observation_families = _semantic_observation_source_families(observation)
+        source_families.update(observation_families)
+        observation_hash = sha256_json(observation.to_dict())
+        reference = source_references.get(observation.observation_id)
+        if not isinstance(reference, Mapping):
+            raise ContractValidationError("stored session source reference is unavailable")
+        helper_batch.append({
+            "observation_id": observation.observation_id,
+            "observation_hash": observation_hash,
+            "source_scope_id": _observation_source_scope_id(
+                observation, authorized_source=session.authorized_source,
+            ),
+            "permission_scope": to_plain(observation.permission_scope),
+            "reference": dict(reference),
+            "lineage": to_plain(lineages[observation.observation_id]),
+            "source_families": list(observation_families),
+            "retrieval_source_family": _semantic_observation_retrieval_source_family(observation),
+            "crosswalk": entries[observation_hash].to_safe_dict(),
+            **(
+                {"attachment_child_asset_id": observation.payload["child_asset_id"]}
+                if observation.observation_type == "email_attachment_occurrence"
+                and observation.payload
+                and observation.payload.get("child_asset_id")
+                else {}
+            ),
+        })
+        if len(helper_batch) == 256:
+            runtime_store.put_helpers(helper_batch)
+            helper_batch.clear()
+    if helper_batch:
+        runtime_store.put_helpers(helper_batch)
+    index_metadata = persist_authorized_hybrid_index(
+        index=session.index, runtime_store=runtime_store,
+    )
+    for node in view.visible_nodes:
+        payload = node.to_dict()
+        memberships = payload["properties"].pop("source_observation_ids", ())
+        payload["properties"]["source_observation_membership_count"] = len(memberships)
+        runtime_store.put_nodes((GraphProjectionNode.from_dict(payload),))
+        for start in range(0, len(memberships), 256):
+            runtime_store.put_memberships([
+                (node.node_id, oid) for oid in memberships[start : start + 256]
+            ])
+    edges = iter(view.visible_edges)
+    while batch := tuple(islice(edges, 256)):
+        runtime_store.put_edges(batch)
+    crosswalk_metadata = {
+        name: getattr(crosswalk, name)
+        for name in (
+            "index_fingerprint", "graph_revision_fingerprint",
+            "source_session_binding_fingerprint", "authorized_evidence_count",
+            "indexed_evidence_count", "occurrence_bound_evidence_count",
+            "graph_node_bound_evidence_count", "graph_edge_bound_evidence_count",
+            "crosswalk_fingerprint",
+        )
+    }
+    return to_plain({
+        "source_families": sorted(source_families),
+        "hybrid_index": index_metadata,
+        "session": {
+            "requester_user_id": session.requester_user_id,
+            "workspace_id": session.workspace_id,
+            "authorized_source": to_plain(session.authorized_source),
+            "source_session_binding_fingerprint": session.source_session_binding_fingerprint,
+            "source_authority_fingerprint": session.source_authority_fingerprint,
+            "authorized_observation_count": len(session.authorized_observation_hashes),
+            "retrieval_observation_count": len(session.retrieval_observation_hashes),
+            "provider_scope_fingerprint": authorized_source_occurrence_scope_fingerprint(
+                requester_user_id=session.requester_user_id,
+                workspace_id=session.workspace_id,
+                source_scope_ids=session.authorized_source_scope_ids,
+                authorized_observation_hashes=session.authorized_observation_hashes,
+                source_session_binding_fingerprint=session.source_session_binding_fingerprint,
+            ),
+        },
+        "graph": {
+            **{
+                name: getattr(view, name) for name in (
+                    "requester_user_id", "user_graph_revision_id",
+                    "canonical_graph_revision_id", "ontology_revision_id", "assembly_policy_id",
+                )
+            },
+            "graph_revision_fingerprint": graph_build.graph_revision_fingerprint,
+            "applied_grant_ids": tuple(view.applied_grant_ids),
+            "access_required": [scope.to_dict() for scope in view.access_required],
+        },
+        "crosswalk": crosswalk_metadata,
+    })
+
+
+def reopen_authorized_semantic_observation_session(
+    *, runtime_store: Any, expected_seal: str, requester_user_id: str,
+    runtime_components: Issue56TargetRuntimeComponents,
+) -> AuthorizedSemanticObservationSession:
+    """Rebind an existing sealed session using lazy owner-store references."""
+    from formowl_contract import PermissionScope
+
+    manifest = runtime_store.reopen(expected_seal)
+    metadata = manifest.get("view_metadata", {}).get("session", {})
+    if metadata.get("requester_user_id") != requester_user_id:
+        raise ContractValidationError("stored semantic requester binding mismatch")
+    raw_source = metadata["authorized_source"]
+    source = AuthorizedSemanticSource(
+        source_kind=raw_source["source_kind"], workspace_id=raw_source["workspace_id"],
+        source_scope_ids=tuple(raw_source["source_scope_ids"]),
+        authorized_permission_scopes=tuple(
+            PermissionScope(**scope) for scope in raw_source["authorized_permission_scopes"]
+        ),
+    )
+    if (
+        source.workspace_id != metadata["workspace_id"]
+        or manifest["counts"]["helper"] != metadata["authorized_observation_count"]
+        or source.authorization_fingerprint
+        != manifest["binding"]["source_access_fingerprint"]
+    ):
+        raise ContractValidationError("stored semantic source binding mismatch")
+    index = reopen_authorized_hybrid_index(
+        runtime_store=runtime_store, expected_seal=expected_seal,
+        runtime_components=runtime_components,
+    )
+    count = metadata["authorized_observation_count"]
+    return AuthorizedSemanticObservationSession(
+        index=index, requester_user_id=requester_user_id, workspace_id=source.workspace_id,
+        selected_source_scope_ids=source.source_scope_ids,
+        authorized_source_scope_ids=source.source_scope_ids, authorized_source=source,
+        authorized_observation_hashes=_StoredReferenceCollection(runtime_store, count, "hashes"),
+        retrieval_observation_hashes=_StoredReferenceCollection(
+            runtime_store, metadata["retrieval_observation_count"], "retrieval_hashes",
+        ),
+        authorized_observations=_StoredReferenceCollection(runtime_store, count, "observations"),
+        occurrence_lineages=_StoredReferenceCollection(runtime_store, count, "lineages"),
+        source_session_binding_fingerprint=metadata["source_session_binding_fingerprint"],
+        source_authority_fingerprint=metadata.get("source_authority_fingerprint"),
+    )
+
+
+def reopen_authorized_effective_graph_view(
+    *, session: AuthorizedSemanticObservationSession,
+) -> EffectiveGraphView:
+    """Open sealed graph metadata, not a materialized node/edge snapshot."""
+    from formowl_contract import PermissionScope
+
+    store = session.index._runtime_store
+    manifest = store.reopen(session.index._runtime_store_seal)
+    metadata = dict(manifest["view_metadata"]["graph"])
+    fingerprint = metadata.pop("graph_revision_fingerprint")
+    if metadata["requester_user_id"] != session.requester_user_id:
+        raise ContractValidationError("stored graph requester binding mismatch")
+    metadata["applied_grant_ids"] = _FrozenGraphList(metadata.get("applied_grant_ids", ()))
+    metadata["access_required"] = _FrozenGraphList(
+        PermissionScope(**scope) for scope in metadata.get("access_required", ())
+    )
+    view = EffectiveGraphView(
+        **metadata,
+        visible_nodes=_StoredReferenceCollection(store, manifest["counts"]["node"], "nodes"),
+        visible_edges=_StoredReferenceCollection(store, manifest["counts"]["edge"], "edges"),
+    )
+    snapshot = _EffectiveGraphContentSnapshot(
+        graph_revision_fingerprint=fingerprint,
+        view_binding=_effective_graph_content_view_binding(view),
+    )
+    object.__setattr__(view, _EFFECTIVE_GRAPH_CONTENT_SNAPSHOT_ATTRIBUTE, snapshot)
+    object.__setattr__(view, "_indexed_runtime_store", store)
+    object.__setattr__(view, "_indexed_runtime_store_seal", session.index._runtime_store_seal)
+    _bind_source_neutral_session_to_graph_snapshot(session=session, effective_graph_view=view)
+    return view
+
+
+def _source_occurrence_provider_family(
+    provider: SourceOccurrenceProvider,
+) -> str:
+    if provider.filter_slot_policy == "combined_present_intersection_v1":
+        return (
+            "mail" if provider.resource_kind == "mail_inline_table_row_occurrence"
+            else "attachment_table"
+        )
+    if (
+        provider.filter_slot_policy == "identifier_union_v1"
+        and provider.resource_kind == "mail_message_occurrence"
+    ):
+        return "mail"
+    raise ContractValidationError(
+        "source occurrence provider source family is unsupported"
+    )
+
+
+def _semantic_observation_source_families(observation: Observation) -> tuple[str, ...]:
+    """Existing family classification; presence does not grant exact capability."""
+    if observation.modality == "mail":
+        return ("mail",)
+    if (
+        observation.modality == "text"
+        and observation.observation_type in {"heading", "paragraph"}
+    ):
+        return ("document_text",)
+    if (
+        observation.modality == "document"
+        and observation.observation_type in {"table_row", "table_cell"}
+        and (observation.payload or {}).get("lineage", {}).get("source_family")
+        != "mail_inline_table"
+    ):
+        return ("attachment_table",)
+    return ()
+
+
+def _semantic_observation_retrieval_source_family(observation: Observation) -> str | None:
+    """Ordinary query scoping, distinct from the capability-presence summary."""
+    if (
+        observation.modality == "text"
+        and observation.observation_type in {"heading", "paragraph"}
+    ):
+        return "document_text"
+    if (
+        observation.modality == "mail"
+        or (observation.payload or {}).get("lineage", {}).get("source_family")
+        == "mail_inline_table"
+    ):
+        return "mail"
+    if observation.modality == "document" and observation.observation_type in {"table_row", "table_cell"}:
+        return "attachment_table"
+    return None
+
+
+def _semantic_session_source_families(
+    session: "AuthorizedSemanticMailSession",
+) -> tuple[str, ...]:
+    runtime_store = session.index._runtime_store
+    if runtime_store is not None:
+        metadata = runtime_store.reopen(
+            session.index._runtime_store_seal,
+        )["view_metadata"]
+        families = metadata.get("source_families")
+        if not isinstance(families, list) or not families:
+            raise ContractValidationError("stored source-family binding is unavailable")
+        return tuple(families)
+    families = {
+        _source_occurrence_provider_family(provider)
+        for provider in session.source_occurrence_providers
+    }
+    for observation in session.authorized_observations:
+        families.update(_semantic_observation_source_families(observation))
+    return tuple(sorted(families))
+
+
+def _source_observation_hashes_for_families(
+    session: "AuthorizedSemanticMailSession",
+    source_families: Collection[str],
+) -> Collection[str] | None:
+    runtime_store = session.index._runtime_store
+    if runtime_store is not None:
+        if set(source_families) == set(_semantic_session_source_families(session)):
+            return None  # Exact whole declared family scope; no corpus hash set.
+        families = tuple(sorted(set(source_families)))
+        if not set(families).issubset(_semantic_session_source_families(session)):
+            raise ContractValidationError("stored source-family scope is unauthorized")
+        count = runtime_store.candidate_count_for_families(families)
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            raise ContractValidationError("stored source-family count is invalid")
+        return _StoredSourceFamilyHashes(runtime_store, families, count)
+    authorized_hashes = dict(session.authorized_observation_hashes)
+    candidate_hashes = {
+        candidate.source_observation_hash for candidate in session.index.candidates
+    }
+    selected_hashes = set()
+    for observation in session.authorized_observations:
+        family = _semantic_observation_retrieval_source_family(observation)
+        observation_hash = authorized_hashes.get(observation.observation_id)
+        if (
+            family in source_families
+            and observation_hash is not None
+            and observation_hash in candidate_hashes
+        ):
+            selected_hashes.add(observation_hash)
+    return frozenset(selected_hashes)
+
+
+def _has_source_bound_table_free_text_intent(
+    *,
+    provider: SourceOccurrenceProvider,
+    ordered_terms: Sequence[tuple[str, str, Sequence[str], str]],
+) -> bool:
+    ordered_terms = _normalize_ordered_source_occurrence_terms(ordered_terms)
+    particle_indexes = [
+        index
+        for index, (_term_hash, grammar_role, _candidate_hashes, control_kind) in enumerate(
+            ordered_terms
+        )
+        if control_kind == "none" and grammar_role == "particle"
+    ]
+    if not particle_indexes:
+        # The existing grounding validator also accepts field-before-value
+        # order when their source bindings are distinct. Do not discard that
+        # route merely because a directional particle was unnecessary.
+        bound_roles = [
+            (
+                any(value in provider._value_candidate_columns for value in candidates),
+                any(value in provider._projection_candidate_columns for value in candidates),
+            )
+            for _term_hash, role, candidates, control in ordered_terms
+            if control == "none" and role in {"lexical", "operator"}
+        ]
+        return (
+            any(value and not projection for value, projection in bound_roles)
+            and any(projection and not value for value, projection in bound_roles)
+        )
+    return any(
+        any(
+            control_kind == "none"
+            and grammar_role in {"lexical", "operator"}
+            and bool(candidate_hashes)
+            for (
+                _term_hash,
+                grammar_role,
+                candidate_hashes,
+                control_kind,
+            ) in ordered_terms[:particle_index]
+        )
+        and any(
+            control_kind == "none"
+            and grammar_role in {"lexical", "operator"}
+            and any(
+                candidate_hash in provider._projection_candidate_columns
+                for candidate_hash in candidate_hashes
+            )
+            for (
+                _term_hash,
+                grammar_role,
+                candidate_hashes,
+                control_kind,
+            ) in ordered_terms[particle_index + 1 :]
+        )
+        for particle_index in particle_indexes
+    )
+
+
+def _bound_semantic_result_claim(
+    result: GovernedSemanticExecutionResult,
+    *,
+    request_contract: Mapping[str, Any] | None,
+) -> GovernedSemanticExecutionResult:
+    if request_contract is None or result.claim_strength == "no_claim":
+        return result
+    maximum_claim_strength = request_contract["maximum_claim_strength"]
+    if result.claim_strength == maximum_claim_strength:
+        return result
+    if (
+        result.query_class != "exact_set_or_inventory"
+        or request_contract["query_class"] == "exact_set_or_inventory"
+    ):
+        raise ContractValidationError(
+            "semantic execution would exceed request contract claim strength"
+        )
+    bounded = replace(
+        result,
+        claim_strength=maximum_claim_strength,
+        result_fingerprint=sha256_json(
+            {
+                "artifact_id": "formowl_request_claim_bounded_semantic_result_v1",
+                "execution_result_fingerprint": result.result_fingerprint,
+                "request_contract_fingerprint": sha256_json(request_contract),
+                "maximum_claim_strength": maximum_claim_strength,
+            }
+        ),
+        warnings=(
+            *result.warnings,
+            "claim_strength_bounded_by_original_request",
+        ),
+    )
+    bounded.to_safe_dict()
+    return bounded
+
+
 @dataclass(frozen=True)
 class AuthorizedSemanticMailSession:
     """Statically auditable compatibility session over authorized semantic evidence."""
@@ -2133,7 +3116,19 @@ class AuthorizedSemanticMailSession:
         repr=False,
         compare=False,
     )
+    source_authority_fingerprint: str | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     source_occurrence_providers: tuple[SourceOccurrenceProvider, ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+    )
+    _source_occurrence_authorized_reference_pairs: tuple[
+        tuple[str, str], ...
+    ] = field(
         default=(),
         repr=False,
         compare=False,
@@ -2148,6 +3143,8 @@ class AuthorizedSemanticMailSession:
         self,
         *,
         query_text: str,
+        table_query: Mapping[str, Any] | None = None,
+        request_contract: Mapping[str, Any] | None = None,
         effective_graph_view: EffectiveGraphView,
         allowed_relation_types: Sequence[str] = (),
         allowed_directions: Sequence[str] = ("out",),
@@ -2162,6 +3159,8 @@ class AuthorizedSemanticMailSession:
         enable_graph_traversal: bool = True,
         legacy_hard_gate: bool = False,
         phase_trace: SemanticPhaseTrace | None = None,
+        execution_deadline: _QueryExecutionDeadline | None = None,
+        manage_phase_trace_lifecycle: bool = True,
     ) -> GovernedSemanticExecutionResult:
         """Run one typed plan without rebuilding or widening the authorized index."""
 
@@ -2169,9 +3168,71 @@ class AuthorizedSemanticMailSession:
         if phase_trace is not None:
             if not isinstance(phase_trace, SemanticPhaseTrace):
                 raise ContractValidationError("semantic phase trace type is invalid")
-            phase_trace._begin_query()
+            if manage_phase_trace_lifecycle:
+                phase_trace._begin_query()
+            elif (
+                not phase_trace._started
+                or phase_trace._terminal_status is not None
+            ):
+                raise ContractValidationError(
+                    "semantic phase trace must be active for managed subquery"
+                )
             source_validation_started_at_ns = phase_trace._start_phase("source_session_validation")
-        typed_exact_intent = any(
+        elif not manage_phase_trace_lifecycle:
+            raise ContractValidationError(
+                "managed subquery requires a semantic phase trace"
+            )
+
+        def finish_query_trace(terminal_status: str) -> None:
+            if phase_trace is not None and manage_phase_trace_lifecycle:
+                phase_trace._finish_query(terminal_status)
+
+        validated_request_contract = (
+            validate_semantic_request_contract(
+                request_contract,
+                available_source_families=_semantic_session_source_families(
+                    self
+                ),
+            )
+            if request_contract is not None
+            else None
+        )
+        requested_source_families = (
+            set(validated_request_contract["source_family_scope"])
+            if validated_request_contract is not None
+            else None
+        )
+        eligible_source_occurrence_providers = (
+            self.source_occurrence_providers
+            if requested_source_families is None
+            else tuple(
+                provider
+                for provider in self.source_occurrence_providers
+                if _source_occurrence_provider_family(provider)
+                in requested_source_families
+            )
+        )
+        allowed_source_observation_hashes = (
+            None
+            if validated_request_contract is None
+            else _source_observation_hashes_for_families(
+                self,
+                requested_source_families,
+            )
+        )
+        structured_table_query_present = table_query is not None
+        if structured_table_query_present and any(
+            value is not None
+            for value in (
+                exact_inventory_kind,
+                exact_field,
+                cursor,
+            )
+        ):
+            raise ContractValidationError(
+                "source occurrence structured table query cannot mix exact controls"
+            )
+        typed_exact_intent = structured_table_query_present or any(
             isinstance(value, str) and value.strip()
             for value in (exact_inventory_kind, exact_field)
         )
@@ -2182,13 +3243,18 @@ class AuthorizedSemanticMailSession:
         typed_source_occurrence_kind = typed_exact_inventory_kind and any(
             exact_inventory_kind
             in {provider.inventory_kind_alias, provider.resource_kind}
-            for provider in self.source_occurrence_providers
+            for provider in eligible_source_occurrence_providers
         )
         query_class = (
             "exact_set_or_inventory"
             if typed_exact_intent
-            else deterministic_query_class(query_text)
+            else (
+                validated_request_contract["query_class"]
+                if validated_request_contract is not None
+                else deterministic_query_class(query_text)
+            )
         )
+        query_class_override: str | None = None
         try:
             _validate_hybrid_query_inputs(
                 query_text=query_text,
@@ -2210,7 +3276,7 @@ class AuthorizedSemanticMailSession:
                     started_at_ns=source_validation_started_at_ns,
                     outcome="failed",
                 )
-                phase_trace._finish_query("failed")
+                finish_query_trace("failed")
             raise
         if not self.selected_source_scope_ids:
             if phase_trace is not None and source_validation_started_at_ns is not None:
@@ -2240,7 +3306,7 @@ class AuthorizedSemanticMailSession:
                 warning="mail_evidence_not_found",
             )
             if phase_trace is not None:
-                phase_trace._finish_query("completed")
+                finish_query_trace("completed")
             return result
         if not self.authorized_source_scope_ids:
             if phase_trace is not None and source_validation_started_at_ns is not None:
@@ -2270,11 +3336,20 @@ class AuthorizedSemanticMailSession:
                 warning="mail_evidence_permission_denied",
             )
             if phase_trace is not None:
-                phase_trace._finish_query("completed")
+                finish_query_trace("completed")
             return result
-        deadline = _QueryExecutionDeadline.start(
+        deadline = execution_deadline or _QueryExecutionDeadline.start(
             budget_ms=min(1_500, limits.max_time_budget_ms),
         )
+        if deadline.budget_ms != min(1_500, limits.max_time_budget_ms):
+            if phase_trace is not None and source_validation_started_at_ns is not None:
+                phase_trace._finish_phase(
+                    phase="source_session_validation",
+                    started_at_ns=source_validation_started_at_ns,
+                    outcome="failed",
+                )
+            finish_query_trace("failed")
+            raise ContractValidationError("semantic query deadline binding mismatch")
         try:
             source_binding_validation = _run_before_query_deadline(
                 deadline,
@@ -2291,7 +3366,7 @@ class AuthorizedSemanticMailSession:
                     started_at_ns=source_validation_started_at_ns,
                     outcome="failed",
                 )
-                phase_trace._finish_query("failed")
+                finish_query_trace("failed")
             raise
         if phase_trace is not None and source_validation_started_at_ns is not None:
             phase_trace._finish_phase(
@@ -2312,7 +3387,7 @@ class AuthorizedSemanticMailSession:
                 graph_revision_fingerprint=_graph_revision_pin_fingerprint(effective_graph_view),
             )
             if phase_trace is not None:
-                phase_trace._finish_query("deadline_exhausted")
+                finish_query_trace("deadline_exhausted")
             return result
         graph_snapshot = _run_traced_query_phase(
             deadline=deadline,
@@ -2329,7 +3404,7 @@ class AuthorizedSemanticMailSession:
                 graph_revision_fingerprint=_graph_revision_pin_fingerprint(effective_graph_view),
             )
             if phase_trace is not None:
-                phase_trace._finish_query("deadline_exhausted")
+                finish_query_trace("deadline_exhausted")
             return result
         assert isinstance(graph_snapshot, _QueryGraphSnapshot)
         graph_revision_fingerprint = graph_snapshot.graph_revision_fingerprint
@@ -2350,11 +3425,7 @@ class AuthorizedSemanticMailSession:
                     else _ExactFilterSlots()
                 ),
                 (
-                    any(
-                        query_identifier_tokens & candidate.protected_identifier_tokens
-                        or query_identifier_tokens & candidate.observation_protected_identifier_tokens
-                        for candidate in self.index.candidates
-                    )
+                    _indexed_identifier_present(self.index, query_identifier_tokens)
                     if query_class == "evidence_lookup"
                     and (
                         query_identifier_tokens := _query_evidence_slots(query_text, query_class=query_class, tokenizer_profile=self.index._runtime_components.tokenizer_profile).identifier_tokens
@@ -2378,7 +3449,7 @@ class AuthorizedSemanticMailSession:
                 graph_revision_fingerprint=graph_revision_fingerprint,
             )
             if phase_trace is not None:
-                phase_trace._finish_query("deadline_exhausted")
+                finish_query_trace("deadline_exhausted")
             return result
         exact_slots, authorized_identifier_present = exact_routing_inputs
         assert isinstance(exact_slots, _ExactFilterSlots)
@@ -2394,11 +3465,11 @@ class AuthorizedSemanticMailSession:
             and set(exact_slots.identifier_hashes).intersection(
                 provider._value_hash_postings
             )
-            for provider in self.source_occurrence_providers
+            for provider in eligible_source_occurrence_providers
         )
         combined_providers = tuple(
             provider
-            for provider in self.source_occurrence_providers
+            for provider in eligible_source_occurrence_providers
             if provider.filter_slot_policy
             == "combined_present_intersection_v1"
         )
@@ -2411,61 +3482,107 @@ class AuthorizedSemanticMailSession:
             ],
         ] = {}
         if combined_providers:
-            (
-                ordered_query_terms,
-                exact_grammar_policy_fingerprint,
-            ) = _ordered_source_occurrence_query_grounding(
-                query_text,
-                tokenizer_profile=(
-                    self.index._runtime_components.tokenizer_profile
-                ),
-            )
-            for provider in combined_providers:
-                if not any(
-                    control_kind == "none"
-                    and grammar_role in {"lexical", "operator"}
-                    and any(
-                        candidate_hash in provider._value_candidate_columns
-                        or candidate_hash
-                        in provider._projection_candidate_columns
-                        for candidate_hash in candidate_hashes
+            if structured_table_query_present:
+                assert table_query is not None
+                structured_errors: list[ContractValidationError] = []
+                for provider in combined_providers:
+                    try:
+                        binding = _partition_structured_source_occurrence_table_query(
+                            provider=provider,
+                            table_query=table_query,
+                        )
+                    except ContractValidationError as exc:
+                        structured_errors.append(exc)
+                        continue
+                    structured_provider_bindings[provider.provider_fingerprint] = (
+                        binding
                     )
-                    for (
-                        _term_hash,
-                        grammar_role,
-                        candidate_hashes,
-                        control_kind,
-                    ) in ordered_query_terms
-                ):
-                    continue
-                binding = _partition_source_occurrence_query_grounding(
-                    provider=provider,
-                    ordered_terms=ordered_query_terms,
-                )
-                if binding[2] and len(combined_providers) != 1:
+                if not structured_provider_bindings:
+                    if len(combined_providers) == 1 and structured_errors:
+                        raise structured_errors[0]
                     raise ContractValidationError(
-                        "source occurrence provider selection is ambiguous"
+                        "source occurrence structured table query has no authorized provider"
                     )
-                structured_provider_bindings[provider.provider_fingerprint] = binding
+                (
+                    _structured_partition,
+                    _structured_grammar_ledger,
+                    _structured_unsupported,
+                ) = next(iter(structured_provider_bindings.values()))
+                exact_grammar_policy_fingerprint = sha256_json(
+                    [
+                        _SOURCE_OCCURRENCE_STRUCTURED_TABLE_QUERY_POLICY_ID,
+                        next(iter(structured_provider_bindings)),
+                        _structured_partition.column_value_hash_pairs,
+                        _structured_partition.projection_column_hashes,
+                    ]
+                )
+            else:
+                (
+                    ordered_query_terms,
+                    exact_grammar_policy_fingerprint,
+                ) = _ordered_source_occurrence_query_grounding(
+                    query_text,
+                    tokenizer_profile=(
+                        self.index._runtime_components.tokenizer_profile
+                    ),
+                )
+                for provider in combined_providers:
+                    if not _has_source_bound_table_free_text_intent(
+                        provider=provider,
+                        ordered_terms=ordered_query_terms,
+                    ):
+                        continue
+                    try:
+                        binding = _partition_source_occurrence_query_grounding(
+                            provider=provider,
+                            ordered_terms=ordered_query_terms,
+                        )
+                    except ContractValidationError as exc:
+                        plain_evidence_fallback_allowed = (
+                            not typed_exact_intent
+                            and (
+                                validated_request_contract is None
+                                or (
+                                    validated_request_contract["query_class"]
+                                    == "evidence_lookup"
+                                    and not validated_request_contract["requested_fields"]
+                                )
+                            )
+                        )
+                        if (
+                            plain_evidence_fallback_allowed
+                            and str(exc)
+                            == "source occurrence query candidate binding is incomplete"
+                        ):
+                            query_class = "evidence_lookup"
+                            query_class_override = "evidence_lookup"
+                            structured_provider_bindings.clear()
+                            break
+                        raise
+                    if binding[2] and len(combined_providers) != 1:
+                        raise ContractValidationError(
+                            "source occurrence provider selection is ambiguous"
+                        )
+                    structured_provider_bindings[provider.provider_fingerprint] = (
+                        binding
+                    )
             identifier_not_found_warning: str | None = None
             if (
+                # Missing evidence is not an exact provider binding. Exact
+                # requests must reach the provider-selection validator below.
+                query_class == "evidence_lookup"
+                and not structured_table_query_present
+                and
                 not structured_provider_bindings
                 and not identifier_provider_candidate_present
                 and exact_slots.identifier_hashes
+                and authorized_identifier_present is False
                 and not typed_exact_intent
                 and cursor is None
             ):
-                if query_class == "exact_set_or_inventory":
-                    identifier_not_found_warning = (
-                        _SOURCE_OCCURRENCE_IDENTIFIER_NOT_FOUND_WARNING
-                    )
-                elif (
-                    query_class == "evidence_lookup"
-                    and authorized_identifier_present is False
-                ):
-                    identifier_not_found_warning = (
-                        _AUTHORIZED_EVIDENCE_IDENTIFIER_NOT_FOUND_WARNING
-                    )
+                identifier_not_found_warning = (
+                    _AUTHORIZED_EVIDENCE_IDENTIFIER_NOT_FOUND_WARNING
+                )
             if identifier_not_found_warning is not None:
                 if phase_trace is not None and routing_started_at_ns is not None:
                     phase_trace._finish_phase(
@@ -2493,36 +3610,25 @@ class AuthorizedSemanticMailSession:
                     )
                     result.to_safe_dict()
                 if phase_trace is not None:
-                    phase_trace._finish_query("completed")
+                    finish_query_trace("completed")
                 return result
-            if (
-                not structured_provider_bindings
-                and not identifier_provider_candidate_present
-                and not (query_class == "evidence_lookup" and exact_slots.identifier_hashes and not typed_exact_intent and cursor is None)
-                and any(
-                    control_kind == "none" and grammar_role == "particle"
-                    for (
-                        _term_hash,
-                        grammar_role,
-                        _candidate_hashes,
-                        control_kind,
-                    ) in ordered_query_terms
-                )
-            ):
-                raise ContractValidationError(
-                    "source occurrence query candidate binding is incomplete"
-                )
             if (
                 query_class != "exact_set_or_inventory"
                 and not typed_exact_intent
                 and len(structured_provider_bindings) == 1
             ):
                 query_class = "exact_set_or_inventory"
-        if query_class == "exact_set_or_inventory" and self.source_occurrence_providers:
-            if typed_exact_inventory_kind:
+        if query_class == "exact_set_or_inventory" and eligible_source_occurrence_providers:
+            if structured_table_query_present:
+                providers = tuple(
+                    provider
+                    for provider in combined_providers
+                    if provider.provider_fingerprint in structured_provider_bindings
+                )
+            elif typed_exact_inventory_kind:
                 typed_providers = tuple(
                     provider
-                    for provider in self.source_occurrence_providers
+                    for provider in eligible_source_occurrence_providers
                     if exact_inventory_kind
                     in {provider.inventory_kind_alias, provider.resource_kind}
                     and (
@@ -2543,7 +3649,7 @@ class AuthorizedSemanticMailSession:
                 providers = tuple(providers_list)
             else:
                 providers_list: list[SourceOccurrenceProvider] = []
-                for provider in self.source_occurrence_providers:
+                for provider in eligible_source_occurrence_providers:
                     if (
                         exact_field is not None
                         and provider.normalized_field != exact_field
@@ -2600,6 +3706,36 @@ class AuthorizedSemanticMailSession:
             raise ContractValidationError("source occurrence provider selection is invalid")
         if cursor is not None and exact_provider is None:
             raise ContractValidationError("source occurrence cursor has no registered provider")
+        if (
+            validated_request_contract is not None
+            and validated_request_contract["query_class"] == "exact_set_or_inventory"
+            and not validated_request_contract["requested_fields"]
+            and not typed_exact_intent
+            and exact_provider is None
+        ):
+            # An exact claim ceiling is not an executable field binding.
+            # Authority/graph validation has completed, but no registered
+            # provider resolved the prose request.  Ask for typed binding
+            # rather than inventing fields or submitting an invalid override.
+            if phase_trace is not None and routing_started_at_ns is not None:
+                phase_trace._finish_phase(
+                    phase="routing_plan",
+                    started_at_ns=routing_started_at_ns,
+                    outcome="completed",
+                )
+            result = _empty_semantic_execution_result(
+                status="replan_required",
+                query_text=query_text,
+                query_class=query_class,
+                runtime_components=self.index._runtime_components,
+                graph_revision_fingerprint=graph_revision_fingerprint,
+                selected_bundle_count=self.index.selected_bundle_count,
+                authorized_bundle_count=self.index.authorized_bundle_count,
+                denied_bundle_count=self.index.denied_bundle_count,
+                warning="exact_query_requires_structured_binding",
+            )
+            finish_query_trace("completed")
+            return result
         plan = _run_before_query_deadline(
             deadline,
             lambda: route_semantic_query(
@@ -2687,7 +3823,15 @@ class AuthorizedSemanticMailSession:
                 exact_operator=exact_provider.operator if exact_provider is not None else None,
                 limits=limits,
                 authorized_source=self.authorized_source,
-                **({"query_class_override": query_class} if exact_provider is not None else {}),
+                **(
+                    {"query_class_override": query_class_override or query_class}
+                    if (
+                        exact_provider is not None
+                        or validated_request_contract is not None
+                        or query_class_override is not None
+                    )
+                    else {}
+                ),
             ),
         )
         if phase_trace is not None and routing_started_at_ns is not None:
@@ -2705,12 +3849,12 @@ class AuthorizedSemanticMailSession:
                 graph_revision_fingerprint=graph_revision_fingerprint,
             )
             if phase_trace is not None:
-                phase_trace._finish_query("deadline_exhausted")
+                finish_query_trace("deadline_exhausted")
             return result
         assert isinstance(plan, SemanticQueryPlan)
         if plan.time_budget_ms != deadline.budget_ms:
             if phase_trace is not None:
-                phase_trace._finish_query("failed")
+                finish_query_trace("failed")
             raise ContractValidationError("semantic query deadline binding mismatch")
 
         def timeout_result() -> GovernedSemanticExecutionResult:
@@ -2722,10 +3866,16 @@ class AuthorizedSemanticMailSession:
                 graph_revision_fingerprint=graph_revision_fingerprint,
             )
             if phase_trace is not None:
-                phase_trace._finish_query("deadline_exhausted")
+                finish_query_trace("deadline_exhausted")
             return result
 
-        authorized_observation_hash_by_id = dict(self.authorized_observation_hashes)
+        authorized_observation_hash_by_id = (
+            _StoredObservationHashes(
+                self.index._runtime_store, len(self.authorized_observation_hashes),
+            )
+            if self.index._runtime_store is not None
+            else dict(self.authorized_observation_hashes)
+        )
         lineage_crosswalk = _run_traced_query_phase(
             deadline=deadline,
             phase_trace=phase_trace,
@@ -2750,15 +3900,7 @@ class AuthorizedSemanticMailSession:
                         plan=plan,
                         provider=exact_provider,
                         expected_authorized_scope_fingerprint=(
-                            authorized_source_occurrence_scope_fingerprint(
-                                requester_user_id=self.requester_user_id,
-                                workspace_id=self.workspace_id,
-                                source_scope_ids=self.authorized_source_scope_ids,
-                                authorized_observation_hashes=self.authorized_observation_hashes,
-                                source_session_binding_fingerprint=(
-                                    self.source_session_binding_fingerprint or ""
-                                ),
-                            )
+                            _authorized_source_occurrence_scope_for_session(self)
                         ),
                         page_size=page_size,
                         cursor=cursor,
@@ -2831,8 +3973,12 @@ class AuthorizedSemanticMailSession:
             if exact_execution_result is _TIME_BUDGET_EXHAUSTED:
                 return timeout_result()
             assert isinstance(exact_execution_result, GovernedSemanticExecutionResult)
+            exact_execution_result = _bound_semantic_result_claim(
+                exact_execution_result,
+                request_contract=validated_request_contract,
+            )
             if phase_trace is not None:
-                phase_trace._finish_query("completed")
+                finish_query_trace("completed")
             return exact_execution_result
 
         hybrid_result = _run_traced_query_phase(
@@ -2844,21 +3990,53 @@ class AuthorizedSemanticMailSession:
                 query_class="evidence_lookup",
                 candidate_limit=plan.candidate_limit,
                 result_limit=plan.result_limit,
+                allowed_source_observation_hashes=(
+                    allowed_source_observation_hashes
+                ),
                 execution_deadline=deadline,
             ),
         )
         if hybrid_result is _TIME_BUDGET_EXHAUSTED:
             return timeout_result()
         assert isinstance(hybrid_result, GovernedHybridRagResult)
+        scoped_authorized_observation_hash_by_id = (
+            authorized_observation_hash_by_id
+            if allowed_source_observation_hashes is None
+            else _StoredObservationHashes(
+                self.index._runtime_store, len(allowed_source_observation_hashes),
+                allowed_source_observation_hashes,
+            )
+            if isinstance(allowed_source_observation_hashes, _StoredSourceFamilyHashes)
+            else {
+                observation_id: observation_hash
+                for observation_id, observation_hash in (
+                    authorized_observation_hash_by_id.items()
+                )
+                if observation_hash in allowed_source_observation_hashes
+            }
+        )
         evidence_candidates_by_hash = _run_before_query_deadline(
             deadline,
-            lambda: {
-                candidate.source_observation_hash: candidate for candidate in self.index.candidates
+            lambda: _index_candidates_by_hash(
+                self.index,
+                allowed_source_observation_hashes
+                if isinstance(allowed_source_observation_hashes, _StoredSourceFamilyHashes) else None,
+            )
+            if self.index._runtime_store is not None
+            else _index_candidates_by_hash(self.index)
+            if allowed_source_observation_hashes is None else {
+                candidate.source_observation_hash: candidate
+                for candidate in self.index.candidates
+                if (
+                    allowed_source_observation_hashes is None
+                    or candidate.source_observation_hash
+                    in allowed_source_observation_hashes
+                )
             },
         )
         if evidence_candidates_by_hash is _TIME_BUDGET_EXHAUSTED:
             return timeout_result()
-        assert isinstance(evidence_candidates_by_hash, dict)
+        assert isinstance(evidence_candidates_by_hash, MappingABC)
         relation_projection: _RelationQueryProjection | None = None
         if plan.query_class == "relation_reasoning" and enable_graph_traversal:
             relation_projection_result = _run_traced_query_phase(
@@ -2871,7 +4049,9 @@ class AuthorizedSemanticMailSession:
                     index=self.index,
                     effective_graph_view=effective_graph_view,
                     tokenizer_profile=self.index._runtime_components.tokenizer_profile,
-                    authorized_observation_hash_by_id=(authorized_observation_hash_by_id),
+                    authorized_observation_hash_by_id=(
+                        scoped_authorized_observation_hash_by_id
+                    ),
                     candidates_by_hash=evidence_candidates_by_hash,
                     graph_snapshot=graph_snapshot,
                     authorized_source=self.authorized_source,
@@ -2896,7 +4076,9 @@ class AuthorizedSemanticMailSession:
                     query_text=query_text,
                     effective_graph_view=effective_graph_view,
                     tokenizer_profile=self.index._runtime_components.tokenizer_profile,
-                    authorized_observation_hash_by_id=(authorized_observation_hash_by_id),
+                    authorized_observation_hash_by_id=(
+                        scoped_authorized_observation_hash_by_id
+                    ),
                     evidence_candidates_by_hash=evidence_candidates_by_hash,
                     relation_projection=relation_projection,
                     graph_snapshot=graph_snapshot,
@@ -2921,7 +4103,9 @@ class AuthorizedSemanticMailSession:
                 graph_paths=graph_paths,
                 effective_graph_view=effective_graph_view,
                 tokenizer_profile=self.index._runtime_components.tokenizer_profile,
-                authorized_observation_hash_by_id=(authorized_observation_hash_by_id),
+                authorized_observation_hash_by_id=(
+                    scoped_authorized_observation_hash_by_id
+                ),
                 enable_entity_signal=enable_entity_signal,
                 legacy_hard_gate=legacy_hard_gate,
                 relation_projection=relation_projection,
@@ -2971,10 +4155,19 @@ class AuthorizedSemanticMailSession:
                         graph_paths=graph_paths,
                         effective_graph_view=effective_graph_view,
                         tokenizer_profile=(self.index._runtime_components.tokenizer_profile),
-                        document_frequency=dict(self.index.document_frequency),
+                        document_frequency=(
+                            _stored_document_frequency(
+                                self.index._runtime_store,
+                                self.index._runtime_components.tokenizer_profile.analyze(query_text).tokens,
+                            )
+                            if self.index._runtime_store is not None
+                            else dict(self.index.document_frequency)
+                        ),
                         document_count=len(self.index.candidates),
                         index_fingerprint=self.index.index_fingerprint,
-                        authorized_observation_hash_by_id=(authorized_observation_hash_by_id),
+                        authorized_observation_hash_by_id=(
+                            scoped_authorized_observation_hash_by_id
+                        ),
                         evidence_candidates_by_hash=evidence_candidates_by_hash,
                         authorized_workspace_id=self.workspace_id,
                         authorized_source_scope_ids=self.authorized_source_scope_ids,
@@ -3021,7 +4214,7 @@ class AuthorizedSemanticMailSession:
                                         self.index._runtime_components.tokenizer_profile
                                     ),
                                     authorized_observation_hash_by_id=(
-                                        authorized_observation_hash_by_id
+                                        scoped_authorized_observation_hash_by_id
                                     ),
                                     enable_entity_signal=enable_entity_signal,
                                     legacy_hard_gate=legacy_hard_gate,
@@ -3081,13 +4274,50 @@ class AuthorizedSemanticMailSession:
             return timeout_result()
         assert isinstance(semantic_result, GovernedSemanticExecutionResult)
         if phase_trace is not None:
-            phase_trace._finish_query("completed")
+            finish_query_trace("completed")
         return semantic_result
 
 
 @dataclass(frozen=True)
 class AuthorizedSemanticObservationSession(AuthorizedSemanticMailSession):
     """Source-neutral session using typed source occurrence and authorization bindings."""
+
+
+def _authorized_source_occurrence_scope_for_session(
+    session: AuthorizedSemanticMailSession,
+) -> str:
+    """Validate stored authority before reusing its immutable full-scope seal."""
+    store = session.index._runtime_store
+    if store is not None:
+        metadata = store.reopen(session.index._runtime_store_seal)["view_metadata"]["session"]
+        if (
+            metadata.get("requester_user_id") != session.requester_user_id
+            or metadata.get("workspace_id") != session.workspace_id
+            or metadata.get("authorized_source") != to_plain(session.authorized_source)
+            or session.authorized_source is None
+            or session.authorized_source_scope_ids != session.authorized_source.source_scope_ids
+            or metadata.get("source_session_binding_fingerprint")
+            != session.source_session_binding_fingerprint
+            or metadata.get("source_authority_fingerprint") != session.source_authority_fingerprint
+        ):
+            raise ContractValidationError("source occurrence exact binding is invalid")
+        expected_scope = metadata.get("provider_scope_fingerprint")
+        if (
+            not isinstance(expected_scope, str)
+            or not expected_scope.startswith("sha256:")
+            or len(expected_scope) != 71
+            or any(character not in "0123456789abcdef" for character in expected_scope[7:])
+        ):
+            raise ContractValidationError("source occurrence exact binding is invalid")
+    else:
+        expected_scope = authorized_source_occurrence_scope_fingerprint(
+            requester_user_id=session.requester_user_id,
+            workspace_id=session.workspace_id,
+            source_scope_ids=session.authorized_source_scope_ids,
+            authorized_observation_hashes=session.authorized_observation_hashes,
+            source_session_binding_fingerprint=session.source_session_binding_fingerprint or "",
+        )
+    return expected_scope
 
 
 def _validated_source_occurrence_providers(
@@ -3099,13 +4329,8 @@ def _validated_source_occurrence_providers(
     if any(not isinstance(provider, SourceOccurrenceProvider) for provider in resolved):
         raise ContractValidationError("source occurrence exact binding is invalid")
     provider_fingerprints = tuple(provider.provider_fingerprint for provider in resolved)
-    expected_scope = authorized_source_occurrence_scope_fingerprint(
-        requester_user_id=session.requester_user_id,
-        workspace_id=session.workspace_id,
-        source_scope_ids=session.authorized_source_scope_ids,
-        authorized_observation_hashes=session.authorized_observation_hashes,
-        source_session_binding_fingerprint=session.source_session_binding_fingerprint or "",
-    )
+    store = session.index._runtime_store
+    expected_scope = _authorized_source_occurrence_scope_for_session(session)
     if (
         len(set(provider_fingerprints)) != len(provider_fingerprints)
         or any(
@@ -3118,6 +4343,58 @@ def _validated_source_occurrence_providers(
     ):
         raise ContractValidationError("source occurrence exact binding is invalid")
     if not resolved:
+        return resolved
+    if store is not None:
+        # The sealed helper is the genuine source hash/permission/typed-lineage
+        # binding validated at build time. Never expand the authorization corpus.
+        additional_pairs = frozenset(session._source_occurrence_authorized_reference_pairs)
+        for provider in resolved:
+            for occurrence in provider._ordered_occurrences:
+                pairs = (
+                    *((binding[2], binding[3]) for binding in occurrence.value_bindings),
+                    *((binding[5], binding[6]) for binding in occurrence.structured_column_bindings),
+                )
+                for observation_hash, lineage_fingerprint in pairs:
+                    helper = store.helper_for_hash(observation_hash)
+                    if helper is None:
+                        # Existing owner-authorized request-local exact references
+                        # may be outside the retrieval helper projection.
+                        if (observation_hash, lineage_fingerprint) in additional_pairs:
+                            continue
+                        raise ContractValidationError(
+                            "source occurrence provider provenance binding mismatch"
+                        )
+                    lineage_data = helper.get("lineage")
+                    if (
+                        helper.get("observation_hash") != observation_hash
+                        or helper.get("source_scope_id") not in session.authorized_source_scope_ids
+                        or not authorized_permission_scope_matches(
+                            helper.get("permission_scope"), authorized_source=session.authorized_source,
+                        )
+                        or not isinstance(lineage_data, dict)
+                        or lineage_data.get("source_observation_id") != helper.get("observation_id")
+                    ):
+                        raise ContractValidationError(
+                            "source occurrence provider provenance binding mismatch"
+                        )
+                    if "parent_attachment_observation_id" in lineage_data:
+                        factory = MailAttachmentChildOccurrenceLineage
+                    elif "parent_message_observation_id" in lineage_data:
+                        factory = MailInlineTableOccurrenceLineage
+                    elif "source_record_fingerprint" in lineage_data:
+                        factory = GitHubProjectOccurrenceLineage
+                    else:
+                        factory = MailMessageOccurrenceLineage
+                    try:
+                        lineage = factory(**lineage_data)
+                    except TypeError as exc:
+                        raise ContractValidationError(
+                            "source occurrence provider provenance binding mismatch"
+                        ) from exc
+                    if lineage.lineage_fingerprint != lineage_fingerprint:
+                        raise ContractValidationError(
+                            "source occurrence provider provenance binding mismatch"
+                        )
         return resolved
     authorized_hashes = dict(session.authorized_observation_hashes)
     lineages = {
@@ -3135,6 +4412,9 @@ def _validated_source_occurrence_providers(
         (authorized_hashes[observation_id], lineage.lineage_fingerprint)
         for observation_id, lineage in lineages.items()
     }
+    authorized_pairs.update(
+        session._source_occurrence_authorized_reference_pairs
+    )
     if any(
         any(
             (binding[2], binding[3]) not in authorized_pairs
@@ -3145,7 +4425,7 @@ def _validated_source_occurrence_providers(
             for binding in occurrence.structured_column_bindings
         )
         for provider in resolved
-        for occurrence in provider.occurrences
+        for occurrence in provider._ordered_occurrences
     ):
         raise ContractValidationError(
             "source occurrence provider provenance binding mismatch"
@@ -3166,6 +4446,8 @@ def _source_occurrence_provider_seal(
             session.workspace_id,
             session.selected_source_scope_ids,
             session.authorized_source_scope_ids,
+            session.source_authority_fingerprint,
+            session._source_occurrence_authorized_reference_pairs,
             tuple(provider.provider_fingerprint for provider in providers),
         )
     )
@@ -3174,6 +4456,10 @@ def _source_occurrence_provider_seal(
 def attach_authorized_source_occurrence_providers(
     session: AuthorizedSemanticMailSession,
     providers: Sequence[SourceOccurrenceProvider],
+    *,
+    additional_authorized_reference_pairs: Sequence[
+        tuple[str, str]
+    ] = (),
 ) -> AuthorizedSemanticMailSession:
     """Validate and seal immutable source providers once at their owner boundary."""
     if not isinstance(session, AuthorizedSemanticMailSession) or (
@@ -3183,20 +4469,42 @@ def attach_authorized_source_occurrence_providers(
         raise ContractValidationError(
             "source occurrence provider attach binding is invalid"
         )
+    additional_pairs = tuple(sorted(set(additional_authorized_reference_pairs)))
+    if (
+        len(additional_pairs) != len(tuple(additional_authorized_reference_pairs))
+        or any(
+            not isinstance(pair, tuple)
+            or len(pair) != 2
+            or any(
+                not isinstance(value, str)
+                or not value.startswith("sha256:")
+                or len(value) != len("sha256:") + 64
+                for value in pair
+            )
+            for pair in additional_pairs
+        )
+    ):
+        raise ContractValidationError(
+            "source occurrence provider additional provenance is invalid"
+        )
+    staged_session = replace(
+        session,
+        _source_occurrence_authorized_reference_pairs=additional_pairs,
+    )
     resolved = _validated_source_occurrence_providers(
-        session=session,
+        session=staged_session,
         providers=providers,
     )
     if resolved:
-        session.index._runtime_components.tokenizer_profile.analyze_query_grounding(
+        staged_session.index._runtime_components.tokenizer_profile.analyze_query_grounding(
             resolved[0].normalized_field
         )
     return replace(
-        session,
+        staged_session,
         source_occurrence_providers=resolved,
         _source_occurrence_provider_provenance_seal=(
             _source_occurrence_provider_seal(
-                session=session,
+                session=staged_session,
                 providers=resolved,
             )
         ),
@@ -3394,52 +4702,85 @@ def build_authorized_hybrid_mail_index(
         _relation_projection_candidates_snapshot=frozen_candidates,
         _integrity_fingerprint=integrity_fingerprint,
         _runtime_components=runtime_components,
+        _precomputed_graph_revision_fingerprint=None,
     )
 
 
 def build_authorized_semantic_observation_session(
     *,
     authorized_source: AuthorizedSemanticSource,
-    snippet_index: ObservationSnippetIndex,
-    authorized_observations: Sequence[Observation],
+    snippet_index: ObservationSnippetIndex | None = None,
+    authorized_observations: Sequence[Observation] = (),
     retrieval_observations: Sequence[Observation] | None = None,
-    occurrence_lineages: Sequence[SourceOccurrenceLineage],
+    occurrence_lineages: Sequence[SourceOccurrenceLineage] = (),
     requester_user_id: str,
     expected_profile_fingerprint: str | None = None,
     precomputed_index_artifact: AuthorizedHybridObservationIndexArtifact | None = None,
     expected_precomputed_index_artifact_fingerprint: str | None = None,
+    validated_snippet_index_manifest: AuthorizedObservationIndexBuildManifest | None = None,
+    authorized_observations_are_sealed: bool = False,
+    source_authority_fingerprint: str | None = None,
+    dense_vector_cache: DenseEvidenceVectorCache | None = None,
+    dense_build_progress: Callable[[dict[str, Any]], None] | None = None,
+    source_records: Any | None = None,
+    runtime_store: Any | None = None,
+    source_binding: Mapping[str, Any] | None = None,
+    streaming_candidate_limit: int | None = None,
 ) -> AuthorizedSemanticObservationSession:
     """Bind an already-authorized source-neutral Observation index to Hybrid execution."""
 
     if not isinstance(authorized_source, AuthorizedSemanticSource):
         raise ContractValidationError("authorized semantic source is invalid")
     safe_public_string(requester_user_id, "requester_user_id")
+    if source_records is not None:
+        if (
+            snippet_index is not None or authorized_observations
+            or occurrence_lineages or retrieval_observations is not None
+            or precomputed_index_artifact is not None
+        ):
+            raise ContractValidationError("streaming build cannot mix materialized source inputs")
+        return _build_streamed_semantic_observation_session(
+            authorized_source=authorized_source, requester_user_id=requester_user_id,
+            source_records=source_records, runtime_store=runtime_store,
+            source_binding=source_binding, dense_vector_cache=dense_vector_cache,
+            dense_build_progress=dense_build_progress,
+            expected_profile_fingerprint=expected_profile_fingerprint,
+            source_authority_fingerprint=source_authority_fingerprint,
+            streaming_candidate_limit=streaming_candidate_limit,
+        )
     if not isinstance(snippet_index, ObservationSnippetIndex):
         raise ContractValidationError("authorized Observation snippet index is invalid")
     observations, lineages, authorized_hash_by_id = _validated_source_neutral_inputs(
         authorized_source=authorized_source,
         authorized_observations=authorized_observations,
         occurrence_lineages=occurrence_lineages,
+        authorized_observations_are_sealed=authorized_observations_are_sealed,
     )
-    retrieval_by_id: dict[str, Observation] = {}
-    retrieval_hash_by_id: dict[str, str] = {}
-    for observation in observations if retrieval_observations is None else retrieval_observations:
-        if not isinstance(observation, Observation):
-            raise ContractValidationError(
-                "semantic retrieval requires Observation records"
-            )
-        validated = Observation.from_dict(observation.to_dict())
-        if validated.observation_id in retrieval_by_id:
-            raise ContractValidationError(
-                "semantic retrieval has duplicate Observation ids"
-            )
-        observation_hash = sha256_json(validated.to_dict())
-        if authorized_hash_by_id.get(validated.observation_id) != observation_hash:
-            raise ContractValidationError(
-                "semantic retrieval authorization binding mismatch"
-            )
-        retrieval_by_id[validated.observation_id] = validated
-        retrieval_hash_by_id[validated.observation_id] = observation_hash
+    if retrieval_observations is None:
+        retrieval_by_id = {
+            observation.observation_id: observation for observation in observations
+        }
+        retrieval_hash_by_id = dict(authorized_hash_by_id)
+    else:
+        retrieval_by_id = {}
+        retrieval_hash_by_id = {}
+        for observation in retrieval_observations:
+            if not isinstance(observation, Observation):
+                raise ContractValidationError(
+                    "semantic retrieval requires Observation records"
+                )
+            validated = Observation.from_dict(observation.to_dict())
+            if validated.observation_id in retrieval_by_id:
+                raise ContractValidationError(
+                    "semantic retrieval has duplicate Observation ids"
+                )
+            observation_hash = sha256_json(validated.to_dict())
+            if authorized_hash_by_id.get(validated.observation_id) != observation_hash:
+                raise ContractValidationError(
+                    "semantic retrieval authorization binding mismatch"
+                )
+            retrieval_by_id[validated.observation_id] = validated
+            retrieval_hash_by_id[validated.observation_id] = observation_hash
     if not retrieval_by_id:
         raise ContractValidationError("semantic retrieval requires Observations")
     lineage_by_observation_id = {
@@ -3468,15 +4809,40 @@ def build_authorized_semantic_observation_session(
         ),
     )
     tokenizer_profile = runtime_components.tokenizer_profile
-    rebuilt_index, _ = build_authorized_observation_snippet_index(
-        retrieval_observations,
-        authorized_source=authorized_source,
-        occurrence_lineages=retrieval_lineages,
-        authorized_observation_hash_by_id=retrieval_hash_by_id,
-        tokenizer_profile=tokenizer_profile,
-    )
-    if rebuilt_index != snippet_index:
-        raise ContractValidationError("authorized Observation snippet index binding mismatch")
+    if validated_snippet_index_manifest is None:
+        rebuilt_index, _ = build_authorized_observation_snippet_index(
+            retrieval_observations,
+            authorized_source=authorized_source,
+            occurrence_lineages=retrieval_lineages,
+            authorized_observation_hash_by_id=retrieval_hash_by_id,
+            tokenizer_profile=tokenizer_profile,
+        )
+        if rebuilt_index != snippet_index:
+            raise ContractValidationError(
+                "authorized Observation snippet index binding mismatch"
+            )
+    elif (
+        not isinstance(
+            validated_snippet_index_manifest,
+            AuthorizedObservationIndexBuildManifest,
+        )
+        or validated_snippet_index_manifest.source_access_fingerprint
+        != authorized_source.authorization_fingerprint
+        or validated_snippet_index_manifest.observation_count != len(retrieval_by_id)
+        or validated_snippet_index_manifest.index_fingerprint
+        != snippet_index.index_fingerprint
+        or validated_snippet_index_manifest.observation_snapshot_fingerprint
+        != snippet_index.observation_snapshot_fingerprint
+        or validated_snippet_index_manifest.occurrence_lineage_fingerprint
+        != snippet_index.occurrence_lineage_fingerprint
+        or validated_snippet_index_manifest.query_profile_fingerprint
+        != tokenizer_profile.profile_fingerprint
+        or validated_snippet_index_manifest.evidence_profile_fingerprint
+        != tokenizer_profile.profile_fingerprint
+    ):
+        raise ContractValidationError(
+            "authorized Observation snippet index manifest binding mismatch"
+        )
 
     artifact = _resolve_precomputed_hybrid_observation_index_artifact(
         precomputed_index_artifact,
@@ -3505,12 +4871,15 @@ def build_authorized_semantic_observation_session(
         precomputed_graph_revision_fingerprint=(
             artifact.graph_revision_fingerprint if artifact is not None else None
         ),
+        dense_vector_cache=dense_vector_cache,
+        dense_build_progress=dense_build_progress,
     )
     source_session_binding_fingerprint = _source_neutral_session_binding_fingerprint(
         authorized_source=authorized_source,
         index=index,
         authorized_observations=observations,
         occurrence_lineages=lineages,
+        source_authority_fingerprint=source_authority_fingerprint,
     )
     if artifact is not None and (
         index.index_fingerprint != artifact.index_fingerprint
@@ -3532,8 +4901,269 @@ def build_authorized_semantic_observation_session(
         authorized_observations=observations,
         occurrence_lineages=lineages,
         source_session_binding_fingerprint=source_session_binding_fingerprint,
+        source_authority_fingerprint=source_authority_fingerprint,
     )
 
+
+def _stored_pages(store, method, **kwargs):
+    cursor = None
+    while page := getattr(store, method)(after_id=cursor, limit=256, **kwargs):
+        yield from page
+        last = page[-1]
+        cursor = last["observation_id"] if isinstance(last, Mapping) else last.node_id
+
+
+def _streamed_json_list_hash(values):
+    digest = hashlib.sha256(b"[")
+    first = True
+    for value in values:
+        if not first:
+            digest.update(b",")
+        digest.update(json.dumps(
+            to_plain(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8"))
+        first = False
+    digest.update(b"]")
+    return "sha256:" + digest.hexdigest()
+
+
+def _stored_provider_scope_fingerprint(*, store, source, requester_user_id, session_binding):
+    digest = hashlib.sha256()
+    prefix = json.dumps(
+        [requester_user_id, source.workspace_id, sorted(source.source_scope_ids)],
+        ensure_ascii=False, separators=(",", ":"),
+    )
+    digest.update(prefix[:-1].encode() + b",[")
+    first = True
+    for helper in _stored_pages(store, "iter_helpers"):
+        if not first:
+            digest.update(b",")
+        digest.update(json.dumps(
+            [helper["observation_id"], helper["observation_hash"]],
+            ensure_ascii=False, separators=(",", ":"),
+        ).encode())
+        first = False
+    digest.update(b"]," + json.dumps(session_binding).encode() + b"]")
+    return "sha256:" + digest.hexdigest()
+
+
+def _build_streamed_semantic_observation_session(
+    *, authorized_source, requester_user_id, source_records, runtime_store,
+    source_binding, dense_vector_cache, dense_build_progress,
+    expected_profile_fingerprint, source_authority_fingerprint,
+    streaming_candidate_limit,
+):
+    """Build-only session from prepared references, retaining at most 32 records.
+
+    The existing graph builder finalizes and seals this session before queries.
+    No record selection, PST/MIME parsing, or corpus-sized source list occurs.
+    """
+    if (
+        runtime_store is None or not isinstance(source_binding, Mapping)
+        or not source_binding or not isinstance(dense_vector_cache, DenseEvidenceVectorCache)
+        or source_records.runtime_store is not runtime_store
+        or source_records.requester_user_id != requester_user_id
+        or source_records.workspace_id != authorized_source.workspace_id
+        or runtime_store.binding.get("source_access_fingerprint")
+        != authorized_source.authorization_fingerprint
+    ):
+        raise ContractValidationError("streaming source/store authority binding is invalid")
+    components = _require_issue56_runtime_components(
+        expected_profile_fingerprint=expected_profile_fingerprint,
+    )
+    pending = deque()
+    pending_limit = configured_dense_evidence_batch_size()
+    if (
+        streaming_candidate_limit is not None
+        and (
+            isinstance(streaming_candidate_limit, bool)
+            or not isinstance(streaming_candidate_limit, int)
+            or streaming_candidate_limit < 1
+        )
+    ):
+        raise ContractValidationError("streaming candidate limit must be positive")
+    resume_fingerprint = sha256_json({
+        "source_binding": source_binding,
+        "source_authority_fingerprint": source_authority_fingerprint,
+        "execution_component_fingerprint": components.execution_binding.execution_component_fingerprint,
+        "streaming_candidate_limit": streaming_candidate_limit,
+    })
+    checkpoint = runtime_store.hybrid_build_checkpoint(resume_fingerprint=resume_fingerprint)
+    count = checkpoint["candidate_count"] if checkpoint is not None else 0
+    if streaming_candidate_limit is not None and count > streaming_candidate_limit:
+        raise ContractValidationError("candidate checkpoint exceeds streaming limit")
+    emitted_count = count
+    previous_id = checkpoint["source_cursor"] if checkpoint is not None else None
+    persisted_previous_id = previous_id
+
+    def texts():
+        nonlocal previous_id, emitted_count
+        if streaming_candidate_limit is not None and emitted_count >= streaming_candidate_limit:
+            return
+        for page in source_records.iter_retrieval_pages(after_id=persisted_previous_id, limit=32):
+            if not page or len(page) > 32:
+                raise ContractValidationError("streaming source page exceeds bound")
+            for raw in page:
+                if (
+                    streaming_candidate_limit is not None
+                    and emitted_count >= streaming_candidate_limit
+                ):
+                    return
+                if previous_id is not None and raw.observation_id <= previous_id:
+                    raise ContractValidationError("streaming source order is not unique")
+                previous_id = raw.observation_id
+                observation = _sealed_source_neutral_observation(raw)
+                lineage = source_records.lineage(observation.observation_id)
+                parent_id = getattr(
+                    lineage, "parent_attachment_observation_id",
+                    getattr(lineage, "parent_message_observation_id", None),
+                )
+                parents = (
+                    (source_records.get_observation(parent_id),) if parent_id is not None else ()
+                )
+                snippet = build_authorized_observation_snippet_from_bound_record(
+                    observation, authorized_source=authorized_source,
+                    occurrence_lineage=lineage,
+                    expected_observation_hash=source_records.observation_hash(
+                        observation.observation_id,
+                    ),
+                    tokenizer_profile=components.tokenizer_profile,
+                    parent_observations=parents,
+                )
+                pending.append((observation, lineage, snippet))
+                emitted_count += 1
+                if len(pending) > pending_limit:
+                    raise ContractValidationError("streaming dense consumer did not drain")
+                yield snippet.dense_evidence_text
+
+    def persist_batch(vectors):
+        nonlocal count, persisted_previous_id
+        if not 1 <= len(vectors) <= len(pending):
+            raise ContractValidationError("streaming dense/source batch binding mismatch")
+        records, vector_records = [], {}
+        for vector in vectors:
+            observation, lineage, snippet = pending.popleft()
+            persisted_previous_id = observation.observation_id
+            candidate = _hybrid_candidate_from_observation_snippet(
+                snippet, authorized_source=authorized_source, observation=observation,
+                occurrence_lineage=lineage, dense_encoder=components.dense_encoder,
+                tokenizer_profile=components.tokenizer_profile, dense_vector=vector,
+            )
+            record = {
+                name: getattr(candidate, name) for name in _STORED_CANDIDATE_ID_FIELDS
+            }
+            record.update({
+                name: sorted(getattr(candidate, name)) for name in _STORED_CANDIDATE_TOKEN_FIELDS
+            })
+            record.update({
+                "ordinal": count,
+                "candidate_content_fingerprint": _hybrid_candidate_content_fingerprint(candidate),
+            })
+            records.append(record)
+            vector_records[candidate.dense_evidence_text_hash] = vector
+            count += 1
+        # Preserve candidate/token emission order while sharing bounded store
+        # chunks across this batch; never materialize the posting fanout.
+        postings = ({
+            "token": token, "source_observation_hash": record["source_observation_hash"],
+            "document_length": len(record["searchable_tokens"]),
+        } for record in records for token in record["searchable_tokens"])
+        posting_batches = iter(lambda: tuple(islice(postings, 256)), ())
+        runtime_store.persist_hybrid_batch(
+            posting_batches,
+            [{"text_hash": key, "vector": value} for key, value in vector_records.items()],
+            records,
+            batch_id=f"candidates_{count}",
+            source_cursor=persisted_previous_id,
+            binding=runtime_store.binding,
+            candidate_count=count,
+            resume_fingerprint=resume_fingerprint,
+        )
+        if dense_build_progress is not None:
+            dense_build_progress({"phase": "candidate_batch_persisted", "candidate_count": count})
+
+    dense_vector_cache.encode(
+        components.dense_encoder, texts(), progress=dense_build_progress,
+        consume_batch=persist_batch,
+    )
+    if pending or not count:
+        raise ContractValidationError("streaming candidate projection is incomplete")
+    statistics = runtime_store.finalize_candidate_order_and_statistics()
+    if statistics["document_count"] != count:
+        raise ContractValidationError("streaming candidate count binding mismatch")
+    source_count = 0
+    source_families = set()
+    def source_hashes():
+        nonlocal source_count
+        for helper in _stored_pages(runtime_store, "iter_helpers"):
+            source_count += 1
+            families = helper.get("source_families")
+            if (
+                not isinstance(families, list)
+                or any(
+                    family not in ("mail", "attachment_table", "document_text")
+                    or not authorized_source.authorizes_source_kind(
+                        AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND
+                        if family == "document_text" else AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND
+                    )
+                    for family in families
+                )
+                or families != sorted(set(families))
+            ):
+                raise ContractValidationError("streaming source-family binding is unavailable")
+            source_families.update(families)
+            yield [helper["observation_id"], helper["observation_hash"], helper["lineage"]]
+    source_records_hash = _streamed_json_list_hash(source_hashes())
+    index_fingerprint = sha256_json({
+        "schema_version": 2, "index_kind": "authorized_postgresql_hybrid_projection_v1",
+        "source_access_fingerprint": authorized_source.authorization_fingerprint,
+        "source_binding_fingerprint": sha256_json(source_binding),
+        "source_records_fingerprint": source_records_hash,
+        "candidate_content_fingerprint": statistics["candidate_content_fingerprint"],
+        "execution_component_fingerprint": components.execution_binding.execution_component_fingerprint,
+    })
+    source_session_binding = sha256_json({
+        "schema_version": 2, "index_fingerprint": index_fingerprint,
+        "source_records_fingerprint": source_records_hash,
+        "source_authority_fingerprint": source_authority_fingerprint,
+    })
+    binding = components.execution_binding
+    candidates = _StoredHybridCandidates(runtime_store, count)
+    index = AuthorizedHybridMailIndex(
+        tokenizer_id=binding.tokenizer_id, profile_fingerprint=binding.tokenizer_profile_fingerprint,
+        index_fingerprint=index_fingerprint, dense_encoder_id=binding.dense_encoder_id,
+        dense_encoder_status=_PINNED_DENSE_STATUS, dense_profile_fingerprint=binding.dense_profile_fingerprint,
+        dense_model_id=binding.dense_model_id, dense_model_revision=binding.dense_model_revision,
+        execution_component_fingerprint=binding.execution_component_fingerprint,
+        selected_bundle_count=len(authorized_source.source_scope_ids),
+        authorized_bundle_count=len(authorized_source.source_scope_ids), denied_bundle_count=0,
+        candidates=candidates, document_frequency=(),
+        average_document_length=statistics["average_document_length"],
+        _runtime_components=components, _runtime_store=runtime_store,
+        _precomputed_graph_revision_fingerprint=None,
+        _relation_projection_candidates_snapshot=candidates,
+        _integrity_fingerprint=sha256_json([index_fingerprint, statistics]),
+    )
+    session = AuthorizedSemanticObservationSession(
+        index=index, requester_user_id=requester_user_id, workspace_id=authorized_source.workspace_id,
+        selected_source_scope_ids=authorized_source.source_scope_ids,
+        authorized_source_scope_ids=authorized_source.source_scope_ids,
+        authorized_source=authorized_source,
+        authorized_observation_hashes=_StoredReferenceCollection(runtime_store, source_count, "hashes"),
+        retrieval_observation_hashes=_StoredReferenceCollection(runtime_store, count, "retrieval_hashes"),
+        authorized_observations=_StoredReferenceCollection(runtime_store, source_count, "observations"),
+        occurrence_lineages=_StoredReferenceCollection(runtime_store, source_count, "lineages"),
+        source_session_binding_fingerprint=source_session_binding,
+        source_authority_fingerprint=source_authority_fingerprint,
+    )
+    object.__setattr__(session, "_streaming_build_metadata", {
+        "source_binding": to_plain(source_binding),
+        "source_records_fingerprint": source_records_hash,
+        "source_records": source_records,
+        "progress": dense_build_progress,
+        "source_families": sorted(source_families),
+    })
+    return session
 
 def _build_authorized_hybrid_observation_index(
     *,
@@ -3544,6 +5174,8 @@ def _build_authorized_hybrid_observation_index(
     runtime_components: Issue56TargetRuntimeComponents,
     dense_vectors: Sequence[Sequence[float]] | None = None,
     precomputed_graph_revision_fingerprint: str | None = None,
+    dense_vector_cache: DenseEvidenceVectorCache | None = None,
+    dense_build_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> AuthorizedHybridMailIndex:
     tokenizer_profile = runtime_components.tokenizer_profile
     dense_encoder = runtime_components.dense_encoder
@@ -3556,13 +5188,21 @@ def _build_authorized_hybrid_observation_index(
     }
     ordered_snippets = tuple(snippet_index.snippets)
     if dense_vectors is None:
-        resolved_dense_vectors = _encode_authorized_evidence_vectors(
-            dense_encoder,
-            tuple(snippet.dense_evidence_text for snippet in ordered_snippets),
+        resolved_dense_vectors = (
+            dense_vector_cache.encode(
+                dense_encoder,
+                (snippet.dense_evidence_text for snippet in ordered_snippets),
+                progress=dense_build_progress,
+            )
+            if dense_vector_cache is not None
+            else _encode_authorized_evidence_vectors(
+                dense_encoder,
+                tuple(snippet.dense_evidence_text for snippet in ordered_snippets),
+            )
         )
     else:
-        if not isinstance(dense_vectors, tuple) or any(
-            not isinstance(vector, tuple) for vector in dense_vectors
+        if not isinstance(dense_vectors, (tuple, PackedEvidenceVectors)) or any(
+            not isinstance(vector, (tuple, PackedDenseVector)) for vector in dense_vectors
         ):
             raise ContractValidationError(
                 "precomputed hybrid index dense vectors must be immutable"
@@ -3817,7 +5457,7 @@ def _precomputed_dense_vectors_for_snippets(
     snippet_index: ObservationSnippetIndex,
     retrieval_hash_by_id: Mapping[str, str],
     runtime_components: Issue56TargetRuntimeComponents,
-) -> tuple[tuple[float, ...], ...]:
+) -> PackedEvidenceVectors:
     binding = runtime_components.execution_binding
     if (
         artifact.source_access_fingerprint
@@ -3841,7 +5481,7 @@ def _precomputed_dense_vectors_for_snippets(
     }
     if set(binding_by_observation_hash) != set(retrieval_hash_by_id.values()):
         raise ContractValidationError("precomputed hybrid index Observation binding mismatch")
-    vectors: list[tuple[float, ...]] = []
+    row_offsets: list[int] = []
     for snippet in snippet_index.snippets:
         observation_id = _required_snippet_source_observation_id(snippet.payload)
         binding_value = binding_by_observation_hash.get(
@@ -3852,13 +5492,15 @@ def _precomputed_dense_vectors_for_snippets(
             or binding_value[0] != sha256_json(snippet.dense_evidence_text)
         ):
             raise ContractValidationError("precomputed hybrid index snippet binding mismatch")
-        vector = _unpack_precomputed_dense_vector(
-            artifact._dense_vector_payload,
-            row_index=binding_value[1],
+        row_offset = binding_value[1] * ISSUE56_TARGET_DENSE_DIMENSION * 4
+        vector = PackedDenseVector(
+            artifact._dense_vector_payload, row_offset, ISSUE56_TARGET_DENSE_DIMENSION,
         )
         _validate_precomputed_dense_vector(vector)
-        vectors.append(vector)
-    return tuple(vectors)
+        row_offsets.append(row_offset)
+    return PackedEvidenceVectors(
+        artifact._dense_vector_payload, row_offsets, ISSUE56_TARGET_DENSE_DIMENSION,
+    )
 
 
 def _pack_precomputed_dense_vectors(
@@ -4041,6 +5683,8 @@ def build_authorized_source_backed_effective_graph_view(
     source_binding_fingerprint: str,
     identifier_mention_batch: SourceBoundIdentifierMentionBatch | None = None,
     source_graph_policy_id: str | None = None,
+    source_records: Any | None = None,
+    runtime_store: Any | None = None,
 ) -> SourceBackedGraphBuild:
     """Build one deterministic candidate graph from retrieval-bound Observations.
 
@@ -4055,6 +5699,16 @@ def build_authorized_source_backed_effective_graph_view(
     """
 
     safe_public_string(source_binding_fingerprint, "source_binding_fingerprint")
+    if source_records is not None or runtime_store is not None:
+        if (
+            observations_by_bundle_id is not None or identifier_mention_batch is not None
+            or source_graph_policy_id not in {None, _SOURCE_GRAPH_POLICY_ID}
+        ):
+            raise ContractValidationError("streaming graph cannot change source graph policy")
+        return _build_streamed_source_graph(
+            session=session, source_records=source_records, runtime_store=runtime_store,
+            source_binding_fingerprint=source_binding_fingerprint,
+        )
     resolved_policy_id = source_graph_policy_id or (
         _SOURCE_GRAPH_POLICY_ID_V2
         if identifier_mention_batch is not None
@@ -4608,6 +6262,405 @@ def build_authorized_source_backed_effective_graph_view(
     return result
 
 
+def _build_streamed_source_graph(
+    *, session, source_records, runtime_store, source_binding_fingerprint,
+):
+    """Persist the existing v1 candidate graph using bounded record batches."""
+    build_state = getattr(session, "_streaming_build_metadata", None)
+    if (
+        not isinstance(build_state, dict)
+        or build_state["source_records"] is not source_records
+        or session.index._runtime_store is not runtime_store
+        or source_records.runtime_store is not runtime_store
+        or sha256_json(build_state["source_binding"]) != source_binding_fingerprint
+    ):
+        raise ContractValidationError("streaming graph source binding mismatch")
+    source_properties = _source_graph_source_kind_properties(session)
+    progress = build_state.get("progress")
+    candidate_count = 0
+    cursor = None
+    # Build-local persisted versions only: eviction causes an ordinary lookup,
+    # never loss of a graph record or reuse across revisions/permissions.
+    persisted_nodes = {}
+
+    def pages():
+        after = None
+        while batch := runtime_store.iter_candidates(after_ordinal=after, limit=16):
+            yield batch
+            after = batch[-1]["ordinal"]
+
+    def write_chunks(method, values):
+        iterator = iter(values)
+        while batch := tuple(islice(iterator, 256)):
+            getattr(runtime_store, method)(batch)
+
+    for page in pages():
+        nodes, edges, memberships, helper_updates = {}, {}, set(), {}
+        page_document_frequency = _stored_document_frequency(
+            runtime_store,
+            sorted({token for record in page for token in record["observation_tokens"]}),
+        )
+
+        def helper_for_hash(value):
+            helper = runtime_store.helper_for_hash(value)
+            if helper is None:
+                raise ContractValidationError("streaming graph source helper is unavailable")
+            return helper_updates.setdefault(helper["observation_id"], helper)
+
+        def merge_node(node):
+            previous = nodes.get(node.node_id)
+            if previous is None:
+                previous = persisted_nodes.get(node.node_id)
+                if previous is None:
+                    previous = runtime_store.get_node(node.node_id)
+            if previous is not None:
+                if (
+                    previous.source_type != node.source_type
+                    or previous.labels != node.labels
+                    or to_plain(previous.permission_scope) != to_plain(node.permission_scope)
+                ):
+                    raise ContractValidationError("streaming graph node permission/identity conflict")
+                properties = dict(node.properties)
+                for key in ("source_term_hashes", "protected_term_hashes"):
+                    properties[key] = sorted(
+                        set(previous.properties.get(key, ())) | set(properties.get(key, ()))
+                    )[:_SOURCE_GRAPH_MAX_TERM_HASHES_PER_ENTITY]
+                node = replace(node, properties=properties)
+            properties = dict(node.properties)
+            analysis = session.index._runtime_components.tokenizer_profile.analyze(
+                " ".join(_node_searchable_values(node))
+            )
+            source_hashes = _node_source_term_hashes(node)
+            protected_hashes = _node_protected_term_hashes(node)
+            previous_properties = previous.properties if previous is not None else {}
+            properties.update({
+                "relation_searchable_tokens": sorted(analysis.tokens),
+                "relation_searchable_protected_tokens": sorted(
+                    span.exact_token for span in analysis.protected_identifiers
+                ),
+                "relation_source_term_hashes": sorted(source_hashes),
+                "relation_protected_term_hashes": sorted(protected_hashes),
+                "relation_bound_concept_hashes": sorted(source_hashes & (
+                    set(previous_properties.get("relation_bound_concept_hashes", ()))
+                    | set(_source_graph_term_hashes(tuple(candidate.observation_tokens)))
+                )),
+                "relation_bound_identifier_hashes": sorted(protected_hashes & (
+                    set(previous_properties.get("relation_bound_identifier_hashes", ()))
+                    | set(_source_graph_term_hashes(tuple(candidate.observation_protected_identifier_tokens)))
+                )),
+            })
+            node = replace(node, properties=properties)
+            nodes[node.node_id] = node
+
+        for record in page:
+            candidate = _hybrid_candidate_from_store_record(record, runtime_store=runtime_store)
+            helper = helper_for_hash(candidate.source_observation_hash)
+            oid = helper["observation_id"]
+            permission = helper["permission_scope"]
+            if not authorized_permission_scope_matches(
+                permission, authorized_source=session.authorized_source,
+            ):
+                raise ContractValidationError("streaming graph source permission mismatch")
+            lineage = source_records.lineage(oid)
+            if candidate.message_occurrence_hash != sha256_json(lineage.occurrence_id):
+                raise ContractValidationError("streaming graph occurrence binding mismatch")
+            terms = _source_graph_source_terms(
+                tuple(candidate.observation_tokens),
+                document_frequency=page_document_frequency,
+            )
+            identifiers = tuple(sorted(candidate.observation_protected_identifier_tokens))[
+                :_SOURCE_GRAPH_MAX_IDENTIFIERS_PER_OBSERVATION
+            ]
+            term_hashes = _source_graph_term_hashes(terms)
+            node_id = _source_graph_observation_node_id(
+                observation_id=oid, identity_scope_binding_fingerprint=None,
+                permission_boundary_fingerprint=sha256_json(permission),
+            )
+            merge_node(GraphProjectionNode(
+                node_id=node_id, source_id=node_id, source_type="source_observation_candidate",
+                labels=list(_source_graph_observation_labels(terms)),
+                properties={
+                    "node_kind": "source_observation", "review_state": "source_record",
+                    "temporal_state": "current", "core_supertype_id": "Document",
+                    "type_confidence": 1.0,
+                    "inventory_kind": _source_graph_inventory_kind_for_occurrence(
+                        session, occurrence_lineage=lineage,
+                    ),
+                    "inventory_value": oid, "ontology_subject": False,
+                    "source_term_hashes": list(term_hashes),
+                    "protected_term_hashes": list(_source_graph_term_hashes(identifiers)),
+                    **source_properties,
+                }, permission_scope=permission,
+            ))
+            memberships.add((node_id, oid))
+            helper["graph_node_bound"] = True
+            helper["crosswalk"] = {
+                "source_observation_hash": candidate.source_observation_hash,
+                "index_binding_hash": candidate.index_binding_hash,
+                "occurrence_hash": candidate.message_occurrence_hash,
+            }
+            for identifier in identifiers:
+                key = sha256_json(identifier)
+                entity_id = _source_graph_node_id("entity", key)
+                merge_node(GraphProjectionNode(
+                    node_id=entity_id, source_id=entity_id, source_type="source_candidate_entity",
+                    labels=["candidate_entity", _source_graph_typed_hash_label(
+                        "candidate_entity", identifier,
+                    )],
+                    properties={
+                        "node_kind": "candidate_entity", "review_state": "diagnostic_policy_admitted",
+                        "temporal_state": "current",
+                        "core_supertype_id": _source_graph_core_supertype(identifier),
+                        "type_confidence": 0.7, "inventory_kind": _source_graph_inventory_kind(identifier),
+                        "inventory_value": key, "ontology_subject": True,
+                        "source_term_hashes": sorted(
+                            set(term_hashes) | set(_source_graph_term_hashes((identifier,)))
+                        )[:_SOURCE_GRAPH_MAX_TERM_HASHES_PER_ENTITY],
+                        "protected_term_hashes": list(_source_graph_term_hashes((identifier,))),
+                        **source_properties,
+                    }, permission_scope=permission,
+                ))
+                memberships.add((entity_id, oid))
+            for left, right in _source_graph_entity_pairs(identifiers):
+                edge_id = _source_graph_edge_id(
+                    observation_id=oid, left_identifier=left, right_identifier=right,
+                )
+                edges[edge_id] = GraphProjectionEdge(
+                    edge_id=edge_id, source_node_id=_source_graph_node_id("entity", left),
+                    target_node_id=_source_graph_node_id("entity", right),
+                    relation_type=_SOURCE_GRAPH_RELATION_TYPE,
+                    properties={
+                        "source_observation_ids": [oid],
+                        "review_state": "diagnostic_policy_admitted", **source_properties,
+                    }, permission_scope=permission,
+                )
+                helper["graph_edge_bound"] = True
+            for term in terms:
+                term_hash = sha256_json(term)
+                key = sha256_json({
+                    "term_hash": term_hash, "permission_fingerprint": sha256_json(permission),
+                })
+                term_id = _source_graph_node_id("term", key)
+                merge_node(GraphProjectionNode(
+                    node_id=term_id, source_id=term_id, source_type="source_candidate_source_term",
+                    labels=["candidate_source_term", _source_graph_typed_hash_label(
+                        "source_term", term_hash,
+                    )],
+                    properties={
+                        "node_kind": "candidate_source_term", "review_state": "diagnostic_policy_admitted",
+                        "temporal_state": "current", "core_supertype_id": "Concept",
+                        "type_confidence": 0.5, "ontology_subject": False,
+                        "source_term_hashes": [term_hash],
+                        "protected_term_hashes": (
+                            [term_hash] if term in candidate.observation_protected_identifier_tokens else []
+                        ),
+                        **source_properties,
+                    }, permission_scope=permission,
+                ))
+                memberships.add((term_id, oid))
+                edge_id = _source_graph_observation_term_edge_id(observation_id=oid, term_key=key)
+                edges[edge_id] = GraphProjectionEdge(
+                    edge_id=edge_id, source_node_id=node_id, target_node_id=term_id,
+                    relation_type=_SOURCE_GRAPH_RELATION_TYPE,
+                    properties={
+                        "source_observation_ids": [oid],
+                        "review_state": "diagnostic_policy_admitted", **source_properties,
+                    }, permission_scope=permission,
+                )
+                helper["graph_edge_bound"] = True
+            candidate_count += 1
+        write_chunks("put_nodes", nodes.values())
+        for node_id, node in nodes.items():
+            persisted_nodes.pop(node_id, None)
+            persisted_nodes[node_id] = node
+            if len(persisted_nodes) > 256:
+                persisted_nodes.pop(next(iter(persisted_nodes)))
+        write_chunks("put_memberships", sorted(memberships))
+        write_chunks("put_edges", edges.values())
+        write_chunks("put_helpers", helper_updates.values())
+        cursor = str(page[-1]["ordinal"])
+        runtime_store.checkpoint(f"graph_nodes_{cursor}", cursor, runtime_store.binding)
+        if progress is not None:
+            progress({"phase": "graph_batch_persisted", "candidate_count": candidate_count})
+    if candidate_count != len(session.index.candidates):
+        raise ContractValidationError("streaming graph candidate coverage mismatch")
+
+    # All observation nodes now exist. Resolve genuine occurrence parents from
+    # the prepared source map; never infer a parent from batch-local enumeration.
+    for page in pages():
+        edges, updates = [], {}
+        for record in page:
+            child = runtime_store.helper_for_hash(record["source_observation_hash"])
+            lineage = source_records.lineage(child["observation_id"])
+            if lineage.parent_occurrence_id is None:
+                continue
+            parent_lineage, after = None, None
+            while matches := source_records.lineage_by_occurrence(
+                lineage.parent_occurrence_id, after_id=after, limit=64,
+            ):
+                for match in matches:
+                    match_id = match.source_observation_id
+                    helper = runtime_store.get_helper(match_id)
+                    if runtime_store.candidate_for_observation(helper["observation_hash"]) is not None:
+                        parent_lineage = match
+                after = matches[-1].source_observation_id
+            if parent_lineage is None:
+                continue  # Same v1 rule: no edge to a non-retrieval parent.
+            parent = runtime_store.get_helper(parent_lineage.source_observation_id)
+            if parent["permission_scope"] != child["permission_scope"]:
+                continue  # Same v1 boundary: no cross-permission occurrence edge.
+            permission = child["permission_scope"]
+            parent_id, child_id = parent["observation_id"], child["observation_id"]
+            edge_id = _source_graph_occurrence_lineage_edge_id(
+                source_kind=session.authorized_source.source_kind,
+                parent_observation_id=parent_id, child_observation_id=child_id,
+            )
+            edges.append(GraphProjectionEdge(
+                edge_id=edge_id,
+                source_node_id=_source_graph_observation_node_id(
+                    observation_id=parent_id, identity_scope_binding_fingerprint=None,
+                    permission_boundary_fingerprint=sha256_json(permission),
+                ),
+                target_node_id=_source_graph_observation_node_id(
+                    observation_id=child_id, identity_scope_binding_fingerprint=None,
+                    permission_boundary_fingerprint=sha256_json(permission),
+                ),
+                relation_type=_SOURCE_GRAPH_RELATION_TYPE,
+                properties={
+                    "source_observation_ids": [parent_id, child_id],
+                    "review_state": "diagnostic_policy_admitted",
+                    "occurrence_lineage_hash": sha256_json(lineage.lineage_fingerprint),
+                    **source_properties,
+                }, permission_scope=permission,
+            ))
+            for helper in (parent, child):
+                helper["graph_edge_bound"] = True
+                updates[helper["observation_id"]] = helper
+        write_chunks("put_edges", edges)
+        write_chunks("put_helpers", updates.values())
+    return _seal_streamed_source_graph(
+        session=session, runtime_store=runtime_store, source_records=source_records,
+        source_binding_fingerprint=source_binding_fingerprint,
+    )
+
+
+def _seal_streamed_source_graph(
+    *, session, runtime_store, source_records, source_binding_fingerprint,
+):
+    """Hash persisted projections incrementally; publish only their complete seal."""
+    counts = Counter()
+
+    def records(kind):
+        cursor = None
+        if kind in {"node", "edge"}:
+            method = runtime_store.iter_nodes if kind == "node" else runtime_store.iter_edges
+            while page := method(after_id=cursor, limit=256):
+                for item in page:
+                    counts[kind] += 1
+                    if kind == "node":
+                        counts[item.properties["node_kind"]] += 1
+                    yield item.to_dict()
+                cursor = page[-1].node_id if kind == "node" else page[-1].edge_id
+        else:
+            # Same existing projection table and verified-record page reader;
+            # no alternate membership/answer store or reconstructed source list.
+            while page := runtime_store._page("membership", after_id=cursor, limit=256):
+                for item in page:
+                    counts["membership"] += 1
+                    yield [item["id"], item["node_id"], item["observation_id"]]
+                cursor = page[-1]["id"]
+
+    content = {
+        "schema_version": 2,
+        "storage_representation": "postgresql_candidate_graph_memberships_v1",
+        "node_records_hash": _streamed_json_list_hash(records("node")),
+        "edge_records_hash": _streamed_json_list_hash(records("edge")),
+        "membership_records_hash": _streamed_json_list_hash(records("membership")),
+    }
+    if counts["source_observation"] != len(session.index.candidates):
+        raise ContractValidationError("streaming graph observation node coverage mismatch")
+    build_fingerprint = sha256_json({
+        **content, "policy_id": _SOURCE_GRAPH_POLICY_ID,
+        "source_binding_fingerprint": source_binding_fingerprint,
+        "index_fingerprint": session.index.index_fingerprint,
+        "requester_user_id": session.requester_user_id,
+        "source_access_fingerprint": session.authorized_source.authorization_fingerprint,
+    })
+    suffix = build_fingerprint.removeprefix("sha256:")[:24]
+    graph_metadata = {
+        "requester_user_id": session.requester_user_id,
+        "user_graph_revision_id": f"ugraph_source_{suffix}",
+        "canonical_graph_revision_id": f"cgraph_candidate_{suffix}",
+        "ontology_revision_id": f"ontology_scoped_{suffix}",
+        "assembly_policy_id": f"assembly_source_{suffix}",
+        "applied_grant_ids": [], "access_required": [],
+    }
+    graph_fingerprint = sha256_json({**content, **graph_metadata})
+    graph_metadata["graph_revision_fingerprint"] = graph_fingerprint
+    node_bound = edge_bound = helper_count = 0
+    for helper in _stored_pages(runtime_store, "iter_helpers"):
+        helper_count += 1
+        node_bound += bool(helper.get("graph_node_bound"))
+        edge_bound += bool(helper.get("graph_edge_bound"))
+    if helper_count != len(session.authorized_observations):
+        raise ContractValidationError("streaming graph helper coverage changed")
+    crosswalk = {
+        "index_fingerprint": session.index.index_fingerprint,
+        "graph_revision_fingerprint": graph_fingerprint,
+        "source_session_binding_fingerprint": session.source_session_binding_fingerprint,
+        "authorized_evidence_count": helper_count,
+        "indexed_evidence_count": len(session.index.candidates),
+        "occurrence_bound_evidence_count": helper_count,
+        "graph_node_bound_evidence_count": node_bound,
+        "graph_edge_bound_evidence_count": edge_bound,
+    }
+    crosswalk["crosswalk_fingerprint"] = sha256_json({
+        "schema_version": 2, **crosswalk, **content,
+        "source_records_fingerprint": session._streaming_build_metadata["source_records_fingerprint"],
+    })
+    source_binding = session._streaming_build_metadata["source_binding"]
+    metadata = to_plain({
+        "requester_user_id": session.requester_user_id,
+        "ingestion_job_fingerprints": [
+            authority.job_fingerprint for authority in source_records.job_authorities
+        ],
+        "source_binding": source_binding,
+        "source_families": session._streaming_build_metadata["source_families"],
+        "hybrid_index": {
+            **{name: getattr(session.index, name) for name in _STORED_HYBRID_INDEX_FIELDS},
+            "candidate_count": len(session.index.candidates),
+        },
+        "session": {
+            "requester_user_id": session.requester_user_id,
+            "workspace_id": session.workspace_id,
+            "authorized_source": to_plain(session.authorized_source),
+            "source_session_binding_fingerprint": session.source_session_binding_fingerprint,
+            "source_authority_fingerprint": session.source_authority_fingerprint,
+            "authorized_observation_count": helper_count,
+            "retrieval_observation_count": len(session.index.candidates),
+            "provider_scope_fingerprint": _stored_provider_scope_fingerprint(
+                store=runtime_store, source=session.authorized_source,
+                requester_user_id=session.requester_user_id,
+                session_binding=session.source_session_binding_fingerprint,
+            ),
+        },
+        "graph": graph_metadata, "graph_content_binding": content, "crosswalk": crosswalk,
+    })
+    manifest = runtime_store.seal(metadata, runtime_store.binding)
+    if any(manifest["counts"][kind] != counts[kind] for kind in ("node", "edge", "membership")):
+        raise ContractValidationError("streaming graph sealed count mismatch")
+    object.__setattr__(session.index, "_runtime_store_seal", manifest["seal_hash"])
+    view = reopen_authorized_effective_graph_view(session=session)
+    return SourceBackedGraphBuild(
+        effective_graph_view=view, graph_revision_fingerprint=graph_fingerprint,
+        source_observation_count=len(session.index.candidates),
+        observation_node_count=counts["source_observation"],
+        entity_node_count=counts["candidate_entity"] + counts["candidate_source_term"],
+        edge_count=counts["edge"], ontology_typed_node_count=counts["candidate_entity"],
+        relation_type_hashes=(sha256_json(_SOURCE_GRAPH_RELATION_TYPE),),
+        build_fingerprint=build_fingerprint, graph_policy_id=_SOURCE_GRAPH_POLICY_ID,
+    )
+
 def build_evidence_identity_lineage_crosswalk(
     *,
     session: AuthorizedSemanticObservationSession,
@@ -4635,6 +6688,24 @@ def build_evidence_identity_lineage_crosswalk(
         session.source_session_binding_fingerprint,
         "evidence lineage crosswalk source session binding fingerprint",
     )
+    if session.index._runtime_store is not None:
+        store = session.index._runtime_store
+        manifest = store.reopen(session.index._runtime_store_seal)
+        metadata = manifest["view_metadata"]["crosswalk"]
+        if (
+            metadata["index_fingerprint"] != session.index.index_fingerprint
+            or metadata["graph_revision_fingerprint"] != graph_revision_fingerprint
+            or metadata["source_session_binding_fingerprint"]
+            != source_session_binding_fingerprint
+        ):
+            raise ContractValidationError("stored crosswalk binding mismatch")
+        return EvidenceIdentityLineageCrosswalk(
+            **metadata,
+            entries=_StoredReferenceCollection(
+                store, metadata["authorized_evidence_count"], "crosswalk",
+            ),
+            _runtime_store=store,
+        )
     cache_binding = (
         session.index.index_fingerprint,
         graph_revision_fingerprint,
@@ -5422,8 +7493,8 @@ def _hybrid_candidate_from_observation_snippet(
         raise ContractValidationError("Observation candidate lineage mismatch")
     if (
         snippet.source_access_fingerprint != authorized_source.authorization_fingerprint
-        or snippet.payload.get("source_kind") != authorized_source.source_kind
-        or occurrence_lineage.source_kind != authorized_source.source_kind
+        or snippet.payload.get("source_kind") != occurrence_lineage.source_kind
+        or not authorized_source.authorizes_source_kind(occurrence_lineage.source_kind)
         or occurrence_lineage.source_observation_id != observation_id
     ):
         raise ContractValidationError("Observation candidate source binding mismatch")
@@ -5441,9 +7512,10 @@ def _hybrid_candidate_from_observation_snippet(
         or snippet.payload.get("parent_source_occurrence_hash") != expected_parent_hash
     ):
         raise ContractValidationError("Observation candidate occurrence lineage mismatch")
-    observation_text = snippet.payload.get("snippet")
-    expected_observation_text = observation.text or observation.caption or ""
-    if not isinstance(observation_text, str) or observation_text != expected_observation_text:
+    display_text = snippet.payload.get("snippet")
+    observation_text = observation.text or observation.caption or ""
+    expected_display_text = _redact_mail_public_text(observation_text)[0]
+    if not isinstance(display_text, str) or display_text != expected_display_text:
         raise ContractValidationError("Observation candidate text lineage mismatch")
     source_scope_id = _observation_source_scope_id(
         observation,
@@ -5468,6 +7540,16 @@ def _hybrid_candidate_from_observation_snippet(
             "dense_evidence_text_hash": dense_evidence_text_hash,
         }
     )
+    if dense_vector is None:
+        resolved_dense_vector = dense_encoder.encode_evidence(snippet.dense_evidence_text)
+    elif isinstance(dense_vector, PackedDenseVector):
+        resolved_dense_vector = dense_vector
+    elif isinstance(dense_vector, tuple) and all(
+        type(value) is float for value in dense_vector
+    ):
+        resolved_dense_vector = dense_vector
+    else:
+        resolved_dense_vector = tuple(float(value) for value in dense_vector)
     return _HybridCandidate(
         bundle_id=source_scope_id,
         coherence_group_hash=coherence_group_hash,
@@ -5480,11 +7562,7 @@ def _hybrid_candidate_from_observation_snippet(
         observation_tokens=observation_tokens,
         observation_protected_identifier_tokens=observation_protected_tokens,
         dense_evidence_text_hash=dense_evidence_text_hash,
-        dense_vector=(
-            tuple(float(value) for value in dense_vector)
-            if dense_vector is not None
-            else dense_encoder.encode_evidence(snippet.dense_evidence_text)
-        ),
+        dense_vector=resolved_dense_vector,
     )
 
 
@@ -5492,28 +7570,39 @@ def _encode_authorized_evidence_vectors(
     dense_encoder: DenseEncoder,
     texts: Sequence[str],
 ) -> tuple[tuple[float, ...], ...]:
-    """Encode source-authorized snippets in index order without weakening runtime checks."""
+    """Encode each exact text once, then fan its vector out to every occurrence."""
 
     ordered_texts = tuple(texts)
+    unique_texts: list[str] = []
+    unique_position_by_text: dict[str, int] = {}
+    occurrence_positions: list[int] = []
+    for text in ordered_texts:
+        position = unique_position_by_text.get(text)
+        if position is None:
+            position = len(unique_texts)
+            unique_position_by_text[text] = position
+            unique_texts.append(text)
+        occurrence_positions.append(position)
     batch_encoder = getattr(dense_encoder, "encode_evidence_batch", None)
     if callable(batch_encoder):
-        encoded = tuple(
+        unique_encoded = tuple(
             tuple(float(value) for value in vector)
-            for vector in batch_encoder(ordered_texts)
+            for vector in batch_encoder(tuple(unique_texts))
         )
-        if len(encoded) != len(ordered_texts):
+        if len(unique_encoded) != len(unique_texts):
             raise DenseEmbeddingUnavailableError("dense_batch_output_count_mismatch")
-        return encoded
+        return tuple(unique_encoded[position] for position in occurrence_positions)
     if (
         getattr(dense_encoder, "encoder_id", None) == ISSUE56_TARGET_DENSE_ENCODER_ID
         and getattr(dense_encoder, "profile_fingerprint", None)
         == ISSUE56_TARGET_DENSE_PROFILE_FINGERPRINT
     ):
         raise DenseEmbeddingUnavailableError("dense_evidence_batch_unavailable")
-    return tuple(
+    unique_encoded = tuple(
         tuple(float(value) for value in dense_encoder.encode_evidence(text))
-        for text in ordered_texts
+        for text in unique_texts
     )
+    return tuple(unique_encoded[position] for position in occurrence_positions)
 
 
 def _source_occurrence_coherence_group_hash(
@@ -5590,6 +7679,7 @@ def _validated_source_neutral_inputs(
     authorized_observations: Sequence[Observation],
     occurrence_lineages: Sequence[SourceOccurrenceLineage],
     execution_deadline: _QueryExecutionDeadline | None = None,
+    authorized_observations_are_sealed: bool = False,
 ) -> tuple[
     tuple[Observation, ...],
     tuple[SourceOccurrenceLineage, ...],
@@ -5603,7 +7693,17 @@ def _validated_source_neutral_inputs(
             raise ContractValidationError(
                 "authorized semantic session requires Observation records"
             )
-        validated = _sealed_source_neutral_observation(observation)
+        validated = (
+            observation
+            if authorized_observations_are_sealed
+            else _sealed_source_neutral_observation(observation)
+        )
+        if authorized_observations_are_sealed:
+            Observation.from_dict(validated.to_dict())
+            if not _source_neutral_observation_is_sealed(validated):
+                raise ContractValidationError(
+                    "authorized semantic session presealed Observation is mutable"
+                )
         if validated.observation_id in observation_by_id:
             raise ContractValidationError(
                 "authorized semantic session has duplicate Observation ids"
@@ -5657,6 +7757,28 @@ def _sealed_source_neutral_observation(observation: Observation) -> Observation:
     )
 
 
+def _source_neutral_observation_is_sealed(observation: Observation) -> bool:
+    values = (
+        observation.location,
+        observation.permission_scope,
+        observation.payload,
+        observation.extracted_value,
+    )
+
+    def is_sealed(value: Any) -> bool:
+        if isinstance(value, dict):
+            return isinstance(value, _FrozenGraphDict) and all(
+                is_sealed(item) for item in value.values()
+            )
+        if isinstance(value, (list, tuple)):
+            return isinstance(value, _FrozenGraphList) and all(
+                is_sealed(item) for item in value
+            )
+        return True
+
+    return all(is_sealed(value) for value in values)
+
+
 def _observation_source_scope_id(
     observation: Observation,
     *,
@@ -5689,6 +7811,7 @@ def _source_neutral_session_binding_fingerprint(
     index: AuthorizedHybridMailIndex,
     authorized_observations: Sequence[Observation],
     occurrence_lineages: Sequence[SourceOccurrenceLineage],
+    source_authority_fingerprint: str | None = None,
 ) -> str:
     return sha256_json(
         {
@@ -5701,6 +7824,7 @@ def _source_neutral_session_binding_fingerprint(
             "occurrence_lineage_fingerprints": sorted(
                 lineage.lineage_fingerprint for lineage in occurrence_lineages
             ),
+            "source_authority_fingerprint": source_authority_fingerprint,
         }
     )
 
@@ -6108,6 +8232,7 @@ def _validate_source_neutral_semantic_session(
         index=session.index,
         authorized_observations=observations,
         occurrence_lineages=lineages,
+        source_authority_fingerprint=session.source_authority_fingerprint,
     )
     if session.source_session_binding_fingerprint != expected_binding:
         raise ContractValidationError("authorized semantic session binding mismatch")
@@ -6140,6 +8265,7 @@ def _source_neutral_session_snapshot_binding(
         session.selected_source_scope_ids,
         session.authorized_source_scope_ids,
         session.source_session_binding_fingerprint,
+        session.source_authority_fingerprint,
     )
 
 
@@ -6251,7 +8377,7 @@ def _source_backed_graph_inputs(
     ):
         raise ContractValidationError("source-backed graph authorized source mismatch")
     stored_observation_by_id = {
-        observation.observation_id: Observation.from_dict(observation.to_dict())
+        observation.observation_id: observation
         for observation in session.authorized_observations
     }
     stored_hash_by_id = {
@@ -7601,61 +9727,61 @@ def _rank_relation_projection_query_anchors(
     limit: int,
     execution_deadline: _QueryExecutionDeadline | None = None,
 ) -> tuple[str, ...]:
-    matches: list[tuple[float, str]] = []
     seedable_node_kinds = {
         "candidate_entity",
         "candidate_source_term",
         "source_observation",
     }
-    for projected_node in projected_nodes:
-        _query_deadline_checkpoint(execution_deadline)
-        if (
-            projected_node.node_kind is not None
-            and projected_node.node_kind not in seedable_node_kinds
-        ):
-            continue
-        if projected_node.authorized_evidence_hashes is None:
-            continue
-        node_term_hashes = set(projected_node.source_term_hashes)
-        node_protected_hashes = set(projected_node.protected_term_hashes)
-        if include_bound_candidate_terms:
-            node_term_hashes.update(projected_node.bound_candidate_concept_term_hashes)
-            node_protected_hashes.update(projected_node.bound_candidate_identifier_term_hashes)
-        bound_concept_overlap = len(
-            query_concept_term_hashes & projected_node.bound_candidate_concept_term_hashes
-        )
-        lexical_overlap = max(
-            len(query_tokens & projected_node.searchable_tokens),
-            len(query_term_hashes & node_term_hashes),
-        )
-        protected_overlap = max(
-            len(protected_query_tokens & projected_node.searchable_protected_tokens),
-            len(protected_query_hashes & (node_protected_hashes | node_term_hashes)),
-        )
-        score = float(lexical_overlap + (2 * protected_overlap))
-        if protected_query_tokens and protected_overlap:
-            matches.append((score, projected_node.node_id))
-        elif (
-            protected_query_tokens
-            and allow_bound_concept_anchor_with_protected_query
-            and bound_concept_overlap
-        ):
-            matches.append((score + float(bound_concept_overlap), projected_node.node_id))
-        elif not protected_query_tokens and (
-            lexical_overlap >= 2
-            or (
-                projected_node.node_kind in {"candidate_source_term", "source_observation"}
-                and bool(query_term_hashes & node_term_hashes)
+    def matches():
+        for projected_node in projected_nodes:
+            _query_deadline_checkpoint(execution_deadline)
+            if (
+                projected_node.node_kind is not None
+                and projected_node.node_kind not in seedable_node_kinds
+            ):
+                continue
+            if projected_node.authorized_evidence_hashes is None:
+                continue
+            node_term_hashes = set(projected_node.source_term_hashes)
+            node_protected_hashes = set(projected_node.protected_term_hashes)
+            if include_bound_candidate_terms:
+                node_term_hashes.update(projected_node.bound_candidate_concept_term_hashes)
+                node_protected_hashes.update(projected_node.bound_candidate_identifier_term_hashes)
+            bound_concept_overlap = len(
+                query_concept_term_hashes & projected_node.bound_candidate_concept_term_hashes
             )
-        ):
-            matches.append((score, projected_node.node_id))
+            lexical_overlap = max(
+                len(query_tokens & projected_node.searchable_tokens),
+                len(query_term_hashes & node_term_hashes),
+            )
+            protected_overlap = max(
+                len(protected_query_tokens & projected_node.searchable_protected_tokens),
+                len(protected_query_hashes & (node_protected_hashes | node_term_hashes)),
+            )
+            score = float(lexical_overlap + (2 * protected_overlap))
+            if protected_query_tokens and protected_overlap:
+                yield (score, projected_node.node_id)
+            elif (
+                protected_query_tokens
+                and allow_bound_concept_anchor_with_protected_query
+                and bound_concept_overlap
+            ):
+                yield (score + float(bound_concept_overlap), projected_node.node_id)
+            elif not protected_query_tokens and (
+                lexical_overlap >= 2
+                or (
+                    projected_node.node_kind in {"candidate_source_term", "source_observation"}
+                    and bool(query_term_hashes & node_term_hashes)
+                )
+            ):
+                yield (score, projected_node.node_id)
     _query_deadline_checkpoint(execution_deadline)
     return tuple(
         node_id
-        for _, node_id in sorted(
-            matches,
+        for _, node_id in heapq.nsmallest(
+            limit, matches(),
             key=lambda item: (-item[0], item[1]),
-        )[:limit]
+        )
     )
 
 
@@ -8186,6 +10312,264 @@ def _relation_candidate_index_binding_hash(
     )
 
 
+@dataclass(frozen=True)
+class _StoredRelationTransitions:
+    store: Any = field(repr=False)
+    node_id: str
+    authorized_hashes: Mapping
+    deadline: Any = field(repr=False)
+    page_reader: Any = field(default=None, repr=False, compare=False)
+
+    def __iter__(self):
+        after = None
+        def page_at(cursor):
+            return (
+                self.page_reader(self.node_id, cursor) if self.page_reader is not None
+                else self.store.incident_edges(self.node_id, after_id=cursor, limit=64)
+            )
+        while page := page_at(after):
+            for edge in page:
+                _query_deadline_checkpoint(self.deadline)
+                evidence = _authorized_property_evidence_hashes(
+                    edge.properties, authorized_observation_hash_by_id=self.authorized_hashes,
+                )
+                transitions = []
+                if edge.target_node_id == self.node_id:
+                    transitions.append(("in", edge.source_node_id))
+                if edge.source_node_id == self.node_id:
+                    transitions.append(("out", edge.target_node_id))
+                for direction, target in transitions:
+                    yield _RelationProjectionTransition(edge, direction, target, evidence)
+            after = page[-1].edge_id
+
+
+def _bounded_sorted_transition_pages(values, key, deadline):
+    """Exact ordering with bounded memory for a restartable adjacency reader."""
+    after = None
+    while True:
+        def remaining():
+            for item in values:
+                _query_deadline_checkpoint(deadline)
+                sort_key = key(item)
+                if after is None or sort_key > after:
+                    yield sort_key, item
+        page = heapq.nsmallest(64, remaining(), key=lambda item: item[0])
+        if not page:
+            return
+        for sort_key, item in page:
+            yield item
+        after = page[-1][0]
+        if len(page) < 64:
+            return
+
+
+def _build_stored_relation_query_projection(
+    *, plan, query_text, index, effective_graph_view, tokenizer_profile,
+    authorized_observation_hash_by_id, candidates_by_hash, graph_snapshot,
+    authorized_source, execution_deadline,
+):
+    store = index._runtime_store
+    if not all(callable(getattr(store, name, None)) for name in (
+        "node_candidates_by_terms", "candidate_tokens_present",
+    )):
+        raise ContractValidationError("stored relation indexed lookup is unavailable")
+    _validate_hybrid_index_runtime(index)
+    manifest = store.reopen(index._runtime_store_seal)
+    node_count = manifest["counts"]["node"]
+    hash_ids = {}
+    family_scope = getattr(candidates_by_hash, "family_scope", None)
+    family_arguments = (
+        {"requested_source_families": family_scope.source_families}
+        if family_scope is not None else {}
+    )
+
+    def project(node):
+        _query_deadline_checkpoint(execution_deadline)
+        props = node.properties
+        if not all(key in props for key in (
+            "relation_searchable_tokens", "relation_source_term_hashes",
+            "relation_bound_concept_hashes", "relation_bound_identifier_hashes",
+        )):
+            raise ContractValidationError("stored relation node projection is unavailable")
+        if not authorized_permission_scope_matches(node.permission_scope, authorized_source=authorized_source):
+            raise ContractValidationError("stored relation node permission mismatch")
+        member = store.observation_ids_for_node(node.node_id, limit=1)
+        evidence = _StoredNodeEvidence(store, node.node_id, family_scope) if member else None
+        if member and family_scope is None and authorized_observation_hash_by_id.get(member[0]) is None:
+            raise ContractValidationError("stored relation node source binding mismatch")
+        source_hashes = frozenset(props["relation_source_term_hashes"])
+        identifiers = frozenset(props.get("relation_protected_term_hashes", ()))
+        bound_concepts = frozenset(props["relation_bound_concept_hashes"])
+        bound_identifiers = frozenset(props["relation_bound_identifier_hashes"])
+        if family_scope is not None:
+            # Shared node metadata describes the whole authorized graph. Rebind
+            # only its bounded supported term sets to the requested family;
+            # never use a different family's members as query evidence.
+            concepts, identifier_support, has_member, after = set(), set(), False, None
+            all_members_authorized = True
+            while members := store.observation_ids_for_node(node.node_id, after_id=after, limit=64):
+                for oid in members:
+                    _query_deadline_checkpoint(execution_deadline)
+                    observation_hash = authorized_observation_hash_by_id.get(oid)
+                    if observation_hash is None:
+                        # Match ordinary _authorized_property_evidence_hashes:
+                        # a mixed-scope node is not partially authorized.
+                        all_members_authorized = False
+                        break
+                    candidate = candidates_by_hash.get(observation_hash) if observation_hash else None
+                    if candidate is None:
+                        continue
+                    has_member = True
+                    concepts.update(source_hashes & frozenset(
+                        _source_graph_term_hashes(tuple(candidate.observation_tokens))
+                    ))
+                    identifier_support.update(identifiers & frozenset(
+                        _source_graph_term_hashes(tuple(candidate.observation_protected_identifier_tokens))
+                    ))
+                after = members[-1]
+                if not all_members_authorized:
+                    concepts.clear()
+                    identifier_support.clear()
+                    break
+            bound_concepts, bound_identifiers = frozenset(concepts), frozenset(identifier_support)
+            if not has_member or not all_members_authorized:
+                evidence = None
+        return _RelationProjectionNode(
+            node=node, node_id=node.node_id, node_hash=sha256_json(node.node_id),
+            node_kind=props.get("node_kind"), authorized_evidence_hashes=evidence,
+            searchable_tokens=frozenset(props["relation_searchable_tokens"]),
+            searchable_protected_tokens=frozenset(props.get("relation_searchable_protected_tokens", ())),
+            source_term_hashes=source_hashes, protected_term_hashes=identifiers,
+            bound_candidate_concept_term_hashes=bound_concepts,
+            bound_candidate_identifier_term_hashes=bound_identifiers,
+            lineage_support_by_observation_hash=_StoredNodeLineageSupport(
+                evidence, candidates_by_hash, identifiers, source_hashes,
+            ) if evidence is not None else (),
+        )
+
+    @lru_cache(maxsize=256)
+    def by_id(node_id):
+        node = store.get_node(node_id)
+        if node is None:
+            return None
+        result = project(node)
+        hash_ids[result.node_hash] = node_id
+        return result
+
+    def by_hash(value):
+        node_id = hash_ids.get(value)
+        return by_id(node_id) if node_id is not None else None
+
+    @lru_cache(maxsize=32)
+    def edge_page(node_id, after_id):
+        _query_deadline_checkpoint(execution_deadline)
+        return tuple(store.incident_edges(node_id, after_id=after_id, limit=64))
+
+    analysis = tokenizer_profile.analyze(query_text)
+    slots = _query_evidence_slots(
+        query_text, query_class="relation_reasoning", tokenizer_profile=tokenizer_profile,
+    )
+    tokens = frozenset(analysis.tokens)
+    protected = frozenset(span.exact_token for span in analysis.protected_identifiers)
+    hashes = frozenset(_source_graph_term_hashes(tuple(tokens)))
+    concept_hashes = frozenset(_source_graph_term_hashes(tuple(slots.topic_tokens)))
+    identifier_hashes = frozenset(_source_graph_term_hashes(tuple(slots.identifier_tokens)))
+
+    def matching_nodes():
+        after = None
+        while page := store.node_candidates_by_terms(
+            tokens=tuple(tokens | protected),
+            term_hashes=tuple(hashes | concept_hashes | identifier_hashes),
+            after_id=after, limit=64, **family_arguments,
+        ):
+            for node in page:
+                # Do not accumulate/copy all matching nodes in the request.
+                yield project(node)
+            after = page[-1].node_id
+
+    anchor_args = dict(
+        query_tokens=tokens, protected_query_tokens=protected, query_term_hashes=hashes,
+        query_concept_term_hashes=concept_hashes,
+        protected_query_hashes=frozenset(_source_graph_term_hashes(tuple(protected))),
+        limit=plan.candidate_limit, execution_deadline=execution_deadline,
+    )
+    initial = _rank_relation_projection_query_anchors(
+        matching_nodes(), **anchor_args, include_bound_candidate_terms=False,
+        allow_bound_concept_anchor_with_protected_query=False,
+    )
+    completion = _rank_relation_projection_query_anchors(
+        matching_nodes(), **anchor_args, include_bound_candidate_terms=True,
+        allow_bound_concept_anchor_with_protected_query=True,
+    )
+    for node_id in set(initial) | set(completion) | set(plan.seed_node_ids):
+        by_id(node_id)
+    def candidate_hashes(value, field):
+        candidate = candidates_by_hash.get(value)
+        if candidate is None:
+            return None
+        return frozenset(_source_graph_term_hashes(tuple(getattr(candidate, field))))
+    concepts = _KeyedRelationValues(
+        lambda value: candidate_hashes(value, "observation_tokens"), len(candidates_by_hash),
+    )
+    identifiers = _KeyedRelationValues(
+        lambda value: candidate_hashes(value, "observation_protected_identifier_tokens"),
+        len(candidates_by_hash),
+    )
+    coverage = _KeyedRelationValues(
+        lambda value: frozenset(
+            ("identifier", key) for key in (identifier_hashes & identifiers.get(value, frozenset()))
+        ) | frozenset(
+            ("concept", key) for key in (concept_hashes & concepts.get(value, frozenset()))
+        ), len(candidates_by_hash),
+    )
+    graph_fingerprint = _require_query_graph_snapshot(
+        effective_graph_view=effective_graph_view, graph_snapshot=graph_snapshot,
+    )
+    policy_fingerprint = _relation_projection_policy_fingerprint(plan)
+    return _RelationQueryProjection(
+        binding_fingerprint=sha256_json({
+            "schema_version": 2, "projection_seal": index._runtime_store_seal,
+            "query_hash": plan.query_hash, "policy_fingerprint": policy_fingerprint,
+            "initial_anchors": initial, "completion_anchors": completion,
+        }),
+        query_hash=plan.query_hash, requester_user_id=plan.requester_user_id,
+        workspace_id=plan.workspace_id, source_scope_ids=plan.source_scope_ids,
+        graph_revision_fingerprint=graph_fingerprint, index_fingerprint=index.index_fingerprint,
+        tokenizer_profile_fingerprint=tokenizer_profile.profile_fingerprint,
+        authorized_observation_set_fingerprint=(
+            sha256_json([manifest["record_hashes"]["helper"], family_scope.source_families])
+            if family_scope is not None else manifest["record_hashes"]["helper"]
+        ),
+        candidate_set_fingerprint=(
+            sha256_json([manifest["record_hashes"]["candidate"], family_scope.source_families])
+            if family_scope is not None else manifest["record_hashes"]["candidate"]
+        ),
+        relation_policy_fingerprint=policy_fingerprint, candidates_by_hash=candidates_by_hash,
+        candidate_concept_term_hashes_by_observation=concepts,
+        candidate_identifier_term_hashes_by_observation=identifiers,
+        candidate_query_slot_coverage_by_observation=coverage,
+        node_by_id=_KeyedRelationValues(by_id, node_count),
+        node_by_hash=_KeyedRelationValues(by_hash, node_count),
+        graph_nodes_by_observation_hash=_KeyedRelationValues(
+            lambda value: _graph_nodes_by_observation_hash(
+                effective_graph_view=effective_graph_view,
+                authorized_observation_hash_by_id=authorized_observation_hash_by_id,
+                execution_deadline=execution_deadline, requested_observation_hashes=(value,),
+            ).get(value, ()), len(candidates_by_hash),
+        ),
+        adjacency=_KeyedRelationValues(
+            lambda node_id: _StoredRelationTransitions(
+                store, node_id, authorized_observation_hash_by_id, execution_deadline,
+                edge_page,
+            ), node_count,
+        ),
+        authorized_index_vocabulary_hashes=_StoredVocabularyBinding(index._runtime_store_seal, "index"),
+        authorized_graph_vocabulary_hashes=_StoredVocabularyBinding(index._runtime_store_seal, "graph"),
+        initial_query_anchor_node_ids=initial, completion_query_anchor_node_ids=completion,
+        _runtime_store=store,
+    )
+
+
 def _build_relation_query_projection(
     *,
     plan: SemanticQueryPlan,
@@ -8220,6 +10604,14 @@ def _build_relation_query_projection(
         or index.index_fingerprint == ""
     ):
         raise ContractValidationError("relation projection tokenizer/index mismatch")
+    if index._runtime_store is not None:
+        return _build_stored_relation_query_projection(
+            plan=plan, query_text=query_text, index=index,
+            effective_graph_view=effective_graph_view, tokenizer_profile=tokenizer_profile,
+            authorized_observation_hash_by_id=authorized_observation_hash_by_id,
+            candidates_by_hash=candidates_by_hash, graph_snapshot=graph_snapshot,
+            authorized_source=authorized_source, execution_deadline=execution_deadline,
+        )
 
     _validated_relation_projection_candidates(
         index=index,
@@ -8455,15 +10847,26 @@ def _bounded_graph_traversal(
             tokenizer_profile=tokenizer_profile,
             graph_snapshot=graph_snapshot,
         )
-        visible_nodes = {
-            node_id: projected.node for node_id, projected in relation_projection.node_by_id.items()
-        }
+        visible_nodes = (
+            _KeyedRelationValues(
+                lambda node_id: (
+                    projected.node
+                    if (projected := relation_projection.node_by_id.get(node_id)) is not None
+                    else None
+                ), len(relation_projection.node_by_id),
+            )
+            if relation_projection._runtime_store is not None else {
+                node_id: projected.node for node_id, projected in relation_projection.node_by_id.items()
+            }
+        )
     else:
         visible_nodes = {node.node_id: node for node in effective_graph_view.visible_nodes}
     allowed_paths = set(plan.allowed_paths)
     seeds = (
         tuple(node_id for node_id in plan.seed_node_ids if node_id in visible_nodes)
         if plan.seed_node_ids
+        else relation_projection.initial_query_anchor_node_ids
+        if relation_projection is not None and relation_projection._runtime_store is not None
         else _matched_visible_seed_nodes(
             query_text=query_text,
             visible_nodes=tuple(visible_nodes.values()),
@@ -8489,7 +10892,23 @@ def _bounded_graph_traversal(
         completion_required_slots = frozenset(
             ("identifier", term_hash) for term_hash in required_identifier_hashes
         ) | frozenset(("concept", term_hash) for term_hash in required_concept_hashes)
-        completion_slot_coverage_by_node_id = {
+        completion_slot_coverage_by_node_id = (
+            _KeyedRelationValues(
+                lambda node_id: (
+                    frozenset(
+                        ("identifier", value) for value in (
+                            required_identifier_hashes
+                            & relation_projection.node_by_id[node_id].bound_candidate_identifier_term_hashes
+                        )
+                    ) | frozenset(
+                        ("concept", value) for value in (
+                            required_concept_hashes
+                            & relation_projection.node_by_id[node_id].bound_candidate_concept_term_hashes
+                        )
+                    )
+                ), len(relation_projection.node_by_id),
+            )
+            if relation_projection._runtime_store is not None else {
             node_id: frozenset().union(
                 *(
                     frozenset(
@@ -8508,7 +10927,8 @@ def _bounded_graph_traversal(
                 )
             )
             for node_id, projected_node in relation_projection.node_by_id.items()
-        }
+            }
+        )
     queue: deque[
         tuple[
             str,
@@ -8557,10 +10977,8 @@ def _bounded_graph_traversal(
         accepted_transitions = 0
         if relation_projection is not None and completion_required_slots:
             missing_slots = completion_required_slots - path_slot_coverage
-            ordered_transitions = tuple(
-                sorted(
-                    transitions,
-                    key=lambda item: (
+            def transition_key(item):
+                return (
                         not completion_required_slots.issubset(
                             path_slot_coverage
                             | completion_slot_coverage_by_node_id.get(
@@ -8578,8 +10996,11 @@ def _bounded_graph_traversal(
                         item.edge.edge_id,
                         item.direction,
                         item.next_node_id,
-                    ),
-                )
+                    )
+            ordered_transitions = (
+                _bounded_sorted_transition_pages(transitions, transition_key, execution_deadline)
+                if isinstance(transitions, _StoredRelationTransitions)
+                else tuple(sorted(transitions, key=transition_key))
             )
         elif relation_projection is not None:
             ordered_transitions = transitions
@@ -8856,9 +11277,7 @@ def _semantic_evidence_scores(
     _query_deadline_checkpoint(execution_deadline)
     query_tokens = set(query_analysis.tokens)
     protected_query_tokens = {span.exact_token for span in query_analysis.protected_identifiers}
-    candidates_by_hash = {
-        candidate.source_observation_hash: candidate for candidate in index.candidates
-    }
+    candidates_by_hash = _index_candidates_by_hash(index)
     graph_nodes_by_observation_hash = (
         relation_projection.graph_nodes_by_observation_hash
         if relation_projection is not None
@@ -8866,6 +11285,12 @@ def _semantic_evidence_scores(
             effective_graph_view=effective_graph_view,
             authorized_observation_hash_by_id=authorized_observation_hash_by_id,
             execution_deadline=execution_deadline,
+            requested_observation_hashes=tuple({
+                score.source_observation_hash
+                for score in hybrid_result.admitted_candidate_scores
+            } | {
+                value for path in graph_paths for value in path.cited_observation_hashes
+            }),
         )
     )
     path_scores_by_observation_hash: dict[str, float] = {}
@@ -8884,7 +11309,14 @@ def _semantic_evidence_scores(
     admitted_observation_hashes = set(candidate_scores_by_observation_hash)
     admitted_observation_hashes.update(path_scores_by_observation_hash)
     scores: list[SemanticEvidenceScore] = []
-    authorized_observation_hashes = set(authorized_observation_hash_by_id.values())
+    authorized_observation_hashes = (
+        {
+            value for value in admitted_observation_hashes
+            if index._runtime_store.helper_for_hash(value) is not None
+        }
+        if index._runtime_store is not None
+        else set(authorized_observation_hash_by_id.values())
+    )
     for observation_hash in sorted(admitted_observation_hashes):
         _query_deadline_checkpoint(execution_deadline)
         candidate = candidates_by_hash.get(observation_hash)
@@ -8990,15 +11422,18 @@ def _bounded_semantic_answer_citation_hashes(
         query_text,
         query_class=plan.query_class,
         tokenizer_profile=tokenizer_profile,
-        document_frequency=dict(index.document_frequency),
+        document_frequency=(
+            index._runtime_store.document_frequency(
+                tuple(tokenizer_profile.analyze(query_text).tokens)
+            )
+            if index._runtime_store is not None else dict(index.document_frequency)
+        ),
         document_count=len(index.candidates),
     )
     _query_deadline_checkpoint(execution_deadline)
     if proof_slots is None:
         return ()
-    candidates_by_hash = {
-        candidate.source_observation_hash: candidate for candidate in index.candidates
-    }
+    candidates_by_hash = _index_candidates_by_hash(index)
     scores_by_observation_hash = {score.source_observation_hash: score for score in semantic_scores}
 
     if plan.query_class == "relation_reasoning":
@@ -9226,6 +11661,24 @@ def _deterministic_required_relation_slots(
     )
     if not slots.identifier_tokens and not slots.topic_tokens:
         return None
+    if isinstance(candidates_by_hash, _StoredCandidatesByHash):
+        store = candidates_by_hash.store
+        family_arguments = (
+            {"requested_source_families": candidates_by_hash.family_scope.source_families}
+            if candidates_by_hash.family_scope is not None else {}
+        )
+        if (
+            set(store.candidate_tokens_present(
+                tuple(slots.identifier_tokens), field="observation_protected_identifier_tokens",
+                **family_arguments,
+            )) != set(slots.identifier_tokens)
+            or set(store.candidate_tokens_present(
+                tuple(slots.topic_tokens), field="observation_tokens",
+                **family_arguments,
+            )) != set(slots.topic_tokens)
+        ):
+            return None
+        return slots
     authorized_identifiers = frozenset().union(
         *(
             candidate.observation_protected_identifier_tokens
@@ -9264,6 +11717,64 @@ def _deterministic_relation_fallback_slots(
         query_class="relation_reasoning",
         tokenizer_profile=tokenizer_profile,
     )
+    if relation_projection is not None and relation_projection._runtime_store is not None:
+        store = relation_projection._runtime_store
+        family_scope = getattr(candidates_by_hash, "family_scope", None)
+        family_arguments = (
+            {"requested_source_families": family_scope.source_families}
+            if family_scope is not None else {}
+        )
+        present_identifiers = set(store.candidate_tokens_present(
+            tuple(query_slots.identifier_tokens), field="observation_protected_identifier_tokens",
+            **family_arguments,
+        ))
+        if not query_slots.identifier_tokens.issubset(present_identifiers):
+            return None
+        topics = set(store.candidate_tokens_present(
+            tuple(query_slots.topic_tokens), field="observation_tokens",
+            **family_arguments,
+        ))
+        for token in query_slots.topic_tokens - topics:
+            _query_deadline_checkpoint(execution_deadline)
+            if store.node_candidates_by_terms(
+                tokens=(), term_hashes=(sha256_json(token),), limit=1, **family_arguments,
+            ):
+                topics.add(token)
+        eligible = {
+            token for token in topics if 0 < document_frequency.get(token, 0) <= document_count
+        }
+        maximal = {
+            token for token in eligible
+            if not any(token != other and token in other for other in eligible)
+        }
+        if not maximal:
+            return None
+        selected = min(maximal, key=lambda token: (
+            -math.log(1.0 + (
+                (document_count - document_frequency[token] + 0.5)
+                / (document_frequency[token] + 0.5)
+            )), sha256_json(token),
+        ))
+        # Versioned full index/graph binding plus exact query membership proofs;
+        # never relabel the query-local vocabulary as a complete source snapshot.
+        return _RelationFallbackSlotSelection(
+            identifier_tokens=query_slots.identifier_tokens,
+            concept_tokens=frozenset((selected,)),
+            identifier_term_hashes=_source_graph_term_hashes(tuple(query_slots.identifier_tokens)),
+            concept_term_hashes=_source_graph_term_hashes((selected,)),
+            vocabulary_fingerprint=sha256_json({
+                "schema_version": 2,
+                "policy_fingerprint": _RELATION_FALLBACK_POLICY_FINGERPRINT,
+                "index_fingerprint": index_fingerprint,
+                "graph_revision_fingerprint": graph_revision_fingerprint,
+                "eligible_query_concepts": sorted(sha256_json(token) for token in maximal),
+                "eligible_document_frequency": sorted(
+                    (sha256_json(token), document_frequency[token]) for token in maximal
+                ),
+                "document_count": document_count,
+                **family_arguments,
+            }),
+        )
     authorized_identifier_tokens = frozenset().union(
         *(
             candidate.observation_protected_identifier_tokens
@@ -9432,6 +11943,24 @@ def _relation_fallback_node_slot_coverage(
     support_by_observation_hash: dict[str, set[tuple[str, str]]] = {}
     required_identifier_hashes = set(selection.identifier_term_hashes)
     required_concept_hashes = set(selection.concept_term_hashes)
+    if relation_projection is not None and relation_projection._runtime_store is not None:
+        representatives = {}
+        base_support = {}
+        base = set(path.cited_observation_hashes)
+        for value, coverage in _stored_path_node_support(
+            relation_projection, path_node_hashes,
+            required_identifier_hashes, required_concept_hashes, execution_deadline,
+        ):
+            if value in base:
+                base_support[value] = coverage
+            elif coverage not in representatives or value < representatives[coverage]:
+                # Equal coverage can never require two supplemental citations.
+                # The smallest hash preserves the existing cardinality/hash tie.
+                representatives[coverage] = value
+        return tuple(sorted((
+            *base_support.items(),
+            *((value, coverage) for coverage, value in representatives.items()),
+        )))
     for node_hash in sorted(path_node_hashes):
         _query_deadline_checkpoint(execution_deadline)
         if relation_projection is not None:
@@ -9628,7 +12157,7 @@ def _minimal_relation_fallback_path_citations(
         ),
     )
     citations = tuple(sorted((*base_citations, *selected_hashes)))
-    authorized_hashes = frozenset(authorized_observation_hash_by_id.values())
+    authorized_hashes = _authorized_hash_subset(authorized_observation_hash_by_id, citations)
     if len(citations) > evidence_budget or not set(citations).issubset(authorized_hashes):
         return ()
     _query_deadline_checkpoint(execution_deadline)
@@ -9650,8 +12179,19 @@ def _connected_relation_fallback_citations(
     """Select one complete connected path; never assemble isolated chunks."""
 
     _query_deadline_checkpoint(execution_deadline)
-    authorized_observation_hashes = frozenset(authorized_observation_hash_by_id.values())
+    authorized_observation_hashes = _authorized_hash_subset(
+        authorized_observation_hash_by_id,
+        {value for path in graph_paths for value in path.cited_observation_hashes},
+    )
     visible_nodes_by_hash = (
+        _KeyedRelationValues(
+            lambda value: (
+                projected.node
+                if (projected := relation_projection.node_by_hash.get(value)) is not None else None
+            ), len(relation_projection.node_by_hash),
+        )
+        if relation_projection is not None and relation_projection._runtime_store is not None
+        else
         {
             node_hash: projected.node
             for node_hash, projected in relation_projection.node_by_hash.items()
@@ -9916,7 +12456,17 @@ def _relation_projection_path_slot_coverage(
     required_concept_hashes: frozenset[str],
     relation_projection: _RelationQueryProjection,
     execution_deadline: _QueryExecutionDeadline | None = None,
-) -> tuple[frozenset[tuple[str, str]], frozenset[str]]:
+) -> tuple[frozenset[tuple[str, str]], frozenset[str] | _EvidenceSupportCount]:
+    if relation_projection._runtime_store is not None:
+        coverage = frozenset()
+        count = 0
+        for _value, supported in _stored_path_node_support(
+            relation_projection, _path_node_hashes(path),
+            required_identifier_hashes, required_concept_hashes, execution_deadline,
+        ):
+            coverage |= supported
+            count += 1
+        return coverage, _EvidenceSupportCount(count)
     coverage: set[tuple[str, str]] = set()
     supporting_observation_hashes: set[str] = set()
     for node_hash in _path_node_hashes(path):
@@ -10158,7 +12708,18 @@ def _result_lineage_audit(
     )
     final_hashes = set(final_citation_hashes)
     traced_hashes = score_hashes | graph_path_hashes | exact_item_hashes | final_hashes
-    known_hashes = {entry.source_observation_hash for entry in crosswalk.entries}
+    if crosswalk._runtime_store is not None:
+        known_hashes = set()
+        for value in traced_hashes:
+            _query_deadline_checkpoint(execution_deadline)
+            helper = crosswalk._runtime_store.helper_for_hash(value)
+            if (
+                helper is not None
+                and helper.get("crosswalk", {}).get("source_observation_hash") == value
+            ):
+                known_hashes.add(value)
+    else:
+        known_hashes = {entry.source_observation_hash for entry in crosswalk.entries}
     unresolved_hashes = traced_hashes - known_hashes
     payload = {
         "crosswalk_fingerprint": crosswalk.crosswalk_fingerprint,
@@ -10187,7 +12748,31 @@ def _graph_nodes_by_observation_hash(
     effective_graph_view: EffectiveGraphView,
     authorized_observation_hash_by_id: Mapping[str, str],
     execution_deadline: _QueryExecutionDeadline | None = None,
+    requested_observation_hashes: Sequence[str] | None = None,
 ) -> dict[str, tuple[GraphProjectionNode, ...]]:
+    store = getattr(effective_graph_view, "_indexed_runtime_store", None)
+    if store is not None:
+        if requested_observation_hashes is None:
+            raise ContractValidationError("stored graph requires bounded evidence lookup")
+        result = {}
+        for observation_hash in requested_observation_hashes:
+            _query_deadline_checkpoint(execution_deadline)
+            helper = store.helper_for_hash(observation_hash)
+            if helper is None:
+                continue
+            if authorized_observation_hash_by_id.get(helper["observation_id"]) != observation_hash:
+                raise ContractValidationError("stored graph evidence authorization mismatch")
+            # Existing builder admits at most 32 term memberships per unit.
+            # More memberships require an explicitly bounded traversal, never
+            # silent truncation of the evidence scoring projection.
+            nodes = store.nodes_for_observation(helper["observation_id"], limit=64)
+            if len(nodes) == 64:
+                raise ContractValidationError("stored evidence graph exceeds bounded lookup")
+            for node in nodes:
+                if to_plain(node.permission_scope) != helper["permission_scope"]:
+                    raise ContractValidationError("stored graph permission lineage mismatch")
+            result[observation_hash] = tuple(nodes)
+        return result
     nodes_by_hash: dict[str, list[GraphProjectionNode]] = {}
     for node in effective_graph_view.visible_nodes:
         _query_deadline_checkpoint(execution_deadline)
@@ -10442,6 +13027,204 @@ def _deterministic_exact_filter_slots(
     )
 
 
+def _partition_structured_source_occurrence_table_query(
+    *,
+    provider: SourceOccurrenceProvider,
+    table_query: Mapping[str, Any],
+) -> tuple[
+    SourceOccurrenceQueryPartition,
+    tuple[tuple[str, str], ...],
+    tuple[str, ...],
+]:
+    """Bind a typed table request to source-provided columns and exact values."""
+
+    if (
+        provider.filter_slot_policy != "combined_present_intersection_v1"
+        or not isinstance(table_query, Mapping)
+        or set(table_query) != {"filters", "projection_fields"}
+    ):
+        raise ContractValidationError(
+            "source occurrence structured table query shape is invalid"
+        )
+    raw_filters = table_query["filters"]
+    raw_projection_fields = table_query["projection_fields"]
+    if (
+        not isinstance(raw_filters, Sequence)
+        or isinstance(raw_filters, (str, bytes))
+        or not 1 <= len(raw_filters) <= 4
+        or not isinstance(raw_projection_fields, Sequence)
+        or isinstance(raw_projection_fields, (str, bytes))
+        or not 1 <= len(raw_projection_fields) <= 8
+    ):
+        raise ContractValidationError(
+            "source occurrence structured table query shape is invalid"
+        )
+
+    source_field_bindings: dict[str, set[tuple[str, str]]] = {}
+    for occurrence in provider._ordered_occurrences:
+        if occurrence.structure_status != "source_provided":
+            continue
+        for (
+            column_hash,
+            candidate_hash,
+            _value_hash,
+            field_name,
+            _value,
+            _citation_hash,
+            _lineage_fingerprint,
+        ) in occurrence.structured_column_bindings:
+            normalized_field = normalize_source_occurrence_structured_surface(
+                field_name
+            )
+            if normalized_field:
+                source_field_bindings.setdefault(normalized_field, set()).add(
+                    (column_hash, candidate_hash)
+                )
+
+    def field_binding(
+        field: Any,
+        *,
+        role: str,
+    ) -> tuple[str, str, str]:
+        if (
+            not isinstance(field, str)
+            or not field.strip()
+            or len(field) > 120
+        ):
+            raise ContractValidationError(
+                f"source occurrence structured table {role} field is invalid"
+            )
+        normalized_field = normalize_source_occurrence_structured_surface(field)
+        bindings = source_field_bindings.get(normalized_field, set())
+        columns = {column_hash for column_hash, _candidate_hash in bindings}
+        if not columns:
+            raise ContractValidationError(
+                f"source occurrence structured table {role} field is unavailable"
+            )
+        if len(columns) != 1:
+            raise ContractValidationError(
+                f"source occurrence structured table {role} field is ambiguous"
+            )
+        column_hash = next(iter(columns))
+        candidate_hashes = sorted(
+            candidate_hash
+            for bound_column_hash, candidate_hash in bindings
+            if bound_column_hash == column_hash
+        )
+        if not candidate_hashes:
+            raise ContractValidationError(
+                f"source occurrence structured table {role} field is unavailable"
+            )
+        return normalized_field, column_hash, candidate_hashes[0]
+
+    lexical_ledger: list[tuple[str, str, str, str]] = []
+    column_value_pairs: set[tuple[str, str]] = set()
+    filter_value_hashes: set[str] = set()
+    normalized_filter_bindings: set[tuple[str, str]] = set()
+    for index, raw_filter in enumerate(raw_filters):
+        if not isinstance(raw_filter, Mapping) or set(raw_filter) != {
+            "field",
+            "value",
+        }:
+            raise ContractValidationError(
+                "source occurrence structured table query filter is invalid"
+            )
+        normalized_field, column_hash, _candidate_hash = field_binding(
+            raw_filter["field"],
+            role="filter",
+        )
+        value = raw_filter["value"]
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value) > 400
+        ):
+            raise ContractValidationError(
+                "source occurrence structured table filter value is invalid"
+            )
+        normalized_value = normalize_source_occurrence_structured_surface(
+            value
+        )
+        normalized_binding = (normalized_field, normalized_value)
+        if normalized_binding in normalized_filter_bindings:
+            raise ContractValidationError(
+                "source occurrence structured table query filter is duplicated"
+            )
+        normalized_filter_bindings.add(normalized_binding)
+        value_hash = source_occurrence_exact_cell_value_hash(
+            column_hash,
+            value,
+        )
+        pair = (column_hash, value_hash)
+        if pair not in provider._column_value_postings:
+            raise ContractValidationError(
+                "source occurrence structured table filter value is unavailable"
+            )
+        column_value_pairs.add(pair)
+        filter_value_hashes.add(value_hash)
+        lexical_ledger.append(
+            (
+                sha256_json(
+                    [
+                        _SOURCE_OCCURRENCE_STRUCTURED_TABLE_QUERY_POLICY_ID,
+                        "filter",
+                        index,
+                        column_hash,
+                        value_hash,
+                    ]
+                ),
+                "filter_value",
+                column_hash,
+                value_hash,
+            )
+        )
+
+    projection_columns: set[str] = set()
+    normalized_projection_fields: set[str] = set()
+    for index, field_name in enumerate(raw_projection_fields):
+        normalized_field, column_hash, candidate_hash = field_binding(
+            field_name,
+            role="projection",
+        )
+        if normalized_field in normalized_projection_fields:
+            raise ContractValidationError(
+                "source occurrence structured table projection field is duplicated"
+            )
+        normalized_projection_fields.add(normalized_field)
+        if column_hash not in provider._column_postings:
+            raise ContractValidationError(
+                "source occurrence structured table projection field is unavailable"
+            )
+        projection_columns.add(column_hash)
+        lexical_ledger.append(
+            (
+                sha256_json(
+                    [
+                        _SOURCE_OCCURRENCE_STRUCTURED_TABLE_QUERY_POLICY_ID,
+                        "projection",
+                        index,
+                        column_hash,
+                        candidate_hash,
+                    ]
+                ),
+                "projection_field",
+                column_hash,
+                candidate_hash,
+            )
+        )
+
+    return (
+        SourceOccurrenceQueryPartition(
+            filter_term_hashes=tuple(sorted(filter_value_hashes)),
+            projection_column_hashes=tuple(sorted(projection_columns)),
+            column_value_hash_pairs=tuple(sorted(column_value_pairs)),
+            lexical_term_ledger=tuple(lexical_ledger),
+        ),
+        (),
+        (),
+    )
+
+
 def _ordered_source_occurrence_query_grounding(
     query_text: str,
     *,
@@ -10449,6 +13232,10 @@ def _ordered_source_occurrence_query_grounding(
 ) -> tuple[tuple[tuple[str, str, tuple[str, ...], str], ...], str]:
     analysis = tokenizer_profile.analyze_query_grounding(query_text)
     terms = analysis.terms
+    normalize_exact_identifier_surface = getattr(
+        tokenizer_profile, "normalize_exact_identifier_surface", None
+    )
+    legacy_tokenizer_profile = not callable(normalize_exact_identifier_surface)
     output_verbs, completion_markers, inventory_markers = _CJK_EXACT_OUTPUT_GRAMMAR_V1
     exact_output_enabled = (
         any(surface in query_text for surface in output_verbs)
@@ -10510,12 +13297,15 @@ def _ordered_source_occurrence_query_grounding(
                 "ordered_query_grounding_term_v1", term.start, term.end,
                 term.normalized_term, term.grammar_role, "projection_connector",
             ]) for term in terms[term_index : last + 1])
+            control_term = (
+                sha256_json(["ordered_query_grounding_control_v1", start, end,
+                             "projection_connector", constituent_hashes]),
+                "conjunction", (),
+            )
             ordered_terms.append(
-                (
-                    sha256_json(["ordered_query_grounding_control_v1", start, end,
-                                 "projection_connector", constituent_hashes]),
-                    "conjunction", (), "projection_connector",
-                )
+                control_term
+                if legacy_tokenizer_profile
+                else (*control_term, "projection_connector")
             )
             term_index = last + 1
             continue
@@ -10539,9 +13329,15 @@ def _ordered_source_occurrence_query_grounding(
             if control_kind == "none"
             else set()
         )
+        if control_kind == "none" and grammar_role == "operator" and not candidate_tokens:
+            # A source column may itself be a quantifier/operator. Preserve its
+            # whole surface for exact capability matching, without adding it
+            # to the tokenizer's admitted evidence vocabulary.
+            candidate_tokens = {normalized_surface} if normalized_surface else set()
         if (
             control_kind == "none"
             and grammar_role == "lexical"
+            and callable(normalize_exact_identifier_surface)
             and term_index + 1 < len(terms)
             and term_index + 1 not in controlled_term_indexes
             and terms[term_index + 1].grammar_role == "particle"
@@ -10562,7 +13358,7 @@ def _ordered_source_occurrence_query_grounding(
         ):
             phrase_end = terms[term_index + 1].end
             span = query_text[term.start : phrase_end]
-            phrase_surface = tokenizer_profile.normalize_exact_identifier_surface(span)
+            phrase_surface = normalize_exact_identifier_surface(span)
             if (
                 phrase_surface
                 and phrase_surface in tokenizer_profile.analyze(span).tokens
@@ -10575,6 +13371,7 @@ def _ordered_source_occurrence_query_grounding(
             run_last == term_index
             and control_kind == "none"
             and grammar_role == "lexical"
+            and callable(normalize_exact_identifier_surface)
             and not candidate_tokens
         ):
             occurrence_kind = "ordered_query_grounding_phrase_v1"
@@ -10589,7 +13386,7 @@ def _ordered_source_occurrence_query_grounding(
             ):
                 run_last += 1
             span = query_text[term.start : terms[run_last].end]
-            normalized_surface = tokenizer_profile.normalize_exact_identifier_surface(span)
+            normalized_surface = normalize_exact_identifier_surface(span)
             candidate_tokens = {normalized_surface} if normalized_surface else set()
         occurrence_hash = sha256_json([
             occurrence_kind, term.start, terms[run_last].end,
@@ -10599,11 +13396,18 @@ def _ordered_source_occurrence_query_grounding(
             candidate_tokens,
             key=lambda token: (token != term.normalized_term, -len(token), token),
         ))
-        ordered_terms.append((occurrence_hash, grammar_role, ordered_candidates, control_kind))
+        term_record = (occurrence_hash, grammar_role, ordered_candidates)
+        ordered_terms.append(
+            term_record
+            if legacy_tokenizer_profile
+            else (*term_record, control_kind)
+        )
         term_index = run_last + 1
-    grammar_policy_fingerprint = sha256_json(
+    grammar_policy_fingerprint = analysis.grammar_policy_fingerprint if (
+        legacy_tokenizer_profile
+    ) else sha256_json(
         [
-            "source_occurrence_query_grammar_policy_v7",
+            "source_occurrence_query_grammar_policy_v8",
             analysis.grammar_policy_fingerprint,
             _CJK_EXACT_OUTPUT_GRAMMAR_V1,
             _SOURCE_OCCURRENCE_PROJECTION_CONNECTOR_POLICY_ID,
@@ -10618,6 +13422,26 @@ def _ordered_source_occurrence_query_grounding(
     return tuple(ordered_terms), grammar_policy_fingerprint
 
 
+def _normalize_ordered_source_occurrence_terms(
+    ordered_terms: SequenceABC,
+) -> tuple[tuple[str, str, Sequence[str], str], ...]:
+    """Normalize the legacy 3-tuple grounding contract before unpacking."""
+    if isinstance(ordered_terms, (str, bytes)) or not isinstance(
+        ordered_terms, SequenceABC
+    ):
+        raise ContractValidationError(
+            "source occurrence query grounding ledger is invalid"
+        )
+    normalized = []
+    for term in ordered_terms:
+        if not isinstance(term, tuple) or len(term) not in {3, 4}:
+            raise ContractValidationError(
+                "source occurrence query grounding ledger is invalid"
+            )
+        normalized.append((*term, "none") if len(term) == 3 else term)
+    return tuple(normalized)
+
+
 def _partition_source_occurrence_query_grounding(
     *,
     provider: SourceOccurrenceProvider,
@@ -10627,6 +13451,19 @@ def _partition_source_occurrence_query_grounding(
 
     if provider.filter_slot_policy != "combined_present_intersection_v1" or not ordered_terms:
         raise ContractValidationError("source occurrence query value binding is incomplete")
+    legacy_ordered_terms = True
+    normalized_ordered_terms = []
+    for term in ordered_terms:
+        if not isinstance(term, tuple) or len(term) not in {3, 4}:
+            raise ContractValidationError(
+                "source occurrence query grounding ledger is invalid"
+            )
+        if len(term) == 3:
+            normalized_ordered_terms.append((*term, "none"))
+        else:
+            legacy_ordered_terms = False
+            normalized_ordered_terms.append(term)
+    ordered_terms = tuple(normalized_ordered_terms)
     lexical_ledger: list[tuple[str, str, str, str]] = []
     grammar_ledger: list[tuple[str, str]] = []
     rejected_term_hashes: list[str] = []
@@ -10689,6 +13526,12 @@ def _partition_source_occurrence_query_grounding(
             viable_particles.append(particle_index)
     if particle_indices:
         if len(viable_particles) != 1:
+            if not any(value for _, _, _, value, _ in grounded_terms) and any(
+                projection for _, _, _, _, projection in grounded_terms
+            ):
+                raise ContractValidationError(
+                    "source occurrence query candidate binding is incomplete"
+                )
             raise ContractValidationError("source occurrence query candidate binding is invalid")
         directional_particle = viable_particles[0]
         last_grounded_index = max(
@@ -10899,7 +13742,7 @@ def _partition_source_occurrence_query_grounding(
         raise ContractValidationError("source occurrence query value binding is incomplete")
     if len(resolved_term_hashes) != len(ordered_terms):
         raise ContractValidationError("source occurrence query grounding ledger is invalid")
-    return (
+    result = (
         SourceOccurrenceQueryPartition(
             filter_term_hashes=tuple(sorted(
                 {value_hash for _column_hash, value_hash in column_value_pairs})),
@@ -10910,6 +13753,7 @@ def _partition_source_occurrence_query_grounding(
         tuple(grammar_ledger),
         tuple(sorted(unsupported_projection_hashes)),
     )
+    return result[:2] if legacy_ordered_terms else result
 
 
 def _mark_partial_projection_exact_result(
@@ -10973,10 +13817,45 @@ AdaptiveQueryPlanner = Callable[
      MailCandidateAdmissionTokenizerProfile, int], str | None]
 
 
+def _adaptive_query_rejection_reason_code(
+    exc: ContractValidationError,
+) -> str:
+    message = str(exc)
+    if "structured table query shape" in message or "query filter is invalid" in message:
+        return "structured_table_query_shape_invalid"
+    if "structured table filter field is unavailable" in message:
+        return "filter_field_not_authorized"
+    if "structured table filter field is ambiguous" in message:
+        return "filter_field_ambiguous"
+    if "structured table filter value is unavailable" in message:
+        return "filter_value_not_found_in_authorized_field"
+    if "structured table projection field is unavailable" in message:
+        return "projection_field_not_authorized"
+    if "structured table projection field is ambiguous" in message:
+        return "projection_field_ambiguous"
+    if "structured table query provider is ambiguous" in message:
+        return "authorized_table_provider_ambiguous"
+    if "structured table query has no authorized provider" in message:
+        return "authorized_table_provider_not_found"
+    if "structured table" in message:
+        return "structured_table_query_rejected"
+    if "lexical binding is ambiguous" in message:
+        return "free_text_field_value_role_ambiguous"
+    if "candidate binding is invalid" in message:
+        return "free_text_directional_binding_invalid"
+    if "candidate binding is incomplete" in message:
+        return "free_text_source_binding_incomplete"
+    if "projection binding" in message:
+        return "free_text_projection_binding_invalid"
+    return "query_plan_rejected"
+
+
 def execute_bounded_adaptive_query(
     *,
     session: AuthorizedSemanticMailSession,
     query_text: str,
+    table_query: Mapping[str, Any] | None = None,
+    request_contract: Mapping[str, Any] | None = None,
     effective_graph_view: EffectiveGraphView,
     allowed_relation_types: Sequence[str] = (),
     exact_inventory_kind: str | None = None,
@@ -10988,6 +13867,8 @@ def execute_bounded_adaptive_query(
     max_repair_count: int = 2,
     context_citation_limit: int = 24,
     total_time_budget_ms: int = 4_500,
+    limits: SemanticPlanLimits = DEFAULT_SEMANTIC_PLAN_LIMITS,
+    phase_trace: SemanticPhaseTrace | None = None,
 ) -> tuple[GovernedSemanticExecutionResult | None,
            tuple[GovernedSemanticExecutionResult, ...], dict[str, Any]]:
     """Execute bounded query candidates through the existing authorized session."""
@@ -10999,17 +13880,75 @@ def execute_bounded_adaptive_query(
         or not 0 <= max_repair_count < max_query_count
         or not 1 <= context_citation_limit <= 48
         or not 1 <= total_time_budget_ms <= 6_000
+        or not isinstance(limits, SemanticPlanLimits)
+        or not 1 <= limits.max_time_budget_ms <= 6_000
+        or (table_query is not None and planner is not None)
     ):
         raise ContractValidationError("adaptive query input is invalid")
+    validated_request_contract = (
+        validate_semantic_request_contract(
+            request_contract,
+            available_source_families=_semantic_session_source_families(session),
+        )
+        if request_contract is not None
+        else None
+    )
+    request_contract_fingerprint = (
+        sha256_json(validated_request_contract)
+        if validated_request_contract is not None
+        else None
+    )
+    requested_field_hashes = frozenset(
+        sha256_json(field_name)
+        for field_name in (
+            validated_request_contract["requested_fields"]
+            if validated_request_contract is not None
+            else ()
+        )
+    )
     started = _system_monotonic()
     steps: list[dict[str, Any]] = []
     successful_results: list[GovernedSemanticExecutionResult] = []
     seen_queries: set[str] = set()
     stop_reason = "query_budget_exhausted"
+    if phase_trace is not None:
+        if not isinstance(phase_trace, SemanticPhaseTrace):
+            raise ContractValidationError("semantic phase trace type is invalid")
+        phase_trace._begin_query()
+
+    def finish_adaptive_trace(terminal_status: str) -> None:
+        if (
+            phase_trace is not None
+            and phase_trace._terminal_status is None
+        ):
+            phase_trace._finish_query(terminal_status)
+
     for index in range(max_query_count + 1):
-        if index and started + total_time_budget_ms / 1_000 <= _system_monotonic():
+        remaining_ms = int(
+            math.ceil(
+                (
+                    started
+                    + total_time_budget_ms / 1_000
+                    - _system_monotonic()
+                )
+                * 1_000
+            )
+        )
+        if remaining_ms < 1:
             stop_reason = "time_budget_exhausted"
             break
+        attempt_budget_ms = min(
+            1_500,
+            limits.max_time_budget_ms,
+            remaining_ms,
+        )
+        attempt_limits = replace(
+            limits,
+            max_time_budget_ms=attempt_budget_ms,
+        )
+        execution_deadline = _QueryExecutionDeadline.start(
+            budget_ms=attempt_budget_ms,
+        )
         planned_query = (
             query_text if not steps else None
         ) if planner is None else planner(
@@ -11035,6 +13974,8 @@ def execute_bounded_adaptive_query(
         tool_plan_fingerprint = sha256_json([
             "query_effective_graph_view",
             sha256_json(planned_query),
+            sha256_json(table_query) if table_query is not None else None,
+            request_contract_fingerprint,
             session.source_session_binding_fingerprint,
             sha256_json(exact_inventory_kind) if exact_inventory_kind else None,
             sha256_json(exact_field) if exact_field else None,
@@ -11042,19 +13983,28 @@ def execute_bounded_adaptive_query(
         try:
             result = session.query(
                 query_text=planned_query,
+                table_query=table_query,
+                request_contract=validated_request_contract,
                 effective_graph_view=effective_graph_view,
                 allowed_relation_types=allowed_relation_types,
                 exact_inventory_kind=exact_inventory_kind,
                 exact_field=exact_field,
                 page_size=page_size,
                 cursor=cursor,
+                limits=attempt_limits,
+                phase_trace=phase_trace,
+                execution_deadline=execution_deadline,
+                manage_phase_trace_lifecycle=phase_trace is None,
             )
         except ContractValidationError as exc:
-            missing_field_hashes: set[str] = set()
+            missing_field_hashes: set[str] = set(requested_field_hashes)
             try:
                 ordered_terms, _ = _ordered_source_occurrence_query_grounding(
                     planned_query,
                     tokenizer_profile=session.index._runtime_components.tokenizer_profile,
+                )
+                ordered_terms = _normalize_ordered_source_occurrence_terms(
+                    ordered_terms
                 )
             except (ContractValidationError, RuntimeError):
                 ordered_terms = ()
@@ -11096,12 +14046,109 @@ def execute_bounded_adaptive_query(
                     "coverage_status": "not_executed",
                     "citation_hashes": [],
                     "missing_field_hashes": sorted(missing_field_hashes),
+                    "rejection_reason_code": (
+                        _adaptive_query_rejection_reason_code(exc)
+                    ),
                     "rejection_fingerprint": sha256_json(
                         [type(exc).__name__, str(exc)]
                     ),
                 }
             )
             continue
+        result_page = (
+            result.exact_result.source_occurrence_page
+            if result.exact_result is not None
+            else None
+        )
+        result_coverage = (
+            str(result_page.get("coverage_status"))
+            if isinstance(result_page, Mapping)
+            else ("supported" if result.answer_citation_hashes else "no_answer")
+        )
+        result_timed_out = _SEMANTIC_TIME_BUDGET_EXHAUSTED_WARNING in result.warnings
+        result_provider_error = result.status in {"error", "failed"}
+        needs_source_fallback = (
+            not result_timed_out
+            and not result_provider_error
+            and (
+                not result.answer_citation_hashes
+                or result_coverage == "incomplete"
+                or result.status in {"no_answer", "incomplete", "unsupported"}
+            )
+        )
+        fallback_timed_out = False
+        fallback_provider_error = False
+        fallback_binding_rejection: ContractValidationError | None = None
+        if (
+            needs_source_fallback
+            and result.query_class == "evidence_lookup"
+            and table_query is None
+            and exact_inventory_kind is None
+            and exact_field is None
+            and cursor is None
+        ):
+            source_fallback_provider = _matching_source_identifier_provider(
+                session,
+                planned_query,
+            )
+            if source_fallback_provider is not None:
+                try:
+                    exact_fallback = session.query(
+                        query_text=planned_query,
+                        request_contract=validated_request_contract,
+                        effective_graph_view=effective_graph_view,
+                        allowed_relation_types=allowed_relation_types,
+                        exact_inventory_kind=(
+                            source_fallback_provider.inventory_kind_alias
+                        ),
+                        exact_field=source_fallback_provider.normalized_field,
+                        page_size=page_size,
+                        limits=attempt_limits,
+                        phase_trace=phase_trace,
+                        execution_deadline=execution_deadline,
+                        manage_phase_trace_lifecycle=phase_trace is None,
+                    )
+                except ContractValidationError as exc:
+                    # An identifier match does not bind table filter/projection
+                    # roles. Only these query-binding failures are clarifyable;
+                    # authority, provenance, hash and permission errors escape.
+                    if (
+                        source_fallback_provider.filter_slot_policy
+                        != "combined_present_intersection_v1"
+                        or str(exc) not in {
+                            "source occurrence provider selection is invalid",
+                            "source occurrence provider selection is ambiguous",
+                            "source occurrence query candidate binding is incomplete",
+                            "source occurrence query lexical binding is ambiguous",
+                        }
+                    ):
+                        raise
+                    fallback_binding_rejection = exc
+                    result = replace(
+                        result,
+                        status="pending_review",
+                        warnings=(
+                            *result.warnings,
+                            "authorized_source_exact_fallback_requires_clarification",
+                        ),
+                        result_fingerprint=sha256_json([
+                            result.result_fingerprint, "pending_review",
+                            type(exc).__name__, str(exc),
+                        ]),
+                    )
+                else:
+                    if _SEMANTIC_TIME_BUDGET_EXHAUSTED_WARNING in exact_fallback.warnings:
+                        fallback_timed_out = True
+                    elif exact_fallback.status in {"error", "failed"}:
+                        fallback_provider_error = True
+                    elif exact_fallback.answer_citation_hashes:
+                        result = replace(
+                            exact_fallback,
+                            warnings=(
+                                *exact_fallback.warnings,
+                                "authorized_source_exact_fallback_used",
+                            ),
+                        )
         if result.query_hash != sha256_json(planned_query):
             raise ContractValidationError("adaptive query result binding is invalid")
         page = result.exact_result.source_occurrence_page if result.exact_result else None
@@ -11117,9 +14164,24 @@ def execute_bounded_adaptive_query(
         unsupported = page.get("unsupported_projection_hashes", ()) if (
             isinstance(page, Mapping)
         ) else ()
+        covered_field_hashes = {
+            sha256_json(field_name)
+            for item in (
+                result.exact_result.items
+                if result.exact_result is not None
+                else ()
+            )
+            if item.structure_status == "source_provided"
+            for field_name, *_ in item.structured_values
+        }
         missing_fields = sorted(
-            value for value in unsupported
-            if isinstance(value, str) and value.startswith("sha256:")
+            requested_field_hashes - covered_field_hashes
+            if requested_field_hashes
+            else {
+                value
+                for value in unsupported
+                if isinstance(value, str) and value.startswith("sha256:")
+            }
         )
         steps.append(
             {
@@ -11131,10 +14193,32 @@ def execute_bounded_adaptive_query(
                 "coverage_status": coverage,
                 "citation_hashes": sorted(citations),
                 "missing_field_hashes": missing_fields,
-                "rejection_fingerprint": None,
+                "rejection_reason_code": (
+                    _adaptive_query_rejection_reason_code(fallback_binding_rejection)
+                    if fallback_binding_rejection is not None else None
+                ),
+                "rejection_fingerprint": (
+                    sha256_json([
+                        type(fallback_binding_rejection).__name__,
+                        str(fallback_binding_rejection),
+                    ])
+                    if fallback_binding_rejection is not None else None
+                ),
             }
         )
         successful_results.append(result)
+        if fallback_binding_rejection is not None:
+            stop_reason = "source_binding_clarification_required"
+            break
+        if result_timed_out or fallback_timed_out:
+            stop_reason = "time_budget_exhausted"
+            break
+        if result_provider_error:
+            stop_reason = "provider_error"
+            break
+        if fallback_provider_error:
+            stop_reason = "provider_error"
+            break
         if cursor is not None or exact_inventory_kind or exact_field:
             stop_reason = "single_exact_plan_completed"
             break
@@ -11143,23 +14227,90 @@ def execute_bounded_adaptive_query(
             stop_reason = "context_budget_reached"
             break
     citations = sorted({value for step in steps for value in step["citation_hashes"]})
-    missing = sorted({value for step in steps for value in step["missing_field_hashes"]})
-    complete = (len(steps) == 1 and bool(citations)
-                and steps[0]["validation_status"].startswith("validated_")
-                and steps[0]["coverage_status"]
-                in {"complete", "complete_authorized_scope"})
-    external_replan_required = planner is None and (
-        not successful_results
-        or any(
-            step["coverage_status"] in {"incomplete", "not_executed", "no_answer"}
+    covered_field_hashes = {
+        sha256_json(field_name)
+        for result in successful_results
+        if result.exact_result is not None
+        for item in result.exact_result.items
+        if item.structure_status == "source_provided"
+        for field_name, *_ in item.structured_values
+    }
+    missing = sorted(
+        requested_field_hashes - covered_field_hashes
+        if requested_field_hashes
+        else {
+            value
+            for step in steps
+            for value in step["missing_field_hashes"]
+        }
+    )
+    cited_evidence_lookup = (
+        bool(citations)
+        and not requested_field_hashes
+        and bool(successful_results)
+        and all(
+            result.query_class == "evidence_lookup"
+            for result in successful_results
+        )
+    )
+    rejection_reason_codes = sorted(
+        {
+            reason_code
+            for step in steps
+            if isinstance(
+                reason_code := step.get("rejection_reason_code"),
+                str,
+            )
+        }
+    )
+    complete = (
+        bool(steps)
+        and len(successful_results) == len(steps)
+        and bool(citations)
+        and not missing
+        and all(
+            step["validation_status"].startswith("validated_")
+            and step["coverage_status"]
+            in {"complete", "complete_authorized_scope"}
             for step in steps
         )
     )
+    successful_results_by_query_hash = {
+        result.query_hash: result for result in successful_results
+    }
+    coverage_requires_external_replan = any(
+        step["coverage_status"] in {"not_executed", "no_answer"}
+        or (
+            step["coverage_status"] == "incomplete"
+            and not (
+                (result := successful_results_by_query_hash.get(step["query_hash"]))
+                is not None
+                and result.query_class == "evidence_lookup"
+                and bool(step["citation_hashes"])
+                and not requested_field_hashes
+            )
+        )
+        for step in steps
+    )
+    external_replan_required = planner is None and (
+        not successful_results
+        or (bool(missing) and not cited_evidence_lookup)
+        or coverage_requires_external_replan
+    )
     status = (
-        "replan_required" if external_replan_required
+        "pending_review" if stop_reason == "source_binding_clarification_required"
+        else "replan_required" if external_replan_required
         else (
             "replan_required" if not successful_results
-            else ("complete" if complete else ("partial" if citations else "unsupported"))
+            else (
+                "ok"
+                if cited_evidence_lookup
+                else (
+                    "complete"
+                    if complete
+                    else ("partial" if citations else "unsupported")
+                )
+            )
         )
     )
     if stop_reason == "planner_stopped":
@@ -11171,9 +14322,111 @@ def execute_bounded_adaptive_query(
                 else "planner_stopped_partial"
             )
         )
+    requested_projection_field_hashes: list[str] = []
+    ambiguous_projection_term_hashes: list[str] = []
+    if planner is None and status in {"replan_required", "partial", "unsupported"}:
+        try:
+            replan_terms, _ = _ordered_source_occurrence_query_grounding(
+                query_text,
+                tokenizer_profile=session.index._runtime_components.tokenizer_profile,
+            )
+        except (ContractValidationError, RuntimeError):
+            replan_terms = ()
+        replan_terms = _normalize_ordered_source_occurrence_terms(replan_terms)
+        combined_providers = tuple(
+            provider
+            for provider in session.source_occurrence_providers
+            if provider.filter_slot_policy == "combined_present_intersection_v1"
+        )
+        replan_bindings = []
+        for term_hash, grammar_role, candidates, control_kind in replan_terms:
+            value_columns = {
+                column
+                for provider in combined_providers
+                for candidate in candidates
+                for column in provider._value_candidate_columns.get(candidate, ())
+            }
+            projection_columns = {
+                column
+                for provider in combined_providers
+                for candidate in candidates
+                for column in provider._projection_candidate_columns.get(
+                    candidate, ()
+                )
+            }
+            replan_bindings.append(
+                (
+                    term_hash,
+                    grammar_role,
+                    control_kind,
+                    value_columns,
+                    projection_columns,
+                )
+            )
+        viable_boundaries = [
+            index
+            for index, (_, role, control, _, _) in enumerate(replan_bindings)
+            if control == "none"
+            and role == "particle"
+            and any(binding[3] for binding in replan_bindings[:index])
+            and any(binding[4] for binding in replan_bindings[index + 1 :])
+        ]
+        if len(viable_boundaries) == 1:
+            seen_projection_fields: set[str] = set()
+            seen_ambiguous_terms: set[str] = set()
+            for term_hash, role, control, value_columns, projection_columns in (
+                replan_bindings[viable_boundaries[0] + 1 :]
+            ):
+                if (
+                    control != "none"
+                    or role not in {"lexical", "operator"}
+                    or not projection_columns
+                ):
+                    continue
+                if len(projection_columns) != 1:
+                    if term_hash not in seen_ambiguous_terms:
+                        ambiguous_projection_term_hashes.append(term_hash)
+                        seen_ambiguous_terms.add(term_hash)
+                    continue
+                projection_field_hash = next(iter(projection_columns))
+                if (
+                    projection_field_hash not in seen_projection_fields
+                    and len(requested_projection_field_hashes) < 2
+                ):
+                    requested_projection_field_hashes.append(
+                        projection_field_hash
+                    )
+                    seen_projection_fields.add(projection_field_hash)
     payload = {
         "status": status,
-        "original_query_hash": sha256_json(query_text),
+        "original_query_hash": (
+            validated_request_contract["original_query_hash"]
+            if validated_request_contract is not None
+            else sha256_json(query_text)
+        ),
+        "request_contract": (
+            {
+                "request_contract_fingerprint": request_contract_fingerprint,
+                "query_class": validated_request_contract["query_class"],
+                "source_family_scope": validated_request_contract[
+                    "source_family_scope"
+                ],
+                "requested_field_count": len(
+                    validated_request_contract["requested_fields"]
+                ),
+                "requested_field_hashes": [
+                    sha256_json(field_name)
+                    for field_name in validated_request_contract[
+                        "requested_fields"
+                    ]
+                ],
+                "maximum_claim_strength": validated_request_contract[
+                    "maximum_claim_strength"
+                ],
+            }
+            if validated_request_contract is not None
+            else None
+        ),
         "planner_interface": "stepwise_callback_v1",
         "planner_model_status": (
             "not_connected" if planner is None else "injected_callback_non_model"),
@@ -11184,10 +14437,27 @@ def execute_bounded_adaptive_query(
             "status": "must_be_resolved_upstream", "hidden_history_used": False},
         "external_replan": {
             "status": (
-                "required" if status == "replan_required"
+                "required" if status in {"replan_required", "pending_review"}
                 else ("not_needed" if complete else "available")
             ),
             "max_follow_up_query_count": 2,
+            "requested_projection_field_hashes": (
+                requested_projection_field_hashes
+            ),
+            "ambiguous_projection_term_hashes": (
+                ambiguous_projection_term_hashes
+            ),
+            "rejection_reason_codes": rejection_reason_codes,
+            "recommended_query_mode": (
+                "clarify_source_binding"
+                if stop_reason == "source_binding_clarification_required"
+                else "structured_table_query"
+                if any(
+                    reason_code.startswith("free_text_")
+                    for reason_code in rejection_reason_codes
+                )
+                else "review_authorized_capabilities"
+            ),
         },
         "subqueries": steps,
         "context_bundle": {
@@ -11199,11 +14469,40 @@ def execute_bounded_adaptive_query(
         },
     }
     assert_public_payload_safe(payload, "issue56_adaptive_query_execution")
+    finish_adaptive_trace(
+        "deadline_exhausted"
+        if stop_reason == "time_budget_exhausted"
+        else ("failed" if stop_reason == "provider_error" else "completed")
+    )
     return (
         successful_results[0] if successful_results else None,
         tuple(successful_results),
         payload,
     )
+
+
+def _matching_source_identifier_provider(
+    session: AuthorizedSemanticMailSession,
+    query_text: str,
+) -> SourceOccurrenceProvider | None:
+    """Select one already-authorized exact identifier provider, if grounded."""
+
+    identifier_hashes = _deterministic_exact_filter_slots(
+        query_text,
+        tokenizer_profile=session.index._runtime_components.tokenizer_profile,
+    ).identifier_hashes
+    if not identifier_hashes:
+        return None
+    matches = tuple(
+        provider
+        for provider in session.source_occurrence_providers
+        if (
+            provider.filter_slot_policy
+            in {"identifier_union_v1", "combined_present_intersection_v1"}
+            and set(identifier_hashes).intersection(provider._value_hash_postings)
+        )
+    )
+    return matches[0] if len(matches) == 1 else None
 
 
 def _prefer_untyped_participant_any_provider(
@@ -11640,6 +14939,23 @@ def _require_effective_graph_content_snapshot(
     )
     if not isinstance(cached, _EffectiveGraphContentSnapshot):
         raise ContractValidationError("effective graph content snapshot is unavailable")
+    store = getattr(effective_graph_view, "_indexed_runtime_store", None)
+    if store is not None:
+        if (
+            not isinstance(effective_graph_view.visible_nodes, _StoredReferenceCollection)
+            or not isinstance(effective_graph_view.visible_edges, _StoredReferenceCollection)
+            or effective_graph_view.visible_nodes.store is not store
+            or effective_graph_view.visible_edges.store is not store
+            or cached.view_binding != _effective_graph_content_view_binding(effective_graph_view)
+        ):
+            raise ContractValidationError("stored graph snapshot binding mismatch")
+        manifest = store.reopen(effective_graph_view._indexed_runtime_store_seal)
+        if (
+            manifest["view_metadata"]["graph"]["graph_revision_fingerprint"]
+            != cached.graph_revision_fingerprint
+        ):
+            raise ContractValidationError("stored graph revision seal mismatch")
+        return cached
     if (
         not isinstance(effective_graph_view.visible_nodes, _FrozenGraphList)
         or not isinstance(effective_graph_view.visible_edges, _FrozenGraphList)
@@ -12082,6 +15398,21 @@ def _validate_hybrid_index_runtime_binding(
 
 def _validate_hybrid_index_runtime(index: AuthorizedHybridMailIndex) -> None:
     _validate_hybrid_index_runtime_binding(index)
+    if index._runtime_store is not None:
+        if not index._runtime_store_seal:
+            raise ContractValidationError("stored hybrid index seal is unavailable")
+        manifest = index._runtime_store.reopen(index._runtime_store_seal)
+        expected = manifest.get("view_metadata", {}).get("hybrid_index")
+        if (
+            not isinstance(index.candidates, _StoredHybridCandidates)
+            or index.candidates.store is not index._runtime_store
+            or expected != to_plain({
+                **{name: getattr(index, name) for name in _STORED_HYBRID_INDEX_FIELDS},
+                "candidate_count": len(index.candidates),
+            })
+        ):
+            raise ContractValidationError("stored hybrid index binding mismatch")
+        return
     expected_integrity_fingerprint = _hybrid_index_integrity_fingerprint(
         index_fingerprint=index.index_fingerprint,
         tokenizer_id=index.tokenizer_id,

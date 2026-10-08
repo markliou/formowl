@@ -60,11 +60,10 @@ _MAX_CODEX_AUTH_CACHE_BYTES = 64 * 1024
 _MAX_RESPONSES_BODY_BYTES = 4 * 1024 * 1024
 _MAX_RESPONSES_TIMEOUT_SECONDS = 300.0
 _MAX_AUTHORIZED_MAIL_SELECTORS = 128
-# Keep one UAT turn bounded while allowing the existing 120-second provider
-# and app-server request budgets to cover a provider -> MCP -> finalization
-# sequence. A shorter whole-turn cap can consume the finalization budget
-# after a valid but slow MCP/replan round.
+# Keep the overall turn cap unchanged; direct-provider work reserves return time
+# for governed projection and HTTP delivery instead of racing that same cap.
 _MAX_UAT_TURN_SECONDS = 120.0
+_UAT_TURN_RETURN_MARGIN_SECONDS = 5.0
 _PROVIDER_STATUS_ALLOWLIST = frozenset(
     {"cancelled", "completed", "failed", "in_progress", "incomplete", "queued"}
 )
@@ -773,7 +772,16 @@ class _UatTurnRequestContractBinder:
         """Reject an unexpanded terse copy before it reaches the UAT tool."""
 
         expansion_required = requires_query_expansion(self._normalized_user_text)
-        if expansion_required and not request_contract_present:
+        typed_expansion_present = (
+            required_terms is not None
+            or table_query is not None
+            or has_typed_selector
+            or (
+                request_contract is not None
+                and bool(request_contract.get("requested_fields"))
+            )
+        )
+        if expansion_required and not request_contract_present and not typed_expansion_present:
             raise ContractValidationError(
                 "UAT evidence tool request contract is required"
             )
@@ -783,14 +791,7 @@ class _UatTurnRequestContractBinder:
             or not expansion_required
         ):
             return
-        if (
-            request_contract is not None
-            and request_contract.get("requested_fields")
-        ) or (
-            required_terms is not None
-            or table_query is not None
-            or has_typed_selector
-        ):
+        if typed_expansion_present:
             return
         raise ContractValidationError(
             "UAT evidence tool query requires typed expansion"
@@ -3664,6 +3665,7 @@ class CodexResponsesConversationModel:
             or len(safety_identifier) > 64
         ):
             raise ContractValidationError("UAT safety identifier is invalid")
+        turn_started = time.monotonic()
         bounded_history = history[-_MAX_HISTORY_MESSAGES:]
         for message in bounded_history:
             if not isinstance(message, UatConversationMessage):
@@ -3784,8 +3786,7 @@ class CodexResponsesConversationModel:
         stop_reason: str | None = None
         final_repair_attempted = False
         force_final = False
-        turn_started = time.monotonic()
-        turn_deadline = turn_started + _MAX_UAT_TURN_SECONDS
+        turn_deadline = turn_started + _MAX_UAT_TURN_SECONDS - _UAT_TURN_RETURN_MARGIN_SECONDS
         provider_phase_timings: list[dict[str, Any]] = []
         provider_attempt_diagnostics: list[dict[str, Any]] = []
         mcp_citation_stage_diagnostics: list[dict[str, Any]] = []
@@ -4055,9 +4056,12 @@ class CodexResponsesConversationModel:
                 }
             )
             diagnostic_tool_choice = tool_choice if tools else "none"
+            request_started = time.monotonic()
+            remaining_seconds = turn_deadline - request_started
+            if remaining_seconds <= 0:
+                continue
             provider_request_count += 1
             provider_attempt = provider_request_count
-            request_started = time.monotonic()
             self._active_request_timeout_seconds = min(
                 self._timeout_seconds,
                 remaining_seconds,
@@ -6674,9 +6678,10 @@ def compact_evidence_for_model(
     graph_evidence = result.get("evidence")
     graph_support = (
         {
-            item.get("citation_hash")
+            item["citation_hash"]
             for item in graph_evidence
             if isinstance(item, Mapping)
+            and isinstance(item.get("citation_hash"), str)
             and isinstance(item.get("snippet"), str) and item["snippet"].strip()
         }
         if isinstance(graph_evidence, (list, tuple))
@@ -6755,18 +6760,53 @@ def compact_evidence_for_model(
         else:
             records["exact_inventory"] = [dict(exact)]
 
+    # Graph citations are hashes, even when their evidence also carries an
+    # Observation id. Resolve lineage ids through that explicit evidence link;
+    # collection positions are never evidence of a citation relationship.
+    graph_observation_citations: dict[str, set[str]] = {}
+    if graph_support is not None:
+        for record in records.get("evidence", ()):
+            for field in ("source_observation_id", "observation_id"):
+                observation_id = record.get(field)
+                citation_hash = record.get("citation_hash")
+                if (
+                    isinstance(observation_id, str) and observation_id
+                    and isinstance(citation_hash, str) and citation_hash
+                ):
+                    graph_observation_citations.setdefault(observation_id, set()).add(
+                        citation_hash
+                    )
+
+    def anchor_for(collection: str, record: Any) -> str | None:
+        if collection == "citations" and isinstance(record, str):
+            return "citation:" + record
+        if graph_support is not None and isinstance(record, Mapping):
+            if collection == "evidence":
+                citation_hash = record.get("citation_hash")
+                return (
+                    "citation:" + citation_hash
+                    if isinstance(citation_hash, str) and citation_hash else None
+                )
+            if collection == "lineages":
+                linked = set()
+                for field in ("source_observation_id", "observation_id"):
+                    observation_id = record.get(field)
+                    if isinstance(observation_id, str):
+                        linked.update(graph_observation_citations.get(observation_id, ()))
+                if len(linked) == 1:
+                    return "citation:" + next(iter(linked))
+                return None
+        return _presentation_anchor(record)
+
     groups: dict[str, dict[str, list[Any]]] = {}
     unlinked = "exact_inventory" in records or any(
-        not _presentation_anchor(record)
-        and not (collection == "citations" and isinstance(record, str))
+        not anchor_for(collection, record)
         for collection, values in records.items()
         for record in values
     )
     for collection, values in records.items():
         for record in values:
-            anchor = _presentation_anchor(record)
-            if collection == "citations" and isinstance(record, str):
-                anchor = "citation:" + record
+            anchor = anchor_for(collection, record)
             if unlinked:
                 anchor = "__all_evidence__"
             group = groups.setdefault(anchor, {})

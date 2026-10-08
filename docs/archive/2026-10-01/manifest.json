@@ -1,0 +1,12 @@
+{
+  "archive_date": "2026-10-01",
+  "files": [
+    {
+      "source": "docs/agent-goals/handoff-log.md",
+      "archive": "docs/archive/2026-10-01/handoff-log.md",
+      "bytes": 39906,
+      "lines": 308,
+      "sha256": "4a364750da98c76684c788b3163ba9ad55bf2ed4c0bb984dbb21ad6e8444d1d9"
+    }
+  ]
+}

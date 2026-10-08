@@ -44,8 +44,10 @@ _SEMANTIC_TOOL_OBJECT_ARGUMENT_KEYS = {
     "observation_filter",
     "permission_scope",
     "requested_scope",
+    "request_contract",
 }
 _SEMANTIC_TOOL_INTEGER_ARGUMENT_KEYS = {"limit", "page_size"}
+_SEMANTIC_TOOL_ARRAY_STRING_ARGUMENT_KEYS = {"required_terms"}
 _SEMANTIC_TOOL_REQUIRED_ARGUMENT_KEYS = {
     "open_upload_session": {"intent", "intended_asset_type"},
     "create_ingestion_job": {"asset_locator", "extractor_profile"},
@@ -272,14 +274,58 @@ def _tool_to_json_rpc_schema(schema: dict[str, Any]) -> dict[str, Any]:
         )
     elif compatibility.get("status") == "canonical":
         description += "; canonical API"
+    if tool_name == "query_mail_evidence":
+        description += (
+            "; provide required_terms as 1-8 literal identity/topic phrases grounded "
+            "as contiguous text in the original user request; include identity and "
+            "genuine topic anchors. All terms are conjunctive and must match within the "
+            "same candidate evidence item. The authorized selector and validated request "
+            "contract determine source-family/scope; source-family and operation/action "
+            "words are not content terms unless the user explicitly requests those "
+            "literal words. Repeat the same phrases on retries. These terms filter "
+            "relevance only and never grant or widen authorization; grounding checks do "
+            "not prove that the model selected every semantically necessary anchor."
+        )
     if tool_name == "query_effective_graph_view":
         description += (
-            "; connected planners must resolve intent and coreference before calling; "
+            "; read-only evidence intents, only within current authorized capabilities: "
+            "for a non-exact evidence lookup, provide 1-8 required_terms grounded as "
+            "contiguous identity/topic phrases in the original user request; every "
+            "term is conjunctive within the same evidence item. Source-family and "
+            "operation/action words describe routing, not content, unless explicitly "
+            "requested as literal content. These terms do not grant or widen scope. "
+            "(1) standalone document_text lookup in independently registered Markdown "
+            "or plain-text documents, not mail attachments. No mail-session, sender, "
+            "or message dependency: do not invent a mail selector or table binding. "
+            "Preserve returned native paragraph/block line_start and line_end, "
+            "document revision bindings, and occurrence lineage with citations. "
+            "(2) structured/source-table lookup using authorized source-provided "
+            "filter fields and projection labels. Do not use this tool for ordinary "
+            "chat, greetings, general knowledge, or reformatting already cited "
+            "evidence; these require zero new MCP calls. Use the selected "
+            "query_mail_evidence tool for mail-only evidence organization when "
+            "available, with its authorized selector; never relabel a document as mail. "
+            "A validated evidence-only initial retrieval with zero verified citations "
+            "may receive at most one bounded same-scope source recheck inside this "
+            "tool call, using the same actor, workspace, grants, source scope and "
+            "revision. This is not permission for another scan or a wider query. "
+            "Inspect source_recovery and the underlying initial status; an outer "
+            "replan_required marker is not itself an eligible retrieval miss. "
+            "Do not use source recheck to bypass provider/tool errors, permission "
+            "denials, unsupported or underspecified plans, or exact requests. "
+            "Exact sets, counts, inventories and definitive negatives require "
+            "deterministic structured execution, never top-k inference. Missing "
+            "or incomplete readers with no verified citations mean pending_review, "
+            "not absence; not_found requires a complete bounded scan and sealed "
+            "coverage and is scoped to that method and authorized revision. "
+            "Cited partial evidence is not proof of exhaustive coverage. "
+            "Connected planners must resolve intent and coreference before calling; "
             "do not forward a terse or underspecified user prompt unchanged as one "
             "attempt and stop. Form only a bounded clarified candidate query/tool plan, "
             "and validate its query and arguments against this tool schema and actual "
             "authorized capabilities before each call. After execution inspect "
-            "query_agent coverage and result; when status is replan_required or partial, "
+            "query_agent coverage and result. For structured/source-table lookup "
+            "when status is replan_required or partial, "
             "join external_replan.requested_projection_field_hashes to capability "
             "field_hash values, and issue at most two follow-up calls using only "
             "source_provided exact labels. When multiple candidates are each "
@@ -300,6 +346,31 @@ def _tool_to_json_rpc_schema(schema: dict[str, Any]) -> dict[str, Any]:
             "web may clarify only redacted terminology and must never supply "
             "workspace evidence or authorization"
         )
+    elif tool_name == "query_mail_evidence":
+        description += (
+            "; call only for an authorized workspace-mail evidence lookup, not "
+            "for ordinary conversation. The query_text must be a standalone "
+            "query containing the needed subject, person, or context; do not "
+            "rely on hidden conversation history or send a fragment. Preserve "
+            "the user's person names, source scope, and quantifiers; do not "
+            "add 'all' or invent exact inventory/count intent. Provide "
+            "exactly one selector from the current authorized capabilities "
+            "(mail_import_session_id or mail_evidence_bundle_id); never invent "
+            "or broaden a selector. Send only this tool's declared mail "
+            "arguments: do not send graph, table, requester, workspace, "
+            "session, or other internal arguments. An empty citations list is "
+            "not proof that data is absent: inspect status, warnings, and "
+            "coverage. ok means verified evidence may be present; "
+            "pending_review means the bounded result is incomplete; not_found "
+            "means no verified result was returned for this bounded authorized "
+            "query; permission_denied means the access boundary rejected the "
+            "request, not that the data is absent. If the result is incomplete "
+            "or requires a different plan, revise the standalone query only "
+            "with currently authorized capabilities and retry at most once "
+            "when budget remains and server execution control permits requery; "
+            "never repeat an unchanged call or bypass "
+            "permission, selector, provenance, or citation validation."
+        )
     return {
         "name": tool_name,
         "description": description,
@@ -312,6 +383,24 @@ def _semantic_argument_json_schema(key: str) -> dict[str, Any]:
         return {"type": "object"}
     if key in _SEMANTIC_TOOL_INTEGER_ARGUMENT_KEYS:
         return {"type": "integer", "minimum": 1, "maximum": 100}
+    if key in _SEMANTIC_TOOL_ARRAY_STRING_ARGUMENT_KEYS:
+        schema = {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 80},
+            "minItems": 1,
+            "maxItems": 8,
+        }
+        if key == "required_terms":
+            schema["description"] = (
+                "Literal content anchors combined with AND: every term must match within "
+                "the same candidate evidence item. Include identity and genuine topic "
+                "terms from the original request. The authorized selector and validated "
+                "request contract determine source-family/scope; source-family and "
+                "operation/action words are not content terms unless the user explicitly "
+                "requests those literal words. These terms do not grant or widen "
+                "authorization."
+            )
+        return schema
     return {"type": "string"}
 
 
@@ -361,6 +450,18 @@ def _validate_semantic_tool_arguments(tool_name: str, arguments: Mapping[str, An
         elif key in _SEMANTIC_TOOL_INTEGER_ARGUMENT_KEYS:
             if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 100:
                 raise ContractValidationError("semantic JSON-RPC integer argument is invalid")
+        elif key in _SEMANTIC_TOOL_ARRAY_STRING_ARGUMENT_KEYS:
+            if (
+                not isinstance(value, list)
+                or not 1 <= len(value) <= 8
+                or any(
+                    not isinstance(term, str)
+                    or not term.strip()
+                    or len(term) > 80
+                    for term in value
+                )
+            ):
+                raise ContractValidationError("semantic JSON-RPC array argument is invalid")
         elif not isinstance(value, str) or not value.strip():
             raise ContractValidationError("semantic JSON-RPC string argument is invalid")
 

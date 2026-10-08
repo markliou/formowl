@@ -443,6 +443,116 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
 
         self.assertEqual(build_count, 1)
 
+    def test_mail_evidence_query_lazy_index_scans_source_text_with_citation(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-query-lazy-index")
+        archive = _mail_archive()
+        archive["messages"][0]["body"] = (
+            "聯絡人：劉一帆\n\nBlocker: Waiting on audit approval"
+        )
+        archive["messages"][0]["body_hash"] = "sha256:body-launch-yifan"
+        bundle = _mail_bundle(temp_dir, archive)
+        base_segment = bundle.body_segments[0]
+        scan_limit = 4_096
+        self.assertEqual(mail_query._LAZY_SOURCE_SCAN_SEGMENT_LIMIT, scan_limit)
+        late_segments = [
+            replace(
+                base_segment,
+                email_body_segment_id=f"lazy-segment-{index:04d}",
+                source_observation_id=f"lazy-observation-{index:04d}",
+                text="No participant match in this segment",
+                body_segment_hash=f"sha256:lazy-segment-{index:04d}",
+                body_segment_index=index,
+            )
+            for index in range(scan_limit)
+        ]
+        late_segments[-1] = replace(
+            late_segments[-1],
+            text="聯絡人：劉一帆",
+        )
+        bundle = replace(bundle, body_segments=late_segments)
+
+        with patch.object(
+            mail_query,
+            "_build_snippet_index",
+            side_effect=AssertionError("lazy gateway must not build a full index"),
+        ):
+            gateway = MailEvidenceQueryGateway([bundle], lazy_index=True)
+            result = gateway.query_mail_evidence(
+                query_text="把劉一帆的信統整出來",
+                requester_user_id="user_yifan",
+                workspace_id="workspace_formowl",
+                session_id="session_lazy",
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+                now=NOW,
+            ).to_dict()
+            zero_limit = gateway.query_mail_evidence(
+                query_text="把劉一帆的信統整出來",
+                requester_user_id="user_yifan",
+                workspace_id="workspace_formowl",
+                session_id="session_lazy_zero",
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+                limit=0,
+                now=NOW,
+            ).to_dict()
+
+        self.assertEqual(gateway.index_fingerprints, {bundle.mail_evidence_bundle_id: None})
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["citations"])
+        self.assertEqual(
+            result["citations"][0]["source_observation_id"],
+            result["evidence_snippets"][0]["source_observation_id"],
+        )
+        self.assertEqual(result["evidence_snippets"][0]["subject"], "Launch checklist")
+        self.assertIn("劉一帆", result["evidence_snippets"][0]["snippet"])
+        self.assertEqual(result["redaction_counts"]["unsafe_snippets"], 0)
+        self.assertEqual(zero_limit["status"], "ok")
+        self.assertEqual(zero_limit["evidence_snippets"], [])
+        self.assertEqual(zero_limit["citations"], [])
+        self.assertEqual(zero_limit["warnings"], ["no_visible_mail_evidence_matched"])
+
+        beyond_bound_segments = [
+            replace(segment, text="No participant match in this segment")
+            for segment in late_segments
+        ]
+        beyond_bound_segments.append(
+            replace(
+                base_segment,
+                email_body_segment_id=f"lazy-segment-{scan_limit:04d}",
+                source_observation_id=f"lazy-observation-{scan_limit:04d}",
+                text="聯絡人：劉一帆",
+                body_segment_hash=f"sha256:lazy-segment-{scan_limit:04d}",
+                body_segment_index=scan_limit,
+            )
+        )
+        beyond_bound_bundle = replace(bundle, body_segments=beyond_bound_segments)
+        with patch.object(
+            mail_query,
+            "_build_snippet_index",
+            side_effect=AssertionError("lazy gateway must not build a full index"),
+        ):
+            beyond_bound_gateway = MailEvidenceQueryGateway(
+                [beyond_bound_bundle],
+                lazy_index=True,
+            )
+            beyond_bound = beyond_bound_gateway.query_mail_evidence(
+                query_text="把劉一帆的信統整出來",
+                requester_user_id="user_yifan",
+                workspace_id="workspace_formowl",
+                session_id="session_lazy_bound",
+                mail_import_session_id=(
+                    beyond_bound_bundle.mail_import_session.mail_import_session_id
+                ),
+                now=NOW,
+            ).to_dict()
+
+        self.assertEqual(beyond_bound["status"], "ok")
+        self.assertEqual(beyond_bound["evidence_snippets"], [])
+        self.assertEqual(beyond_bound["citations"], [])
+        self.assertEqual(
+            beyond_bound["warnings"],
+            ["no_visible_mail_evidence_matched"],
+        )
+
     def test_mail_evidence_query_rejects_raw_or_missing_inputs_without_content(self) -> None:
         temp_dir = _paths.fresh_test_dir("mail-evidence-query-input-guards")
         bundle = _mail_bundle(temp_dir)

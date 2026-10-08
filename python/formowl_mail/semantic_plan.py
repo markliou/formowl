@@ -127,6 +127,18 @@ _CJK_MAIL_CONTENT_PATTERN = re.compile(
     r"(?:往[來来]的?|[來来]|(?:寄[出來来]|收[到取])的?|的|封)" r"信(?![心任念仰用號号息賴赖])"
 )
 _CJK_MAIL_REFERENCE_PATTERN = re.compile(r"的(?:信件|郵件|信箱)")
+# A source-backed row lookup must not depend on a fixed business-field
+# vocabulary.  UAT users can ask for an arbitrary column label (for example a
+# tenant-specific field name), so an identifier followed by a record reference
+# and 的 is a stronger routing signal than the known-field marker list.
+_RECORD_FIELD_LOOKUP_PATTERN = re.compile(
+    r"(?:\b[a-z0-9][a-z0-9._/-]{1,63}\b|[\u4e00-\u9fff]{2,24})"
+    r"\s*(?:這|該|此)(?:筆|項|個)(?:資料|目|項目)?\s*的"
+)
+_EVIDENCE_RETURN_PATTERN = re.compile(
+    r"^(?:please\s+)?return\b[^?]*\b"
+    r"(?:rows?|records?|documents?|evidence|files?|messages?|values?|citations?)\b"
+)
 # Workspace evidence is not limited to mail.  Match source nouns with word
 # boundaries in English; Chinese source nouns already form lexical units.
 # A noun alone is not a lookup: the action check below is still required.
@@ -295,6 +307,8 @@ def requires_query_expansion(query_text: str) -> bool:
     normalized = _normalize_routing_text(query_text)
     if not requires_workspace_evidence(normalized):
         return False
+    if _EVIDENCE_RETURN_PATTERN.search(normalized) is not None:
+        return False
     if any(marker in normalized for marker in _EVIDENCE_QUERY_ACTION_MARKERS):
         return False
     if any(marker in normalized for marker in _BUSINESS_CURRENT_STATE_MARKERS):
@@ -334,9 +348,13 @@ def _is_ordinary_greeting(normalized: str) -> bool:
 
 
 def _has_explicit_workspace_evidence_marker(normalized: str) -> bool:
+    if _EVIDENCE_RETURN_PATTERN.search(normalized) is not None:
+        return True
     if any(marker in normalized for marker in _EXPLICIT_WORKSPACE_MARKERS):
         return True
     if _CJK_MAIL_REFERENCE_PATTERN.search(normalized) is not None:
+        return True
+    if _RECORD_FIELD_LOOKUP_PATTERN.search(normalized) is not None:
         return True
     if any(term in normalized for term in _RELATION_TERMS) and any(
         action_marker in normalized for action_marker in _EVIDENCE_QUERY_ACTION_MARKERS
@@ -352,9 +370,16 @@ def _has_explicit_workspace_evidence_marker(normalized: str) -> bool:
 def _has_business_source_signal(normalized: str) -> bool:
     if any(marker in normalized for marker in _BUSINESS_DEFINITION_MARKERS):
         # A definition request is ordinary conversation unless it also asks
-        # for a current/source-backed business value.
-        if not any(marker in normalized for marker in _BUSINESS_CURRENT_STATE_MARKERS):
+        # for a current/source-backed business value.  A property attached to
+        # a concrete subject is also source-backed: e.g. ``X 的 COO`` asks for
+        # the value of COO for X, while ``What is a supplier?`` remains chat.
+        if (
+            not any(marker in normalized for marker in _BUSINESS_CURRENT_STATE_MARKERS)
+            and not _has_scoped_business_source_signal(normalized)
+        ):
             return False
+    if _has_scoped_business_source_signal(normalized):
+        return True
     if any(marker in normalized for marker in _BUSINESS_SOURCE_CJK_MARKERS):
         return True
     has_business_marker = any(
@@ -367,6 +392,34 @@ def _has_business_source_signal(normalized: str) -> bool:
         any(marker in normalized for marker in _EVIDENCE_QUERY_ACTION_MARKERS)
         or any(marker in normalized for marker in _BUSINESS_CURRENT_STATE_MARKERS)
     )
+
+
+def _has_scoped_business_source_signal(normalized: str) -> bool:
+    """Recognize a business field bound to a user-supplied subject.
+
+    This is intentionally structural rather than a list of identifiers.  It
+    lets a private entity or arbitrary source identifier make ``X 的 COO`` a
+    governed lookup without turning bare acronym/field definitions into MCP
+    calls.
+    """
+
+    # Generic English nouns are not source identifiers.  Keep identifier-bound
+    # COO/field lookups while leaving definition questions in ordinary chat.
+    english_subject = r"(?:[a-z0-9]*\d[a-z0-9._/-]*|[a-z0-9]+(?:[._/-][a-z0-9]+)+)"
+    subject = rf"(?:{english_subject}|[\u4e00-\u9fff]{{2,32}})"
+    for marker in (*_BUSINESS_SOURCE_CJK_MARKERS, *_BUSINESS_SOURCE_MARKERS):
+        escaped_marker = re.escape(marker)
+        if re.search(
+            rf"{subject}\s*(?:的|之)\s*{escaped_marker}(?![a-z0-9_])",
+            normalized,
+        ):
+            return True
+        if marker in _BUSINESS_SOURCE_MARKERS and re.search(
+            rf"\b{escaped_marker}\b\s+(?:of|for)\s+{english_subject}",
+            normalized,
+        ):
+            return True
+    return False
 
 
 _RELATION_TERMS = (

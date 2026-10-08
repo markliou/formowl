@@ -14,15 +14,20 @@ Reviewer composition:
 
 ## Current Issue #56 Worker/UAT Model — user override
 
-- The latest 2026-10-06 authorization retains exactly two ordinary `gpt-6.1-sol`
-  workers with `reasoning_effort=high`, superseding earlier worker tiers.
-  Each verifies its own native task-owned turn; dated A/B evidence is not
-  current verification. Safe B recovery proof and Master-inspected A proof are in the handoff.
-- No descendants, substitution, duplication, or additional worker is authorized.
+- The latest 2026-10-06 authorization permits up to two ordinary `gpt-6.1-sol`
+  worker slots requesting `reasoning_effort=high`, superseding earlier worker tiers.
+  This is the requested tier; current-turn metadata is recorded when available
+  but is not a gate. Safe B recovery proof and Master-inspected A proof are in the handoff.
+- No descendants, duplication, or additional worker is authorized. The two-slot
+  cap remains in force, but a missing or unavailable handle is not an availability
+  gate for bounded work. No silent relabelling of an observed model, effort, or
+  worker identity is permitted; an available execution path may continue bounded
+  work.
   No prior task resumes implicitly.
   Hubble is not an active release reviewer.
-- Master remains orchestration-only/no repository writes. The current bounded
-  existing-service recovery and permitted checks are in the registry README. A finished;
+- Master remains ordinarily orchestration-only. An explicit current user assignment
+  may authorize bounded edits in named repository paths; the present policy slice
+  is one such docs-only assignment. A finished;
   B sequentially active, overall UAT goal ACTIVE, only UAT-critical work. Dated
   completed-task write sets/closures constrain only their recorded slice, not
   later explicit user authorization; historical metadata is not current proof.
@@ -31,13 +36,17 @@ Reviewer composition:
   unrerun whole module/full suite. Diagnostic passes are not reviewer credit.
   Feature 待測, step 4 `in-progress`, F841, non-green full regression, live UAT,
   three-reviewer acceptance and four methodology gates remain unresolved.
-- First dispatch and every future resume explicitly configure model and effort
-  as sol/high; no unpinned `send_input`. Each worker verifies its own persisted
-  native task-owned session_meta/task_started/turn_context before actions.
-  Minimal read-only metadata inspection is authorized; retain safe IDs,
-  model/effort/UTC timestamp/outcome only, never raw paths/content, prompts or
-  secrets. Missing/mismatched metadata blocks work; inherited contexts or
-  message text are not proof. Implementation evidence is not reviewer approval.
+- Dispatch requests sol/high where supported. Missing/mismatched metadata,
+  unavailable model configuration, or an unpinned resume is recorded as
+  `unverified`/`unavailable` and does not block bounded work. Retain only safe
+  IDs, observed model/effort, UTC timestamp and outcome; never raw
+  paths/content, prompts or secrets. Metadata absence cannot prove a positive
+  tier claim, and implementation evidence is not reviewer approval.
+- **Current user assignment (2026-10-07):** the bounded source-native fallback
+  reader, sealed artifact, focused tests, and current-policy repair are explicitly
+  allowed even when worker metadata is unavailable. This changes neither the independent
+  three-reviewer acceptance gate nor the safety, provenance, permission, and
+  incomplete-is-not-absence rules.
 - The UAT provider runtime remains pinned to `gpt-5.5` with
   `reasoning_effort=high`.
 - The independent release gate remains three effective read-only Codex/GPT

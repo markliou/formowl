@@ -31,36 +31,39 @@ active goal and must not be selected for restart.
 
 ## Issue #56 Current Operating Mode — user override
 
-- The latest 2026-10-06 authorization retains exactly two ordinary
-  `gpt-6.1-sol` workers with `reasoning_effort=high`, superseding earlier
-  sol/xhigh and luna/max settings. Each verifies its own native task-owned
-  session_meta/task_started/turn_context before actions; safe B evidence for this slice is in the latest handoff,
-  not proof of A's configuration.
-- No descendants, substitution, duplication, or additional worker is
-  authorized. Master orchestration-only/no repository writes.
-- Current goal ACTIVE: restore UAT promptly; only UAT-deployment-critical work.
-  A's eight-doc slice finished; sequential B owns existing diagnostic service recovery.
-  Verify existing mounts/no-build startup; only existing PostgreSQL then UAT may start,
-  with bounded pg_isready then health/home/listener checks. Preserve images/bindings/data/
-  config/secrets/restart/resource/network settings; never create/rebuild/migrate/reindex,
-  auto-start other containers, or repeatedly retry the same failure. Provider/browser tests
-  wait for Master inspection and ordinary-chat-first sequencing.
-  B's doc write set ONLY `AGENTS.md`, `docs/agent-roles.md`,
-  `docs/agent-goals/{README,kg-research-agent,handoff-log,reviewer-gate}.md`,
-  `docs/implementation-task-breakdown.md`; no code/test/config edits or full suite.
-  Preserve dirty edits/unique dated evidence/archives/checkboxes; doc diff/hash/link checks
-  are bounded. Earlier DOC-ONLY bans apply only their closed slices, not this recovery grant.
+- The latest 2026-10-06 authorization permits up to two ordinary
+  worker slots requesting `gpt-6.1-sol`/`reasoning_effort=high`, superseding earlier
+  sol/xhigh and luna/max settings. This is the requested tier, not a metadata
+  gate: each worker records its actual configuration as verified, unverified,
+  or unavailable and continues bounded work when persisted metadata is absent.
+- No descendants, duplication, or additional worker is authorized. The two-worker
+  cap remains in force, but a missing or unavailable handle is not an availability
+  gate. The Master is ordinarily orchestration-only; an explicit user assignment
+  may authorize a bounded repository edit, and worker metadata absence does not
+  block it.
+- The 2026-10-06 SPEC clarification was a closed docs-only slice: A finished
+  `SPEC.md` and B aligned the eight assigned current docs; Master
+  orchestration-only applied to that slice. The earlier B PostgreSQL/UAT/service
+  recovery is dated handoff evidence, not a standing assignment from this file.
+- The UAT recovery and acceptance goal remains open. Only work explicitly bounded
+  by the current user assignment may proceed; this registry grants no source,
+  provider, Docker, database, index, or UAT operation by itself. Preserve dirty
+  edits, unique dated evidence, archives, and checkboxes.
+- The 2026-10-07 source-native fallback reader, sealed artifact, focused-test,
+  and policy work is a dated assignment recorded in the handoff and work board,
+  not an instruction to restart that slice. Source/hash/lineage/permission and
+  honest incomplete/absence boundaries remain mandatory for later authorized work.
 - Current explicit user assignments take precedence over dated completed-task
   write sets and closure/no-further-work statements. Those statements constrain
   their own slice, not later authorized work; old tasks never resume implicitly.
   Earlier CLI/source-start assignments and metadata remain historical in the
   handoff, not current permissions or current worker verification.
-- First dispatch and every future resume must explicitly configure model and
-  effort as sol/high; no unpinned `send_input`. Each worker verifies its own
-  native task-owned session_meta/task_started/turn_context before actions. Minimal read-only metadata inspection
-  is authorized; retain safe IDs/model/effort/UTC timestamp/outcome only, never
-  raw paths/content, prompts or secrets. Missing/mismatched metadata blocks
-  work; inherited contexts or message text are not proof; no substitution.
+- Dispatch requests sol/high when available, but an unpinned or resumed handle
+  may continue when explicit configuration or persisted metadata is unavailable.
+  Record only safe IDs, observed model/effort, UTC timestamp and status; never
+  raw paths/content, prompts or secrets. Missing/mismatched metadata is
+  diagnostic `unverified`, not a blocker. Never label an unobserved fallback as
+  sol/high.
 - The UAT provider runtime remains pinned to `gpt-5.5` with
   `reasoning_effort=high`.
 - The independent release gate remains three effective read-only Codex/GPT

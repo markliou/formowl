@@ -72,6 +72,210 @@ class _PreparedPackage:
 
 
 class Issue56SealedSourceLoaderE2ETests(unittest.TestCase):
+    def test_source_start_parent_map_has_separate_finite_cap_and_preserves_seals(self) -> None:
+        from test_issue56_uat_handler_composition import _source_start_preparation_fixture
+
+        self.assertEqual(sealed_source._MAX_SAFE_BYTES, 16 * 1024 * 1024)
+        self.assertEqual(sealed_source._MAX_INGESTION_PARENT_BINDING_BYTES, 256 * 1024 * 1024)
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = _source_start_preparation_fixture(Path(directory))
+            parent = next(item for item in fixture.observations
+                          if item.observation_type == "email_message")
+            parent_path = fixture.directory / "sidecar-parent-binding.json"
+            preparation_path = fixture.directory / "preparation.json"
+            # Exercise the sealed JSON byte-intake contract with genuine
+            # completed-job parent records; whitespace scales file size only.
+            parent_json = json.dumps({"parents": [parent.to_dict()]}, sort_keys=True).encode()
+            core = {**fixture.preparation_core, "sidecar_parent_binding_sha256": "sha256:" + "0" * 64}
+            preparation_size = len(json.dumps({
+                **core, "preparation_fingerprint": sha256_json(core),
+            }, sort_keys=True).encode())
+            generic_cap = max(preparation_size, (fixture.directory / "exact-cells" / "manifest.json").stat().st_size) + 128
+            parent_bytes = parent_json + b" " * generic_cap
+            dedicated_cap = len(parent_bytes) + 128
+            self.assertGreater(len(parent_bytes), generic_cap)
+            self.assertLess(len(parent_bytes), dedicated_cap)
+            parent_path.write_bytes(parent_bytes)
+            core["sidecar_parent_binding_sha256"] = "sha256:" + hashlib.sha256(parent_bytes).hexdigest()
+            preparation_bytes = json.dumps({
+                **core, "preparation_fingerprint": sha256_json(core),
+            }, sort_keys=True).encode()
+            preparation_path.write_bytes(preparation_bytes)
+            preparation_hash = "sha256:" + hashlib.sha256(preparation_bytes).hexdigest()
+
+            with (
+                mock.patch.object(sealed_source, "_MAX_SAFE_BYTES", generic_cap),
+                mock.patch.object(sealed_source, "_MAX_INGESTION_PARENT_BINDING_BYTES", dedicated_cap),
+            ):
+                revision = sealed_source.load_issue56_ingestion_revision(
+                    fixture.directory, expected_revision_sha256=preparation_hash,
+                )
+                self.assertTrue(revision.safe_binding["source_start"])
+                self.assertEqual(revision.safe_binding["source_revision_sha256"], preparation_hash)
+                self.assertEqual(tuple(item.job_fingerprint for item in revision.job_authorities),
+                                 tuple(item.job_fingerprint for item in fixture.authorities))
+                self.assertEqual(revision.source_records.observation_references,
+                                 fixture.snapshot["observation_references"])
+
+                with self.subTest(invalid="expected_hash_mismatch"):
+                    parent_path.write_bytes(parent_bytes[:-1] + b"\n")
+                    with self.assertRaisesRegex(sealed_source.Issue56SealedSourceLoadError,
+                                                "^ingestion_parent_binding_byte_seal_mismatch$"):
+                        sealed_source.load_issue56_ingestion_revision(
+                            fixture.directory, expected_revision_sha256=preparation_hash,
+                        )
+                    parent_path.write_bytes(parent_bytes)
+
+                with self.subTest(invalid="symlink"):
+                    target = parent_path.with_name("parent-target.json")
+                    parent_path.rename(target)
+                    parent_path.symlink_to(target)
+                    with self.assertRaisesRegex(sealed_source.Issue56SealedSourceLoadError,
+                                                "^ingestion_parent_binding_unavailable$"):
+                        sealed_source.load_issue56_ingestion_revision(
+                            fixture.directory, expected_revision_sha256=preparation_hash,
+                        )
+                    parent_path.unlink()
+                    target.rename(parent_path)
+
+                with self.subTest(invalid="dedicated_cap_plus_one"):
+                    parent_path.write_bytes(parent_bytes + b" " * (dedicated_cap + 1 - len(parent_bytes)))
+                    self.assertEqual(parent_path.stat().st_size, dedicated_cap + 1)
+                    with self.assertRaisesRegex(sealed_source.Issue56SealedSourceLoadError,
+                                                "^ingestion_parent_binding_unavailable$"):
+                        sealed_source.load_issue56_ingestion_revision(
+                            fixture.directory, expected_revision_sha256=preparation_hash,
+                        )
+                    parent_path.write_bytes(parent_bytes)
+
+                with self.subTest(invalid="generic_metadata_cap_unchanged"):
+                    oversized_preparation = preparation_bytes + b" " * (generic_cap + 1 - len(preparation_bytes))
+                    preparation_path.write_bytes(oversized_preparation)
+                    self.assertLess(len(oversized_preparation), dedicated_cap)
+                    with self.assertRaisesRegex(sealed_source.Issue56SealedSourceLoadError,
+                                                "^ingestion_preparation_unavailable$"):
+                        sealed_source.load_issue56_ingestion_revision(
+                            fixture.directory,
+                            expected_revision_sha256="sha256:" + hashlib.sha256(oversized_preparation).hexdigest(),
+                        )
+
+    def test_source_start_discovery_allows_chat_without_inventing_mail_selectors(self) -> None:
+        from formowl_gateway.issue56_uat_runtime import (
+            _query_agent_runtime_context,
+            create_issue56_temporary_lan_query_service,
+        )
+        from formowl_mail.human_uat_orchestrator import (
+            CodexResponsesConversationModel,
+            _UatTurnRequestContractBinder,
+        )
+        from test_issue56_codex_provider_bridge import _decision
+        import test_issue56_uat_handler_composition as composition_fixture
+
+        register_asset = composition_fixture.register_asset_from_local_file
+        for upload_selector_available, families in (
+            (False, ("mail", "document_text")),
+            (True, ("mail", "document_text")),
+            (False, ("document_text",)),
+        ):
+            with self.subTest(upload_selector_available=upload_selector_available, families=families):
+                with tempfile.TemporaryDirectory() as directory:
+                    def register_source(*args, **kwargs):
+                        if not upload_selector_available:
+                            # Real registration, extraction and job seals; a
+                            # captured source need not be an upload session.
+                            kwargs.pop("source_ref", None)
+                        return register_asset(*args, **kwargs)
+
+                    with mock.patch.object(
+                        composition_fixture,
+                        "register_asset_from_local_file",
+                        side_effect=register_source,
+                    ):
+                        fixture = composition_fixture._source_start_preparation_fixture(
+                            Path(directory), families=families,
+                        )
+                    revision = sealed_source.load_issue56_ingestion_revision(
+                        fixture.directory,
+                        expected_revision_sha256=fixture.preparation_sha256,
+                    )
+                    selectors = revision.source_records.authorized_mail_import_session_ids
+                    self.assertEqual(len(selectors), int(upload_selector_available))
+                    model = CodexResponsesConversationModel(
+                        base_url="https://provider.example.test/v1",
+                        api_key="synthetic-direct-provider-key",
+                    )
+                    with (
+                        mock.patch.object(
+                            model, "_request_response",
+                            return_value={
+                                "status": "completed",
+                                "output_text": _decision(answer_text="Hello"),
+                            },
+                        ) as request_response,
+                        create_issue56_temporary_lan_query_service(
+                            model, ingestion_revision=revision,
+                        ) as service,
+                        mock.patch.object(service, "_call") as mcp_call,
+                    ):
+                        session_id, _ = service.ensure_browser_session(None)
+                        result = service.ask("Hello", session_id=session_id)
+                        self.assertEqual(result["status"], "complete")
+                        self.assertEqual(result["answer"], "Hello")
+                        request_response.assert_called_once()
+                        request = request_response.call_args.args[0]
+                        self.assertEqual(request["tools"], [])
+                        self.assertEqual(request["tool_choice"], "none")
+                        mcp_call.assert_not_called()
+                        self.assertEqual(service.request_count, 0)
+
+                        discoveries = (
+                            (
+                                "Find mail evidence",
+                                "query_mail_evidence" if selectors
+                                else "query_effective_graph_view",
+                            ),
+                            ("Find document evidence", "query_effective_graph_view"),
+                        ) if "mail" in families else (
+                            ("Find document evidence", "query_effective_graph_view"),
+                        )
+                        for prompt, tool_name in discoveries:
+                            descriptor, capabilities = _query_agent_runtime_context(
+                                service._application, user_text=prompt,
+                            )
+                            self.assertEqual(descriptor["name"], tool_name)
+                            self.assertEqual(capabilities["source_families"], list(families))
+                            self.assertEqual(capabilities.get("selector_count", 0), len(selectors))
+                            if selectors:
+                                self.assertEqual(
+                                    capabilities["authorized_mail_import_session_ids"],
+                                    list(selectors),
+                                )
+                                self.assertEqual(
+                                    capabilities["mail_selector_kind"], "mail_import_session_id",
+                                )
+                            else:
+                                self.assertNotIn("authorized_mail_import_session_ids", capabilities)
+                                self.assertNotIn("mail_selector_kind", capabilities)
+                            core = dict(capabilities)
+                            fingerprint = core.pop("capability_fingerprint")
+                            self.assertEqual(fingerprint, sha256_json(core))
+                            binder = _UatTurnRequestContractBinder(
+                                user_text=prompt, authorized_capability_summary=capabilities,
+                            )
+                            if selectors:
+                                self.assertEqual(binder.bind_mail_selector(
+                                    mail_import_session_id=None, mail_evidence_bundle_id=None,
+                                ), (selectors[0], None))
+                            else:
+                                for selector in (None, "unbound-session"):
+                                    with self.assertRaisesRegex(
+                                        ContractValidationError, "selector is unavailable",
+                                    ):
+                                        binder.bind_mail_selector(
+                                            mail_import_session_id=selector,
+                                            mail_evidence_bundle_id=None,
+                                        )
+
     def test_capability_families_use_the_indexed_runtime_authorized_scope(self) -> None:
         class _RuntimeStore:
             def reopen(self, seal):

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 import unittest
+from unittest import mock
+import weakref
 
 import _paths  # noqa: F401
 from formowl_contract import (
@@ -13,7 +15,7 @@ from formowl_contract import (
     stable_observation_id,
 )
 from formowl_ingestion.assets import register_asset_from_local_file
-from formowl_ingestion.extraction import ExtractionInput, ExtractionResult
+from formowl_ingestion.extraction import ExtractionInput, ExtractionResult, run_extractor
 from formowl_ingestion.extractors import PlainTextObservationExtractor
 from formowl_ingestion.jobs import create_ingestion_job, run_ingestion_job
 from formowl_ingestion.storage import (
@@ -27,6 +29,150 @@ from formowl_ingestion.storage import (
 
 
 class IngestionWorkflowTests(unittest.TestCase):
+    def test_run_extractor_releases_original_observations_before_persistence(self) -> None:
+        for retain_result in (False, True):
+            with self.subTest(adapter_retains_result=retain_result):
+                context = _WorkflowContext.create(
+                    f"ingestion-workflow-result-lifetime-{retain_result}",
+                    filename="notes.txt", content="First paragraph.\n\nSecond paragraph.\n",
+                )
+                asset = register_asset_from_local_file(
+                    context.source_path, object_store=context.object_store,
+                    asset_store=context.asset_store, storage_backend_id=context.storage_backend_id,
+                    workspace_id="workspace_formowl", owner_user_id="user_yifan",
+                    permission_scope=context.permission_scope, source_ref=context.source_ref,
+                    mime_type="text/plain",
+                )
+                result_refs: list[weakref.ReferenceType[ExtractionResult]] = []
+                observation_refs: list[weakref.ReferenceType[Observation]] = []
+                retained_results: list[ExtractionResult] = []
+                expected_records: list[dict] = []
+                validated_ids: list[str] = []
+                writes: list[str] = []
+
+                class LifecycleTextExtractor(PlainTextObservationExtractor):
+                    def extract(self, extraction_input: ExtractionInput) -> ExtractionResult:
+                        result = super().extract(extraction_input)
+                        result_refs.append(weakref.ref(result))
+                        observation_refs.extend(weakref.ref(item) for item in result.observations)
+                        expected_records.extend(item.to_dict() for item in result.observations)
+                        if retain_result:
+                            retained_results.append(result)
+                        return result
+
+                validate_id = context.observation_store.validate_observation_id
+                create_run = context.run_store.create
+                create_observation = context.observation_store.create
+
+                def record_validation(observation_id: str) -> None:
+                    validate_id(observation_id)
+                    validated_ids.append(observation_id)
+
+                def check_lifetime() -> None:
+                    self.assertEqual(len(expected_records), 2)
+                    self.assertEqual(
+                        validated_ids, [item["observation_id"] for item in expected_records],
+                    )
+                    if retain_result:
+                        self.assertIs(result_refs[0](), retained_results[0])
+                        self.assertEqual(
+                            [item.to_dict() for item in retained_results[0].observations],
+                            expected_records,
+                        )
+                        for original_ref, original in zip(
+                            observation_refs, retained_results[0].observations, strict=True,
+                        ):
+                            self.assertIs(original_ref(), original)
+                    else:
+                        self.assertIsNone(result_refs[0](), "runner retains original ExtractionResult")
+                        for original_ref in observation_refs:
+                            self.assertIsNone(original_ref(), "runner retains original Observation")
+
+                def checked_create_run(run):
+                    if run.status == "succeeded":
+                        check_lifetime()
+                        writes.append("run")
+                    return create_run(run)
+
+                def checked_create_observation(observation):
+                    check_lifetime()
+                    self.assertEqual(writes[0], "run")
+                    self.assertEqual(observation.to_dict(), expected_records[len(writes) - 1])
+                    writes.append("observation")
+                    return create_observation(observation)
+
+                with (
+                    mock.patch.object(
+                        context.observation_store, "validate_observation_id",
+                        side_effect=record_validation,
+                    ),
+                    mock.patch.object(context.run_store, "create", side_effect=checked_create_run),
+                    mock.patch.object(
+                        context.observation_store, "create", side_effect=checked_create_observation,
+                    ),
+                ):
+                    stored = run_extractor(
+                        asset=asset, object_store=context.object_store,
+                        extractor_run_store=context.run_store,
+                        observation_store=context.observation_store, adapter=LifecycleTextExtractor(),
+                    )
+                self.assertEqual(stored.extractor_run.status, "succeeded")
+                self.assertEqual(writes, ["run", "observation", "observation"])
+                self.assertEqual([item.to_dict() for item in stored.observations], expected_records)
+                self.assertEqual(stored.observation_ids, validated_ids)
+
+    def test_run_extractor_late_permission_mismatch_writes_no_observations(self) -> None:
+        context = _WorkflowContext.create(
+            "ingestion-workflow-late-permission-mismatch",
+            filename="notes.txt", content="Valid first paragraph.\n\nInvalid second paragraph.\n",
+        )
+        asset = register_asset_from_local_file(
+            context.source_path, object_store=context.object_store,
+            asset_store=context.asset_store, storage_backend_id=context.storage_backend_id,
+            workspace_id="workspace_formowl", owner_user_id="user_yifan",
+            permission_scope=context.permission_scope, source_ref=context.source_ref,
+            mime_type="text/plain",
+        )
+
+        class LateInvalidTextExtractor(PlainTextObservationExtractor):
+            def extract(self, extraction_input: ExtractionInput) -> ExtractionResult:
+                result = super().extract(extraction_input)
+                if len(result.observations) != 2:
+                    raise AssertionError("fixture must contain a valid first and invalid last record")
+                result.observations[-1] = replace(
+                    result.observations[-1],
+                    permission_scope=PermissionScope.project("project_other").to_dict(),
+                )
+                return result
+
+        with (
+            mock.patch.object(
+                context.observation_store, "validate_observation_id",
+                wraps=context.observation_store.validate_observation_id,
+            ) as validate_id,
+            mock.patch.object(
+                context.observation_store, "create", wraps=context.observation_store.create,
+            ) as create_observation,
+            self.assertRaisesRegex(
+                ContractValidationError,
+                "Observation.permission_scope must match extraction asset permission_scope",
+            ),
+        ):
+            run_extractor(
+                asset=asset, object_store=context.object_store,
+                extractor_run_store=context.run_store,
+                observation_store=context.observation_store, adapter=LateInvalidTextExtractor(),
+            )
+        self.assertEqual(validate_id.call_count, 2)
+        create_observation.assert_not_called()
+        self.assertEqual(context.observation_store.list(), [])
+        runs = context.run_store.list()
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].status, "failed")
+        self.assertEqual(runs[0].errors, [
+            "Observation.permission_scope must match extraction asset permission_scope",
+        ])
+
     def test_asset_to_job_to_run_to_observation_persists_after_restart(self) -> None:
         context = _WorkflowContext.create(
             "ingestion-workflow",

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import re
-from typing import Any, Mapping, Sequence
+from types import MappingProxyType
+from typing import Any, Iterator, Mapping, Sequence
 
 from formowl_contract import (
     ContractValidationError,
+    Asset,
+    ExtractorRun,
+    IngestionJob,
+    Observation,
     SourceRef,
     UploadSession,
     sha256_json,
@@ -78,6 +83,399 @@ _SAFE_OUTPUT_HASH_KEYS = {
     "mail_import_session_id_hash",
     "mail_evidence_bundle_id_hash",
 }
+
+
+@dataclass(frozen=True)
+class CompletedIngestionJobAuthority:
+    """Compact authority for records derived from one validated completed job."""
+
+    asset: Asset
+    ingestion_job_id: str
+    job_fingerprint: str
+    observation_count: int
+    completed_at: str
+    permission_scope: Mapping[str, Any]
+    runs: tuple[ExtractorRun, ...]
+    observation_store: ObservationRecordStore = field(repr=False, compare=False)
+    _runs_by_id: Mapping[str, ExtractorRun] = field(repr=False, compare=False)
+    observation_ids: tuple[str, ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+    )
+    required_failed_child_bindings: frozenset[tuple[str, str]] = field(
+        default_factory=frozenset,
+        repr=False,
+        compare=False,
+    )
+
+    def open_reader(self) -> "CompletedIngestionJobReader":
+        """Open a fresh validated source-order reader without loading the corpus."""
+
+        if not self.observation_ids:
+            raise ContractValidationError(
+                "completed ingestion source reader is unavailable"
+            )
+        return CompletedIngestionJobReader(
+            authority=self,
+            observation_ids=self.observation_ids,
+            _required_failed_child_bindings=self.required_failed_child_bindings,
+        )
+
+    def load_indexed_observation(
+        self,
+        observation_id: str,
+        *,
+        expected_observation_hash: str,
+        expected_job_fingerprint: str,
+    ) -> Observation:
+        """Resolve one sealed index reference without retaining the job corpus."""
+
+        if expected_job_fingerprint != self.job_fingerprint:
+            raise ContractValidationError(
+                "completed ingestion indexed Observation job binding is invalid"
+            )
+        observation = self.observation_store.get(observation_id)
+        run = (
+            self._runs_by_id.get(observation.extractor_run_id)
+            if observation is not None
+            else None
+        )
+        if (
+            observation is None
+            or run is None
+            or run.status != "succeeded"
+            or observation.asset_id != run.asset_id
+            or to_plain(observation.permission_scope) != dict(self.permission_scope)
+            or sha256_json(observation.to_dict()) != expected_observation_hash
+        ):
+            raise ContractValidationError(
+                "completed ingestion indexed Observation binding is invalid"
+            )
+        return observation
+
+
+@dataclass
+class CompletedIngestionJobReader:
+    """Single-pass reader retaining IDs, but never the loaded Observation corpus."""
+
+    authority: CompletedIngestionJobAuthority
+    observation_ids: tuple[str, ...] = field(repr=False)
+    _required_failed_child_bindings: frozenset[tuple[str, str]] = field(
+        repr=False
+    )
+    _consumed: bool = field(default=False, init=False, repr=False)
+
+    def iter_observations(self) -> Iterator[Observation]:
+        if self._consumed:
+            raise ContractValidationError(
+                "completed ingestion job reader is single-pass"
+            )
+        self._consumed = True
+        found_child_bindings: set[tuple[str, str]] = set()
+        for observation_id in self.observation_ids:
+            observation = self.authority.observation_store.get(observation_id)
+            run = (
+                self.authority._runs_by_id.get(observation.extractor_run_id)
+                if observation is not None
+                else None
+            )
+            if (
+                observation is None
+                or run is None
+                or run.status != "succeeded"
+                or observation.asset_id != run.asset_id
+                or to_plain(observation.permission_scope)
+                != dict(self.authority.permission_scope)
+            ):
+                raise ContractValidationError(
+                    "completed ingestion Observation binding is invalid"
+                )
+            if (
+                observation.asset_id == self.authority.asset.asset_id
+                and observation.observation_type
+                == "email_attachment_occurrence"
+                and isinstance(observation.payload, dict)
+            ):
+                child_asset_id = observation.payload.get("child_asset_id")
+                content_hash = observation.payload.get("content_hash")
+                if isinstance(child_asset_id, str) and isinstance(
+                    content_hash, str
+                ):
+                    found_child_bindings.add((child_asset_id, content_hash))
+            yield observation
+        if not self._required_failed_child_bindings <= found_child_bindings:
+            raise ContractValidationError(
+                "completed ingestion child exclusion is invalid"
+            )
+
+
+def open_completed_ingestion_job_reader(
+    ingestion_job_id: str,
+    *,
+    job_store: JobRecordStore,
+    asset_store: AssetRecordStore,
+    observation_store: ObservationRecordStore,
+    extractor_run_store: ExtractorRunRecordStore,
+    requester_user_id: str,
+    workspace_id: str,
+    bound_child_failure_exclusions: Mapping[str, Any] | None = None,
+) -> CompletedIngestionJobReader:
+    """Open one validated completed job for a source-order, single pass.
+
+    This operator/import boundary deliberately supports owned jobs only. It does
+    not manufacture access from a matching entity, graph edge, or child Asset.
+    """
+    job = job_store.get(ingestion_job_id)
+    if (
+        job is None or job.status != "succeeded"
+        or job.requested_by != requester_user_id or job.workspace_id != workspace_id
+        or not job.observation_ids or not job.extractor_run_ids
+        or len(set(job.observation_ids)) != len(job.observation_ids)
+        or len(set(job.extractor_run_ids)) != len(job.extractor_run_ids)
+    ):
+        raise ContractValidationError("completed ingestion job scope is invalid")
+    asset = asset_store.get(job.asset_id)
+    if (
+        asset is None or asset.owner_user_id != requester_user_id
+        or asset.workspace_id != workspace_id
+        or to_plain(asset.permission_scope) != to_plain(job.permission_scope)
+        or asset.lifecycle_state != "active"
+    ):
+        raise ContractValidationError("completed ingestion asset scope is invalid")
+    runs = []
+    for run_id in job.extractor_run_ids:
+        run = extractor_run_store.get(run_id)
+        if run is None:
+            raise ContractValidationError("completed ingestion run is unavailable")
+        run_asset = asset_store.get(run.asset_id)
+        if (
+            run_asset is None or run_asset.owner_user_id != requester_user_id
+            or run_asset.workspace_id != workspace_id
+            or to_plain(run_asset.permission_scope) != to_plain(job.permission_scope)
+            or run_asset.lifecycle_state != "active"
+            or run.input_hash != run_asset.content_hash
+        ):
+            raise ContractValidationError("completed ingestion run asset binding is invalid")
+        runs.append(run)
+    runs_by_id = {run.extractor_run_id: run for run in runs}
+    parent_runs = [
+        run for run in runs if run.asset_id == asset.asset_id and run.status == "succeeded"
+    ]
+    if not parent_runs:
+        raise ContractValidationError("completed ingestion parent run is unavailable")
+    # A classified child exclusion is coverage metadata, never searchable
+    # evidence. Unknown parse failures remain fail-closed (including I/O errors).
+    partial_codes = {
+        "attachment_document_byte_limit_reached",
+        "attachment_document_table_limit_reached",
+        "attachment_document_cell_limit_reached",
+        "attachment_document_unsupported_content",
+    }
+    parent_warnings = {warning for run in parent_runs for warning in run.warnings}
+    bound_failure_records: dict[str, Mapping[str, Any]] = {}
+    if bound_child_failure_exclusions is not None:
+        records = bound_child_failure_exclusions.get("records")
+        bound_parent_run = next(
+            (
+                run
+                for run in parent_runs
+                if run.extractor_run_id
+                == bound_child_failure_exclusions.get(
+                    "parent_extractor_run_id"
+                )
+            ),
+            None,
+        )
+        if (
+            bound_child_failure_exclusions.get("artifact_id")
+            != "formowl_bound_child_content_failure_exclusions_v1"
+            or bound_child_failure_exclusions.get("schema_version") != 1
+            or bound_child_failure_exclusions.get("ingestion_job_id")
+            != job.ingestion_job_id
+            or bound_child_failure_exclusions.get("source_asset_id")
+            != asset.asset_id
+            or bound_child_failure_exclusions.get("source_content_hash")
+            != asset.content_hash
+            or bound_child_failure_exclusions.get("workspace_id")
+            != workspace_id
+            or bound_child_failure_exclusions.get(
+                "permission_scope_fingerprint"
+            )
+            != sha256_json(to_plain(job.permission_scope))
+            or bound_parent_run is None
+            or bound_child_failure_exclusions.get(
+                "parent_config_fingerprint"
+            )
+            != bound_parent_run.config_hash
+            or not isinstance(
+                bound_child_failure_exclusions.get(
+                    "parser_code_byte_sha256"
+                ),
+                str,
+            )
+            or not _SHA256_RE.fullmatch(
+                bound_child_failure_exclusions[
+                    "parser_code_byte_sha256"
+                ]
+            )
+            or bound_child_failure_exclusions.get(
+                "formal_job_completion_required_before_consumption"
+            )
+            is not True
+            or bound_child_failure_exclusions.get(
+                "unknown_parse_failures_must_reject"
+            )
+            is not True
+            or bound_child_failure_exclusions.get(
+                "changes_run_status"
+            )
+            is not False
+            or bound_child_failure_exclusions.get(
+                "full_source_coverage_claim"
+            )
+            is not False
+            or not isinstance(records, list)
+            or not records
+        ):
+            raise ContractValidationError(
+                "completed ingestion child failure exclusions are invalid"
+            )
+        bound_failure_records = {
+            str(record.get("child_extractor_run_id")): record
+            for record in records
+            if isinstance(record, Mapping)
+        }
+        if len(bound_failure_records) != len(records):
+            raise ContractValidationError(
+                "completed ingestion child failure exclusions are ambiguous"
+            )
+    required_failed_child_bindings: set[tuple[str, str]] = set()
+    for run in runs:
+        if run.status == "succeeded":
+            continue
+        child_asset = asset_store.get(run.asset_id)
+        source_ref = to_plain(child_asset.source_ref)
+        bound_failure = bound_failure_records.pop(
+            run.extractor_run_id,
+            None,
+        )
+        bound_failure_valid = (
+            bound_failure is not None
+            and bound_failure.get("child_asset_id") == run.asset_id
+            and bound_failure.get("child_content_hash") == run.input_hash
+            and bound_failure.get("child_file_size") == child_asset.file_size
+            and bound_failure.get("child_source_ref") == source_ref
+            and isinstance(
+                bound_failure.get("child_asset_record_byte_sha256"),
+                str,
+            )
+            and _SHA256_RE.fullmatch(
+                bound_failure["child_asset_record_byte_sha256"]
+            )
+            and isinstance(
+                bound_failure.get("child_run_record_byte_sha256"),
+                str,
+            )
+            and _SHA256_RE.fullmatch(
+                bound_failure["child_run_record_byte_sha256"]
+            )
+            and bound_failure.get("extractor_name") == run.extractor_name
+            and bound_failure.get("extractor_version") == run.extractor_version
+            and bound_failure.get("extractor_config_hash")
+            == run.config_hash
+            and bound_failure.get("run_error_codes") == list(run.errors)
+            and bound_failure.get("run_status_must_remain") == "failed"
+            and bound_failure.get(
+                "excluded_from_successful_document_evidence"
+            )
+            is True
+            and bound_failure.get("input_bytes_hash_and_size_verified")
+            is True
+            and bound_failure.get("filesystem_IO_failure") is False
+            and bound_failure.get("source_completeness_claim") is False
+            and isinstance(bound_failure.get("classification"), str)
+            and bool(bound_failure["classification"])
+            and isinstance(bound_failure.get("reason_code"), str)
+            and bool(bound_failure["reason_code"])
+        )
+        if (
+            run.status != "failed" or run.asset_id == asset.asset_id
+            or run.extractor_name != "attachment_document_parser"
+            or not run.errors
+            or not (
+                (
+                    set(run.errors).issubset(partial_codes)
+                    and set(run.errors).issubset(parent_warnings)
+                )
+                or bound_failure_valid
+            )
+            or "partial_extraction" not in parent_warnings
+            or "attachment_child_extraction_incomplete" not in parent_warnings
+            or source_ref.get("source_system") != "formowl_mail_attachment"
+            or source_ref.get("source_type") != "email_attachment_occurrence"
+        ):
+            raise ContractValidationError("completed ingestion child exclusion is invalid")
+        required_failed_child_bindings.add((run.asset_id, run.input_hash))
+    if bound_failure_records:
+        raise ContractValidationError(
+            "completed ingestion child failure exclusion is unused"
+        )
+    authority = CompletedIngestionJobAuthority(
+        asset=asset,
+        ingestion_job_id=job.ingestion_job_id,
+        job_fingerprint=sha256_json(job.to_dict()),
+        observation_count=len(job.observation_ids),
+        completed_at=job.completed_at,
+        permission_scope=MappingProxyType(dict(to_plain(job.permission_scope))),
+        runs=tuple(runs),
+        observation_store=observation_store,
+        _runs_by_id=MappingProxyType(runs_by_id),
+        observation_ids=tuple(job.observation_ids),
+        required_failed_child_bindings=frozenset(
+            required_failed_child_bindings
+        ),
+    )
+    return CompletedIngestionJobReader(
+        authority=authority,
+        observation_ids=tuple(job.observation_ids),
+        _required_failed_child_bindings=frozenset(
+            required_failed_child_bindings
+        ),
+    )
+
+
+def load_completed_ingestion_job_inputs(
+    ingestion_job_id: str,
+    *,
+    job_store: JobRecordStore,
+    asset_store: AssetRecordStore,
+    observation_store: ObservationRecordStore,
+    extractor_run_store: ExtractorRunRecordStore,
+    requester_user_id: str,
+    workspace_id: str,
+) -> tuple[Asset, IngestionJob, tuple[Observation, ...], tuple[ExtractorRun, ...]]:
+    """Read the whole completed job, including children, without a content filter."""
+
+    reader = open_completed_ingestion_job_reader(
+        ingestion_job_id,
+        job_store=job_store,
+        asset_store=asset_store,
+        observation_store=observation_store,
+        extractor_run_store=extractor_run_store,
+        requester_user_id=requester_user_id,
+        workspace_id=workspace_id,
+    )
+    observations = tuple(reader.iter_observations())
+    job = job_store.get(ingestion_job_id)
+    if job is None or sha256_json(job.to_dict()) != reader.authority.job_fingerprint:
+        raise ContractValidationError("completed ingestion job changed during read")
+    return (
+        reader.authority.asset,
+        job,
+        observations,
+        reader.authority.runs,
+    )
 
 
 @dataclass(frozen=True)
@@ -242,17 +640,15 @@ def run_upload_session_mail_import(
         )
         raise RuntimeError("mail upload import parser failed")
 
-    observation_ids = set(finished_job.observation_ids)
-    observations = [
-        observation
-        for observation in observation_store.list()
-        if observation.observation_id in observation_ids
-    ]
-    extractor_runs = [
-        extractor_run
-        for extractor_run in extractor_run_store.list()
-        if extractor_run.extractor_run_id in set(finished_job.extractor_run_ids)
-    ]
+    _, _, observations, extractor_runs = load_completed_ingestion_job_inputs(
+        finished_job.ingestion_job_id,
+        job_store=job_store,
+        asset_store=asset_store,
+        observation_store=observation_store,
+        extractor_run_store=extractor_run_store,
+        requester_user_id=upload_session.actor_user_id,
+        workspace_id=upload_session.workspace_id,
+    )
     resolved_query_text = query_text or _verification_query_from_observations(observations)
     bundle = build_mail_evidence_bundle(
         observations,

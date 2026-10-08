@@ -8,13 +8,19 @@ English-only model when dependencies or model artifacts are unavailable.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from array import array
+from collections.abc import Callable, Iterable, Iterator, Sequence as SequenceABC
+import fcntl
 import hashlib
 import importlib
 import importlib.metadata
 import json
 import math
+import mmap
+import os
 from pathlib import Path
 import platform
+import struct
 from typing import Any, Protocol, Sequence
 import unicodedata
 
@@ -52,7 +58,10 @@ ISSUE56_TARGET_DENSE_PROFILE_FINGERPRINT = (
 _PROFILE_CONTRACT_ID = "formowl_issue56_dense_embedding_profile_v1"
 _EXECUTION_COMPONENT_CONTRACT_ID = "formowl_issue56_execution_component_binding_v1"
 _UNAVAILABLE_MESSAGE = "issue56 target dense embedding model is unavailable"
-_DENSE_EVIDENCE_BATCH_CHUNK_SIZE = 32
+_DEFAULT_DENSE_EVIDENCE_BATCH_CHUNK_SIZE = 32
+_DENSE_DURABLE_BATCH_CHUNK_SIZE = 32
+_DENSE_EVIDENCE_BATCH_SIZE_ENV = "FORMOWL_DENSE_EVIDENCE_BATCH_SIZE"
+_MAX_DENSE_EVIDENCE_BATCH_CHUNK_SIZE = 256
 _MODEL_FILE_NAME = "model.safetensors"
 _MODEL_CONFIG_FILE_NAME = "config.json"
 _MAX_MODEL_BYTES = 1024 * 1024 * 1024
@@ -67,6 +76,21 @@ _RUNTIME_DEPENDENCIES = (
     ("torch", "2.5.1+cpu"),
     ("transformers", "4.46.3"),
 )
+
+
+def configured_dense_evidence_batch_size() -> int:
+    """Return the process-stable dense batch size without changing the profile."""
+
+    raw_value = os.environ.get(_DENSE_EVIDENCE_BATCH_SIZE_ENV)
+    if raw_value is None:
+        return _DEFAULT_DENSE_EVIDENCE_BATCH_CHUNK_SIZE
+    try:
+        batch_size = int(raw_value)
+    except ValueError as exc:
+        raise DenseEmbeddingUnavailableError("dense_batch_size_invalid") from exc
+    if not 0 < batch_size <= _MAX_DENSE_EVIDENCE_BATCH_CHUNK_SIZE:
+        raise DenseEmbeddingUnavailableError("dense_batch_size_invalid")
+    return batch_size
 _MODEL_CONFIGURATION_CONTRACT = {
     "architectures": ["BertModel"],
     "hidden_size": ISSUE56_TARGET_DENSE_DIMENSION,
@@ -150,6 +174,280 @@ class DenseEncoder(Protocol):
 
     def encode_tokens(self, tokens: Sequence[str]) -> tuple[float, ...]:
         """Compatibility boundary for token-set consumers."""
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class PackedDenseVector(SequenceABC[float]):
+    """Read-only float32 row; Python floats exist only while consuming a row."""
+
+    _payload: bytes | mmap.mmap = field(repr=False)
+    _offset: int
+    _dimension: int
+
+    def __post_init__(self) -> None:
+        if (
+            self._offset < 0 or self._dimension <= 0
+            or self._offset + self._dimension * 4 > len(self._payload)
+        ):
+            raise ValueError("packed dense vector bounds are invalid")
+
+    def __len__(self) -> int:
+        return self._dimension
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return tuple(self)[index]
+        if index < 0:
+            index += self._dimension
+        if not 0 <= index < self._dimension:
+            raise IndexError(index)
+        return struct.unpack_from("<f", self._payload, self._offset + index * 4)[0]
+
+    def __iter__(self) -> Iterator[float]:
+        return iter(struct.unpack_from(f"<{self._dimension}f", self._payload, self._offset))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SequenceABC):
+            return NotImplemented
+        return tuple(self) == tuple(other)
+
+    def packed_bytes(self) -> bytes:
+        return self._payload[self._offset : self._offset + self._dimension * 4]
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class PackedEvidenceVectors(SequenceABC[PackedDenseVector]):
+    """Occurrence-to-row indirection over one immutable, private vector payload."""
+
+    _payload: bytes | mmap.mmap = field(repr=False)
+    _offsets: memoryview = field(repr=False)
+    _dimension: int
+
+    def __init__(
+        self, payload: bytes | mmap.mmap, row_offsets: Iterable[int], dimension: int,
+    ) -> None:
+        object.__setattr__(self, "_payload", payload)
+        object.__setattr__(
+            self, "_offsets", memoryview(array("Q", row_offsets).tobytes()).cast("Q"),
+        )
+        object.__setattr__(self, "_dimension", dimension)
+
+    def __len__(self) -> int:
+        return len(self._offsets)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return tuple(self[position] for position in range(*index.indices(len(self))))
+        return PackedDenseVector(self._payload, self._offsets[index], self._dimension)
+
+
+class DenseEvidenceVectorCache:
+    """Resumable numerical cache, not an evidence or authorization store.
+
+    The existing pinned encoder remains authoritative. Only committed batches
+    are reusable; a complete journal entry binds exact text hashes to float32
+    bytes and the frozen encoder profile. No source text is stored here.
+    Callers still validate source, occurrence, permission and index bindings.
+    """
+
+    def __init__(self, directory: str | Path) -> None:
+        self.directory = Path(directory)
+
+    def encode(
+        self,
+        encoder: DenseEncoder,
+        texts: Iterable[str],
+        *,
+        progress: Callable[[dict[str, Any]], None] | None = None,
+        consume_batch: Callable[[Sequence[PackedDenseVector]], None] | None = None,
+    ) -> PackedEvidenceVectors:
+        if (
+            encoder.encoder_id != ISSUE56_TARGET_DENSE_ENCODER_ID
+            or encoder.profile_fingerprint != ISSUE56_TARGET_DENSE_PROFILE_FINGERPRINT
+            or encoder.dimension != ISSUE56_TARGET_DENSE_DIMENSION
+        ):
+            raise DenseEmbeddingUnavailableError("dense_cache_profile_mismatch")
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock_path = self.directory / "writer.lock"
+        with lock_path.open("a+b") as lock:
+            os.chmod(lock_path, 0o600)
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return self._encode_locked(
+                encoder, texts, progress=progress, consume_batch=consume_batch,
+            )
+
+    def _encode_locked(
+        self, encoder, texts, *, progress, consume_batch=None,
+    ) -> PackedEvidenceVectors:
+        batch_size = configured_dense_evidence_batch_size()
+        declaration = {
+            "artifact_id": "formowl_pinned_dense_batch_cache_v1",
+            "encoder_id": encoder.encoder_id,
+            "profile_fingerprint": encoder.profile_fingerprint,
+            "dimension": encoder.dimension,
+            "format": "little_endian_float32_v1",
+            "text_key": "sha256_exact_utf8_v1",
+        }
+        declaration_path = self.directory / "profile.json"
+        if declaration_path.exists():
+            if json.loads(declaration_path.read_bytes()) != declaration:
+                raise DenseEmbeddingUnavailableError("dense_cache_profile_mismatch")
+        else:
+            # Refuse an unexplained pre-existing payload without its profile.
+            if any((self.directory / name).exists() for name in ("vectors.f32", "batches.jsonl")):
+                raise DenseEmbeddingUnavailableError("dense_cache_profile_unavailable")
+            temporary = self.directory / "profile.pending"
+            with temporary.open("w", encoding="utf-8") as stream:
+                os.chmod(temporary, 0o600)
+                json.dump(declaration, stream, sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, declaration_path)
+        payload_path = self.directory / "vectors.f32"
+        journal_path = self.directory / "batches.jsonl"
+        row_size = encoder.dimension * 4
+        offsets_by_hash: dict[str, int] = {}
+        occurrence_offsets = array("Q")
+        with payload_path.open("a+b") as payload, journal_path.open("a+b") as journal:
+            os.chmod(payload_path, 0o600)
+            os.chmod(journal_path, 0o600)
+            committed_bytes = 0
+            committed_journal_bytes = 0
+            journal.seek(0)
+            for line in journal:
+                if not line.endswith(b"\n"):
+                    break  # An interrupted final journal write was not committed.
+                entry = json.loads(line)
+                hashes = entry.get("text_hashes")
+                if (
+                    not isinstance(hashes, list)
+                    or not 0 < len(hashes) <= _DENSE_DURABLE_BATCH_CHUNK_SIZE
+                    or entry.get("offset") != committed_bytes
+                    or any(
+                        not isinstance(key, str) or len(key) != 64
+                        or any(char not in "0123456789abcdef" for char in key)
+                        or key in offsets_by_hash for key in hashes
+                    )
+                    or len(set(hashes)) != len(hashes)
+                ):
+                    raise DenseEmbeddingUnavailableError("dense_cache_journal_invalid")
+                payload.seek(committed_bytes)
+                block = payload.read(len(hashes) * row_size)
+                if (
+                    len(block) != len(hashes) * row_size
+                    or hashlib.sha256(block).hexdigest() != entry.get("payload_sha256")
+                ):
+                    raise DenseEmbeddingUnavailableError("dense_cache_payload_mismatch")
+                for index, key in enumerate(hashes):
+                    offsets_by_hash[key] = committed_bytes + index * row_size
+                committed_bytes += len(block)
+                committed_journal_bytes += len(line)
+            # Recover only uncommitted tails, never a corrupt committed record.
+            payload.truncate(committed_bytes)
+            journal.truncate(committed_journal_bytes)
+            payload.seek(0, os.SEEK_END)
+            journal.seek(0, os.SEEK_END)
+            pending: dict[str, str] = {}
+            reused = 0
+            encoded = 0
+            consumer_offsets = []
+
+            def commit() -> None:
+                nonlocal committed_bytes, encoded
+                if not pending:
+                    return
+                keys = tuple(pending)
+                vectors = encoder.encode_evidence_batch(tuple(pending.values()))
+                if len(vectors) != len(keys):
+                    raise DenseEmbeddingUnavailableError("dense_batch_output_count_mismatch")
+                for start in range(
+                    0, len(keys), _DENSE_DURABLE_BATCH_CHUNK_SIZE,
+                ):
+                    chunk_keys = keys[
+                        start : start + _DENSE_DURABLE_BATCH_CHUNK_SIZE
+                    ]
+                    block = bytearray()
+                    for vector in vectors[
+                        start : start + _DENSE_DURABLE_BATCH_CHUNK_SIZE
+                    ]:
+                        _validate_normalized_vector(
+                            vector, expected_dimension=encoder.dimension,
+                        )
+                        block.extend(
+                            struct.pack(f"<{encoder.dimension}f", *vector),
+                        )
+                    payload.write(block)
+                    payload.flush()
+                    os.fsync(payload.fileno())
+                    record = {
+                        "offset": committed_bytes,
+                        "text_hashes": chunk_keys,
+                        "payload_sha256": hashlib.sha256(block).hexdigest(),
+                    }
+                    journal.write(
+                        (json.dumps(record, separators=(",", ":")) + "\n").encode(),
+                    )
+                    journal.flush()
+                    os.fsync(journal.fileno())
+                    committed_bytes += len(block)
+                    encoded += len(chunk_keys)
+                    if progress is not None:
+                        progress({
+                            "phase": "dense_batch_committed",
+                            "newly_encoded_unique_text_count": encoded,
+                            "cached_unique_text_count": len(offsets_by_hash),
+                            "reused_occurrence_count": reused,
+                            "committed_vector_bytes": committed_bytes,
+                        })
+                pending.clear()
+
+            def consume() -> None:
+                if consume_batch is None or not consumer_offsets:
+                    return
+                # Only durable vectors reach the projection writer. A callback
+                # failure leaves the numerical cache reusable on restart.
+                while consumer_offsets:
+                    offsets = consumer_offsets[:_DENSE_DURABLE_BATCH_CHUNK_SIZE]
+                    rows = []
+                    for offset in offsets:
+                        payload.seek(offset)
+                        block = payload.read(row_size)
+                        if len(block) != row_size:
+                            raise DenseEmbeddingUnavailableError(
+                                "dense_cache_payload_mismatch",
+                            )
+                        rows.append(PackedDenseVector(block, 0, encoder.dimension))
+                    payload.seek(0, os.SEEK_END)
+                    consume_batch(tuple(rows))
+                    del consumer_offsets[:len(offsets)]
+
+            for text in texts:
+                if not isinstance(text, str) or not _normalize_embedding_text(text):
+                    raise ValueError("dense encoder text is required")
+                key = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                if key not in offsets_by_hash:
+                    offsets_by_hash[key] = committed_bytes + len(pending) * row_size
+                    pending[key] = text
+                else:
+                    reused += 1
+                occurrence_offsets.append(offsets_by_hash[key])
+                if consume_batch is not None:
+                    consumer_offsets.append(offsets_by_hash[key])
+                if (
+                    len(pending) == batch_size
+                    or (
+                        consume_batch is not None
+                        and len(consumer_offsets) >= batch_size
+                    )
+                ):
+                    commit()
+                    consume()
+            commit()
+            consume()
+            if not occurrence_offsets:
+                return PackedEvidenceVectors(b"", (), encoder.dimension)
+            readonly = mmap.mmap(payload.fileno(), committed_bytes, access=mmap.ACCESS_READ)
+        return PackedEvidenceVectors(readonly, occurrence_offsets, encoder.dimension)
 
 
 @dataclass(frozen=True)
@@ -253,18 +551,19 @@ class SentenceTransformerDenseEncoder:
         prefix: str,
         texts: Sequence[str],
     ) -> tuple[tuple[float, ...], ...]:
+        batch_size = configured_dense_evidence_batch_size()
         normalized_texts = tuple(_normalize_embedding_text(text) for text in texts)
         if any(not text for text in normalized_texts):
             raise ValueError("dense encoder text is required")
         if not normalized_texts:
             return ()
         vectors: list[tuple[float, ...]] = []
-        for start in range(0, len(normalized_texts), _DENSE_EVIDENCE_BATCH_CHUNK_SIZE):
-            chunk = normalized_texts[start : start + _DENSE_EVIDENCE_BATCH_CHUNK_SIZE]
+        for start in range(0, len(normalized_texts), batch_size):
+            chunk = normalized_texts[start : start + batch_size]
             try:
                 encoded = self._model.encode(
                     [prefix + text for text in chunk],
-                    batch_size=min(_DENSE_EVIDENCE_BATCH_CHUNK_SIZE, len(chunk)),
+                    batch_size=min(batch_size, len(chunk)),
                     show_progress_bar=False,
                     precision="float32",
                     convert_to_numpy=True,

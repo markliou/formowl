@@ -17,7 +17,11 @@ from formowl_ingestion.storage import (
     ObservationStore,
     StorageBackendRegistry,
 )
-from formowl_mail import MailEvidenceBundle, build_mail_evidence_bundle
+from formowl_mail import (
+    MailEvidenceBundle,
+    build_mail_evidence_bundle,
+    build_mail_evidence_pack,
+)
 
 
 class MailEvidenceBundleTests(unittest.TestCase):
@@ -27,6 +31,14 @@ class MailEvidenceBundleTests(unittest.TestCase):
         temp_dir = _paths.fresh_test_dir("mail-evidence-bundle")
         stored = _run_mail_fixture(temp_dir, _duplicate_mail_archive())
         before_bundle_snapshot = _tree_snapshot(temp_dir)
+
+        evidence_pack = build_mail_evidence_pack(
+            stored.observations,
+            created_at="2026-07-05T10:00:00+00:00",
+        )
+        self.assertTrue(
+            any("launch" in indexed_terms for indexed_terms in evidence_pack.query_index.values())
+        )
 
         bundle = build_mail_evidence_bundle(
             stored.observations,
@@ -436,7 +448,7 @@ class MailEvidenceBundleTests(unittest.TestCase):
         with self.assertRaises(ContractValidationError):
             build_mail_evidence_bundle(orphan_attachment, **base_kwargs)
 
-    def test_raw_backend_values_are_rejected_without_graph_or_wiki_side_effects(self) -> None:
+    def test_private_input_is_preserved_and_public_bundle_redacted_without_side_effects(self) -> None:
         temp_dir = _paths.fresh_test_dir("mail-evidence-bundle-raw-reject")
         stored = _run_mail_fixture(temp_dir, _duplicate_mail_archive())
         before_failure_snapshot = _tree_snapshot(temp_dir)
@@ -454,16 +466,18 @@ class MailEvidenceBundleTests(unittest.TestCase):
         )
         observations[body_index] = unsafe
 
-        with self.assertRaises(ContractValidationError):
-            build_mail_evidence_bundle(
-                observations,
-                workspace_id="workspace_formowl",
-                owner_user_id="user_yifan",
-                source_asset_id=stored.extractor_run.asset_id,
-                archive_sha256="sha256:archive-launch",
-                upload_session_id="upload_session_mail_001",
-                created_at="2026-07-05T10:00:00+00:00",
-            )
+        projected = build_mail_evidence_bundle(
+            observations,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            source_asset_id=stored.extractor_run.asset_id,
+            archive_sha256="sha256:archive-launch",
+            upload_session_id="upload_session_mail_001",
+            created_at="2026-07-05T10:00:00+00:00",
+        )
+        self.assertNotIn("object://", json.dumps(projected.to_dict()))
+        self.assertEqual(observations[body_index].text, unsafe.text)
+        self.assertIn("Investigate", " ".join(row.text for row in projected.body_segments))
         self.assertEqual(_tree_snapshot(temp_dir), before_failure_snapshot)
         with self.assertRaises(ContractValidationError):
             build_mail_evidence_bundle(
@@ -485,16 +499,17 @@ class MailEvidenceBundleTests(unittest.TestCase):
                 "text": "SELECT * FROM mailbox_messages",
             }
         )
-        with self.assertRaises(ContractValidationError):
-            build_mail_evidence_bundle(
-                sql_observations,
-                workspace_id="workspace_formowl",
-                owner_user_id="user_yifan",
-                source_asset_id=stored.extractor_run.asset_id,
-                archive_sha256="sha256:archive-launch",
-                upload_session_id="upload_session_mail_001",
-                created_at="2026-07-05T10:00:00+00:00",
-            )
+        sql_projected = build_mail_evidence_bundle(
+            sql_observations,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_yifan",
+            source_asset_id=stored.extractor_run.asset_id,
+            archive_sha256="sha256:archive-launch",
+            upload_session_id="upload_session_mail_001",
+            created_at="2026-07-05T10:00:00+00:00",
+        )
+        self.assertNotIn("SELECT * FROM", json.dumps(sql_projected.to_dict()))
+        self.assertEqual(sql_observations[body_index].text, "SELECT * FROM mailbox_messages")
         self.assertEqual(_tree_snapshot(temp_dir), before_failure_snapshot)
 
         with self.assertRaises(ContractValidationError):

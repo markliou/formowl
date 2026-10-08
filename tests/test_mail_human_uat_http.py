@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import _paths  # noqa: F401
-from formowl_contract import ContractValidationError, sha256_json
+from formowl_contract import ContractValidationError
 from formowl_gateway.issue56_uat_runtime import Issue56TemporaryLanQueryService, _browser_projection
 from formowl_mail.human_uat_orchestrator import (
     CodexResponsesConversationModel,
@@ -142,6 +142,28 @@ class MailHumanUatHttpTests(unittest.TestCase):
                 tool_descriptor=descriptor,
                 request_contract_binder=raw_contract_binder,
             )
+
+        typed_table_binder = _UatTurnRequestContractBinder(
+            user_text="麻煩幫我確認一下 SYN-PART-314 這筆的 玄地，謝謝。",
+            authorized_capability_summary={"source_families": ["attachment_table", "mail"]},
+        )
+        typed_table_request = _parse_tool_request(
+            {
+                "query_text": "有SYN-PART-314的玄地呢？",
+                "required_terms": ["SYN-PART-314", "玄地"],
+                "table_query": {
+                    "filters": [{"field": "PartNumber", "value": "SYN-PART-314"}],
+                    "projection_fields": ["玄地"],
+                },
+            },
+            tool_descriptor=_actual_query_tool_descriptor(),
+            request_contract_binder=typed_table_binder,
+        )
+        self.assertEqual(typed_table_request.table_query["projection_fields"], ["玄地"])
+        self.assertEqual(
+            typed_table_request.request_contract["requested_fields"],
+            ["玄地"],
+        )
 
         expanded = _parse_tool_request(
             {

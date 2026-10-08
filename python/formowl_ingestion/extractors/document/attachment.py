@@ -7,7 +7,9 @@ from typing import Any
 from xml.etree import ElementTree as ET
 from zipfile import BadZipFile, ZipFile, is_zipfile
 
-from formowl_contract import Observation, now_iso, stable_observation_id
+from formowl_contract import (
+    Observation, now_iso, stable_observation_id, redact_public_raw_references,
+)
 
 from ...extraction import ExtractionInput, ExtractionResult
 
@@ -30,7 +32,7 @@ class AttachmentDocumentExtractor:
         return "attachment_document_parser"
 
     def version(self) -> str:
-        return "0.3.0"
+        return "0.4.2"
 
     def supported_mime_types(self) -> list[str]:
         return ["*/*"]
@@ -69,7 +71,12 @@ class AttachmentDocumentExtractor:
             return ExtractionResult(errors=["attachment_document_parse_failed"])
 
 def _delimited_table(data: bytes) -> _Tables | None:
-    text = data.decode("utf-8-sig")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        # A binary attachment is not a malformed supported text table. Preserve
+        # its governed child Asset and report unsupported content to the parent.
+        return None
     lines = [line for line in text.splitlines() if line.strip()]
     for delimiter in ("\t", ","):
         if not lines or not all(delimiter in line for line in lines):
@@ -161,7 +168,7 @@ def _observations(source: ExtractionInput, tables: _Tables) -> list[Observation]
         for row_index, cells in rows:
             location = {"table_index": table_index, "row_index": row_index}
             if sheet_name is not None:
-                location["sheet_name"] = sheet_name
+                location["sheet_name"] = redact_public_raw_references(sheet_name)[0]
             row_structure = _row_structure(
                 row_index=row_index,
                 cells=cells,
@@ -206,10 +213,12 @@ def _observation(
     *,
     table_structure: dict[str, Any],
 ) -> Observation:
+    extracted_value = text
+    text = redact_public_raw_references(text)[0]
     payload = {
         "value": text,
         "lineage": lineage,
-        "table_structure": table_structure,
+        "table_structure": _public_table_structure(table_structure),
     }
     observation_id = stable_observation_id(
         asset_id=source.asset.asset_id,
@@ -219,6 +228,7 @@ def _observation(
         location=location,
         text=text,
         payload=payload,
+        extracted_value=extracted_value,
     )
     return Observation(
         observation_id=observation_id,
@@ -232,7 +242,18 @@ def _observation(
         permission_scope=source.asset.permission_scope,
         created_at=source.created_at or now_iso(),
         payload=payload,
+        extracted_value=extracted_value,
     )
+
+
+def _public_table_structure(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_public_raw_references(value)[0]
+    if isinstance(value, list):
+        return [_public_table_structure(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _public_table_structure(item) for key, item in value.items()}
+    return value
 
 
 def _formal_tables(
@@ -545,11 +566,15 @@ def _bounded_header_paths(
 
 
 def _merged_ranges(sheet_xml: ET.Element) -> tuple[_MergeRange, ...]:
+    # Repeated declarations describe the same source rectangle. Collapse only
+    # identical bounds; distinct overlapping rectangles remain a real failure.
     ranges = tuple(
         sorted(
-            _range_bounds(item.attrib.get("ref", ""))
-            for item in sheet_xml.iter()
-            if _local(item.tag) == "mergeCell"
+            {
+                _range_bounds(item.attrib.get("ref", ""))
+                for item in sheet_xml.iter()
+                if _local(item.tag) == "mergeCell"
+            }
         )
     )
     for index, left in enumerate(ranges):

@@ -15,6 +15,7 @@ from contextlib import AbstractAsyncContextManager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import inspect
 import json
 import logging
@@ -26,6 +27,11 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from formowl_contract import ContractValidationError
+from formowl_mail.semantic_plan import (
+    SEMANTIC_CLAIM_STRENGTH_BY_CLASS,
+    SEMANTIC_QUERY_CLASSES,
+    validate_semantic_request_contract,
+)
 from mcp import types as mcp_types
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -65,6 +71,17 @@ _AUTH_MODE_ENV = "FORMOWL_AUTH_MODE"
 _DEFAULT_REQUIRED_SCOPE = "formowl.use"
 _MCP_PATH = "/mcp"
 _STRICT_TOOL_RESULT_ERROR = "connected MCP tool result must contain strict JSON values"
+_SAFE_DIAGNOSTIC_EXCEPTION_CLASSES = frozenset(
+    {
+        "ContractValidationError",
+        "KeyError",
+        "LookupError",
+        "OSError",
+        "RuntimeError",
+        "TypeError",
+        "ValueError",
+    }
+)
 _LOGGER = logging.getLogger(__name__)
 
 _current_principal: ContextVar[Any | None] = ContextVar(
@@ -138,6 +155,10 @@ _CONNECTED_TOOL_POLICIES: Mapping[str, _ConnectedToolPolicy] = MappingProxyType(
             allowed_roles=frozenset({"owner"}),
             requires_grant=False,
         ),
+        "query_mail_evidence": _ConnectedToolPolicy(
+            allowed_roles=frozenset({"owner"}),
+            requires_grant=False,
+        ),
     }
 )
 _DEFAULT_CONNECTED_TOOL_NAMES = frozenset({"whoami", "open_upload_session"})
@@ -146,6 +167,75 @@ _WHOAMI_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {},
     "required": [],
+    "additionalProperties": False,
+}
+_STRUCTURED_TABLE_QUERY_INPUT_SCHEMA: dict[str, Any] = {
+    "type": ["object", "null"],
+    "properties": {
+        "filters": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "field": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "value": {"type": "string", "minLength": 1, "maxLength": 400},
+                },
+                "required": ["field", "value"],
+                "additionalProperties": False,
+            },
+        },
+        "projection_fields": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {"type": "string", "minLength": 1, "maxLength": 120},
+        },
+    },
+    "required": ["filters", "projection_fields"],
+    "additionalProperties": False,
+}
+_SEMANTIC_REQUEST_CONTRACT_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "original_query_hash": {
+            "type": "string",
+            "pattern": r"^sha256:[0-9a-f]{64}$",
+        },
+        "query_class": {
+            "type": "string",
+            "enum": list(SEMANTIC_QUERY_CLASSES),
+        },
+        "source_family_scope": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": True,
+            "items": {
+                "type": "string",
+                "pattern": r"^[a-z][a-z0-9_]{0,63}$",
+            },
+        },
+        "requested_fields": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 8,
+            "uniqueItems": True,
+            "items": {"type": "string", "minLength": 1, "maxLength": 120},
+        },
+        "maximum_claim_strength": {
+            "type": "string",
+            "enum": list(SEMANTIC_CLAIM_STRENGTH_BY_CLASS.values()),
+        },
+    },
+    "required": [
+        "original_query_hash",
+        "query_class",
+        "source_family_scope",
+        "requested_fields",
+        "maximum_claim_strength",
+    ],
     "additionalProperties": False,
 }
 _WHOAMI_OUTPUT_SCHEMA: dict[str, Any] = {
@@ -212,7 +302,12 @@ _EXACT_INVENTORY_OUTPUT_SCHEMA: dict[str, Any] = {
                         "next_cursor",
                         "redacted_count",
                         "unsupported_count",
+                        "encrypted_count",
                         "unresolved_count",
+                        "authorized_occurrence_scope_count",
+                        "extractable_occurrence_scope_count",
+                        "candidate_only_occurrence_count",
+                        "source_asset_reason_counts",
                         "duplicate_policy",
                         "ambiguous_identifier_count",
                         "items",
@@ -220,7 +315,40 @@ _EXACT_INVENTORY_OUTPUT_SCHEMA: dict[str, Any] = {
                     "properties": {
                         "status": {"type": "string"},
                         "query_class": {"const": "exact_set_or_inventory"},
-                        "plan": {"type": "object"},
+                        "plan": {
+                            "type": "object",
+                            "required": [
+                                "plan_fingerprint",
+                                "resource_kind",
+                                "normalized_field",
+                                "predicate",
+                                "operator",
+                                "claim_strength",
+                                "duplicate_policy",
+                                "ordering",
+                                "page_size",
+                                "cursor_present",
+                            ],
+                            "properties": {
+                                "plan_fingerprint": {"type": "string"},
+                                "resource_kind": {"type": "string"},
+                                "normalized_field": {"type": "string"},
+                                "predicate": {"type": "string"},
+                                "operator": {"type": "string"},
+                                "claim_strength": {"type": "string"},
+                                "duplicate_policy": {
+                                    "const": "preserve_source_occurrence_v1"
+                                },
+                                "ordering": {"const": "item_hash_ascending_v1"},
+                                "page_size": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 100,
+                                },
+                                "cursor_present": {"type": "boolean"},
+                            },
+                            "additionalProperties": False,
+                        },
                         "total_count": {"type": "integer", "minimum": 0},
                         "returned_count": {"type": "integer", "minimum": 0},
                         "coverage_status": {
@@ -229,7 +357,42 @@ _EXACT_INVENTORY_OUTPUT_SCHEMA: dict[str, Any] = {
                         "next_cursor": {"type": ["string", "null"]},
                         "redacted_count": {"type": "integer", "minimum": 0},
                         "unsupported_count": {"type": "integer", "minimum": 0},
+                        "encrypted_count": {"type": "integer", "minimum": 0},
                         "unresolved_count": {"type": "integer", "minimum": 0},
+                        "authorized_occurrence_scope_count": {
+                            "type": ["integer", "null"],
+                            "minimum": 0,
+                        },
+                        "extractable_occurrence_scope_count": {
+                            "type": ["integer", "null"],
+                            "minimum": 0,
+                        },
+                        "candidate_only_occurrence_count": {
+                            "type": "integer",
+                            "minimum": 0,
+                        },
+                        "source_asset_reason_counts": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["reason", "asset_count"],
+                                "properties": {
+                                    "reason": {
+                                        "enum": [
+                                            "encrypted",
+                                            "redacted",
+                                            "unresolved",
+                                            "unsupported",
+                                        ]
+                                    },
+                                    "asset_count": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                    },
+                                },
+                                "additionalProperties": False,
+                            },
+                        },
                         "duplicate_policy": {"const": "preserve_source_occurrence_v1"},
                         "ambiguous_identifier_count": {"type": "integer", "minimum": 0},
                         "items": {
@@ -241,6 +404,69 @@ _EXACT_INVENTORY_OUTPUT_SCHEMA: dict[str, Any] = {
                                     "governed_references",
                                     "matched_normalized_value_hashes",
                                     "ambiguous_identifier",
+                                ],
+                                "properties": {
+                                    "item_hash": {"type": "string"},
+                                    "governed_references": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "required": [
+                                                "citation_hash",
+                                                "occurrence_lineage_fingerprint",
+                                            ],
+                                            "properties": {
+                                                "citation_hash": {"type": "string"},
+                                                "occurrence_lineage_fingerprint": {
+                                                    "type": "string"
+                                                },
+                                            },
+                                            "additionalProperties": False,
+                                        },
+                                    },
+                                    "matched_normalized_value_hashes": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "ambiguous_identifier": {"type": "boolean"},
+                                    "structure_status": {
+                                        "enum": [
+                                            "source_provided",
+                                            "candidate_only",
+                                        ]
+                                    },
+                                    "structured_values": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "required": [
+                                                "field",
+                                                "value",
+                                                "citation_hash",
+                                                "occurrence_lineage_fingerprint",
+                                            ],
+                                            "properties": {
+                                                "field": {"type": "string"},
+                                                "value": {"type": "string"},
+                                                "citation_hash": {"type": "string"},
+                                                "occurrence_lineage_fingerprint": {
+                                                    "type": "string"
+                                                },
+                                            },
+                                            "additionalProperties": False,
+                                        },
+                                    },
+                                },
+                                "additionalProperties": False,
+                                "allOf": [
+                                    {
+                                        "if": {"required": ["structured_values"]},
+                                        "then": {"required": ["structure_status"]},
+                                    },
+                                    {
+                                        "if": {"required": ["structure_status"]},
+                                        "then": {"required": ["structured_values"]},
+                                    },
                                 ],
                             },
                         },
@@ -691,6 +917,7 @@ class RemoteMcpDispatcher:
                 message="The FormOwl authorization decision could not be recorded.",
             )
 
+        response_stage = "exception"
         try:
             if tool_name == "whoami":
                 payload = self.bridge.whoami_payload(actor_context)
@@ -714,13 +941,21 @@ class RemoteMcpDispatcher:
                     except Exception:
                         pass
                 raise ContractValidationError(_STRICT_TOOL_RESULT_ERROR)
+            response_stage = "payload_validation"
             validate_public_gateway_payload(payload)
             return _successful_tool_result(payload)
-        except Exception:
+        except Exception as exc:
             return _safe_tool_error(
                 error="server_error",
                 reason_code="tool_execution_failed",
                 message="The FormOwl tool could not complete the request.",
+                meta={
+                    "formowl_diagnostic": _safe_gateway_failure_diagnostic(
+                        arguments=arguments,
+                        response_stage=response_stage,
+                        exception=exc,
+                    )
+                },
             )
 
     def _record_decision(
@@ -838,6 +1073,26 @@ def build_remote_tool_descriptors(
         if schema["tool_name"] not in enabled:
             continue
         json_rpc_schema = _tool_to_json_rpc_schema(schema)
+        if schema["tool_name"] == "query_effective_graph_view":
+            json_rpc_schema = {
+                **json_rpc_schema,
+                "description": (
+                    json_rpc_schema["description"]
+                    + "; for authorized source-table filters and projections, prefer "
+                    "table_query with exact source-provided field labels and an exact "
+                    "source-validated user or semantic-expansion candidate value. "
+                    "This removes free-text field/value role guessing but does not "
+                    "bypass schema, permission, provenance, or coverage validation"
+                ),
+                "inputSchema": {
+                    **json_rpc_schema["inputSchema"],
+                    "properties": {
+                        **json_rpc_schema["inputSchema"]["properties"],
+                        "table_query": _STRUCTURED_TABLE_QUERY_INPUT_SCHEMA,
+                        "request_contract": _SEMANTIC_REQUEST_CONTRACT_INPUT_SCHEMA,
+                    },
+                },
+            }
         descriptors.append(
             _tool_descriptor(
                 name=schema["tool_name"],
@@ -1034,7 +1289,19 @@ def _prepare_tool_arguments(
         if arguments:
             raise ContractValidationError("whoami does not accept arguments")
         return {}
-    _validate_semantic_tool_arguments(tool_name, arguments)
+    if tool_name == "query_effective_graph_view" and (
+        "table_query" in arguments or "request_contract" in arguments
+    ):
+        semantic_arguments = dict(arguments)
+        table_query = semantic_arguments.pop("table_query", None)
+        request_contract = semantic_arguments.pop("request_contract", None)
+        _validate_semantic_tool_arguments(tool_name, semantic_arguments)
+        if table_query is not None:
+            _validate_structured_table_query_argument(table_query)
+        if request_contract is not None:
+            validate_semantic_request_contract(request_contract)
+    else:
+        _validate_semantic_tool_arguments(tool_name, arguments)
     if tool_name == "open_upload_session":
         _validate_current_workspace_upload(arguments, workspace_id=workspace_id)
     prepared = dict(arguments)
@@ -1044,6 +1311,50 @@ def _prepare_tool_arguments(
     if tool_name == "submit_graph_review_decision":
         prepared["reviewer_user_id"] = actor_context.user.user_id
     return prepared
+
+
+def _validate_structured_table_query_argument(value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping) or set(value) != {
+        "filters",
+        "projection_fields",
+    }:
+        raise ContractValidationError("connected structured table query is invalid")
+    filters = value["filters"]
+    projection_fields = value["projection_fields"]
+    if (
+        not isinstance(filters, Sequence)
+        or isinstance(filters, (str, bytes))
+        or not 1 <= len(filters) <= 4
+        or not isinstance(projection_fields, Sequence)
+        or isinstance(projection_fields, (str, bytes))
+        or not 1 <= len(projection_fields) <= 8
+    ):
+        raise ContractValidationError("connected structured table query is invalid")
+    for item in filters:
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {"field", "value"}
+            or not isinstance(item["field"], str)
+            or not item["field"].strip()
+            or len(item["field"]) > 120
+            or not isinstance(item["value"], str)
+            or not item["value"].strip()
+            or len(item["value"]) > 400
+        ):
+            raise ContractValidationError(
+                "connected structured table query filter is invalid"
+            )
+    if any(
+        not isinstance(field, str)
+        or not field.strip()
+        or len(field) > 120
+        for field in projection_fields
+    ):
+        raise ContractValidationError(
+            "connected structured table query projection is invalid"
+        )
 
 
 def _validate_current_workspace_upload(
@@ -1289,6 +1600,41 @@ def _safe_tool_error(
         _meta=meta,
         isError=True,
     )
+
+
+def _safe_gateway_failure_diagnostic(
+    *,
+    arguments: Mapping[str, Any],
+    response_stage: str,
+    exception: Exception,
+) -> dict[str, Any]:
+    """Project only bounded, non-content gateway failure metadata."""
+
+    safe_stage = (
+        response_stage
+        if response_stage in {"exception", "payload_validation"}
+        else "exception"
+    )
+    exception_name = type(exception).__name__
+    safe_exception_class = (
+        exception_name
+        if exception_name in _SAFE_DIAGNOSTIC_EXCEPTION_CLASSES
+        else "mcp_exception"
+    )
+    diagnostic: dict[str, Any] = {
+        "response_stage": safe_stage,
+        "exception_class": safe_exception_class,
+    }
+    # Stack ownership is an internal diagnostic only.  The ChatGPT-facing
+    # gateway must not expose module, symbol, or line metadata even when the
+    # exception itself is safely classified.
+    query_text = arguments.get("query_text") if isinstance(arguments, Mapping) else None
+    if isinstance(query_text, str):
+        diagnostic["query_hash"] = "sha256:" + hashlib.sha256(
+            query_text.encode("utf-8")
+        ).hexdigest()
+        diagnostic["query_length"] = len(query_text)
+    return diagnostic
 
 
 def _new_safe_id(prefix: str) -> str:

@@ -79,7 +79,7 @@ class MethodologyAuthorityTests(unittest.TestCase):
         self.assertIn("methodology_ready_for_quality_uat", report["blocked_claim_ids"])
         self.assertRegex(report["execution_fingerprint"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(report["authority_state_fingerprint"], r"^sha256:[0-9a-f]{64}$")
-        self.assertEqual(report["pipeline_source_binding_count"], 64)
+        self.assertEqual(report["pipeline_source_binding_count"], 67)
         rendered = json.dumps(report, sort_keys=True)
         for forbidden in ("/home/", "/tmp/", "/workspace/", "postgresql://", "raw_path"):
             self.assertNotIn(forbidden, rendered)
@@ -950,9 +950,9 @@ class MethodologyAuthorityTests(unittest.TestCase):
             "gate_evidence_relative_paths": evidence_paths,
             "gate_dependency_manifest_relative_paths": {
                 gate_id: Path(
-                    json.loads(
-                        (repository_root / evidence_path).read_text(encoding="utf-8")
-                    )["dependency_manifest_path"]
+                    json.loads((repository_root / evidence_path).read_text(encoding="utf-8"))[
+                        "dependency_manifest_path"
+                    ]
                 )
                 for gate_id, evidence_path in evidence_paths.items()
             },

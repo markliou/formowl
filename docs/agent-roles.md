@@ -11,41 +11,55 @@ user explicitly reassigns it.
 
 ## Current Execution Topology
 
-The latest 2026-10-06 authorization requires exactly two ordinary
-implementation workers using `gpt-6.1-sol` with `reasoning_effort=high`.
+The latest 2026-10-06 authorization permits up to two ordinary implementation
+worker slots requesting `gpt-6.1-sol` with `reasoning_effort=high`.
 Stale current worker-specific assignments, earlier sol/xhigh and luna/max
 tiers, and any “no recreation” work order are not current authority.
 Inherited contexts and historical proofs are not current configuration proof.
-No descendants, substitution, duplication, or additional worker is authorized.
-The UAT provider remains `gpt-5.5`/`high`; the tier alone grants no provider/build/index actions.
-Goal ACTIVE: restore UAT promptly, only UAT-critical work. A's eight-doc slice finished;
-B sequentially checks mounts/no-build startup, then only existing PostgreSQL/UAT recovery
-with bounded pg_isready/health/home/listener checks. No data/config/secrets/settings changes,
-other-container starts or provider/browser tests; Master inspects before ordinary-chat-first testing.
-Any model unavailability or missing/mismatched persisted metadata is a blocker;
-no silent substitution is permitted. First dispatch and every future resume
-must explicitly configure model and effort as sol/high; no unpinned
-`send_input`. Each worker verifies its own native task-owned session_meta/task_started/turn_context before actions. The user authorizes
-minimal read-only metadata inspection; retain only safe task/turn IDs, model,
-effort, UTC timestamp and verification outcome, never raw rollout content,
-paths, prompts or secrets. Message text and inherited contexts are not proof.
+No descendants, duplication, or additional worker is authorized. The two-worker
+cap remains in force, but a missing or unavailable handle is not an availability
+gate for bounded work. No silent model, effort, or worker identity relabelling
+is authorized.
+The UAT provider remains `gpt-5.5`/`high`; the tier alone grants no provider/build/index
+actions. Explicit user assignments govern provider, Docker, source, and UAT actions.
+The prior A/B startup and recovery sequence is a closed-slice status record, not a
+standing prohibition on later explicitly authorized operations.
+Model unavailability or missing/mismatched persisted metadata is not a work
+blocker. Dispatch should request sol/high, while each worker records its actual
+model/effort as `verified`, `unverified`, or `unavailable`. An unpinned resume
+is allowed when explicit pinning is unavailable; no unobserved fallback may be
+labelled as sol/high. Minimal metadata inspection remains read-only and safe:
+retain only task/turn IDs when present, observed model/effort, UTC timestamp and
+outcome, never raw rollout content, paths, prompts or secrets. Message text and
+inherited contexts cannot prove a positive model claim, but do not force
+termination of the bounded assignment.
+
+The 2026-10-06 SPEC clarification was a closed docs-only slice: A finished
+`SPEC.md`, B aligned the eight assigned current docs, and Master
+orchestration-only applied to that slice. The earlier B PostgreSQL/UAT/service
+recovery is dated handoff evidence, not a standing assignment. Later source,
+provider, Docker, UAT, or bounded Master edits require their own explicit user
+scope; none may bypass source/hash/lineage/permission validation or claim live
+acceptance without evidence.
 
 Current explicit user assignments govern bounded write sets and actions; see
-the goal-registry README for this bounded operational recovery. Dated completed-task paths,
-closure reports and “no further work authorized” statements are historical
-slice boundaries, not new assignments or indefinite bans on later authorized
-work. They never resume a prior task implicitly or prove a current model turn.
+the goal-registry README for operating policy and the handoff for dated recovery
+evidence. Dated completed-task paths, closure reports, and “no further work
+authorized” statements are historical slice boundaries, not new assignments
+or indefinite bans on later authorized work. They never resume a prior task
+implicitly or prove a current model turn.
 Diagnostic evidence is centralized in the handoff: the later narrow cap-fixture
 repair supersedes the earlier unresolved cap case, not whole-module/full-suite
 verification. Feature 待測, step 4 `in-progress`, F841, non-green full regression,
 live UAT, three reviewers and four methodology gates remain open.
 
-The Master is an orchestration role, not an implementation role. It:
+The Master is ordinarily an orchestration role, not an implementation role. It:
 
 - keeps one global plan with at most five steps and, after creation, changes
   only step status unless a newly evidenced blocker requires revision;
 - assigns bounded sequential scopes and repository edits, including operating
   documentation, only to the explicitly authorized worker/temporary reviewer;
+  an explicit user assignment may authorize a bounded direct edit;
 - inspects progress, diffs, and evidence; detects repeated failure paths; and
   responds by repartitioning, changing validation, or stopping the route;
 - during active turns, inspects progress and reports at least every 15 minutes
@@ -56,13 +70,16 @@ The Master is an orchestration role, not an implementation role. It:
   This does not imply autonomous wake-ups, background monitoring, or scheduled
   messages after a final response; historical 2-second safety watcher and
   60-second heartbeat settings are not fresh evidence of a running build;
-- performs integration review and final acceptance without directly writing
-  or modifying implementation code or repository documents.
+- performs integration review and final acceptance without directly writing or
+  modifying implementation code or repository documents, except where the
+  current user explicitly authorizes a bounded edit in named paths; that edit
+  does not expand the Master role or assignment scope.
 
-The two authorized implementers verify bounded assignments sequentially,
-without duplicating work or repeating failed approaches without a changed
-hypothesis or validation method. The independent three-reviewer release gate
-remains separate when a completed slice is claimed.
+Authorized implementer(s) verify bounded assignments sequentially, without
+duplicating work or repeating failed approaches without a changed hypothesis or
+validation method. An available subset may proceed; worker unavailability is
+recorded as `unavailable` rather than blocking the assignment. The independent
+three-reviewer release gate remains separate when a completed slice is claimed.
 
 For an explicitly authorized POC time box, acceptance prioritizes the smallest real
 end-to-end user journey. API, contract, and unit wiring are diagnostic only.

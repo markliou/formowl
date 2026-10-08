@@ -11,7 +11,13 @@ from typing import Any
 import _paths  # noqa: F401
 import formowl_mail.import_workflow as import_workflow
 from formowl_auth import FileAuditLogStore
-from formowl_contract import ContractValidationError, PermissionScope, SourceRef
+from formowl_contract import (
+    ContractValidationError,
+    PermissionScope,
+    SourceRef,
+    sha256_json,
+    to_plain,
+)
 from formowl_gateway import validate_public_gateway_payload
 from formowl_ingestion.assets import register_asset_from_local_file
 from formowl_ingestion.extraction import ExtractionResult
@@ -44,6 +50,137 @@ STORAGE_BACKEND_ID = "storage_mail_upload_import"
 
 
 class MailUploadImportWorkflowTests(unittest.TestCase):
+    def test_completed_partial_job_retains_bound_failed_child_exclusion(self) -> None:
+        from unittest.mock import patch
+
+        root = _paths.fresh_test_dir("mail-import-partial-child")
+        stores = _workflow_stores(root)
+        upload = _create_mail_upload_session(
+            stores["upload_session_store"], audit_store=stores["audit_store"],
+        )
+        result = run_upload_session_mail_import(
+            _write_pst_archive(root), upload_session_id=upload.upload_session_id,
+            **{key: stores[key] for key in (
+                "upload_session_store", "object_store", "asset_store", "job_store",
+                "extractor_run_store", "observation_store",
+            )},
+            mail_evidence_store=PostgreSQLMailEvidenceStore(_RecordingMailConnection()),
+            storage_backend_id=STORAGE_BACKEND_ID, actor_user_id=OWNER_USER_ID,
+            session_id=SESSION_ID, query_text="audit approval", created_at=NOW,
+            asset_mime_type="application/vnd.ms-outlook",
+            adapter=PstMailArchiveExtractor(
+                runner=_pst_runner_with_messages([_pst_rfc822_csv_attachment()]),
+                scratch_parent=root / "scratch",
+            ),
+            extraction_config={"attachment_max_bytes": 1},
+        )
+        inputs = {key: stores[key] for key in (
+            "job_store", "asset_store", "observation_store", "extractor_run_store",
+        )}
+        _, _, observations, runs = import_workflow.load_completed_ingestion_job_inputs(
+            result.ingestion_job_id, **inputs,
+            requester_user_id=OWNER_USER_ID, workspace_id=WORKSPACE_ID,
+        )
+        failed = next(run for run in runs if run.status == "failed")
+        self.assertEqual(failed.errors, ["attachment_document_byte_limit_reached"])
+        self.assertTrue(observations)
+        self.assertFalse(any(item.extractor_run_id == failed.extractor_run_id
+                             for item in observations))
+        get_run = stores["extractor_run_store"].get
+        with patch.object(
+            stores["extractor_run_store"], "get",
+            side_effect=lambda key: (
+                replace(failed, errors=["attachment_document_parse_failed"])
+                if key == failed.extractor_run_id else get_run(key)
+            ),
+        ):
+            with self.assertRaisesRegex(ContractValidationError, "child exclusion"):
+                import_workflow.load_completed_ingestion_job_inputs(
+                    result.ingestion_job_id, **inputs,
+                    requester_user_id=OWNER_USER_ID, workspace_id=WORKSPACE_ID,
+                )
+            patched_failed = replace(
+                failed,
+                errors=["attachment_document_parse_failed"],
+            )
+            job = stores["job_store"].get(result.ingestion_job_id)
+            source_asset = stores["asset_store"].get(job.asset_id)
+            child_asset = stores["asset_store"].get(failed.asset_id)
+            parent_run = next(
+                run
+                for run in runs
+                if run.asset_id == source_asset.asset_id
+                and run.status == "succeeded"
+            )
+            exclusions = {
+                "artifact_id": (
+                    "formowl_bound_child_content_failure_exclusions_v1"
+                ),
+                "schema_version": 1,
+                "ingestion_job_id": job.ingestion_job_id,
+                "source_asset_id": source_asset.asset_id,
+                "source_content_hash": source_asset.content_hash,
+                "workspace_id": WORKSPACE_ID,
+                "permission_scope_fingerprint": sha256_json(
+                    to_plain(job.permission_scope)
+                ),
+                "parent_extractor_run_id": parent_run.extractor_run_id,
+                "parent_config_fingerprint": parent_run.config_hash,
+                "parser_code_byte_sha256": sha256_json("parser-code"),
+                "formal_job_completion_required_before_consumption": True,
+                "unknown_parse_failures_must_reject": True,
+                "changes_run_status": False,
+                "full_source_coverage_claim": False,
+                "records": [
+                    {
+                        "child_asset_id": child_asset.asset_id,
+                        "child_content_hash": child_asset.content_hash,
+                        "child_file_size": child_asset.file_size,
+                        "child_source_ref": to_plain(child_asset.source_ref),
+                        "child_asset_record_byte_sha256": (
+                            sha256_json("child-asset-record")
+                        ),
+                        "child_extractor_run_id": (
+                            patched_failed.extractor_run_id
+                        ),
+                        "child_run_record_byte_sha256": (
+                            sha256_json("child-run-record")
+                        ),
+                        "extractor_name": patched_failed.extractor_name,
+                        "extractor_version": patched_failed.extractor_version,
+                        "extractor_config_hash": patched_failed.config_hash,
+                        "run_error_codes": list(patched_failed.errors),
+                        "run_status_must_remain": "failed",
+                        "excluded_from_successful_document_evidence": True,
+                        "input_bytes_hash_and_size_verified": True,
+                        "filesystem_IO_failure": False,
+                        "source_completeness_claim": False,
+                        "classification": "source_structure_conflict",
+                        "reason_code": (
+                            "xlsx_overlapping_merge_declarations"
+                        ),
+                        "independent_source_XML_proof": {
+                            "duplicate_identical_declarations": True,
+                        },
+                    }
+                ],
+            }
+            reader = import_workflow.open_completed_ingestion_job_reader(
+                result.ingestion_job_id,
+                **inputs,
+                requester_user_id=OWNER_USER_ID,
+                workspace_id=WORKSPACE_ID,
+                bound_child_failure_exclusions=exclusions,
+            )
+            admitted = tuple(reader.iter_observations())
+            self.assertTrue(admitted)
+            self.assertFalse(
+                any(
+                    item.extractor_run_id == failed.extractor_run_id
+                    for item in admitted
+                )
+            )
+
     def test_upload_session_bound_import_writes_store_and_queries_through_jsonrpc(
         self,
     ) -> None:

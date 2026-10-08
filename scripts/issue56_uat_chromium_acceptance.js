@@ -30,6 +30,8 @@ const safeRunnerFailureReasons = new Set([
   'pipe_closed', 'pipe_error', 'pipe_reset', 'request_control_failed',
   'screenshot_capture_failed', 'session_not_fresh', 'spawn_error',
   'target_invalid', 'timeout_invalid', 'turn_timeout', 'unknown_failure',
+  'pre_reload_snapshot_failed', 'reload_failed', 'reset_failed',
+  'reset_ordinary_timeout', 'reset_ordinary_state_failed',
 ]);
 const safeCdpCommands = new Set([
   'Browser.getVersion',
@@ -497,6 +499,97 @@ function normalizeOperatorDocumentPrompt(raw) {
   return prompt.length >= 1 && prompt.length <= 4096 ? prompt : null;
 }
 
+function resolveOperatorPrompt(raw, fallback) {
+  return raw === undefined ? fallback : normalizeOperatorDocumentPrompt(raw);
+}
+
+function liveLineBindingFingerprint(
+  sourceAuthorityFingerprint,
+  sourceSessionBindingFingerprint,
+  citationId,
+  lineStart,
+  lineEnd,
+) {
+  return textFingerprint(
+    `${sourceAuthorityFingerprint}|${sourceSessionBindingFingerprint}|` +
+    `${citationId}|${lineStart}:${lineEnd}`,
+  );
+}
+
+function parseLiveDocumentSourceManifest(raw) {
+  // Operator preregistration from the authorized source, not a captured answer.
+  // The session fingerprint includes the index/source revision. The browser
+  // exposes citation IDs, not raw locators: this checks the manifest binding
+  // and required snippets, not an independent reread of the native lines.
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 32768) {
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+      parsed.source_family !== 'document_text' ||
+      !boundedHash(parsed.source_authority_fingerprint) ||
+      !boundedHash(parsed.source_session_binding_fingerprint) ||
+      !Array.isArray(parsed.citation_bindings) ||
+      parsed.citation_bindings.length < 1 ||
+      parsed.citation_bindings.length > 8) {
+    return null;
+  }
+  const seenCitationIds = new Set();
+  const citationBindings = [];
+  for (const value of parsed.citation_bindings) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        !boundedHash(value.citation_id) ||
+        !boundedHash(value.citation_fingerprint) ||
+        value.citation_fingerprint !== textFingerprint(value.citation_id) ||
+        !Number.isInteger(value.line_start) ||
+        !Number.isInteger(value.line_end) ||
+        value.line_start < 1 || value.line_end < value.line_start ||
+        value.line_end > 100000 ||
+        !boundedHash(value.line_binding_fingerprint) ||
+        value.line_binding_fingerprint !== liveLineBindingFingerprint(
+          parsed.source_authority_fingerprint,
+          parsed.source_session_binding_fingerprint,
+          value.citation_id,
+          value.line_start,
+          value.line_end,
+        ) ||
+        !Array.isArray(value.required_snippets) ||
+        value.required_snippets.length < 1 ||
+        value.required_snippets.length > 4 ||
+        !value.required_snippets.every(snippet =>
+          typeof snippet === 'string' &&
+          snippet.trim().length >= 1 &&
+          snippet.trim().length <= 400 &&
+          !/\/(?:home|tmp|run|workspace|var)\//i.test(snippet))) {
+      return null;
+    }
+    const citationId = value.citation_id;
+    if (seenCitationIds.has(citationId)) return null;
+    seenCitationIds.add(citationId);
+    citationBindings.push({
+      citation_id: citationId,
+      citation_fingerprint: value.citation_fingerprint,
+      line_start: value.line_start,
+      line_end: value.line_end,
+      line_binding_fingerprint: value.line_binding_fingerprint,
+      required_snippets: value.required_snippets.map(snippet => snippet.trim()),
+    });
+  }
+  return {
+    source_family: 'document_text',
+    source_authority_fingerprint: parsed.source_authority_fingerprint,
+    source_session_binding_fingerprint: (
+      parsed.source_session_binding_fingerprint
+    ),
+    citation_bindings: citationBindings,
+  };
+}
+
 function textFingerprint(value) {
   return typeof value === 'string' ?
     `sha256:${crypto.createHash('sha256').update(value, 'utf8').digest('hex')}` :
@@ -877,7 +970,11 @@ function classify(
   phase,
   record,
   turn,
-  {sourceNeutral = false, expectedEvidenceBinding = null} = {},
+  {
+    sourceNeutral = false,
+    expectedEvidenceBinding = null,
+    liveDocumentManifest = null,
+  } = {},
 ) {
   // This function is serialized into the page with classify.toString().
   // Keep all page-side validation local; it must not capture Node helpers.
@@ -900,13 +997,12 @@ function classify(
     /^sha256:[0-9a-f]{64}$/.test(value);
   const sourceFamily = phase === 'mail' ? 'mail' :
     phase === 'document' ? 'document_text' : null;
-  const sourceBindingRequired = sourceNeutral || phase === 'document';
   const actualCitationFingerprints = Array.isArray(turn.citation_fingerprints) ?
     turn.citation_fingerprints : [];
   const expectedCitationFingerprints = expectedEvidenceBinding &&
     Array.isArray(expectedEvidenceBinding.citation_fingerprints) ?
     expectedEvidenceBinding.citation_fingerprints : [];
-  const sourceBindingVerified = !sourceBindingRequired || (
+  const syntheticSourceBindingVerified = sourceNeutral && (
     sourceFamily !== null && expectedEvidenceBinding &&
     expectedEvidenceBinding.source_family === sourceFamily &&
     safeFingerprint(turn.answer_fingerprint) &&
@@ -917,9 +1013,59 @@ function classify(
     actualCitationFingerprints.every((item, index) =>
       item === expectedCitationFingerprints[index])
   );
+  const normalizedFactText = value => typeof value === 'string' ?
+    value.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase() : '';
+  const normalizedAnswerText = normalizedFactText(turn.text);
+  const liveCitationBindings = liveDocumentManifest &&
+    Array.isArray(liveDocumentManifest.citation_bindings) ?
+    liveDocumentManifest.citation_bindings : [];
+  const liveCitationBindingById = new Map(
+    liveCitationBindings
+      .filter(binding => binding && typeof binding === 'object')
+      .map(binding => [binding.citation_id, binding]),
+  );
+  const liveRequiredSnippetsCovered = liveCitationBindings.every(binding =>
+    Array.isArray(binding.required_snippets) &&
+    binding.required_snippets.length >= 1 &&
+    binding.required_snippets.every(snippet =>
+      normalizedAnswerText.includes(normalizedFactText(snippet))));
+  const liveDocumentSourceBindingVerified =
+    phase === 'document' && !sourceNeutral &&
+    liveDocumentManifest &&
+    liveDocumentManifest.source_family === 'document_text' &&
+    safeFingerprint(liveDocumentManifest.source_authority_fingerprint) &&
+    safeFingerprint(liveDocumentManifest.source_session_binding_fingerprint) &&
+    liveCitationBindings.length >= 1 &&
+    citations.length >= 1 &&
+    liveRequiredSnippetsCovered &&
+    citations.every((citation, index) => {
+      const binding = liveCitationBindingById.get(citation);
+      const citationFingerprint = actualCitationFingerprints[index];
+      return typeof citation === 'string' &&
+        /^sha256:[0-9a-f]{64}$/.test(citation) &&
+        binding &&
+        binding.citation_id === citation &&
+        safeFingerprint(binding.citation_fingerprint) &&
+        binding.citation_fingerprint === citationFingerprint &&
+        Number.isInteger(binding.line_start) &&
+        Number.isInteger(binding.line_end) &&
+        binding.line_start >= 1 &&
+        binding.line_end >= binding.line_start &&
+        binding.line_end <= 100000 &&
+        safeFingerprint(binding.line_binding_fingerprint) &&
+        Array.isArray(binding.required_snippets) &&
+        binding.required_snippets.length >= 1 &&
+        binding.required_snippets.every(snippet =>
+          normalizedAnswerText.includes(normalizedFactText(snippet)));
+    });
+  const sourceBindingVerified = sourceNeutral ?
+    syntheticSourceBindingVerified :
+    phase === 'document' ? Boolean(liveDocumentSourceBindingVerified) : null;
+  const citationSourceBindingPass = phase === 'mail' && !sourceNeutral ?
+    true : sourceBindingVerified === true;
   const governedCitations = citations.length > 0 &&
     citationProjectionMatches &&
-    sourceBindingVerified &&
+    citationSourceBindingPass &&
     citations.every(citation => {
       if (typeof citation !== 'string') return false;
       if (sourceNeutral) {
@@ -927,7 +1073,11 @@ function classify(
           .test(citation);
       }
       if (phase === 'document') return /^sha256:[0-9a-f]{64}$/.test(citation);
-      return /^mailcitation_[0-9a-f]{24}$/.test(citation);
+      // Mail may be returned by the dedicated mail tool (mailcitation_*) or
+      // by the source-neutral graph tool (source observation hash).  Both are
+      // governed citation identifiers; the tool selected by the provider must
+      // not change whether an otherwise valid cited result is accepted.
+      return /^(?:mailcitation_[0-9a-f]{24}|sha256:[0-9a-f]{64})$/.test(citation);
     });
   const providerErrorParams = new Set([
     'model', 'tools', 'tool_choice', 'text.format', 'reasoning',
@@ -955,7 +1105,15 @@ function classify(
   const noData = /沒有(?:找到|查到|任何|.*(?:資料|信件|郵件|文件|文檔))|查無|找不到.*(?:資料|信件|郵件|文件|文檔)|無相關(?:資料|信件|郵件|文件|文檔)|no (?:data|results|mail|messages|document|file)|(?:no|zero) matching/i;
   const operational = /未完成|失敗|逾時|超時|尚未準備|稍後再試|暫時無法|(?:provider|mcp|service|query|request).*(?:fail|error|unavailable|timeout)|timed? out|try again/i;
   const forbidden = /\/(?:home|tmp|run|workspace|var)\//i;
-  const visible = turn.visible && Boolean(turn.text.trim()) &&
+  // A governed partial result may intentionally put its user-facing text in
+  // the clarification element while keeping the answer field empty.  Treat
+  // that visible incomplete disclosure as visible output; do not turn a
+  // citeable partial result into a runner failure merely because it is not a
+  // complete answer.
+  const visible = turn.visible && (
+    Boolean(turn.text.trim()) ||
+    (body.status === 'partial' && turn.incomplete_visible === true)
+  ) &&
     !forbidden.test(turn.text + turn.error);
   const successful = record.http === 200 &&
     ['complete', 'partial'].includes(body.status) && turn.status === body.status;
@@ -1107,7 +1265,21 @@ function classify(
   return {status, http_status: record.http, tool_count: toolCount,
     citation_count: turn.citations, elapsed_ms: record.elapsed,
     visible_text_pass: Boolean(pass),
-    source_binding_verified: sourceNeutral ? sourceBindingVerified : null,
+    acceptance_checks: {
+      visible,
+      successful,
+      mcp_success_shape: mcpSuccessShape,
+      governed_citations: governedCitations,
+      citation_projection_matches: citationProjectionMatches,
+      answer_matches_payload: turn.text === body.answer.trim(),
+      provider_finalization_passed: providerFinalizationPassed,
+      provider_completed: providerCompleted,
+      incomplete_visible: turn.incomplete_visible === true,
+      no_data_match: noData.test(turn.text),
+      has_failure: hasFailure,
+    },
+    source_binding_verified: phase === 'document' || sourceNeutral ?
+      sourceBindingVerified : null,
     diagnostic: (() => {
       const responseStatuses = new Set([
         'complete', 'partial', 'clarification_required', 'error',
@@ -1517,6 +1689,14 @@ function safeOutput(result, {final = false} = {}) {
   if (Object.hasOwn(result, 'visible_text_pass')) {
     output.visible_text_pass = result.visible_text_pass === true;
   }
+  if (result.acceptance_checks && typeof result.acceptance_checks === 'object') {
+    const checks = result.acceptance_checks;
+    output.acceptance_checks = Object.fromEntries(
+      Object.entries(checks)
+        .filter(([, value]) => typeof value === 'boolean')
+        .map(([key, value]) => [key, value]),
+    );
+  }
   if (Object.hasOwn(result, 'screenshot_captured')) {
     output.screenshot_captured = result.screenshot_captured === true;
   }
@@ -1640,10 +1820,14 @@ async function main() {
   let userDir = null;
   let eventError = false;
   const {basicOnly, live, sourceNeutralSynthetic} = runnerModeFromArgv();
+  const rawLiveMailPrompt = process.env.FORMOWL_UAT_MAIL_PROMPT;
+  const liveMailPrompt = resolveOperatorPrompt(rawLiveMailPrompt, mailPrompt);
+  const mailPromptInvalid = !basicOnly && !sourceNeutralSynthetic &&
+    rawLiveMailPrompt !== undefined && liveMailPrompt === null;
   const rawLiveDocumentPrompt = process.env.FORMOWL_UAT_DOCUMENT_PROMPT;
-  const liveDocumentPrompt = rawLiveDocumentPrompt === undefined ?
-    null : normalizeOperatorDocumentPrompt(rawLiveDocumentPrompt);
-  const documentPromptInvalid = rawLiveDocumentPrompt !== undefined &&
+  const liveDocumentPrompt = resolveOperatorPrompt(rawLiveDocumentPrompt, null);
+  const documentPromptInvalid = !basicOnly && !sourceNeutralSynthetic &&
+    rawLiveDocumentPrompt !== undefined &&
     liveDocumentPrompt === null;
   const documentPhaseRequested = !basicOnly && !sourceNeutralSynthetic &&
     liveDocumentPrompt !== null;
@@ -1651,7 +1835,7 @@ async function main() {
     process.env.FORMOWL_UAT_ACCEPTANCE_FOLLOWUPS === '1' ||
     documentPhaseRequested;
   try {
-    if (documentPromptInvalid) {
+    if (mailPromptInvalid || documentPromptInvalid) {
       recordRunnerFailure(state, 'unknown_failure', 'startup');
       safeOutput({status: 'runner_error', runner_diagnostic: state}, {final: true});
       return 1;
@@ -1708,6 +1892,8 @@ async function main() {
         '--headless=new', '--no-sandbox', '--disable-gpu',
         '--disable-dev-shm-usage', '--disable-background-networking',
         '--no-first-run', '--remote-debugging-pipe',
+        ...(target.protocol === 'http:' ?
+          [`--unsafely-treat-insecure-origin-as-secure=${target.origin}`] : []),
         `--user-data-dir=${userDir}`, 'about:blank',
       ], {stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe']});
     } catch (_) {
@@ -2122,6 +2308,11 @@ async function main() {
           const answerText = content.textContent.trim();
           const citationLabels = [...assistant.querySelectorAll(
             '.turn-citations li')].map(item => item.textContent.trim());
+          const incompleteVisible = [...assistant.querySelectorAll(
+            '.turn-clarification')].some(node =>
+            Boolean(node.textContent.trim()) &&
+            node.getClientRects().length > 0 &&
+            getComputedStyle(node).visibility !== 'hidden');
           const fingerprint = async value => {
             const digest = await crypto.subtle.digest(
               'SHA-256', new TextEncoder().encode(value));
@@ -2132,13 +2323,10 @@ async function main() {
             window.__formowlUatProbe.chat[${index}], {
               status: assistant.dataset.status,
               text: answerText,
-              visible: content.getClientRects().length > 0 &&
-                getComputedStyle(content).visibility !== 'hidden',
-              incomplete_visible: [...assistant.querySelectorAll(
-                '.turn-clarification')].some(node =>
-                Boolean(node.textContent.trim()) &&
-                node.getClientRects().length > 0 &&
-                getComputedStyle(node).visibility !== 'hidden'),
+              visible: (content.getClientRects().length > 0 &&
+                getComputedStyle(content).visibility !== 'hidden') ||
+                incompleteVisible,
+              incomplete_visible: incompleteVisible,
               error: error && !error.hidden ? error.textContent.trim() : '',
               citations: assistant.querySelectorAll('.turn-citations li').length,
               citation_labels: citationLabels,
@@ -2279,23 +2467,21 @@ async function main() {
     let liveDocumentResult = null;
     const liveTurns = [
       [0, 'ordinary', ordinaryPrompt],
-      [1, 'mail', mailPrompt],
+      [1, 'mail', liveMailPrompt],
     ];
     if (documentPhaseRequested) {
       liveTurns.push([2, 'document', liveDocumentPrompt]);
     }
-    let liveDocumentBinding = null;
+    let liveDocumentSourceManifest = null;
     if (documentPhaseRequested) {
-      const expectedEvidenceBindings = parseExpectedEvidenceBindings(
-        process.env.FORMOWL_UAT_EXPECTED_EVIDENCE_BINDINGS,
-        ['document'],
+      liveDocumentSourceManifest = parseLiveDocumentSourceManifest(
+        process.env.FORMOWL_UAT_DOCUMENT_SOURCE_MANIFEST,
       );
-      if (expectedEvidenceBindings === null) {
+      if (liveDocumentSourceManifest === null) {
         recordRunnerFailure(state, 'unknown_failure', 'startup');
         safeOutput({status: 'runner_error', runner_diagnostic: state}, {final: true});
         return 1;
       }
-      liveDocumentBinding = expectedEvidenceBindings.document;
     }
     for (const [index, phase, prompt] of liveTurns) {
       const start = Date.now();
@@ -2334,7 +2520,8 @@ async function main() {
           return 1;
         }
       }
-      const expectedBinding = phase === 'document' ? liveDocumentBinding : null;
+      const liveManifest = phase === 'document' ?
+        liveDocumentSourceManifest : null;
       const result = await evaluate(`(async () => {
         const assistant = [...document.querySelectorAll(
           '#conversation-transcript article[data-role="assistant"]')].at(-1);
@@ -2343,6 +2530,11 @@ async function main() {
         const answerText = content.textContent.trim();
         const citationLabels = [...assistant.querySelectorAll(
           '.turn-citations li')].map(item => item.textContent.trim());
+        const incompleteVisible = [...assistant.querySelectorAll(
+          '.turn-clarification')].some(node =>
+          Boolean(node.textContent.trim()) &&
+          node.getClientRects().length > 0 &&
+          getComputedStyle(node).visibility !== 'hidden');
         const fingerprint = async value => {
           const digest = await crypto.subtle.digest(
             'SHA-256', new TextEncoder().encode(value));
@@ -2353,20 +2545,17 @@ async function main() {
           window.__formowlUatProbe.chat[${index}], {
             status: assistant.dataset.status,
             text: answerText,
-            visible: content.getClientRects().length > 0 &&
-              getComputedStyle(content).visibility !== 'hidden',
-            incomplete_visible: [...assistant.querySelectorAll(
-              '.turn-clarification')].some(node =>
-              Boolean(node.textContent.trim()) &&
-              node.getClientRects().length > 0 &&
-              getComputedStyle(node).visibility !== 'hidden'),
+            visible: (content.getClientRects().length > 0 &&
+              getComputedStyle(content).visibility !== 'hidden') ||
+              incompleteVisible,
+            incomplete_visible: incompleteVisible,
             error: error && !error.hidden ? error.textContent.trim() : '',
             citations: citationLabels.length,
             citation_labels: citationLabels,
             answer_fingerprint: await fingerprint(answerText),
             citation_fingerprints: await Promise.all(
               citationLabels.map(fingerprint)),
-          }, {expectedEvidenceBinding: ${JSON.stringify(expectedBinding)}});
+          }, {liveDocumentManifest: ${JSON.stringify(liveManifest)}});
       })()`);
       result.elapsed_ms = Date.now() - start;
       result.runner_diagnostic = state;
@@ -2461,7 +2650,20 @@ async function main() {
           !document.querySelector('#conversation-transcript article[data-status="pending"]') &&
           document.querySelector('#loading-state').hidden &&
           !document.querySelector('#send-button').disabled`, turnMs);
-        if (!ordinaryReady) throw new Error('reset_ordinary_timeout');
+        if (!ordinaryReady) {
+          recordRunnerFailure(state, 'reset_ordinary_timeout');
+          const progress = await evaluate(`(() => ({
+            post_reset_transcript_count: window.__formowlUatProbe.transcript?.count,
+            post_reset_visible_turn_count: document.querySelectorAll(
+              '#conversation-transcript article[data-role="assistant"]').length,
+            post_reset_visible_pending_count: document.querySelectorAll(
+              '#conversation-transcript article[data-status="pending"]').length,
+          }))()`);
+          safeOutput({status: 'acceptance_followups_failed', ...progress,
+            reload_transcript_count: reloadCount, reset_transcript_count: resetCount,
+            runner_diagnostic: state}, {final: true});
+          return 1;
+        }
         const postResetCount = await evaluate(
           'window.__formowlUatProbe.transcript.count',
         );
@@ -2538,8 +2740,10 @@ async function main() {
           'acceptance_followups_failed';
         safeOutput(result, {final: true});
         if (!passed) return 1;
-      } catch (_) {
-        recordRunnerFailure(state, 'unknown_failure', state.phase);
+      } catch (error) {
+        const reason = error && safeRunnerFailureReasons.has(error.message) ?
+          error.message : 'unknown_failure';
+        recordRunnerFailure(state, reason, state.phase);
         safeOutput({status: 'acceptance_followups_failed',
           runner_diagnostic: state}, {final: true});
         return 1;
@@ -2567,6 +2771,20 @@ async function selfCheck() {
   const {PassThrough} = require('stream');
   const vm = require('vm');
   assert.equal(runnerModeFromArgv(['node', 'runner']).basicOnly, false);
+  assert.equal(
+    normalizeOperatorDocumentPrompt('把嘉值交期調閱出來'),
+    '把嘉值交期調閱出來',
+  );
+  assert.equal(
+    normalizeOperatorDocumentPrompt(' '),
+    null,
+  );
+  assert.equal(resolveOperatorPrompt(undefined, mailPrompt), mailPrompt);
+  assert.equal(
+    resolveOperatorPrompt('把嘉值交期調閱出來', mailPrompt),
+    '把嘉值交期調閱出來',
+  );
+  assert.equal(resolveOperatorPrompt(' ', mailPrompt), null);
   assert.equal(
     runnerModeFromArgv(['node', 'runner', '--basic-only']).basicOnly,
     true,
@@ -2817,6 +3035,19 @@ async function selfCheck() {
     finalizationRecord('passed'),
   ];
   assert.equal(classify('mail', record, turn).status, 'mail_cited_result');
+  const graphMailCitation = `sha256:${'f'.repeat(64)}`;
+  const graphMailRecord = JSON.parse(JSON.stringify(record));
+  graphMailRecord.payload.answer = '圖譜來源引用回答';
+  graphMailRecord.payload.citations = [graphMailCitation];
+  const graphMailTurn = {
+    ...turn,
+    text: graphMailRecord.payload.answer,
+    citation_labels: [graphMailCitation],
+    answer_fingerprint: textFingerprint(graphMailRecord.payload.answer),
+    citation_fingerprints: [textFingerprint(graphMailCitation)],
+  };
+  assert.equal(classify('mail', graphMailRecord, graphMailTurn).status,
+    'mail_cited_result');
   const missingFinalizationRecord = JSON.parse(JSON.stringify(record));
   delete missingFinalizationRecord.payload.diagnostic.finalization_validation;
   assert.equal(
@@ -2940,6 +3171,19 @@ async function selfCheck() {
     classify('mail', completedProviderRecord, turn).status,
     'mail_cited_result',
   );
+  const partialProviderRecord = JSON.parse(JSON.stringify(completedProviderRecord));
+  partialProviderRecord.payload.status = 'partial';
+  partialProviderRecord.payload.answer = '';
+  const partialClassificationTurn = {
+    ...turn,
+    status: 'partial',
+    text: '',
+    incomplete_visible: true,
+  };
+  assert.equal(
+    classify('mail', partialProviderRecord, partialClassificationTurn).status,
+    'mail_cited_result',
+  );
   const fourthRepairRecord = JSON.parse(JSON.stringify(record));
   fourthRepairRecord.payload.diagnostic.provider_attempt_count = 4;
   fourthRepairRecord.payload.diagnostic.provider_attempts = [
@@ -2977,44 +3221,140 @@ async function selfCheck() {
     error: '',
     citations: 1,
     citation_labels: [documentCitation],
-    answer_fingerprint: textFingerprint(documentAnswer),
+    // Live acceptance must not depend on a precomputed full-answer hash.
+    answer_fingerprint: `sha256:${'f'.repeat(64)}`,
     citation_fingerprints: [textFingerprint(documentCitation)],
   };
-  const expectedDocumentBinding = {
+  const expectedDocumentManifest = {
     source_family: 'document_text',
-    answer_fingerprint: textFingerprint(documentAnswer),
-    citation_fingerprints: [textFingerprint(documentCitation)],
+    source_authority_fingerprint: `sha256:${'1'.repeat(64)}`,
+    source_session_binding_fingerprint: `sha256:${'2'.repeat(64)}`,
+    citation_bindings: [{
+      citation_id: documentCitation,
+      citation_fingerprint: textFingerprint(documentCitation),
+      line_start: 3,
+      line_end: 3,
+      line_binding_fingerprint: liveLineBindingFingerprint(
+        `sha256:${'1'.repeat(64)}`,
+        `sha256:${'2'.repeat(64)}`,
+        documentCitation,
+        3,
+        3,
+      ),
+      required_snippets: ['書面核准'],
+    }],
   };
   assert.deepEqual(
-    parseExpectedEvidenceBindings(
-      JSON.stringify({document: expectedDocumentBinding}),
-      ['document'],
-    ),
-    {document: expectedDocumentBinding},
+    parseLiveDocumentSourceManifest(JSON.stringify(expectedDocumentManifest)),
+    expectedDocumentManifest,
   );
   assert.equal(
-    parseExpectedEvidenceBindings(
-      JSON.stringify({document: expectedDocumentBinding}),
-    ),
+    parseLiveDocumentSourceManifest(JSON.stringify({
+      ...expectedDocumentManifest,
+      source_family: 'mail',
+    })),
+    null,
+  );
+  const wrongLineManifest = JSON.parse(
+    JSON.stringify(expectedDocumentManifest),
+  );
+  wrongLineManifest.citation_bindings[0].line_start = 4;
+  wrongLineManifest.citation_bindings[0].line_end = 4;
+  assert.equal(
+    parseLiveDocumentSourceManifest(JSON.stringify(wrongLineManifest)),
+    null,
+  );
+  wrongLineManifest.citation_bindings[0].line_start = 0;
+  wrongLineManifest.citation_bindings[0].line_binding_fingerprint =
+    liveLineBindingFingerprint(
+      wrongLineManifest.source_authority_fingerprint,
+      wrongLineManifest.source_session_binding_fingerprint,
+      documentCitation, 0, 4,
+    );
+  assert.equal(
+    parseLiveDocumentSourceManifest(JSON.stringify(wrongLineManifest)),
+    null,
+  );
+  const wrongAuthorityManifest = JSON.parse(
+    JSON.stringify(expectedDocumentManifest),
+  );
+  wrongAuthorityManifest.source_authority_fingerprint =
+    `sha256:${'9'.repeat(64)}`;
+  assert.equal(
+    parseLiveDocumentSourceManifest(JSON.stringify(wrongAuthorityManifest)),
+    null,
+  );
+  const wrongSessionManifest = {
+    ...expectedDocumentManifest,
+    source_session_binding_fingerprint: `sha256:${'9'.repeat(64)}`,
+  };
+  assert.equal(
+    parseLiveDocumentSourceManifest(JSON.stringify(wrongSessionManifest)),
     null,
   );
   assert.equal(
     classify('document', documentRecord, documentTurn, {
-      expectedEvidenceBinding: expectedDocumentBinding,
+      liveDocumentManifest: expectedDocumentManifest,
+    }).status,
+    'document_cited_result',
+  );
+  assert.equal(
+    classify('document', documentRecord, documentTurn, {
+      liveDocumentManifest: expectedDocumentManifest,
+    }).source_binding_verified,
+    true,
+  );
+  assert.equal(
+    browserClassify('document', documentRecord, documentTurn, {
+      liveDocumentManifest: expectedDocumentManifest,
     }).status,
     'document_cited_result',
   );
   assert.equal(
     browserClassify('document', documentRecord, documentTurn, {
-      expectedEvidenceBinding: expectedDocumentBinding,
-    }).status,
-    'document_cited_result',
+      liveDocumentManifest: expectedDocumentManifest,
+    }).source_binding_verified,
+    true,
   );
-  const missingDocumentBinding = JSON.parse(JSON.stringify(documentRecord));
-  delete missingDocumentBinding.payload.diagnostic.finalization_validation;
+  const wrongSourceManifest = JSON.parse(
+    JSON.stringify(expectedDocumentManifest),
+  );
+  wrongSourceManifest.source_family = 'mail';
   assert.equal(
-    classify('document', missingDocumentBinding, documentTurn, {
-      expectedEvidenceBinding: expectedDocumentBinding,
+    classify('document', documentRecord, documentTurn, {
+      liveDocumentManifest: wrongSourceManifest,
+    }).status,
+    'document_failed',
+  );
+  const wrongDocumentCitation = `sha256:${'9'.repeat(64)}`;
+  assert.equal(
+    browserClassify('document', {
+      ...documentRecord,
+      payload: {...documentRecord.payload, citations: [wrongDocumentCitation]},
+    }, {
+      ...documentTurn,
+      citation_labels: [wrongDocumentCitation],
+      citation_fingerprints: [textFingerprint(wrongDocumentCitation)],
+    }, {liveDocumentManifest: expectedDocumentManifest}).status,
+    'document_failed',
+  );
+  const wrongFactManifest = JSON.parse(
+    JSON.stringify(expectedDocumentManifest),
+  );
+  wrongFactManifest.citation_bindings[0].required_snippets = ['不同來源事實'];
+  assert.equal(
+    classify('document', documentRecord, documentTurn, {
+      liveDocumentManifest: wrongFactManifest,
+    }).status,
+    'document_failed',
+  );
+  const missingDocumentFinalization = JSON.parse(
+    JSON.stringify(documentRecord),
+  );
+  delete missingDocumentFinalization.payload.diagnostic.finalization_validation;
+  assert.equal(
+    classify('document', missingDocumentFinalization, documentTurn, {
+      liveDocumentManifest: expectedDocumentManifest,
     }).status,
     'document_failed',
   );

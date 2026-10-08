@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
+import unicodedata
 
 from formowl_contract import ContractValidationError, sha256_json
 from formowl_graph import EffectiveGraphView
@@ -34,6 +35,9 @@ _SOURCE_OCCURRENCE_PROJECTION_CAPABILITY_BINDING_V1 = (
 _SOURCE_OCCURRENCE_COLUMN_CAPABILITY_BINDING_V1 = (
     "source_occurrence_column_capability_binding_v1"
 )
+_SOURCE_OCCURRENCE_EXACT_CELL_VALUE_BINDING_V1 = (
+    "source_occurrence_exact_cell_value_binding_v1"
+)
 SOURCE_OCCURRENCE_LEXICAL_TERM_ROLES = (
     "filter_value",
     "projection_field",
@@ -49,6 +53,37 @@ def source_occurrence_projection_capability_hash(value_hash: str) -> str:
 def source_occurrence_column_capability_hash(normalized_field: str) -> str:
     return sha256_json(
         [_SOURCE_OCCURRENCE_COLUMN_CAPABILITY_BINDING_V1, normalized_field]
+    )
+
+
+def normalize_source_occurrence_structured_surface(value: str) -> str:
+    if not isinstance(value, str):
+        raise ContractValidationError(
+            "source occurrence structured surface is invalid"
+        )
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def source_occurrence_exact_cell_value_hash(
+    column_hash: str,
+    value: str,
+) -> str:
+    normalized_value = normalize_source_occurrence_structured_surface(value)
+    if (
+        not isinstance(column_hash, str)
+        or not column_hash.startswith("sha256:")
+        or len(column_hash) != len("sha256:") + 64
+        or not normalized_value
+    ):
+        raise ContractValidationError(
+            "source occurrence exact cell value is invalid"
+        )
+    return sha256_json(
+        [
+            _SOURCE_OCCURRENCE_EXACT_CELL_VALUE_BINDING_V1,
+            column_hash,
+            normalized_value,
+        ]
     )
 
 
@@ -740,6 +775,9 @@ def execute_deterministic_source_occurrence_inventory(
     plan_fingerprint = plan.plan_fingerprint
     provider_fingerprint = provider.provider_fingerprint
     query_hashes = _source_occurrence_query_hashes(plan=plan, provider=provider)
+    requested_projection_columns = frozenset(
+        plan.exact_projection_term_hashes
+    )
     candidate_links = None
     projection_coverage_incomplete = False
     if provider.filter_slot_policy == "identifier_union_v1":
@@ -758,37 +796,67 @@ def execute_deterministic_source_occurrence_inventory(
                 }
             )
         )
+        if requested_projection_columns:
+            matched_positions = ()
+            projection_coverage_incomplete = True
     else:
         postings_by_value: dict[str, set[int]] = {}
         for pair in plan.exact_column_value_hash_pairs:
             postings_by_value.setdefault(pair[1], set()).update(
                 provider._column_value_postings[pair]
             )
+        filter_positions = set.intersection(*postings_by_value.values())
         filter_matched_position_set = {
             position
-            for position in set.intersection(*postings_by_value.values())
+            for position in filter_positions
             if provider._ordered_occurrences[position].structure_status
             != "candidate_only"
         }
         matched_position_set = set(filter_matched_position_set)
-        if plan.exact_projection_term_hashes:
+        if requested_projection_columns:
+            projection_positions = {
+                column_hash: {
+                    position
+                    for position in filter_matched_position_set
+                    if any(
+                        binding[0] == column_hash
+                        for binding in provider._ordered_occurrences[
+                            position
+                        ].structured_column_bindings
+                    )
+                }
+                for column_hash in requested_projection_columns
+            }
+            positions_with_requested_values = set().union(
+                *projection_positions.values()
+            )
             matched_position_set.intersection_update(
-                position
-                for column_hash in plan.exact_projection_term_hashes
-                for position in provider._column_postings[column_hash]
+                positions_with_requested_values
             )
             projection_coverage_incomplete = any(
-                filter_matched_position_set.isdisjoint(
-                    provider._column_postings[column_hash]
-                )
-                for column_hash in plan.exact_projection_term_hashes
+                not requested_projection_columns
+                <= {
+                    binding[0]
+                    for binding in provider._ordered_occurrences[
+                        position
+                    ].structured_column_bindings
+                }
+                for position in filter_matched_position_set
             )
+        if requested_projection_columns and not matched_position_set and filter_positions:
+            # A bounded cross-row link is diagnostic evidence only. Keep the
+            # source/target references, but never count it as a source-native row.
+            candidate_links = _bounded_source_occurrence_candidate_links(
+                plan=plan, provider=provider, filter_positions=filter_positions,
+            )
+            matched_position_set.update(candidate_links)
         matched_positions = tuple(sorted(matched_position_set))
     matched_positions = tuple(
         position
         for position in matched_positions
-        if provider._ordered_occurrences[position].structure_status
-        != "candidate_only"
+        if candidate_links is not None or (
+            provider._ordered_occurrences[position].structure_status != "candidate_only"
+        )
     )
     local_query_hashes = frozenset(
         query_hash
@@ -855,7 +923,6 @@ def execute_deterministic_source_occurrence_inventory(
             requested_value_hashes = {
                 value_hash for _column_hash, value_hash in requested_pairs
             }
-            requested_columns = set(plan.exact_projection_term_hashes)
             projection_bindings_set: set[tuple[str, str, str, str]] = set()
             for (
                 normalized_hash,
@@ -887,7 +954,10 @@ def execute_deterministic_source_occurrence_inventory(
                         (citation_hash, lineage_fingerprint)
                     )
                     matched_normalized_hashes.add(value_hash)
-                if not requested_columns or column_hash in requested_columns:
+                if (
+                    not requested_projection_columns
+                    or column_hash in requested_projection_columns
+                ):
                     projection_bindings_set.add(
                         (
                             field,
@@ -949,7 +1019,8 @@ def execute_deterministic_source_occurrence_inventory(
         + provider.redacted_count
     )
     candidate_only_count = sum(
-        item.structure_status == "candidate_only" for item in provider.occurrences
+        item.structure_status == "candidate_only"
+        for item in provider._ordered_occurrences
     )
     source_asset_gap_count = sum(
         count for _, count in provider.source_asset_reason_counts
@@ -1012,13 +1083,13 @@ def execute_deterministic_source_occurrence_inventory(
     authorized_scope_count = (
         provider.authorized_occurrence_scope_count
         if provider.authorized_occurrence_scope_count is not None
-        else len(provider.occurrences) + occurrence_gap_count
+        else len(provider._ordered_occurrences) + occurrence_gap_count
     )
     coverage = ExactCoverageContract(
         coverage_fingerprint=sha256_json(coverage_payload),
         view_revision_fingerprint=provider.authorized_scope_fingerprint,
         visible_node_count=0,
-        inventory_schema_record_count=len(provider.occurrences),
+        inventory_schema_record_count=len(provider._ordered_occurrences),
         filter_term_count=len(query_hashes),
         identifier_filter_count=len(query_hashes),
         topic_filter_count=0,
@@ -1056,7 +1127,7 @@ def execute_deterministic_source_occurrence_inventory(
             "extractable_occurrence_scope_count": (
                 provider.extractable_occurrence_scope_count
                 if provider.extractable_occurrence_scope_count is not None
-                else len(provider.occurrences)
+                else len(provider._ordered_occurrences)
             ),
             "candidate_only_occurrence_count": candidate_only_count,
             "source_asset_reason_counts": [
@@ -1420,6 +1491,8 @@ __all__ = [
     "authorized_source_occurrence_scope_fingerprint",
     "execute_deterministic_exact_inventory",
     "execute_deterministic_source_occurrence_inventory",
+    "normalize_source_occurrence_structured_surface",
     "source_occurrence_column_capability_hash",
+    "source_occurrence_exact_cell_value_hash",
     "source_occurrence_projection_capability_hash",
 ]

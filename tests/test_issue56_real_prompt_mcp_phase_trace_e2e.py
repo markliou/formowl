@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import stat
+from time import perf_counter
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -29,6 +30,8 @@ from formowl_gateway.issue56_diagnostic import (
     build_issue56_sealed_source_diagnostic_input,
 )
 from formowl_mail import issue56_real_prompt as owner_prompt
+from formowl_mail import hybrid as hybrid_module
+from formowl_mail import issue56_sealed_source as owner_source
 from scripts import issue56_prompt_mcp_hybrid_diagnostic as diagnostic_cli
 import test_issue56_prompt_mcp_hybrid_e2e as existing_diagnostic_fixture
 
@@ -130,6 +133,10 @@ class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
     ) -> None:
         base = self._base_source()
         loaded = self._owner_loaded_fixture(base)
+        self.assertEqual(
+            loaded.safe_binding["lineage_crosswalk_precompute"]["source_session_binding_fingerprint"],
+            loaded.session.source_session_binding_fingerprint,
+        )
         events: list[str] = []
 
         def load_owner_source() -> object:
@@ -434,7 +441,15 @@ class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
         base: Issue56SealedSourceDiagnosticInput,
     ) -> object:
         relation = base.relation_projection_base_precompute
-        lineage = base.lineage_crosswalk_precompute
+        started_at = perf_counter()
+        lineage = hybrid_module.precompute_evidence_identity_lineage_crosswalk(
+            session=base.session,
+            effective_graph_view=base.effective_graph_view,
+        )
+        lineage_binding = owner_source._lineage_crosswalk_precompute_safe_binding(
+            lineage_crosswalk=lineage,
+            elapsed_ms=(perf_counter() - started_at) * 1000.0,
+        )
         counts = {
             "authorized_observation_count": base.observation_count,
             "graph_observation_node_count": relation.projected_node_count,
@@ -453,7 +468,7 @@ class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
                 relation.candidate_admission_profile_fingerprint
             ),
             "counts": counts,
-            "lineage_crosswalk_precompute": lineage.to_safe_dict(),
+            "lineage_crosswalk_precompute": lineage_binding,
             "relation_projection_base_precompute": relation.to_safe_dict(),
         }
         safe_binding["binding_fingerprint"] = sha256_json(safe_binding)
@@ -523,7 +538,7 @@ class Issue56RealPromptMcpPhaseTraceE2ETests(unittest.TestCase):
             "index_fingerprint": base.session.index.index_fingerprint,
             "graph_revision_fingerprint": base.graph_revision_fingerprint,
             "source_access_fingerprint": (base.session.authorized_source.authorization_fingerprint),
-            "source_session_binding_fingerprint": sha256_json("source-session-binding"),
+            "source_session_binding_fingerprint": base.session.source_session_binding_fingerprint,
             "candidate_inventory_fingerprint": sha256_json("candidate-inventory"),
             "identity_scope_mode_fingerprint": sha256_json(ISSUE56_DIAGNOSTIC_IDENTITY_SCOPE_MODE),
             "identity_scope_fingerprint": sha256_json("workspace-only-scope"),

@@ -28,6 +28,13 @@ from .storage import (
     ObservationStore,
 )
 
+_PARTIAL_DOCUMENT_ERRORS = frozenset({
+    "attachment_document_byte_limit_reached",
+    "attachment_document_table_limit_reached",
+    "attachment_document_cell_limit_reached",
+    "attachment_document_parse_failed",
+})
+
 
 @dataclass
 class AttachmentMaterializationContext:
@@ -39,6 +46,9 @@ class AttachmentMaterializationContext:
     extractor_run_store: ExtractorRunStore | None = field(default=None, repr=False)
     observation_store: ObservationStore | None = field(default=None, repr=False)
     document_adapter: ExtractorAdapter | None = field(default=None, repr=False)
+    document_config: dict[str, Any] = field(default_factory=dict, repr=False)
+    compact_child_results: bool = field(default=False, repr=False)
+    child_results: list[StoredExtractionResult] = field(default_factory=list, repr=False)
     _receipts: list[tuple[str, str, str, bool]] = field(
         default_factory=list,
         init=False,
@@ -110,13 +120,29 @@ class AttachmentMaterializationContext:
                 observation_store=self.observation_store,
                 adapter=self.document_adapter,
                 config={
+                    **self.document_config,
                     "parent_asset_id": self.parent_asset.asset_id,
                     "parent_source_ref": to_plain(self.parent_asset.source_ref),
                     "attachment_source_ref": to_plain(source_ref),
                 },
             )
-            if child_result.extractor_run.status != "succeeded":
+            child_errors = child_result.extractor_run.errors
+            if child_result.extractor_run.status != "succeeded" and (
+                not child_errors
+                or not set(child_errors).issubset(_PARTIAL_DOCUMENT_ERRORS)
+            ):
                 raise ContractValidationError("attachment document extraction failed")
+            # Preserve the real failed run and child Asset for supported parser
+            # exclusions. Hash/permission/lineage errors and unknown failures
+            # still propagate; no failed child is relabelled as succeeded.
+            if self.compact_child_results:
+                child_result = StoredExtractionResult(
+                    extractor_run=child_result.extractor_run,
+                    observations=[],
+                    child_extractor_runs=child_result.child_extractor_runs,
+                    observation_ids=child_result.observation_ids,
+                )
+            self.child_results.append(child_result)
         return child_asset.asset_id
 
     def validate_observations(self, observations: list[Observation]) -> None:
@@ -156,6 +182,8 @@ class ExtractionResult:
 class StoredExtractionResult:
     extractor_run: ExtractorRun
     observations: list[Observation] = field(default_factory=list)
+    child_extractor_runs: list[ExtractorRun] = field(default_factory=list)
+    observation_ids: list[str] = field(default_factory=list)
 
 
 @runtime_checkable
@@ -232,6 +260,14 @@ def run_extractor(
             extractor_run_store=extractor_run_store,
             observation_store=observation_store,
             document_adapter=AttachmentDocumentExtractor(),
+            document_config={
+                key: value for key, value in normalized_config.items()
+                if key.startswith("attachment_")
+            },
+            compact_child_results=_bool_config(
+                normalized_config.get("attachment_compact_child_results", False),
+                "attachment_compact_child_results",
+            ),
         )
     extraction_input = ExtractionInput(
         asset=asset,
@@ -245,6 +281,31 @@ def run_extractor(
     try:
         result = adapter.extract(extraction_input)
         status = "failed" if result.errors else "succeeded"
+        children = (
+            attachment_materialization.child_results
+            if attachment_materialization is not None else []
+        )
+        warnings = [
+            *result.warnings,
+            *(warning for child in children for warning in child.extractor_run.warnings),
+            *(
+                "attachment_child_extraction_incomplete"
+                for child in children if child.extractor_run.status != "succeeded"
+            ),
+            *(
+                error for child in children if child.extractor_run.status != "succeeded"
+                for error in child.extractor_run.errors
+            ),
+        ]
+        # A successful processing run is not a completeness certificate.
+        # Keep the original exclusion codes and expose one existing warning marker
+        # for downstream coverage consumers; do not invent a new JobStatus.
+        if any(
+            "skipped" in warning or "limit_reached" in warning
+            or "unsupported" in warning or "incomplete" in warning
+            for warning in warnings
+        ) and "partial_extraction" not in warnings:
+            warnings.append("partial_extraction")
         persisted_observations = (
             _validate_observations(
                 result.observations,
@@ -273,9 +334,12 @@ def run_extractor(
             status=status,
             started_at=run_started_at,
             completed_at=completed_at or now_iso(),
-            warnings=list(result.warnings),
+            warnings=warnings,
             errors=list(result.errors),
         )
+        # Prevalidation is complete and run metadata no longer needs the result.
+        # Drop only our reference; never mutate adapter-owned observations.
+        del result
         extractor_run_store.create(run)
         if status == "succeeded":
             for observation in persisted_observations:
@@ -285,7 +349,18 @@ def run_extractor(
                 attachment_materialization._closed = True
         return StoredExtractionResult(
             extractor_run=run,
-            observations=persisted_observations,
+            observations=[
+                *persisted_observations,
+                *(observation for child in children for observation in child.observations),
+            ] if status == "succeeded" else [],
+            child_extractor_runs=[
+                run for child in children
+                for run in (child.extractor_run, *child.child_extractor_runs)
+            ] if status == "succeeded" else [],
+            observation_ids=[
+                *(observation.observation_id for observation in persisted_observations),
+                *(observation_id for child in children for observation_id in child.observation_ids),
+            ] if status == "succeeded" else [],
         )
     except Exception as exc:
         if attachment_materialization is not None and not attachment_materialization._closed:
@@ -370,6 +445,12 @@ def _validate_optional_timestamp(field_name: str, value: str | None) -> None:
             datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError as exc:
             raise ContractValidationError(f"{field_name} must be an ISO timestamp") from exc
+
+
+def _bool_config(value: Any, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ContractValidationError(f"{field_name} must be a boolean")
+    return value
 
 
 def _safe_extractor_error(exc: Exception) -> str:

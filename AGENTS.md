@@ -55,13 +55,20 @@ System Backbone Agent unless the user explicitly assigns it here.
 
 ## Master and Subagent Execution Mode
 
-**Latest 2026-10-06 user authorization:** exactly two ordinary implementation
-workers use `gpt-6.1-sol` with `reasoning_effort=high`. This supersedes earlier
+**Latest 2026-10-06 user authorization:** up to two ordinary implementation
+worker slots may request `gpt-6.1-sol` with `reasoning_effort=high`. This supersedes earlier
 sol/xhigh and luna/max tiers and conflicting “no recreation” work orders.
-Current 2026-10-06 SPEC clarification: A's `SPEC.md` revision finished; B sequentially
-aligns the eight explicitly assigned current docs, Master orchestration-only.
-This docs-only slice grants scoped document/link/diff checks, no code, tests,
+The 2026-10-06 SPEC clarification was a closed documentation slice: A's
+`SPEC.md` revision finished and B aligned the eight assigned current docs;
+Master orchestration-only applied to that slice.
+That closed docs-only slice granted scoped document/link/diff checks, no code, tests,
 containers, provider, service, or private-source actions; UAT recovery remains open.
+
+**Current user assignments supersede that closed-slice boundary:** the Master
+or authorized worker may perform only the explicitly named bounded work. This
+does not authorize canonical writes, unsafe permission bypass, or a
+methodology-completion claim; it also does not create a standing ban on a later
+explicitly authorized provider, Docker, source, or UAT operation.
 
 Current explicit user assignments govern paths and permitted actions. Dated
 completed-task write sets, closure reports, and “no further work authorized”
@@ -70,21 +77,26 @@ nor indefinitely prohibit later user-authorized work. Historical metadata is
 not proof of a current worker turn. Evidence is superseded only for the same
 proved scope; a later focused pass does not make a whole module or suite green.
 
-No descendants, substitution, duplication, or additional worker is authorized.
-The worker tier alone grants no provider/general deployment/build/index actions.
-The earlier bounded service-recovery grant and outcomes remain dated handoff evidence,
-not actions for this SPEC clarification. Later operational testing needs its applicable
-assignment and Master inspection before ordinary-chat-first testing. UAT remains `gpt-5.5`/`high`. Any model
-unavailability or missing/mismatched persisted metadata remains a blocker; no
-silent substitution is permitted.
-First dispatch and every future resume must explicitly configure both model and
-effort as sol/high; do not use unpinned `send_input`. Each worker then verifies
-its own native task-owned `session_meta` + `task_started` + `turn_context` before actions; message text or
-running status is not configuration proof. The user authorizes read-only inspection of the minimum
-persisted worker metadata needed for this check. Record only task ID, the
-worker-owned turn ID, model, effort, UTC timestamp, and verification outcome;
-exclude inherited contexts, raw rollout paths/content, prompts, and secrets.
-Missing or mismatched metadata blocks work; do not silently substitute.
+No descendants, duplication, or unbounded parallel workers are authorized. The
+two-worker cap remains in force, but the lack of an available or verifiable
+worker handle is not an availability gate for bounded work.
+The worker tier is the requested configuration and a traceability field, not a
+precondition for work. Dispatch should request `gpt-6.1-sol`/`high` when the
+runtime supports it, but missing or mismatched persisted metadata, an unavailable
+model, or an unavailable worker handle must not block a bounded assignment.
+Continue with the configured/available execution path and record the status as
+`verified`, `unverified`, or `unavailable`; never claim a model or effort that
+was not observed. This removes the former metadata deadlock without permitting
+silent promotion of a fallback to the requested tier. “No substitution” means
+no silent relabelling of the observed model, effort, or worker identity; it does
+not prohibit continuing explicitly bounded work with the available execution
+path.
+Worker metadata inspection remains read-only and safe: retain only task/turn
+IDs when present, model/effort when observed, UTC timestamp, and verification
+status; exclude inherited contexts, raw rollout paths/content, prompts, and
+secrets. An unpinned resume is permitted when explicit pinning is unavailable,
+provided its actual configuration is marked unverified and the work remains
+within the bounded assignment. UAT remains `gpt-5.5`/`high`.
 
 Dated diagnostic results and unique verification records remain in
 `docs/agent-goals/handoff-log.md`. Its later cap-fixture repair supersedes the
@@ -96,13 +108,16 @@ completion or reviewer acceptance is established.
 - Keep bounded assignments sequential and write sets disjoint.
 - The temporary exception does not reduce the independent three-reviewer
   acceptance gate or relax safety or methodology authority.
-- The Master owns only the global view, a plan of at most five steps,
+- The Master normally owns only the global view, a plan of at most five steps,
   non-overlapping work assignment, progress and repeated-failure monitoring,
-  integration review, and final acceptance.
+  integration review, and final acceptance. An explicit user assignment may
+  authorize the Master to make a bounded documentation or implementation edit;
+  worker metadata availability must not prevent that authorized work.
 - The Master may inspect repository state, diffs, and verification results, but
   must not write or modify implementation code or durable repository
-  documentation. Repository edits belong only to the explicitly authorized
-  worker or temporary reviewer within its current bounded write set.
+  documentation unless the current user explicitly authorizes a bounded edit in
+  named paths. Repository edits otherwise belong only to the explicitly
+  authorized worker or temporary reviewer within its current bounded write set.
 - While implementation workers are active, the Master must inspect their
   progress at least every 15 minutes for overengineering, scope or file-count
   growth, parallel abstractions, repeated failed routes, and unnecessary broad
@@ -279,7 +294,7 @@ Do not start methodology-quality comparison until `--require-ready` permits it.
 
 For an authorized implementation-completion verification, run the existing
 Python tests before reporting completion. This is not an implicit full-suite
-grant for a bounded docs-only assignment:
+grant for a bounded assignment:
 
 ```sh
 docker run --rm -v "$PWD:/workspace" -w /workspace formowl-dev:local \

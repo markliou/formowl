@@ -377,6 +377,7 @@ def _ingest_stable_file(
             config=config,
             started_at=started_at,
             completed_at=completed_at,
+            attachment_asset_store=asset_store,
         )
 
     return _item_from_asset(

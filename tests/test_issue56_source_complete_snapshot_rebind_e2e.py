@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -550,6 +551,84 @@ class Issue56SourceCompleteSnapshotRebindE2ETests(unittest.TestCase):
             ".test-tmp",
         ):
             self.assertNotIn(forbidden, public_rendered)
+
+    def test_native_retrieval_validator_accepts_mail_table_observations_fail_closed(
+        self,
+    ) -> None:
+        root = _paths.fresh_test_dir("issue56-native-retrieval-validator-table")
+        manifest_path, export_root, work_dir = _native_fixture(root)
+        artifacts = rebind.run_native_retrieval_ready_mail_evidence(
+            native_manifest_path=manifest_path,
+            native_export_root=export_root,
+            preserved_work_dir=work_dir,
+            source_snapshot_output=root / "source-snapshot.json",
+            source_report_output=root / "source-report.json",
+            retrieval_snapshot_output=root / "retrieval-snapshot.json",
+            bundle_output=root / "mail-bundle.json",
+            report_output=root / "retrieval-report.json",
+            created_at="2026-08-18T10:00:00+00:00",
+        )
+        snapshot = deepcopy(artifacts.retrieval_snapshot)
+        parsed = [Observation.from_dict(row) for row in snapshot["parsed_mail_observations"]]
+        parent = next(
+            observation
+            for observation in parsed
+            if observation.observation_type == "email_message"
+        )
+        table_observations = []
+        for observation_type, cell_index in (("table_row", None), ("table_cell", 1)):
+            location = {
+                **parent.location,
+                "table_index": 1,
+                "row_index": 1,
+            }
+            if cell_index is not None:
+                location["cell_index"] = cell_index
+            table_observations.append(
+                Observation(
+                    observation_id=f"table-{observation_type}",
+                    asset_id=parent.asset_id,
+                    extractor_run_id=parent.extractor_run_id,
+                    observation_type=observation_type,
+                    modality="document",
+                    location=location,
+                    confidence=1.0,
+                    permission_scope=parent.permission_scope,
+                    created_at=parent.created_at,
+                    text="table evidence",
+                    payload={"canonical_fact_status": "not_asserted"},
+                    extracted_value="table evidence",
+                )
+            )
+        parsed.extend(table_observations)
+        snapshot["parsed_mail_observations"] = [
+            observation.to_dict() for observation in parsed
+        ]
+        snapshot["counts"]["parsed_observation_count"] += len(table_observations)
+        snapshot["counts"]["retrieval_snapshot_observation_count"] += len(table_observations)
+        snapshot["parsed_observation_fingerprint"] = sha256_json(
+            snapshot["parsed_mail_observations"]
+        )
+        snapshot["snapshot_fingerprint"] = rebind._payload_fingerprint(
+            snapshot,
+            "snapshot_fingerprint",
+        )
+        rebind._validate_native_retrieval_snapshot(snapshot)
+
+        invalid = deepcopy(snapshot)
+        invalid["parsed_mail_observations"][-1]["observation_type"] = "unknown_observation"
+        invalid["parsed_observation_fingerprint"] = sha256_json(
+            invalid["parsed_mail_observations"]
+        )
+        invalid["snapshot_fingerprint"] = rebind._payload_fingerprint(
+            invalid,
+            "snapshot_fingerprint",
+        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "native_retrieval_snapshot_observation_type_invalid",
+        ):
+            rebind._validate_native_retrieval_snapshot(invalid)
 
     def test_native_authority_fails_closed_on_export_hash_drift(self) -> None:
         root = _paths.fresh_test_dir("issue56-native-source-complete-drift")

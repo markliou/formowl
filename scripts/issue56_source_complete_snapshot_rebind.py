@@ -2336,6 +2336,8 @@ def _validate_native_retrieval_snapshot(snapshot: Mapping[str, Any]) -> None:
             "email_message",
             "email_header",
             "email_body_segment",
+            "table_row",
+            "table_cell",
         }:
             if item.structure_kind != "email_message_occurrence" or observation.location.get(
                 "source_content_hash"

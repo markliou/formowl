@@ -36,6 +36,43 @@ acceptance.
 7. Preserve permission and provenance at candidate creation and every graph hop.
 8. Keep PostgreSQL/pgvector as the canonical storage baseline.
 
+Under the 2026-10-06 rule in `SPEC.md` §7.3.1, validated `evidence_lookup`
+with a nonempty validated requested-field set and **all** fields lacking
+verified support triggers one materially different, same-authorized-scope
+bounded source recheck when existing safety/eligibility and remaining budgets
+permit, even with unrelated citations. Partial misses must be disclosed and
+must not trigger this automatic recheck. An empty field set uses the existing
+validated evidence-need plan or clarification; it is not vacuously all missing.
+Source-backed explicit blanks count as verified coverage; citation count or
+status alone cannot trigger recheck. Missing, unsealed, or unactivated
+projections grant no independent §7.3.1 eligibility. Eligible fallback may use
+an independently validated immutable source snapshot without the failed
+projection, and must retain authorized source/hash/lineage/revision checks and pinned budgets without
+inline rebuild. Mail and independent document lookup share this contract; the
+feature remains **待測**.
+
+### 2.1 Development POC and security-review boundaries
+
+The source-neutral double-check uses the existing retrieval owner and records
+one explicit boundary:
+
+- `development_poc_v1` is the default for local/provider-free diagnostics and
+  bounded implementation work over the authorized `mail` and standalone
+  `document_text` adapters. It may report safe statuses, counts, citations,
+  timings, and fingerprints only. It cannot support a methodology, production
+  security, superiority, or default-path claim.
+- `security_review_v1` is not a stronger test label. The shared core may use
+  it only after the executable authority is ready, source completeness,
+  execution-fingerprint binding, same-pipeline real-source ablation, and
+  independent final-answer acceptance are verified, with exactly three
+  effective reviewer agreements. If any prerequisite is absent, the boundary
+  rejects before reading source evidence.
+
+Both boundaries retain the same permission, provenance, fail-closed, audit,
+redaction, no-secret, and no-raw-path rules. No live private-mail or provider
+UAT is part of the October 1, 2026 implementation slice. A POC result remains
+diagnostic even when its local path is functionally successful.
+
 ## 3. Work Package A — Runtime Alignment
 
 ### A1. Immutable tokenizer profile
@@ -167,9 +204,24 @@ Observation evidence. Rerank evidence bundles, not isolated chunks.
 
 ### D5. Plan repair
 
-Allow at most one bounded repair/retrieval pass for unresolved required slots.
-The repair cannot broaden actor, workspace, source, permission, revision, or
-claim scope.
+Allow a bounded repair/retrieval loop for unresolved required slots. Before
+each tool call, the Query Agent must expand/refine the request and pass a
+freshly validated plan. After each result it inspects coverage and either
+stops, asks for clarification, or continues within the pinned
+attempt/tool-call/evidence/token/time/repair budgets. The loop cannot broaden
+actor, workspace, source, permission, revision, or claim scope, and cannot
+rebuild the KG or index. This general plan repair must not bypass the automatic
+all-requested-fields source-recheck rule in `SPEC.md` §7.3.1.
+
+Field-driven source recheck is not a repair for one missing field when another
+requested field is already covered: only the literal all-requested-fields-
+missing condition triggers it, subject to existing safety/eligibility and
+remaining budgets. Partial misses must be disclosed and must not trigger this
+automatic recheck. A source-backed explicit blank counts as verified coverage
+and is reported as blank, not retrieval missing. A failed projection grants no
+independent eligibility; only an eligible lookup may use the independently
+validated same-authorized source snapshot without it, retaining source/hash/
+lineage/revision/permissions and budgets, never rebuilding inline.
 
 ### D6. Deterministic executor
 

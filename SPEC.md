@@ -1194,35 +1194,49 @@ External parsers, embedding models, rerankers, and LLMs are replaceable
 candidate-generation or answer components. Their output is never ontology,
 authorization, or canonical truth by itself.
 
-#### 8.1.1 Development worker tier and metadata verification
+#### 8.1.1 Development worker tier and metadata recording
 
-As reaffirmed by the **2026-10-06 user authorization**, development uses an
-orchestration-only Master and exactly two ordinary implementation workers, both
-`gpt-6.1-sol` with `reasoning_effort=high`. Current explicit bounded
-assignments govern the disjoint worker write sets; the orchestration-only Master
-makes no implementation or durable repository-document edits. Dated task
+As reaffirmed by the **2026-10-06 user authorization**, development permits an
+orchestration-only Master and up to two ordinary implementation worker slots,
+requesting `gpt-6.1-sol` with `reasoning_effort=high`. Current explicit bounded
+assignments govern the disjoint worker write sets. The Master normally makes no
+implementation or durable repository-document edits; an explicit current user
+assignment may authorize a bounded edit in named paths. Dated task
 scopes, closure records, old metadata, and “no further work” statements are
-historical evidence, not future work bans. No descendants, substitution,
-duplication, or additional workers are authorized.
+historical evidence, not future work bans. No descendants, duplication, or
+additional workers are authorized. No substitution means no silent relabelling
+of the observed model, effort, or worker identity; it does not prohibit
+continuing explicitly bounded work through an available execution path.
 UAT remains `gpt-5.5`/`high`, and the methodology authority and independent
 three-reviewer gate remain unchanged.
 
-Every dispatch and resume must explicitly configure model and effort as sol/high;
-unpinned `send_input` is not a permitted resume path. Each worker verifies its
-own persisted native `turn_context` by task ID, worker-owned turn ID, model,
-effort, and UTC timestamp before edits. Inherited parent turns, requested
-configuration, prompt text, or running status are not configuration proof.
-Missing or mismatched metadata or model/dispatch unavailability is a blocker,
-never permission to substitute. Durable records retain only safe task/turn IDs,
-model, effort, UTC timestamp, and verification outcome; no raw rollout paths,
-content, prompts, credentials, or source payloads.
+The requested worker configuration is `gpt-6.1-sol` with `reasoning_effort=high`.
+Dispatch should request that configuration and record the actual configuration
+when it is observable, but persisted `session_meta`, `task_started`, and
+`turn_context` are diagnostic metadata rather than an execution gate. Missing,
+mismatched, unavailable, or unpinned worker metadata must be recorded as
+`unverified`/`unavailable` and must not stop a bounded assignment. A worker may
+continue through the available configured handle; it must not describe an
+unobserved fallback as sol/high. Inherited context and prompt text remain
+insufficient evidence for a positive model claim, but they are not reasons to
+abort work. Durable records retain only safe task/turn IDs when present,
+observed model/effort, UTC timestamp, and verification outcome; no raw rollout
+paths, content, prompts, credentials, or source payloads.
 
-No provider, deployment, source/index rebuild, live UAT, full-suite, or reviewer
-acceptance action is granted here. Feature remains **待測**, step 4 is
+This worker-tier paragraph alone grants no provider, deployment, source/index
+rebuild, live UAT, full-suite, or reviewer acceptance action. An explicit current
+user assignment may grant those operations within its named scope. Feature remains **待測**, step 4 is
 in-progress, F841/full regression/live UAT/three reviewers/four methodology
 gates remain open, and no standard functionality, readiness, completion, or
 reviewer acceptance is established. Permission, privacy, audit, provenance,
 and candidate-before-canonical protections remain unchanged.
+
+The explicit **2026-10-07 bounded assignment** supersedes closed-slice wording
+for its named paths and outcomes. It does not grant canonical writes, unsafe
+permission bypass, source/index rebuild outside a named artifact, methodology
+readiness, or reviewer acceptance. Provider, Docker, source, and live-UAT
+operations remain governed by the latest explicit user assignment rather than
+by this generic tier paragraph.
 
 ### 8.2 Data split
 
