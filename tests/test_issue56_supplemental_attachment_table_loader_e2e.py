@@ -514,8 +514,20 @@ class Issue56SupplementalAttachmentTableLoaderE2ETests(
                 )
             runtime.preflight = AsyncMock(return_value={"status": "ready"})
             principal, actor = _oauth_context(config)
+            exact_results = []
+            execute = hybrid_module.execute_deterministic_source_occurrence_inventory
+
+            def record_exact_result(*args, **kwargs):
+                result = execute(*args, **kwargs)
+                exact_results.append(result)
+                return result
+
             try:
                 with (
+                    patch.object(
+                        hybrid_module, "execute_deterministic_source_occurrence_inventory",
+                        side_effect=record_exact_result,
+                    ),
                     patch.object(
                         runtime.bridge,
                         "authenticate_access_token",
@@ -635,7 +647,17 @@ class Issue56SupplementalAttachmentTableLoaderE2ETests(
                 data = result["structuredContent"]["data"]
                 validate_public_gateway_payload(data)
                 inventory = data["exact_inventory"]
-                self.assertEqual(inventory["coverage_status"], "complete")
+                # Both source rows match this identifier, but only one has
+                # the requested field. Returning that value cannot certify
+                # complete coverage of the other matching row.
+                self.assertEqual(inventory["coverage_status"], "incomplete")
+                self.assertEqual(inventory["source_asset_reason_counts"], [])
+                self.assertEqual(inventory["unresolved_count"], 0)
+                self.assertEqual(inventory["unsupported_count"], 0)
+                self.assertEqual(
+                    exact_results[0].coverage.incompleteness_reason_hashes,
+                    (sha256_json("source_occurrence_projection_capability_incomplete"),),
+                )
                 self.assertEqual(inventory["returned_count"], 1)
                 self.assertEqual(inventory["candidate_only_occurrence_count"], 0)
                 self.assertEqual(
@@ -676,6 +698,7 @@ class Issue56SupplementalAttachmentTableLoaderE2ETests(
                 self.assertFalse(union_result["isError"], union_result)
                 union_data = union_result["structuredContent"]["data"]
                 union_inventory = union_data["exact_inventory"]
+                self.assertEqual(union_inventory["coverage_status"], "incomplete")
                 self.assertEqual(
                     union_inventory["returned_count"], 2, union_inventory
                 )
@@ -707,6 +730,9 @@ class Issue56SupplementalAttachmentTableLoaderE2ETests(
                 self.assertFalse(blank_result["isError"], blank_result)
                 blank_data = blank_result["structuredContent"]["data"]
                 blank_inventory = blank_data["exact_inventory"]
+                # A real explicit blank on its sole matching row is verified
+                # coverage; a sparse/absent cell below is not.
+                self.assertEqual(blank_inventory["coverage_status"], "complete")
                 self.assertEqual(blank_inventory["returned_count"], 1)
                 self.assertEqual(blank_inventory["candidate_only_occurrence_count"], 0)
                 blank_item = blank_inventory["items"][0]

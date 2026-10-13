@@ -33,6 +33,10 @@ _PARTIAL_DOCUMENT_ERRORS = frozenset({
     "attachment_document_table_limit_reached",
     "attachment_document_cell_limit_reached",
     "attachment_document_parse_failed",
+    "attachment_document_xls_parse_failed",
+    "attachment_document_pdf_parse_failed",
+    "attachment_document_pdf_text_extract_failed",
+    "attachment_document_pptx_parse_failed",
 })
 
 

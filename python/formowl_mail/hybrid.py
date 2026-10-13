@@ -2900,6 +2900,8 @@ def _semantic_observation_source_families(observation: Observation) -> tuple[str
     """Existing family classification; presence does not grant exact capability."""
     if observation.modality == "mail":
         return ("mail",)
+    if _is_attachment_text_observation(observation):
+        return ("mail",)
     if (
         observation.modality == "text"
         and observation.observation_type in {"heading", "paragraph"}
@@ -2917,6 +2919,8 @@ def _semantic_observation_source_families(observation: Observation) -> tuple[str
 
 def _semantic_observation_retrieval_source_family(observation: Observation) -> str | None:
     """Ordinary query scoping, distinct from the capability-presence summary."""
+    if _is_attachment_text_observation(observation):
+        return "mail"
     if (
         observation.modality == "text"
         and observation.observation_type in {"heading", "paragraph"}
@@ -2931,6 +2935,19 @@ def _semantic_observation_retrieval_source_family(observation: Observation) -> s
     if observation.modality == "document" and observation.observation_type in {"table_row", "table_cell"}:
         return "attachment_table"
     return None
+
+
+def _is_attachment_text_observation(observation: Observation) -> bool:
+    # This classification grants no access: the ordinary bound-record builder
+    # still validates a genuine parent occurrence, hashes, and permission scope.
+    lineage = (observation.payload or {}).get("lineage")
+    return (
+        observation.modality == "document"
+        and observation.observation_type in {"paragraph", "heading", "list_item"}
+        and isinstance(lineage, Mapping)
+        and isinstance(observation.asset_id, str)
+        and lineage.get("child_asset_id") == observation.asset_id
+    )
 
 
 def _semantic_session_source_families(

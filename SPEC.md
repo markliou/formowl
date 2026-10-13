@@ -556,6 +556,16 @@ Queries asking for all, every, count, inventory, duplicates, missing items,
 exact membership, completeness, or definitive absence route deterministically
 to structured execution.
 
+Business examples describe applications of this shared core, not separate
+question-specific functions. A set of 30 target examples is not a claim that
+30 functions are implemented. Generic native-table field lookup binds arbitrary
+requested fields to the current authorized source schema, preserving identifier
+and same-row constraints; unknown or ambiguous structured bindings require
+clarification. An unrelated table schema must not divert ordinary text lookup.
+Attachment text and independently registered document text use the same
+governed query core with distinct source/parent bindings. Each application still
+requires evidence for its actual native features, coverage and claim strength.
+
 ### 7.2 Capability discovery and validated plan set
 
 Before planning execution, the Query Agent discovers and pins the actual
@@ -571,6 +581,16 @@ current MCP tools and their actual input/output schemas
 Descriptions, cached assumptions, public documentation, and model knowledge do
 not override these runtime contracts. Tool arguments and source-field
 projections are validated against the discovered schemas before execution.
+
+An attachment is a container, not necessarily table evidence. Parsed mail
+attachment text stays in `mail`; `attachment_table` denotes native tables;
+`document_text` denotes independently registered documents. Local attachment
+document qualifiers and explicitly literal source-label predicates must not
+invent an independent-document requirement or become accidental AND filters.
+The server supplies the required source-family scope before planning. The
+current request schema and validator both admit up to three available families;
+this capacity grants no access to an unavailable family. Repair may correct a
+rejected scope, but cannot replace an already validated request boundary.
 
 The Query Agent may propose multiple query expansions, subqueries, and tool
 plans when the request has multiple intents, fields, sources, or dependencies.
@@ -660,6 +680,48 @@ The runtime distinguishes evidence outcomes from operational failures.
 not the same as a provider error or timeout. A provider error or timeout must
 return a safe operational failure/stop reason and must never be projected as a
 legitimate no-answer or as evidence that the requested fact is absent.
+
+The current UAT provider bridge permits one transport recovery only for the
+observed HTTP `408`/`invalid_request_error` signature reporting a stream closed
+before `response.completed`, and only before any FormOwl/public tool execution.
+It retries the same request using explicit SSE within the original deadline
+and existing six-provider-request ceiling, sharing the single pre-tool recovery
+allowance with empty-body recovery. Ordinary chat still offers no tools.
+Unrelated errors, repeated disconnections, missing terminal events and expired
+budgets remain failures; post-tool failures preserve governed partial evidence.
+Failed attempts remain in the bounded trace. This mechanism is **待測** for
+live provider stability, not proof that the upstream service was repaired.
+The direct-provider UAT entrypoint explicitly uses SSE from the initial request
+to avoid waiting for a fully buffered JSON response. The reusable bridge retains
+JSON compatibility by default. An already-streaming failure is not retried via
+the same transport; a compact safe recovery-trigger record survives the bounded
+attempt tail when legacy JSON recovery is used.
+
+Provider SSE repair proceeds in separate evidence-gated stages (2026-10-12,
+**待測**): (1) parse named and data-only error events before raising, including
+the Responses flat `type: error` envelope; retain only bounded safe diagnostic
+fields and distinguish explicit errors, failed/incomplete terminals, malformed
+events, premature EOF and transport deadlines; (2) isolate a benign no-tool
+request through direct provider and UAT bridge paths with pinned model/settings
+and request/code bindings, then inspect bounded same-call failure evidence;
+(3) apply a countermeasure only to the demonstrated failure class, without
+speculative retry/timeout increases; (4) verify chat, governed MCP dispatch and
+reload/reset through the browser. Protocol tests or one passing provider call
+do not establish stability. Unknown upstream causes remain unknown; provider
+errors never establish source absence. These stages require no index rebuild
+and do not relax the existing retry, source, privacy or methodology boundaries.
+Transport failures retain a bounded failure phase, allowlisted exception family,
+cycle-safe nested cause/reason families and errno, request timeout and remaining
+deadline, observed HTTP status, and hash-only request ID through HTTP/gateway
+projections, attempt records and safe terminal traces. Received byte counts and
+other wire metadata are retained at top level, through public projections and
+safe terminal traces; causal/deadline/status/hash metadata is also retained per
+attempt.
+Raw exceptions, URLs, headers, bodies and private payloads are excluded. A close
+failure cannot erase the primary read failure; diagnostic types do not alter
+existing reason/retry/deadline/model/source policy. The 2026-10-12 isolated
+browser pass used an intermediate snapshot preceding final diagnostic guards;
+the historical continuation failure was not reproduced and its root is unproved.
 
 Every Query Agent run records versioned fingerprints for:
 
@@ -774,10 +836,13 @@ methodology gates blocked; execution fingerprint
 
 Evidence presentation has a shared `16 KiB` UTF-8 evidence-data budget:
 provenance-linked groups stay whole and exact inventory is all-or-none. This
-does not cap the entire provider request/context size. Provider diagnostics
+does not cap the entire provider request/context size. Provider diagnostics must
 carry the authoritative count (maximum `6`, derived from existing execution
-budgets) and latest `3` attempt/timing records; no timeout, execution budget,
-or retry allowance was increased.
+budgets) and all safe attempt/timing records within that budget. Frozen r11's
+latest-`3` truncation contradicts this contract; serving r12 includes the frozen
+retention repair with canonical focused117/117 verified as described below.
+All three retention-only scoped reviews agree. No timeout, execution
+budget or retry allowance is increased.
 
 The source recheck uses sealed job/hash/permission/scope references outside
 the canary; valid out-of-index document observations need not be canary
@@ -787,6 +852,21 @@ Original intent, claim ceiling, scope, and exact-output grammar stay bound.
 Field-focused graph evidence retains supporting text beyond a 400-character
 preamble with its source/citation group; citations alone cannot satisfy a
 business field or upgrade missing-field/coverage metadata.
+Source-start attachment projection likewise retains the full validated native
+paragraph within the existing shared `16 KiB` budget, not an arbitrary leading
+preview; provenance groups remain intact and cap-induced incompleteness explicit.
+Validated `request_contract.requested_fields` express business-semantic evidence
+needs for text as well as tables; they need not be literal source-column labels.
+Explicit structured projections still bind to the authorized source schema.
+Requested outputs are not conjunctive source-text predicates unless the original
+request explicitly requires that literal content/value. Neither this distinction
+nor fuller context changes first-valid-term freezing or automatic recheck eligibility.
+Repeated, reordered, or subset citations and rewritten prose are not new
+evidence. Additional contract-bound, validated field support may count as
+progress even when corpus coverage remains incomplete; operational errors or
+denials do not. With no new evidence or verified field support, stop the repeated
+lookup without discarding usable prior evidence. Existing bounded validation
+repair remains distinct from evidence progress (2026-10-12, **待測**).
 Inherited source pins and visual citation samples are not independent oracle
 proof; the historical browser's `source_binding_verified=false` remains
 recorded in the handoff. Raw terms/query text are not retained in safe traces;
@@ -1009,7 +1089,33 @@ the canonical request-shape, full tool-descriptor fingerprint (not names only),
 upstream HTTP status, terminal outcome, and valid-attempt marker. UI HTTP
 status is separate from upstream provider status.
 
-If any required binding or field is missing, classify the artifact as
+The bounded diagnostic producer uses a trusted frozen manifest and explicit
+operator attestation, read-only verification of the complete immutable code
+inventory and runtime identity, and image/settings/source-revision bindings.
+Operator-attested image identity is not remote attestation. Source identity
+comes from the validated ingestion revision, not arbitrary caller hashes or a
+plain JSON assertion. This is bounded diagnostic binding, not formal readiness
+or live deployment acceptance; external mount checks alone cannot repair an
+unbound response.
+
+Observed r11 diagnostic defect: the recorder retained only the latest three
+attempt records although the existing turn budget permits six. Requiring a
+complete history therefore made otherwise valid four-to-six-attempt turns
+incomparable. This three-record truncation is not the desired contract. B's
+frozen repair derives the diagnostic-retention constant from the unchanged
+six-request cap; all other product AST is unchanged. Canonical local19/19,
+zero failures/errors/skips,0.818s/Ruff verifies four/six-attempt positives and
+missing-history negatives. Serving r12 includes this repair; final canonical focused
+117/117 passed,174.049s,EXIT0, zero failures/errors/skips, exact252 code/34 tests
+verified pre/post and rechecked. Hypatia/Archimedes/Lagrange scoped AGREE3/3. It changes
+no execution budget/model/deadline or retry allowance, and genuinely missing/
+truncated identity stays incomparable. Candidate and live r12 each retain four
+comparable trusted-bound responses; this diagnostic identity proof does not
+resolve the first live source-reopen failure recorded alongside later native
+proof in §14.
+
+If any required binding or field is missing, mismatched, or truncated (including
+provider-attempt history), classify the artifact as
 `diagnostic_only/incomparable`; it must not support a loaded-code mismatch,
 no-data, provider-success, root-cause, or UAT-acceptance claim. Do not output
 raw queries, source payloads, headers, or secrets.
@@ -1084,6 +1190,18 @@ absence is not a source-coverage result. Query-time fallback or repair creates
 no hidden candidate or canonical writes.
 
 ### 7.5 Deterministic exact execution
+
+Projection-independent identifier/field execution (2026-10-12, **待測**) uses
+the existing sealed native-cell reader and deterministic executor. Automatic
+binding requires applicable source-provided requested-field schema; an unrelated
+table schema must not divert ordinary evidence lookup. Preserve all validated
+content constraints on the same row, not just the identifier. Explicit invalid
+or ambiguous table plans still clarify. When every requested field lacks verified
+support, an eligible automatic exact miss may continue through the existing
+same-scope source reader using the original remaining deadline/read/evidence/
+context budgets; partial support and source-backed blanks do not trigger recheck.
+Native date/display/formula/merged-header limitations remain explicit. A bounded
+exact shortlist never certifies complete inventory or source absence.
 
 Ranked top-k retrieval cannot prove a complete set, total count, inventory, or
 definitive negative.
@@ -1450,6 +1568,15 @@ jobs and projection metadata
 pgvector is the default dense-retrieval baseline. Raw or large binary assets
 live behind an object-store abstraction.
 
+Object verification binds one complete read to the expected hash and size,
+checks opened-descriptor stability and path identity, and re-resolves the
+governed locator to reject a changed symlink target. Failure diagnostics record
+that same call's safe digest/count/completion/stability facts, not a later
+replacement read. A mismatch never changes the expected pin or authorizes
+extraction/rebuild. A later passing read does not erase an earlier mismatch or
+establish its root cause; the historical large-source inconsistency remains
+unresolved until independently explained.
+
 A graph data model does not require a graph database. Dedicated graph or search
 engines may be considered only as rebuildable projections after a demonstrated
 requirement; they do not replace PostgreSQL governance authority.
@@ -1469,6 +1596,127 @@ or operator changes; a KG miss, exact-lookup miss, or prompt retry never starts
 one.
 
 Detailed infrastructure requirements are in `docs/infra-spec.md`.
+
+### 11.1 Query-independent offline batch indexing — 待測
+
+Preserve raw Assets and the existing Observation owner. The PostgreSQL adapter
+in [`python/formowl_ingestion/storage/postgres.py`](python/formowl_ingestion/storage/postgres.py)
+already persists unstructured Observation payloads as JSONB; PostgreSQL/pgvector
+remains the canonical baseline. The recovered UAT source stores are currently
+file-backed, not a proven live PostgreSQL migration. The existing source-native
+SQLite accelerator is a rebuildable derived locator/index artifact, not another
+truth store or a new MongoDB, Neo4j, or schema service.
+
+Offline batches persist sealed reference keys/ordinals, occurrence and attachment
+parent helpers, and document neighbor locators for reuse across unrelated queries.
+Bind artifact schema/capabilities, source revision/snapshot/authority, frozen
+profile, and artifact hashes; reopen/reuse matching versions without ingestion
+or indexing per request. Source, policy, or extractor changes require an explicit
+offline job and new version at the applicable extraction/index boundary; user
+prompts, KG misses, and retries never trigger ingestion or rebuild.
+
+With an admitted keyed artifact, eligible mail and independent PlainText/Markdown
+lookup uses bounded keyed hydration and at most four context references per side,
+not a sealed-reference tail scan or `list.index`. Revalidate selected source/hash,
+job/run/revision, permissions, occurrence and native locators through existing
+owners. Native row/cell evidence retains its existing sealed exact-cell owner and
+same-row provenance; locator metadata does not grant access or prove field schema.
+Existing eligibility, exact semantics and shared `500ms`/`8192` observations/
+`128` evidence/`16KiB` context caps are unchanged.
+
+Shortlists and misses remain incomplete, never proof of source absence. Coverage
+must distinguish unsupported extraction, parse failure, truncation, and missing
+projection. Legacy missing metadata is explicitly unavailable, never migrated
+inline. Offline clone mode retains verified postings without retokenization and
+does **not** build missing lexical surfaces. See
+[`RESOURCE_EXTRACTION_SPEC.md` §§8/10](RESOURCE_EXTRACTION_SPEC.md#8-tokenization-indexing-and-retrieval-boundary).
+
+Explicit offline prefix seeding independently validates old and new preparations
+and pins, the base SQLite hash, frozen profile and lexical-surface policy; active
+writes or incompatible policy reject. Reuse only an unchanged ordered job/reference
+prefix with identical authority fingerprints, native-source bindings, permissions,
+hashes and reference order. In a NEW copy, discard replaced-suffix postings,
+helpers, parents and locators before validating and indexing the new references.
+New helpers/parents retain full authority checks; mixed, reordered or tampered
+prefixes reject. Never mutate the base/pins, silently relabel old policy, inherit
+an unproved suffix, or extend inline. This is the existing derived lookup owner,
+not another index or truth store.
+
+File-backed recovery uses the existing ObservationStore: ordinary new records
+are sharded under the same collection (`_shards/XX/id.json`), while keyed reads
+and inventories support legacy flat and sharded records and reject duplicate
+logical identities. Existing records retain their physical location; legacy
+replacements stage on the same filesystem in a shard bucket rather than create
+new entries in an exhausted flat directory. No bulk migration or query-time
+writes/enumeration are introduced; IDs, hashes and permissions remain intact.
+The finite sealed UAT materializer explicitly selects `write_layout="flat"` to
+preserve its established byte-sealed export format. This bounded export policy
+is not a global sharding revert, new truth store, PG migration or activation.
+Metadata publication uses an exclusive same-filesystem temporary and atomic replacement,
+with private permissions established BEFORE writing any bytes and intended final
+permissions preserved. Failure before publication must retain valid old metadata;
+partial first publications must not appear valid. Synthetic failure/concurrency
+proof does not establish the cause of a historical unreadable-metadata incident.
+
+Generic attachment backfill uses the existing Asset/ExtractorRun/Observation
+owners. Known parser failures retain failed child runs and explicit partial-parent
+coverage; unknown errors still fail, and failed runs/ledgers are never overwritten.
+Bounded XLSX/XLSM/XLS, native-text PDF, DOCX/PPTX and text/delimited parsers do not
+by themselves establish activated lexical+dense coverage or live UAT acceptance.
+Missing fields on any matching source row keep exact projection coverage
+incomplete; a source-backed explicit blank is distinct from an absent cell.
+See extraction §7 for the failure boundary. Status remains **待測**.
+
+Interruption recovery may use explicitly configured fixed source-order parent
+windows in the existing offline sidecar batch owner (2026-10-12, **待測**).
+Selection is by inventory position/count, never question terms or expected
+answers; native sidecar ordinals and authorized parent bindings remain intact.
+Seal the selected parent/attachment bytes and pin window/batch identity in the
+extractor profile, including the preceding sidecar ordinal offset; preceding
+membership drift must invalidate reuse even when selected bytes are unchanged.
+Preserve old interrupted jobs, child records and ledgers;
+a new retry uses a new batch identity, while an unchanged completed window
+reuses its verified output without re-extraction. Changed persisted redaction
+requires a new extractor/policy version and explicit offline job/revision;
+attachment version0.6.2 preserves safe text around unsafe path spans
+without weakening the detector or final fail-closed guard. Old output is not
+silently repaired/relabelled, and a query never starts the replay. A completed window is partial
+source coverage, not whole-corpus completion or permission to activate it.
+Validate and compose only completed outputs through the existing source owner
+before source-native querying; no online ingestion or new truth store. The
+sidecar composer reuses the existing atomic link-or-copy helper across storage
+mounts: only `EXDEV` selects the copy path; other I/O errors remain errors.
+Source bytes/bindings stay unchanged and failed composition is not activation.
+
+Offline vector reuse uses `DenseEvidenceVectorCache.seed_from` in the existing
+`python/formowl_core/dense_embedding.py` owner. The indexed preparation-finish
+CLI may explicitly supply `--seed-dense-cache-from` once for a **new** target;
+omit it on ordinary resume. Validate the frozen encoder/profile/dimension,
+exact UTF-8 text hashes, committed journal offsets and payload checksums under
+the source lock. Reject active writers, incompatible/corrupt/torn bases and
+existing targets without publishing a partial target. Copy numerical cache
+files only, never hardlink or mutate the base or inherit source/permission
+authority; each target freshly validates source and projection bindings.
+Current Linux no-replace publication and bounded reads (4 KiB profile,
+8 KiB journal record, 256 MiB journal, 8 GiB vectors) are implementation limits.
+Ordinary interrupted-writer recovery remains separate. Focused cache tests
+and scoped review do not establish real-cache activation or full RAG/UAT
+acceptance; the overall feature remains **待測**.
+
+The source-start attachment-text slice admits parsed document-modality
+`paragraph`/`heading`/`list_item` evidence under its **mail** source family,
+including captured mail without an upload-session selector. It must rehydrate
+and validate the genuine attachment parent, child run/content hash, permission,
+job and revision bindings before returning child text and native locators.
+Missing parent stays incomplete; tampered bindings reject. An attachment is
+not an independent `document_text` source. This path requires neither dense
+activation nor a graph match and performs no query-time extraction or rebuild;
+existing shared caps remain unchanged. Small real-parser/MCP/browser checks
+are diagnostic, not corpus completeness, live-provider or business-field proof.
+The offline lexical surface policy is versioned separately from the unchanged
+frozen tokenizer: outputs or clone bases that omit attachment text must not be
+accepted as the new capability. Build a fresh artifact offline; never rewrite
+the old manifest or fill missing postings during a query.
 
 ---
 
@@ -1591,12 +1839,70 @@ Current tested compatibility paths do not prove source-complete heterogeneous
 integration, automatic canonical commits, universal parser coverage,
 enterprise-scale readiness, or KG + ontology superiority.
 
+At the 2026-10-12 checkpoint, r12 is the active serving manifest on live8089,
+all252 product files/zero drift. Candidate8096 was deployed/proved, then removed
+at19:35:25Z; old r5 remains stopped/preserved for rollback. Its historical128-parent source-window000-r3
+had4,996,943 Observations/1,044,332 references/399,548 mail helpers/
+10,421,821 postings/zero independent-document helpers, completeness=false.
+Old unbound responses remain incomparable; later binding does not repair them.
+
+R11 (`ac409901…`) exact252 code/34 tests passed canonical focused
+**108/108,170.274s,EXIT0**, zero failures/errors/skips, exact pre/post inventories.
+It includes the generic span-consumer/version0.6.2 and mock citation-order repairs;
+Hypatia/Archimedes/Lagrange scoped **AGREE3/3**, not whole-suite acceptance.
+Fixture-r11 EXIT0 verifies synthetic native PDF/independent-document late cue,
+native citation and chat/lifecycle. All six responses remain incomparable:
+deployment/code/build absent; four-attempt business turns retained only three.
+Serving r12 (`b2f4fa44…`) adds retention from unchanged cap6, exact252+34:
+focused **117/117,174.049s,EXIT0**, zero failures/errors/skips, verified pre/post
+and current inventories, three retention-only scoped agreements. Freeze-helper
+TypeError/empty unpublished tree remains preserved; no product/test bytes were
+copied by that failure. The later readonly-template chmod deployment failure was
+fixed only in the operator helper's private tmpfs-copy handling, not product/secrets.
+
+Fixed2048 r2/prep-r3 completed but pin `7c11bec0…` stayed unactivated; a successful
+PDF run's three paragraphs were erased by redaction, not absent from source.
+Corrected same2048/all-formats r3/version0.6.2 replay completed18:57:38Z/EXIT0,
+622,631 Observations/7,211 runs; prep-r4 completed19:18:55Z/EXIT0.
+New pin `5e222fc…` has1,100,143 references/407,401 helpers/10,671,080 postings,
+zero independent-document helpers and **partial** coverage. Admission verified a
+successful native PDF run and three preserved indexed paragraphs. Old jobs/pins
+and the separate unexplained remainder metadata_unreadable failure are retained.
+
+Candidate Chromium EXIT0: delivery20.597s and unrelated attachment19.580s, each
+MCP1/provider2, ordinary/reload/reset/postreset MCP0; all four responses comparable.
+At19:26Z both citations reopened/hash/run/parent checked; Master viewed candidate
+screenshot and original PDF page1. The proved field is
+`purchase_order_requested_delivery`, not PO/approval dates, shipment or latest
+supplier schedule. The unrelated actual attachment's paragraph/native input hash
+was verified, not an independently registered document. Canonical dev rendering
+was unavailable; host visual inspection is separate, not a test skip.
+
+Live Chromium LAN EXIT0 (~19:28Z): all four responses comparable, ordinary3.112s/
+MCP0, delivery22.829s and unrelated attachment17.833s, each MCP1/provider2/citation1;
+reload/reset/postreset pass. Both evidence turns retain partial coverage.
+The first live citation reopen failed
+`ContractValidationError: ingestion revision completed job changed`.
+Once-only operator instrumentation then passed the original loader unchanged,
+with all three job digests agreeing across independent engines and both LIVE
+citations reopened/hash/run/parent checked. Master verified the native meaning.
+Archimedes scoped **AGREE** supports **this observed source-correct answer in the
+real LAN webpage**, not stability/reproducibility: the first failure's cause
+remains unresolved, with no source-mutation, corruption or root-fix claim.
+This is not full-UAT/source-complete/methodology/docs acceptance.
+Canonical authority-resume4 remains valid=true/ready=false/errors=[]/EXIT0.
+Broad source/independent-document/spreadsheet/dense/feature/stability acceptance
+is unproved; feature **待測**, step4 in-progress, four methodology gates blocked.
+No user-only blocker or completion promotion. Safe records, pins and preserved
+failures: [handoff](docs/agent-goals/handoff-log.md).
+
 Current source support must be read at the following granularity:
 
 | Source slice | Current code evidence and limit |
 | --- | --- |
 | Mail and independent text | Mail is the first diagnostic fixture; the real `PlainTextObservationExtractor` handles independent Markdown/plain-text. §7.3.1 retains its mail/text-only diagnostic and promotion boundary, with live acceptance still open. |
-| XLSX and delimited attachment tables | [`AttachmentDocumentExtractor`](python/formowl_ingestion/extractors/document/attachment.py) reads bounded XLSX ZIP/XML values (`<v>`, shared strings, inline strings), emits row/cell Observations and coordinates, reads formal table metadata, and derives bounded candidate header paths using merged ranges. It does not retain `<f>` formulas or cell styles/display formatting and does not prove formula, displayed-value, native-type/unit/null, or whole-workbook completeness. Candidate header structure is not verified source-provided schema. Standalone spreadsheet/XLSX is a first-class product requirement; this attachment slice does not establish its complete end-to-end path. |
+| Attachment text | Bounded native-text PDF, DOCX/PPTX and text parsers produce source-addressed content. The deployed bounded source-start lexical/reader/gateway path retains parsed attachment text under `mail` with genuine parent/child/run/hash/permission bindings. Earlier parser/provider-free diagnostics alone do not establish full live acceptance or whole-corpus coverage; the r12 observed live native proof above does not resolve the first source-reopen failure. Scan-only PDF/OCR and native rendering remain unsupported. |
+| XLSX and delimited attachment tables | [`AttachmentDocumentExtractor`](python/formowl_ingestion/extractors/document/attachment.py) reads bounded XLSX ZIP/XML values (`<v>`, shared strings, inline strings), emits row/cell Observations and coordinates, retains formula/raw/cached/date/precision/blank metadata where available, reads formal table metadata, and derives bounded candidate header paths using merged ranges. It does not recalculate formulas or guarantee native display semantics, full style fidelity, native type/unit/null coverage, or whole-workbook completeness. Candidate header structure is not verified source-provided schema. Standalone spreadsheet/XLSX is a first-class product requirement; this attachment slice does not establish its complete end-to-end path. |
 | OCR/images | [`FixtureOcrExtractor`](python/formowl_ingestion/extractors/ocr/fixture.py) reads text-backed fixtures with page/bbox locators via `read_text()`. It proves fixture contracts, not real-image OCR, visual retrieval, or source-region understanding. |
 | Audio | [`FixtureAudioTranscriptExtractor`](python/formowl_ingestion/extractors/audio/fixture.py) reads text-backed timestamp/speaker/transcript fixtures via `read_text()`. Real-audio decoding, ASR, acoustic retrieval/verification, and a music or non-speech audio path are not proven. |
 | Video | [`FixtureVideoSceneExtractor`](python/formowl_ingestion/extractors/video/fixture.py) reads text-backed scene/keyframe descriptions and locators via `read_text()`. Real-video decoding, temporal/visual retrieval, and native clip/frame verification are not proven. |

@@ -37,6 +37,7 @@ from formowl_mail.human_uat_orchestrator import (  # noqa: E402
     CodexAppServerStdioTransport,
     CodexResponsesConversationModel,
     build_hardened_codex_app_server_command,
+    diagnostic_deployment_settings,
     validate_codex_runtime_state,
 )
 
@@ -1054,7 +1055,7 @@ def _compose_sidecar_supplement_preparation(
     supplement_preparation_directory: Path,
     supplement_contract_directory: Path,
     prior_job_id: str,
-    bound_child_failure_manifest_path: Path,
+    bound_child_failure_manifest_path: Path | None,
 ) -> dict:
     """Nest one completed sidecar delta under the existing second root."""
     from formowl_contract import sha256_json, to_plain
@@ -1141,16 +1142,21 @@ def _compose_sidecar_supplement_preparation(
     prior_index = prior_indexes[0]
     prior_binding = base_bindings[prior_index]
     delta_binding = delta_bindings[0]
-    failure_bytes = bound_child_failure_manifest_path.read_bytes()
-    failure_manifest = json.loads(failure_bytes)
     failure_binding = delta_preparation.get("bound_child_failure_binding")
-    if (
-        failure_binding is None
-        or failure_binding.get("manifest_byte_sha256")
-        != "sha256:" + hashlib.sha256(failure_bytes).hexdigest()
-        or delta_source.get("bound_child_failure_binding") != failure_binding
-    ):
-        raise ValueError("ingestion supplement child failure binding is invalid")
+    failure_bytes = None
+    failure_manifest = None
+    if bound_child_failure_manifest_path is not None:
+        failure_bytes = bound_child_failure_manifest_path.read_bytes()
+        failure_manifest = json.loads(failure_bytes)
+        if (
+            failure_binding is None
+            or failure_binding.get("manifest_byte_sha256")
+            != "sha256:" + hashlib.sha256(failure_bytes).hexdigest()
+            or delta_source.get("bound_child_failure_binding") != failure_binding
+        ):
+            raise ValueError("ingestion supplement child failure binding is invalid")
+    elif failure_binding is not None or delta_source.get("bound_child_failure_binding") is not None:
+        raise ValueError("ingestion supplement child failure binding is incomplete")
 
     def authority(binding: dict, exclusions: dict | None = None):
         store = Path(binding["store_directory"])
@@ -1215,7 +1221,6 @@ def _compose_sidecar_supplement_preparation(
         or parent_delta.get("full_source_coverage_claim") is not False
         or not isinstance(parent_records, list)
         or parent_delta.get("repaired_parent_count") != len(parent_records)
-        or not parent_records
     ):
         raise ValueError("ingestion supplement contract binding is invalid")
 
@@ -1294,7 +1299,7 @@ def _compose_sidecar_supplement_preparation(
             base_item = base_shards.get(key)
             delta_item = delta_shards.get(key)
             if delta_item is None:
-                os.link(
+                _link_or_copy_file_atomic(
                     base_preparation_directory / "exact-cells" / subdirectory / f"{shard}.jsonl",
                     target,
                 )
@@ -1478,16 +1483,23 @@ def _compose_sidecar_supplement_preparation(
                     raise ValueError("ingestion revision snapshot exceeds bounded maximum size")
                 stream.write(encoded)
                 snapshot_digest.update(encoded)
-        os.link(
+        _link_or_copy_file_atomic(
             base_preparation_directory / "sidecar-parent-binding.json",
             temporary / "sidecar-parent-binding.json",
         )
-        (temporary / "bound-child-failure-exclusions.json").write_bytes(failure_bytes)
+        if failure_bytes is not None:
+            (temporary / "bound-child-failure-exclusions.json").write_bytes(failure_bytes)
         type_counts = dict(base_preparation["observation_type_counts"])
         for key, value in delta_preparation["observation_type_counts"].items():
             type_counts[key] = type_counts.get(key, 0) + value
         preparation_core = {
             **base_preparation,
+            # The source-start loader verifies every root and supplement job;
+            # requested_jobs is the complete ordered authority list, not roots.
+            "requested_jobs": [
+                [binding["store_directory"], binding["ingestion_job_id"]]
+                for binding in final_store_bindings
+            ],
             "supplemental_jobs": delta_preparation["requested_jobs"],
             "supplement_bindings": [supplement_binding],
             "snapshot_sha256": ("sha256:" + snapshot_digest.hexdigest()),
@@ -2025,15 +2037,29 @@ def _build_ingestion_revision(
         mail_root = AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND in source_kinds
         source_ref = (
             _accepted_governed_mail_root_source_ref(to_plain(asset.source_ref))
-            if mail_root else None
+            if mail_root
+            else None
         )
         collect_sidecar_parents = job_id == sidecar_parent_job_id
         if collect_sidecar_parents and not mail_root:
             raise ValueError("sidecar parent requires a registered mail root")
-        text_root_run_ids = {
-            run.extractor_run_id for run in runs
-            if run.asset_id == asset.asset_id and run.status == "succeeded"
-        } if AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND in source_kinds else set()
+        text_root_run_ids = (
+            {
+                run.extractor_run_id
+                for run in runs
+                if run.asset_id == asset.asset_id and run.status == "succeeded"
+            }
+            if AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND in source_kinds
+            else set()
+        )
+        document_child_run_ids = {
+            run.extractor_run_id
+            for run in runs
+            if run.asset_id != asset.asset_id
+            and run.status == "succeeded"
+            and run.extractor_type == "document_structure"
+        }
+        attachment_parent_references: dict[str, tuple[str, str]] = {}
         sidecar_records_by_occurrence: dict[str, dict[str, object]] = {}
         attachment_max_by_occurrence: dict[str, int] = {}
         for observation in reader.iter_observations():
@@ -2042,19 +2068,60 @@ def _build_ingestion_revision(
                 observation_type_counts.get(observation.observation_type, 0) + 1
             )
             observation_hash = sha256_json(observation.to_dict())
-            if (mail_root and observation.observation_type in {
-                "mail_folder_occurrence",
-                "email_thread",
-                "email_message",
-                "email_header",
-                "email_body_segment",
-                "email_attachment_occurrence",
-                "table_row",
-            }) or (
-                observation.modality == "text"
-                and observation.observation_type in {"heading", "paragraph"}
-                and observation.asset_id == asset.asset_id
-                and observation.extractor_run_id in text_root_run_ids
+            if mail_root and observation.observation_type == "email_attachment_occurrence":
+                child_asset_id = (observation.payload or {}).get("child_asset_id")
+                if isinstance(child_asset_id, str) and child_asset_id:
+                    if child_asset_id in attachment_parent_references:
+                        raise ValueError("attachment text parent binding is ambiguous")
+                    attachment_parent_references[child_asset_id] = (
+                        observation.observation_id,
+                        observation_hash,
+                    )
+            attachment_text = (
+                mail_root
+                and observation.modality == "document"
+                and observation.observation_type in {"heading", "paragraph", "list_item"}
+                and observation.extractor_run_id in document_child_run_ids
+            )
+            if attachment_text:
+                from formowl_mail.query import _attachment_child_lineages
+
+                parent_reference = attachment_parent_references.get(observation.asset_id)
+                if parent_reference is None:
+                    raise ValueError("attachment text parent reference is unavailable")
+                parent = authority.load_indexed_observation(
+                    parent_reference[0],
+                    expected_observation_hash=parent_reference[1],
+                    expected_job_fingerprint=authority.job_fingerprint,
+                )
+                if observation.observation_id not in _attachment_child_lineages(
+                    {
+                        parent.observation_id: parent,
+                        observation.observation_id: observation,
+                    }
+                ):
+                    raise ValueError("attachment text child lineage is unavailable")
+            if (
+                (
+                    mail_root
+                    and observation.observation_type
+                    in {
+                        "mail_folder_occurrence",
+                        "email_thread",
+                        "email_message",
+                        "email_header",
+                        "email_body_segment",
+                        "email_attachment_occurrence",
+                        "table_row",
+                    }
+                )
+                or (
+                    observation.modality == "text"
+                    and observation.observation_type in {"heading", "paragraph"}
+                    and observation.asset_id == asset.asset_id
+                    and observation.extractor_run_id in text_root_run_ids
+                )
+                or attachment_text
             ):
                 reference = [
                     job_index - 1,
@@ -2651,6 +2718,9 @@ def main() -> int:
     )
     parser.add_argument("--temporary-lan-diagnostic", action="store_true")
     parser.add_argument("--temporary-access-code")
+    parser.add_argument("--diagnostic-deployment-manifest", type=Path)
+    parser.add_argument("--diagnostic-deployment-manifest-sha256")
+    parser.add_argument("--diagnostic-build-attestation", type=Path)
     parser.add_argument("--behavior-log", type=Path)
     parser.add_argument("--record-raw-uat-interactions", action="store_true")
     parser.add_argument(
@@ -2693,6 +2763,16 @@ def main() -> int:
         help="required for indexed bounded continuation; positive candidate bound",
     )
     args = parser.parse_args()
+    diagnostic_binding_options = (
+        args.diagnostic_deployment_manifest, args.diagnostic_deployment_manifest_sha256,
+        args.diagnostic_build_attestation,
+    )
+    if any(option is not None for option in diagnostic_binding_options) and (
+        any(option is None for option in diagnostic_binding_options)
+        or not args.temporary_lan_diagnostic or args.ingestion_revision is None
+        or args.build_ingestion_revision is not None
+    ):
+        parser.error("diagnostic binding requires all three options and a serving ingestion revision")
     if args.host is None:
         args.host = "0.0.0.0" if args.temporary_lan_diagnostic else "127.0.0.1"
     if args.port is None:
@@ -2844,6 +2924,8 @@ def main() -> int:
         )
     runtime_paths = validate_codex_runtime_state(args.codex_runtime_state_dir)
     provider_env_key = runtime_paths.provider_env_key
+    if args.diagnostic_deployment_manifest is not None and provider_env_key is None:
+        parser.error("diagnostic deployment binding currently requires the Responses transport")
     if provider_env_key is None:
         if args.codex_provider_api_key_file is not None:
             parser.error("Codex provider API key file is invalid for ChatGPT runtime state")
@@ -2869,6 +2951,7 @@ def main() -> int:
             base_url=runtime_paths.provider_base_url,
             api_key=provider_api_key,
             model=_MODEL,
+            stream_initial_requests=True,
         )
     if args.temporary_lan_diagnostic:
         ingestion_revision = None
@@ -2901,6 +2984,17 @@ def main() -> int:
             behavior_log_path=args.behavior_log,
             record_raw_uat_interactions=args.record_raw_uat_interactions,
             ingestion_revision=ingestion_revision,
+            diagnostic_deployment_manifest=args.diagnostic_deployment_manifest,
+            diagnostic_deployment_manifest_sha256=args.diagnostic_deployment_manifest_sha256,
+            diagnostic_build_attestation=args.diagnostic_build_attestation,
+            diagnostic_settings=(
+                diagnostic_deployment_settings(
+                    host=args.host, port=args.port,
+                    record_raw_uat_interactions=args.record_raw_uat_interactions,
+                    temporary_access_enabled=args.temporary_access_code is not None,
+                    provider_base_url=runtime_paths.provider_base_url,
+                ) if args.diagnostic_deployment_manifest is not None else None
+            ),
         )
     else:
         try:

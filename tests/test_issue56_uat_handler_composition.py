@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import copy
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1040,7 +1041,7 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
             created_at="2026-08-20T09:00:00+00:00",
             asset_id="asset_late_hit",
             text="late-token authorized evidence",
-            payload={},
+            payload={"message_fingerprint": "sha256:" + "1" * 64} if source_family == "mail" else {},
         )
         observation_hash = sha256_json(observation.to_dict())
         job_fingerprint = "sha256:" + ("a" * 64)
@@ -1130,6 +1131,55 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
             helper=helper, scope=scope, arguments=arguments,
             earlier=observations[0],
         )
+
+    def test_legacy_mail_child_requires_its_genuine_parent_without_fingerprint(self) -> None:
+        for use_shortlist in (False, True):
+            for parent_kind in ("missing", "matching", "other_asset", "other_run"):
+                with self.subTest(use_shortlist=use_shortlist, parent_kind=parent_kind):
+                    fixture = self._posting_shortlist_fixture("mail")
+                    child = replace(fixture.observation, payload={})
+                    child_hash = sha256_json(child.to_dict())
+                    items = [child]
+                    if parent_kind != "missing":
+                        parent = replace(
+                            child, observation_id="genuine_parent",
+                            observation_type="email_message",
+                            asset_id="other_asset" if parent_kind == "other_asset" else child.asset_id,
+                            extractor_run_id="other_run" if parent_kind == "other_run" else child.extractor_run_id,
+                            payload={"message_fingerprint": "sha256:" + "1" * 64},
+                        )
+                        items.append(parent)
+                    by_id = {item.observation_id: item for item in items}
+
+                    def load(key, *, expected_observation_hash, expected_job_fingerprint):
+                        item = by_id[key]
+                        self.assertEqual(expected_observation_hash, sha256_json(item.to_dict()))
+                        self.assertEqual(expected_job_fingerprint, fixture.authority.job_fingerprint)
+                        return item
+
+                    fixture.authority.load_indexed_observation.side_effect = load
+                    fixture.store.helper_for_hash.side_effect = lambda value: (
+                        {**fixture.helper, "observation_hash": child_hash} if value == child_hash else None
+                    )
+                    fixture.store.source_family_lexical_lookup.return_value = [child_hash] if use_shortlist else []
+                    fixture.records.observation_references = [
+                        [0, item.observation_id, sha256_json(item.to_dict())] for item in items
+                    ]
+                    fixture.arguments["max_observations"] = 8
+                    delivered = []
+                    with (source_evidence_query_terms_scope(("late-token",) if use_shortlist else ()),
+                          patch("formowl_mail.issue56_sealed_source.time.monotonic", return_value=10.0)):
+                        scan = fixture.records.scan_authorized_observations(
+                            **fixture.arguments,
+                            observation_callback=lambda item, scope: delivered.append(item.observation_id) or True,
+                        )
+                    if parent_kind == "matching":
+                        self.assertEqual(delivered, [parent.observation_id, child.observation_id])
+                        self.assertTrue(scan.complete)
+                    else:
+                        self.assertNotIn(child.observation_id, delivered)
+                        self.assertFalse(scan.complete)
+                        self.assertEqual(scan.stop_reason, "source_parent_binding_unresolved")
 
     def test_revision_source_reader_uses_posting_shortlist_for_late_hit(self) -> None:
         for family in ("mail", "document_text"):
@@ -3134,7 +3184,8 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
             created_at="2026-08-20T09:00:00+00:00",
             asset_id="asset_mail_001",
             text="audit approval",
-            payload={"message_occurrence_id": "message_occurrence_001"},
+            payload={"message_occurrence_id": "message_occurrence_001",
+                     "message_fingerprint": "sha256:" + "1" * 64},
         )
         inventory_observation = Observation(
             observation_id="observation_mail_folder_001",
@@ -4745,6 +4796,528 @@ class Issue56UatHandlerCompositionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProjectionIndependentSourceMcpTests(unittest.IsolatedAsyncioTestCase):
+    def _table_lookup(self, root, *, terms=("7812046639",), scope=("attachment_table",), page_size=10, attachment_csv=None):
+        fixture = _source_start_preparation_fixture(
+            root, families=("mail",), attachment_csv=attachment_csv or (
+                "Code,Window,Capacity\n7812046639,2032-06-19,17\n"
+                "8640391527,2034-11-23,29\nOrionWorkshop,review-pending,53\n"
+            ),
+        )
+        from scripts.issue56_source_native_lookup import build_lookup
+        lookup_directory = root / "lookup"
+        build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+                     output_directory=lookup_directory)
+        for name in ("source-lookup-manifest.json", "source-lookup.sqlite"):
+            shutil.copyfile(lookup_directory / name, fixture.directory / name)
+        revision = issue56_sealed_source.load_issue56_ingestion_revision(
+            fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+        )
+        self.assertIsNone(revision.session)
+        self.assertEqual(revision.exact_lookup_directory, fixture.directory / "exact-cells")
+        handler = loader.build_issue56_production_semantic_retrieval_handler(ingestion_revision=revision)
+        query = "Find native row values"
+        arguments = {
+            "query_text": query, "required_terms": list(terms), "page_size": page_size,
+            "requester_user_id": loader.APPROVER_ACTOR, "workspace_id": loader.WORKSPACE_ID,
+            "session_id": "synthetic-table-lookup",
+            "request_contract": {
+                "original_query_hash": sha256_json(query), "query_class": "evidence_lookup",
+                "source_family_scope": list(scope), "requested_fields": ["Window", "Capacity"],
+                "maximum_claim_strength": "cited_evidence",
+            },
+        }
+        return fixture, revision, handler, arguments
+
+    def test_numeric_attachment_anchor_uses_ordinary_tokens_and_verified_same_row_cells(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler, arguments = self._table_lookup(Path(directory))
+            profile = loader.load_issue56_target_mail_tokenizer_profile()
+            self.assertFalse(profile.analyze("7812046639").protected_identifiers)
+            self.assertTrue(profile.analyze("7812046639").tokens)
+            self.assertIn("attachment_table", handler.authorized_capability_summary["source_families"])
+            result = handler(arguments)
+            self.assertEqual(result["status"], "ok")
+            self.assertFalse(result["deterministic_exact"])
+            evidence = result["evidence"]
+            self.assertEqual({cell["value"] for item in evidence for cell in item["table_row"]["cells"]}, {"7812046639", "2032-06-19", "17"})
+            native_rows = {sha256_json(item.to_dict()): item for item in fixture.observations if item.observation_type == "table_row"}
+            native_cells = {sha256_json(item.to_dict()): item for item in fixture.observations if item.observation_type == "table_cell"}
+            for item in evidence:
+                row = native_rows[item["citation_hash"]]
+                self.assertEqual(item["table_row"]["source_observation_id"], row.observation_id)
+                for cell in item["table_row"]["cells"]:
+                    native = native_cells[cell["citation_hash"]]
+                    self.assertEqual(cell["coordinates"]["row_index"], row.location["row_index"])
+                    self.assertEqual(cell["coordinates"]["cell_index"], native.location["cell_index"])
+                    self.assertEqual(cell["value"], native.text)
+                    self.assertTrue(cell["occurrence_lineage_fingerprint"].startswith("sha256:"))
+                    self.assertFalse(cell["source_proven_field_schema"])
+            self.assertEqual(set(result["citations"]), {item["citation_hash"] for item in evidence})
+            self.assertEqual(result["coverage"]["status"], "incomplete")
+            validate_public_gateway_payload(result)
+            unrelated = handler({**arguments, "required_terms": ["OrionWorkshop"]})
+            self.assertEqual({cell["value"] for item in unrelated["evidence"] for cell in item["table_row"]["cells"]}, {"OrionWorkshop", "review-pending", "53"})
+            other_row = handler({**arguments, "required_terms": ["7812046639", "2034-11-23"]})
+            self.assertFalse(other_row["evidence"])
+            self.assertEqual(other_row["status"], "pending_review")
+
+    def test_attachment_timeout_caps_and_denial_do_not_become_absence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, handler, arguments = self._table_lookup(Path(directory))
+            with patch("formowl_retrieval.gateway.SOURCE_EVIDENCE_OBSERVATION_LIMIT", 2):
+                capped = handler(arguments)
+            self.assertEqual(capped["status"], "pending_review")
+            scan = capped["query_agent"]["context_bundle"]["source_recovery"]["scan"]
+            self.assertFalse(scan["complete"])
+            self.assertLessEqual(scan["scanned_observation_count"], 2)
+            with source_evidence_deadline_scope(loader.time.monotonic() - 1):
+                expired = handler(arguments)
+            self.assertEqual(expired["status"], "pending_review")
+            self.assertFalse(expired["evidence"])
+            denied = handler({**arguments, "requester_user_id": "synthetic-denied-user"})
+            self.assertEqual(denied["status"], "permission_denied")
+            self.assertFalse(denied["citations"])
+            exact = handler({**arguments, "request_contract": {
+                **arguments["request_contract"], "query_class": "exact_set_or_inventory",
+                "maximum_claim_strength": "complete_authorized_scope",
+            }})
+            self.assertEqual(exact["status"], "pending_review")
+            self.assertFalse(exact["citations"])
+
+    def test_attachment_shard_and_native_cell_tampering_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler, arguments = self._table_lookup(Path(directory))
+            profile = loader.load_issue56_target_mail_tokenizer_profile()
+            token_hash = sha256_json(next(iter(profile.analyze("7812046639").tokens)))
+            shard = revision.exact_lookup_directory / "values" / f"{token_hash[7:9]}.jsonl"
+            original = shard.read_bytes()
+            shard.write_bytes(original + b"\n")
+            with self.assertRaises(ContractValidationError):
+                handler(arguments)
+            shard.write_bytes(original)
+            cell = next(item for item in fixture.observations if item.text == "2032-06-19")
+            store = revision.job_authorities[0].observation_store
+            path = store._store._record_path(cell.observation_id)
+            payload = json.loads(path.read_text())
+            payload["payload"]["lineage"]["child_asset_id"] = "synthetic-tampered-child"
+            path.write_text(json.dumps(payload))
+            with self.assertRaises(ContractValidationError):
+                handler(arguments)
+
+    def test_missing_parent_helper_never_starts_linear_source_hydration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler, arguments = self._table_lookup(Path(directory))
+            authority = revision.job_authorities[0]
+            original = authority.load_indexed_observation
+            with (patch.object(revision.source_records.runtime_store, "helper_for_attachment_asset", return_value=None),
+                  patch.object(type(authority), "load_indexed_observation", autospec=True,
+                               side_effect=lambda current, observation_id, **kwargs: original(observation_id, **kwargs)) as read):
+                result = handler(arguments)
+            self.assertEqual(result["status"], "pending_review")
+            self.assertFalse(result["evidence"])
+            self.assertLessEqual(read.call_count, 4)  # One sealed row and its three cells only.
+            scan = result["query_agent"]["context_bundle"]["source_recovery"]["scan"]
+            self.assertEqual(scan["stop_reason"], "source_parent_binding_unresolved")
+
+    def test_table_deadline_preserves_ordinary_mail_family_time(self):
+        import time
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, handler, arguments = self._table_lookup(Path(directory), scope=("attachment_table", "mail"))
+            table_deadlines = []
+            def exhaust_table(lookup, **kwargs):
+                deadline = kwargs["deadline_monotonic"]
+                table_deadlines.append(deadline)
+                while time.monotonic() < deadline:
+                    time.sleep(min(0.01, max(0, deadline - time.monotonic())))
+                return RevisionOwnedMailSourceScan((), 0, False, "deadline")
+            with (patch.object(loader._IngestionExactCellLookup, "scan_source_rows", autospec=True, side_effect=exhaust_table),
+                  patch.object(revision.source_records, "scan_authorized_observations", wraps=revision.source_records.scan_authorized_observations) as mail_scan):
+                result = handler({**arguments, "required_terms": ["Acceptance"]})
+            self.assertEqual(result["status"], "ok")
+            self.assertTrue(result["evidence"])
+            self.assertTrue(all("table_row" not in item for item in result["evidence"]))
+            self.assertLess(table_deadlines[0], mail_scan.call_args.kwargs["deadline_monotonic"])
+            self.assertFalse(result["query_agent"]["context_bundle"]["source_recovery"]["scan"]["complete"])
+
+    def test_verified_rows_are_emitted_before_later_shard_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, _, _ = self._table_lookup(Path(directory), attachment_csv=(
+                "Code,State\n" + "".join(f"7812046639,phase-{index}\n" for index in range(16))
+            ))
+            lookup = loader._IngestionExactCellLookup(revision)
+            original = lookup._read_matching_shard_records
+            emitted, evidence, row_shards = [], {}, []
+            expired = [False]
+            def read(kind, shard, **kwargs):
+                if kind == "row":
+                    row_shards.append(shard)
+                    if len(row_shards) == 2:
+                        self.assertTrue(emitted)  # No preloading of later row shards.
+                        expired[0] = True
+                        kwargs["check"]()
+                return original(kind, shard, **kwargs)
+            with (patch.object(lookup, "_read_matching_shard_records", side_effect=read),
+                  patch.object(loader.time, "monotonic", side_effect=lambda: 2.0 if expired[0] else 0.0)):
+                scan = lookup.scan_source_rows(
+                    required_terms=("7812046639",), query_text="Find row state",
+                    source_families=("attachment_table",), mail_import_session_id=None,
+                    max_observations=8192, deadline_monotonic=1.0,
+                    observation_callback=lambda item, scope: emitted.append(item) is None,
+                    evidence_by_id=evidence,
+                )
+            self.assertEqual(len(row_shards), 2)
+            self.assertTrue(emitted)
+            self.assertFalse(scan.complete)
+            self.assertEqual(scan.stop_reason, "deadline")
+            self.assertEqual(set(evidence), {item.observation_id for item in emitted})
+
+    def test_numeric_inline_table_uses_existing_rows_and_mail_selector_without_graph(self):
+        from scripts.issue56_source_native_lookup import build_lookup
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = _source_start_preparation_fixture(root, families=("mail",), inline_html=(
+                "<table><tr><th>Code</th><th>State</th></tr>"
+                "<tr><td>7812046639</td><td>review-pending</td></tr>"
+                "<tr><td>8640391527</td><td>complete</td></tr></table>"
+            ))
+            output = root / "lookup"
+            build_lookup(directory=fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+                         output_directory=output)
+            for name in ("source-lookup-manifest.json", "source-lookup.sqlite"):
+                shutil.copyfile(output / name, fixture.directory / name)
+            revision = issue56_sealed_source.load_issue56_ingestion_revision(
+                fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+            )
+            selector = revision.source_records.authorized_mail_import_session_ids[0]
+            handler = loader._build_source_start_semantic_handler(revision, mail_tool=True)
+            result = handler({
+                "query_text": "Find inline row state", "required_terms": ["7812046639"],
+                "requester_user_id": loader.APPROVER_ACTOR, "workspace_id": loader.WORKSPACE_ID,
+                "session_id": "synthetic-inline", "mail_import_session_id": selector, "limit": 10,
+            })
+            self.assertEqual(result["status"], "ok")
+            cells = result["evidence_snippets"]
+            self.assertEqual({cell["value"] for item in cells for cell in item["table_row"]["cells"]}, {"7812046639", "review-pending"})
+            self.assertTrue(all(item["mail_import_session_id"] == selector for item in cells))
+            self.assertEqual(len(result["citations"]), 1)
+            self.assertEqual(result["citations"][0]["source_observation_id"], cells[0]["table_row"]["source_observation_id"])
+            compact = human_uat_orchestrator.compact_evidence_for_model(result, item_limit=1)
+            presented = json.loads(compact["evidence_snippets"][0]["snippet"])
+            self.assertEqual(presented["table_row"], cells[0]["table_row"])
+            self.assertEqual(presented["citation_hash"], cells[0]["citation_hash"])
+            self.assertEqual(len(compact["citations"]), 1)
+            self.assertIsNone(revision.session)
+            validate_public_gateway_payload(result)
+
+    def test_native_row_context_cap_omits_entire_oversized_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            columns = ["Code", *(f"Field{index}" for index in range(24))]
+            values = ["7812046639", *("syntheticvalue" * 80 for _ in range(24))]
+            _, _, handler, arguments = self._table_lookup(Path(directory), page_size=128,
+                attachment_csv=",".join(columns) + "\n" + ",".join(values) + "\n")
+            result = handler(arguments)
+            self.assertEqual(result["status"], "pending_review")
+            self.assertFalse(result["evidence"])
+            self.assertFalse(result["citations"])
+            self.assertEqual(result["coverage"]["status"], "incomplete")
+            scan = result["query_agent"]["context_bundle"]["source_recovery"]["scan"]
+            self.assertFalse(scan["complete"])
+            self.assertEqual(scan["stop_reason"], "context_limit")
+            self.assertEqual(set(result["citations"]), {item["citation_hash"] for item in result["evidence"]})
+
+    def test_anchor_last_row_is_atomic_at_page_and_callback_exhaustion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture, revision, handler, arguments = self._table_lookup(
+                Path(directory), page_size=1, attachment_csv=(
+                    "Window,Capacity,Code\n2032-06-19,17,7812046639\n"
+                    "2034-11-23,29,7812046639\n"
+                ),
+            )
+            result = handler(arguments)
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(len(result["evidence"]), 1)
+            group = result["evidence"][0]
+            self.assertEqual(len(group["table_row"]["cells"]), 3)
+            self.assertEqual(group["table_row"]["cells"][-1]["value"], "7812046639")
+            row = next(item for item in fixture.observations
+                       if item.observation_id == group["table_row"]["source_observation_id"])
+            self.assertEqual(group["citation_hash"], sha256_json(row.to_dict()))
+            self.assertEqual(result["citations"], [group["citation_hash"]])
+            lookup = loader._IngestionExactCellLookup(revision)
+            emitted, evidence = [], {}
+            scan = lookup.scan_source_rows(
+                required_terms=("7812046639",), query_text="Find row values",
+                source_families=("attachment_table",), mail_import_session_id=None,
+                max_observations=8192, deadline_monotonic=loader.time.monotonic() + 0.5,
+                observation_callback=lambda item, scope: emitted.append(item) or False,
+                evidence_by_id=evidence,
+            )
+            self.assertEqual(scan.stop_reason, "callback")
+            self.assertEqual(len(emitted), 1)
+            self.assertEqual(emitted[0].observation_type, "table_row")
+            self.assertEqual(len(evidence[emitted[0].observation_id]["table_row"]["cells"]), 3)
+
+    def test_mid_row_staging_deadline_publishes_no_members(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, revision, _, _ = self._table_lookup(Path(directory), attachment_csv=(
+                "Window,Capacity,Code\n2032-06-19,17,7812046639\n"
+            ))
+            lookup = loader._IngestionExactCellLookup(revision)
+            emitted, evidence = [], {}
+            expired = [False]
+            original = loader.redact_public_raw_references
+
+            def redact(value):
+                if value == "2032-06-19":
+                    expired[0] = True  # Deadline between first value and last anchor.
+                return original(value)
+
+            with (patch.object(loader, "redact_public_raw_references", side_effect=redact),
+                  patch.object(loader.time, "monotonic", side_effect=lambda: 2.0 if expired[0] else 0.0)):
+                scan = lookup.scan_source_rows(
+                    required_terms=("7812046639",), query_text="Find row values",
+                    source_families=("attachment_table",), mail_import_session_id=None,
+                    max_observations=8192, deadline_monotonic=1.0,
+                    observation_callback=lambda item, scope: emitted.append(item) is None,
+                    evidence_by_id=evidence,
+                )
+            self.assertEqual(scan.stop_reason, "deadline")
+            self.assertFalse(scan.complete)
+            self.assertFalse(emitted)
+            self.assertFalse(evidence)
+
+    def test_remaining_context_bytes_never_split_second_row_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            columns = [*(f"Field{index}" for index in range(12)), "Code"]
+            values = [*("syntheticvalue" * 40 for _ in range(12)), "7812046639"]
+            _, _, handler, arguments = self._table_lookup(Path(directory), page_size=128,
+                attachment_csv=",".join(columns) + "\n" + (",".join(values) + "\n") * 2)
+            result = handler(arguments)
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(len(result["evidence"]), 1)
+            cells = result["evidence"][0]["table_row"]["cells"]
+            self.assertEqual(len(cells), len(values))
+            self.assertEqual(cells[-1]["value"], "7812046639")
+            self.assertTrue(cells[0]["value_truncated"])
+            self.assertLessEqual(len(json.dumps(result["evidence"][0], ensure_ascii=False).encode()), 16 * 1024)
+            scan = result["query_agent"]["context_bundle"]["source_recovery"]["scan"]
+            self.assertEqual(scan["stop_reason"], "context_limit")
+            self.assertFalse(scan["complete"])
+            self.assertEqual(result["citations"], [result["evidence"][0]["citation_hash"]])
+
+    def test_source_shard_prefilter_decodes_only_keyed_records_and_seals_after_overflow(self):
+        matching_key, unrelated_key, row_key = (sha256_json(value) for value in (
+            "synthetic-anchor-token", "unrelated-token", "synthetic-row",
+        ))
+        for kind in ("value", "row"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                target = ([matching_key, row_key, False] if kind == "value" else
+                          ["row", matching_key, 0, "synthetic-row-id", sha256_json("row-bytes"), False])
+                other = list(target)
+                other[0 if kind == "value" else 1] = unrelated_key
+                # An escaped JSON key is valid and must take the parser fallback.
+                escaped = json.dumps(target).encode().replace(
+                    matching_key.encode(), matching_key.encode().replace(b"sha256", b"\\u0073ha256"), 1,
+                ) + b"\n"
+                target_line, other_line = (json.dumps(item).encode() + b"\n" for item in (target, other))
+                payload = target_line + other_line * 12000 + escaped
+                path = root / ("values" if kind == "value" else "rows") / "aa.jsonl"
+                path.parent.mkdir()
+                path.write_bytes(payload)
+                lookup = object.__new__(loader._IngestionExactCellLookup)
+                lookup._directory = root
+                binding = {"size_bytes": len(payload), "record_count": 12002,
+                           "sha256": "sha256:" + hashlib.sha256(payload).hexdigest()}
+                lookup._shards = {(kind, "aa"): binding}
+                original = loader.json.loads
+                checks = []
+                with (patch.object(loader.json, "loads", wraps=original) as decode,
+                      patch.object(Path, "read_bytes", side_effect=AssertionError("must stream shard"))):
+                    selected = lookup._read_matching_shard_records(
+                        kind, "aa", matching_keys={matching_key}, maximum_matching_records=8192,
+                        check=lambda: checks.append(True),
+                    )
+                self.assertEqual(selected, (target, target))
+                self.assertEqual(decode.call_count, 2)
+                self.assertGreater(len(checks), 2)
+                self.assertLess(len(checks), 300)  # Bounded periodic checks, not per-record parsing.
+                self.assertIsNone(lookup._read_matching_shard_records(
+                    kind, "aa", matching_keys={matching_key}, maximum_matching_records=1,
+                ))
+                # Overflow must not bypass a late unmatched byte-seal failure.
+                path.write_bytes(payload.replace(unrelated_key.encode(), row_key.encode(), 1))
+                with self.assertRaisesRegex(ContractValidationError, "seal mismatch"):
+                    lookup._read_matching_shard_records(
+                        kind, "aa", matching_keys={matching_key}, maximum_matching_records=1,
+                    )
+                path.write_bytes(payload)
+                binding["record_count"] += 1
+                with self.assertRaisesRegex(ContractValidationError, "count mismatch"):
+                    lookup._read_matching_shard_records(kind, "aa", matching_keys={matching_key})
+                binding["record_count"] -= 1
+                binding["size_bytes"] += 1
+                with self.assertRaisesRegex(ContractValidationError, "seal mismatch"):
+                    lookup._read_matching_shard_records(kind, "aa", matching_keys={matching_key})
+
+    def test_source_shard_prefilter_deadline_never_returns_unsealed_shortlist(self):
+        matching_key, other_key, row_key = (sha256_json(value) for value in ("anchor", "other", "row"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "values" / "aa.jsonl"
+            path.parent.mkdir()
+            payload = (json.dumps([matching_key, row_key, False]).encode() + b"\n"
+                       + (json.dumps([other_key, row_key, False]).encode() + b"\n") * 1000)
+            path.write_bytes(payload)
+            lookup = object.__new__(loader._IngestionExactCellLookup)
+            lookup._directory = root
+            lookup._shards = {("value", "aa"): {"size_bytes": len(payload), "record_count": 1001,
+                              "sha256": "sha256:" + hashlib.sha256(payload).hexdigest()}}
+            checks = []
+
+            def check():
+                checks.append(True)
+                if len(checks) == 4:
+                    raise RuntimeError("synthetic deadline after shortlisted record")
+
+            original = loader.json.loads
+            with patch.object(loader.json, "loads", wraps=original) as decode:
+                with self.assertRaisesRegex(RuntimeError, "synthetic deadline"):
+                    lookup._read_matching_shard_records(
+                        "value", "aa", matching_keys={matching_key}, maximum_matching_records=8192, check=check,
+                    )
+            self.assertEqual(decode.call_count, 1)
+
+    def _assert_neighbor_context(self, *, family, mail_tool):
+        identifier = "SYNTH-REQ-042"
+        name = "Elara workshop"
+        field = "Dispatch window: 2031-04-17."
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = _source_start_preparation_fixture(
+                Path(directory), families=(family,),
+                mail_text=f"{identifier} {name}\n\n{field}",
+                document_text=f"# {identifier} {name}\n\n{field}\n",
+            )
+            revision = issue56_sealed_source.load_issue56_ingestion_revision(
+                fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+            )
+            handler = loader._build_source_start_semantic_handler(revision, mail_tool=mail_tool)
+            query = f"Find dispatch window for {identifier} {name}"
+            arguments = {
+                "query_text": query, "required_terms": [identifier, name],
+                "requester_user_id": loader.APPROVER_ACTOR,
+                "workspace_id": loader.WORKSPACE_ID, "session_id": "synthetic-context",
+                "request_contract": {
+                    "original_query_hash": sha256_json(query), "query_class": "evidence_lookup",
+                    "source_family_scope": [family], "requested_fields": ["dispatch_window"],
+                    "maximum_claim_strength": "cited_evidence",
+                },
+            }
+            if mail_tool:
+                arguments["mail_import_session_id"] = revision.source_records.authorized_mail_import_session_ids[0]
+                arguments["limit"] = 8
+            result = handler(arguments)
+            self.assertEqual(result["status"], "ok")
+            evidence = result["evidence_snippets" if mail_tool else "evidence"]
+            anchor = next(item for item in fixture.observations if identifier in (item.text or ""))
+            neighbor = next(item for item in fixture.observations if item.text == field)
+            anchor_hash, neighbor_hash = (sha256_json(item.to_dict()) for item in (anchor, neighbor))
+            context = next(item for item in evidence if item["citation_hash"] == neighbor_hash)
+            self.assertEqual(context["source_context"], {
+                "relationship": "same_source_neighbor", "anchor_citation_hash": anchor_hash,
+                "anchor_source_observation_id": anchor.observation_id,
+                "identifier_hit": False, "exact_field_proof": False,
+            })
+            self.assertIn(field, context["snippet"])
+            self.assertTrue(context["occurrence_lineage_fingerprint"])
+            self.assertTrue(any(item["citation_hash"] == anchor_hash and "source_context" not in item for item in evidence))
+            if mail_tool:
+                self.assertTrue(any(item["source_observation_id"] == neighbor.observation_id for item in result["citations"]))
+                self.assertEqual(result["requested_field_coverage"]["supported_fields"], [])
+            else:
+                self.assertIn(neighbor_hash, result["citations"])
+                self.assertEqual(context["document_locator"]["line_start"], 3)
+                self.assertIsNone(result["exact_result"])
+                self.assertEqual(result["coverage"]["status"], "incomplete")
+            compact = human_uat_orchestrator.compact_evidence_for_model(result)
+            compact_items = compact["evidence_snippets" if mail_tool else "evidence"]
+            compact_context = next(item for item in compact_items if field in item.get("snippet", ""))
+            self.assertIn(anchor.observation_id, compact_context["snippet"])
+            self.assertIn("not an identifier hit or exact field proof", compact_context["snippet"])
+            # Neighbor text cannot independently satisfy the anchor constraints.
+            miss = handler({**arguments, "required_terms": [identifier, "unmatched synthetic name"]})
+            self.assertFalse(miss["citations"])
+            with patch.object(revision.source_records, "scan_neighbor_context") as context_reader:
+                exact = handler({**arguments, "request_contract": {
+                    **arguments["request_contract"], "query_class": "exact_set_or_inventory",
+                    "maximum_claim_strength": "complete_authorized_scope",
+                }})
+                context_reader.assert_not_called()
+            self.assertEqual(exact["status"], "pending_review")
+            self.assertFalse(exact["citations"])
+
+    def test_source_start_mail_segment_anchor_gets_separately_cited_neighbor(self):
+        self._assert_neighbor_context(family="mail", mail_tool=True)
+
+    def test_source_start_real_plain_text_heading_gets_separately_cited_neighbor(self):
+        self._assert_neighbor_context(family="document_text", mail_tool=False)
+
+    def test_source_start_context_shares_shortlist_deadline_read_and_evidence_caps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = _source_start_preparation_fixture(
+                Path(directory), families=("document_text",),
+                document_text="# SYNTH-REQ-083\n\nWindow: review pending.\n\nOwner: review team.\n\nState: draft.\n",
+            )
+            revision = issue56_sealed_source.load_issue56_ingestion_revision(
+                fixture.directory, expected_revision_sha256=fixture.preparation_sha256,
+            )
+            records = revision.source_records
+            authority = records.job_authorities[0]
+            # Put the anchored heading last: the lexical shortlist, not the
+            # linear pass, must deliver its context while budget remains.
+            records.observation_references.reverse()
+            anchor = fixture.observations[0]
+            anchor_hash = sha256_json(anchor.to_dict())
+            records.runtime_store = SimpleNamespace(
+                source_family_lexical_lookup=lambda *args, **kwargs: [anchor_hash],
+                helper_for_hash=lambda value: {
+                    "observation_id": anchor.observation_id, "observation_hash": anchor_hash,
+                    "reference": {"job_index": 0, "job_fingerprint": authority.job_fingerprint},
+                    "permission_scope": dict(authority.permission_scope),
+                    "source_scope_id": dict(authority.permission_scope)["scope_id"],
+                },
+            )
+            handler = loader._build_source_start_semantic_handler(revision, mail_tool=False)
+            arguments = {
+                "query_text": "SYNTH-REQ-083", "required_terms": ["SYNTH-REQ-083"],
+                "requester_user_id": loader.APPROVER_ACTOR, "workspace_id": loader.WORKSPACE_ID,
+                "session_id": "synthetic-context-caps", "page_size": 2,
+            }
+            get = authority.observation_store.get
+            context_read = records.scan_neighbor_context
+            with (
+                patch.object(authority.observation_store, "get", wraps=get) as read,
+                patch.object(records, "scan_authorized_observations", wraps=records.scan_authorized_observations) as scan,
+                patch.object(records, "scan_neighbor_context", wraps=context_read) as context,
+                patch("formowl_retrieval.gateway.SOURCE_EVIDENCE_OBSERVATION_LIMIT", 3),
+            ):
+                result = handler(arguments)
+            self.assertEqual(len(result["evidence"]), 2)
+            self.assertNotIn("source_context", result["evidence"][0])
+            self.assertIn("source_context", result["evidence"][1])
+            self.assertEqual(read.call_count, 2)
+            self.assertEqual(context.call_count, 1)  # Never recurse on neighbors.
+            self.assertEqual(context.call_args.kwargs["max_observations"], 2)
+            recovery = result["query_agent"]["context_bundle"]["source_recovery"]
+            self.assertEqual(recovery["scan"]["scanned_observation_count"], 2)
+            self.assertFalse(recovery["scan"]["complete"])
+            self.assertEqual(context.call_args.kwargs["deadline_monotonic"], scan.call_args.kwargs["deadline_monotonic"])
+            with patch.object(authority.observation_store, "get", wraps=get) as read, patch("formowl_retrieval.gateway.SOURCE_EVIDENCE_OBSERVATION_LIMIT", 2):
+                capped = handler({**arguments, "page_size": 10})
+            self.assertEqual(read.call_count, 2)
+            self.assertEqual(len(capped["evidence"]), 2)
+            self.assertEqual(capped["coverage"]["status"], "incomplete")
+
     def test_source_start_shortlist_uses_tokenized_required_terms_for_both_families(self):
         from formowl_retrieval.gateway import current_source_evidence_query_terms
 
@@ -5588,10 +6161,11 @@ def _completed_registered_text_revision_fixture(
     temp_dir: Path,
     *,
     owner_user_id: str,
+    source_text: str | None = None,
 ):
     source_path = temp_dir / "acceptance.md"
     source_path.write_text(
-        "# Project acceptance\n\n"
+        source_text if source_text is not None else "# Project acceptance\n\n"
         "Acceptance requires written owner approval.\n"
         "The final checklist must be complete.\n",
         encoding="utf-8",
@@ -5654,19 +6228,24 @@ def _source_start_preparation_fixture(
     root: Path, *, families=("mail", "document_text"),
     mail_text="Acceptance requires written owner approval.",
     source_completeness_certified=False,
+    document_text=None,
+    attachment_csv=None,
+    attachment_content=None,
+    inline_html=None,
 ):
     """Real completed jobs; only their immutable reference checkpoint is synthetic.
 
     No projection, embedding, graph, mail attachment or alternate source store
     is manufactured. The format mirrors the existing preembedding checkpoint.
     """
-    authorities, observations, bindings, jobs = [], [], [], []
+    authorities, observations, observation_groups, bindings, jobs = [], [], [], [], []
     for family in families:
         directory = root / family
         directory.mkdir()
         if family == "document_text":
             asset, items, authority = _completed_registered_text_revision_fixture(
                 directory, owner_user_id=loader.APPROVER_ACTOR,
+                source_text=document_text,
             )
         else:
             source_path = directory / "archive.json"
@@ -5705,7 +6284,48 @@ def _source_start_preparation_fixture(
                 created_at="2026-09-01T00:00:00+00:00",
                 registered_at="2026-09-01T00:00:00+00:00",
             )
-            adapter = FixtureMailArchiveExtractor()
+            class TableFixtureExtractor(FixtureMailArchiveExtractor):
+                def extract(self, extraction_input):
+                    result = super().extract(extraction_input)
+                    if inline_html is not None:
+                        from formowl_ingestion.extractors.mail.pst import _HtmlTextExtractor, _inline_table_observations
+                        parser = _HtmlTextExtractor()
+                        parser.feed(inline_html)
+                        parser.close()
+                        tables = [{**table, "mime_ordinal": 1, "parent_mime_ordinal": 0, "quoted_depth": 0}
+                                  for table in parser.tables]
+                        message = next(item for item in result.observations if item.observation_type == "email_message")
+                        result.observations.extend(_inline_table_observations(
+                            SimpleNamespace(html_tables=tables), message, 1,
+                        ))
+                    if attachment_csv is None and attachment_content is None:
+                        return result
+                    message = next(item for item in result.observations if item.observation_type == "email_message")
+                    content, content_mime = (
+                        attachment_content if attachment_content is not None
+                        else (attachment_csv.encode("utf-8"), "text/csv")
+                    )
+                    child_id = extraction_input.attachment_materialization.materialize(
+                        content=content, expected_content_hash="sha256:" + hashlib.sha256(content).hexdigest(),
+                        mime_type=content_mime, source_ref=SourceRef(
+                            source_system="formowl_mail_attachment", source_type="email_attachment_occurrence",
+                            source_id="synthetic-native-table", source_key=message.location["message_occurrence_id"],
+                        ),
+                    )
+                    result.observations.append(Observation(
+                        observation_id="synthetic_table_parent", asset_id=extraction_input.asset.asset_id,
+                        extractor_run_id=extraction_input.extractor_run_id,
+                        observation_type="email_attachment_occurrence", modality="mail", text="Native table",
+                        confidence=1.0,
+                        location={"message_occurrence_id": message.location["message_occurrence_id"], "attachment_index": 1},
+                        permission_scope=extraction_input.asset.permission_scope,
+                        created_at=extraction_input.created_at,
+                        payload={"child_asset_id": child_id, "attachment_extraction_status": "extracted",
+                                 "content_hash": "sha256:" + hashlib.sha256(content).hexdigest()},
+                    ))
+                    return result
+
+            adapter = TableFixtureExtractor()
             job = create_ingestion_job(
                 asset=asset, job_store=job_store, requested_by=loader.APPROVER_ACTOR,
                 extractor_adapters=(adapter,), created_at="2026-09-01T00:00:00+00:00",
@@ -5714,6 +6334,7 @@ def _source_start_preparation_fixture(
                 ingestion_job_id=job.ingestion_job_id, asset_store=asset_store,
                 job_store=job_store, object_store=object_store, extractor_run_store=run_store,
                 observation_store=observation_store, extractor_adapters=(adapter,),
+                attachment_asset_store=asset_store if attachment_csv is not None or attachment_content is not None else None,
                 started_at="2026-09-01T00:00:00+00:00",
                 completed_at="2026-09-01T00:00:00+00:00",
             )
@@ -5726,6 +6347,7 @@ def _source_start_preparation_fixture(
         index = len(authorities)
         authorities.append(authority)
         observations.extend(items)
+        observation_groups.append(items)
         bindings.append({
             "job_index": index, "store_directory": str(directory.resolve()),
             "ingestion_job_id": authority.ingestion_job_id,
@@ -5735,7 +6357,7 @@ def _source_start_preparation_fixture(
         jobs.append({
             "root_asset_hash": asset.content_hash, "job_fingerprint": authority.job_fingerprint,
             "run_fingerprints": [
-                sha256_json(run.to_dict()) for run in ExtractorRunStore(directory).list()
+                sha256_json(run.to_dict()) for run in authority.runs
             ],
             "observation_count": authority.observation_count, "excluded_child_runs": [],
         })
@@ -5760,6 +6382,49 @@ def _source_start_preparation_fixture(
         )},
         "columns": [], "shards": [],
     }
+    shard_records = {}
+    for job_index, items in enumerate(observation_groups):
+        for item in items:
+            if item.observation_type not in {"table_row", "table_cell"}:
+                continue
+            key = sha256_json(loader._table_row_key(item))
+            kind = "row" if item.observation_type == "table_row" else "cell"
+            inline = item.payload.get("lineage", {}).get("source_family") == "mail_inline_table"
+            record = [kind, key, job_index, item.observation_id, sha256_json(item.to_dict())]
+            exact_core["counts"][item.observation_type] += 1
+            structure = item.payload["table_structure"]
+            if kind == "row":
+                exact_core["counts"][structure["structure_status"] + "_row"] += 1
+                exact_core["counts"]["inline_authorized_row" if inline else "attachment_authorized_row"] += 1
+            else:
+                field = structure.get("column_name") or f"column_{item.location['cell_index']}"
+                column_hash = loader.source_occurrence_column_capability_hash(
+                    runtime.tokenizer_profile.normalize_exact_identifier_surface(field),
+                )
+                record.append(column_hash)
+                column = {
+                    "field": field, "column_hash": column_hash, "inline_table": inline,
+                    "structure_status": structure["structure_status"],
+                    "candidate_hashes": [sha256_json(field)],
+                }
+                if column not in exact_core["columns"]:
+                    exact_core["columns"].append(column)
+                value_hashes = {sha256_json(token) for token in runtime.tokenizer_profile.analyze(item.text or "").tokens}
+                if item.text:
+                    value_hashes.add(loader.source_occurrence_exact_cell_value_hash(column_hash, item.text))
+                for value_hash in value_hashes:
+                    shard_records.setdefault(("value", value_hash[7:9]), []).append([value_hash, key, inline])
+            record.append(inline)
+            shard_records.setdefault(("row", key[7:9]), []).append(record)
+    for (kind, shard), records in sorted(shard_records.items()):
+        path = exact / ("rows" if kind == "row" else "values") / f"{shard}.jsonl"
+        path.parent.mkdir(exist_ok=True)
+        payload = b"".join(json.dumps(record).encode() + b"\n" for record in records)
+        path.write_bytes(payload)
+        exact_core["shards"].append({
+            "kind": kind, "shard": shard, "record_count": len(records), "size_bytes": len(payload),
+            "sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
+        })
     exact_bytes = json.dumps({
         **exact_core, "manifest_fingerprint": sha256_json(exact_core),
     }, sort_keys=True).encode()
@@ -5776,8 +6441,7 @@ def _source_start_preparation_fixture(
     }
     references = [
         [index, item.observation_id, sha256_json(item.to_dict())]
-        for index, authority in enumerate(authorities) for item in observations
-        if item.asset_id == authority.asset.asset_id
+        for index, items in enumerate(observation_groups) for item in items
     ]
     snapshot = {
         "bundles": [], "observation_references": references,

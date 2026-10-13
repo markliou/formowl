@@ -488,6 +488,37 @@ class PstMailArchiveExtractor:
         return ExtractionResult(observations=observations, warnings=warnings)
 
 
+def _readpst_sidecar_parent_window(by_parent, *, export_root, config):
+    """Select an offline source-order window, never a query/content predicate.
+
+    Keep the native sidecar ordinals from the whole inventory. Window identity
+    is part of the extraction profile so interrupted whole-corpus child assets
+    cannot silently become outputs of a new partial run.
+    """
+    rows = sorted(
+        by_parent.items(),
+        key=lambda item: str(item[0].relative_to(export_root)).lower(),
+    )
+    start = config.get("attachment_sidecar_parent_start")
+    count = config.get("attachment_sidecar_parent_count")
+    if start is None and count is None:
+        return rows, None, 0
+    if (
+        type(start) is not int or start < 0
+        or type(count) is not int or count < 1
+        or start >= len(rows)
+    ):
+        raise ValueError("pst_sidecar_parent_window_invalid")
+    end = min(len(rows), start + count)
+    ordinal_before = sum(len(children) for _, children in rows[:start])
+    window = {
+        "parent_start": start, "parent_count": end - start,
+        "requested_parent_count": count, "total_parent_count": len(rows),
+        "sidecar_ordinal_offset": ordinal_before,
+    }
+    return rows[start:end], window, ordinal_before
+
+
 class ReadpstSidecarBackfillExtractor:
     """Incrementally materialize bound readpst ``-S`` attachment sidecars."""
 
@@ -566,6 +597,17 @@ class ReadpstSidecarBackfillExtractor:
         )
         if not detached_paths:
             return ExtractionResult(errors=["pst_sidecar_export_empty"])
+        try:
+            parent_rows, parent_window, ordinal = _readpst_sidecar_parent_window(
+                by_parent, export_root=self._existing_export_root, config=config,
+            )
+        except ValueError:
+            return ExtractionResult(errors=["pst_sidecar_parent_window_invalid"])
+        if parent_window is not None and (
+            not isinstance(config.get("attachment_backfill_batch_id"), str)
+            or not config["attachment_backfill_batch_id"].strip()
+        ):
+            return ExtractionResult(errors=["pst_sidecar_parent_window_batch_invalid"])
         bindings_by_key: dict[
             tuple[str, str], list[ReadpstSidecarParentBinding]
         ] = {}
@@ -584,19 +626,16 @@ class ReadpstSidecarBackfillExtractor:
                 "parent_binding_manifest_fingerprint": (
                     self._parent_binding_manifest_fingerprint
                 ),
+                **({
+                    "parent_window": parent_window,
+                    "parent_window_batch_id": config["attachment_backfill_batch_id"],
+                } if parent_window is not None else {}),
             },
         )
         plans: list[_ReadpstSidecarPlan] = []
         repaired_parents: list[Observation] = []
         inventory_items: list[SourceInventoryItem] = []
-        ordinal = 0
         try:
-            parent_rows = sorted(
-                by_parent.items(),
-                key=lambda item: str(
-                    item[0].relative_to(self._existing_export_root)
-                ).lower(),
-            )
             for parent_path, sidecar_paths in parent_rows:
                 source_content_hash, _ = _sha256_path(parent_path)
                 folder_path_hash = sha256_json(

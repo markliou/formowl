@@ -50,6 +50,10 @@ SEMANTIC_CLAIM_STRENGTH_BY_CLASS = {
     "exact_set_or_inventory": "complete_authorized_scope",
     "global_summarization": "bounded_summary",
 }
+
+# The current request boundary can include mail, attachment tables, and
+# independent document text together. Capability validation still owns access.
+SEMANTIC_REQUEST_MAX_SOURCE_FAMILIES = 3
 _CLAIM_STRENGTH_BY_CLASS = SEMANTIC_CLAIM_STRENGTH_BY_CLASS
 _SEMANTIC_REQUEST_CONTRACT_FIELDS = {
     "original_query_hash",
@@ -83,7 +87,6 @@ _EXACT_TERMS = (
     "list all",
     "how many",
     "全部",
-    "列出",
     "清單",
     "盤點",
     "多少",
@@ -93,7 +96,7 @@ _EXACT_TERMS = (
 _CJK_EXACT_OUTPUT_GRAMMAR_V1 = (
     ("列出", "列舉", "調閱", "整理"),
     ("出來",),
-    ("全部", "都", "所有"),
+    ("全部", "都", "所有", "每"),
 )
 _GREETING_MARKERS = ("hello", "hi", "hey", "嗨", "你好", "您好")
 _PRIOR_PRESENTATION_MARKERS = (
@@ -862,7 +865,7 @@ def validate_semantic_request_contract(
     if (
         not isinstance(source_family_scope, Sequence)
         or isinstance(source_family_scope, (str, bytes))
-        or not 1 <= len(source_family_scope) <= 2
+        or not 1 <= len(source_family_scope) <= SEMANTIC_REQUEST_MAX_SOURCE_FAMILIES
         or any(
             not isinstance(family, str)
             or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", family) is None

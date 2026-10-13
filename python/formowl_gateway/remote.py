@@ -30,6 +30,7 @@ from formowl_contract import ContractValidationError
 from formowl_mail.semantic_plan import (
     SEMANTIC_CLAIM_STRENGTH_BY_CLASS,
     SEMANTIC_QUERY_CLASSES,
+    SEMANTIC_REQUEST_MAX_SOURCE_FAMILIES,
     validate_semantic_request_contract,
 )
 from mcp import types as mcp_types
@@ -210,7 +211,7 @@ _SEMANTIC_REQUEST_CONTRACT_INPUT_SCHEMA: dict[str, Any] = {
         "source_family_scope": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 2,
+            "maxItems": SEMANTIC_REQUEST_MAX_SOURCE_FAMILIES,
             "uniqueItems": True,
             "items": {
                 "type": "string",

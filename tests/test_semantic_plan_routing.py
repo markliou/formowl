@@ -7,6 +7,74 @@ from formowl_mail.semantic_plan import deterministic_query_class, requires_works
 
 
 class SemanticPlanRoutingTests(unittest.TestCase):
+    def test_excerpt_listing_is_not_an_exhaustive_inventory(self) -> None:
+        prompts = (
+            "搜尋授權郵件附件的校準說明段落，列出原文並附來源引用。",
+            "從郵件附件找出包裝規則，列出相關片段與引用。",
+            "搜尋獨立文件的設備保養條款，列出原文和來源。",
+            "找出已授權專案文件中的複核說明，列出段落並引用來源。",
+            "Find the attachment excerpt and show its source citation.",
+            "Find the independent document clause and list the cited excerpt.",
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                self.assertEqual(deterministic_query_class(prompt), "evidence_lookup")
+                self.assertTrue(requires_workspace_evidence(prompt))
+
+    def test_explicit_inventory_and_count_guards_remain_exact(self) -> None:
+        prompts = (
+            "列出所有授權郵件附件。",
+            "列出全部獨立文件。",
+            "把授權郵件附件都列出。",
+            "盤點授權專案文件。",
+            "授權附件有多少份？",
+            "count authorized attachment excerpts",
+            "list all independent documents",
+            "how many authorized attachments are there?",
+            "inventory of independent documents",
+            "exact set of authorized attachments",
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                self.assertEqual(deterministic_query_class(prompt), "exact_set_or_inventory")
+
+    def test_every_record_quantifiers_remain_exact(self) -> None:
+        prompts = (
+            "列出每一份授權文件。",
+            "列出每份授權文件。",
+            "列出每個授權附件。",
+            "列出每一个授权附件。",
+            "列出每封授權郵件。",
+            "列出每一封授权邮件。",
+            "列出每件授權附件。",
+            "列出每一件授權附件。",
+            "列出每筆授權紀錄。",
+            "列出每一笔授权记录。",
+            "列出每條授權文件紀錄。",
+            "列出每一条授权文件记录。",
+            "列出每項授權文件紀錄。",
+            "列出每一项授权文件记录。",
+            "列出每篇授權文件。",
+            "列出每一篇授權文件。",
+            "列出每行授權表格紀錄。",
+            "列出每一頁授權文件。",
+            "列出每組授權郵件。",
+            "整理每台設備的授權文件。",
+            "每人的授權文件請調閱。",
+            "每一張授權文件請列舉。",
+            "列出每一张授权文件。",
+            "列出每天的授權文件。",
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                self.assertEqual(deterministic_query_class(prompt), "exact_set_or_inventory")
+
+        # Universal quantification needs an output verb; temporal prose alone
+        # does not trigger exact execution or workspace evidence retrieval.
+        prose = "每天我都會散步。"
+        self.assertEqual(deterministic_query_class(prose), "evidence_lookup")
+        self.assertFalse(requires_workspace_evidence(prose))
+
     def test_output_completion_is_non_exhaustive_across_source_families(self) -> None:
         ordinary_outputs = (
             "把周岑禾的設備維護郵件整理出來",

@@ -6,12 +6,14 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
+import http.client
 import json
 import math
 import os
 from pathlib import Path
 import re
 import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -26,6 +28,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from formowl_contract import ContractValidationError, sha256_json
+from formowl_contract.public_safety import assert_no_public_raw_references
 
 from .semantic_plan import (
     SEMANTIC_CLAIM_STRENGTH_BY_CLASS,
@@ -132,10 +135,11 @@ _CODEX_ERROR_HTTP_STATUS_ALLOWLIST = frozenset(
     {400, 401, 403, 404, 408, 409, 413, 422, 429, 500, 502, 503, 504}
 )
 _DEFAULT_UAT_TIMEZONE = "Asia/Taipei"
-_MAX_PROVIDER_ATTEMPT_DIAGNOSTICS = 3
 _MAX_PROVIDER_REQUESTS_PER_TURN = (
     _MAX_TOOL_CALLS_PER_TURN + _MAX_PUBLIC_TERM_CALLS_PER_TURN + 2
 )
+# Keep every already-budgeted request observable; this does not permit more requests.
+_MAX_PROVIDER_ATTEMPT_DIAGNOSTICS = _MAX_PROVIDER_REQUESTS_PER_TURN
 _MAX_MCP_CITATION_STAGE_DIAGNOSTICS = 3
 _MAX_FINALIZATION_VALIDATION_DIAGNOSTICS = 2
 _PROVIDER_ATTEMPT_OUTCOMES = frozenset({"completed", "error", "incomplete", "invalid", "timeout"})
@@ -148,6 +152,10 @@ _CITATION_PROJECTION_RESULTS = frozenset(
 _FINALIZATION_VALIDATION_RESULTS = frozenset(
     {"passed", "citation_rejected", "coverage_rejected", "parse_rejected", "provider_incomplete"}
 )
+_ANSWER_PROJECTION_RESULTS = frozenset({
+    "passed", "public_safety_rejected", "repair_recovered", "recovery_exhausted",
+    "projection_rejected_partial_fallback", "invalid",
+})
 _PROVIDER_REQUEST_SHAPE_TOOL_CHOICE_KINDS = frozenset(
     {"absent", "none", "auto", "required_function", "other"}
 )
@@ -268,6 +276,8 @@ When calling FormOwl:
 - always provide query_text as a standalone intent description rather than
   forwarding the user's fragment unchanged;
 {tool_argument_guidance}
+{anchor_field_guidance}
+{source_recheck_guidance}
 - validate every query against the actual authorized capability and schema
   information returned by the tool;
 - inspect status, requested-field coverage, external replan hints, citations,
@@ -294,7 +304,8 @@ When calling FormOwl:
   and field, return an explicitly scoped partial answer with incomplete
   coverage; never mark a silently reduced answer complete;
 - make at most three tool calls in one turn, including the initial call;
-- use only authorized, non-redacted, source_provided exact field labels;
+- for deterministic structured execution, use only authorized, non-redacted,
+  source_provided exact field labels;
 - never treat candidate_only evidence as deterministic exact evidence;
 - do not invent identifiers, procurement rules, department aliases, or
   source-specific routing constraints;
@@ -357,9 +368,8 @@ _CODEX_GRAPH_TOOL_ARGUMENT_GUIDANCE = """
 - request only fields needed for the user's stated answer plus one minimal row
   identifier when necessary to preserve row association. A richer query does
   not authorize gratuitous description, manufacturer, MOQ, or other columns;
-- a validated evidence-only initial retrieval with zero verified citations may
-  receive at most one bounded same-scope source recheck inside this tool call,
-  under the same actor, workspace, grants, source scope and revision. Inspect
+- source recheck, when eligible, stays inside this tool call under the same
+  actor, workspace, grants, source scope and revision. Inspect
   source_recovery and the underlying initial status; an outer replan_required
   marker is not itself an eligible retrieval miss. Do not request another scan;
 - do not use source recheck to bypass provider/tool errors, permission denials,
@@ -381,9 +391,11 @@ _CODEX_MAIL_TOOL_ARGUMENT_GUIDANCE = """
   user explicitly requests those literal words;
 - when trusted turn request-contract context is supplied, copy its
   original_query_hash, query_class, and maximum_claim_strength into
-  request_contract; select source_family_scope and requested_fields only from
-  authorized capabilities. Do not change the server-bound query intent, scope,
-  or claim ceiling;
+  request_contract; select source_family_scope only from authorized capabilities
+  and requested_fields from the user's information needs in the original task.
+  Semantic requested fields do not require a known source column or literal
+  source wording. Do not change the server-bound query intent, scope, or claim
+  ceiling;
 - preserve the selected tool's bounded evidence_snippets and governed citation
   objects as source evidence. Missing snippets are incomplete coverage, not
   proof that the requested mail data does not exist;
@@ -399,6 +411,11 @@ def _formowl_instruction_bundle(
 ) -> tuple[str, str]:
     """Render provider instructions for the descriptor selected for this turn."""
 
+    from formowl_gateway.jsonrpc import (
+        EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE,
+        SOURCE_EVIDENCE_RECHECK_PLANNING_GUIDANCE,
+    )
+
     tool_name = formowl_tool["name"]
     tool_argument_guidance = (
         _CODEX_MAIL_TOOL_ARGUMENT_GUIDANCE
@@ -408,6 +425,8 @@ def _formowl_instruction_bundle(
     base_instructions = _CODEX_BASE_INSTRUCTIONS.replace(
         "{tool_argument_guidance}",
         tool_argument_guidance,
+    ).replace("{anchor_field_guidance}", EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE).replace(
+        "{source_recheck_guidance}", SOURCE_EVIDENCE_RECHECK_PLANNING_GUIDANCE,
     )
     base_instructions = (
         f"Selected UAT FormOwl evidence tool: {tool_name}. "
@@ -642,9 +661,14 @@ class _UatTurnRequestContractBinder:
         )
         self._query_class = deterministic_query_class(user_text)
         self._available_source_families = _authorized_source_families(authorized_capability_summary)
-        self._explicit_source_families = _explicit_source_families(user_text)
+        self._explicit_source_families = _explicit_source_families(
+            user_text, available_source_families=self._available_source_families,
+        )
         self._contract: dict[str, Any] | None = None
         self._normalized_user_text = unicodedata.normalize("NFKC", user_text).casefold()
+        self._attachment_document_label = (
+            _without_attached_document_labels(self._normalized_user_text) != self._normalized_user_text
+        )
         self._required_terms: tuple[str, ...] | None = None
         (
             self._mail_selector_kind,
@@ -659,12 +683,20 @@ class _UatTurnRequestContractBinder:
     def trusted_context(self) -> Mapping[str, Any] | None:
         if not self.enabled:
             return None
+        from formowl_gateway.jsonrpc import (
+            EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE,
+            SOURCE_EVIDENCE_RECHECK_PLANNING_GUIDANCE,
+        )
+
         return {
             "artifact_id": "formowl_uat_turn_request_contract_boundary_v1",
             "original_query_hash": self._original_query_hash,
             "query_class": self._query_class,
             "maximum_claim_strength": SEMANTIC_CLAIM_STRENGTH_BY_CLASS[self._query_class],
             "available_source_families": list(self._available_source_families),
+            "required_source_family_scope": list(
+                self._explicit_source_families or self._available_source_families
+            ),
             "binding_policy": (
                 "The server owns the original query hash, query class, and claim "
                 "ceiling and authorized source-family scope. If the user explicitly "
@@ -673,6 +705,8 @@ class _UatTurnRequestContractBinder:
                 "scope for subsequent repairs. Preserve explicit user source "
                 "constraints in each subquery; select requested fields only from the "
                 "original task."
+                + " " + EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE
+                + " " + SOURCE_EVIDENCE_RECHECK_PLANNING_GUIDANCE
             ),
         }
 
@@ -681,6 +715,7 @@ class _UatTurnRequestContractBinder:
         candidate: Mapping[str, Any] | None,
         *,
         table_query: Mapping[str, Any] | None,
+        freeze: bool = True,
     ) -> Mapping[str, Any] | None:
         if not self.enabled:
             return validate_semantic_request_contract(candidate) if candidate is not None else None
@@ -747,7 +782,7 @@ class _UatTurnRequestContractBinder:
             requested_fields = (
                 list(table_query["projection_fields"]) if table_query is not None else []
             )
-        self._contract = validate_semantic_request_contract(
+        contract = validate_semantic_request_contract(
             {
                 "original_query_hash": self._original_query_hash,
                 "query_class": self._query_class,
@@ -757,7 +792,9 @@ class _UatTurnRequestContractBinder:
             },
             available_source_families=self._available_source_families,
         )
-        return self._contract
+        if freeze:
+            self._contract = contract
+        return contract
 
     def validate_tool_query_shape(
         self,
@@ -803,6 +840,7 @@ class _UatTurnRequestContractBinder:
         *,
         freeze: bool = True,
         allow_missing: bool = False,
+        request_contract: Mapping[str, Any] | None = None,
     ) -> tuple[str, ...] | None:
         """Bind grounded identity/topic phrases to this turn, including retries."""
 
@@ -837,7 +875,12 @@ class _UatTurnRequestContractBinder:
         for term in terms:
             source_family = _required_term_source_family(term)
             if (
-                source_family in self._explicit_source_families
+                (source_family in self._explicit_source_families or (
+                    term in {"附件", "attachment", "attachments"}
+                    and bool(set(self._explicit_source_families) & {"mail", "attachment_table"})
+                ) or (
+                    source_family == "document_text" and self._attachment_document_label
+                ))
                 and not _is_explicit_literal_content_term(self._normalized_user_text, term)
             ):
                 raise ContractValidationError(
@@ -845,6 +888,29 @@ class _UatTurnRequestContractBinder:
                 )
         if self._required_terms is not None and terms != self._required_terms:
             raise ContractValidationError("UAT evidence required terms changed within the turn")
+        if request_contract is not None and request_contract["query_class"] == "evidence_lookup":
+            requested_fields = {
+                unicodedata.normalize("NFKC", field.strip()).casefold()
+                for field in request_contract["requested_fields"]
+            }
+            non_literal_terms = tuple(
+                term for term in terms
+                if not _is_explicit_literal_content_term(
+                    self._normalized_user_text, term, require_explicit_intent=True,
+                )
+            )
+            # Decorated fields can still overlap a content constraint. Reject
+            # ambiguous roles for repair, never guess which term to remove.
+            # ASCII identifier fragments do not count; CJK spans need no spaces.
+            if any(
+                re.search(r"(?<![a-z0-9_./-])" + re.escape(term) + r"(?![a-z0-9_./-])", field)
+                is not None
+                for field in requested_fields
+                for term in non_literal_terms
+            ):
+                raise ContractValidationError(
+                    "UAT evidence required term overlaps a requested output field; clarify field/term roles"
+                )
         if freeze and self._required_terms is None:
             self._required_terms = terms
         return self._required_terms if self._required_terms is not None else terms
@@ -2215,8 +2281,8 @@ class CodexAppServerConversationModel:
                             "Server-authoritative immutable boundary for this user "
                             "turn. Copy its original_query_hash, query_class, and "
                             "maximum_claim_strength into request_contract; select "
-                            "source_family_scope and requested_fields only from the "
-                            "authorized capabilities. The server freezes the first "
+                            "source_family_scope from required_source_family_scope "
+                            "and requested_fields from the original task. The server freezes the first "
                             "valid contract across retries:\n"
                             + json.dumps(
                                 dict(request_contract_context),
@@ -2431,6 +2497,109 @@ class _NoResponsesRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+_PROVIDER_FAILURE_PHASES = frozenset({
+    "prepare", "connect_headers", "sse_read", "json_read", "http_error_read", "close",
+})
+_PROVIDER_TRANSPORT_EXCEPTION_TYPES = (
+    urllib.error.HTTPError, urllib.error.URLError,
+    ssl.SSLCertVerificationError, ssl.SSLEOFError, ssl.SSLError,
+    socket.gaierror, socket.herror, TimeoutError, http.client.RemoteDisconnected,
+    ConnectionResetError,
+    ConnectionAbortedError, ConnectionRefusedError, BrokenPipeError,
+    http.client.IncompleteRead,
+    http.client.BadStatusLine, http.client.HTTPException,
+    OSError, TypeError, ValueError, RuntimeError,
+)
+_PROVIDER_TRANSPORT_TYPE_NAMES = frozenset(
+    cls.__name__ for cls in _PROVIDER_TRANSPORT_EXCEPTION_TYPES
+) | {"other", "non_exception"}
+
+
+def safe_provider_transport_diagnostics(value: Mapping[str, Any]) -> dict[str, Any]:
+    """One strict projection shared by the existing HTTP, gateway and trace owners."""
+    safe: dict[str, Any] = {}
+    for key, allowed in (("failure_phase", _PROVIDER_FAILURE_PHASES),
+                         ("transport_exception_type", _PROVIDER_TRANSPORT_TYPE_NAMES)):
+        token = value.get(key)
+        if isinstance(token, str) and token in allowed:
+            safe[key] = token
+    error_number = value.get("transport_errno")
+    if type(error_number) is int and -65535 <= error_number <= 65535:
+        safe["transport_errno"] = error_number
+    for key in ("request_timeout_seconds", "remaining_deadline_seconds"):
+        seconds = value.get(key)
+        if (type(seconds) in (int, float)
+                and 0 <= seconds <= _MAX_RESPONSES_TIMEOUT_SECONDS and math.isfinite(seconds)):
+            safe[key] = round(float(seconds), 3)
+    request_id = _safe_diagnostic_fingerprint(value.get("response_request_id_sha256"))
+    if request_id is not None:
+        safe["response_request_id_sha256"] = request_id
+    received_bytes = value.get("response_body_bytes")
+    if type(received_bytes) is int and 0 <= received_bytes <= _MAX_RESPONSES_BODY_BYTES + 1:
+        safe["response_body_bytes"] = received_bytes
+    causes = value.get("transport_causes")
+    if isinstance(causes, (list, tuple)) and len(causes) <= 4:
+        safe_causes = []
+        for cause in causes:
+            if not isinstance(cause, Mapping):
+                continue
+            relation = cause.get("relation")
+            kind = cause.get("exception_type")
+            if (not isinstance(relation, str) or relation not in {"reason", "cause", "context"}
+                    or not isinstance(kind, str) or kind not in _PROVIDER_TRANSPORT_TYPE_NAMES):
+                continue
+            record = {"relation": relation, "exception_type": kind}
+            number = cause.get("errno")
+            if type(number) is int and -65535 <= number <= 65535:
+                record["errno"] = number
+            safe_causes.append(record)
+        safe["transport_causes"] = safe_causes
+    return safe
+
+
+def _provider_transport_cause_diagnostic(exception: Exception) -> dict[str, Any]:
+    def attribute(value: Any, name: str) -> Any:
+        try:
+            return getattr(value, name, None)
+        except Exception:
+            return None
+
+    def classify(value: Any) -> dict[str, Any]:
+        kind = next((cls.__name__ for cls in _PROVIDER_TRANSPORT_EXCEPTION_TYPES
+                     if isinstance(value, cls)),
+                    "other" if isinstance(value, BaseException) else "non_exception")
+        record = {"exception_type": kind}
+        number = attribute(value, "errno")
+        if type(number) is int and -65535 <= number <= 65535:
+            record["errno"] = number
+        return record
+
+    root = classify(exception)
+    safe = {"transport_exception_type": root["exception_type"]}
+    if "errno" in root:
+        safe["transport_errno"] = root["errno"]
+    causes = []
+    seen = {id(exception)}
+    pending = deque([(exception, 0)])
+    while pending and len(causes) < 4:
+        current, depth = pending.popleft()
+        if depth >= 3:
+            continue
+        for relation, name in (("reason", "reason"), ("cause", "__cause__"),
+                               ("context", "__context__")):
+            child = attribute(current, name)
+            if child is None or id(child) in seen:
+                continue
+            seen.add(id(child))
+            causes.append({"relation": relation, **classify(child)})
+            if isinstance(child, BaseException):
+                pending.append((child, depth + 1))
+            if len(causes) == 4:
+                break
+    safe["transport_causes"] = causes
+    return safe
+
+
 def _read_responses_sse_terminal(
     response: Any,
     *,
@@ -2438,6 +2607,7 @@ def _read_responses_sse_terminal(
     http_status: int | None,
     headers: Any,
     request_shape: Mapping[str, Any] | None,
+    timeout_seconds: float | None = None,
 ) -> tuple[dict[str, Any], bytes]:
     """Read one bounded Responses SSE stream through its complete terminal event."""
 
@@ -2446,6 +2616,8 @@ def _read_responses_sse_terminal(
     event_name = ""
     data_lines: list[str] = []
     first_line = True
+    sse_field_seen = False
+    remaining = timeout_seconds
     terminal_status = {
         "response.completed": "completed",
         "response.failed": "failed",
@@ -2455,6 +2627,7 @@ def _read_responses_sse_terminal(
     def fail(
         reason_code: str,
         response_payload: Mapping[str, Any] | None = None,
+        exception: Exception | None = None,
     ) -> _UatProviderFailure:
         return _UatProviderFailure(
             reason_code=reason_code,
@@ -2467,10 +2640,14 @@ def _read_responses_sse_terminal(
             body=bytes(body),
             headers=headers,
             request_shape=request_shape,
+            failure_phase="sse_read",
+            transport_exception=exception,
+            request_timeout_seconds=timeout_seconds,
+            remaining_deadline_seconds=remaining,
         )
 
     def consume_line(line: bytes) -> dict[str, Any] | None:
-        nonlocal event_name, data_lines, first_line
+        nonlocal event_name, data_lines, first_line, sse_field_seen
         if first_line:
             first_line = False
             if line.startswith(b"\xef\xbb\xbf"):
@@ -2480,27 +2657,25 @@ def _read_responses_sse_terminal(
             current_data = "\n".join(data_lines)
             event_name = ""
             data_lines = []
-            if current_name == "error":
-                raise fail("provider_error")
             if not current_data:
+                if current_name == "error" or current_name in terminal_status:
+                    raise fail("invalid_top_level_shape")
                 return None
             try:
                 event_payload = json.loads(current_data)
             except (UnicodeError, json.JSONDecodeError):
-                if current_name:
-                    raise fail("invalid_json_response") from None
-                return None
+                raise fail("invalid_json_response") from None
             if not isinstance(event_payload, Mapping):
-                if current_name in terminal_status:
-                    raise fail("invalid_top_level_shape")
-                return None
+                raise fail("invalid_top_level_shape")
             data_type = event_payload.get("type")
-            if data_type == "error":
-                raise fail("provider_error", event_payload)
             if data_type is not None and not isinstance(data_type, str):
                 raise fail("invalid_top_level_shape", event_payload)
             if current_name and "type" in event_payload and current_name != data_type:
                 raise fail("invalid_top_level_shape", event_payload)
+            # Decode and validate named error data before projecting diagnostics;
+            # both flat official events and legacy nested errors retain details.
+            if current_name == "error" or data_type == "error":
+                raise fail("provider_error", event_payload)
             terminal_name = current_name or data_type
             if terminal_name not in terminal_status:
                 return None
@@ -2512,6 +2687,7 @@ def _read_responses_sse_terminal(
                 raise fail("invalid_top_level_shape", event_payload)
             return dict(terminal)
         if line.startswith(b":"):
+            sse_field_seen = True
             return None
         field, separator, value = line.partition(b":")
         if separator and value.startswith(b" "):
@@ -2521,6 +2697,8 @@ def _read_responses_sse_terminal(
             field_value = value.decode("utf-8")
         except UnicodeError:
             raise fail("invalid_utf8_response") from None
+        if field_name in {"event", "data", "id", "retry"}:
+            sse_field_seen = True
         if field_name == "event":
             event_name = field_value
         elif field_name == "data":
@@ -2531,17 +2709,37 @@ def _read_responses_sse_terminal(
     if not callable(read_chunk):
         read_chunk = response.read
     while True:
-        remaining = deadline - time.monotonic()
+        remaining = max(0.0, deadline - time.monotonic())
         if remaining <= 0:
-            raise TimeoutError("provider response deadline expired")
-        _set_response_socket_timeout(response, remaining)
-        chunk = read_chunk(16 * 1024)
-        if time.monotonic() >= deadline:
-            raise TimeoutError("provider response deadline expired")
+            raise fail("transport_timeout")
+        try:
+            _set_response_socket_timeout(response, remaining)
+            chunk = read_chunk(16 * 1024)
+        except Exception as exc:
+            partial = exc.partial if isinstance(exc, http.client.IncompleteRead) else b""
+            if isinstance(partial, bytes):
+                body.extend(partial[: _MAX_RESPONSES_BODY_BYTES + 1 - len(body)])
+            remaining = max(0.0, deadline - time.monotonic())
+            timed_out = isinstance(exc, (TimeoutError, socket.timeout)) or (
+                isinstance(exc, urllib.error.URLError)
+                and isinstance(exc.reason, (TimeoutError, socket.timeout))
+            )
+            raise fail("transport_timeout" if timed_out else "transport_error",
+                       exception=exc) from None
+        remaining = max(0.0, deadline - time.monotonic())
+        if remaining <= 0:
+            if isinstance(chunk, bytes):
+                body.extend(chunk[: _MAX_RESPONSES_BODY_BYTES + 1 - len(body)])
+            raise fail("transport_timeout")
         if not isinstance(chunk, bytes):
             raise fail("invalid_sse_response")
         if not chunk:
-            raise fail("unexpected_sse_response")
+            # A recognized SSE stream ending without a dispatched terminal is
+            # different from an HTML/JSON body in the streaming transport.
+            raise fail(
+                "invalid_sse_response" if body and not sse_field_seen
+                else "unexpected_sse_response"
+            )
         body.extend(chunk)
         if len(body) > _MAX_RESPONSES_BODY_BYTES:
             body[:] = body[: _MAX_RESPONSES_BODY_BYTES + 1]
@@ -2698,6 +2896,9 @@ def _safe_provider_wire_diagnostic(body: bytes, headers: Any) -> dict[str, Any]:
             if transfer_encoding is not None
             else False
         ),
+        "response_request_id_sha256": _safe_provider_value_hash(
+            _provider_header(headers, "x-request-id") or _provider_header(headers, "request-id")
+        ),
     }
 
 
@@ -2778,11 +2979,12 @@ def _provider_diagnostic(
         elif raw_incomplete_reason is not None:
             incomplete_reason_sha256 = _safe_provider_value_hash(raw_incomplete_reason)
         error = response.get("error")
+        flat_error = response.get("object") == "error" or response.get("type") == "error"
         raw_error_code = (
             error.get("code")
             if isinstance(error, Mapping)
             else response.get("code")
-            if response.get("object") == "error"
+            if flat_error
             else None
         )
         if isinstance(raw_error_code, str) and raw_error_code in (_PROVIDER_ERROR_CODE_ALLOWLIST):
@@ -2793,7 +2995,7 @@ def _provider_diagnostic(
             error.get("type")
             if isinstance(error, Mapping)
             else response.get("type")
-            if response.get("object") == "error"
+            if response.get("object") == "error" and response.get("type") != "error"
             else None
         )
         if isinstance(raw_error_type, str) and raw_error_type in (_PROVIDER_ERROR_TYPE_ALLOWLIST):
@@ -2804,7 +3006,7 @@ def _provider_diagnostic(
             error.get("param")
             if isinstance(error, Mapping)
             else response.get("param")
-            if response.get("object") == "error"
+            if flat_error
             else None
         )
         if isinstance(raw_error_param, str) and raw_error_param in _PROVIDER_ERROR_PARAM_ALLOWLIST:
@@ -2815,7 +3017,7 @@ def _provider_diagnostic(
             error.get("message")
             if isinstance(error, Mapping)
             else response.get("message")
-            if response.get("object") == "error"
+            if flat_error
             else None
         )
         provider_error_message_class = _provider_error_message_class(raw_error_message)
@@ -3107,6 +3309,7 @@ def _provider_attempt_diagnostic(
     tools: Sequence[Mapping[str, Any]],
     request_shape: Mapping[str, Any] | None = None,
     http_status: int | None = None,
+    failure_diagnostic: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     output = response.get("output") if isinstance(response, Mapping) else None
     function_call_count = (
@@ -3139,6 +3342,8 @@ def _provider_attempt_diagnostic(
         and 100 <= http_status <= 599
     ):
         diagnostic["http_status"] = http_status
+    if failure_diagnostic is not None:
+        diagnostic.update(safe_provider_transport_diagnostics(failure_diagnostic))
     return diagnostic
 
 
@@ -3233,7 +3438,25 @@ def safe_provider_loop_diagnostics(value: Mapping[str, Any] | None) -> dict[str,
     if not isinstance(value, Mapping):
         return {}
     safe: dict[str, Any] = {}
+    recovery = value.get("pre_mcp_recovery")
+    if (
+        isinstance(recovery, Mapping)
+        and set(recovery) == {"attempt", "http_status", "reason_code", "retry_transport"}
+        and type(recovery.get("attempt")) is int
+        and 1 <= recovery["attempt"] < _MAX_PROVIDER_REQUESTS_PER_TURN
+        and type(recovery.get("http_status")) is int and recovery["http_status"] == 408
+        and recovery.get("reason_code") == "stream_disconnected"
+        and recovery.get("retry_transport") == "sse"
+        and type(value.get("provider_attempt_count")) is int
+        and recovery["attempt"] < value["provider_attempt_count"] <= _MAX_PROVIDER_REQUESTS_PER_TURN
+    ):
+        safe["pre_mcp_recovery"] = dict(recovery)
     safe["provider_attempts_valid"] = False
+    if "answer_projection_result" in value:
+        safe["answer_projection_result"] = (
+            _safe_enum_value(value.get("answer_projection_result"), _ANSWER_PROJECTION_RESULTS)
+            or "invalid"
+        )
     # Legacy failures retain safe wire metadata, but have no validated loop.
     if "provider_attempts" not in value and "provider_attempt_count" not in value:
         request_shape = _safe_provider_request_shape(value.get("request_shape"))
@@ -3364,6 +3587,7 @@ def safe_provider_loop_diagnostics(value: Mapping[str, Any] | None) -> dict[str,
             attempt_request_shape = _safe_provider_request_shape(raw.get("request_shape"))
             if attempt_request_shape is not None:
                 bounded_attempt["request_shape"] = attempt_request_shape
+            bounded_attempt.update(safe_provider_transport_diagnostics(raw))
             attempts.append(bounded_attempt)
         safe["provider_attempts"] = (
             attempts[-_MAX_PROVIDER_ATTEMPT_DIAGNOSTICS:] if valid_attempt_tail else []
@@ -3488,12 +3712,191 @@ def safe_provider_loop_diagnostics(value: Mapping[str, Any] | None) -> dict[str,
     return safe
 
 
+_DIAGNOSTIC_DEPLOYMENT_AUTHORITY = object()
+
+
+@dataclass(frozen=True)
+class VerifiedDiagnosticDeployment:
+    """Startup-only capability; serialized hashes are not this authority.
+
+    Image identity is a trusted operator attestation, tied to the kernel's
+    container identity. This is not remote attestation or methodology readiness.
+    """
+
+    deployment_binding_fingerprint: str
+    code_binding_fingerprint: str
+    build_binding_fingerprint: str
+    source_binding_fingerprint: str
+    _authority: object = field(repr=False)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> VerifiedDiagnosticDeployment:
+        return self
+
+
+def diagnostic_deployment_settings(
+    *, host: str, port: int, record_raw_uat_interactions: bool,
+    temporary_access_enabled: bool, provider_base_url: str,
+) -> dict[str, Any]:
+    """Pure manifest helper; startup supplies actual resolved settings, not JSON."""
+    return {
+        "host": host, "port": port, "temporary_lan_diagnostic": True,
+        "record_raw_uat_interactions": record_raw_uat_interactions,
+        "temporary_access_enabled": temporary_access_enabled,
+        "provider_transport": "codex_responses", "model": "gpt-5.5",
+        "reasoning_effort": "high", "stream_initial_requests": True,
+        "provider_endpoint_fingerprint": sha256_json(provider_base_url.rstrip("/")),
+    }
+
+
+def _diagnostic_immutable_bytes(path: Path, *, limit: int = 64 * 1024 * 1024) -> bytes:
+    path = path.absolute()
+    if (
+        path.resolve(strict=True) != path or not stat.S_ISREG(path.stat().st_mode)
+        or not os.statvfs(path).f_flag & os.ST_RDONLY
+    ):
+        raise ValueError("diagnostic binding requires immutable regular files")
+    with path.open("rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+            raise ValueError("diagnostic binding file shape invalid")
+        data = stream.read(limit + 1)
+        after = os.fstat(stream.fileno())
+        if (
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+            != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            or len(data) != before.st_size
+        ):
+            raise ValueError("diagnostic binding file changed")
+    return data
+
+
+def diagnostic_runtime_facts() -> dict[str, str]:
+    """Measure Python in the same immutable image used by the deployment."""
+    executable = _diagnostic_immutable_bytes(Path(sys.executable).resolve(strict=True))
+    return {
+        "python_executable_sha256": "sha256:" + hashlib.sha256(executable).hexdigest(),
+        "python_version": sys.version, "cache_tag": sys.implementation.cache_tag,
+    }
+
+
+def _diagnostic_container_identity() -> str:
+    # Docker's kernel mount root contains the full ID even under cgroup v2.
+    # Host networking may inherit a host name; it is not a container identity.
+    # Unsupported mount layouts fail closed, never guessed from a CLI hash.
+    identities = []
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        fields = line.split()
+        if len(fields) > 6 and fields[4] == "/etc/hostname":
+            match = re.fullmatch(r".*/containers/([0-9a-f]{64})/hostname", fields[3])
+            if match is not None:
+                identities.append(match.group(1))
+    if len(identities) != 1:
+        raise ValueError("diagnostic container identity unavailable")
+    return identities[0]
+
+
+def load_verified_diagnostic_deployment(
+    *, manifest_path: Path, expected_manifest_sha256: str, attestation_path: Path,
+    code_root: Path, settings: Mapping[str, Any], source_binding_fingerprint: str,
+) -> VerifiedDiagnosticDeployment:
+    """Verify operator-pinned startup artifacts before accepting browser turns.
+
+    The operator freezes code, pins this manifest before container creation,
+    then derives the read-only attestation from inspect of that created container.
+    Host/operator integrity is trusted. No provider/client input reaches here.
+    """
+    try:
+        raw = _diagnostic_immutable_bytes(manifest_path, limit=2 * 1024 * 1024)
+        if "sha256:" + hashlib.sha256(raw).hexdigest() != expected_manifest_sha256:
+            raise ValueError("manifest pin mismatch")
+        manifest = json.loads(raw)
+        attestation = json.loads(_diagnostic_immutable_bytes(attestation_path, limit=16 * 1024))
+        if set(manifest) != {
+            "artifact_id", "code_files", "image_id", "runtime", "settings",
+            "source_binding_fingerprint",
+        } or manifest["artifact_id"] != "formowl_uat_deployment_manifest_v1":
+            raise ValueError("manifest shape mismatch")
+        if set(attestation) != {
+            "artifact_id", "container_id", "image_id", "deployment_manifest_sha256",
+        } or attestation["artifact_id"] != "formowl_uat_runtime_attestation_v1":
+            raise ValueError("attestation shape mismatch")
+        if (
+            _safe_diagnostic_fingerprint(manifest["image_id"]) is None
+            or attestation["image_id"] != manifest["image_id"]
+            or attestation["deployment_manifest_sha256"] != expected_manifest_sha256
+            or attestation["container_id"] != _diagnostic_container_identity()
+            or not os.statvfs("/").f_flag & os.ST_RDONLY
+            or manifest["runtime"] != diagnostic_runtime_facts()
+            or manifest["settings"] != dict(settings)
+            or _safe_diagnostic_fingerprint(source_binding_fingerprint) is None
+            or manifest["source_binding_fingerprint"] != source_binding_fingerprint
+        ):
+            raise ValueError("runtime binding mismatch")
+        root = code_root.absolute()
+        inventory = {}
+        for directory in (root / "python", root / "scripts"):
+            if directory.resolve(strict=True) != directory or not directory.is_dir():
+                raise ValueError("code root mismatch")
+            for path in sorted(directory.rglob("*")):
+                if path.is_symlink() or path.suffix in {".pyc", ".pyo"}:
+                    raise ValueError("code aliases and cached bytecode are unsupported")
+                if not path.is_dir():
+                    inventory[path.relative_to(root).as_posix()] = (
+                        "sha256:" + hashlib.sha256(_diagnostic_immutable_bytes(path)).hexdigest()
+                    )
+        if not inventory or inventory != manifest["code_files"]:
+            raise ValueError("code inventory mismatch")
+        if "scripts/issue56_uat_web.py" not in inventory:
+            raise ValueError("entrypoint missing")
+        for name, module in tuple(sys.modules.items()):
+            origin = getattr(module, "__file__", None)
+            if not origin:
+                continue
+            path = Path(origin).absolute()
+            if name.startswith("formowl_") or path.is_relative_to(root):
+                if (
+                    not path.is_relative_to(root)
+                    or path.relative_to(root).as_posix() not in inventory
+                    or path.suffix != ".py"
+                ):
+                    raise ValueError("loaded code origin mismatch")
+            elif path.exists() and not os.statvfs(path).f_flag & os.ST_RDONLY:
+                raise ValueError("mutable runtime module")
+        return VerifiedDiagnosticDeployment(
+            deployment_binding_fingerprint=sha256_json({
+                "manifest": expected_manifest_sha256, "attestation": attestation,
+            }),
+            code_binding_fingerprint=sha256_json(inventory),
+            build_binding_fingerprint=sha256_json({
+                "image_id": manifest["image_id"], "runtime": manifest["runtime"],
+            }),
+            source_binding_fingerprint=source_binding_fingerprint,
+            _authority=_DIAGNOSTIC_DEPLOYMENT_AUTHORITY,
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        # Never leak mounted paths or operator metadata into startup diagnostics.
+        raise ValueError("diagnostic deployment binding verification failed") from None
+
+
+class _ServiceDiagnosticComparability(dict[str, Any]):
+    """Keep authority out of JSON; deepcopy/session projection retains it in process."""
+
+    def __init__(
+        self, values: Mapping[str, Any], source: str | None,
+        binding: VerifiedDiagnosticDeployment | None,
+    ) -> None:
+        super().__init__(values)
+        self.source = source
+        self.binding = binding
+
+
 def diagnostic_comparability(
     diagnostic: Mapping[str, Any] | None,
     *,
     source_binding_fingerprint: str | None = None,
+    deployment_binding: VerifiedDiagnosticDeployment | None = None,
 ) -> dict[str, Any]:
-    """Describe diagnostic gaps; no loaded deployment/build/code producer exists.
+    """Describe diagnostic gaps using only service-owned startup authority.
 
     The source string is supplied privately by service composition after normal
     source validation. Caller/provider diagnostic hashes are never binding input.
@@ -3523,15 +3926,39 @@ def diagnostic_comparability(
                 missing_fields.append(field_name)
                 break
     source = _safe_diagnostic_fingerprint(source_binding_fingerprint)
+    binding = deployment_binding
+    if not (
+        isinstance(binding, VerifiedDiagnosticDeployment)
+        and binding._authority is _DIAGNOSTIC_DEPLOYMENT_AUTHORITY
+        and source == binding.source_binding_fingerprint
+    ):
+        binding = None
     result: dict[str, Any] = {
         "status": "incomparable",
         "claim_scope": "diagnostic_only",
-        "missing_bindings": ["deployment", "code", "build"] + ([] if source else ["source"]),
+        "missing_bindings": ([] if binding else ["deployment", "code", "build"])
+        + ([] if source else ["source"]),
         "missing_fields": missing_fields,
     }
     if source is not None:
         result["source_binding_fingerprint"] = source
-    return result
+    if binding is not None:
+        if loop.get("provider_attempt_count") != len(attempts):
+            missing_fields.append("provider_attempt_history")
+        for name in ("deployment", "code", "build"):
+            result[f"{name}_binding_fingerprint"] = getattr(binding, f"{name}_binding_fingerprint")
+        mcp = diagnostic.get("mcp", {}) if isinstance(diagnostic, Mapping) else {}
+        failed_projection = loop.get("answer_projection_result") not in (None, "passed")
+        failed_mcp = isinstance(mcp, Mapping) and (
+            mcp.get("timeout") is True
+            or any(status in {"error", "mcp_failed"} for status in mcp.get("status", ()))
+        )
+        if not missing_fields and not failed_projection and not failed_mcp and all(
+            record.get("outcome") == "completed" and 200 <= record.get("http_status", 0) < 300
+            for record in records
+        ):
+            result["status"] = "comparable"
+    return _ServiceDiagnosticComparability(result, source, binding)
 
 
 def safe_diagnostic_comparability(
@@ -3540,15 +3967,11 @@ def safe_diagnostic_comparability(
 ) -> dict[str, Any]:
     """Sanitize an already service-owned record for storage/HTTP projection."""
 
-    source = None
-    if (
-        isinstance(value, Mapping)
-        and value.get("status") == "incomparable"
-        and value.get("claim_scope") == "diagnostic_only"
-        and value.get("missing_bindings") == ["deployment", "code", "build"]
-    ):
-        source = _safe_diagnostic_fingerprint(value.get("source_binding_fingerprint"))
-    return diagnostic_comparability(diagnostic, source_binding_fingerprint=source)
+    trusted = isinstance(value, _ServiceDiagnosticComparability)
+    return diagnostic_comparability(
+        diagnostic, source_binding_fingerprint=value.source if trusted else None,
+        deployment_binding=value.binding if trusted else None,
+    )
 
 
 class _UatProviderResponse(dict[str, Any]):
@@ -3576,6 +3999,10 @@ class _UatProviderFailure(RuntimeError):
         body: bytes | None = None,
         headers: Any = None,
         request_shape: Mapping[str, Any] | None = None,
+        failure_phase: str | None = None,
+        transport_exception: Exception | None = None,
+        request_timeout_seconds: float | None = None,
+        remaining_deadline_seconds: float | None = None,
     ) -> None:
         super().__init__("UAT Responses provider returned an invalid response")
         safe_diagnostic = _provider_diagnostic(
@@ -3586,7 +4013,27 @@ class _UatProviderFailure(RuntimeError):
         )
         if body is not None:
             safe_diagnostic.update(_safe_provider_wire_diagnostic(body, headers))
+        transport = {
+            "failure_phase": failure_phase,
+            "request_timeout_seconds": request_timeout_seconds,
+            "remaining_deadline_seconds": remaining_deadline_seconds,
+        }
+        if transport_exception is not None:
+            transport.update(_provider_transport_cause_diagnostic(transport_exception))
+        safe_diagnostic.update(safe_provider_transport_diagnostics(transport))
         self.safe_diagnostic = safe_diagnostic
+        error = response.get("error") if isinstance(response, Mapping) else None
+        # Operator-observed upstream termination, not a general retry policy
+        # for invalid requests. Keep the message private and retain the 408.
+        self.pre_mcp_stream_disconnected = (
+            reason_code == "http_error" and http_status == 408
+            and isinstance(error, Mapping)
+            and error.get("type") == "invalid_request_error"
+            and error.get("message") == (
+                "stream error: stream disconnected before completion: "
+                "stream closed before response.completed"
+            )
+        )
 
 
 class CodexResponsesConversationModel:
@@ -3602,8 +4049,12 @@ class CodexResponsesConversationModel:
         timeout_seconds: float = 120.0,
         clock: Callable[[], datetime] | None = None,
         timezone_name: str = _DEFAULT_UAT_TIMEZONE,
+        stream_initial_requests: bool = False,
     ) -> None:
         normalized_base_url = _normalize_custom_provider_base_url(base_url)
+        if type(stream_initial_requests) is not bool:
+            raise ContractValidationError("UAT initial streaming mode is invalid")
+        self._stream_initial_requests = stream_initial_requests
         if (
             not isinstance(api_key, str)
             or not api_key.strip()
@@ -3726,8 +4177,8 @@ class CodexResponsesConversationModel:
                         "Server-authoritative immutable FormOwl boundary for this "
                         "user turn. Copy its original_query_hash, query_class, and "
                         "maximum_claim_strength into request_contract; select "
-                        "source_family_scope and requested_fields only from the "
-                        "authorized capabilities. The server freezes the first "
+                        "source_family_scope from required_source_family_scope "
+                        "and requested_fields from the original task. The server freezes the first "
                         "valid contract across every retry:\n"
                         + json.dumps(
                             dict(request_contract_context),
@@ -3780,11 +4231,14 @@ class CodexResponsesConversationModel:
         call_ids: set[str] = set()
         seen_query_fingerprints: set[str] = set()
         seen_empty_result_fingerprints: set[str] = set()
+        seen_citation_ids: set[str] = set()
+        seen_field_support: set[str] = set()
         formowl_attempts = 0
         public_term_attempts = 0
         formowl_halted = False
         stop_reason: str | None = None
         final_repair_attempted = False
+        answer_projection_result: str | None = None
         force_final = False
         turn_deadline = turn_started + _MAX_UAT_TURN_SECONDS - _UAT_TURN_RETURN_MARGIN_SECONDS
         provider_phase_timings: list[dict[str, Any]] = []
@@ -3793,6 +4247,8 @@ class CodexResponsesConversationModel:
         finalization_validation_diagnostics: list[dict[str, Any]] = []
         provider_request_count = 0
         empty_response_retry_attempted = False
+        stream_recovery_attempted = False
+        pre_mcp_recovery: dict[str, Any] | None = None
 
         def _append_bounded(
             target: list[dict[str, Any]],
@@ -3812,6 +4268,7 @@ class CodexResponsesConversationModel:
             tools: Sequence[Mapping[str, Any]],
             request_shape: Mapping[str, Any] | None,
             http_status: int | None = None,
+            failure_diagnostic: Mapping[str, Any] | None = None,
         ) -> None:
             provider_attempt_diagnostics.append(
                 _provider_attempt_diagnostic(
@@ -3823,6 +4280,7 @@ class CodexResponsesConversationModel:
                     tools=tools,
                     request_shape=request_shape,
                     http_status=http_status,
+                    failure_diagnostic=failure_diagnostic,
                 )
             )
             del provider_attempt_diagnostics[:-_MAX_PROVIDER_ATTEMPT_DIAGNOSTICS]
@@ -3860,6 +4318,8 @@ class CodexResponsesConversationModel:
             diagnostic: Mapping[str, Any] | None,
         ) -> Mapping[str, Any] | None:
             merged = dict(diagnostic) if diagnostic is not None else {}
+            if pre_mcp_recovery is not None:
+                merged["pre_mcp_recovery"] = dict(pre_mcp_recovery)
             if provider_attempt_diagnostics:
                 merged["provider_attempts"] = [dict(item) for item in provider_attempt_diagnostics]
                 merged["provider_attempt_count"] = provider_request_count
@@ -3877,6 +4337,8 @@ class CodexResponsesConversationModel:
                 merged["finalization_validation"] = [
                     dict(item) for item in finalization_validation_diagnostics
                 ]
+            if answer_projection_result is not None:
+                merged["answer_projection_result"] = answer_projection_result
             return merged or None
 
         # Keep the existing stop paths and contracts, while attaching only
@@ -3891,6 +4353,9 @@ class CodexResponsesConversationModel:
             evidence_records: Sequence[tuple[UatEvidenceToolRequest, Mapping[str, Any]]],
             provider_diagnostic: Mapping[str, Any] | None = None,
         ) -> UatConversationOutcome:
+            nonlocal answer_projection_result
+            if answer_projection_result == "public_safety_rejected" and final_repair_attempted:
+                answer_projection_result = "recovery_exhausted"
             retained_citation_ids = (
                 evidence_citation_ids(presented_prior_evidence)
                 if presented_prior_evidence is not None
@@ -3952,6 +4417,12 @@ class CodexResponsesConversationModel:
             and not prior_evidence_citeable
         )
         while True:
+            if provider_request_count >= _MAX_PROVIDER_REQUESTS_PER_TURN:
+                return _safe_stop_outcome(
+                    reason="provider_incomplete", model_name=self.model_name,
+                    evidence_records=evidence_records,
+                    provider_diagnostic={"reason_code": "provider_incomplete", "stop_reason": "budget_exhausted"},
+                )
             remaining_seconds = turn_deadline - time.monotonic()
             if remaining_seconds <= 0:
                 provider_phase_timings.append(
@@ -4048,11 +4519,13 @@ class CodexResponsesConversationModel:
                 "store": False,
             }
             provider_payload["tool_choice"] = tool_choice if tools else "none"
+            if stream_recovery_attempted or self._stream_initial_requests:
+                provider_payload["stream"] = True
             provider_request_shape = _provider_request_shape_snapshot(
                 {
                     **provider_payload,
                     # _request_response adds this default at the wire boundary.
-                    "stream": False,
+                    "stream": provider_payload.get("stream", False),
                 }
             )
             diagnostic_tool_choice = tool_choice if tools else "none"
@@ -4107,6 +4580,7 @@ class CodexResponsesConversationModel:
                     tools=provider_payload["tools"],
                     request_shape=exc.safe_diagnostic.get("request_shape") or provider_request_shape,
                     http_status=exc.safe_diagnostic.get("http_status"),
+                    failure_diagnostic=exc.safe_diagnostic,
                 )
                 provider_phase_timings.append(
                     {
@@ -4121,6 +4595,24 @@ class CodexResponsesConversationModel:
                     }
                 )
                 provider_failure_diagnostic = dict(exc.safe_diagnostic)
+                if (
+                    exc.pre_mcp_stream_disconnected
+                    and not provider_payload.get("stream", False)
+                    and formowl_attempts == 0 and public_term_attempts == 0
+                    and not stream_recovery_attempted and not empty_response_retry_attempted
+                    and provider_request_count < _MAX_PROVIDER_REQUESTS_PER_TURN
+                    and time.monotonic() < turn_deadline
+                ):
+                    # No tool has run. Change transport once, keep exactly the
+                    # same request/state, and consume the existing deadline and
+                    # provider-attempt budget; never invent an MCP request.
+                    stream_recovery_attempted = True
+                    empty_response_retry_attempted = True
+                    pre_mcp_recovery = {
+                        "attempt": provider_attempt, "http_status": 408,
+                        "reason_code": "stream_disconnected", "retry_transport": "sse",
+                    }
+                    continue
                 if (
                     provider_failure_diagnostic.get("reason_code")
                     == "empty_response_body"
@@ -4325,6 +4817,7 @@ class CodexResponsesConversationModel:
                         evidence_records=evidence_records,
                     )
                 parsed_decision: Mapping[str, Any] | None = None
+                finalization_validated = False
                 try:
                     parsed_decision = _parse_decision(self._response_text(response))
                     _validate_evidence_bound_decision(
@@ -4337,34 +4830,54 @@ class CodexResponsesConversationModel:
                         validation_result="passed",
                         repair_attempted=final_repair_attempted,
                     )
+                    finalization_validated = True
+                    try:
+                        assert_no_public_raw_references(
+                            {
+                                "answer": parsed_decision["answer_text"],
+                                "clarification": parsed_decision["coverage_note"],
+                            },
+                            "issue56_uat_final_answer",
+                        )
+                    except ContractValidationError:
+                        answer_projection_result = "public_safety_rejected"
+                        # Never use the rejected span or exception text as repair context.
+                        raise RuntimeError("UAT final answer failed public safety validation") from None
+                    answer_projection_result = (
+                        "repair_recovered"
+                        if answer_projection_result == "public_safety_rejected"
+                        else "passed"
+                    )
                 except (ContractValidationError, RuntimeError) as exc:
                     reason_code = _finalization_stop_reason(exc)
-                    _record_finalization_validation(
-                        final_citation_ids=(
-                            parsed_decision["citation_ids"]
-                            if isinstance(parsed_decision, Mapping)
-                            and isinstance(parsed_decision.get("citation_ids"), Sequence)
-                            and not isinstance(parsed_decision.get("citation_ids"), (str, bytes))
-                            else ()
-                        ),
-                        validation_result=(
-                            "coverage_rejected"
-                            if reason_code == "coverage_validation_failed"
-                            else (
-                                "citation_rejected"
-                                if reason_code == "citation_validation_failed"
-                                else "parse_rejected"
-                            )
-                        ),
-                        repair_attempted=final_repair_attempted,
-                    )
+                    if not finalization_validated:
+                        _record_finalization_validation(
+                            final_citation_ids=(
+                                parsed_decision["citation_ids"]
+                                if isinstance(parsed_decision, Mapping)
+                                and isinstance(parsed_decision.get("citation_ids"), Sequence)
+                                and not isinstance(parsed_decision.get("citation_ids"), (str, bytes))
+                                else ()
+                            ),
+                            validation_result=(
+                                "coverage_rejected"
+                                if reason_code == "coverage_validation_failed"
+                                else (
+                                    "citation_rejected"
+                                    if reason_code == "citation_validation_failed"
+                                    else "parse_rejected"
+                                )
+                            ),
+                            repair_attempted=final_repair_attempted,
+                        )
                     if not final_repair_attempted and (evidence_records or prior_evidence_citeable):
                         final_repair_attempted = True
                         force_final = True
                         stop_reason = reason_code
                         response_input = [
                             *response_input,
-                            *(dict(item) for item in output_items),
+                            # No rejected draft is replayed: citation/coverage failure
+                            # may precede safety validation of its native output items.
                             {
                                 "role": "developer",
                                 "content": _final_repair_context(
@@ -4588,30 +5101,43 @@ class CodexResponsesConversationModel:
                                         force_final = True
                                     tool_output = _model_evidence_envelope(presented_result)
                                     citations = evidence_citation_ids(presented_result)
-                                    material_progress = bool(citations)
-                                    if citations:
-                                        stop_reason = None
-                                    else:
+                                    field_support = _validated_field_support(request, result)
+                                    material_progress = bool(
+                                        set(citations) - seen_citation_ids
+                                        or field_support - seen_field_support
+                                    )
+                                    seen_citation_ids.update(citations)
+                                    seen_field_support.update(field_support)
+                                    repair_feedback_new = False
+                                    if not citations:
                                         empty_fingerprint = _empty_evidence_progress_fingerprint(
                                             presented_result
                                         )
-                                        if empty_fingerprint in (seen_empty_result_fingerprints):
-                                            stop_reason = "no_progress"
-                                            formowl_halted = True
-                                        else:
-                                            material_progress = True
-                                        seen_empty_result_fingerprints.add(empty_fingerprint)
-                                        stop_reason = _infer_evidence_stop_reason(
-                                            (presented_result,)
+                                        # Distinct validator feedback may enable the
+                                        # existing bounded repair; prose is excluded.
+                                        repair_feedback_new = (
+                                            empty_fingerprint not in seen_empty_result_fingerprints
                                         )
-                                        if stop_reason == "mcp_unavailable":
-                                            formowl_halted = True
-                                        if (
-                                            formowl_attempts >= _MAX_TOOL_CALLS_PER_TURN
-                                            and not formowl_halted
-                                        ):
-                                            stop_reason = "budget_exhausted"
-                                            formowl_halted = True
+                                        seen_empty_result_fingerprints.add(empty_fingerprint)
+                                    inferred_reason = _infer_evidence_stop_reason(
+                                        (presented_result,), inspect_text=not citations,
+                                    )
+                                    if inferred_reason == "mcp_unavailable":
+                                        stop_reason = inferred_reason
+                                        formowl_halted = True
+                                    elif not material_progress and not repair_feedback_new:
+                                        stop_reason = "no_progress"
+                                        formowl_halted = True
+                                    elif citations:
+                                        stop_reason = None
+                                    else:
+                                        stop_reason = inferred_reason
+                                    if (
+                                        formowl_attempts >= _MAX_TOOL_CALLS_PER_TURN
+                                        and not formowl_halted
+                                    ):
+                                        stop_reason = "budget_exhausted"
+                                        formowl_halted = True
                                     tool_output["execution_control"] = {
                                         "material_progress": material_progress,
                                         "remaining_mcp_calls": (
@@ -4726,15 +5252,35 @@ class CodexResponsesConversationModel:
             self._timeout_seconds,
         )
         raw_input = payload.get("input")
-        stream_continuation = isinstance(raw_input, list) and any(
+        stream_response = payload.get("stream") is True or isinstance(raw_input, list) and any(
             isinstance(item, Mapping) and item.get("type") == "function_call_output"
             for item in raw_input
         )
-        deadline = time.monotonic() + timeout_seconds if stream_continuation else None
+        diagnostic_deadline = time.monotonic() + timeout_seconds
+        deadline = diagnostic_deadline if stream_response else None
         request_shape: Mapping[str, Any] | None = None
+        failure_phase = "prepare"
+        primary_failure: _UatProviderFailure | None = None
+
+        def transport_failure(exc: Exception) -> _UatProviderFailure:
+            nonlocal body
+            if isinstance(exc, http.client.IncompleteRead) and isinstance(exc.partial, bytes):
+                body = (body + exc.partial)[:_MAX_RESPONSES_BODY_BYTES + 1]
+            timed_out = isinstance(exc, (TimeoutError, socket.timeout)) or (
+                isinstance(exc, urllib.error.URLError)
+                and isinstance(exc.reason, (TimeoutError, socket.timeout))
+            )
+            return _UatProviderFailure(
+                reason_code="transport_timeout" if timed_out else "transport_error",
+                http_status=http_status, body=body, headers=response_headers,
+                request_shape=request_shape, failure_phase=failure_phase,
+                transport_exception=exc, request_timeout_seconds=timeout_seconds,
+                remaining_deadline_seconds=max(0.0, diagnostic_deadline - time.monotonic()),
+            )
+
         try:
             request_payload = dict(payload)
-            if stream_continuation:
+            if stream_response:
                 request_payload["stream"] = True
             else:
                 request_payload.setdefault("stream", False)
@@ -4751,35 +5297,60 @@ class CodexResponsesConversationModel:
                     "Authorization": "Bearer " + self._api_key,
                     "Content-Type": "application/json",
                     "Accept": (
-                        "text/event-stream" if stream_continuation else "application/json"
+                        "text/event-stream" if stream_response else "application/json"
                     ),
                     "Accept-Encoding": "identity",
                 },
             )
+            failure_phase = "connect_headers"
             with urllib.request.build_opener(_NoResponsesRedirect()).open(
                 request,
                 timeout=timeout_seconds,
             ) as response:
                 http_status = response.status
                 response_headers = response.headers
-                if stream_continuation:
-                    assert deadline is not None
-                    parsed, body = _read_responses_sse_terminal(
-                        response,
-                        deadline=deadline,
-                        http_status=http_status,
-                        headers=response_headers,
-                        request_shape=request_shape,
-                    )
-                else:
-                    body = response.read(_MAX_RESPONSES_BODY_BYTES + 1)
+                failure_phase = "sse_read" if stream_response else "json_read"
+                try:
+                    if stream_response:
+                        assert deadline is not None
+                        parsed, body = _read_responses_sse_terminal(
+                            response,
+                            deadline=deadline,
+                            http_status=http_status,
+                            headers=response_headers,
+                            request_shape=request_shape,
+                            timeout_seconds=timeout_seconds,
+                        )
+                    else:
+                        body = response.read(_MAX_RESPONSES_BODY_BYTES + 1)
+                except _UatProviderFailure as exc:
+                    primary_failure = exc
+                    raise
+                except Exception as exc:
+                    primary_failure = transport_failure(exc)
+                    raise primary_failure from None
+                failure_phase = "close"
         except urllib.error.HTTPError as exc:
+            if primary_failure is not None:
+                raise primary_failure from None
             http_status = exc.code
             response_headers = exc.headers
             try:
                 body = exc.read(_MAX_RESPONSES_BODY_BYTES + 1)
-            except Exception:
-                body = b""
+            except Exception as read_error:
+                body = (
+                    read_error.partial[:_MAX_RESPONSES_BODY_BYTES + 1]
+                    if isinstance(read_error, http.client.IncompleteRead)
+                    and isinstance(read_error.partial, bytes) else b""
+                )
+                raise _UatProviderFailure(
+                    reason_code="http_error", http_status=http_status,
+                    response=_decode_provider_response(body), body=body,
+                    headers=response_headers, request_shape=request_shape,
+                    failure_phase="http_error_read", transport_exception=read_error,
+                    request_timeout_seconds=timeout_seconds,
+                    remaining_deadline_seconds=max(0.0, diagnostic_deadline - time.monotonic()),
+                ) from None
             raise _UatProviderFailure(
                 reason_code="http_error",
                 http_status=http_status,
@@ -4787,32 +5358,19 @@ class CodexResponsesConversationModel:
                 body=body,
                 headers=response_headers,
                 request_shape=request_shape,
+                failure_phase="connect_headers",
+                transport_exception=exc,
+                request_timeout_seconds=timeout_seconds,
+                remaining_deadline_seconds=max(0.0, diagnostic_deadline - time.monotonic()),
             ) from None
         except _UatProviderFailure:
             raise
-        except (TimeoutError, socket.timeout):
-            raise _UatProviderFailure(
-                reason_code="transport_timeout",
-                http_status=http_status,
-                body=body,
-                headers=response_headers,
-                request_shape=request_shape,
-            ) from None
-        except urllib.error.URLError as exc:
-            if isinstance(exc.reason, (TimeoutError, socket.timeout)):
-                raise _UatProviderFailure(
-                    reason_code="transport_timeout",
-                    request_shape=request_shape,
-                ) from None
-            raise _UatProviderFailure(
-                reason_code="transport_error",
-                request_shape=request_shape,
-            ) from None
-        except Exception:
-            raise _UatProviderFailure(
-                reason_code="transport_error",
-                request_shape=request_shape,
-            ) from None
+        except Exception as exc:
+            # A close failure during unwinding must not erase the primary read
+            # failure, its buffered evidence metadata, or its classification.
+            if primary_failure is not None:
+                raise primary_failure from None
+            raise transport_failure(exc) from None
         if http_status is None or not 200 <= http_status < 300:
             raise _UatProviderFailure(
                 reason_code="http_error",
@@ -5488,10 +6046,41 @@ def _responses_function_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _explicit_source_families(user_text: str) -> tuple[str, ...]:
+def _without_attached_document_labels(normalized: str) -> str:
+    """Remove local document-container qualifiers, not separate source mentions."""
+    reference = re.sub(
+        r"\b(?:attached|attachment)(?:\s+(?:pdf|docx?|txt|markdown|plain[- ]text))?\s+documents?\b"
+        r"|\bdocuments?(?:\s+in(?:\s+(?:the|mail|email|e-mail))?)?\s+attachments?\b",
+        "attachment", normalized,
+    )
+    return re.sub(r"附件(?:中|裡|里|內|内)?(?:的)?(?:文檔|文件)", "附件", reference)
+
+
+def _explicit_source_families(
+    user_text: str, *, available_source_families: Sequence[str] = (),
+) -> tuple[str, ...]:
     """Return only deterministic source families explicitly named by the user."""
 
     normalized = unicodedata.normalize("NFKC", user_text).casefold()
+    # Explicitly literal source-label occurrences are predicates, not source
+    # scope. Remove only those occurrences; keep separate source mentions.
+    labels = (
+        r"(?:mail|e-?mail|document|markdown|plain[- ]text|attachment_?table|spreadsheet|xlsx|excel|"
+        r"電子郵件|郵件|信件|信箱|附件|文檔|文件(?:內容)?|試算表格?)"
+    )
+    for left, right in (("「", "」"), ("『", "』"), ("“", "”"), ("'", "'"), ('"', '"')):
+        quoted = rf"{re.escape(left)}\s*{labels}\s*{re.escape(right)}"
+        normalized = re.sub(
+            rf"{quoted}\s*(?:一詞|一词|字樣|字样|字串|字符串|這個詞|这个词)", " ", normalized,
+        )
+        normalized = re.sub(
+            rf"\b(?:literal\s+(?:word|term|phrase)|(?:word|term)\s+literal)\s+{quoted}",
+            " ", normalized,
+        )
+    normalized = re.sub(
+        rf"\b(?:literal\s+(?:word|term|phrase)|(?:word|term)\s+literal)\s+{labels}(?![a-z0-9])",
+        " ", normalized,
+    )
     compact = "".join(character for character in normalized if not character.isspace())
     families: set[str] = set()
     if (
@@ -5503,10 +6092,16 @@ def _explicit_source_families(user_text: str) -> tuple[str, ...]:
         )
     ):
         families.add("mail")
+    # An attached document is not an independently registered document. Keep
+    # separate document mentions elsewhere in a mixed-source request intact.
+    document_reference = _without_attached_document_labels(normalized)
+    attachment_mentioned = document_reference != normalized or "附件" in compact or bool(
+        re.search(r"\battachments?\b|\battached\s+(?:documents?|files?)\b", normalized)
+    )
     if re.search(
         r"(?<![a-z0-9])(?:document|markdown|plain[- ]text)(?![a-z0-9])",
-        normalized,
-    ) or any(marker in compact for marker in ("文檔", "文件", "文件內容")):
+        document_reference,
+    ) or any(marker in document_reference for marker in ("文檔", "文件", "文件內容")):
         families.add("document_text")
     if any(
         marker in compact
@@ -5516,12 +6111,19 @@ def _explicit_source_families(user_text: str) -> tuple[str, ...]:
             "spreadsheet",
             "xlsx",
             "excel",
-            "附件",
+            "附件表",
             "試算表",
             "試算表格",
         )
     ):
         families.add("attachment_table")
+    if attachment_mentioned and not families.intersection({"mail", "attachment_table"}):
+        # A container label alone specifies neither a table nor an independent
+        # document. Admit only the available attachment-bearing source families.
+        attachment_families = set(available_source_families) & {"mail", "attachment_table"}
+        families.update(attachment_families)
+        if not attachment_families:
+            families.add("mail")  # Bind fails unavailable; never widen to documents.
     return tuple(sorted(families))
 
 
@@ -5545,9 +6147,30 @@ def _required_term_source_family(term: str) -> str | None:
     return None
 
 
-def _is_explicit_literal_content_term(user_text: str, term: str) -> bool:
+def _is_explicit_literal_content_term(
+    user_text: str, term: str, *, require_explicit_intent: bool = False,
+) -> bool:
     escaped_term = re.escape(term)
     quote_pairs = (("「", "」"), ("『", "』"), ("“", "”"), ("'", "'"), ('"', '"'))
+    if require_explicit_intent:
+        # Output labels are often quoted too. For the output-field guard,
+        # quotation is a surface form, not proof of literal/content intent.
+        # Keep the existing source-family grammar below unchanged.
+        surface = "(?:" + "|".join([
+            escaped_term,
+            *(rf"{re.escape(left)}\s*{escaped_term}\s*{re.escape(right)}"
+              for left, right in quote_pairs),
+        ]) + ")"
+        intent_patterns = (
+            rf"\bliteral\s+(?:(?:word|term|phrase|content)\s+)?{surface}(?!\w)",
+            rf"\b(?:word|term|phrase)\s+literal\s+{surface}(?!\w)",
+            rf"\b(?:content|text)\s+(?:must\s+)?(?:contain|contains|include|includes|mention|mentions)\s+{surface}(?!\w)",
+            rf"\bvalue\s+(?:must\s+)?(?:be|is|equals?|==?)\s*{surface}(?!\w)",
+            rf"\b[\w.-]+\s*(?:==?|\bequals?\b)\s*{surface}(?!\w)",
+            rf"(?:包含|含有|出現|出现|提及|提到|搜尋|搜索|查找).{{0,8}}"
+            rf"{surface}.{{0,4}}(?:一詞|一词|這個詞|这个词|字樣|字样|字串|字符串|文字)",
+        )
+        return any(re.search(pattern, user_text) for pattern in intent_patterns)
     if any(
         re.search(rf"{re.escape(left)}\s*{escaped_term}\s*{re.escape(right)}", user_text)
         for left, right in quote_pairs
@@ -5689,6 +6312,7 @@ def _parse_tool_request(
         request_contract = request_contract_binder.bind(
             arguments.get("request_contract"),
             table_query=None,
+            freeze=False,
         )
         request = UatEvidenceToolRequest(
             query_text=arguments["query_text"],
@@ -5713,7 +6337,9 @@ def _parse_tool_request(
         request_contract_binder.bind_required_terms(
             arguments.get("required_terms"),
             freeze=True,
+            request_contract=request.request_contract,
         )
+        request_contract_binder.bind(request.request_contract, table_query=None)
         return request
     table_query = arguments.get("table_query")
     candidate_terms = arguments.get("required_terms")
@@ -5723,6 +6349,7 @@ def _parse_tool_request(
     request_contract = request_contract_binder.bind(
         arguments.get("request_contract"),
         table_query=table_query,
+        freeze=False,
     )
     request = UatEvidenceToolRequest(
         query_text=arguments["query_text"],
@@ -5745,7 +6372,13 @@ def _parse_tool_request(
     )
     request_contract_binder.bind_required_terms(
         candidate_terms, freeze=True, allow_missing=True,
+        request_contract=(
+            request.request_contract
+            if request.table_query is None and request.exact_inventory_kind is None and request.exact_field is None
+            else None
+        ),
     )
+    request_contract_binder.bind(request.request_contract, table_query=table_query)
     return request
 
 
@@ -5771,13 +6404,13 @@ def _tool_request_fingerprint(request: UatEvidenceToolRequest) -> str:
     if request.table_query is not None:
         filters = sorted(
             (
-                _normalized_plan_text(str(item["field"])),
-                _normalized_plan_text(str(item["value"])),
+                str(item["field"]),
+                str(item["value"]),
             )
             for item in request.table_query["filters"]
         )
         projections = sorted(
-            _normalized_plan_text(str(field_name))
+            str(field_name)
             for field_name in request.table_query["projection_fields"]
         )
         value = {
@@ -5790,17 +6423,19 @@ def _tool_request_fingerprint(request: UatEvidenceToolRequest) -> str:
     for key in ("exact_inventory_kind", "exact_field", "cursor"):
         raw_value = getattr(request, key)
         if raw_value is not None:
-            value[key] = _normalized_plan_text(raw_value)
+            value[key] = raw_value
     if request.page_size is not None:
         value["page_size"] = request.page_size
     for key in ("mail_import_session_id", "mail_evidence_bundle_id"):
         raw_value = getattr(request, key)
         if raw_value is not None:
-            value[key] = _normalized_plan_text(raw_value)
+            value[key] = raw_value
     if request.required_terms is not None:
         value["required_terms"] = list(request.required_terms)
     if request.limit is not None:
         value["limit"] = request.limit
+    if request.request_contract is not None:
+        value["request_contract"] = dict(request.request_contract)
     encoded = json.dumps(
         value,
         ensure_ascii=False,
@@ -5808,6 +6443,77 @@ def _tool_request_fingerprint(request: UatEvidenceToolRequest) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _validated_field_support(
+    request: UatEvidenceToolRequest,
+    result: Mapping[str, Any],
+) -> set[str]:
+    """Read governed field coverage; never infer it from text or citation counts."""
+
+    contract = request.request_contract
+    citations = set(evidence_citation_ids(result))
+    if (
+        not isinstance(contract, Mapping) or not contract.get("requested_fields")
+        or not citations or result.get("status") in {"error", "failed", "permission_denied"}
+    ):
+        return set()
+    fingerprint = sha256_json(contract)
+    requested = set(contract["requested_fields"])
+    for key in ("requested_field_coverage", "coverage"):
+        coverage = result.get(key)
+        if not isinstance(coverage, Mapping):
+            continue
+        fields, supported, missing, bound_citations = (
+            coverage.get(name) for name in (
+                "requested_fields", "supported_fields", "missing_fields", "evidence_citation_hashes",
+            )
+        )
+        if (
+            coverage.get("request_contract_fingerprint") != fingerprint
+            or not all(isinstance(value, (list, tuple)) and all(
+                isinstance(item, str) for item in value
+            ) for value in (fields, supported, missing, bound_citations))
+            or set(fields) != requested or not set(supported).issubset(requested)
+            or set(missing) != requested - set(supported)
+            or not bound_citations or not set(bound_citations).issubset(citations)
+            or coverage.get("coverage_fingerprint") != sha256_json({
+                name: value for name, value in coverage.items() if name != "coverage_fingerprint"
+            })
+        ):
+            continue
+        # The source owner counts explicit source-backed blanks as support.
+        return {sha256_json(field) for field in supported}
+    agent = result.get("query_agent")
+    if not isinstance(agent, Mapping) or agent.get("status") in {
+        "error", "failed", "permission_denied",
+    }:
+        return set()
+    bound = agent.get("request_contract")
+    context = agent.get("context_bundle")
+    steps = agent.get("subqueries")
+    if not isinstance(bound, Mapping) or not isinstance(context, Mapping):
+        return set()
+    hashes = {sha256_json(field) for field in requested}
+    missing = context.get("missing_field_hashes")
+    if (
+        bound.get("request_contract_fingerprint") != fingerprint
+        or bound.get("requested_field_count") != len(hashes)
+        or bound.get("requested_field_hashes") != [
+            sha256_json(field) for field in contract["requested_fields"]
+        ]
+        or not isinstance(missing, (list, tuple))
+        or not all(isinstance(value, str) and value in hashes for value in missing)
+        or not isinstance(steps, (list, tuple))
+        or not any(isinstance(step, Mapping) and step.get("validation_status")
+                   == "validated_existing_scope_schema_permission"
+                   # Verified field values can accompany incomplete corpus
+                   # coverage; completeness is not the progress predicate.
+                   and step.get("status") in {"ok", "incomplete", "complete", "complete_authorized_scope"}
+                   for step in steps)
+    ):
+        return set()
+    return hashes - set(missing)
 
 
 def _progress_shape(value: Any, *, key: str = "") -> Any:
@@ -5866,12 +6572,18 @@ def _execution_control_envelope(
         "reason_code": reason,
     }
     if reason == "invalid_arguments":
+        from formowl_gateway.jsonrpc import EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE
+
         external_replan["repair_hint"] = (
             "Correct the rejected arguments from the original request. For "
-            "required_terms, submit all grounded identity/topic content terms; "
+            "required_terms, submit the grounded anchors and explicit content/value filters; "
             "exclude source-family or action labels unless the user explicitly "
-            "requested those literal words. Keep the authorized selector and "
-            "request contract unchanged."
+            "requested those literal words. Preserve any already validated selector "
+            "and request contract; repair a rejected source scope using the "
+            "server-provided required_source_family_scope, not a guessed modality."
+            " Clarify rejected requested-field/required-term overlap from the original "
+            "task, retaining genuine anchors and explicit literal/value filters."
+            + " " + EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE
         )
     return {
         "trust": "trusted_execution_control",
@@ -5903,6 +6615,8 @@ def _public_term_result_envelope(result: Mapping[str, Any]) -> dict[str, Any]:
 
 def _infer_evidence_stop_reason(
     evidence_results: Sequence[Mapping[str, Any]],
+    *,
+    inspect_text: bool = True,
 ) -> str:
     explicit_mcp_failure_statuses = {
         "error",
@@ -5925,6 +6639,8 @@ def _infer_evidence_stop_reason(
             and query_agent.get("status") in explicit_mcp_failure_statuses
         ):
             return "mcp_unavailable"
+    if not inspect_text:
+        return "no_evidence"
     rendered = json.dumps(
         list(evidence_results),
         ensure_ascii=False,
@@ -5957,6 +6673,8 @@ def _validation_stop_reason(error: Exception) -> str:
 
 def _finalization_stop_reason(error: Exception) -> str:
     message = str(error).casefold()
+    if message == "uat final answer failed public safety validation":
+        return "answer_public_safety_failed"
     if "coverage" in message:
         return "coverage_validation_failed"
     if any(marker in message for marker in ("citation", "cited", "citeable")):
@@ -5988,6 +6706,9 @@ def _final_repair_context(
         "cannot support every requested row and field, return only the supported "
         "scope, set coverage_status=incomplete, and state that limitation; never "
         "silently omit rows while claiming complete coverage."
+        " Keep answer_text and coverage_note free of raw filesystem, storage, "
+        "database, parser, worker, and secret references. Describe only the "
+        "supported business facts; never repeat unsafe infrastructure details."
     )
 
 
@@ -6019,6 +6740,10 @@ def _safe_stop_message(reason: str) -> str:
         ),
         "provider_incomplete": (
             "GPT provider 回應未能完成安全解析或結構化驗證；" "這次最終答案未完成。"
+        ),
+        "answer_public_safety_failed": (
+            "模型答案未通過公開輸出安全驗證；最終答案未完成。"
+            "僅可顯示已驗證的授權來源資料，且這不代表資料不存在。"
         ),
         "public_term_unavailable": (
             "公開術語查詢目前無法使用；系統沒有把未驗證的公開資訊當成"
@@ -6642,7 +7367,10 @@ def compact_evidence_for_model(
                 compact = candidate
         return {**compact, "presentation_truncated": True}
 
-    for key in ("mail_import_session_id", "query_agent", "answer", "source_structure_statuses"):
+    for key in (
+        "mail_import_session_id", "query_agent", "answer", "source_structure_statuses",
+        "requested_field_coverage",
+    ):
         if key in result:
             value = result[key]
             if key == "query_agent" and "evidence" in result and isinstance(value, Mapping):

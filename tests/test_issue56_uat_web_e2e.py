@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import errno
 import hashlib
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -242,6 +243,36 @@ class Issue56UatTerminalTraceTests(unittest.TestCase):
             assert_no_public_raw_references(event)
         for private in ("PRIVATE-PROMPT", "GENERIC-ANSWER", "private-session"):
             self.assertNotIn(private, stderr.getvalue())
+
+    def test_terminal_trace_keeps_safe_sse_failure_details_without_raw_messages(self):
+        for reason in ("provider_error", "invalid_sse_response", "unexpected_sse_response",
+                       "transport_timeout"):
+            with self.subTest(reason=reason):
+                private = "PRIVATE-MESSAGE /tmp/private.txt api_key=SECRET"
+                outcome = SimpleNamespace(response_kind="clarification", provider_diagnostic={
+                    "reason_code": reason, "http_status": 200,
+                    "provider_error_code": "server_error",
+                    "provider_error_type": "server_error", "provider_error_param": "stream",
+                    "provider_error_message_class": "capacity_unavailable",
+                    "response_body_shape": "sse", "message": private, "headers": private,
+                })
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    uat_runtime_module._emit_private_uat_terminal_trace(
+                        "provider", started_at=uat_runtime_module.time.perf_counter(),
+                        outcome=outcome, mcp_call_count=0,
+                    )
+                event = json.loads(stderr.getvalue())
+                diagnostic = event["provider_diagnostic"]
+                for key in ("reason_code", "http_status", "provider_error_code",
+                            "provider_error_type", "provider_error_param",
+                            "provider_error_message_class", "response_body_shape"):
+                    self.assertEqual(diagnostic[key], outcome.provider_diagnostic[key])
+                self.assertEqual(event["mcp_call_count"], 0)
+                self.assertNotIn(private, stderr.getvalue())
+                self.assertNotIn("headers", diagnostic)
+                self.assertNotIn("message", diagnostic)
+                assert_no_public_raw_references(event)
 
     def test_terminal_trace_rejects_injected_text_and_invalid_metadata(self):
         private = "PRIVATE-CONTENT /tmp/private.txt api_key=SECRET"
@@ -2495,10 +2526,13 @@ class Issue56UatWebE2ETests(unittest.TestCase):
         self.assertIn("mcp", diagnostic)
         self.assertEqual(
             [item["validation_result"] for item in diagnostic["finalization_validation"]],
-            ["parse_rejected"],
+            ["passed"],
         )
         self.assertFalse(diagnostic["finalization_validation"][0]["repair_attempted"])
-        self.assertNotIn('"validation_result": "passed"', json.dumps(diagnostic))
+        self.assertEqual(diagnostic["finalization_validation"], passed_diagnostic["finalization_validation"])
+        self.assertEqual(
+            diagnostic["answer_projection_result"], "projection_rejected_partial_fallback",
+        )
         self.assertIn("issue56_private_uat_failure_trace", private_trace.getvalue())
         self.assertNotIn("/workspace/private", private_trace.getvalue())
 
@@ -3290,6 +3324,12 @@ class Issue56UatWebE2ETests(unittest.TestCase):
     def test_sidecar_supplement_keeps_two_roots_and_remaps_exact_rows(
         self,
     ) -> None:
+        self._assert_sidecar_supplement()
+
+    def test_sidecar_supplement_cross_device_preserves_source_bytes(self) -> None:
+        self._assert_sidecar_supplement(cross_device=True)
+
+    def _assert_sidecar_supplement(self, *, cross_device: bool = False) -> None:
         root = _paths.fresh_test_dir("issue56-sidecar-supplement")
         base = root / "base.preembedding"
         delta = root / "delta.preembedding"
@@ -3330,6 +3370,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             source_count: int,
             job_count: int,
             failure: dict | None = None,
+            value_shard: str = "bb",
         ) -> None:
             exact = path / "exact-cells"
             (exact / "rows").mkdir(parents=True)
@@ -3337,7 +3378,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             shards = []
             for kind, shard, records in (
                 ("row", "aa", row_records),
-                ("value", "bb", value_records),
+                ("value", value_shard, value_records),
             ):
                 if not records:
                     continue
@@ -3488,7 +3529,8 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 [1, "obs_base", "sha256:base"],
             ],
             row_records=[base_row],
-            value_records=[],
+            value_records=[["sha256:base-value", "sha256:row", False]],
+            value_shard="cc",
             columns=[],
             counts={"table_row": 1, "table_cell": 0},
             source_count=2,
@@ -3580,7 +3622,12 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             ),
         }
         base_bytes = (base / "preparation.json").read_bytes()
-        with patch(
+        source_bytes = {p: p.read_bytes() for p in base.rglob("*") if p.is_file()}
+        with patch.object(
+            uat_web_script.os, "link",
+            side_effect=OSError(errno.EXDEV, "synthetic cross-device") if cross_device else None,
+            wraps=os.link if not cross_device else None,
+        ), patch(
             "formowl_mail.import_workflow.open_completed_ingestion_job_reader",
             side_effect=lambda job_id, **_: authorities[job_id],
         ):
@@ -3594,7 +3641,19 @@ class Issue56UatWebE2ETests(unittest.TestCase):
             )
         output = Path(report["preparation_directory"])
         self.assertEqual((base / "preparation.json").read_bytes(), base_bytes)
+        self.assertEqual(source_bytes, {p: p.read_bytes() for p in source_bytes})
+        for relative in ("sidecar-parent-binding.json", "exact-cells/values/cc.jsonl"):
+            self.assertEqual((output / relative).read_bytes(), (base / relative).read_bytes())
+            if cross_device:
+                self.assertNotEqual((output / relative).stat().st_ino, (base / relative).stat().st_ino)
+        self.assertFalse(list(output.rglob("*.staging")))
         snapshot = json.loads((output / "observations.json").read_bytes())
+        preparation = json.loads((output / "preparation.json").read_bytes())
+        self.assertEqual(preparation["requested_jobs"], [
+            [binding["store_directory"], binding["ingestion_job_id"]]
+            for binding in snapshot["job_store_bindings"]
+        ])
+        self.assertEqual(len(preparation["requested_jobs"]), 3)
         self.assertEqual(snapshot["observation_references"][-1][0], 2)
         self.assertEqual(
             len(snapshot["source_binding"]["jobs"][1]["supplements"]),
@@ -3949,10 +4008,27 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 )
                 if not snippets or not citations:
                     raise AssertionError("actual CLI MCP did not return governed source evidence")
+                if not mail:
+                    # Native neighbor evidence has independently ordered citation hashes.
+                    # Make positional pairing wrong regardless of generated fixture IDs.
+                    citations = tuple(sorted(
+                        citations, key=lambda item: item == snippets[0]["citation_hash"],
+                    ))
+                    if len(set(citations)) < 2 or citations[0] == snippets[0]["citation_hash"]:
+                        raise AssertionError("fixture must exercise non-positional citations")
+                citation_id = (
+                    next(
+                        item["citation_id"] for item in result["citations"]
+                        if item["source_observation_id"] == snippets[0]["source_observation_id"]
+                        and item["mail_import_session_id"] == snippets[0]["mail_import_session_id"]
+                    ) if mail else snippets[0]["citation_hash"]
+                )
+                if citation_id not in citations:
+                    raise AssertionError("chosen snippet must have a returned governed citation")
                 return UatConversationOutcome(
                     response_kind="answer", answer_text=snippets[0]["snippet"],
                     display_format="narrative", model_name=self.model_name,
-                    citation_ids=(citations[0],), coverage_status="incomplete",
+                    citation_ids=(citation_id,), coverage_status="incomplete",
                     coverage_note="Only the declared synthetic source scope was searched.",
                     tool_requests=(request,), tool_results=(result,),
                 )
@@ -4166,6 +4242,7 @@ class Issue56UatWebE2ETests(unittest.TestCase):
                 base_url=runtime_paths.provider_base_url,
                 api_key=provider_api_key,
                 model="gpt-5.5",
+                stream_initial_requests=True,
             )
             transport_factory.assert_not_called()
             app_server_model_factory.assert_not_called()

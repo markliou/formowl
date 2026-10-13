@@ -62,6 +62,7 @@ from .hybrid import (
     precompute_evidence_identity_lineage_crosswalk,
     _sealed_source_neutral_observation,
     precompute_relation_projection_base,
+    _is_attachment_text_observation,
 )
 from .query import (
     GitHubProjectOccurrenceLineage,
@@ -74,6 +75,7 @@ from .query import (
     build_authorized_observation_snippet_index,
     normalized_authorized_observation_lineages,
     source_occurrence_lineage_from_observation,
+    _attachment_child_lineages,
 )
 from .semantic_plan import validated_authorized_semantic_source
 from .semantic_plan import (
@@ -247,6 +249,7 @@ class SourceNativeLexicalLookup:
 
     ARTIFACT_ID = "formowl_issue56_source_native_lexical_lookup_v1"
     SCHEMA_VERSION = 1
+    LOCATOR_POLICY_ID = "sealed_reference_occurrence_locators_v1"
 
     def __init__(
         self,
@@ -310,6 +313,42 @@ class SourceNativeLexicalLookup:
             }
             if not {"metadata", "helpers", "postings"}.issubset(tables):
                 raise ContractValidationError("source lexical lookup schema is incomplete")
+            parent_policy = manifest.get("attachment_parent_policy_id")
+            if parent_policy is not None and (
+                parent_policy != "sealed_attachment_parent_helpers_v1" or "attachment_parents" not in tables
+                or type(manifest.get("attachment_parent_count")) is not int
+                or manifest["attachment_parent_count"] < 0
+            ):
+                raise ContractValidationError("source attachment parent schema is invalid")
+            locator_policy = manifest.get("locator_policy_id")
+            if locator_policy is not None and (
+                locator_policy != self.LOCATOR_POLICY_ID
+                or not {"reference_locators", "occurrence_helpers"}.issubset(tables)
+                or type(manifest.get("locator_count")) is not int
+                or manifest["locator_count"] != manifest.get("counts", {}).get("references")
+            ):
+                raise ContractValidationError("source keyed locator schema is invalid")
+            if locator_policy is not None:
+                for table, columns in {
+                    "reference_locators": {"observation_hash", "observation_id", "job_index", "job_fingerprint", "position"},
+                    "occurrence_helpers": {"observation_hash", "occurrence_id", "job_index", "asset_id", "extractor_run_id", "observation_type"},
+                }.items():
+                    actual = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+                    if actual != columns:
+                        raise ContractValidationError("source keyed locator columns are invalid")
+                if connection.execute("SELECT COUNT(*) FROM reference_locators").fetchone()[0] != manifest["locator_count"]:
+                    raise ContractValidationError("source keyed locator count mismatch")
+                for table, required in {
+                    "reference_locators": {("observation_hash",), ("observation_id",), ("position",)},
+                    "helpers": {("observation_id",)},
+                    "occurrence_helpers": {("occurrence_id", "job_index", "asset_id", "extractor_run_id", "observation_type")},
+                }.items():
+                    indexes = {
+                        tuple(item[2] for item in connection.execute(f"PRAGMA index_info('{index[1]}')"))
+                        for index in connection.execute(f"PRAGMA index_list({table})")
+                    }
+                    if not required <= indexes:
+                        raise ContractValidationError("source keyed locator indexes are invalid")
         except sqlite3.Error as exc:
             raise ContractValidationError("source lexical lookup artifact is unreadable") from exc
         self.manifest = MappingProxyType({**manifest, "manifest_fingerprint": fingerprint})
@@ -319,6 +358,61 @@ class SourceNativeLexicalLookup:
         # shared connection still needs serialization around its mutable
         # progress/busy handlers.
         self._connection_lock = threading.RLock()
+
+    @property
+    def has_keyed_source_metadata(self) -> bool:
+        return self.manifest.get("locator_policy_id") == self.LOCATOR_POLICY_ID
+
+    def reference_for_key(
+        self, *, observation_id: str | None = None, observation_hash: str | None = None
+    ) -> tuple[int, str, str, str] | None:
+        if not self.has_keyed_source_metadata:
+            return None
+        if (observation_id is None) == (observation_hash is None):
+            raise ContractValidationError("source keyed locator key is invalid")
+        column, value = ("observation_id", observation_id) if observation_id is not None else ("observation_hash", observation_hash)
+        with self._connection_lock:
+            row = self._connection.execute(
+                f"SELECT job_index, observation_id, observation_hash, job_fingerprint "
+                f"FROM reference_locators WHERE {column} = ?", (value,),
+            ).fetchone()
+        return row
+
+    def neighbor_references(self, observation_hash: str) -> list[tuple[int, str, str, str]]:
+        if not self.has_keyed_source_metadata:
+            return []
+        with self._connection_lock:
+            row = self._connection.execute(
+                "SELECT position FROM reference_locators WHERE observation_hash = ?",
+                (observation_hash,),
+            ).fetchone()
+            if row is None:
+                return []
+            result = []
+            for offset in (-1, 1, -2, 2, -3, 3, -4, 4):
+                reference = self._connection.execute(
+                    "SELECT job_index, observation_id, observation_hash, job_fingerprint "
+                    "FROM reference_locators WHERE position = ?", (row[0] + offset,),
+                ).fetchone()
+                if reference is not None:
+                    result.append(reference)
+        return result
+
+    def helper_for_mail_parent(
+        self, *, occurrence_id: str, job_index: int, asset_id: str, extractor_run_id: str
+    ) -> dict[str, Any] | None:
+        if not self.has_keyed_source_metadata:
+            return None
+        with self._connection_lock:
+            rows = self._connection.execute(
+                "SELECT observation_hash FROM occurrence_helpers "
+                "WHERE occurrence_id = ? AND job_index = ? AND asset_id = ? "
+                "AND extractor_run_id = ? AND observation_type = 'email_message' LIMIT 2",
+                (occurrence_id, job_index, asset_id, extractor_run_id),
+            ).fetchall()
+        if len(rows) > 1:
+            raise ContractValidationError("source mail parent helper is ambiguous")
+        return self.helper_for_hash(rows[0][0]) if rows else None
 
     def _helper_row(
         self, *, observation_hash: str | None = None, observation_id: str | None = None
@@ -386,11 +480,17 @@ class SourceNativeLexicalLookup:
     def helper_for_hash(self, observation_hash: str) -> dict[str, Any] | None:
         return self._helper_row(observation_hash=observation_hash)
 
-    def helper_for_attachment_asset(self, child_asset_id: str) -> None:
-        # The source-native lexical artifact intentionally contains no
-        # attachment lineage.  Attachment providers use their owner path.
-        del child_asset_id
-        return None
+    def helper_for_attachment_asset(self, child_asset_id: str) -> dict[str, Any] | None:
+        if self.manifest.get("attachment_parent_policy_id") is None:
+            return None  # Old artifacts cannot establish parent absence.
+        with self._connection_lock:
+            rows = self._connection.execute(
+                "SELECT observation_hash FROM attachment_parents WHERE child_asset_id = ? LIMIT 2",
+                (child_asset_id,),
+            ).fetchall()
+        if len(rows) > 1:
+            raise ContractValidationError("source attachment parent helper is ambiguous")
+        return self.helper_for_hash(rows[0][0]) if rows else None
 
     def helpers_for_occurrence(
         self,
@@ -399,8 +499,19 @@ class SourceNativeLexicalLookup:
         after_id: str | None = None,
         limit: int = 64,
     ) -> list[dict[str, Any]]:
-        del occurrence_id, after_id, limit
-        return []
+        if type(limit) is not int or not 1 <= limit <= 64:
+            raise ContractValidationError("source occurrence helper limit is invalid")
+        if not self.has_keyed_source_metadata:
+            return []  # Legacy artifacts have no occurrence coverage claim.
+        with self._connection_lock:
+            rows = self._connection.execute(
+                "SELECT h.observation_hash FROM occurrence_helpers o "
+                "JOIN helpers h ON h.observation_hash = o.observation_hash "
+                "WHERE o.occurrence_id = ? AND h.observation_id > ? "
+                "ORDER BY h.observation_id COLLATE BINARY LIMIT ?",
+                (occurrence_id, after_id or "", limit),
+            ).fetchall()
+        return [self.helper_for_hash(row[0]) for row in rows]
 
     def source_family_lexical_lookup(
         self,
@@ -596,6 +707,8 @@ class IngestionRevisionSourceRecords:
         deadline_monotonic: float | None,
         mail_import_session_id: str | None,
         observation_callback: Callable[[Observation, str], bool] | None,
+        context_anchor_callback: Callable[[Observation, str], bool] | None = None,
+        context_callback: Callable[[Observation, Observation, str], bool] | None = None,
     ) -> RevisionOwnedMailSourceScan:
         """Read only sealed references, independent of retrieval helpers."""
 
@@ -638,8 +751,13 @@ class IngestionRevisionSourceRecords:
 
         selected: list[tuple[Observation, str]] = []
         scanned = 0
-        seen_mail_parents: set[tuple[str, ...]] = set()
+        seen_mail_parents: dict[tuple[str, ...], str] = {}
+        context_hashes: set[str] = set()
         pending_mail_children: dict[tuple[str, ...], list[tuple[Observation, str]]] = {}
+        attachment_parents: dict[tuple[str, str], Observation] = {}
+        pending_attachment_children: dict[tuple[str, str], list[tuple[Observation, str]]] = {}
+        indexed_source = isinstance(self.runtime_store, SourceNativeLexicalLookup)
+        emit_stop_reason = "callback"
 
         def observation_matches(
             observation: Observation,
@@ -648,8 +766,10 @@ class IngestionRevisionSourceRecords:
             if source_family == "mail":
                 return (
                     observation.modality == "mail"
-                    and observation.observation_type in REVISION_SOURCE_FALLBACK_OBSERVATION_TYPES
-                )
+                    and observation.observation_type in (
+                        REVISION_SOURCE_FALLBACK_OBSERVATION_TYPES | {"email_attachment_occurrence"}
+                    )
+                ) or _is_attachment_text_observation(observation)
             if (
                 observation.modality != "text"
                 or observation.observation_type not in _REVISION_TEXT_RETRIEVAL_OBSERVATION_TYPES
@@ -664,14 +784,103 @@ class IngestionRevisionSourceRecords:
             observed_scope: str,
             authority: CompletedIngestionJobAuthority,
         ) -> bool:
+            nonlocal scanned, emit_stop_reason
             def deliver(item: Observation, scope: str) -> bool:
+                nonlocal scanned, emit_stop_reason
                 if observation_callback is None:
                     selected.append((item, scope))
                     return True
-                return observation_callback(item, scope)
+                if not observation_callback(item, scope):
+                    return False
+                if context_callback is not None and context_anchor_callback(item, scope):
+                    key = (
+                        authority.job_fingerprint, item.extractor_run_id,
+                        item.asset_id, scope, (item.location or {}).get("message_occurrence_id"),
+                    )
+                    scan = self.scan_neighbor_context(
+                        anchor=item, authority=authority, source_scope=scope,
+                        max_observations=max_observations - scanned,
+                        deadline_monotonic=deadline_monotonic,
+                        message_fingerprint=seen_mail_parents.get(
+                            key, (item.payload or {}).get("message_fingerprint"),
+                        ),
+                        observation_callback=lambda neighbor, observed_scope: context_callback(
+                            item, neighbor, observed_scope,
+                        ),
+                    )
+                    scanned += scan.scanned_observation_count
+                    context_hashes.update(sha256_json(neighbor.to_dict()) for neighbor, _ in scan.observations)
+                    if scan.stop_reason in {"deadline", "callback", "observation_limit"}:
+                        emit_stop_reason = scan.stop_reason
+                        return False
+                return True
 
             occurrence_id = (observation.location or {}).get("message_occurrence_id")
             payload = observation.payload or {}
+            if source_family == "mail" and _is_attachment_text_observation(observation):
+                parent_key = (authority.job_fingerprint, observation.asset_id)
+                parent = attachment_parents.get(parent_key)
+                if parent is None and indexed_source:
+                    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                        emit_stop_reason = "deadline"
+                        return False
+                    helper = self.runtime_store.helper_for_attachment_asset(observation.asset_id)
+                    if helper is not None:
+                        if self._authority_for_helper(helper) is not authority:
+                            raise ContractValidationError("source attachment parent job binding mismatch")
+                        if scanned >= max_observations:
+                            emit_stop_reason = "observation_limit"
+                            return False
+                        scanned += 1
+                        parent = authority.load_indexed_observation(
+                            helper["observation_id"], expected_observation_hash=helper["observation_hash"],
+                            expected_job_fingerprint=authority.job_fingerprint,
+                        )
+                        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                            emit_stop_reason = "deadline"
+                            return False
+                if parent is None:
+                    pending_attachment_children.setdefault(parent_key, []).append((observation, observed_scope))
+                    return True
+                child_run = authority._runs_by_id.get(observation.extractor_run_id)
+                if (
+                    parent.asset_id != authority.asset.asset_id
+                    or parent.observation_type != "email_attachment_occurrence"
+                    or parent.modality != "mail"
+                    or (parent.payload or {}).get("child_asset_id") != observation.asset_id
+                    or child_run is None
+                    or child_run.input_hash != payload["lineage"].get("child_content_hash")
+                ):
+                    raise ContractValidationError("source attachment child run/parent binding mismatch")
+                _attachment_child_lineages({
+                    observation.observation_id: observation, parent.observation_id: parent,
+                })
+                if parent_key not in attachment_parents:
+                    attachment_parents[parent_key] = parent
+                    if not deliver(parent, observed_scope):
+                        return False
+                    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                        emit_stop_reason = "deadline"
+                        return False
+                return deliver(observation, observed_scope)
+            if source_family == "mail" and observation.observation_type == "email_attachment_occurrence":
+                child_asset_id = payload.get("child_asset_id")
+                if not isinstance(child_asset_id, str) or not child_asset_id:
+                    return True
+                parent_key = (authority.job_fingerprint, child_asset_id)
+                previous = attachment_parents.get(parent_key)
+                if previous is not None and previous.observation_id != observation.observation_id:
+                    raise ContractValidationError("source attachment parent binding is ambiguous")
+                attachment_parents[parent_key] = observation
+                if not deliver(observation, observed_scope):
+                    return False
+                for child, scope in pending_attachment_children.pop(parent_key, ()):
+                    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                        emit_stop_reason = "deadline"
+                        return False
+                    if not emit(child, scope, authority):
+                        return False
+                return True
             if source_family != "mail" or not isinstance(occurrence_id, str):
                 return deliver(observation, observed_scope)
             # Lexical order need not be extraction order. A child without its
@@ -682,6 +891,54 @@ class IngestionRevisionSourceRecords:
                 observation.asset_id, observed_scope, occurrence_id,
             )
             is_parent = observation.observation_type == "email_message"
+            if indexed_source and not is_parent and parent_key not in seen_mail_parents:
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    emit_stop_reason = "deadline"
+                    return False
+                job_index = next(i for i, job in enumerate(self.job_authorities) if job is authority)
+                helper = self.runtime_store.helper_for_mail_parent(
+                    occurrence_id=occurrence_id, job_index=job_index,
+                    asset_id=observation.asset_id, extractor_run_id=observation.extractor_run_id,
+                )
+                if helper is None:
+                    pending_mail_children.setdefault(parent_key, []).append((observation, observed_scope))
+                    return True
+                if self._authority_for_helper(helper) is not authority:
+                    raise ContractValidationError("source mail parent job binding mismatch")
+                if scanned >= max_observations:
+                    emit_stop_reason = "observation_limit"
+                    return False
+                scanned += 1
+                parent = authority.load_indexed_observation(
+                    helper["observation_id"], expected_observation_hash=helper["observation_hash"],
+                    expected_job_fingerprint=authority.job_fingerprint,
+                )
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    emit_stop_reason = "deadline"
+                    return False
+                fingerprint = (parent.payload or {}).get("message_fingerprint")
+                if (
+                    parent.modality != "mail" or parent.observation_type != "email_message"
+                    or parent.asset_id != observation.asset_id
+                    or parent.extractor_run_id != observation.extractor_run_id
+                    or (parent.location or {}).get("message_occurrence_id") != occurrence_id
+                    or not isinstance(fingerprint, str)
+                    or payload.get("message_fingerprint") not in {None, fingerprint}
+                ):
+                    raise ContractValidationError("source mail parent occurrence binding mismatch")
+                seen_mail_parents[parent_key] = fingerprint
+                if not deliver(parent, observed_scope):
+                    return False
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    emit_stop_reason = "deadline"
+                    return False
+            if indexed_source and not is_parent and parent_key in seen_mail_parents and (
+                payload.get("message_fingerprint") not in {None, seen_mail_parents[parent_key]}
+            ):
+                raise ContractValidationError("source mail child fingerprint binding mismatch")
+            # This binding is independent of the accelerator implementation.
+            # An authorized child with no fingerprint still needs its genuine
+            # parent; a legacy/index-less scan must not invent that identity.
             if (
                 not is_parent
                 and not isinstance(payload.get("message_fingerprint"), str)
@@ -689,10 +946,11 @@ class IngestionRevisionSourceRecords:
             ):
                 pending_mail_children.setdefault(parent_key, []).append((observation, observed_scope))
                 return True
+            if is_parent and isinstance(payload.get("message_fingerprint"), str):
+                seen_mail_parents[parent_key] = payload["message_fingerprint"]
             if not deliver(observation, observed_scope):
                 return False
-            if is_parent and isinstance(payload.get("message_fingerprint"), str):
-                seen_mail_parents.add(parent_key)
+            if is_parent and parent_key in seen_mail_parents:
                 for child, scope in pending_mail_children.pop(parent_key, ()):
                     if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                         return True  # The caller reports deadline exhaustion.
@@ -806,7 +1064,7 @@ class IngestionRevisionSourceRecords:
                         observations=tuple(selected),
                         scanned_observation_count=scanned,
                         complete=False,
-                        stop_reason="callback",
+                        stop_reason=emit_stop_reason,
                     )
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                     return RevisionOwnedMailSourceScan(
@@ -815,15 +1073,22 @@ class IngestionRevisionSourceRecords:
                         complete=False,
                         stop_reason="deadline",
                     )
-            if not references_available:
+            if indexed_source or not references_available:
                 return RevisionOwnedMailSourceScan(
                     observations=tuple(selected),
                     scanned_observation_count=scanned,
                     complete=False,
                     stop_reason=(
+                        "source_parent_binding_unresolved" if pending_mail_children or pending_attachment_children else
                         "indexed_shortlist" if shortlist_hashes else "indexed_shortlist_miss"
                     ),
                 )
+
+        if indexed_source:
+            return RevisionOwnedMailSourceScan(
+                observations=tuple(selected), scanned_observation_count=scanned,
+                complete=False, stop_reason="indexed_query_terms_unavailable",
+            )
 
         if not references_available:
             return RevisionOwnedMailSourceScan(
@@ -857,7 +1122,7 @@ class IngestionRevisionSourceRecords:
             observed_scope = source_scope_by_job_index.get(job_index)
             if observed_scope is None:
                 continue
-            if expected_observation_hash in shortlist_hashes:
+            if expected_observation_hash in shortlist_hashes or expected_observation_hash in context_hashes:
                 continue
             if scanned >= max_observations:
                 return RevisionOwnedMailSourceScan(
@@ -906,8 +1171,8 @@ class IngestionRevisionSourceRecords:
         return RevisionOwnedMailSourceScan(
             observations=tuple(selected),
             scanned_observation_count=scanned,
-            complete=not pending_mail_children,
-            stop_reason="source_parent_binding_unresolved" if pending_mail_children else None,
+            complete=not (pending_mail_children or pending_attachment_children),
+            stop_reason="source_parent_binding_unresolved" if pending_mail_children or pending_attachment_children else None,
         )
 
     def scan_authorized_observations(
@@ -919,6 +1184,8 @@ class IngestionRevisionSourceRecords:
         source_scope_ids: Sequence[str] = (),
         mail_import_session_id: str | None = None,
         observation_callback: Callable[[Observation, str], bool] | None = None,
+        context_anchor_callback: Callable[[Observation, str], bool] | None = None,
+        context_callback: Callable[[Observation, Observation, str], bool] | None = None,
     ) -> RevisionOwnedMailSourceScan:
         """Read one authorized source family through sealed job references."""
 
@@ -959,6 +1226,11 @@ class IngestionRevisionSourceRecords:
             raise ContractValidationError("source fallback selector is invalid")
         if observation_callback is not None and not callable(observation_callback):
             raise ContractValidationError("source fallback callback is invalid")
+        if context_callback is not None and (
+            not callable(context_callback) or not callable(context_anchor_callback)
+            or not callable(observation_callback)
+        ):
+            raise ContractValidationError("source context callbacks are invalid")
 
         return self._scan_sealed_authorized_observations(
             source_family=source_family,
@@ -967,7 +1239,123 @@ class IngestionRevisionSourceRecords:
             deadline_monotonic=deadline_monotonic,
             mail_import_session_id=mail_import_session_id,
             observation_callback=observation_callback,
+            context_anchor_callback=context_anchor_callback,
+            context_callback=context_callback,
         )
+
+    def scan_neighbor_context(
+        self, *, anchor: Observation, authority: CompletedIngestionJobAuthority,
+        source_scope: str, max_observations: int, deadline_monotonic: float | None,
+        message_fingerprint: str | None = None,
+        observation_callback: Callable[[Observation, str], bool],
+    ) -> RevisionOwnedMailSourceScan:
+        """Locate +/-4 candidates; existing job authority admits each.
+
+        Source-native artifacts use offline keyed ordinals. Legacy artifacts
+        cannot invent locator coverage; unindexed preparations retain their
+        bounded diagnostic scan. No recursive expansion or query-time writes.
+        """
+        selected: list[tuple[Observation, str]] = []
+        scanned = 0
+
+        def result(reason: str = "bounded_context") -> RevisionOwnedMailSourceScan:
+            return RevisionOwnedMailSourceScan(tuple(selected), scanned, False, reason)
+
+        def expired() -> bool:
+            return deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
+
+        if expired():
+            return result("deadline")
+        if max_observations <= 0:
+            return result("observation_limit")
+        references = self.observation_references
+        job_index = next((i for i, job in enumerate(self.job_authorities) if job is authority), None)
+        if job_index is None:
+            return result()
+        permission = dict(authority.permission_scope)
+        if (
+            to_plain(anchor.permission_scope) != permission
+            or source_scope not in {permission.get("scope_id"), _authorized_mail_selector_for_asset(authority.asset)}
+        ):
+            raise ContractValidationError("source context anchor permission mismatch")
+        anchor_ref = [job_index, anchor.observation_id, sha256_json(anchor.to_dict())]
+        if isinstance(self.runtime_store, SourceNativeLexicalLookup):
+            if not self.runtime_store.has_keyed_source_metadata:
+                return result("source_context_unavailable")
+            candidates = self.runtime_store.neighbor_references(anchor_ref[2])
+        else:
+            if not isinstance(references, list):
+                return result("source_context_unavailable")
+            position = None
+            for start in range(0, len(references), 4096):
+                if expired():
+                    return result("deadline")
+                try:
+                    position = references.index(anchor_ref, start, min(start + 4096, len(references)))
+                    break
+                except ValueError:
+                    continue
+            if position is None:
+                return result()
+            candidates = [references[position + offset] for offset in (-1, 1, -2, 2, -3, 3, -4, 4)
+                          if 0 <= position + offset < len(references)]
+        location = anchor.location or {}
+        occurrence = location.get("message_occurrence_id")
+        anchor_fingerprint = (anchor.payload or {}).get("message_fingerprint")
+        if anchor.modality == "mail" and (
+            not isinstance(occurrence, str) or not isinstance(message_fingerprint, str)
+            or anchor_fingerprint not in {None, message_fingerprint}
+        ):
+            return result()
+        for reference in candidates:
+            if expired():
+                return result("deadline")
+            if not isinstance(reference, (list, tuple)) or len(reference) not in {3, 4}:
+                raise ContractValidationError("source context reference is invalid")
+            if type(reference[0]) is not int or reference[0] != job_index:
+                continue
+            if len(reference) == 4:
+                self._helper_for_locator(reference)
+            if scanned >= max_observations:
+                return result("observation_limit")
+            scanned += 1
+            neighbor = authority.load_indexed_observation(
+                reference[1], expected_observation_hash=reference[2],
+                expected_job_fingerprint=authority.job_fingerprint,
+            )
+            if expired():
+                return result("deadline")
+            if (
+                neighbor.asset_id != anchor.asset_id
+                or neighbor.extractor_run_id != anchor.extractor_run_id
+                or (neighbor.payload or {}).get("source_ref") != (anchor.payload or {}).get("source_ref")
+                or neighbor.modality != anchor.modality
+            ):
+                continue
+            neighbor_location = neighbor.location or {}
+            if anchor.modality == "mail":
+                if (
+                    neighbor.observation_type not in REVISION_SOURCE_FALLBACK_OBSERVATION_TYPES
+                    or neighbor_location.get("message_occurrence_id") != occurrence
+                    or (neighbor.payload or {}).get("message_fingerprint") not in {None, message_fingerprint}
+                ):
+                    continue
+            elif anchor.modality == "text":
+                lines = [location.get("line_start"), location.get("line_end"),
+                         neighbor_location.get("line_start"), neighbor_location.get("line_end")]
+                if (
+                    neighbor.observation_type not in {"heading", "paragraph"}
+                    or any(type(line) is not int or line < 1 for line in lines)
+                    or lines[0] > lines[1] or lines[2] > lines[3]
+                    or max(lines[0] - lines[3], lines[2] - lines[1]) > 64
+                ):
+                    continue
+            else:
+                continue
+            selected.append((neighbor, source_scope))
+            if not observation_callback(neighbor, source_scope):
+                return result("callback")
+        return result()
 
     def scan_authorized_mail_observations(
         self,
@@ -1012,7 +1400,10 @@ class IngestionRevisionSourceRecords:
             and callable(getattr(self.runtime_store, "get_helper", None))
             else None
         )
-        if helper is None and self.observation_references is not None:
+        if helper is None and isinstance(self.runtime_store, SourceNativeLexicalLookup):
+            locator = self.runtime_store.reference_for_key(observation_id=observation_id)
+            helper = self._helper_for_locator(locator) if locator is not None else None
+        elif helper is None and self.observation_references is not None:
             for reference in self.observation_references:
                 if (
                     isinstance(reference, list)
@@ -1037,6 +1428,22 @@ class IngestionRevisionSourceRecords:
         authority = self._authority_for_helper(helper)
         return helper, authority
 
+    def _helper_for_locator(self, reference: Sequence[Any]) -> dict[str, Any]:
+        if (len(reference) != 4 or type(reference[0]) is not int
+            or not 0 <= reference[0] < len(self.job_authorities)
+            or any(not isinstance(value, str) or not value for value in reference[1:])):
+            raise ContractValidationError("source keyed locator reference is invalid")
+        job_index, observation_id, observation_hash, job_fingerprint = reference
+        authority = self.job_authorities[job_index]
+        if job_fingerprint != authority.job_fingerprint:
+            raise ContractValidationError("source keyed locator job binding mismatch")
+        return {
+            "observation_hash": observation_hash, "observation_id": observation_id,
+            "source_scope_id": dict(authority.permission_scope)["scope_id"],
+            "reference": {"job_index": job_index, "job_fingerprint": job_fingerprint},
+            "permission_scope": dict(authority.permission_scope),
+        }
+
     def get_observation(self, observation_id: str) -> Observation:
         helper, authority = self._helper(observation_id)
         return authority.load_indexed_observation(
@@ -1056,7 +1463,10 @@ class IngestionRevisionSourceRecords:
             and callable(getattr(self.runtime_store, "helper_for_hash", None))
             else None
         )
-        if helper is None and self.observation_references is not None:
+        if helper is None and isinstance(self.runtime_store, SourceNativeLexicalLookup):
+            locator = self.runtime_store.reference_for_key(observation_hash=observation_hash)
+            helper = self._helper_for_locator(locator) if locator is not None else None
+        elif helper is None and self.observation_references is not None:
             for reference in self.observation_references:
                 if (
                     isinstance(reference, list)
@@ -1212,6 +1622,13 @@ class IngestionRevisionSourceRecords:
                     "email_thread",
                 }:
                     continue  # Inventory remains in the immutable source checkpoint.
+                nested_lineage = (observation.payload or {}).get("lineage", {})
+                attachment_text_retrieval = (
+                    observation.modality == "document"
+                    and observation.observation_type in {"paragraph", "heading", "list_item"}
+                    and isinstance(nested_lineage, Mapping)
+                    and nested_lineage.get("child_asset_id") == observation.asset_id
+                )
                 item = {
                     "observation_id": observation_id,
                     "observation_hash": observation_hash,
@@ -1239,6 +1656,8 @@ class IngestionRevisionSourceRecords:
                         in _REVISION_TEXT_RETRIEVAL_OBSERVATION_TYPES
                     ),
                 }
+                if attachment_text_retrieval:
+                    item["retrieval"] = True
                 if observation.modality == "mail":
                     lineage = source_occurrence_lineage_from_observation(
                         observation,
@@ -1251,7 +1670,7 @@ class IngestionRevisionSourceRecords:
                             "",
                         )
                 else:
-                    nested = (observation.payload or {}).get("lineage", {})
+                    nested = nested_lineage
                     if nested.get("source_family") == "mail_inline_table":
                         lineage = MailInlineTableOccurrenceLineage(
                             source_observation_id=observation_id,
@@ -2063,6 +2482,8 @@ def _load_issue56_source_start_preparation(
         snippet_index=None,
         graph_build=None,
         safe_binding=MappingProxyType(binding),
+        exact_lookup_directory=directory / "exact-cells",
+        exact_lookup_manifest=MappingProxyType(dict(exact)),
         source_records=records,
         job_authorities=authorities,
         authorized_source=source,

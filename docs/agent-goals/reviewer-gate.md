@@ -80,7 +80,8 @@ not old citation-count or any-one-field triggers:
   full tool-descriptor fingerprint, upstream HTTP status, terminal outcome, and
   valid-attempt marker without raw query/source/header/secret output.
 - **Negative check:** if deployment identity or any required field is missing,
-  mismatched, or reduced to names-only tool hashing, classify the evidence as
+  mismatched, truncated (including attempt history), or reduced to names-only
+  tool hashing, classify the evidence as
   `diagnostic_only/incomparable`; it cannot support loaded-code mismatch,
   no-data, provider-success, root-cause, or UAT acceptance.
 - **Semantic guard:** UI HTTP `200` is separate from upstream status; an empty
@@ -88,10 +89,37 @@ not old citation-count or any-one-field triggers:
   absence or `not_found`.
 - ANY required diagnostic identity metadata missing => incomparable is separate
   from ALL requested business fields missing => eligible source recheck.
-  Loaded deployment/build/code producers remain absent; source identity only
-  from explicitly supplied validated ingestion_revision, never arbitrary hashes.
-- These are evidence-admissibility checks only, not a fifth authority gate and
-  not a change to the existing four methodology gates or `--require-ready`.
+- **Bounded producer:** require a trusted frozen manifest and explicit operator
+  attestation; verify the full immutable code inventory and runtime identity
+  read-only, with image/settings and validated ingestion-revision bindings.
+  Image identity is operator-attested, not remote attestation. Arbitrary caller
+  hashes/plain JSON or external mount proof alone do not bind a response.
+  Source identity comes only from the validated ingestion revision. This bounded
+  diagnostic producer is not formal readiness, live activation or retrospective
+  acceptance of older incomparable responses.
+- **Attempt-history scope:** retain all safe records within the unchanged
+  six-request cap, not only the latest three. B's constant-only repair is frozen,
+  locally verified19/19/Ruff and included in deployed r12; final canonical focused
+  117/117,174.049s,EXIT0, zero failures/errors/skips, exact252+34 pre/post.
+  Hypatia/Archimedes/Lagrange scoped AGREE3/3, inventory rechecked. This closes
+  only the r12 retention scope. Four/six-attempt positives do not excuse genuinely
+  missing/truncated history. R11's three scoped agreements do not approve r12
+  or retroactively make its six unbound fixture responses comparable.
+- **Observed deployment scope:** historical r12 candidate and observed live runs
+  each have four comparable trusted-bound responses and Chromium content/citation/
+  lifecycle passes; candidate8096 was removed at19:35:25Z, live8089 remains r12. Candidate
+  original-source crosswalk passed19:26Z; unrelated attachment proof is not
+  independently registered document proof. First live citation reopen failed
+  `ingestion revision completed job changed`; once-only instrumented original
+  guards then passed both native citations with independent job digests agreeing.
+  Archimedes scoped AGREE supports only this observed source-correct live answer,
+  not stability/reproducibility: the first failure remains unexplained and blocks
+  those claims. Neither later pass nor comparability erases it. Partial coverage,
+  no shipment/latest-schedule proof and no full-UAT/source/method/docs acceptance
+  remain explicit.
+- Canonical authority-resume4 is valid=true/ready=false/errors=[]/EXIT0;
+  four gates remain blocked. These are evidence-admissibility checks only,
+  not a fifth gate or a change to `--require-ready`, source or delivery acceptance.
 
 ## Issue #56 Time-Boxed POC Proof — 2026-08-18 (historical; worker model superseded 2026-09-21)
 

@@ -1,0 +1,28 @@
+{
+  "utc": "2026-10-12T17:56:22.789331+00:00",
+  "status": "immutable-history-not-current-instructions",
+  "purpose": "Lossless full-file snapshots before the bounded delivery-resolution pre-span-repair documentation checkpoint.",
+  "files": [
+    {
+      "source": "docs/implementation-task-breakdown.md",
+      "snapshot": "implementation-task-breakdown.md",
+      "sha256": "e75de99783c09ca5b62a98c33da27b7babae3a3acedd7716bfe8711c72101fda",
+      "bytes": 55380,
+      "lines": 230
+    },
+    {
+      "source": "docs/agent-goals/kg-research-agent.md",
+      "snapshot": "kg-research-agent.md",
+      "sha256": "656b0a9126bd1a7df6f7d0203714eb3c717b06be31f395790cc2283418d4d8f4",
+      "bytes": 39334,
+      "lines": 179
+    },
+    {
+      "source": "docs/agent-goals/handoff-log.md",
+      "snapshot": "handoff-log.md",
+      "sha256": "dc80d2d1b6669ab50bf3be173ad163552e1248e1362d6dfbdd9ea8fefb5233c2",
+      "bytes": 119184,
+      "lines": 277
+    }
+  ]
+}

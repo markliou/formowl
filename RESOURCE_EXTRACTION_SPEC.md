@@ -149,6 +149,16 @@ media regions, not counts of chunks, annotations, graph nodes, or indexed hits.
 Missing derived graph/ontology/index state is distinct from missing source
 content. Unexplained loss blocks the source-completeness gate.
 
+Public redaction must consume the complete unsafe span recognized by its
+existing detector, including path roots and Unicode suffixes, while preserving
+safe surrounding source text. The final unsafe-content guard remains fail-closed;
+no allowlist, question-specific exception or raw-source rewrite is implied.
+Accidental whole-paragraph erasure is evidence loss, not intentional policy
+redaction or proof of absence. Attachment version0.6.2 records the
+changed persisted output: a new governed offline job/source revision is required,
+not query-time repair, mutation of old runs/pins, or silent reuse as new policy.
+Content hash, source/run/permission bindings and native locators remain required.
+
 ---
 
 ## 3. Core Data Model
@@ -567,6 +577,18 @@ effect. Partial observation output is allowed only when the run explicitly
 records partial status, exact output manifest, missing-source taxonomy, and
 claim limits.
 
+Known attachment parser exclusions are handled per child, not as successful
+extraction: the existing materializer may retain a failed child Asset/ExtractorRun
+for bounded byte/table/cell limits and explicit generic, XLS, PDF parsing/text
+extraction, or PPTX parsing failure codes. The parent may finish processing only
+with `attachment_child_extraction_incomplete`, the original error codes, and
+`partial_extraction`; failed-child content is not successful evidence. Downstream
+consumption still requires the existing bound failure-exclusion contract where
+applicable. Unknown/mixed errors, exceptions, and invalid source/hash/permission
+bindings still fail; no wildcard error suppression or relabelling is allowed.
+Retries use new batch/run identities and preserve previous failed ledgers.
+This diagnostic implementation remains **待測** for real-source UAT acceptance.
+
 ---
 
 ## 8. Tokenization, Indexing, and Retrieval Boundary
@@ -599,6 +621,18 @@ Required index rules:
 - old index revisions remain rollback-capable;
 - no silent ASCII-regex, substring, stale-index, or unpinned-model fallback;
 - indexing does not create canonical graph writes.
+
+The query-independent offline batch contract is [SPEC §11.1](SPEC.md#111-query-independent-offline-batch-indexing--待測).
+Reuse the existing PostgreSQL JSONB Observation owner/pgvector baseline; the
+recovered UAT stores remain file-backed. Existing SQLite derivatives persist
+sealed reference/occurrence/attachment-parent and document neighbor locators,
+not source truth. Admitted keyed artifacts support mail and independent real
+PlainText/Markdown extraction paths without request-time tail scans or
+`list.index`; selected source/hash/job/revision/permission/native locators are
+revalidated within existing caps. Native rows/cells stay with their existing
+sealed owner. Shortlists/misses remain incomplete; coverage separately reports
+unsupported extraction, parse failure, truncation and unavailable projections.
+This slice is 待測, not live document coverage, full RAG or source completeness.
 
 Strong RAG and graph-guided retrieval consume the same Observation snapshot.
 Graph or ontology ranking cannot hide source-completeness failure.
@@ -651,10 +685,67 @@ records current slices:
 | Adapter slice | Current evidence and limit |
 | --- | --- |
 | Mail and independent text | Diagnostic mail and real `PlainTextObservationExtractor` for Markdown/plain-text; live §7.3.1 acceptance remains open. |
-| `AttachmentDocumentExtractor` | Bounded XLSX ZIP/XML `<v>`, shared/inline strings, rows/cells/coordinates and formal tables; merged-header paths are candidates. No retained `<f>` formulas or styles/display formatting, no complete native-type/unit/null or workbook proof, no complete standalone XLSX end-to-end path. |
+| `AttachmentDocumentExtractor` | Bounded XLSX/XLSM, XLS, native-text PDF, DOCX/PPTX, plain text/Markdown and CSV/TSV parsing. XLSX preserves raw/cached/formula/date/precision/blank metadata and coordinates where available; merged-header paths are candidates. It does not recalculate formulas or guarantee display/style/unit/null semantics or whole-workbook proof. XLS formula identity and scan-only PDF/OCR remain unsupported. Parser tests do not establish standalone-document/live UAT or activated RAG coverage. |
 | `FixtureOcrExtractor` | `read_text()` page/bbox fixtures; no real-image OCR, visual retrieval or native-region proof. |
 | `FixtureAudioTranscriptExtractor` | `read_text()` timestamp/speaker/transcript fixtures; no real decoding/ASR, acoustic verification or non-speech/music path proof. |
 | `FixtureVideoSceneExtractor` | `read_text()` scene/keyframe descriptions; no real decoding, temporal/visual retrieval or native-clip/frame proof. |
+
+Parser capability, query-path capability and activated source coverage are
+separate evidence. The deployed bounded source-start path indexes and rehydrates parsed
+attachment `paragraph`/`heading`/`list_item` content under `mail`, with genuine
+parent/child/run/hash/revision/permission and native-locator checks; an attachment
+does not become an independent document. Independent Markdown/plain-text stays
+`document_text`. The attachment-inclusive lexical surface policy requires a
+matching new offline artifact; an older attachment-omitting artifact or clone
+cannot acquire that coverage from a code deployment alone.
+
+The 2026-10-12 bounded integration targets native-table field retrieval, DOCX
+attachment content and a standalone clause. Existing exact-cell tests verify
+source-provided column labels, same-row constraints, explicit blanks and partial
+coverage; the executor currently exposes `extracted_cell_text`, not complete
+spreadsheet calculation semantics. UnitPrice/Quantity retrieval is a bounded
+target, not aggregation, currency math or latest-revision completeness proof.
+At the 2026-10-12 checkpoint, r12/new partial source runs on live8089, full252/drift0;
+candidate8096 was deployed/proved, then removed at19:35:25Z. Old r5 remains
+stopped/preserved for rollback. Earlier
+fixed2048 r2/prep-r3 success did not preserve all text: the safe audit proved a
+successful PDF run's three paragraphs were erased by redaction, not source absence.
+R11 span-consumer repair leaves detector/final guard unchanged; output version0.6.2
+required a NEW same2048/all-formats replay, not a query-time fix or old-run mutation.
+R3 completed18:57:38Z/EXIT0,622,631 Observations/7,211 runs; prep-r4 completed
+19:18:55Z/EXIT0. Pin `5e222fc…` has1,100,143 references/407,401 helpers/
+10,671,080 postings, zero independent-document helpers, partial coverage.
+Admission verified one successful native PDF run and three preserved indexed hits.
+
+R11 exact252+34 passed108/108,170.274s/EXIT0, zero failures/errors/skips and
+three scoped agreements; worker26/26 and original red/fixture failures retained.
+Fixture-r11 EXIT0 PDF/independent-document cue/citation/lifecycle remains diagnostic:
+six responses incomparable, missing deployment/code/build; four-attempt business
+turns retained three. R12 retention derives from unchanged cap6, local19/19,
+final focused117/117,174.049s/EXIT0, zero failures/errors/skips, exact252+34
+pre/post/current inventory checked and Hypatia/Archimedes/Lagrange scoped AGREE3/3.
+Active serving manifest is r12; extraction remains the recorded r11/version0.6.2 job.
+
+Candidate source crosswalk passed19:26Z: both original-attachment citations
+reopened/hash/run/parent checked; requested-delivery column visually verified,
+not PO/approval dates, shipment or latest supplier schedule. Unrelated attachment
+paragraph/native hash proof is not independent-document registration proof.
+Live Chromium LAN EXIT0/all four comparable, delivery and unrelated attachment
+each MCP1/provider2/citation1, chat/reload/reset pass; evidence coverage stays partial.
+First live citation reopen failed
+`ContractValidationError: ingestion revision completed job changed`.
+Once-only instrumentation then passed the unchanged original loader/guards;
+all three job digests agreed across engines, both LIVE citations reopened/hash/
+run/parent checked. Archimedes scoped AGREE supports this observed source-correct
+answer in the real LAN webpage. The first failure remains preserved/unexplained
+and blocks stability/reproducibility acceptance, not the demonstrated answer;
+no mutation/corruption/root-fix, full-UAT or source-completeness claim.
+
+Canonical authority-resume4: valid=true/ready=false/errors=[]/EXIT0;
+feature待測/four methodology gates stay blocked. Trusted diagnostic bindings are
+not remote attestation, source stability or retrospective repair of unbound records.
+See [SPEC §14](SPEC.md#14-current-implementation-and-methodology-status) and the
+[dated handoff](docs/agent-goals/handoff-log.md) for exact pins and preserved failures.
 
 MIME/modality declarations and fixture locators cannot establish native support.
 These limits leave source coverage explicit while preserving the wider product
@@ -742,6 +833,14 @@ errors, and exact-query boundaries remain fail-closed. Incomplete scans and
 timeouts are not absence; only proven complete source coverage can support a
 scoped complete negative.
 
+Under [SPEC §11.1](SPEC.md#111-query-independent-offline-batch-indexing--待測),
+source/policy/extractor changes require explicit offline jobs and versioned
+artifacts, not question-driven ingestion. Reopen/reuse validated batch artifacts;
+legacy missing locator metadata stays unavailable, with no inline migration.
+Offline clone mode preserves verified postings without retokenization and does
+not fill missing lexical surfaces. Raw assets and prior source lineage remain
+preserved; no new canonical store or schema service is introduced.
+
 ---
 
 ## 11. Storage and Security Boundary
@@ -761,6 +860,16 @@ index projection stores
 
 PostgreSQL is canonical for metadata, provenance, permission, review, and graph
 state. Raw and large binary payloads live behind an object-store abstraction.
+
+Before extraction, object verification must bind the expected hash/size to a
+complete, stable descriptor read and the still-current governed path/target.
+Path replacement, symlink retargeting, detectable file mutation, short reads
+and mismatches fail without invoking an extractor. Operator diagnostics retain
+only same-call hash/count/stability/completion facts and safe reason codes;
+never raw paths or exception text. Do not retry until a hash happens to pass,
+repin source expectations, or present later verification as the failed call's
+evidence. These guards do not by themselves explain historical inconsistent
+digests or certify whole-source completeness.
 
 Graph and projection records reference stable FormOwl identifiers:
 

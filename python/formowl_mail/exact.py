@@ -845,11 +845,11 @@ def execute_deterministic_source_occurrence_inventory(
             )
         if requested_projection_columns and not matched_position_set and filter_positions:
             # A bounded cross-row link is diagnostic evidence only. Keep the
-            # source/target references, but never count it as a source-native row.
+            # source/target references for diagnostics, but never promote the
+            # candidate target into the deterministic inventory result.
             candidate_links = _bounded_source_occurrence_candidate_links(
                 plan=plan, provider=provider, filter_positions=filter_positions,
             )
-            matched_position_set.update(candidate_links)
         matched_positions = tuple(sorted(matched_position_set))
     matched_positions = tuple(
         position

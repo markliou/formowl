@@ -14,10 +14,12 @@ dependencies = [
   "httpx>=0.28,<1",
   "jieba>=0.42.1,<0.43",
   "mcp==1.28.1",
+  "pypdf==5.9.0",
   "psycopg[binary]>=3.2,<4",
   "sentencepiece>=0.2,<0.3",
   "starlette>=0.37,<1",
-  "uvicorn>=0.34,<1"
+  "uvicorn>=0.34,<1",
+  "xlrd==2.0.1"
 ]
 
 [project.optional-dependencies]
@@ -27,7 +29,8 @@ dev = [
   "neo4j==5.28.1",
   "pre-commit>=4.0",
   "ruff==0.8.6",
-  "sentencepiece>=0.2,<0.3"
+  "sentencepiece>=0.2,<0.3",
+  "xlwt==1.3.0"
 ]
 graph-adapters = [
   "rapidfuzz>=3.14,<4",

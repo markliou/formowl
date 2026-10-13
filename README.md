@@ -167,12 +167,69 @@ These slices do not establish production readiness, source-complete
 heterogeneous integration, automatic canonical writes, general parser
 coverage, or KG + ontology superiority.
 
+Business examples are target applications of one generic query core, not 30
+implemented functions. Native-table fields bind to the actual authorized schema;
+attachment content retains its mail parent, while standalone documents retain
+independent source bindings. The bounded integration target is exact
+UnitPrice/Quantity retrieval, DOCX attachment content and a standalone clause.
+It does not establish aggregation, currency math or latest-revision completeness.
+
+At the 2026-10-12 checkpoint, active serving manifest r12 (`b2f4fa44…`) runs on
+live8089, full252 product files/drift0; candidate8096 was deployed/proved, then
+removed at19:35:25Z. Old r5 remains stopped/preserved for rollback.
+Canonical focused **117/117,174.049s,EXIT0**, zero
+failures/errors/skips, exact252 code/34 tests verified pre/post and rechecked;
+Hypatia/Archimedes/Lagrange retention-only scoped **AGREE3/3**. The retention
+constant derives from unchanged request cap6 (local19/19,0.818s/Ruff);
+no model/budget/deadline change or full-suite/standard promotion.
+
+R11's108/108,170.274s/EXIT0 and three scoped agreements remain bounded.
+Fixture-r11 EXIT0 proved synthetic PDF/independent-document cue/citation/lifecycle,
+but all six responses remain incomparable: deployment/code/build absent, with
+four-attempt business turns retaining three records. Later bindings do not
+retrospectively repair them. Freeze-helper TypeError/empty tree and readonly-
+template chmod failure are retained; the latter was fixed only in the operator
+helper's private tmpfs-copy handling, no product/secret change.
+
+The safe audit proved native PDF text was erased by redaction, not absent.
+Generic span preservation leaves detector/final guard unchanged; version0.6.2
+required a new offline job/revision. Same2048/all-formats r3 completed
+18:57:38Z/EXIT0 (622,631 Observations/7,211 runs), prep-r4 completed19:18:55Z/EXIT0.
+New partial pin `5e222fc…`:1,100,143 references/407,401 helpers/10,671,080 postings,
+zero independent-document helpers; native PDF admission retained three indexed
+paragraphs. Old runs/pins/failures remain preserved. Ordinary Observation writes
+stay sharded; only the finite sealed materializer explicitly keeps flat export
+([SPEC §11.1](SPEC.md#111-query-independent-offline-batch-indexing--待測)).
+
+Candidate original-source acceptance passed19:26Z: both citations reopened/hash/
+run/parent checked; requested delivery, not PO/approval dates, shipment or latest
+supplier schedule. The unrelated actual attachment proof is not independently
+registered document proof. Live Chromium LAN EXIT0: all four responses comparable,
+delivery22.829s and unrelated attachment17.833s, each MCP1/provider2/citation1;
+ordinary/reload/reset/postreset MCP0. Evidence turns honestly remain partial.
+First live citation reopen failed
+`ContractValidationError: ingestion revision completed job changed`.
+Once-only instrumentation then verified both LIVE citations and original-source
+meaning with loader/guards unchanged and all three job digests agreeing across
+engines. Archimedes scoped **AGREE**: **this observed question's source-verified
+answer was obtained in the real LAN webpage**. The first failure remains
+unexplained and blocks stability/reproducibility acceptance, not that observed
+answer. No corruption/root-fix, full-UAT, source-complete or docs acceptance claim.
+
+The bounded diagnostic producer binds trusted frozen manifest/operator attestation
+to read-only full-inventory/runtime and image/settings/validated-source identity.
+This is not remote attestation or formal readiness; missing/mismatched/truncated
+identity remains incomparable. Canonical authority-resume4 is
+valid=true/ready=false/errors=[]/EXIT0. Feature待測, step4 in-progress and all four
+blocked gates remain unchanged; no user-only blocker. Safe evidence and next
+action: [handoff](docs/agent-goals/handoff-log.md).
+
 Current adapter limits are explicit in [SPEC §14](SPEC.md#14-current-implementation-and-methodology-status):
 
 | Slice | Evidence and remaining gap |
 | --- | --- |
 | Mail and independent Markdown/plain-text | Diagnostic mail and the real `PlainTextObservationExtractor`; §7.3.1 live mail/document acceptance remains open. |
-| XLSX/delimited attachment tables | `AttachmentDocumentExtractor` reads bounded ZIP/XML values, row/cell coordinates and formal table metadata, with candidate merged-header paths. It does not retain formulas or styles/display formatting, prove native types/units/nulls or full-workbook completeness, or establish the standalone XLSX end-to-end product path. |
+| XLSX/delimited attachment tables | `AttachmentDocumentExtractor` reads bounded ZIP/XML values, row/cell coordinates, formula/raw/cached/date/precision/blank metadata where available, and formal table metadata, with candidate merged-header paths. It does not recalculate formulas or guarantee native display/style/type/unit/null semantics or full-workbook completeness, and does not establish the standalone XLSX end-to-end product path. |
 | OCR/images | `FixtureOcrExtractor` uses `read_text()` on page/bbox fixtures; real-image OCR, visual retrieval, and source-region verification are unproved. |
 | Audio/music | `FixtureAudioTranscriptExtractor` uses `read_text()` on timestamp/speaker/transcript fixtures; real decoding/ASR, acoustic verification, non-speech audio and music paths are unproved. |
 | Video | `FixtureVideoSceneExtractor` uses `read_text()` on scene/keyframe descriptions; real decoding, temporal/visual retrieval, and native clip/frame verification are unproved. |
@@ -199,11 +256,19 @@ Issue #41 separately owns generic Asset tenant/owner binding, byte storage,
 occurrence lineage, upload recovery, retention, purge, and authorization. A
 source adapter must not create a parallel asset or permission system.
 
+Attachment format expansion also implements bounded XLS/XLSM, native-text PDF,
+DOCX/PPTX and text/delimited parsing through the same Observation owner. Known
+child parser failures remain failed and disclose partial parent coverage; unknown
+errors still fail the batch. Offline backfill and RAG activation are separate
+from parser support and remain unaccepted for live UAT. Scan-only PDF/OCR, XLS
+formula identity and complete native display semantics are not established.
+
 ### Source-neutral evidence recheck — 待測
 
 The 2026-10-06 contract in `SPEC.md` §7.3.1 applies to validated
-`evidence_lookup` for both mail and independent Markdown/plain-text documents
-(not mail attachments). A nonempty validated requested-field set with **all
+`evidence_lookup` for both mail and independent Markdown/plain-text documents.
+Parsed mail attachment text remains mail evidence; it does not satisfy the
+independent-document acceptance case. A nonempty validated requested-field set with **all
 fields** lacking verified support triggers one materially different,
 same-authorized-scope bounded source recheck when existing safety/eligibility
 and remaining budgets permit, even with unrelated citations. Partial misses

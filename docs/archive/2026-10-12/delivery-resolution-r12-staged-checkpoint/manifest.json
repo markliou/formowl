@@ -1,0 +1,56 @@
+{
+  "utc": "2026-10-12T18:18:46.905261+00:00",
+  "status": "immutable-history-not-current-instructions",
+  "purpose": "Full pre-edit seven-document snapshots before locally verified attempt-retention/r12 staged status synchronization.",
+  "files": [
+    {
+      "source": "docs/implementation-task-breakdown.md",
+      "snapshot": "docs/implementation-task-breakdown.md",
+      "sha256": "7316f98459119c9830fdd08e1d24b6688251cfcb97c67ae2a1891abf09c817f2",
+      "bytes": 15432,
+      "lines": 187
+    },
+    {
+      "source": "docs/agent-goals/kg-research-agent.md",
+      "snapshot": "docs/agent-goals/kg-research-agent.md",
+      "sha256": "d7e5d02fa4ff7823576027ca310d1ddb098ab4dffec7de3b252ea30c5b2ab102",
+      "bytes": 9243,
+      "lines": 143
+    },
+    {
+      "source": "docs/agent-goals/handoff-log.md",
+      "snapshot": "docs/agent-goals/handoff-log.md",
+      "sha256": "95e153f106a126ef66ccddfe05ced9eb990c6f6e510b4c1d52b6dd61c59a1058",
+      "bytes": 10593,
+      "lines": 146
+    },
+    {
+      "source": "SPEC.md",
+      "snapshot": "SPEC.md",
+      "sha256": "2ce51bdf42b34ed5082c8ecb7f201815a5b7e2b1f7339270ac614a0ae16e25d9",
+      "bytes": 103815,
+      "lines": 2076
+    },
+    {
+      "source": "RESOURCE_EXTRACTION_SPEC.md",
+      "snapshot": "RESOURCE_EXTRACTION_SPEC.md",
+      "sha256": "eac92dfbf0b3be6513896c0732728c7bdbdce009c15bf34cdac30278166b81f0",
+      "bytes": 36638,
+      "lines": 911
+    },
+    {
+      "source": "README.md",
+      "snapshot": "README.md",
+      "sha256": "4b59dbd60cb851b8185784f087402f40f4afe37e0e92734fecee17dd2fa40bc6",
+      "bytes": 44192,
+      "lines": 890
+    },
+    {
+      "source": "docs/agent-goals/reviewer-gate.md",
+      "snapshot": "docs/agent-goals/reviewer-gate.md",
+      "sha256": "2f15a852217004a600e85d0c1f66efe4b6c9a89d96b2b941581f2c785833c9eb",
+      "bytes": 19375,
+      "lines": 385
+    }
+  ]
+}

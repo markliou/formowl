@@ -18,6 +18,41 @@ from .semantic import (
     validate_public_gateway_payload,
 )
 
+EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE = (
+    "For mail and independent document evidence lookup, separate entity/topic "
+    "anchors and explicit user-specified content/value filters from attributes "
+    "to retrieve. Keep the retrieval goal in query_text and put sought output "
+    "attributes in request_contract.requested_fields. requested_fields describe "
+    "the user's information needs in safe, concise wording grounded in the "
+    "original request, even when no source field labels are available. Do not "
+    "leave requested_fields empty merely because source terminology or schema "
+    "is unknown. These semantic labels need not occur literally in the source; "
+    "table_query field and projection labels must be source-provided and "
+    "authorized. Naming a requested field never establishes verified field "
+    "support or authorizes exact execution. required_terms are same-item AND "
+    "filters, not output projections: "
+    "do not add a requested attribute's name merely because its value is sought. "
+    "Preserve this distinction in query_text as well: a retrieval goal is not "
+    "a literal source-text requirement. "
+    "For example, asking for an entity's category projects category; selecting "
+    "entities with category 'archived' filters by the stated value 'archived'. "
+    "If the user explicitly filters by a value or requests a literal word/phrase "
+    "in the source, preserve that grounded constraint in required_terms, even "
+    "when it also names a requested field. Never drop valid user constraints or "
+    "change the frozen conjunctive terms on retries."
+)
+SOURCE_EVIDENCE_RECHECK_PLANNING_GUIDANCE = (
+    "A validated evidence_lookup with a nonempty validated requested-field set "
+    "ALL lacking verified support requires one materially different, "
+    "same-authorized-scope source recheck when existing safety/eligibility "
+    "and remaining budgets permit. Partial misses MUST be disclosed and MUST NOT "
+    "trigger this recheck; source-backed blanks count as verified support. "
+    "For empty fields, resolve the validated evidence-need plan or clarify. "
+    "Citation count, status, or projection failure alone neither triggers the "
+    "recheck nor establishes eligibility. Keep source/hash/lineage/revision/permission "
+    "checks and no inline rebuild; incomplete evidence never proves absence."
+)
+
 _SEMANTIC_TOOL_INPUT_KEYS = {
     schema["tool_name"]: set(schema["input_keys"]) for schema in PUBLIC_TOOL_SCHEMAS
 }
@@ -299,16 +334,20 @@ def _tool_to_json_rpc_schema(schema: dict[str, Any]) -> dict[str, Any]:
             "or message dependency: do not invent a mail selector or table binding. "
             "Preserve returned native paragraph/block line_start and line_end, "
             "document revision bindings, and occurrence lineage with citations. "
+            "Parsed text in mail attachments belongs to the mail source family, "
+            "not document_text or attachment_table merely because it is attached. "
+            "attachment_table denotes native table evidence, not every attachment. "
+            "Captured mail without an upload-session selector uses this graph tool "
+            "with its authorized mail scope; never invent a selector. "
             "(2) structured/source-table lookup using authorized source-provided "
             "filter fields and projection labels. Do not use this tool for ordinary "
             "chat, greetings, general knowledge, or reformatting already cited "
             "evidence; these require zero new MCP calls. Use the selected "
             "query_mail_evidence tool for mail-only evidence organization when "
             "available, with its authorized selector; never relabel a document as mail. "
-            "A validated evidence-only initial retrieval with zero verified citations "
-            "may receive at most one bounded same-scope source recheck inside this "
-            "tool call, using the same actor, workspace, grants, source scope and "
-            "revision. This is not permission for another scan or a wider query. "
+            "Source recheck, when eligible, stays inside this tool call under the "
+            "same actor, workspace, grants, source scope and revision. This is not "
+            "permission for another scan or a wider query. "
             "Inspect source_recovery and the underlying initial status; an outer "
             "replan_required marker is not itself an eligible retrieval miss. "
             "Do not use source recheck to bypass provider/tool errors, permission "
@@ -371,6 +410,8 @@ def _tool_to_json_rpc_schema(schema: dict[str, Any]) -> dict[str, Any]:
             "never repeat an unchanged call or bypass "
             "permission, selector, provenance, or citation validation."
         )
+    if tool_name in {"query_mail_evidence", "query_effective_graph_view", "query_effective_graph"}:
+        description += "; " + EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE + " " + SOURCE_EVIDENCE_RECHECK_PLANNING_GUIDANCE
     return {
         "name": tool_name,
         "description": description,
@@ -398,7 +439,7 @@ def _semantic_argument_json_schema(key: str) -> dict[str, Any]:
                 "request contract determine source-family/scope; source-family and "
                 "operation/action words are not content terms unless the user explicitly "
                 "requests those literal words. These terms do not grant or widen "
-                "authorization."
+                "authorization. " + EVIDENCE_ANCHOR_FIELD_PLANNING_GUIDANCE
             )
         return schema
     return {"type": "string"}

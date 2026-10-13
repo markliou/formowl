@@ -294,7 +294,7 @@ const safePhases = new Set([
 ]);
 const providerStopReasons = new Set([
   'budget_exhausted', 'citation_validation_failed',
-  'coverage_validation_failed', 'invalid_arguments', 'mcp_unavailable',
+  'coverage_validation_failed', 'answer_public_safety_failed', 'invalid_arguments', 'mcp_unavailable',
   'no_evidence', 'no_progress', 'provider_incomplete',
   'provider_timeout', 'public_term_unavailable',
 ]);
@@ -330,6 +330,10 @@ const citationProjectionResults = new Set([
 const finalizationValidationResults = new Set([
   'passed', 'citation_rejected', 'coverage_rejected', 'parse_rejected',
   'provider_incomplete',
+]);
+const answerProjectionResults = new Set([
+  'passed', 'public_safety_rejected', 'repair_recovered', 'recovery_exhausted',
+  'projection_rejected_partial_fallback', 'invalid',
 ]);
 const safeDiagnosticTools = new Set([
   'none', 'other', 'query_effective_graph_view', 'query_mail_evidence',
@@ -740,6 +744,10 @@ function boundedProviderSafeFields(value) {
 function boundedProviderLoopDiagnostics(value) {
   if (!value || typeof value !== 'object') return {};
   const safe = {};
+  if (Object.hasOwn(value, 'answer_projection_result')) {
+    safe.answer_projection_result = answerProjectionResults.has(value.answer_projection_result) ?
+      value.answer_projection_result : 'invalid';
+  }
   if (Object.hasOwn(value, 'provider_attempts') ||
       Object.hasOwn(value, 'provider_attempt_count')) {
     const rawAttempts = Array.isArray(value.provider_attempts) ?
@@ -1152,6 +1160,8 @@ function classify(
     Boolean(latestFinalizationIsValid &&
       latestFinalization.validation_result === 'passed' &&
       latestFinalization.final_model.citation_count > 0);
+  const answerProjectionPassed = !Object.hasOwn(diagnostic, 'answer_projection_result') ||
+    ['passed', 'repair_recovered'].includes(diagnostic.answer_projection_result);
   const rawProviderAttempts = diagnostic.provider_attempts;
   const hasProviderAttempts = Object.hasOwn(diagnostic, 'provider_attempts');
   const hasRawProviderAttemptCount = Object.hasOwn(
@@ -1234,7 +1244,7 @@ function classify(
   if (phase === 'ordinary') {
     const conversational = /你好|您好|嗨|謝謝|高興|開心|很好|不錯|準備|隨時|hello|hi\b|hey\b|doing (?:well|fine|great)|happy to help|ready to help/i.test(turn.text);
     pass = visible && successful && body.status === 'complete' &&
-      !hasFailure && toolCount === 0 && turn.citations === 0 &&
+      !hasFailure && answerProjectionPassed && toolCount === 0 && turn.citations === 0 &&
       citations.length === 0 && citationLabels.length === 0 &&
       turn.text === body.answer.trim() &&
       conversational && !noData.test(turn.text) && !operational.test(turn.text) &&
@@ -1252,7 +1262,7 @@ function classify(
       turn.citations > 0 && governedCitations &&
       turn.citations === citations.length &&
       turn.text === body.answer.trim() && !turn.error &&
-      providerFinalizationPassed && providerCompleted &&
+      providerFinalizationPassed && providerCompleted && answerProjectionPassed &&
       (body.status !== 'partial' || turn.incomplete_visible === true) &&
       // Structured provider/finalization outcomes govern acceptance. A cited
       // business statement may itself contain operational-sounding wording.
@@ -1273,6 +1283,7 @@ function classify(
       citation_projection_matches: citationProjectionMatches,
       answer_matches_payload: turn.text === body.answer.trim(),
       provider_finalization_passed: providerFinalizationPassed,
+      answer_projection_passed: answerProjectionPassed,
       provider_completed: providerCompleted,
       incomplete_visible: turn.incomplete_visible === true,
       no_data_match: noData.test(turn.text),
@@ -1291,7 +1302,7 @@ function classify(
       ]);
       const stopReasons = new Set([
         'budget_exhausted', 'citation_validation_failed',
-        'coverage_validation_failed', 'invalid_arguments', 'mcp_unavailable',
+        'coverage_validation_failed', 'answer_public_safety_failed', 'invalid_arguments', 'mcp_unavailable',
         'no_evidence', 'no_progress', 'provider_incomplete',
         'provider_timeout', 'public_term_unavailable',
       ]);
@@ -1440,6 +1451,10 @@ function classify(
         'passed', 'citation_rejected', 'coverage_rejected', 'parse_rejected',
         'provider_incomplete',
       ]);
+      const loopAnswerProjectionResults = new Set([
+        'passed', 'public_safety_rejected', 'repair_recovered', 'recovery_exhausted',
+        'projection_rejected_partial_fallback', 'invalid',
+      ]);
       const loopTools = new Set([
         'none', 'other', 'query_effective_graph_view', 'query_mail_evidence',
         'clarify_public_terminology',
@@ -1548,6 +1563,11 @@ function classify(
           }];
         });
         if (stages.length) loopDiagnostics.mcp_citation_stages = stages;
+      }
+      if (Object.hasOwn(diagnostic, 'answer_projection_result')) {
+        loopDiagnostics.answer_projection_result =
+          loopAnswerProjectionResults.has(diagnostic.answer_projection_result) ?
+            diagnostic.answer_projection_result : 'invalid';
       }
       if (Object.hasOwn(diagnostic, 'finalization_validation')) {
         const rawValidations = Array.isArray(diagnostic.finalization_validation) ?
@@ -3035,6 +3055,26 @@ async function selfCheck() {
     finalizationRecord('passed'),
   ];
   assert.equal(classify('mail', record, turn).status, 'mail_cited_result');
+  for (const projectionResult of [
+    'public_safety_rejected', 'recovery_exhausted', 'projection_rejected_partial_fallback',
+    'invalid', '/workspace/private/unsafe.txt', null, {},
+  ]) {
+    const rejectedProjection = JSON.parse(JSON.stringify(record));
+    rejectedProjection.payload.diagnostic.answer_projection_result = projectionResult;
+    const rejected = classify('mail', rejectedProjection, turn);
+    assert.equal(rejected.status, 'mail_failed');
+    assert.equal(rejected.acceptance_checks.provider_finalization_passed, true);
+    assert.equal(rejected.acceptance_checks.answer_projection_passed, false);
+    const projected = boundedProviderLoopDiagnostics(rejectedProjection.payload.diagnostic);
+    assert.equal(projected.answer_projection_result,
+      answerProjectionResults.has(projectionResult) ? projectionResult : 'invalid');
+    assert.equal(rejected.diagnostic.answer_projection_result, projected.answer_projection_result);
+  }
+  for (const projectionResult of ['passed', 'repair_recovered']) {
+    const recoveredProjection = JSON.parse(JSON.stringify(record));
+    recoveredProjection.payload.diagnostic.answer_projection_result = projectionResult;
+    assert.equal(classify('mail', recoveredProjection, turn).status, 'mail_cited_result');
+  }
   const graphMailCitation = `sha256:${'f'.repeat(64)}`;
   const graphMailRecord = JSON.parse(JSON.stringify(record));
   graphMailRecord.payload.answer = '圖譜來源引用回答';

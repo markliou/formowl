@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import re
 import time
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Final
 import unicodedata
 
@@ -36,6 +36,7 @@ from formowl_mail.answer import build_authorized_candidate_table_lookup, interpr
 from formowl_mail.exact import (
     AuthorizedSourceOccurrence,
     SourceOccurrenceProvider,
+    execute_deterministic_source_occurrence_inventory,
     authorized_source_occurrence_scope_fingerprint,
     source_occurrence_column_capability_hash,
     source_occurrence_exact_cell_value_hash,
@@ -48,14 +49,18 @@ from formowl_mail.issue56_sealed_source import (
     IDENTITY_SCOPE_MODE,
     SOURCE_GRAPH_POLICY_ID,
     WORKSPACE_ID,
+    _authorized_mail_selector_for_asset,
     Issue56IngestionRevision,
     load_issue56_sealed_source,
 )
 from formowl_mail.hybrid import (
     AdaptiveQueryPlanner,
     _semantic_session_source_families,
+    _is_attachment_text_observation,
     attach_authorized_source_occurrence_providers,
     execute_bounded_adaptive_query,
+    _partition_structured_source_occurrence_table_query,
+    _SOURCE_OCCURRENCE_STRUCTURED_TABLE_QUERY_POLICY_ID,
 )
 from formowl_mail.query import (
     MailAttachmentChildOccurrenceLineage,
@@ -66,6 +71,7 @@ from formowl_mail.query import (
     TextDocumentOccurrenceLineage,
     REVISION_SOURCE_FALLBACK_OBSERVATION_TYPES,
     _source_mail_observation_match,
+    _attachment_child_lineages,
     _safe_snippet,
     _citation_for_snippet,
     build_revision_owned_mail_evidence_query_handler,
@@ -77,11 +83,15 @@ from formowl_mail.semantic_plan import (
     AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND,
     SEMANTIC_CLAIM_STRENGTH_BY_CLASS,
     SEMANTIC_QUERY_CLASSES,
+    SemanticQueryPlan,
     authorized_permission_scope_matches,
     deterministic_query_class,
     validate_semantic_request_contract,
 )
 from formowl_retrieval.gateway import (
+    _SOURCE_EVIDENCE_DEADLINE,
+    SOURCE_EVIDENCE_OBSERVATION_LIMIT,
+    SOURCE_EVIDENCE_TIME_BUDGET_MS,
     check_source_evidence_deadline,
     source_evidence_supported_requested_fields,
     source_evidence_double_check,
@@ -816,6 +826,8 @@ def _source_start_capabilities(revision: Issue56IngestionRevision) -> dict[str, 
     families = []
     if source.authorizes_source_kind(AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND):
         families.append("mail")
+        if revision.exact_lookup_manifest.get("counts", {}).get("attachment_authorized_row", 0):
+            families.append("attachment_table")
     if source.authorizes_source_kind(AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND):
         families.append("document_text")
     if not families:
@@ -844,6 +856,41 @@ def _source_start_capabilities(revision: Issue56IngestionRevision) -> dict[str, 
             else "incomplete"
         ),
     }
+    lookup = _IngestionExactCellLookup(revision) if revision.exact_lookup_manifest else None
+    fields = list(lookup.capability_fields) if lookup else []
+    providers = list(lookup.capability_providers) if lookup else []
+    # The legacy provider totals combine candidate and source-provided rows;
+    # they are not verified per-column/per-structure counts for source-start.
+    for item in fields:
+        item["authorized_family_row_count"] = item.pop("authorized_occurrence_count")
+        safe_field, redacted = redact_public_raw_references(item["field"])
+        item["label_redacted"] = bool(redacted) or len(safe_field) > 120
+        item["field"] = safe_field[:120]
+    for item in providers:
+        item.pop("source_provided_occurrence_count", None)
+        item.pop("candidate_only_occurrence_count", None)
+        item["coverage_status"] = "incomplete"
+    structured_supported = any(item["structure_status"] == "source_provided" and not item["label_redacted"] for item in fields)
+    core.update({
+        "projection_fields": fields[:128],
+        "projection_field_count": len(fields),
+        "returned_projection_field_count": min(len(fields), 128),
+        "listing_status": "truncated" if len(fields) > 128 else "complete",
+        "providers": providers,
+        "query_contract": {
+            "structured_table_query_supported": structured_supported,
+            "projection_labels_must_match_authorized_fields": True,
+            "candidate_only_is_deterministic_exact": False,
+            "complete_inventory_supported": False,
+            "native_formula_recalculation_supported": False,
+            "native_display_semantics_supported": False,
+            "value_representation": "extracted_cell_text",
+            "native_date_normalization_supported": False,
+            "merged_header_inference_supported": False,
+        },
+    })
+    if structured_supported:
+        core["query_classes"].append("exact_set_or_inventory")
     if "mail" in families:
         selector_ids = getattr(revision.source_records, "authorized_mail_import_session_ids", ())
         if (
@@ -863,7 +910,234 @@ def _source_start_capabilities(revision: Issue56IngestionRevision) -> dict[str, 
                 "mail_selector_kind": "mail_import_session_id",
                 "authorized_mail_import_session_ids": list(selector_ids),
             })
-    return {**core, "capability_fingerprint": sha256_json(core)}
+    result = {**core, "capability_fingerprint": sha256_json(core)}
+    validate_public_gateway_payload(result)
+    return result
+
+
+def _execute_source_start_table(
+    revision: Issue56IngestionRevision, *, lookup: _IngestionExactCellLookup | None,
+    arguments: Mapping[str, Any], request_contract: Mapping[str, Any],
+    mail_tool: bool, selector: str | None, identifier_terms: tuple[str, ...],
+    required_terms: tuple[str, ...] = (),
+    automatic: bool = False, source_budget: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Bind source-native cells to the existing typed binder and exact executor.
+
+    The source shortlist is deliberately incomplete even when every returned
+    field is supported. No graph/index revision is manufactured or rebuilt.
+    """
+    source = revision.authorized_source
+    limit = arguments.get("limit" if mail_tool else "page_size", 5 if mail_tool else 10)
+    if type(limit) is not int or not 1 <= limit <= 128:
+        raise ContractValidationError("source-start evidence limit is invalid")
+    if arguments.get("cursor") is not None or arguments.get("exact_inventory_kind") is not None:
+        raise ContractValidationError("source-start complete inventory is unavailable")
+    deadline = time.monotonic() + SOURCE_EVIDENCE_TIME_BUDGET_MS / 1000
+    if source_budget is not None:
+        deadline = min(deadline, source_budget["deadline"])
+    inherited_deadline = _SOURCE_EVIDENCE_DEADLINE.get()
+    if inherited_deadline is not None:
+        deadline = min(deadline, inherited_deadline)
+    requested = tuple(request_contract["requested_fields"])
+    table_query = arguments.get("table_query")
+    families = tuple(request_contract["source_family_scope"])
+    evidence_by_id: dict[str, dict[str, Any]] = {}
+    native: dict[str, Observation] = {}
+
+    def clarification() -> dict[str, Any]:
+        payload = {
+            "status": "clarification_required", "citations": [], "evidence": [],
+            "deterministic_exact": False, "exact_result": None,
+            "warnings": ["source_table_binding_requires_clarification"],
+        }
+        if mail_tool:
+            payload.update(mail_import_session_id=selector, evidence_snippets=[])
+        return payload
+
+    if source is None or lookup is None or not set(families).intersection({"mail", "attachment_table"}):
+        return clarification()
+    fields = [item for item in lookup._columns
+              if ("mail" if item["inline_table"] else "attachment_table") in families
+              and item["structure_status"] == "source_provided"]
+    available = {normalize_source_occurrence_structured_surface(item["field"]): item["field"] for item in fields}
+    if table_query is not None:
+        if (not isinstance(table_query, Mapping) or set(table_query) != {"filters", "projection_fields"}
+                or not isinstance(table_query["filters"], list) or not 1 <= len(table_query["filters"]) <= 4
+                or not isinstance(table_query["projection_fields"], list) or not 1 <= len(table_query["projection_fields"]) <= 8):
+            raise ContractValidationError("source occurrence structured table query shape is invalid")
+        labels = list(table_query["projection_fields"])
+        for item in table_query["filters"]:
+            if (not isinstance(item, Mapping) or set(item) != {"field", "value"}
+                    or not isinstance(item["value"], str) or not item["value"].strip() or len(item["value"]) > 400):
+                raise ContractValidationError("source occurrence structured table query filter is invalid")
+            labels.append(item["field"])
+    else:
+        labels = list(requested)
+    if (not labels or any(not isinstance(label, str) or not label.strip() or len(label) > 120
+                          or normalize_source_occurrence_structured_surface(label) not in available for label in labels)):
+        return clarification()
+    normalized_projections = [normalize_source_occurrence_structured_surface(label)
+                              for label in (table_query["projection_fields"] if table_query else requested)]
+    if len(set(normalized_projections)) != len(normalized_projections):
+        return clarification()
+    if table_query and any(normalize_source_occurrence_structured_surface(field) not in normalized_projections for field in requested):
+        return clarification()
+
+    def collect(group: tuple[Observation, ...]) -> None:
+        native.update((item.observation_id, item) for item in group)
+
+    scan = lookup.scan_source_rows(
+        # The identifier selects the exact predicate, not permission to drop
+        # other validated content constraints from the same native row.
+        required_terms=tuple(dict.fromkeys((*identifier_terms, *required_terms))) if table_query is None else (),
+        query_text=arguments["query_text"], source_families=families,
+        mail_import_session_id=selector, max_observations=SOURCE_EVIDENCE_OBSERVATION_LIMIT,
+        deadline_monotonic=deadline, evidence_by_id=evidence_by_id,
+        observation_callback=lambda item, scope: len(evidence_by_id) < min(limit, 100),
+        table_query=table_query, native_group_callback=collect,
+    )
+    evidence = list(evidence_by_id.values())
+    if source_budget is not None:
+        source_budget["reads"] += scan.scanned_observation_count
+        source_budget["evidence"] += len(evidence)
+        source_budget["context_bytes"] += sum(
+            len(json.dumps(item, ensure_ascii=False).encode("utf-8")) for item in evidence
+        )
+    results = []
+    binding_unresolved = False
+    if native and time.monotonic() < deadline:
+        hashes = tuple(sorted((key, sha256_json(item.to_dict())) for key, item in native.items()))
+        lineages = normalized_authorized_observation_lineages(
+            tuple(native.values()), authorized_source=source,
+            occurrence_lineages=tuple(source_occurrence_lineage_from_observation(item, authorized_source=source)
+                                     for item in native.values()
+                                     if item.observation_type in {"email_message", "email_attachment_occurrence"}),
+        )
+        scope_fingerprint = authorized_source_occurrence_scope_fingerprint(
+            requester_user_id=arguments["requester_user_id"], workspace_id=arguments["workspace_id"],
+            source_scope_ids=source.source_scope_ids, authorized_observation_hashes=hashes,
+            source_session_binding_fingerprint=revision.safe_binding["source_session_binding_fingerprint"],
+        )
+        # This is only the established provider's input shape, never a runtime
+        # semantic session, projection, graph or replacement store.
+        provider_input = SimpleNamespace(
+            authorized_observations=tuple(native.values()), authorized_observation_hashes=hashes,
+            occurrence_lineages=lineages, requester_user_id=arguments["requester_user_id"],
+            workspace_id=arguments["workspace_id"], authorized_source_scope_ids=source.source_scope_ids,
+            index=SimpleNamespace(_runtime_components=SimpleNamespace(tokenizer_profile=lookup._tokenizer_profile)),
+        )
+        if table_query is None:
+            matching_labels = {
+                cell["field"] for item in evidence for cell in item["table_row"]["cells"]
+                if cell["source_proven_field_schema"] and normalize_source_occurrence_structured_surface(cell["value"])
+                == normalize_source_occurrence_structured_surface(identifier_terms[0])
+            }
+            if len(matching_labels) > 1:
+                return clarification()
+            present_fields = {
+                normalize_source_occurrence_structured_surface(cell["field"])
+                for item in evidence for cell in item["table_row"]["cells"]
+                if cell["source_proven_field_schema"]
+            }
+            projections = [field for field in requested
+                           if normalize_source_occurrence_structured_surface(field) in present_fields]
+            if matching_labels and projections:
+                table_query = {"filters": [{"field": next(iter(matching_labels)), "value": identifier_terms[0]}],
+                               "projection_fields": projections}
+                labels.append(table_query["filters"][0]["field"])
+        for item in evidence:
+            for label in labels:
+                members = [cell for cell in item["table_row"]["cells"]
+                           if normalize_source_occurrence_structured_surface(cell["field"]) == normalize_source_occurrence_structured_surface(label)]
+                if len(members) > 1 or any(not cell["source_proven_field_schema"] for cell in members):
+                    return clarification()
+        for inline, family in ((False, "attachment_table"), (True, "mail")):
+            if family not in families or table_query is None:
+                continue
+            if time.monotonic() >= deadline:
+                break
+            provider = _build_attachment_table_row_provider(provider_input, authorized_scope_fingerprint=scope_fingerprint, inline_tables=inline)
+            if provider is None:
+                continue
+            # A query-keyed shortlist and a partial corpus cannot certify a set
+            # or negative. Preserve that boundary inside the executor's contract.
+            provider = replace(provider, source_asset_reason_counts=(("unresolved", 1),))
+            try:
+                partition, _, _ = _partition_structured_source_occurrence_table_query(provider=provider, table_query=table_query)
+            except ContractValidationError as exc:
+                binding_unresolved = binding_unresolved or not (automatic and str(exc).endswith("is unavailable"))
+                continue
+            plan = SemanticQueryPlan(
+                query_hash=sha256_json(arguments["query_text"]), query_class="exact_set_or_inventory",
+                source_kind=source.source_kind, source_scope_ids=source.source_scope_ids,
+                workspace_id=arguments["workspace_id"], requester_user_id=arguments["requester_user_id"],
+                required_permissions=("read",), user_graph_revision_id="unavailable",
+                canonical_graph_revision_id="unavailable", ontology_revision_id="unavailable",
+                assembly_policy_id="source_start", allowed_paths=(), seed_node_ids=(), max_hops=0,
+                max_fanout=0, candidate_limit=0, result_limit=min(limit, 100), evidence_budget=128,
+                time_budget_ms=SOURCE_EVIDENCE_TIME_BUDGET_MS, repair_budget=0, repair_attempt_count=0,
+                claim_strength="cited_evidence", exact_operation="inventory_with_count",
+                exact_inventory_kind=provider.resource_kind, exact_normalized_field=provider.normalized_field,
+                exact_predicate=provider.predicate, exact_operator=provider.operator,
+                exact_source_occurrence_provider_fingerprint=provider.provider_fingerprint,
+                exact_filter_term_hashes=partition.filter_term_hashes,
+                exact_topic_term_hashes=partition.filter_term_hashes,
+                exact_projection_term_hashes=partition.projection_column_hashes,
+                exact_column_value_hash_pairs=partition.column_value_hash_pairs,
+                exact_lexical_term_ledger=partition.lexical_term_ledger,
+                exact_grammar_policy_fingerprint=sha256_json([
+                    _SOURCE_OCCURRENCE_STRUCTURED_TABLE_QUERY_POLICY_ID,
+                    provider.provider_fingerprint, partition.column_value_hash_pairs,
+                    partition.projection_column_hashes,
+                ]),
+            )
+            if time.monotonic() >= deadline:
+                break
+            results.append(execute_deterministic_source_occurrence_inventory(
+                plan=plan, provider=provider, expected_authorized_scope_fingerprint=scope_fingerprint,
+                page_size=min(limit, 100), cursor=None,
+            ))
+    if binding_unresolved or len(results) > 1:
+        return clarification()
+    cited = {value for result in results for item in result.items for value in item.cited_observation_hashes}
+    evidence = [item for item in evidence if item["citation_hash"] in cited]
+    exact_result = results[0] if len(results) == 1 else None
+    supported = source_evidence_supported_requested_fields(
+        requested, exact_result=exact_result,
+        answer_citation_hashes=tuple(sorted(cited)),
+        verified_citation_lineages=tuple(pair for result in results for item in result.items for pair in item.governed_references),
+    )
+    missing = [field for field in requested if field not in supported]
+    status = "partial" if evidence else "pending_review"
+    coverage = {"status": "incomplete", "absence_claim": False, "scope": "declared_completed_ingestion_jobs",
+                "reason": scan.stop_reason or "source_table_shortlist"}
+    field_coverage = {
+        "request_contract_fingerprint": sha256_json(request_contract),
+        "requested_fields": list(requested), "supported_fields": list(supported),
+        "missing_fields": missing, "status": "incomplete" if missing else "verified", "absence_claim": False,
+        "evidence_citation_hashes": sorted(item["citation_hash"] for item in evidence),
+    }
+    field_coverage["coverage_fingerprint"] = sha256_json(field_coverage)
+    payload = {
+        "status": status, "evidence": evidence, "citations": [item["citation_hash"] for item in evidence],
+        "deterministic_exact": bool(results), "exact_result": exact_result.to_safe_dict() if exact_result else None,
+        "canonical_kg": False, "graph_hits": {"count": 0}, "coverage": coverage,
+        "requested_field_coverage": field_coverage,
+        "warnings": ["source_table_shortlist_incomplete", "native_value_semantics_contract_bound"],
+        "query_agent": {"status": "pending_review", "stop_reason": "retrieval_projection_unavailable",
+                        "original_query_hash": request_contract["original_query_hash"], "request_contract": dict(request_contract),
+                        "context_bundle": {"citation_hashes": [item["citation_hash"] for item in evidence],
+                                           "missing_field_hashes": [sha256_json(field) for field in missing]}},
+    }
+    if mail_tool:
+        payload.update(mail_import_session_id=selector, query_hash=sha256_json(arguments["query_text"]),
+                       evidence_snippets=evidence, citations=[_citation_for_snippet(item) for item in evidence])
+    else:
+        payload["answer"] = {"status": status, "text": "Source-backed table values are available; corpus coverage is incomplete." if evidence else "",
+                             "answer_hash": sha256_json(payload), "citation_count": len(evidence)}
+    validate_public_gateway_payload(payload)
+    return payload
 
 
 def _build_source_start_semantic_handler(
@@ -879,6 +1153,9 @@ def _build_source_start_semantic_handler(
     tokenizer = load_issue56_target_mail_tokenizer_profile()
     capabilities = _source_start_capabilities(revision)
     available_families = tuple(capabilities["source_families"])
+    exact_lookup = (
+        _IngestionExactCellLookup(revision) if revision.exact_lookup_manifest else None
+    )
     selector_ids = tuple(getattr(records, "authorized_mail_import_session_ids", ()))
     coverage = revision.safe_binding.get("extraction_coverage", {})
     coverage_complete = (
@@ -944,7 +1221,7 @@ def _build_source_start_semantic_handler(
             request_contract, available_source_families=available_families,
         )
         query_class = request_contract["query_class"]
-        if query_class == "exact_set_or_inventory":
+        if query_class == "exact_set_or_inventory" and arguments.get("table_query") is None:
             payload = {
                 "status": "pending_review",
                 "query_hash": sha256_json(query_text),
@@ -973,16 +1250,81 @@ def _build_source_start_semantic_handler(
             if len(set(required_terms)) != len(required_terms):
                 raise ContractValidationError("source-start required terms are invalid")
         requested_fields = tuple(request_contract["requested_fields"])
+        table_query = arguments.get("table_query")
+        # Typed predicates are explicit. For identifier-plus-field lookup, only
+        # an identifier actually present in the validated query may start exact
+        # binding; output labels and unrelated anchors never become predicates.
+        identifier_terms = tuple(
+            span.exact_token for span in tokenizer.analyze(query_text).protected_identifiers
+        ) or tuple(
+            term for term in required_terms
+            if term in unicodedata.normalize("NFKC", query_text).casefold()
+            and (term.isdecimal() or tokenizer.analyze(term).protected_identifiers)
+        )
+        source_budget = {
+            "deadline": time.monotonic() + SOURCE_EVIDENCE_TIME_BUDGET_MS / 1000,
+            "reads": 0, "evidence": 0, "context_bytes": 0,
+        }
+        if _SOURCE_EVIDENCE_DEADLINE.get() is not None:
+            source_budget["deadline"] = min(source_budget["deadline"], _SOURCE_EVIDENCE_DEADLINE.get())
+        applicable_fields = {
+            normalize_source_occurrence_structured_surface(item["field"])
+            for item in (exact_lookup._columns if exact_lookup is not None else ())
+            if item["structure_status"] == "source_provided"
+            and ("mail" if item["inline_table"] else "attachment_table") in request_contract["source_family_scope"]
+        }
+        auto_exact = (
+            query_class == "evidence_lookup" and bool(requested_fields) and len(identifier_terms) == 1
+            and all(normalize_source_occurrence_structured_surface(field) in applicable_fields for field in requested_fields)
+        )
+        if table_query is not None:
+            return _execute_source_start_table(
+                revision, lookup=exact_lookup, arguments=arguments,
+                request_contract=request_contract, mail_tool=mail_tool,
+                selector=selector, identifier_terms=identifier_terms,
+            )
+        if auto_exact:
+            exact_payload = _execute_source_start_table(
+                revision, lookup=exact_lookup, arguments=arguments, request_contract=request_contract,
+                mail_tool=mail_tool, selector=selector, identifier_terms=identifier_terms,
+                required_terms=required_terms, automatic=True, source_budget=source_budget,
+            )
+            # Partial field support must be disclosed without an automatic
+            # recheck. Only a validated all-fields miss may continue, and only
+            # through the existing same-scope reader and its remaining caps.
+            if (exact_payload["status"] in {"clarification_required", "permission_denied", "error", "failed"}
+                    or exact_payload.get("requested_field_coverage", {}).get("supported_fields")):
+                return exact_payload
         query_terms: set[str] = set()
         protected_terms: set[str] = set()
         active_family: str | None = None
         active_selector: str | None = selector
         message_fingerprints_by_occurrence: dict[tuple[str, str, str, str], str] = {}
         unresolved_parent_binding = False
+        attachment_parents: dict[tuple[str, str], Observation] = {}
+        last_anchor: Observation | None = None
+        context_anchor: Observation | None = None
+        table_evidence: dict[str, dict[str, Any]] = {}
+        admitted_context_bytes = source_budget["context_bytes"]
+        context_limit_reached = False
+        admitted_hashes: set[str] = set()
+
+        def admit(observation: Observation, item: dict[str, Any]):
+            nonlocal admitted_context_bytes, context_limit_reached
+            observation_hash = sha256_json(observation.to_dict())
+            size = len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+            if observation_hash not in admitted_hashes:
+                if admitted_context_bytes + size > 16 * 1024:
+                    context_limit_reached = True
+                    return None
+                admitted_hashes.add(observation_hash)
+                admitted_context_bytes += size
+            return observation_hash, item
 
         def begin(deadline: float) -> None:
             nonlocal query_terms, protected_terms
             check_source_evidence_deadline(deadline)
+
             analysis = tokenizer.analyze(query_text)
             query_terms = set(analysis.tokens)
             protected_terms = {item.exact_token for item in analysis.protected_identifiers}
@@ -1000,29 +1342,92 @@ def _build_source_start_semantic_handler(
             check_source_evidence_deadline(deadline)
 
         def project(observation: Observation, scope_id: str, deadline: float):
-            nonlocal unresolved_parent_binding
+            nonlocal unresolved_parent_binding, last_anchor
             check_source_evidence_deadline(deadline)
-            focus_terms = (*requested_fields, *required_terms, *sorted(query_terms))
+            if observation.observation_id in table_evidence:
+                return admit(observation, table_evidence[observation.observation_id])
+            last_anchor = None
 
-            def focused_text(value: str) -> str:
-                safe = redact_public_raw_references(value)[0]
-                if len(safe) <= 400:
-                    return safe
-                start = 0
-                for term in focus_terms:
-                    match = re.search(
-                        re.escape(term.replace("_", " ")),
-                        safe,
-                        re.IGNORECASE,
-                    )
-                    if match is not None:
-                        start = max(0, min(match.start() - 80, len(safe) - 400))
-                        break
-                return safe[start:start + 400]
+            def public_text(value: str) -> str:
+                # A native PDF page can be one paragraph. Literal field/anchor
+                # windows may detach its value from the identifier. Retain the
+                # whole redacted text; admit() charges the serialized item to
+                # the shared UTF-8 budget and stops with context_limit if it
+                # cannot fit, without silently presenting a clipped paragraph.
+                return redact_public_raw_references(value)[0]
 
             if active_family == "mail":
                 payload = to_plain(observation.payload or {})
                 location = to_plain(observation.location)
+                if observation.observation_type == "email_attachment_occurrence" or _is_attachment_text_observation(observation):
+                    if (
+                        (active_selector is not None and scope_id != active_selector)
+                        or (active_selector is None and scope_id not in source.source_scope_ids)
+                        or not authorized_permission_scope_matches(
+                            observation.permission_scope, authorized_source=source,
+                            source_kind=AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
+                        )
+                    ):
+                        return None
+                    if observation.observation_type == "email_attachment_occurrence":
+                        child_id = payload.get("child_asset_id")
+                        if isinstance(child_id, str) and child_id:
+                            attachment_parents[(scope_id, child_id)] = observation
+                        return None  # Parent binding is not a child text match.
+                    # The reader emits the hash-checked parent first, counting
+                    # hydration against this same scan's read/time limits.
+                    parent = attachment_parents.get((scope_id, observation.asset_id))
+                    if parent is None:
+                        unresolved_parent_binding = True
+                        return None
+                    lineage = _attachment_child_lineages({
+                        parent.observation_id: parent, observation.observation_id: observation,
+                    })[observation.observation_id]
+                    text = observation.text or observation.caption or ""
+                    normalized = unicodedata.normalize("NFKC", text).casefold()
+                    if required_terms:
+                        if not all(term in normalized for term in required_terms):
+                            return None
+                    elif not query_terms.issubset(set(tokenizer.analyze(text).tokens)):
+                        return None
+                    if protected_terms and not protected_terms.issubset(set(tokenizer.analyze(text).tokens)):
+                        return None
+                    parent_payload = parent.payload or {}
+                    message_fingerprint = parent_payload.get("message_fingerprint")
+                    if not isinstance(message_fingerprint, str) or not message_fingerprint:
+                        unresolved_parent_binding = True
+                        return None
+                    snippet_payload = {
+                        "source_type": "mail_attachment_text",
+                        "source_observation_id": observation.observation_id,
+                        "email_message_id": stable_resource_contract_id(
+                            "emailmsg", "EmailMessage", {"message_fingerprint": message_fingerprint},
+                        ),
+                        "message_occurrence_id": lineage.message_occurrence_id,
+                        "snippet": public_text(text),
+                        "source_observation_hash": sha256_json(observation.to_dict()),
+                        "citation_hash": sha256_json(observation.to_dict()),
+                        "occurrence_lineage_fingerprint": lineage.lineage_fingerprint,
+                        "source_scope_fingerprint": sha256_json(scope_id),
+                        "attachment_locator": {
+                            "block_type": observation.observation_type,
+                            "child_asset_id": lineage.child_asset_id,
+                            "parent_attachment_observation_id": lineage.parent_attachment_observation_id,
+                            **{
+                                key: value for key, value in location.items()
+                                if key in {"page", "paragraph_index", "block_index", "slide", "shape_index", "list_item_index"}
+                                and type(value) is int and value >= 1
+                            },
+                        },
+                        "revision_binding": {
+                            "source_authority_fingerprint": revision.safe_binding["source_authority_fingerprint"],
+                            "source_session_binding_fingerprint": revision.safe_binding["source_session_binding_fingerprint"],
+                        },
+                    }
+                    if active_selector is not None:
+                        snippet_payload["mail_import_session_id"] = active_selector
+                    check_source_evidence_deadline(deadline)
+                    return admit(observation, _safe_snippet(snippet_payload))
                 occurrence_id = location.get("message_occurrence_id")
                 message_fingerprint = payload.get("message_fingerprint")
                 if (
@@ -1050,7 +1455,7 @@ def _build_source_start_semantic_handler(
                     )] = (
                         message_fingerprint
                     )
-                if (
+                if context_anchor is None and (
                     _source_mail_observation_match(
                         observation,
                         query_terms=query_terms,
@@ -1081,7 +1486,7 @@ def _build_source_start_semantic_handler(
                     ),
                     "message_occurrence_id": occurrence_id,
                     "subject": payload.get("subject"),
-                    "snippet": focused_text(observation.text or ""),
+                    "snippet": public_text(observation.text or ""),
                     "source_observation_hash": sha256_json(observation.to_dict()),
                     "citation_hash": sha256_json(observation.to_dict()),
                     "occurrence_lineage_fingerprint": lineage.lineage_fingerprint,
@@ -1114,21 +1519,23 @@ def _build_source_start_semantic_handler(
                 if not text:
                     return None
                 normalized = unicodedata.normalize("NFKC", text).casefold()
-                if required_terms:
+                if context_anchor is not None:
+                    pass  # Reader already revalidated this neighbor against the matched anchor.
+                elif required_terms:
                     if not all(term in normalized for term in required_terms):
                         return None
                 else:
                     source_tokens = set(tokenizer.analyze(text).tokens)
                     if not query_terms.intersection(source_tokens):
                         return None
-                source_tokens = set(tokenizer.analyze(text).tokens)
-                if protected_terms and not protected_terms.issubset(source_tokens):
+                source_tokens = set() if context_anchor is not None else set(tokenizer.analyze(text).tokens)
+                if context_anchor is None and protected_terms and not protected_terms.issubset(source_tokens):
                     return None
                 lineage = source_occurrence_lineage_from_observation(
                     observation, authorized_source=source,
                 )
                 snippet = {
-                    "snippet": focused_text(text),
+                    "snippet": public_text(text),
                     "citation_hash": sha256_json(observation.to_dict()),
                     "occurrence_lineage_fingerprint": lineage.lineage_fingerprint,
                     "source_scope_fingerprint": sha256_json(scope_id),
@@ -1148,19 +1555,52 @@ def _build_source_start_semantic_handler(
                         ],
                     },
                 }
-                return sha256_json(observation.to_dict()), snippet
             else:
                 raise ContractValidationError("source-start family is invalid")
-            return sha256_json(observation.to_dict()), snippet
+            if context_anchor is not None:
+                anchor_hash = sha256_json(context_anchor.to_dict())
+                snippet["source_context"] = {
+                    "relationship": "same_source_neighbor",
+                    "anchor_citation_hash": anchor_hash,
+                    "anchor_source_observation_id": context_anchor.observation_id,
+                    "identifier_hit": False,
+                    "exact_field_proof": False,
+                }
+                # Existing compact evidence paths retain snippet text. Keep the
+                # relationship visible there too, without attributing a field
+                # value to the identifier's own source occurrence.
+                snippet["snippet"] = (
+                    f"[same-source context; anchor observation {context_anchor.observation_id}; "
+                    f"anchor citation {anchor_hash}; "
+                    "not an identifier hit or exact field proof] " + snippet["snippet"]
+                )
+            else:
+                last_anchor = observation
+            return admit(observation, snippet)
 
         def read_source(**kwargs: Any) -> RevisionOwnedMailSourceScan:
-            nonlocal active_family, active_selector
-            remaining = kwargs["max_observations"]
+            nonlocal active_family, active_selector, context_anchor
+            def consume(observation: Observation, scope: str) -> bool:
+                return kwargs["observation_callback"](observation, scope) and not context_limit_reached
+
+            def consume_context(anchor: Observation, neighbor: Observation, scope: str) -> bool:
+                nonlocal context_anchor
+                context_anchor = anchor
+                try:
+                    return consume(neighbor, scope)
+                finally:
+                    context_anchor = None
+
+            remaining = max(0, kwargs["max_observations"] - source_budget["reads"])
             scanned = 0
             families = [
                 family for family in request_contract["source_family_scope"]
-                if family in available_families and family != "attachment_table"
+                if family in available_families
             ]
+            if "mail" in families and exact_lookup is not None and revision.exact_lookup_manifest.get(
+                "counts", {}
+            ).get("inline_authorized_row", 0):
+                families.append("mail_inline_table")
             incomplete_reason: str | None = None
             for family_index, family in enumerate(families):
                 active_family = family
@@ -1175,6 +1615,29 @@ def _build_source_start_semantic_handler(
                 if family_limit <= 0:
                     incomplete_reason = "observation_limit"
                     break
+                now = time.monotonic()
+                family_deadline = (
+                    now + max(0, kwargs["deadline_monotonic"] - now) / family_left
+                    if any(item in {"attachment_table", "mail_inline_table"} for item in families)
+                    else kwargs["deadline_monotonic"]
+                )
+                if family in {"attachment_table", "mail_inline_table"}:
+                    scan = exact_lookup.scan_source_rows(
+                        required_terms=required_terms,
+                        query_text=query_text,
+                        source_families=("mail" if family == "mail_inline_table" else "attachment_table",),
+                        mail_import_session_id=selector if mail_tool else None,
+                        max_observations=family_limit,
+                        deadline_monotonic=family_deadline,
+                        observation_callback=consume,
+                        evidence_by_id=table_evidence,
+                    )
+                    scanned += scan.scanned_observation_count
+                    if not scan.complete:
+                        incomplete_reason = "context_limit" if context_limit_reached else scan.stop_reason
+                        if incomplete_reason in {"callback", "context_limit"} or time.monotonic() >= kwargs["deadline_monotonic"]:
+                            return RevisionOwnedMailSourceScan((), scanned, False, incomplete_reason)
+                    continue
                 for selector_index, family_selector in enumerate(selectors):
                     active_selector = family_selector
                     selectors_left = len(selectors) - selector_index
@@ -1191,15 +1654,17 @@ def _build_source_start_semantic_handler(
                         ),
                         mail_import_session_id=family_selector,
                         max_observations=left,
-                        deadline_monotonic=kwargs["deadline_monotonic"],
-                        observation_callback=kwargs["observation_callback"],
+                        deadline_monotonic=family_deadline,
+                        observation_callback=consume,
+                        context_anchor_callback=lambda item, scope: item is last_anchor,
+                        context_callback=consume_context,
                     )
                     if not isinstance(scan, RevisionOwnedMailSourceScan):
                         raise ContractValidationError("source-start scan result is invalid")
                     scanned += scan.scanned_observation_count
                     if not scan.complete:
-                        incomplete_reason = scan.stop_reason or "deadline"
-                        if incomplete_reason in {"deadline", "callback"}:
+                        incomplete_reason = "context_limit" if context_limit_reached else scan.stop_reason or "deadline"
+                        if incomplete_reason in {"callback", "context_limit"} or time.monotonic() >= kwargs["deadline_monotonic"]:
                             return RevisionOwnedMailSourceScan(
                                 (), scanned, False, incomplete_reason,
                             )
@@ -1220,13 +1685,14 @@ def _build_source_start_semantic_handler(
             result_query_class=query_class,
             initial_warnings=("retrieval_projection_unavailable",),
             verified_evidence_count=0,
-            evidence_limit=limit,
+            evidence_limit=max(0, limit - source_budget["evidence"]),
             sealed_coverage_complete=coverage_complete,
             read_source=read_source,
             project_observation=project,
             begin=begin,
             requested_fields=requested_fields,
             supported_requested_fields=(),
+            deadline_monotonic=source_budget["deadline"],
         )
         evidence = list(double_check.evidence)
         supported = source_evidence_supported_requested_fields(
@@ -1305,6 +1771,13 @@ def _build_source_start_semantic_handler(
                 "source_recovery": recovery,
             },
         }
+        if auto_exact:
+            query_agent["exact_first"] = {
+                "status": exact_payload["status"],
+                "all_requested_fields_missing": True,
+                "scanned_observation_count": source_budget["reads"],
+                "source_recovery_attempted": double_check.scan is not None,
+            }
         query_agent["context_bundle"]["bundle_fingerprint"] = sha256_json(
             query_agent["context_bundle"]
         )
@@ -3279,6 +3752,7 @@ class _IngestionExactCellLookup:
     """Resolve only query-matched table rows from a sealed compact index."""
 
     def __init__(self, revision: Issue56IngestionRevision) -> None:
+        profile = load_issue56_target_mail_tokenizer_profile()
         manifest = dict(revision.exact_lookup_manifest)
         if not manifest:
             raise ContractValidationError(
@@ -3295,9 +3769,9 @@ class _IngestionExactCellLookup:
             or manifest.get("schema_version") != 1
             or fingerprint != sha256_json(manifest)
             or manifest.get("source_authority_fingerprint")
-            != revision.session.source_authority_fingerprint
+            != revision.safe_binding.get("source_authority_fingerprint", getattr(revision.session, "source_authority_fingerprint", None))
             or manifest.get("tokenizer_profile_fingerprint")
-            != revision.session.index.profile_fingerprint
+            != profile.profile_fingerprint
             or manifest.get("job_count") != len(revision.job_authorities)
             or not isinstance(columns, list)
             or not isinstance(shards, list)
@@ -3366,6 +3840,7 @@ class _IngestionExactCellLookup:
                     item["column_hash"]
                 )
         self._revision = revision
+        self._tokenizer_profile = profile
         self._directory = revision.exact_lookup_directory
         self._manifest = MappingProxyType(
             {**manifest, "manifest_fingerprint": fingerprint}
@@ -3437,6 +3912,262 @@ class _IngestionExactCellLookup:
             }
             for item in self._columns
         )
+
+    def scan_source_rows(
+        self, *, required_terms: Sequence[str], query_text: str,
+        source_families: Sequence[str], mail_import_session_id: str | None,
+        max_observations: int, deadline_monotonic: float,
+        observation_callback: Callable[[Observation, str], bool],
+        evidence_by_id: dict[str, dict[str, Any]],
+        table_query: Mapping[str, Any] | None = None,
+        native_group_callback: Callable[[tuple[Observation, ...]], None] | None = None,
+    ) -> RevisionOwnedMailSourceScan:
+        """Use existing token/row shards; hydrate and admit only same-row evidence.
+
+        Index records locate candidates, never prove values or field schema.
+        Shard sealing, hydration, parent binding and projection share the caller's
+        clock. No full-column value hash search or query-time rebuild is used.
+        """
+        revision = self._revision
+        source = revision.authorized_source
+        if source is None:
+            raise ContractValidationError("source table authority is unavailable")
+        scanned = 0
+        context_bytes = 0
+
+        class Stopped(Exception):
+            pass
+
+        def check() -> None:
+            if time.monotonic() >= deadline_monotonic:
+                raise Stopped("deadline")
+
+        def load(job_index: int, observation_id: str, observation_hash: str) -> Observation:
+            nonlocal scanned
+            check()
+            if scanned >= max_observations:
+                raise Stopped("observation_limit")
+            if (type(job_index) is not int or not 0 <= job_index < len(revision.job_authorities)
+                    or not isinstance(observation_id, str) or not _is_sha256(observation_hash)):
+                raise ContractValidationError("source table reference is invalid")
+            scanned += 1
+            authority = revision.job_authorities[job_index]
+            item = authority.load_indexed_observation(
+                observation_id, expected_observation_hash=observation_hash,
+                expected_job_fingerprint=authority.job_fingerprint,
+            )
+            check()
+            if not authorized_permission_scope_matches(
+                item.permission_scope, authorized_source=source,
+                source_kind=AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
+            ):
+                raise ContractValidationError("source table permission is denied")
+            return item
+
+        try:
+            check()
+            terms = () if table_query is not None else tuple(required_terms) or tuple(
+                span.exact_token for span in self._tokenizer_profile.analyze(query_text).protected_identifiers
+            )
+            if not terms and table_query is None:
+                return RevisionOwnedMailSourceScan((), 0, False, "source_table_anchor_unresolved")
+            hashes = set()
+            for term in terms:
+                check()
+                hashes.update(sha256_json(token) for token in self._tokenizer_profile.analyze(term).tokens)
+            if table_query is not None:
+                # Resolve literal source-cell predicates through the existing
+                # sealed value shards, independently of tokenizer protection.
+                for predicate in table_query["filters"]:
+                    column_hashes = self._normalized_columns.get(
+                        normalize_source_occurrence_structured_surface(predicate["field"]), (),
+                    )
+                    hashes.update(source_occurrence_exact_cell_value_hash(column, predicate["value"])
+                                  for column in column_hashes)
+            if not hashes:
+                return RevisionOwnedMailSourceScan((), 0, False, "source_table_anchor_unresolved")
+            row_keys: dict[str, bool] = {}
+            for shard in sorted({key[7:9] for key in hashes}):
+                records = self._read_matching_shard_records(
+                    "value", shard, matching_keys=hashes, check=check,
+                    maximum_matching_records=max_observations,
+                )
+                if records is None:
+                    raise Stopped("observation_limit")
+                for _, row_key, inline in records:
+                    family = "mail" if inline else "attachment_table"
+                    if family in source_families:
+                        if row_key in row_keys and row_keys[row_key] != inline:
+                            raise ContractValidationError("source table family is ambiguous")
+                        row_keys[row_key] = inline
+                        if len(row_keys) > max_observations:
+                            raise Stopped("observation_limit")
+            def matched_rows():
+                # Seal one shard, emit its verified rows, then proceed. A later
+                # deadline cannot discard already admitted same-row evidence.
+                for shard in sorted({key[7:9] for key in row_keys}):
+                    local_keys = {key for key in row_keys if key[7:9] == shard}
+                    records = self._read_matching_shard_records(
+                        "row", shard, matching_keys=local_keys, check=check,
+                        maximum_matching_records=max_observations,
+                    )
+                    if records is None:
+                        raise Stopped("observation_limit")
+                    by_row: dict[str, list[Any]] = {key: [] for key in local_keys}
+                    for record in records:
+                        by_row[record[1]].append(record)
+                    for key in sorted(local_keys):
+                        yield key, row_keys[key], by_row[key]
+
+            for row_key, inline, selected_records in matched_rows():
+                check()
+                subset = []
+                job_indexes = set()
+                for record in selected_records:
+                    if record[-1] != inline:
+                        raise ContractValidationError("source table family binding mismatch")
+                    item = load(record[2], record[3], record[4])
+                    if (sha256_json(_table_row_key(item)) != row_key
+                            or item.observation_type != ("table_row" if record[0] == "row" else "table_cell")):
+                        raise ContractValidationError("source table row binding mismatch")
+                    subset.append(item)
+                    job_indexes.add(record[2])
+                rows = [item for item in subset if item.observation_type == "table_row"]
+                cells = sorted((item for item in subset if item.observation_type == "table_cell"),
+                               key=lambda item: item.location.get("cell_index", 0))
+                if len(rows) != 1 or not cells or len(job_indexes) != 1:
+                    raise ContractValidationError("source table row reference is incomplete")
+                row = rows[0]
+                if table_query is not None:
+                    matches = all(any(
+                        normalize_source_occurrence_structured_surface((cell.payload or {}).get("table_structure", {}).get("column_name") or "")
+                        == normalize_source_occurrence_structured_surface(predicate["field"])
+                        and normalize_source_occurrence_structured_surface(cell.text or "")
+                        == normalize_source_occurrence_structured_surface(predicate["value"])
+                        for cell in cells) for predicate in table_query["filters"])
+                else:
+                    matches = all(any(term in unicodedata.normalize("NFKC", cell.text or "").casefold()
+                                      for cell in cells) for term in terms)
+                if not matches:
+                    continue
+                job_index = next(iter(job_indexes))
+                nested = (row.payload or {}).get("lineage", {})
+                parent_id = nested.get("parent_message_observation_id" if inline else "parent_attachment_observation_id")
+                parent = None
+                reader = revision.source_records
+                runtime_store = reader.runtime_store
+                helper = None
+                if parent_id is not None and callable(getattr(runtime_store, "get_helper", None)):
+                    helper = runtime_store.get_helper(parent_id)
+                elif not inline and callable(getattr(runtime_store, "helper_for_attachment_asset", None)):
+                    helper = runtime_store.helper_for_attachment_asset(row.asset_id)
+                check()
+                if helper is not None:
+                    reader._authority_for_helper(helper)
+                    if helper["reference"]["job_index"] != job_index:
+                        raise ContractValidationError("source table parent job mismatch")
+                    parent = load(job_index, helper["observation_id"], helper["observation_hash"])
+                if parent is None:
+                    raise Stopped("source_parent_binding_unresolved")
+                if ((inline and parent.observation_type != "email_message") or (
+                        not inline and (parent.observation_type != "email_attachment_occurrence"
+                                        or (parent.payload or {}).get("child_asset_id") != row.asset_id))):
+                    raise ContractValidationError("source table parent binding mismatch")
+                selector = _authorized_mail_selector_for_asset(revision.job_authorities[job_index].asset)
+                if mail_import_session_id is not None and selector != mail_import_session_id:
+                    continue
+                parent_lineage = source_occurrence_lineage_from_observation(parent, authorized_source=source)
+                if inline and not isinstance((parent.payload or {}).get("message_fingerprint"), str):
+                    raise Stopped("source_parent_binding_unresolved")
+                lineages = normalized_authorized_observation_lineages(
+                    (parent, *subset), authorized_source=source, occurrence_lineages=(parent_lineage,),
+                )
+                lineage_by_id = {item.source_observation_id: item for item in lineages}
+                row_hash = sha256_json(row.to_dict())
+                # Stage one genuine source row, including every verified member.
+                # A callback/evidence/byte/deadline boundary must never detach a
+                # value from its later anchor or from its native row citation.
+                members = []
+                content_redacted = False
+                for cell in cells:
+                    check()
+                    if cell.permission_scope != row.permission_scope or cell.extractor_run_id != row.extractor_run_id:
+                        raise ContractValidationError("source table cell scope mismatch")
+                    structure = (cell.payload or {}).get("table_structure", {})
+                    structure_status = structure.get("structure_status", "unavailable")
+                    field = structure.get("column_name") or f"column_{cell.location.get('cell_index')}"
+                    value, redacted = redact_public_raw_references(cell.text or "")
+                    safe_field, field_redacted = redact_public_raw_references(field)
+                    members.append({
+                        "citation_hash": sha256_json(cell.to_dict()),
+                        "occurrence_lineage_fingerprint": lineage_by_id[cell.observation_id].lineage_fingerprint,
+                        "source_observation_id": cell.observation_id,
+                        "coordinates": {key: cell.location[key] for key in (
+                            "sheet_name", "table_index", "row_index", "cell_index", "cell_ref",
+                        ) if key in cell.location},
+                        "field": safe_field[:120], "value": value[:400],
+                        "field_truncated": len(safe_field) > 120,
+                        "value_truncated": len(value) > 400,
+                        "structure_status": structure_status,
+                        "source_proven_field_schema": (
+                            structure_status == "source_provided"
+                            and (row.payload or {}).get("table_structure", {}).get("structure_status") == "source_provided"
+                            and not redacted and not field_redacted and len(field) <= 120 and len(value) <= 400
+                        ),
+                    })
+                    content_redacted |= bool(redacted or field_redacted)
+                item = {
+                    "snippet": "Verified same-row cells; field schema status is given per member.",
+                    "citation_hash": row_hash,
+                    "occurrence_lineage_fingerprint": lineage_by_id[row.observation_id].lineage_fingerprint,
+                    "source_scope_fingerprint": sha256_json(row.permission_scope["scope_id"]),
+                    "content_redacted": content_redacted,
+                    "table_row": {
+                        "source_observation_id": row.observation_id,
+                        "coordinates": {key: row.location[key] for key in (
+                            "sheet_name", "table_index", "row_index",
+                        ) if key in row.location},
+                        "cells": members,
+                    },
+                    "revision_binding": {
+                        "source_authority_fingerprint": revision.safe_binding["source_authority_fingerprint"],
+                        "source_session_binding_fingerprint": revision.safe_binding["source_session_binding_fingerprint"],
+                    },
+                }
+                if selector is not None:
+                    item["mail_import_session_id"] = selector
+                if inline:
+                    item.update({
+                        "source_type": "mail_inline_table_row",
+                        "source_observation_id": row.observation_id,
+                        "source_observation_hash": row_hash,
+                        "email_message_id": stable_resource_contract_id(
+                            "emailmsg", "EmailMessage", {"message_fingerprint": parent.payload["message_fingerprint"]},
+                        ),
+                        "message_occurrence_id": parent_lineage.message_occurrence_id,
+                    })
+                    # The existing mail presentation keeps snippet/citation
+                    # fields, not table metadata. Carry the same whole group in
+                    # its snippet so compaction cannot discard the row's cells.
+                    item["snippet"] = json.dumps({
+                        "citation_hash": row_hash,
+                        "occurrence_lineage_fingerprint": item["occurrence_lineage_fingerprint"],
+                        "table_row": item["table_row"],
+                    }, ensure_ascii=False, separators=(",", ":"))
+                size = len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+                check()
+                if context_bytes + size > 16 * 1024:
+                    raise Stopped("context_limit")
+                context_bytes += size
+                evidence_by_id[row.observation_id] = item
+                if native_group_callback is not None:
+                    native_group_callback((parent, *subset))
+                if not observation_callback(row, row.permission_scope["scope_id"]):
+                    raise Stopped("callback")
+            # Token shortlists and native XML values never certify completeness.
+            return RevisionOwnedMailSourceScan((), scanned, False, "source_table_shortlist")
+        except Stopped as exc:
+            return RevisionOwnedMailSourceScan((), scanned, False, str(exc))
 
     @property
     def capability_providers(self) -> tuple[Mapping[str, Any], ...]:
@@ -3817,8 +4548,17 @@ class _IngestionExactCellLookup:
         shard: str,
         *,
         matching_keys: set[str],
-    ) -> tuple[Any, ...]:
-        """Stream a sealed shard and retain only records matching its key field."""
+        check: Callable[[], None] | None = None,
+        maximum_matching_records: int | None = None,
+    ) -> tuple[Any, ...] | None:
+        """Seal every byte, decoding only the bounded keyed shortlist.
+
+        The preparation pins the offline writer's JSONL bytes. A canonical key
+        prefix is only a cheap prefilter, never evidence: selected records still
+        require JSON/schema validation, and nothing is returned before the
+        complete byte/count seal passes. Noncanonical prefixes take the parser
+        path rather than silently dropping a possible escaped JSON key.
+        """
         if not matching_keys:
             return ()
         binding = self._shards.get((kind, shard))
@@ -3831,12 +4571,39 @@ class _IngestionExactCellLookup:
         size = 0
         record_count = 0
         records: list[Any] = []
+        matching_bytes = {key.encode("ascii") for key in matching_keys}
+        prefix = re.compile(
+            rb'^\s*\[\s*' + (rb'"(?:row|cell)"\s*,\s*' if kind == "row" else b"")
+            + rb'"(sha256:[0-9a-f]{64})"'
+        )
+        overflow = False
+        checked_size = 0
+        if check is not None:
+            check()
         try:
+            if path.is_symlink():
+                raise ContractValidationError("ingestion exact cell lookup shard is unavailable")
             with path.open("rb") as stream:
-                for line in stream:
+                # Native index records hold IDs/hashes, not source content.
+                # Bound a corrupt unterminated line as well as retained records.
+                for line in iter(lambda: stream.readline(16 * 1024 + 1), b""):
+                    if len(line) > 16 * 1024:
+                        raise ContractValidationError("ingestion exact cell lookup record is oversized")
+                    if check is not None and (record_count % 128 == 0 or size - checked_size >= 64 * 1024):
+                        check()
+                        checked_size = size
                     digest.update(line)
                     size += len(line)
                     record_count += 1
+                    if size > binding["size_bytes"]:
+                        raise ContractValidationError("ingestion exact cell lookup shard seal mismatch")
+                    if record_count > binding["record_count"]:
+                        raise ContractValidationError("ingestion exact cell lookup shard count mismatch")
+                    candidate = prefix.match(line)
+                    if candidate is not None and candidate[1] not in matching_bytes:
+                        continue
+                    if check is not None:
+                        check()
                     try:
                         record = json.loads(line)
                     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -3868,7 +4635,10 @@ class _IngestionExactCellLookup:
                             )
                         record_key = record[1]
                     if record_key in matching_keys:
-                        records.append(record)
+                        if maximum_matching_records is not None and len(records) >= maximum_matching_records:
+                            overflow = True
+                        else:
+                            records.append(record)
         except OSError as exc:
             raise ContractValidationError(
                 "ingestion exact cell lookup shard is unavailable"
@@ -3884,7 +4654,9 @@ class _IngestionExactCellLookup:
             raise ContractValidationError(
                 "ingestion exact cell lookup shard count mismatch"
             )
-        return tuple(records)
+        if check is not None:
+            check()
+        return None if overflow else tuple(records)
 
     def _read_shard_records(
         self,
@@ -4590,7 +5362,10 @@ def _build_attachment_table_row_provider(
                 structure_status == "source_provided"
                 and cell_structure.get("structure_status") == "source_provided"
                 and cell.text == ""
-                and (cell.payload or {}).get("cell_state") == "absent"
+                and (
+                    (cell.payload or {}).get("cell_state") == "absent"
+                    or (cell.payload or {}).get("native", {}).get("explicit_blank") is True
+                )
                 and isinstance(cell.location.get("row_index"), int)
                 and not isinstance(cell.location.get("row_index"), bool)
             ):

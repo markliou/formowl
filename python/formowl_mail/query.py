@@ -412,6 +412,9 @@ SourceOccurrenceLineage: TypeAlias = (
 _ATTACHMENT_CHILD_OBSERVATION_TYPES = {
     "table_row",
     "table_cell",
+    "paragraph",
+    "heading",
+    "list_item",
 }
 
 
@@ -522,6 +525,22 @@ def _attachment_child_lineages(
             or to_plain(observation.permission_scope) != to_plain(parent.permission_scope)
         ):
             raise ContractValidationError("attachment parent-child lineage binding mismatch")
+        if observation.observation_type in {"paragraph", "heading", "list_item"}:
+            if (
+                parent.modality != "mail"
+                or nested_lineage.get("parent_asset_id") != parent.asset_id
+                or nested_lineage.get("child_content_hash") != (parent.payload or {}).get("content_hash")
+                or not isinstance(nested_lineage.get("child_content_hash"), str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", nested_lineage["child_content_hash"]) is None
+            ):
+                raise ContractValidationError("attachment text source hash/parent binding mismatch")
+            attachment_ref = nested_lineage.get("attachment_source_ref")
+            if (
+                not isinstance(attachment_ref, Mapping)
+                or attachment_ref.get("source_id") != (parent.payload or {}).get("source_inventory_item_id")
+                or not attachment_ref.get("source_id")
+            ):
+                raise ContractValidationError("attachment text source occurrence binding mismatch")
         safe_public_string(parent_id, "parent_attachment_observation_id")
         safe_public_string(message_occurrence_id, "message_occurrence_id")
         child_lineage_by_id[observation_id] = MailAttachmentChildOccurrenceLineage(
@@ -549,7 +568,7 @@ def _inline_table_lineages(
         table_ordinal = lineage.get("table_ordinal")
         if (
             observation.modality != "document"
-            or observation.observation_type not in _ATTACHMENT_CHILD_OBSERVATION_TYPES
+            or observation.observation_type not in {"table_row", "table_cell"}
             or parent is None
             or parent.observation_type != "email_message"
             or parent.modality != "mail"
@@ -1986,6 +2005,20 @@ def _snippet_from_validated_observation(
     }
     if lineage.parent_occurrence_id is not None:
         payload["parent_source_occurrence_hash"] = sha256_json(lineage.parent_occurrence_id)
+    if (
+        isinstance(lineage, MailAttachmentChildOccurrenceLineage)
+        and observation.observation_type in {"paragraph", "heading", "list_item"}
+    ):
+        payload["attachment_locator"] = {
+            "block_type": observation.observation_type,
+            "child_asset_id": lineage.child_asset_id,
+            "parent_attachment_observation_id": lineage.parent_attachment_observation_id,
+            **{
+                key: value for key, value in observation.location.items()
+                if key in {"page", "paragraph_index", "block_index", "slide", "shape_index", "list_item_index"}
+                and type(value) is int and value >= 1
+            },
+        }
     return _IndexedObservationSnippet(
         source_access_fingerprint=authorized_source.authorization_fingerprint,
         searchable_tokens=tokens,

@@ -156,6 +156,73 @@ def _exhausted_graph_recovery(request, *, family="mail", complete=False):
 
 
 class MailToolDescriptionContractTests(unittest.TestCase):
+    def test_semantic_output_needs_are_not_limited_to_exact_source_fields(self) -> None:
+        binder = _UatTurnRequestContractBinder(
+            user_text="Find the inspection interval for prism compass in authorized documents.",
+            authorized_capability_summary={"source_families": ["mail", "document_text"]},
+        )
+        guidance_surfaces = [binder.trusted_context()["binding_policy"]]
+        for descriptor in (_actual_mail_tool_descriptor(), _actual_query_tool_descriptor()):
+            guidance_surfaces.append(descriptor["description"])
+            guidance_surfaces.append(
+                descriptor["inputSchema"]["properties"]["required_terms"]["description"]
+            )
+            for app_server in (False, True):
+                base, developer = orchestrator._formowl_instruction_bundle(
+                    descriptor, app_server=app_server,
+                )
+                guidance_surfaces.append(base + " " + developer)
+        for guidance in guidance_surfaces:
+            normalized = " ".join(guidance.split())
+            self.assertIn("requested_fields describe the user's information needs", normalized)
+            self.assertIn("even when no source field labels are available", normalized)
+            self.assertIn("Do not leave requested_fields empty merely because", normalized)
+            self.assertIn("table_query field and projection labels must be source-provided", normalized)
+            self.assertIn("never establishes verified field support", normalized)
+            self.assertNotIn("requested_fields only from authorized capabilities", normalized)
+            self.assertNotIn("requested_fields using authorized field labels", normalized)
+
+    def test_arbitrary_semantic_fields_bind_without_table_schema_across_routes(self) -> None:
+        for descriptor, family, source in (
+            (_actual_mail_tool_descriptor(), "mail", "mail attachments"),
+            (_actual_query_tool_descriptor(), "mail", "mail attachments"),
+            (_actual_query_tool_descriptor(), "document_text", "independent document"),
+        ):
+            with self.subTest(tool=descriptor["name"], family=family):
+                fields = ["inspection interval", "複核條件"]
+                prompt = f"Find {' and '.join(fields)} for prism compass in {source}."
+                capabilities = {
+                    "source_families": [family],
+                    "mail_selector_kind": "mail_import_session_id",
+                    "authorized_mail_import_session_ids": ["synthetic-session"],
+                }
+                binder = _UatTurnRequestContractBinder(
+                    user_text=prompt, authorized_capability_summary=capabilities,
+                )
+                arguments = {
+                    "query_text": f"Retrieve the requested attributes for prism compass from {source}.",
+                    "required_terms": ["prism compass"],
+                    "request_contract": {
+                        "original_query_hash": "sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
+                        "query_class": "evidence_lookup", "source_family_scope": [family],
+                        "requested_fields": fields, "maximum_claim_strength": "cited_evidence",
+                    },
+                }
+                request = _parse_tool_request(
+                    arguments, tool_descriptor=descriptor, request_contract_binder=binder,
+                )
+                self.assertEqual(request.request_contract, arguments["request_contract"])
+                self.assertEqual(request.required_terms, ("prism compass",))
+                self.assertIsNone(request.table_query)
+                self.assertIsNone(request.exact_field)
+                retry = _parse_tool_request(
+                    {**arguments, "request_contract": {
+                        **arguments["request_contract"], "requested_fields": [],
+                    }},
+                    tool_descriptor=descriptor, request_contract_binder=binder,
+                )
+                self.assertEqual(retry.request_contract["requested_fields"], fields)
+
     def test_graph_descriptor_teaches_document_and_table_intents_without_widening(self) -> None:
         descriptor = _actual_query_tool_descriptor()
         description = descriptor["description"]
@@ -169,7 +236,8 @@ class MailToolDescriptionContractTests(unittest.TestCase):
             "occurrence lineage",
             "structured/source-table lookup",
             "table_query with exact source-provided field labels",
-            "at most one bounded same-scope source recheck inside this tool call",
+            "Source recheck, when eligible, stays inside this tool call",
+            "nonempty validated requested-field set ALL lacking verified support",
             "same actor, workspace, grants, source scope and revision",
             "outer replan_required marker is not itself an eligible retrieval miss",
             "provider/tool errors",
@@ -362,8 +430,12 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
             for project in (safe_provider_loop_diagnostics, runtime_project, http_project):
                 with self.subTest(projection=project.__module__, records=len(records)):
                     safe = project({**raw, "provider_attempts": records})
+                    if len(records) != len(attempts):
+                        self.assertIs(safe["provider_attempts_valid"], False)
+                        self.assertEqual(safe["provider_attempts"], [])
+                        continue
                     self.assertIs(safe["provider_attempts_valid"], True)
-                    self.assertEqual([a["attempt"] for a in safe["provider_attempts"]], [4, 5, 6])
+                    self.assertEqual([a["attempt"] for a in safe["provider_attempts"]], [1, 2, 3, 4, 5, 6])
                     self.assertTrue(all(a["valid_attempt"] is True for a in safe["provider_attempts"]))
                     latest = safe["provider_attempts"][-1]
                     self.assertEqual(safe["tool_choice"], latest["tool_choice"])
@@ -610,7 +682,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         )
         repair_payload = json.loads(repaired_output["output"])
         repair_hint = repair_payload["data"]["query_agent"]["external_replan"]["repair_hint"]
-        self.assertIn("submit all grounded identity/topic content terms", repair_hint)
+        self.assertIn("submit the grounded anchors and explicit content/value filters", repair_hint)
         self.assertNotIn("青銅日誌", json.dumps(repair_payload, ensure_ascii=False))
         evidence_tool.assert_called_once()
         self.assertEqual(set(evidence_tool.call_args.args[0].required_terms), {"岑月", "青銅日誌"})
@@ -951,7 +1023,8 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                     "occurrence lineage",
                     "source-table lookup",
                     "typed table_query",
-                    "at most one bounded same-scope source recheck inside this tool call",
+                    "Source recheck, when eligible, stays inside this tool call",
+                    "nonempty validated requested-field set ALL lacking verified support",
                     "outer replan_required marker is not itself an eligible retrieval miss",
                     "provider/tool errors, permission denials",
                     "unsupported or underspecified plans, or exact requests",
@@ -2904,12 +2977,12 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         self.assertEqual(diagnostic["provider_attempt_count"], 4)
         self.assertEqual(
             [item["attempt"] for item in diagnostic["provider_attempts"]],
-            [2, 3, 4],
+            [1, 2, 3, 4],
         )
         self.assertEqual(diagnostic["provider_attempts"][-1]["elapsed_ms"], 68_703)
         self.assertEqual(
             [item["attempt"] for item in diagnostic["provider_phase_timings"]],
-            [2, 3, 4],
+            [1, 2, 3, 4],
         )
         self.assertEqual(diagnostic["provider_phase_timings"][-1]["elapsed_ms"], 68_703)
         self.assertEqual(
@@ -2924,7 +2997,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         self.assertEqual(projected["provider_attempt_count"], 4)
         self.assertEqual(
             [item["attempt"] for item in projected["provider_attempts"]],
-            [2, 3, 4],
+            [1, 2, 3, 4],
         )
         self.assertEqual(projected["provider_attempts"][-1]["elapsed_ms"], 68_703)
         self.assertEqual(
@@ -2961,7 +3034,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
                         "offered_tool_fingerprint": "sha256:" + ("a" * 64),
                     },
                 }
-                for index in range(2, 5)
+                for index in range(1, 5)
             ],
             "mcp_citation_stages": [
                 {
@@ -3001,7 +3074,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         projected = safe_provider_loop_diagnostics(raw)
         self.assertEqual(
             [item["attempt"] for item in projected["provider_attempts"]],
-            [2, 3, 4],
+            [1, 2, 3, 4],
         )
         self.assertEqual(projected["provider_attempts"][-1]["elapsed_ms"], 68_703)
         self.assertEqual(projected["provider_attempt_count"], 4)
@@ -3020,12 +3093,12 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         runtime_bounded = runtime_project(raw)
         self.assertEqual(
             [item["attempt"] for item in runtime_bounded["provider_attempts"]],
-            [2, 3, 4],
+            [1, 2, 3, 4],
         )
         self.assertEqual(runtime_bounded["provider_attempt_count"], 4)
         self.assertEqual(
             [item["elapsed_ms"] for item in runtime_bounded["provider_phase_timings"]],
-            [10, 10, 68_703],
+            [10, 10, 10, 68_703],
         )
         for bounded in (
             http_project(raw),
@@ -3037,10 +3110,10 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
             )
             self.assertEqual(
                 [item["attempt"] for item in bounded["provider_attempts"]],
-                [2, 3, 4],
+                [1, 2, 3, 4],
             )
             self.assertEqual(bounded["provider_attempt_count"], 4)
-            self.assertEqual(len(bounded["provider_phase_timings"]), 3)
+            self.assertEqual(len(bounded["provider_phase_timings"]), 4)
             self.assertEqual(bounded["provider_phase_timings"][-1]["elapsed_ms"], 68_703)
             self.assertEqual(
                 bounded["finalization_validation"][0]["final_model"]["citation_count"],
@@ -3051,7 +3124,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         malformed_provider_tail = {
             **raw,
             "provider_attempts": [
-                *raw["provider_attempts"][:2],
+                *raw["provider_attempts"][:-1],
                 {
                     **raw["provider_attempts"][-1],
                     "outcome": "not-allowlisted",

@@ -150,8 +150,11 @@ def _attachment_child_observations(
                 created_at="2026-08-29T00:00:00+00:00",
             )
         )
-    if result.errors or result.warnings:
+    allowed_warnings = {"xlsx_display_value_unavailable"} if suffix == ".xlsx" else set()
+    if result.errors or set(result.warnings) - allowed_warnings:
         raise AssertionError("attachment document fixture extraction failed")
+    if suffix == ".xlsx" and "xlsx_display_value_unavailable" not in result.warnings:
+        raise AssertionError("XLSX display limitation warning was not preserved")
     return tuple(result.observations)
 
 
@@ -1627,7 +1630,11 @@ class ConnectedAttachmentHybridE2ETests(unittest.IsolatedAsyncioTestCase):
                     inventory["plan"]["resource_kind"],
                     table_provider.resource_kind,
                 )
-                self.assertEqual(inventory["coverage_status"], "complete")
+                self.assertEqual(
+                    inventory["coverage_status"], "complete",
+                    {key: value for key, value in inventory.items()
+                     if key not in {"items", "plan"}},
+                )
                 self.assertEqual(
                     inventory["candidate_only_occurrence_count"],
                     0,

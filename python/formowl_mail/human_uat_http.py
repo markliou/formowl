@@ -19,6 +19,7 @@ from formowl_mail.human_uat_orchestrator import (
     diagnostic_comparability,
     safe_diagnostic_comparability,
     safe_provider_loop_diagnostics,
+    safe_provider_transport_diagnostics,
 )
 
 _MAX_REQUEST_BYTES = 64 * 1024
@@ -56,6 +57,7 @@ _SAFE_PROVIDER_STOP_REASONS = frozenset(
     {
         "budget_exhausted",
         "citation_validation_failed",
+        "answer_public_safety_failed",
         "coverage_validation_failed",
         "invalid_arguments",
         "mcp_unavailable",
@@ -825,7 +827,7 @@ def _browser_error_response() -> dict[str, Any]:
 def _safe_provider_diagnostic(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
-    safe: dict[str, Any] = {}
+    safe: dict[str, Any] = safe_provider_transport_diagnostics(value)
     reason_code = value.get("reason_code")
     if (
         isinstance(reason_code, str)
@@ -979,14 +981,18 @@ def _safe_provider_diagnostic(value: Any) -> dict[str, Any] | None:
         "provider_attempt_count",
         "provider_attempts",
         "provider_attempts_valid",
+        "pre_mcp_recovery",
         "mcp_citation_stages",
         "finalization_validation",
+        "answer_projection_result",
     ):
         if key in loop:
             safe[key] = loop[key]
     safe["diagnostic_comparability"] = safe_diagnostic_comparability(
         value.get("diagnostic_comparability"), safe,
     )
+    # Only the service's in-process startup capability survives this projection;
+    # hashes/status reconstructed from HTTP or JSON never recreate authority.
     source = safe["diagnostic_comparability"].get("source_binding_fingerprint")
     if source is not None:
         safe["source_binding_fingerprint"] = source

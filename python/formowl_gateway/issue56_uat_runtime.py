@@ -40,8 +40,11 @@ from formowl_mail.human_uat_orchestrator import (
     compact_evidence_for_model,
     evidence_citation_ids,
     diagnostic_comparability,
+    load_verified_diagnostic_deployment,
+    VerifiedDiagnosticDeployment,
     safe_diagnostic_comparability,
     safe_provider_loop_diagnostics,
+    safe_provider_transport_diagnostics,
 )
 from formowl_mail.semantic_plan import deterministic_query_class, requires_workspace_evidence
 from formowl_retrieval.gateway import source_evidence_deadline_scope
@@ -156,6 +159,7 @@ _SAFE_PROVIDER_STOP_REASONS = frozenset(
     {
         "budget_exhausted",
         "citation_validation_failed",
+        "answer_public_safety_failed",
         "coverage_validation_failed",
         "invalid_arguments",
         "mcp_unavailable",
@@ -176,6 +180,7 @@ _SAFE_PROVIDER_FAILURE_REASONS = frozenset(
         "invalid_json_response",
         "invalid_output_item_shape",
         "invalid_output_shape",
+        "invalid_sse_response",
         "invalid_top_level_shape",
         "invalid_utf8_response",
         "http_error",
@@ -662,6 +667,7 @@ class Issue56TemporaryLanQueryService:
         behavior_log_path: Path | None = None,
         record_raw_uat_interactions: bool = False,
         _source_binding_fingerprint: str | None = None,
+        _diagnostic_deployment_binding: VerifiedDiagnosticDeployment | None = None,
     ) -> None:
         if (behavior_log_path is None) != (not record_raw_uat_interactions):
             raise ValueError("raw UAT recording requires both explicit options")
@@ -674,6 +680,7 @@ class Issue56TemporaryLanQueryService:
         self._conversation_model = conversation_model
         # Composition supplies only a frozen digest after normal source validation.
         self._source_binding_fingerprint = _source_binding_fingerprint
+        self._diagnostic_deployment_binding = _diagnostic_deployment_binding
         (
             self._formowl_tool_descriptor,
             self._authorized_capability_summary,
@@ -820,6 +827,7 @@ class Issue56TemporaryLanQueryService:
                 result = _with_mcp_diagnostic(
                     result, call_traces,
                     source_binding_fingerprint=self._source_binding_fingerprint,
+                    deployment_binding=getattr(self, "_diagnostic_deployment_binding", None),
                 )
                 self.last_mcp_statuses = tuple(
                     str(response.get("status", "unknown")) for response in responses
@@ -902,6 +910,7 @@ class Issue56TemporaryLanQueryService:
                             outcome.provider_diagnostic if outcome is not None else None,
                             call_traces,
                             source_binding_fingerprint=self._source_binding_fingerprint,
+                            deployment_binding=getattr(self, "_diagnostic_deployment_binding", None),
                         ),
                         elapsed_ms=(time.perf_counter() - started_at) * 1_000.0,
                     )
@@ -1378,7 +1387,7 @@ def _safe_provider_diagnostic(
 ) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
-    safe: dict[str, Any] = {}
+    safe: dict[str, Any] = safe_provider_transport_diagnostics(value)
     reason_code = value.get("reason_code")
     if (
         isinstance(reason_code, str)
@@ -1523,8 +1532,10 @@ def _safe_provider_diagnostic(
         "provider_attempt_count",
         "provider_attempts",
         "provider_attempts_valid",
+        "pre_mcp_recovery",
         "mcp_citation_stages",
         "finalization_validation",
+        "answer_projection_result",
     ):
         fragment = loop.get(key)
         if fragment is None:
@@ -1893,6 +1904,7 @@ def _diagnostic_with_mcp(
     call_traces: Sequence[Mapping[str, Any]],
     *,
     source_binding_fingerprint: str | None = None,
+    deployment_binding: VerifiedDiagnosticDeployment | None = None,
 ) -> dict[str, Any]:
     safe = _safe_provider_diagnostic(provider_diagnostic) or {}
     safe["mcp"] = _safe_mcp_call_diagnostic(call_traces)
@@ -1900,6 +1912,7 @@ def _diagnostic_with_mcp(
     safe.pop("source_binding_fingerprint", None)
     safe["diagnostic_comparability"] = diagnostic_comparability(
         safe, source_binding_fingerprint=source_binding_fingerprint,
+        deployment_binding=deployment_binding,
     )
     source = safe["diagnostic_comparability"].get("source_binding_fingerprint")
     if source is not None:
@@ -1912,11 +1925,13 @@ def _with_mcp_diagnostic(
     call_traces: Sequence[Mapping[str, Any]],
     *,
     source_binding_fingerprint: str | None = None,
+    deployment_binding: VerifiedDiagnosticDeployment | None = None,
 ) -> dict[str, Any]:
     projected = dict(result)
     projected["diagnostic"] = _diagnostic_with_mcp(
         projected.get("diagnostic"), call_traces,
         source_binding_fingerprint=source_binding_fingerprint,
+        deployment_binding=deployment_binding,
     )
     return projected
 
@@ -2472,24 +2487,10 @@ def _safe_current_turn_projection_after_validation_failure(
     )
     fallback.pop("diagnostic", None)
     safe_diagnostic = _safe_provider_diagnostic(original_result.get("diagnostic"))
-    if safe_diagnostic is not None:
-        finalization = safe_diagnostic.get("finalization_validation")
-        if isinstance(finalization, list):
-            safe_diagnostic["finalization_validation"] = [
-                {
-                    **validation,
-                    **(
-                        {
-                            "validation_result": "parse_rejected",
-                        }
-                        if validation.get("validation_result") == "passed"
-                        else {}
-                    ),
-                }
-                for validation in finalization
-                if isinstance(validation, Mapping)
-            ]
-        fallback["diagnostic"] = safe_diagnostic
+    safe_diagnostic = dict(safe_diagnostic or {})
+    # Projection rejection is independent of provider schema/citation validation.
+    safe_diagnostic["answer_projection_result"] = "projection_rejected_partial_fallback"
+    fallback["diagnostic"] = safe_diagnostic
     validate_public_gateway_payload(fallback)
     assert_no_public_raw_references(fallback, boundary)
     _emit_private_uat_failure_trace(original_error, "projection", original_result)
@@ -3012,7 +3013,7 @@ def _private_graph_recheck_trace(
     if isinstance(families, (list, tuple)):
         safe["source_families"] = sorted({
             family for family in families
-            if isinstance(family, str) and family in {"mail", "document_text"}
+            if isinstance(family, str) and family in {"mail", "document_text", "attachment_table"}
         })
     warnings = recovery.get("warnings")
     if isinstance(warnings, (list, tuple)):
@@ -3091,8 +3092,17 @@ def _emit_private_uat_terminal_trace(
                 "provider_status", "provider_attempt_count", "provider_attempts_valid",
                 "provider_phase_timings", "mcp_citation_stages", "finalization_validation",
                 "stop_reason",
+                "http_status", "provider_error_code", "provider_error_type",
+                "provider_error_param", "provider_error_message_class",
+                "response_body_shape",
             ) if key in safe
         }
+        diagnostic.update(safe_provider_transport_diagnostics(safe))
+        for key in ("response_body_bytes", "response_content_type", "response_content_encoding",
+                    "response_declared_body_bytes", "response_declared_length_matches",
+                    "response_transfer_chunked"):
+            if key in safe:
+                diagnostic[key] = safe[key]
         if safe.get("reason_code") in _SAFE_PROVIDER_FAILURE_REASONS | {"turn_budget_exhausted"}:
             diagnostic["reason_code"] = safe["reason_code"]
         if "provider_attempts" in safe:
@@ -3100,7 +3110,8 @@ def _emit_private_uat_terminal_trace(
                 {key: attempt[key] for key in (
                     "attempt", "elapsed_ms", "outcome", "response_status",
                     "function_call_count", "valid_attempt",
-                ) if key in attempt}
+                    "http_status",
+                ) if key in attempt} | safe_provider_transport_diagnostics(attempt)
                 for attempt in safe["provider_attempts"]
             ]
         payload["provider_diagnostic"] = diagnostic
@@ -3298,6 +3309,10 @@ def create_issue56_temporary_lan_query_service(
     record_raw_uat_interactions: bool = False,
     ingestion_revision: Any | None = None,
     query_agent_planner: Any | None = None,
+    diagnostic_deployment_manifest: Path | None = None,
+    diagnostic_deployment_manifest_sha256: str | None = None,
+    diagnostic_build_attestation: Path | None = None,
+    diagnostic_settings: Mapping[str, Any] | None = None,
 ) -> Issue56TemporaryLanQueryService:
     """Compose one reusable real-source diagnostic app without external services.
 
@@ -3330,6 +3345,22 @@ def create_issue56_temporary_lan_query_service(
     if ingestion_revision is not None:
         safe_binding = deepcopy(dict(ingestion_revision.safe_binding))
         source_binding_fingerprint = sha256_json(safe_binding)
+    deployment_binding = None
+    binding_options = (
+        diagnostic_deployment_manifest, diagnostic_deployment_manifest_sha256,
+        diagnostic_build_attestation, diagnostic_settings,
+    )
+    if any(option is not None for option in binding_options):
+        if any(option is None for option in binding_options) or source_binding_fingerprint is None:
+            raise ValueError("diagnostic deployment binding requires validated source and all options")
+        deployment_binding = load_verified_diagnostic_deployment(
+            manifest_path=diagnostic_deployment_manifest,
+            expected_manifest_sha256=diagnostic_deployment_manifest_sha256,
+            attestation_path=diagnostic_build_attestation,
+            code_root=Path(__file__).resolve().parents[2],
+            settings=diagnostic_settings,
+            source_binding_fingerprint=source_binding_fingerprint,
+        )
     config = Issue56DiagnosticConfig()
     state = Issue56DiagnosticState()
     google_client = object()
@@ -3355,4 +3386,5 @@ def create_issue56_temporary_lan_query_service(
         behavior_log_path=behavior_log_path,
         record_raw_uat_interactions=record_raw_uat_interactions,
         _source_binding_fingerprint=source_binding_fingerprint,
+        _diagnostic_deployment_binding=deployment_binding,
     )
