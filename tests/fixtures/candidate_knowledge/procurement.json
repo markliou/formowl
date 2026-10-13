@@ -1,0 +1,254 @@
+{
+  "fixture_id": "candidate_knowledge_procurement_v1",
+  "domain_pack": {
+    "pack_id": "domain_pack_procurement_v1",
+    "domain": "procurement",
+    "ontology_revision_id": "ontology_rev_candidate_core_v1",
+    "source_observation_ids": [
+      "obs_domain_pack_procurement_v1"
+    ],
+    "object_types": {
+      "PurchaseOrderLine": "Transaction",
+      "Supplier": "Organization"
+    },
+    "assertion_mappings": {
+      "promised_delivery_date": {
+        "assertion_kind": "property",
+        "predicate": "promised_delivery_date",
+        "epistemic_status": "expected",
+        "temporal_roles": {
+          "promised_for": "due_at",
+          "known_on": "recorded_at"
+        }
+      },
+      "supplied_by": {
+        "assertion_kind": "relation",
+        "predicate": "supplied_by"
+      },
+      "acceptance_status": {
+        "assertion_kind": "state",
+        "predicate": "acceptance_status",
+        "epistemic_status": "actual",
+        "temporal_roles": {
+          "status_as_of": "observed_at",
+          "known_on": "recorded_at"
+        }
+      },
+      "delivery_date_change": {
+        "assertion_kind": "event",
+        "predicate": "delivery_date_change",
+        "epistemic_status": "asserted",
+        "lifecycle_status": "corrected",
+        "temporal_roles": {
+          "changed_on": "asserted_at",
+          "applies_on": "effective_at",
+          "known_on": "recorded_at"
+        }
+      },
+      "supplier_commitment": {
+        "assertion_kind": "coordination",
+        "predicate": "Commitment",
+        "epistemic_status": "committed",
+        "temporal_roles": {
+          "committed_on": "asserted_at",
+          "promised_for": "due_at",
+          "known_on": "recorded_at"
+        }
+      }
+    },
+    "frame_extensions": {
+      "SupplierCommitment": "Commitment"
+    },
+    "aliases": {
+      "PurchaseOrderLine": [
+        "PO line",
+        "order line"
+      ]
+    }
+  },
+  "observations": [
+    {
+      "observation_id": "obs_procurement_delivery_update",
+      "asset_id": "asset_procurement_delivery_fixture",
+      "extractor_run_id": "run_procurement_source_fixture",
+      "observation_type": "email_body_segment",
+      "modality": "text",
+      "location": {
+        "message_id": "msg_procurement_delivery_update",
+        "section": "body",
+        "paragraph_index": 1
+      },
+      "confidence": 0.94,
+      "permission_scope": {
+        "scope_type": "workspace",
+        "scope_id": "formowl",
+        "visibility": "restricted"
+      },
+      "created_at": "2026-07-15T01:00:00+00:00",
+      "text": "Supplier confirms a revised delivery date while the order line remains unaccepted.",
+      "payload": {
+        "candidate_knowledge": {
+          "business_objects": [
+            {
+              "local_id": "po_line_450001_10",
+              "object_type": "PurchaseOrderLine",
+              "label": "PO 450001 line 10",
+              "properties": {
+                "quantity": 120
+              }
+            },
+            {
+              "local_id": "supplier_acme",
+              "object_type": "Supplier",
+              "label": "Supplier ACME",
+              "properties": {
+                "supplier_code": "SUP-001"
+              }
+            }
+          ],
+          "assertions": [
+            {
+              "assertion_type": "promised_delivery_date",
+              "subject": "po_line_450001_10",
+              "value": "2026-07-31",
+              "temporal_context": {
+                "promised_for": "2026-07-31",
+                "known_on": "2026-07-15T01:00:00+00:00",
+                "precision": "day"
+              }
+            },
+            {
+              "assertion_type": "supplied_by",
+              "subject": "po_line_450001_10",
+              "object": "supplier_acme"
+            },
+            {
+              "assertion_type": "acceptance_status",
+              "subject": "po_line_450001_10",
+              "value": "not_accepted",
+              "temporal_context": {
+                "status_as_of": "2026-07-15",
+                "known_on": "2026-07-15T01:00:00+00:00"
+              }
+            },
+            {
+              "assertion_type": "delivery_date_change",
+              "subject": "po_line_450001_10",
+              "previous_value": "2026-07-20",
+              "proposed_value": "2026-07-31",
+              "temporal_context": {
+                "changed_on": "2026-07-15",
+                "applies_on": "2026-07-31",
+                "known_on": "2026-07-15T01:00:00+00:00"
+              },
+              "context": {
+                "reason": "supplier capacity adjustment"
+              }
+            },
+            {
+              "assertion_type": "supplier_commitment",
+              "subject": "po_line_450001_10",
+              "actor": "supplier_acme",
+              "value": "deliver_by_promised_date",
+              "temporal_context": {
+                "committed_on": "2026-07-15",
+                "promised_for": "2026-07-31",
+                "known_on": "2026-07-15T01:00:00+00:00"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "observation_id": "obs_domain_pack_procurement_v1",
+      "asset_id": "asset_domain_pack_procurement_fixture",
+      "extractor_run_id": "run_domain_pack_fixture",
+      "observation_type": "domain_pack_definition",
+      "modality": "structured_json",
+      "location": {
+        "section": "domain_pack"
+      },
+      "confidence": 1.0,
+      "permission_scope": {
+        "scope_type": "workspace",
+        "scope_id": "formowl",
+        "visibility": "restricted"
+      },
+      "created_at": "2026-07-15T00:30:00+00:00",
+      "text": "Procurement Domain Pack fixture definition.",
+      "payload": {
+        "candidate_knowledge": {
+          "business_objects": [],
+          "assertions": []
+        },
+        "domain_pack_definition": {
+          "pack_id": "domain_pack_procurement_v1",
+          "domain": "procurement",
+          "ontology_revision_id": "ontology_rev_candidate_core_v1",
+          "source_observation_ids": [
+            "obs_domain_pack_procurement_v1"
+          ],
+          "object_types": {
+            "PurchaseOrderLine": "Transaction",
+            "Supplier": "Organization"
+          },
+          "assertion_mappings": {
+            "promised_delivery_date": {
+              "assertion_kind": "property",
+              "predicate": "promised_delivery_date",
+              "epistemic_status": "expected",
+              "temporal_roles": {
+                "promised_for": "due_at",
+                "known_on": "recorded_at"
+              }
+            },
+            "supplied_by": {
+              "assertion_kind": "relation",
+              "predicate": "supplied_by"
+            },
+            "acceptance_status": {
+              "assertion_kind": "state",
+              "predicate": "acceptance_status",
+              "epistemic_status": "actual",
+              "temporal_roles": {
+                "status_as_of": "observed_at",
+                "known_on": "recorded_at"
+              }
+            },
+            "delivery_date_change": {
+              "assertion_kind": "event",
+              "predicate": "delivery_date_change",
+              "epistemic_status": "asserted",
+              "lifecycle_status": "corrected",
+              "temporal_roles": {
+                "changed_on": "asserted_at",
+                "applies_on": "effective_at",
+                "known_on": "recorded_at"
+              }
+            },
+            "supplier_commitment": {
+              "assertion_kind": "coordination",
+              "predicate": "Commitment",
+              "epistemic_status": "committed",
+              "temporal_roles": {
+                "committed_on": "asserted_at",
+                "promised_for": "due_at",
+                "known_on": "recorded_at"
+              }
+            }
+          },
+          "frame_extensions": {
+            "SupplierCommitment": "Commitment"
+          },
+          "aliases": {
+            "PurchaseOrderLine": [
+              "PO line",
+              "order line"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

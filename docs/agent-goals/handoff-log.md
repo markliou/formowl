@@ -1,4 +1,55 @@
 # Agent Handoff Log
+## PR #62 conflict integration — 2026-10-14, bounded verification complete
+- User: resolve conflicts. Parents `cc8919f` / `86baa47`; isolated worktree,
+  original22 dirty-file hashes unchanged. No live8088/source/index/DB change,
+  force-push or main merge. Publication is a normal PR branch update only.
+- Nine paths conflict; main has eight malformed Python appendices. Complete
+  parent APIs are reconciled instead of taking either side wholesale. Host AST
+  now parses all534 tracked Python files (prior449 count was narrower).
+- Both inventory ID/wire families remain intact. Private persistence is explicit;
+  public scope gates remain, legacy exclusions cannot become structural proof.
+  Positional inventory constructors are not restored; keyword/factory/wire
+  compatibility is the verified scope. PST legacy message and attachment bindings
+  retain source key/ID/parent/ordinal/name; native structural validators stay strict.
+- Default descriptor-bound r4 and explicit legacy/semantic modes coexist. Private
+  body/attachment content survives persistence; public locator/credential guards
+  remain. Private artifact consumers use persistence APIs, not public projections;
+  guards, seals and old artifacts are not repinned or relaxed.
+- Probe fixes: transport timeout belongs to constructor; shared readonly contents
+  validation accepts both retained runtime formats without mkdir/chmod, capability
+  escalation or config/hash/auth bypass. Actual-class autospec and format/tamper/
+  directory tests cover the repaired paths; no provider login/probe executed.
+- Canonical core72/72 PASS5.952s. Eight-module integration194/194 PASS159.316s
+  preceded the last PST/probe changes. Final affected selection67/67 PASS149.548s
+  includes sealed source, PST, launchers, orchestrator/semantic and three provider
+  mock cases. Synthetic preservation17/17 PASS2.876s; private registered-source
+  case explicitly excluded. These overlapping selections are not a full-suite pass.
+- Preserved reds: core12/1FAIL8ERROR; initial133/16FAIL33ERROR, second133/2FAIL,
+  feature159/12FAIL3ERROR; intermediate110/12FAIL34ERROR loaded a missing import.
+  Earlier PST1FAIL and private-envelope7/1ERROR were repaired; private body loss
+  integration142/1FAIL was repaired. Remainder4/1FAIL and45/1FAIL were repaired,
+  then52/52 PASS4.140s. Probe autospec1ERROR and format1test/3ERROR were repaired.
+- Source wire1/1ERROR repaired (1/1PASS0.205s); mixed verification58/1ERROR then
+  loader1/1ERROR exposed private serialization mismatches. Final67 above supersedes
+  those named cases only. Additional private-consumer2tests/1FAIL39.006s retained;
+  its materializer passed. Candidate workspace456 also fails on pristine HEAD,
+  with identical rejection fingerprint `996cced0…`; not a merge regression.
+  Separate synthetic rebind1/1 PASS5.295s completes the failfast-deferred case.
+- Pristine HEAD baseline8cases reproduces9 descriptor/retention failures (one
+  subtest pair); those are inherited, not silently fixed or counted green.
+  Authority remains valid=true/ready=false/errors=[]; four gates blocked. No
+  feature/standard/UAT/methodology/comparative acceptance or checkbox promotion.
+- Final static scan exposed duplicate facade imports and auto-merge removal of
+  the CSV test/helper plus attachment store argument. Restored original bindings;
+  prior child1ERROR retained; whole upload workflow12/12 PASS5.964s, facade5/5.
+- Lorentz core, Epicurus engineering and Faraday source/governance/methodology
+  explicitly AGREE (3 scoped reviews); only normal PR publication is permitted.
+  Requested sol/high actual metadata unverified; implementers closed, no descendants.
+- Local credential heuristic flags55 expressions/synthetic safety fixtures;
+  offline Gitleaks flags4 tokenizer/version identifiers, manually inspected as
+  noncredentials. No scanner/ignore rule disabled or changed; remote checks pending.
+  Publication identity is the merge commit/PR #62; safe local logs are retained.
+
 Lifecycle label: `active`.
 ## Retention Rule
 Keep the latest bounded checkpoint and at most 300 lines. Full pre-edit files,

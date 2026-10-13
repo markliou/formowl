@@ -1,4 +1,18 @@
 # Knowledge Graph Research Agent Goal
+## Current bounded assignment — PR #62 conflict integration, 2026-10-14
+User requested conflict resolution. Isolated integration of `86baa47` into
+`cc8919f` preserves the original dirty workspace and live8088. Eight malformed
+main Python owners and nine conflict paths require API-level reconciliation,
+not a whole-side checkout. Scope is a normal PR branch update only; no main
+merge or live activation. Source identities remain version-preserving and
+private serialization is explicit. Canonical affected67 and preservation17 passed;
+prior integration194/core72 are scoped, overlapping evidence, not whole-suite green.
+Inherited failures include baseline-matched workspace456 rejection; synthetic
+rebind1/1 and upload workflow12/12 passed. Three scoped reviewers agree.
+Publish only the existing PR branch; its merge commit records publication identity;
+methodology valid=true/ready=false, four gates blocked. No feature/standard/UAT
+acceptance is implied. Details and failures: [handoff](handoff-log.md).
+
 ## Lifecycle
 - Label: `active`
 - Active program: GitHub issue #56

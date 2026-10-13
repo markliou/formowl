@@ -854,12 +854,7 @@ class _RecordingMailConnection:
             if _matches_optional(row, statement.parameters, "mail_import_session_id") and (
                 _matches_optional(row, statement.parameters, "mail_evidence_bundle_id")
             ):
-                return {
-                    "payload": row["payload"],
-                    "mail_evidence_bundle_id": row["mail_evidence_bundle_id"],
-                    "producer_type": row["producer_type"],
-                    "bundle_created_at": row["bundle_created_at"],
-                }
+                return _project_selected_columns(row, statement.sql)
         return None
 
     def query_all(self, statement: Any) -> list[dict[str, Any]]:
@@ -876,7 +871,8 @@ class _RecordingMailConnection:
                 allowed = set(value)
                 rows = [row for row in rows if row.get(id_field) in allowed]
         return [
-            {"payload": row["payload"]} for row in sorted(rows, key=lambda row: row["payload_hash"])
+            _project_selected_columns(row, statement.sql)
+            for row in sorted(rows, key=lambda row: row["payload_hash"])
         ]
 
     def begin(self) -> None:
@@ -937,6 +933,11 @@ def _statement_record_id(table_name: str, parameters: dict[str, Any]) -> str:
 
 def _matches_optional(row: dict[str, Any], parameters: dict[str, Any], key: str) -> bool:
     return parameters.get(key) is None or row.get(key) == parameters[key]
+
+
+def _project_selected_columns(row: dict[str, Any], sql: str) -> dict[str, Any]:
+    selected_columns = sql.split("SELECT ", 1)[1].split(" FROM ", 1)[0]
+    return {column.strip(): row[column.strip()] for column in selected_columns.split(",")}
 
 
 def _query_response_hash(response: dict[str, Any]) -> str:

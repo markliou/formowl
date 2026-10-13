@@ -9,6 +9,11 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Unit tests must opt into the legacy tokenizer explicitly. Runtime, UAT, and
+# evaluation entrypoints default to the required frozen Jieba + SentencePiece
+# profile and fail closed when its pinned model is unavailable.
+os.environ.setdefault("FORMOWL_MAIL_TOKENIZER_MODE", "legacy_ascii_test")
+
 
 def _process_tmp_suffix() -> str:
     getuid = getattr(os, "getuid", None)

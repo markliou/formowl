@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 import _paths  # noqa: F401
 
@@ -101,6 +102,123 @@ class MailFullPstDomainHardOntologyFactorialEvalScriptTests(unittest.TestCase):
         self.assertNotIn(".test-tmp", rendered)
         self.assertFalse((work_dir / "data" / "graph").exists())
         self.assertFalse((work_dir / "data" / "wiki").exists())
+
+    def test_permission_denied_label_still_uses_configured_ablation_arm(self) -> None:
+        module = _load_eval_module()
+        kg_index = kg_tests._minimal_kg_index(module.kg_eval, {"obs_a": "record_a"})
+        ontology_index = module.ontology_eval._OntologyIndex(
+            evidence_index=kg_index.evidence_index,
+            ontology_contract_hash="sha256:" + "b" * 64,
+            ontology_signal_vocabulary_hash="sha256:" + "c" * 64,
+            supported_signals=frozenset(),
+            signals_by_observation_id={},
+            signal_scores_by_component={},
+            component_ids_by_signal={},
+        )
+        factorial_index = module._FactorialIndex(
+            ontology_index=ontology_index,
+            type_scores_by_component={},
+            component_ids_by_type={},
+        )
+        case = {
+            "case_id": "permission_case",
+            "query_text": "private placeholder",
+            "requester_user_id": "denied_user",
+            "result_kind": "permission_denied",
+            "required_source_observation_ids": [],
+            "required_source_item_ids": [],
+            "required_match_count": 0,
+        }
+
+        def fail_query_tokens(*_args, **_kwargs):
+            raise AssertionError("denied request must not tokenize query text")
+
+        with (
+            patch.object(
+                type(kg_index.evidence_index),
+                "retrieve",
+                side_effect=AssertionError(
+                    "permission label must not force the default retrieval arm"
+                ),
+            ),
+            patch.object(module.kg_eval, "_query_tokens", fail_query_tokens),
+        ):
+            row = module._score_case_for_arm(
+                case,
+                arm=(module.SHACL_PRUNING,),
+                baseline_row=None,
+                kg_index=kg_index,
+                factorial_index=factorial_index,
+            )
+
+        self.assertEqual(row["status"], "passed")
+        self.assertEqual(row["selected_evidence_count"], 0)
+
+    def test_permission_denied_label_does_not_auto_pass_with_broad_binding(self) -> None:
+        module = _load_eval_module()
+        kg_index = kg_tests._minimal_kg_index(module.kg_eval, {"obs_a": "record_a"})
+        ontology_index = module.ontology_eval._OntologyIndex(
+            evidence_index=kg_index.evidence_index,
+            ontology_contract_hash="sha256:" + "b" * 64,
+            ontology_signal_vocabulary_hash="sha256:" + "c" * 64,
+            supported_signals=frozenset(),
+            signals_by_observation_id={},
+            signal_scores_by_component={},
+            component_ids_by_signal={},
+        )
+        factorial_index = module._FactorialIndex(
+            ontology_index=ontology_index,
+            type_scores_by_component={},
+            component_ids_by_type={},
+        )
+        case = {
+            "case_id": "permission_case",
+            "query_text": "release",
+            "requester_user_id": "denied_user",
+            "result_kind": "permission_denied",
+            "required_source_observation_ids": [],
+            "required_source_item_ids": [],
+            "required_match_count": 0,
+        }
+        broad_binding = module.kg_eval._access_binding_for_records(
+            kg_index.evidence_index.records,
+            binding_context="factorial_test_broad",
+        )
+        original_binding = module.kg_eval._access_binding_for_requester
+        module.kg_eval._access_binding_for_requester = lambda *_args, **_kwargs: broad_binding
+        try:
+            row = module._score_case_for_arm(
+                case,
+                arm=(),
+                baseline_row=None,
+                kg_index=kg_index,
+                factorial_index=factorial_index,
+            )
+        finally:
+            module.kg_eval._access_binding_for_requester = original_binding
+
+        self.assertEqual(row["status"], "failed")
+
+    def test_eval_blocks_when_baseline_and_private_manifest_do_not_match(self) -> None:
+        module = _load_eval_module()
+        temp_dir = _paths.fresh_test_dir("mail-domain-hard-factorial-manifest-mismatch")
+        baseline_path, work_dir = kg_tests._write_synthetic_inputs(module.kg_eval, temp_dir)
+        manifest_path = work_dir / module.kg_eval.PRIVATE_MANIFEST_RELATIVE
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["cases"][0]["private_fingerprint"] = module.sha256_json("different-case")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        report = _run_with_opt_in(
+            module,
+            baseline_path=baseline_path,
+            work_dir=work_dir,
+        )
+
+        self.assertEqual(
+            report["metrics"]["blocked_reason"],
+            "baseline_manifest_binding_mismatch",
+        )
+        self.assertTrue(report["validation"]["passed"], report["validation"]["blockers"])
 
     def test_validate_report_rejects_stale_arm_derived_counts(self) -> None:
         module = _load_eval_module()

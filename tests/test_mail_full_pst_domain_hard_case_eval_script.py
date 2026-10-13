@@ -52,6 +52,7 @@ class MailFullPstDomainHardCaseEvalScriptTests(unittest.TestCase):
             pattern_counts[case.pattern] = pattern_counts.get(case.pattern, 0) + 1
             if case.result_kind == "owner_match":
                 self.assertGreaterEqual(len(case.required_source_observation_ids), 2)
+                self.assertGreaterEqual(len(case.required_logical_source_item_ids), 1)
                 self.assertEqual(case.required_match_count, 2)
             if case.result_kind == "no_match":
                 self.assertNotIn("unconfirmed-", case.query_text)

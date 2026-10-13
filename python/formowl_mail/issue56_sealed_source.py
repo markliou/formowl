@@ -2266,7 +2266,7 @@ def load_issue56_ingestion_revision(
 
     def bundles_from_snapshot() -> Iterable[MailEvidenceBundle]:
         while bundle_payloads:
-            yield MailEvidenceBundle.from_dict(bundle_payloads.pop())
+            yield MailEvidenceBundle.from_persistence_dict(bundle_payloads.pop())
 
     revision = build_issue56_ingestion_revision(
         observations=observations_from_snapshot(),
@@ -2613,7 +2613,7 @@ def load_issue56_sealed_source(
             report_path=retrieval_report_path,
             expected_report_sha256=expected_retrieval_report_sha256,
         )
-        source_bundle = MailEvidenceBundle.from_dict(retrieval_intake.bundle_payload)
+        source_bundle = MailEvidenceBundle.from_persistence_dict(retrieval_intake.bundle_payload)
     except ContractValidationError as exc:
         raise Issue56SealedSourceLoadError("retrieval_ready_bundle_owner_contract_invalid") from exc
     _validate_source_bundle_identity(
@@ -3439,7 +3439,7 @@ def _project_query_bundle(
         parse_warnings=[],
         created_at=source_bundle.created_at,
     )
-    MailEvidenceBundle.from_dict(query_bundle.to_dict())
+    MailEvidenceBundle.from_persistence_dict(query_bundle.to_persistence_dict())
     return query_bundle
 
 

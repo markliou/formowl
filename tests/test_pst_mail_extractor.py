@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from email.message import EmailMessage
-import io
 from pathlib import Path
 import json
 import subprocess
 import unittest
-from zipfile import ZipFile
 
 import _paths  # noqa: F401
 from formowl_contract import (
@@ -16,7 +13,7 @@ from formowl_contract import (
     sha256_json,
 )
 from formowl_ingestion.assets import register_asset_from_local_file
-from formowl_ingestion.extraction import AttachmentMaterializationContext, run_extractor
+from formowl_ingestion.extraction import run_extractor
 from formowl_ingestion.extractors.mail.pst import (
     PstMailArchiveExtractor,
     _ParserCommandResult,
@@ -28,182 +25,13 @@ from formowl_ingestion.storage import (
     ObservationStore,
     StorageBackendRegistry,
 )
-from formowl_mail import build_mail_evidence_bundle
+from formowl_mail import MailEvidenceQueryGateway, build_mail_evidence_bundle
 
 
 NOW = "2026-07-06T10:00:00+00:00"
 
 
 class PstMailArchiveExtractorTests(unittest.TestCase):
-    def test_attachment_child_document_rows_and_cells_are_source_bound(self) -> None:
-        xlsx = io.BytesIO()
-        with ZipFile(xlsx, "w") as archive:
-            archive.writestr("[Content_Types].xml", "<Types/>")
-            archive.writestr(
-                "xl/workbook.xml",
-                '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
-                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-                '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>',
-            )
-            archive.writestr(
-                "xl/_rels/workbook.xml.rels",
-                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-                '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>',
-            )
-            archive.writestr(
-                "xl/worksheets/sheet1.xml",
-                '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-                '<sheetData><row r="2"><c r="A2" t="inlineStr"><is><t>part</t></is></c>'
-                '<c r="B2"><v>7</v></c></row><row r="4"><c r="A4" t="inlineStr">'
-                '<is><t>price</t></is></c><c r="B4"><v>9</v></c></row></sheetData></worksheet>',
-            )
-        cases = [
-            ("csv", b"part,price\nA1,7\n", "application", "octet-stream", [1, 2], None),
-            (
-                "xlsx",
-                xlsx.getvalue(),
-                "text",
-                "plain",
-                [2, 4],
-                "Sheet1",
-            ),
-        ]
-        for name, payload, maintype, subtype, row_indexes, sheet_name in cases:
-            with self.subTest(format=name):
-                context = _PstExtractionContext.create(f"pst-attachment-document-{name}")
-                result = run_extractor(
-                    asset=context.asset,
-                    object_store=context.object_store,
-                    extractor_run_store=context.run_store,
-                    observation_store=context.observation_store,
-                    adapter=context.adapter_with_runner(
-                        _runner_with_messages(
-                            [_rfc822_binary_attachment(payload, maintype, subtype)]
-                        )
-                    ),
-                    attachment_asset_store=context.asset_store,
-                    started_at=NOW,
-                    completed_at=NOW,
-                )
-                attachment = next(
-                    item
-                    for item in result.observations
-                    if item.observation_type == "email_attachment_occurrence"
-                )
-                child = context.asset_store.get(attachment.payload["child_asset_id"])
-                child_runs = [
-                    item for item in context.run_store.list() if item.asset_id == child.asset_id
-                ]
-                child_observations = [
-                    item
-                    for item in context.observation_store.list()
-                    if item.asset_id == child.asset_id
-                ]
-                self.assertEqual(len(child_runs), 1)
-                self.assertEqual(child_runs[0].status, "succeeded")
-                self.assertEqual(
-                    sorted(
-                        item.location["row_index"]
-                        for item in child_observations
-                        if item.observation_type == "table_row"
-                    ),
-                    row_indexes,
-                )
-                self.assertEqual(
-                    {item.observation_type for item in child_observations},
-                    {"table_row", "table_cell"},
-                )
-                self.assertEqual(
-                    {item.location.get("sheet_name") for item in child_observations},
-                    {sheet_name},
-                )
-                for item in child_observations:
-                    lineage = item.payload["lineage"]
-                    self.assertEqual(lineage["child_asset_id"], child.asset_id)
-                    self.assertEqual(lineage["child_content_hash"], child.content_hash)
-                    self.assertEqual(lineage["parent_asset_id"], context.asset.asset_id)
-                    self.assertEqual(
-                        lineage["attachment_source_ref"]["source_id"],
-                        attachment.payload["source_inventory_item_id"],
-                    )
-                    self.assertEqual(item.permission_scope, child.permission_scope)
-
-    def test_attachment_child_asset_binding_and_compensating_rollback(self) -> None:
-        context = _PstExtractionContext.create("pst-attachment-child-asset")
-        result = run_extractor(
-            asset=context.asset,
-            object_store=context.object_store,
-            extractor_run_store=context.run_store,
-            observation_store=context.observation_store,
-            adapter=context.adapter_with_runner(_runner_with_messages([_rfc822_message()])),
-            attachment_asset_store=context.asset_store,
-            started_at=NOW,
-            completed_at=NOW,
-        )
-        attachment = next(
-            item
-            for item in result.observations
-            if item.observation_type == "email_attachment_occurrence"
-        )
-        child_asset = context.asset_store.get(attachment.payload["child_asset_id"])
-        self.assertIsNotNone(child_asset)
-        self.assertEqual(child_asset.content_hash, attachment.payload["content_hash"])
-        self.assertEqual(child_asset.workspace_id, context.asset.workspace_id)
-        self.assertEqual(child_asset.owner_user_id, context.asset.owner_user_id)
-        self.assertEqual(child_asset.permission_scope, context.asset.permission_scope)
-        self.assertTrue(
-            context.object_store.verify_object(
-                child_asset.object_uri,
-                child_asset.content_hash,
-            )
-        )
-        bundle = build_mail_evidence_bundle(
-            result.observations,
-            workspace_id=context.asset.workspace_id,
-            owner_user_id=context.asset.owner_user_id,
-            source_asset_id=context.asset.asset_id,
-            archive_sha256=context.asset.content_hash,
-            upload_session_id="upload_real_pst_unit",
-            created_at=NOW,
-        )
-        self.assertEqual(bundle.attachment_occurrences[0].child_asset_id, child_asset.asset_id)
-
-        materialization = AttachmentMaterializationContext(
-            parent_asset=context.asset,
-            asset_store=context.asset_store,
-            object_store=context.object_store,
-        )
-        with self.assertRaises(ValueError):
-            materialization.materialize(
-                content=b"tampered",
-                expected_content_hash="sha256:" + "0" * 64,
-                mime_type="text/plain",
-                source_ref=SourceRef(
-                    source_system="formowl_mail_attachment",
-                    source_type="email_attachment_occurrence",
-                    source_id="inventory_item_tampered",
-                ),
-            )
-
-        rollback = _PstExtractionContext.create("pst-attachment-child-rollback")
-        recording_objects = _RecordingObjectStore(rollback.object_store.backend_registry)
-        with self.assertRaises(RuntimeError):
-            run_extractor(
-                asset=rollback.asset,
-                object_store=recording_objects,
-                extractor_run_store=rollback.run_store,
-                observation_store=_FailingObservationStore(rollback.temp_dir),
-                adapter=rollback.adapter_with_runner(
-                    _runner_with_messages([_rfc822_message()])
-                ),
-                attachment_asset_store=rollback.asset_store,
-                started_at=NOW,
-                completed_at=NOW,
-            )
-        self.assertEqual(rollback.asset_store.list(), [rollback.asset])
-        self.assertIsNotNone(recording_objects.created_object_uri)
-        self.assertIsNone(recording_objects.get_object(recording_objects.created_object_uri))
-
     def test_pst_adapter_exports_mail_observations_from_runner_output(self) -> None:
         context = _PstExtractionContext.create("pst-extractor-basic")
         adapter = context.adapter_with_runner(_runner_with_messages([_rfc822_message()]))
@@ -297,110 +125,21 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
         self.assertEqual(len(bundle.messages), 1)
         self.assertEqual(len(bundle.message_occurrences), 2)
 
-    def test_attachment_observation_binding_disambiguates_by_physical_identity(self) -> None:
-        from formowl_ingestion.extractors.mail.pst import (
-            _ParsedAttachment,
-            _PstAttachmentInventoryIndex,
-            _pst_attachment_observation_binding,
-        )
-        from formowl_contract import SourceInventoryItem, SourceInventory
+    def test_message_identity_is_stable_when_export_order_changes(self) -> None:
+        first_message = _rfc822_message(message_id="", body="Stable fallback message alpha")
+        second_message = _rfc822_message(message_id="", body="Stable fallback message beta")
 
-        parent_key = "msg_001"
-        target_name_fp = sha256_json("target.txt")
-        other_name_fp = sha256_json("other.txt")
-
-        item1 = SourceInventoryItem.create(
-            source_asset_id="asset_001",
-            structure_kind="regular_attachment_occurrence",
-            content_type="text/plain",
-            ordinal=1,
-            processing_state="parsed",
-            raw_retention_state="retained",
-            source_fingerprint="sha256:" + "0" * 64,
-            parser_fingerprint="sha256:" + "0" * 64,
-            permission_scope={"workspace_id": "ws1", "owner_user_id": "u1"},
-            location={
-                "source_local_key": "att_001",
-                "parent_source_local_key": parent_key,
-                "attachment_id": "att_id_1",
-                "attachment_ordinal": 1,
-                "attachment_name_fingerprint": target_name_fp,
-            },
+        first = _extract_message_identities(
+            "pst-extractor-stable-order-first",
+            [first_message, second_message],
         )
-        item2 = SourceInventoryItem.create(
-            source_asset_id="asset_001",
-            structure_kind="inline_attachment_occurrence",
-            content_type="text/plain",
-            ordinal=2,
-            processing_state="parsed",
-            raw_retention_state="retained",
-            source_fingerprint="sha256:" + "0" * 64,
-            parser_fingerprint="sha256:" + "0" * 64,
-            permission_scope={"workspace_id": "ws1", "owner_user_id": "u1"},
-            location={
-                "source_local_key": "att_002",
-                "parent_source_local_key": parent_key,
-                "attachment_id": "att_id_1",
-                "attachment_ordinal": 1,
-                "attachment_name_fingerprint": other_name_fp,
-            },
-        )
-        msg_item = SourceInventoryItem.create(
-            source_asset_id="asset_001",
-            structure_kind="exported_message_occurrence",
-            content_type="message/rfc822",
-            ordinal=0,
-            processing_state="parsed",
-            raw_retention_state="retained",
-            source_fingerprint="sha256:" + "0" * 64,
-            parser_fingerprint="sha256:" + "0" * 64,
-            permission_scope={"workspace_id": "ws1", "owner_user_id": "u1"},
-            location={
-                "source_local_key": parent_key,
-                "parent_source_local_key": "root",
-            },
+        second = _extract_message_identities(
+            "pst-extractor-stable-order-second",
+            [second_message, first_message],
         )
 
-        inventory = SourceInventory.create(
-            source_asset_id="asset_001",
-            items=[msg_item, item1, item2],
-            source_fingerprint="sha256:" + "0" * 64,
-            parser_fingerprint="sha256:" + "0" * 64,
-            created_at=NOW,
-        )
-
-        index = _PstAttachmentInventoryIndex(
-            item_by_key={"msg_001": msg_item, "att_001": item1, "att_002": item2},
-            attachment_items=(item1, item2),
-            attachment_items_by_id={"att_id_1": (item1, item2)},
-            attachment_items_by_id_and_ordinal={("att_id_1", 1): (item1, item2)},
-            attachment_items_by_parent_message_key={"msg_001": (item1, item2)},
-            message_key_by_occurrence_id={"occ_001": "msg_001"},
-        )
-
-        attachment = _ParsedAttachment(
-            attachment_id="att_id_1",
-            filename="target.txt",
-            source_name_fingerprint=target_name_fp,
-        )
-
-        class DummyMessage:
-            source_local_key = parent_key
-
-        class DummyContext:
-            occurrence_id = "occ_001"
-            parent_occurrence_id = None
-            message = DummyMessage()
-
-        binding = _pst_attachment_observation_binding(
-            attachment,
-            attachment_ordinal=1,
-            context=DummyContext(),
-            source_inventory=inventory,
-            inventory_index=index,
-        )
-
-        self.assertEqual(binding["attachment_inventory_item_id"], item1.source_inventory_item_id)
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 2)
 
     def test_readpst_command_contract_and_timeout_are_forwarded(self) -> None:
         context = _PstExtractionContext.create("pst-extractor-command-contract")
@@ -561,9 +300,9 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
                 self.assertEqual(runner.calls, 0)
                 self.assertEqual(context.observation_store.list(), [])
 
-    def test_sanitizes_exported_mail_values_without_leaking_unsafe_strings(self) -> None:
+    def test_preserves_private_body_and_redacts_only_public_query_output(self) -> None:
         context = _PstExtractionContext.create("pst-extractor-sanitizes")
-        unsafe_body = "Review path C:\\private\\archive.pst before approval."
+        unsafe_body = "Review scratch path C:\\tmp\\archive.pst before approval."
         unsafe_attachment = "C:\\private\\attachment.pdf"
         adapter = context.adapter_with_runner(
             _runner_with_messages(
@@ -582,28 +321,155 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
             extractor_run_store=context.run_store,
             observation_store=context.observation_store,
             adapter=adapter,
-            config={"max_messages": 25, "preserve_private_body_text": False},
+            config={"max_messages": 25},
             started_at=NOW,
             completed_at=NOW,
         )
 
-        rendered = json.dumps(
-            {
-                "run": result.extractor_run.to_dict(),
-                "observations": [observation.to_dict() for observation in result.observations],
-            },
+        private_rendered = json.dumps(
+            [observation.to_dict() for observation in result.observations],
             sort_keys=True,
         )
-        self.assertTrue(
-            "pst_parser_body_segment_redacted" in result.extractor_run.warnings
-            or "pst_parser_body_segment_contains_publicly_unsafe_text"
-            in result.extractor_run.warnings
+        self.assertIn(
+            "pst_parser_body_segment_contains_publicly_unsafe_text",
+            result.extractor_run.warnings,
         )
-        self.assertIn("redacted_mail_body_segment", rendered)
-        self.assertIn("redacted_filename_", rendered)
-        self.assertNotIn(unsafe_body, rendered)
-        self.assertNotIn(unsafe_attachment, rendered)
-        self.assertNotIn("C:\\private", rendered)
+        private_body_segments = [
+            observation.extracted_value
+            for observation in result.observations
+            if observation.observation_type == "email_body_segment"
+        ]
+        self.assertIn(unsafe_body, private_body_segments)
+        public_body_segments = [observation.text for observation in result.observations
+                                if observation.observation_type == "email_body_segment"]
+        self.assertNotIn(unsafe_body, public_body_segments)
+        self.assertNotIn("C:\\tmp", " ".join(public_body_segments))
+        self.assertIn("redacted_filename_", private_rendered)
+        self.assertNotIn(unsafe_attachment, private_rendered)
+
+        bundle = build_mail_evidence_bundle(
+            result.observations,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_owner",
+            source_asset_id=context.asset.asset_id,
+            archive_sha256=context.asset.content_hash,
+            upload_session_id="upload_real_pst_unit",
+            parser_name="pst_mail_archive_extractor",
+            parser_version="0.1.0",
+            created_at=NOW,
+            started_at=NOW,
+            completed_at=NOW,
+            parse_warnings=result.extractor_run.warnings,
+        )
+        self.assertIn(unsafe_body, [segment.text for segment in bundle.body_segments])
+
+        public_result = MailEvidenceQueryGateway([bundle]).query_mail_evidence(
+            query_text="Review approval",
+            requester_user_id="user_owner",
+            workspace_id="workspace_formowl",
+            session_id="session_unit",
+            mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
+            limit=5,
+        )
+        public_rendered = json.dumps(public_result.to_dict(), sort_keys=True)
+        self.assertNotIn(unsafe_body, public_rendered)
+        self.assertNotIn("C:\\tmp", public_rendered)
+        self.assertIn("unsafe_mail_evidence_content_redacted", public_result.warnings)
+
+    def test_body_segments_are_complete_and_attachment_text_is_searchable(self) -> None:
+        context = _PstExtractionContext.create("pst-extractor-complete-segments")
+        body = "A" * 9001
+        adapter = context.adapter_with_runner(_runner_with_messages([_rfc822_message(body=body)]))
+
+        result = run_extractor(
+            asset=context.asset,
+            object_store=context.object_store,
+            extractor_run_store=context.run_store,
+            observation_store=context.observation_store,
+            adapter=adapter,
+            config={"body_segment_max_chars": 4000},
+            started_at=NOW,
+            completed_at=NOW,
+        )
+
+        message = next(
+            observation
+            for observation in result.observations
+            if observation.observation_type == "email_message"
+        )
+        segments = [
+            observation
+            for observation in result.observations
+            if observation.observation_type == "email_body_segment"
+        ]
+        attachment_segments = [
+            observation
+            for observation in result.observations
+            if observation.observation_type == "email_attachment_text_segment"
+        ]
+        self.assertEqual([len(segment.text or "") for segment in segments], [4000, 4000, 1001])
+        self.assertEqual("".join(segment.text or "" for segment in segments), body)
+        self.assertEqual(message.payload["source_body_char_count"], 9001)
+        self.assertEqual(message.payload["stored_body_char_count"], 9001)
+        self.assertEqual(message.payload["body_segment_count"], 3)
+        self.assertEqual(message.payload["body_evidence_state"], "complete")
+        self.assertEqual(len(attachment_segments), 1)
+        self.assertIn("attachment body", attachment_segments[0].text or "")
+
+        bundle = build_mail_evidence_bundle(
+            result.observations,
+            workspace_id="workspace_formowl",
+            owner_user_id="user_owner",
+            source_asset_id=context.asset.asset_id,
+            archive_sha256=context.asset.content_hash,
+            upload_session_id="upload_real_pst_unit",
+            parser_name="pst_mail_archive_extractor",
+            parser_version="0.1.0",
+            created_at=NOW,
+            started_at=NOW,
+            completed_at=NOW,
+            parse_warnings=result.extractor_run.warnings,
+        )
+        gateway = MailEvidenceQueryGateway([bundle])
+        search = gateway.query_mail_evidence(
+            query_text="attachment",
+            requester_user_id="user_owner",
+            workspace_id="workspace_formowl",
+            session_id="session_unit",
+            mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
+            limit=5,
+        )
+        self.assertEqual(search.answerability_state, "evidence_found_complete")
+        read = gateway.read_mail_evidence(
+            requester_user_id="user_owner",
+            workspace_id="workspace_formowl",
+            session_id="session_unit",
+            mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
+            email_message_ids=[bundle.messages[0].email_message_id],
+        )
+        self.assertEqual(read.status, "ok")
+        self.assertEqual(read.evidence_completeness, "complete")
+        self.assertEqual(len(read.evidence_segments), 4)
+        self.assertEqual(
+            [
+                segment["body_segment_index"]
+                for segment in read.evidence_segments
+                if segment["segment_source_type"] == "message_body"
+            ],
+            [1, 2, 3],
+        )
+        limited_read = gateway.read_mail_evidence(
+            requester_user_id="user_owner",
+            workspace_id="workspace_formowl",
+            session_id="session_unit",
+            mail_evidence_bundle_id=bundle.mail_evidence_bundle_id,
+            email_message_ids=[bundle.messages[0].email_message_id],
+            limit=2,
+        )
+        self.assertEqual(limited_read.status, "partial")
+        self.assertEqual(limited_read.evidence_completeness, "incomplete")
+        self.assertEqual(limited_read.answerability_state, "read_limit_reached")
+        self.assertIn("mail_evidence_read_limit_reached", limited_read.warnings)
 
 
 class _PstExtractionContext:
@@ -612,16 +478,16 @@ class _PstExtractionContext:
         *,
         temp_dir: Path,
         object_store: FileObjectStore,
+        asset_store: AssetStore,
         run_store: ExtractorRunStore,
         observation_store: ObservationStore,
-        asset_store: AssetStore,
         asset,
     ) -> None:
         self.temp_dir = temp_dir
         self.object_store = object_store
+        self.asset_store = asset_store
         self.run_store = run_store
         self.observation_store = observation_store
-        self.asset_store = asset_store
         self.asset = asset
 
     def adapter_with_runner(self, runner) -> PstMailArchiveExtractor:
@@ -669,9 +535,9 @@ class _PstExtractionContext:
         return cls(
             temp_dir=temp_dir,
             object_store=object_store,
+            asset_store=asset_store,
             run_store=ExtractorRunStore(temp_dir),
             observation_store=ObservationStore(temp_dir),
-            asset_store=asset_store,
             asset=asset,
         )
 
@@ -683,23 +549,6 @@ class _CountingRunner:
     def __call__(self, command, timeout):
         self.calls += 1
         return _ParserCommandResult(0)
-
-
-class _FailingObservationStore(ObservationStore):
-    def create(self, observation):
-        raise RuntimeError("forced_observation_write_failure")
-
-
-class _RecordingObjectStore(FileObjectStore):
-    def __init__(self, backend_registry) -> None:
-        super().__init__(backend_registry)
-        self.created_object_uri: str | None = None
-
-    def copy_local_file(self, *args, **kwargs):
-        stored = super().copy_local_file(*args, **kwargs)
-        if kwargs.get("original_filename", "").startswith("formowl-attachment-"):
-            self.created_object_uri = stored.object_uri
-        return stored
 
 
 class _CapturingRunner:
@@ -738,6 +587,30 @@ def _runner_with_raw_files(files: list[bytes]):
     return runner
 
 
+def _extract_message_identities(
+    case_name: str, messages: list[bytes]
+) -> dict[str, tuple[str, str]]:
+    context = _PstExtractionContext.create(case_name)
+    result = run_extractor(
+        asset=context.asset,
+        object_store=context.object_store,
+        extractor_run_store=context.run_store,
+        observation_store=context.observation_store,
+        adapter=context.adapter_with_runner(_runner_with_messages(messages)),
+        config={"max_messages": 25},
+        started_at=NOW,
+        completed_at=NOW,
+    )
+    return {
+        str(observation.payload["body_hash"]): (
+            str(observation.payload["message_id"]),
+            str(observation.payload["message_occurrence_id"]),
+        )
+        for observation in result.observations
+        if observation.observation_type == "email_message"
+    }
+
+
 def _rfc822_message(
     *,
     message_id: str = "<unit-001@example.test>",
@@ -764,27 +637,6 @@ def _rfc822_message(
         "attachment body\n"
         "--unit-boundary--\n"
     ).encode("utf-8")
-
-
-def _rfc822_binary_attachment(
-    payload: bytes,
-    maintype: str,
-    subtype: str,
-) -> bytes:
-    message = EmailMessage()
-    message["Message-ID"] = "<unit-binary@example.test>"
-    message["Subject"] = "Attachment"
-    message["From"] = "pm@example.test"
-    message["To"] = "team@example.test"
-    message["Date"] = NOW
-    message.set_content("Attachment follows.")
-    message.add_attachment(
-        payload,
-        maintype=maintype,
-        subtype=subtype,
-        filename="opaque.bin",
-    )
-    return message.as_bytes()
 
 
 if __name__ == "__main__":

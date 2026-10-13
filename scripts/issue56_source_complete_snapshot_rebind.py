@@ -362,7 +362,7 @@ def run_native_retrieval_ready_mail_evidence(
             for warning_code, warning_count in parsed.warning_counts.items()
         ],
     )
-    bundle_payload = bundle.to_dict()
+    bundle_payload = bundle.to_persistence_dict()
     bundle_fingerprint = sha256_json(bundle_payload)
     bundle_artifact: dict[str, Any] = {
         "artifact_id": "formowl_issue56_native_mail_evidence_bundle_v1",
@@ -383,8 +383,8 @@ def run_native_retrieval_ready_mail_evidence(
         bundle_artifact,
         fingerprint_field="artifact_fingerprint",
     )
-    round_trip_bundle = MailEvidenceBundle.from_dict(persisted_bundle["bundle"])
-    if round_trip_bundle.to_dict() != bundle_payload:
+    round_trip_bundle = MailEvidenceBundle.from_persistence_dict(persisted_bundle["bundle"])
+    if round_trip_bundle.to_persistence_dict() != bundle_payload:
         raise RuntimeError("native_retrieval_bundle_round_trip_failed")
 
     tokenizer_profile = load_issue56_target_mail_tokenizer_profile()
@@ -712,7 +712,7 @@ def run_native_source_complete_snapshot(
             "source_registered_at": asset.registered_at,
         },
         "created_at": snapshot_created_at,
-        "source_inventory": source_inventory.to_dict(),
+        "source_inventory": source_inventory.to_persistence_dict(),
         "observations": [observation.to_dict() for observation in observations],
         "lineage_rollups": lineage_rollups,
         "counts": counts,
@@ -915,7 +915,7 @@ def run_source_complete_snapshot_rebind(
                 for raw_ordinal, observation_ordinal in sorted(folder_mapping.items())
             ]
         ),
-        "source_inventory": source_inventory.to_dict(),
+        "source_inventory": source_inventory.to_persistence_dict(),
         "rebindings": rebound_entries,
         "counts": {
             "raw_message_count": raw_message_count,
@@ -2281,7 +2281,7 @@ def _validate_native_retrieval_snapshot(snapshot: Mapping[str, Any]) -> None:
             raise RuntimeError(f"native_retrieval_snapshot_{field}_nonzero")
 
     source_inventory = SourceInventory.from_dict(snapshot["source_inventory"])
-    if sha256_json(source_inventory.to_dict()) != snapshot["source_inventory_fingerprint"]:
+    if sha256_json(source_inventory.to_persistence_dict()) != snapshot["source_inventory_fingerprint"]:
         raise RuntimeError("native_retrieval_snapshot_inventory_fingerprint_drift")
     source_observations = [
         Observation.from_dict(row) for row in snapshot["source_occurrence_observations"]

@@ -25,6 +25,40 @@ Raw resource
 
 Users should experience this as task-oriented review work, not as manual graph maintenance.
 
+## Default Candidate Evidence Retrieval Workflow
+
+Every retrieval, hardness, or harness workflow uses:
+
+```text
+trusted access binding
+  -> admissible source versions, explicit contexts, and explicit times
+  -> index-owned CandidateEvidenceTextPolicyRuntime for Unicode-NFKC/
+     protected-ASCII/Jieba/SentencePiece/frozen-profile processing
+  -> query planning from runtime-produced tokens
+  -> logical source item cardinality and IDF
+  -> conjunctive same-source anchor coverage
+  -> optional capped additive ontology rerank
+  -> minimal citeable observations
+```
+
+The runtime binding includes exact admission-policy, SentencePiece-model, and
+training-corpus SHA-256 hashes. It also pins the runtime id and tokenizer
+implementation hash; runtime code mismatch fails closed. Default callers pass
+query text only. Raw caller tokens, a free-form hash, a placeholder hash, or a
+regex-only declaration cannot onboard the default workflow. Experimental
+transforms use `retrieve_ablation` and cannot remove default runtime tokens.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
+
+Regex-only retrieval, parser-chunk counting, lexical/thread transitive
+components, and ontology hard-pruning are explicit ablation or historical
+baseline workflows only. They must not be onboarded as defaults.
+
 ## Minimal Local Ingestion Workflow
 
 The current Slice 1 workflow is a deterministic internal path for trusted local

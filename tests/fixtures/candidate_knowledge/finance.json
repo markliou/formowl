@@ -1,0 +1,287 @@
+{
+  "fixture_id": "candidate_knowledge_finance_v1",
+  "domain_pack": {
+    "pack_id": "domain_pack_finance_v1",
+    "domain": "finance",
+    "ontology_revision_id": "ontology_rev_candidate_core_v1",
+    "source_observation_ids": [
+      "obs_domain_pack_finance_v1"
+    ],
+    "object_types": {
+      "Invoice": "Transaction",
+      "Payment": "Transaction",
+      "CostCenter": "Account",
+      "Controller": "Person"
+    },
+    "assertion_mappings": {
+      "invoice_amount": {
+        "assertion_kind": "property",
+        "predicate": "invoice_amount"
+      },
+      "belongs_to_cost_center": {
+        "assertion_kind": "relation",
+        "predicate": "belongs_to_cost_center"
+      },
+      "payment_status": {
+        "assertion_kind": "state",
+        "predicate": "payment_status",
+        "epistemic_status": "actual",
+        "temporal_roles": {
+          "status_as_of": "observed_at",
+          "ledger_recorded_on": "recorded_at"
+        }
+      },
+      "payment_approval": {
+        "assertion_kind": "event",
+        "predicate": "payment_approval",
+        "epistemic_status": "actual",
+        "temporal_roles": {
+          "approved_on": "phenomenon_time",
+          "ledger_recorded_on": "recorded_at"
+        }
+      },
+      "approval_request": {
+        "assertion_kind": "coordination",
+        "predicate": "Request",
+        "epistemic_status": "requested",
+        "temporal_roles": {
+          "requested_on": "asserted_at",
+          "answer_due_on": "due_at",
+          "known_on": "recorded_at"
+        }
+      }
+    },
+    "frame_extensions": {
+      "PaymentApprovalRequest": "Request"
+    },
+    "aliases": {
+      "CostCenter": [
+        "cost centre"
+      ]
+    }
+  },
+  "observations": [
+    {
+      "observation_id": "obs_finance_invoice_row",
+      "asset_id": "asset_finance_erp_fixture",
+      "extractor_run_id": "run_finance_erp_fixture",
+      "observation_type": "erp_transaction_row",
+      "modality": "table",
+      "location": {
+        "sheet": "Invoices",
+        "row_index": 12
+      },
+      "confidence": 0.99,
+      "permission_scope": {
+        "scope_type": "workspace",
+        "scope_id": "formowl",
+        "visibility": "restricted"
+      },
+      "created_at": "2026-07-15T02:00:00+00:00",
+      "extracted_value": {
+        "invoice_number": "INV-2026-1042",
+        "amount": 100000,
+        "currency": "TWD",
+        "payment_status": "unpaid"
+      },
+      "payload": {
+        "candidate_knowledge": {
+          "business_objects": [
+            {
+              "local_id": "invoice_1042",
+              "object_type": "Invoice",
+              "label": "Invoice INV-2026-1042",
+              "properties": {
+                "invoice_number": "INV-2026-1042"
+              }
+            },
+            {
+              "local_id": "payment_1042",
+              "object_type": "Payment",
+              "label": "Payment for INV-2026-1042",
+              "properties": {
+                "payment_reference": "PAY-1042"
+              }
+            },
+            {
+              "local_id": "cost_center_110",
+              "object_type": "CostCenter",
+              "label": "Cost Center 110",
+              "properties": {
+                "cost_center_code": "110"
+              }
+            },
+            {
+              "local_id": "controller_01",
+              "object_type": "Controller",
+              "label": "Finance Controller",
+              "properties": {
+                "role": "controller"
+              }
+            }
+          ],
+          "assertions": [
+            {
+              "assertion_type": "invoice_amount",
+              "subject": "invoice_1042",
+              "value": {
+                "amount": 100000,
+                "currency": "TWD"
+              }
+            },
+            {
+              "assertion_type": "belongs_to_cost_center",
+              "subject": "invoice_1042",
+              "object": "cost_center_110"
+            },
+            {
+              "assertion_type": "payment_status",
+              "subject": "payment_1042",
+              "value": "unpaid",
+              "temporal_context": {
+                "status_as_of": "2026-07-15",
+                "ledger_recorded_on": "2026-07-15T02:00:00+00:00"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "observation_id": "obs_finance_approval_event",
+      "asset_id": "asset_finance_approval_fixture",
+      "extractor_run_id": "run_finance_approval_fixture",
+      "observation_type": "approval_event",
+      "modality": "application_record",
+      "location": {
+        "event_index": 3,
+        "record_type": "payment_approval"
+      },
+      "confidence": 0.97,
+      "permission_scope": {
+        "scope_type": "workspace",
+        "scope_id": "formowl",
+        "visibility": "restricted"
+      },
+      "created_at": "2026-07-15T03:00:00+00:00",
+      "extracted_value": {
+        "status_from": "pending",
+        "status_to": "approved"
+      },
+      "payload": {
+        "candidate_knowledge": {
+          "business_objects": [],
+          "assertions": [
+            {
+              "assertion_type": "payment_approval",
+              "subject": "payment_1042",
+              "actor": "controller_01",
+              "previous_value": "pending",
+              "proposed_value": "approved",
+              "temporal_context": {
+                "approved_on": "2026-07-15T03:00:00+00:00",
+                "ledger_recorded_on": "2026-07-15T03:00:00+00:00"
+              }
+            },
+            {
+              "assertion_type": "approval_request",
+              "subject": "payment_1042",
+              "actor": "controller_01",
+              "counterparty": "cost_center_110",
+              "value": "approve_payment",
+              "temporal_context": {
+                "requested_on": "2026-07-15T03:00:00+00:00",
+                "answer_due_on": "2026-07-16",
+                "known_on": "2026-07-15T03:00:00+00:00"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "observation_id": "obs_domain_pack_finance_v1",
+      "asset_id": "asset_domain_pack_finance_fixture",
+      "extractor_run_id": "run_domain_pack_fixture",
+      "observation_type": "domain_pack_definition",
+      "modality": "structured_json",
+      "location": {
+        "section": "domain_pack"
+      },
+      "confidence": 1.0,
+      "permission_scope": {
+        "scope_type": "workspace",
+        "scope_id": "formowl",
+        "visibility": "restricted"
+      },
+      "created_at": "2026-07-15T00:30:00+00:00",
+      "text": "Finance Domain Pack fixture definition.",
+      "payload": {
+        "candidate_knowledge": {
+          "business_objects": [],
+          "assertions": []
+        },
+        "domain_pack_definition": {
+          "pack_id": "domain_pack_finance_v1",
+          "domain": "finance",
+          "ontology_revision_id": "ontology_rev_candidate_core_v1",
+          "source_observation_ids": [
+            "obs_domain_pack_finance_v1"
+          ],
+          "object_types": {
+            "Invoice": "Transaction",
+            "Payment": "Transaction",
+            "CostCenter": "Account",
+            "Controller": "Person"
+          },
+          "assertion_mappings": {
+            "invoice_amount": {
+              "assertion_kind": "property",
+              "predicate": "invoice_amount"
+            },
+            "belongs_to_cost_center": {
+              "assertion_kind": "relation",
+              "predicate": "belongs_to_cost_center"
+            },
+            "payment_status": {
+              "assertion_kind": "state",
+              "predicate": "payment_status",
+              "epistemic_status": "actual",
+              "temporal_roles": {
+                "status_as_of": "observed_at",
+                "ledger_recorded_on": "recorded_at"
+              }
+            },
+            "payment_approval": {
+              "assertion_kind": "event",
+              "predicate": "payment_approval",
+              "epistemic_status": "actual",
+              "temporal_roles": {
+                "approved_on": "phenomenon_time",
+                "ledger_recorded_on": "recorded_at"
+              }
+            },
+            "approval_request": {
+              "assertion_kind": "coordination",
+              "predicate": "Request",
+              "epistemic_status": "requested",
+              "temporal_roles": {
+                "requested_on": "asserted_at",
+                "answer_due_on": "due_at",
+                "known_on": "recorded_at"
+              }
+            }
+          },
+          "frame_extensions": {
+            "PaymentApprovalRequest": "Request"
+          },
+          "aliases": {
+            "CostCenter": [
+              "cost centre"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

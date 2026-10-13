@@ -60,7 +60,7 @@ PROGRAMMATIC_NEURAL_TRAINING_EPOCHS = 8
 PROGRAMMATIC_NEURAL_LEARNING_RATE = 0.08
 PROGRAMMATIC_NEURAL_HIDDEN_UNITS = 5
 PROGRAMMATIC_DATA_DRIVEN_MODEL_VERSION = "formowl_exm_data_driven_cjk_policy_v1"
-PROGRAMMATIC_FROZEN_MODEL_VERSION = "formowl_exm_frozen_cjk_profile_v1"
+PROGRAMMATIC_FROZEN_MODEL_VERSION = "formowl_exm_frozen_text_profile_v3"
 PROGRAMMATIC_SCORER_WEAK_LABEL_MLP = "weak_label_mlp"
 PROGRAMMATIC_SCORER_DATA_DRIVEN = "data_driven_no_neural"
 PROGRAMMATIC_SCORER_FROZEN_PROFILE = "frozen_profile_no_training"
@@ -225,6 +225,7 @@ _PROGRAMMATIC_NEURAL_FEATURE_NAMES = (
 _FROZEN_PROFILE_SCORE_RULES = {
     "bias": -1.25,
     "cjk_presence": 1.15,
+    "ascii_whole_word": 0.85,
     "medium_length": 0.55,
     "minimum_business_length": 0.25,
     "protected_category": 1.15,
@@ -232,7 +233,7 @@ _FROZEN_PROFILE_SCORE_RULES = {
     "document_frequency": {
         "lte_12": 0.45,
         "lte_80": 0.15,
-        "gt_160": -0.7,
+        "gt_160": -0.2,
     },
     "sentencepiece_piece": -0.35,
     "sigmoid_multiplier_basis_points": 10000,
@@ -1224,16 +1225,22 @@ def _compile_programmatic_ontology_policy(
             for lexeme, message_keys in message_keys_by_lexeme.items()
         )
     )
+    message_count = len({segment.message_key for segment in segments})
+    effective_max_document_frequency = max(
+        PROGRAMMATIC_MAX_DOCUMENT_FREQUENCY,
+        message_count // 2,
+    )
     scorer_candidates = tuple(
         (lexeme, document_frequency, categories)
         for lexeme, document_frequency, categories in lexeme_rows
         if PROGRAMMATIC_MIN_DOCUMENT_FREQUENCY
         <= document_frequency
-        <= PROGRAMMATIC_MAX_DOCUMENT_FREQUENCY
+        <= effective_max_document_frequency
         and not lexeme.startswith(("org:", "id:", "contact:"))
         and (
             lexeme.startswith("zh:")
             or (lexeme.startswith("sp:") and _CJK_RE.search(lexeme.removeprefix("sp:")))
+            or _usable_ascii_candidate_lexeme(lexeme)
         )
     )
     if scorer_kind == PROGRAMMATIC_SCORER_WEAK_LABEL_MLP:
@@ -1247,7 +1254,7 @@ def _compile_programmatic_ontology_policy(
         if document_frequency < PROGRAMMATIC_MIN_DOCUMENT_FREQUENCY:
             counters["frequency_rejected"] += 1
             continue
-        if document_frequency > PROGRAMMATIC_MAX_DOCUMENT_FREQUENCY:
+        if document_frequency > effective_max_document_frequency:
             counters["frequency_rejected"] += 1
             continue
         if lexeme.startswith(("org:", "id:", "contact:")):
@@ -1258,7 +1265,11 @@ def _compile_programmatic_ontology_policy(
             counters["ascii_piece_rejected"] += 1
             continue
         surface = lexeme.split(":", 1)[1] if ":" in lexeme else lexeme
-        if lexeme.startswith(("zh:", "sp:")) and _CJK_RE.search(surface):
+        if (
+            lexeme.startswith(("zh:", "sp:"))
+            and _CJK_RE.search(surface)
+            or _usable_ascii_candidate_lexeme(lexeme)
+        ):
             counters["neural_scored"] += 1
             neural_score = candidate_scorer.score_basis_points(
                 lexeme,
@@ -1268,14 +1279,15 @@ def _compile_programmatic_ontology_policy(
             if neural_score >= PROGRAMMATIC_NEURAL_SCORE_THRESHOLD_BP:
                 accepted.add(lexeme)
                 counters["neural_accepted"] += 1
-                counters["cjk_accepted"] += 1
+                if _CJK_RE.search(surface):
+                    counters["cjk_accepted"] += 1
             continue
         counters["frequency_rejected"] += 1
 
     payload = {
         "policy_version": TYPE_COMPATIBILITY_PROXY_POLICY_VERSION,
         "min_document_frequency": PROGRAMMATIC_MIN_DOCUMENT_FREQUENCY,
-        "max_document_frequency": PROGRAMMATIC_MAX_DOCUMENT_FREQUENCY,
+        "max_document_frequency": effective_max_document_frequency,
         "neural_score_threshold_basis_points": PROGRAMMATIC_NEURAL_SCORE_THRESHOLD_BP,
         "scorer_kind": scorer_kind,
         "scorer_requires_training": scorer_requires_training,
@@ -1320,6 +1332,8 @@ def _weak_label_candidate_score_basis_points(
     score = float(rules["bias"])
     if _CJK_RE.search(surface):
         score += float(rules["cjk_presence"])
+    if _usable_ascii_candidate_lexeme(lexeme):
+        score += float(rules["ascii_whole_word"])
     if 2 <= len(surface) <= 12:
         score += float(rules["medium_length"])
     if len(surface) >= 4:
@@ -3352,11 +3366,22 @@ def _important_lexemes(
         lexeme
         for lexeme in lexemes
         if lexeme.startswith(("org:", "id:", "contact:", "zh:", "sp:"))
-        or (lexeme.startswith("rx:") and lexeme.removeprefix("rx:") in _IMPORTANT_REGEX_TERMS)
+        or _usable_ascii_candidate_lexeme(lexeme)
     }
     if policy_name in PROGRAMMATIC_POLICIES and compiled_policy is not None:
         return lexical_important & compiled_policy.accepted_lexemes
     return lexical_important
+
+
+def _usable_ascii_candidate_lexeme(lexeme: str) -> bool:
+    if not lexeme.startswith("rx:"):
+        return False
+    surface = lexeme.removeprefix("rx:")
+    return (
+        3 <= len(surface) <= 64
+        and surface not in _STOPWORDS
+        and any(character.isalpha() for character in surface)
+    )
 
 
 def _groups_by_thread(segments: Sequence[_Segment]) -> dict[str, list[str]]:

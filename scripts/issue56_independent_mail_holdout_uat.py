@@ -765,8 +765,8 @@ def build_independent_mail_holdout_preflight(
     )
 
     bundle_payload = _validated_bundle_artifact(bundle_artifact)
-    bundle = MailEvidenceBundle.from_dict(bundle_payload)
-    if bundle.to_dict() != bundle_payload:
+    bundle = MailEvidenceBundle.from_persistence_dict(bundle_payload)
+    if bundle.to_persistence_dict() != bundle_payload:
         raise IndependentMailHoldoutUatError("mail_bundle_round_trip_drift")
     _validate_native_retrieval_snapshot(retrieval_snapshot)
     _validate_source_bindings(
@@ -2811,7 +2811,7 @@ def _validate_extension_execution_manifest_lineage(
         "source_inventory_fingerprint": hashes.get("source_inventory_fingerprint"),
         "source_provenance_fingerprint": hashes.get("source_provenance_fingerprint"),
         "permission_fingerprint": next(iter(permission_fingerprints)),
-        "mail_evidence_bundle_fingerprint": sha256_json(bundle.to_dict()),
+        "mail_evidence_bundle_fingerprint": sha256_json(bundle.to_persistence_dict()),
         "tokenizer_profile_fingerprint": hashes.get("lexical_profile_fingerprint"),
         "index_fingerprint": hashes.get("index_fingerprint"),
         "snapshot_fingerprint": hashes.get("retrieval_snapshot_fingerprint"),

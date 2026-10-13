@@ -787,7 +787,7 @@ def _write_retrieval_inputs(
         "source_snapshot_fingerprint": source_snapshot_fingerprint,
         "source_asset_sha256": source_asset_sha256,
         "native_manifest_fingerprint": sha256_json("native-manifest"),
-        "source_inventory_fingerprint": sha256_json(inventory.to_dict()),
+        "source_inventory_fingerprint": sha256_json(inventory.to_persistence_dict()),
         "source_provenance_fingerprint": provenance_fingerprint,
         "permission_fingerprint": sha256_json(permission_scope.to_dict()),
         "parsed_observation_fingerprint": sha256_json(
@@ -802,7 +802,7 @@ def _write_retrieval_inputs(
         "authorized_result_fingerprint": sha256_json("authorized-result"),
         "denied_result_fingerprint": sha256_json("denied-result"),
         "created_at": CREATED_AT,
-        "source_inventory": inventory.to_dict(),
+        "source_inventory": inventory.to_persistence_dict(),
         "source_occurrence_observations": [],
         "parsed_mail_observations": [observation.to_dict() for observation in observations],
         "counts": counts,

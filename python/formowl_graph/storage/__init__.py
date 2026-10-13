@@ -8,6 +8,9 @@ from .records import (
     CandidateRelationStore,
     CanonicalGraphStore,
     SemanticMetadataStore,
+    CandidateAssertionStore,
+    DomainPackStore,
+    persist_candidate_knowledge_batch,
 )
 from .postgres import (
     CanonicalCommitProposal,
@@ -29,6 +32,7 @@ from .postgres import (
 )
 
 __all__ = [
+    "CandidateAssertionStore",
     "CandidateAtomStore",
     "CandidateBusinessObjectStore",
     "CandidateFrameStore",
@@ -36,8 +40,9 @@ __all__ = [
     "CandidateRelationStore",
     "CanonicalGraphStore",
     "CanonicalCommitProposal",
+    "DomainPackStore",
+    "persist_candidate_knowledge_batch",
     "PostgreSQLConnectionConfig",
-    "PostgreSQLMigrationResult",
     "PostgreSQLMigrationRunner",
     "PostgreSQLMetadataRepository",
     "PostgreSQLUnitOfWork",
@@ -52,4 +57,5 @@ __all__ = [
     "postgre_sql_backed_repository_interfaces",
     "postgre_sql_connection_configuration",
     "transaction_rollback_tests_against_postgre_sql",
+    "PostgreSQLMigrationResult",
 ]

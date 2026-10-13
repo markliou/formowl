@@ -4,6 +4,29 @@ Use this file as the short restart note for the Knowledge Graph Research Agent.
 The long history remains in `HANDOFF.md`, but this file is the current concise
 state.
 
+## Default Candidate Evidence Retrieval
+
+Any new KG retrieval, hardness, or harness packet must onboard
+`CandidateEvidenceIndex` before opening private evaluation cases. The default
+counts a stable logical source item, resolves access/context/time before query
+planning, forbids lexical transitive closure, and limits ontology to a capped
+additive rerank. Regex-only, parser-chunk, component-union, and ontology
+hard-pruning methods are ablation or historical baseline arms only.
+The index-owned `CandidateEvidenceTextPolicyRuntime` must prove the
+Unicode-NFKC/protected-ASCII/Jieba/corpus-bound SentencePiece/frozen-profile
+stack and exact admission/model/corpus SHA-256 hashes. The binding also pins
+the runtime id and tokenizer implementation hash; runtime code mismatch fails
+closed. Default callers pass query text only; raw tokens and free-form hashes
+are not sufficient. Access and explicit context/time admissibility precede
+tokenization. Experiments use `retrieve_ablation`.
+Raw query text may identify control intent, evidence count, and chronology
+syntax only. Retrieval anchors, actor/topic vocabulary, and supported content
+terms must come from runtime-produced tokens or a named `retrieve_ablation`
+extension; regex-parsed raw terms must never be added back. Access uses a real
+`CandidateEvidenceAccessBinding` whose four eligibility collections are
+`frozenset` values of exact nonblank strings. Cross-context comparison
+authorization must be an actual boolean; string values fail closed.
+
 ## Startup
 
 Read these before editing:

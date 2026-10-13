@@ -1460,13 +1460,13 @@ def _write_workspace_fixture(
         started_at=materializer_fixture.CREATED_AT,
         completed_at=materializer_fixture.CREATED_AT,
     )
-    bundle_payload = bundle.to_dict()
+    bundle_payload = bundle.to_persistence_dict()
     bundle_artifact = {
         "artifact_id": "formowl_issue56_native_mail_evidence_bundle_v1",
         "schema_version": 1,
         "status": "passed",
         "source_snapshot_fingerprint": snapshot["source_snapshot_fingerprint"],
-        "source_inventory_fingerprint": sha256_json(new_inventory.to_dict()),
+        "source_inventory_fingerprint": sha256_json(new_inventory.to_persistence_dict()),
         "source_provenance_fingerprint": snapshot["source_provenance_fingerprint"],
         "bundle": bundle_payload,
         "bundle_fingerprint": sha256_json(bundle_payload),
@@ -1476,8 +1476,8 @@ def _write_workspace_fixture(
         "artifact_fingerprint",
     )
 
-    snapshot["source_inventory"] = new_inventory.to_dict()
-    snapshot["source_inventory_fingerprint"] = sha256_json(new_inventory.to_dict())
+    snapshot["source_inventory"] = new_inventory.to_persistence_dict()
+    snapshot["source_inventory_fingerprint"] = sha256_json(new_inventory.to_persistence_dict())
     snapshot["permission_fingerprint"] = sha256_json(WORKSPACE_PERMISSION_SCOPE.to_dict())
     snapshot["parsed_mail_observations"] = [observation.to_dict() for observation in observations]
     added_header_count = len(observations) - len(

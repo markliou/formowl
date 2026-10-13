@@ -5940,6 +5940,7 @@ class Issue56CodexProviderBridgeTests(unittest.TestCase):
         for event_kind in ("error_notification", "failed_completion"):
             with self.subTest(event_kind=event_kind):
                 transport = object.__new__(CodexAppServerStdioTransport)
+                transport._allow_public_web_search = False
                 transport._state_lock = threading.RLock()
                 transport._thread_locks = {}
                 transport._active_turns = {}

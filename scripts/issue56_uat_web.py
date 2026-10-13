@@ -289,7 +289,7 @@ def _finish_prepared_ingestion_revision(
         bundle_payloads = snapshot.get("bundles")
         if not isinstance(bundle_payloads, list):
             raise ValueError("ingestion revision preparation bundles are invalid")
-        prepared_bundles = [MailEvidenceBundle.from_dict(item) for item in bundle_payloads]
+        prepared_bundles = [MailEvidenceBundle.from_persistence_dict(item) for item in bundle_payloads]
     del snapshot, snapshot_bytes
 
     print(
@@ -2575,7 +2575,7 @@ def _build_ingestion_revision(
             for index, bundle in enumerate(bundles):
                 if index:
                     snapshot_write(stream, b",")
-                snapshot_write(stream, bundle.to_dict())
+                snapshot_write(stream, bundle.to_persistence_dict())
             snapshot_write(stream, b'],"observation_references":[')
             for index, reference in enumerate(observations):
                 if index:

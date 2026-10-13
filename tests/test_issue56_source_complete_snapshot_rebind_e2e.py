@@ -485,7 +485,7 @@ class Issue56SourceCompleteSnapshotRebindE2ETests(unittest.TestCase):
             second.report["index_fingerprint"],
         )
 
-        bundle = MailEvidenceBundle.from_dict(first.bundle["bundle"])
+        bundle = MailEvidenceBundle.from_persistence_dict(first.bundle["bundle"])
         observations = [
             Observation.from_dict(row)
             for row in first.retrieval_snapshot["source_occurrence_observations"]

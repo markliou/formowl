@@ -1,238 +1,611 @@
 #!/usr/bin/env bash
-# INTERNAL DIAGNOSTIC UAT ONLY. Generated from a read-only audit.
-# This script is intentionally inert until all __PLACEHOLDER__ values are replaced.
-# It may build and replace ONLY formowl-mcp-uat when explicitly executed.
+# INTERNAL DOCUMENT-FIRST UAT ONLY.
+#
+# This launcher intentionally starts exactly three containers:
+#   1. one read-only FormOwl document MCP over the existing export,
+#   2. one Codex app-server sidecar, and
+#   3. one browser-facing UAT HTTP surface.
+#
+# The browser-facing process reaches Codex through one private Unix socket.
+# Codex reaches exactly one read-only MCP through the UAT process.  This launch
+# path does not provision ontology, public search, a second Codex runtime, or a
+# PST parser.  It does not build images, mutate services, or claim production
+# readiness.
 set -Eeuo pipefail
 IFS=$'\n\t'
 
 PLAN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-CONTAINER="formowl-mcp-uat"
-MAIL_CONTAINER="formowl-mail-diagnostic-uat"
-SIDECAR_CONTAINER="formowl-codex-uat-sidecar"
-NETWORK="formowl-diagnostic-uat"
-HOST_PORT="8091"
-CONTAINER_PORT="8090"
-BASE_IMAGE="formowl-may-uat:diagnostic-reviewed-v24-20260809-r1"
-BASE_IMAGE_ID="sha256:d5a7eaab66fc61dbbdac447d9e9e98c854940bbe4c6decd9346faec5f602dcec"
-CANDIDATE_IMAGE="formowl-may-uat:diagnostic-reviewed-v24-20260810-r8"
-BUILD_CONTEXT="/tmp/formowl-reviewed-v24-build-context"
-CANARY="/tmp/formowl-mcp-direct-canary-v17-long-timeout-20260809.py"
-EXPECTED_CANARY_SHA256="da29d474561d451c6c6e06fb812f3acf251c1dce19e962f6ba5dbbab3ebf6716"
-EXPECTED_CONTEXT_MANIFEST_SHA256="5eb9959ee3be1cfea292b6d1b2b329ed29dd1176ef82c139d04eefa9cda5bfa8"
-EXPECTED_DOCKERFILE_SHA256="5dfd9e618eb1d94e2af25a3eda8fb89260c37cac8a3a145bb6f5a2482de1da05"
-EXPECTED_INSPECT_SNAPSHOT_SHA256="614227fe991d3f9361f4f00a639aff51da87dc8dfdfbbc3e45c7ac3cff75797d"
-EXPECTED_REVIEWED_IMAGE_METADATA_SHA256="845a37c9322e162b0d79f61e6b8834a50402d6180e35c1250f4a5d8bbc7b2f3f"
-INSPECT_SNAPSHOT="/tmp/formowl-current-uat-containers-20260809.inspect.json"
-REVIEWED_IMAGE_METADATA="/tmp/formowl-readonly-reviewed-image.json"
-EXPECTED_COUNT=77
-EXPECTED_FINGERPRINT="sha256:d791cfcd424910ed766f4092b51c6a9c1f1b756943935544134e626301e7c705"
-CANDIDATE_BINDING_PATH="__CANDIDATE_BINDING_PATH__"
-CANDIDATE_BINDING_SHA256="__CANDIDATE_BINDING_SHA256__"
-SEMANTIC_PREFLIGHT_REPORT="__SEMANTIC_PREFLIGHT_REPORT_PATH__"
-BROWSER_CONTRACT_COMMAND="__INDEPENDENT_BROWSER_CONTRACT_COMMAND__"
-BROWSER_CONTRACT_REPORT="__BROWSER_CONTRACT_REPORT_PATH__"
-ROLLBACK_NAME="${CONTAINER}.rollback.$(date -u +%Y%m%dT%H%M%SZ)"
-CANDIDATE_CREATED=0
-BASELINE_RENAMED=0
+ACTION=""
+IMAGE=""
+PRIVATE_ROOT=""
+BRIDGE_ROOT=""
+WORKTREE_ROOT=""
+AUTH_CACHE=""
+RUNTIME_ROOT=""
+DOCUMENT_MCP_COMMAND_JSON=""
+CODEX_COMMAND="codex"
+HOST_PORT="8088"
+MCP_HOST_PORT="8091"
+WEB_BIND_ADDRESS="127.0.0.1"
 
-fail() { printf '%s\n' "FAIL: $*" >&2; exit 1; }
-sha256_file() { sha256sum -- "$1" | awk '{print $1}'; }
-require_exact_hash() { [[ -f "$1" ]] || fail "required file is missing"; [[ "$(sha256_file "$1")" == "$2" ]] || fail "required artifact hash mismatch"; }
-require_non_placeholder() { [[ "$2" != __*__ ]] || fail "$1 must be explicitly supplied"; }
+CORE_NETWORK="formowl-document-uat"
+CODEX_NETWORK="formowl-document-uat-codex"
+MCP_CONTAINER="formowl-document-mcp-uat"
+CODEX_CONTAINER="formowl-uat-codex-sidecar"
+UAT_CONTAINER="formowl-mail-document-uat"
 
-safe_config_fingerprint() {
-  docker inspect "$1" | python3 -c '
-import hashlib,json,sys
-item=json.load(sys.stdin)[0]
-def env_keys(values):
-  return sorted(str(v).split("=",1)[0] for v in values or [])
-def mounts(values):
-  out=[]
-  for value in values or []:
-    out.append({"type":value.get("Type"),"target":value.get("Destination"),"rw":value.get("RW"),"source_sha256":hashlib.sha256(str(value.get("Source","")).encode()).hexdigest()})
-  return sorted(out,key=lambda entry:(str(entry["target"]),str(entry["type"])))
-config=item.get("Config",{}); host=item.get("HostConfig",{})
-safe={"name":item.get("Name"),"id":item.get("Id"),"image":config.get("Image"),"user":config.get("User"),"workdir":config.get("WorkingDir"),"entrypoint":config.get("Entrypoint"),"cmd":config.get("Cmd"),"env_keys":env_keys(config.get("Env")),"network":host.get("NetworkMode"),"ports":host.get("PortBindings"),"restart":host.get("RestartPolicy"),"mounts":mounts(item.get("Mounts"))}
-print(hashlib.sha256(json.dumps(safe,sort_keys=True,separators=(",",":")).encode()).hexdigest())'
+CODEX_STATE_CONTAINER_PATH="/formowl/runtime/codex-state"
+UAT_STATE_CONTAINER_PATH="/formowl/runtime/uat-state"
+CODEX_SOCKET_CONTAINER_PATH="/formowl/run/codex/app-server.sock"
+WORKTREE_PYTHON_CONTAINER_PATH="/opt/formowl/python"
+CODEX_ENGINE_CONTAINER_PATH="/opt/formowl/scripts/mail_human_uat_codex_engine.py"
+UAT_LAUNCHER_CONTAINER_PATH="/opt/formowl/scripts/mail_human_uat.py"
+FORMOWL_MAIL_INIT_CONTAINER_PATH="${WORKTREE_PYTHON_CONTAINER_PATH}/formowl_mail/__init__.py"
+FORMOWL_MAIL_INIT_SHIM_HOST="${PLAN_DIR}/document-uat-formowl-mail-init.py"
+MODEL_READINESS_MARKER="FORMOWL_CODEX_UAT_MODEL_READY"
+
+CODEX_STATE_HOST=""
+UAT_STATE_HOST=""
+CODEX_SOCKET_DIR_HOST=""
+WORKTREE_PYTHON_HOST=""
+CODEX_ENGINE_HOST=""
+UAT_LAUNCHER_HOST=""
+RUN_UID=""
+RUN_GID=""
+declare -a DOCUMENT_MCP_COMMAND=()
+declare -a WORKTREE_PYTHON_OVERLAY_MOUNT_ARGS=()
+declare -a UAT_PACKAGE_INIT_SHIM_MOUNT_ARGS=()
+
+# Mount only the document-first integration seams that can differ from the
+# base UAT image. The active orchestrator does not import or instantiate the
+# legacy public-search adapter.
+readonly WORKTREE_PYTHON_OVERLAY_FILES=(
+  "formowl_contract/__init__.py"
+  "formowl_contract/structured_intent.py"
+  "formowl_mail/_guards.py"
+  "formowl_mail/document_uat_mcp.py"
+  "formowl_mail/human_uat_http.py"
+  "formowl_mail/human_uat_orchestrator.py"
+)
+
+fail() {
+  printf '%s\n' "FAIL: $*" >&2
+  exit 1
 }
 
-assert_preserved_container() {
-  local name="$1"
-  docker inspect "$name" >/dev/null 2>&1 || fail "required preserved container is absent"
-  [[ "$(docker inspect -f '{{.State.Running}}' "$name")" == "true" ]] || fail "preserved container is not running"
+usage() {
+  cat <<'EOF'
+Usage:
+  uat-mcp-r8-deploy.sh dry-run [options]
+  uat-mcp-r8-deploy.sh start [options]
+  uat-mcp-r8-deploy.sh status
+  uat-mcp-r8-deploy.sh stop
+
+Required for dry-run and start:
+  --image IMAGE
+  --private-root ABSOLUTE_DIRECTORY
+  --bridge-root ABSOLUTE_DIRECTORY
+  --worktree-root ABSOLUTE_DIRECTORY
+  --auth-cache ABSOLUTE_FILE
+  --runtime-root ABSOLUTE_DIRECTORY
+  --document-mcp-command-json ABSOLUTE_FILE
+
+Optional:
+  --codex-command COMMAND                       (default: codex)
+  --host-port PORT                              (default: 8088)
+  --mcp-host-port PORT                          (default: 8091)
+  --web-bind-address IPV4                       (default: 127.0.0.1)
+
+The document MCP command file is an operator-private JSON array of executable
+arguments beginning with
+`python3 /opt/formowl/python/formowl_mail/document_uat_mcp.py`. It is mounted
+into no container and must not use shell execution or an arbitrary script.
+The current integration launcher must expose --document-first,
+--document-mcp-url, --private-codex-socket, and
+--private-codex-runtime-state-dir. A dual-Codex-only launcher fails closed.
+EOF
 }
 
-assert_candidate_mcp_shape() {
-  local shape
-  shape="$(docker inspect "$CONTAINER" | python3 -c '
-import json,sys
-x=json.load(sys.stdin)[0]; c=x["Config"]; h=x["HostConfig"]; mounts=x.get("Mounts",[])
-targets={(m.get("Destination"),m.get("RW")) for m in mounts}
-cmd=c.get("Cmd") or []
-ok=(c.get("Image")=="formowl-may-uat:diagnostic-reviewed-v24-20260810-r8" and c.get("User")=="65532:65532" and c.get("WorkingDir")=="/opt/formowl" and h.get("NetworkMode")=="formowl-diagnostic-uat" and h.get("RestartPolicy",{}).get("Name")=="no" and h.get("PortBindings",{}).get("8090/tcp")==[{"HostIp":"127.0.0.1","HostPort":"8091"}] and targets=={("/formowl/bridge",False),("/formowl/private",False),("/formowl/private/reviewed-structural-bindings.private.json",False)} and "--reviewed-structural-bindings" in cmd and "/formowl/private/reviewed-structural-bindings.private.json" in cmd and "FORMOWL_MAIL_TOKENIZER_MODE" in {str(v).split("=",1)[0] for v in c.get("Env") or []})
-print("true" if ok else "false")')"
-  [[ "$shape" == true ]] || fail "candidate MCP configuration is not an exact approved replacement shape"
+require_absolute_path() {
+  local value="$1"
+  local label="$2"
+  [[ "$value" == /* ]] || fail "$label must be absolute"
+  [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || fail "$label is invalid"
 }
 
-assert_baseline_mcp_shape() {
-  docker inspect "$CONTAINER" >/dev/null 2>&1 || fail "baseline MCP container is absent"
-  [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" == "false" ]] || fail "baseline MCP must be stopped before an atomic rename swap"
-  [[ "$(docker inspect -f '{{.State.OOMKilled}}' "$CONTAINER")" == "false" ]] || fail "baseline MCP has OOMKilled=true; investigate before replacement"
-  local shape
-  shape="$(docker inspect "$CONTAINER" | python3 -c '
-import json,sys
-x=json.load(sys.stdin)[0]; c=x["Config"]; h=x["HostConfig"]; mounts=x.get("Mounts",[])
-ok=(c.get("User")=="65532:65532" and c.get("WorkingDir")=="/opt/formowl" and h.get("NetworkMode")=="formowl-diagnostic-uat" and h.get("RestartPolicy",{}).get("Name")=="no" and h.get("PortBindings",{}).get("8090/tcp")==[{"HostIp":"127.0.0.1","HostPort":"8091"}] and {(m.get("Destination"),m.get("RW")) for m in mounts}=={("/formowl/bridge",False),("/formowl/private",False)})
-print("true" if ok else "false")')"
-  [[ "$shape" == true ]] || fail "baseline MCP parity shape does not match the reviewed plan"
+require_regular_file() {
+  local value="$1"
+  local label="$2"
+  require_absolute_path "$value" "$label"
+  [[ -f "$value" && ! -L "$value" ]] ||
+    fail "$label must be a regular non-symlink file"
 }
 
-validate_semantic_preflight() {
-  require_non_placeholder "SEMANTIC_PREFLIGHT_REPORT" "$SEMANTIC_PREFLIGHT_REPORT"
-  [[ -f "$SEMANTIC_PREFLIGHT_REPORT" ]] || fail "semantic preflight report is missing"
-  python3 - "$SEMANTIC_PREFLIGHT_REPORT" "$EXPECTED_COUNT" "$EXPECTED_FINGERPRINT" <<'PY'
-import json,sys
-p,count,fingerprint=sys.argv[1],int(sys.argv[2]),sys.argv[3]
-d=json.load(open(p,encoding="utf-8"))
-def choose(*keys):
-  for key in keys:
-    if key in d: return d[key]
-  return None
-checks={
- "status":choose("status")=="passed",
- "count":choose("observed_distinct_projection_count","distinct_projection_count")==count,
- "fingerprint":choose("observed_fingerprint","fingerprint")==fingerprint,
- "claim_state":choose("claim_state")=="CANDIDATE_MATCHES",
- "retrieval_path":choose("retrieval_path")=="mail_authorized_structured_set",
- "canonical_kg":choose("canonical_kg") is False,
- "citation_count":choose("citation_count")==0,
- "source_count":choose("source_count")==0,
+require_directory() {
+  local value="$1"
+  local label="$2"
+  require_absolute_path "$value" "$label"
+  [[ -d "$value" && ! -L "$value" ]] ||
+    fail "$label must be a directory and not a symlink"
 }
-if not all(checks.values()): raise SystemExit(2)
+
+require_port() {
+  local value="$1"
+  local label="$2"
+  [[ "$value" =~ ^[0-9]+$ ]] || fail "$label must be numeric"
+  (( value >= 1 && value <= 65535 )) || fail "$label is out of range"
+}
+
+require_web_bind_address() {
+  python3 - "$1" <<'PY' ||
+import ipaddress
+import sys
+
+try:
+    address = ipaddress.ip_address(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+if (
+    address.version != 4
+    or address.is_unspecified
+    or address.is_multicast
+    or address.is_reserved
+    or not (address.is_loopback or address.is_private)
+):
+    raise SystemExit(1)
 PY
+    fail "web bind address must be an explicit loopback or private IPv4 address"
 }
 
-validate_browser_contract() {
-  require_non_placeholder "BROWSER_CONTRACT_COMMAND" "$BROWSER_CONTRACT_COMMAND"
-  require_non_placeholder "BROWSER_CONTRACT_REPORT" "$BROWSER_CONTRACT_REPORT"
-  rm -f -- "$BROWSER_CONTRACT_REPORT"
-  timeout 350s bash -lc "$BROWSER_CONTRACT_COMMAND"
-  [[ -f "$BROWSER_CONTRACT_REPORT" ]] || fail "browser contract did not write its required safe report"
-  python3 - "$BROWSER_CONTRACT_REPORT" "$EXPECTED_COUNT" "$EXPECTED_FINGERPRINT" <<'PY'
-import json,sys
-p,count,fingerprint=sys.argv[1],int(sys.argv[2]),sys.argv[3]
-d=json.load(open(p,encoding="utf-8"))
-checks={
- "status":d.get("status")=="passed",
- "route":d.get("query_route")=="browser_to_sidecar_to_one_mcp",
- "one_mcp":d.get("mcp_call_count")==1,
- "count":d.get("distinct_projection_count")==count,
- "fingerprint":d.get("fingerprint")==fingerprint,
- "claim_state":d.get("claim_state")=="CANDIDATE_MATCHES",
- "retrieval_path":d.get("retrieval_path")=="mail_authorized_structured_set",
- "canonical_kg":d.get("canonical_kg") is False,
- "citation_count":d.get("citation_count")==0,
- "source_count":d.get("source_count")==0,
+require_web_bind_address_assigned() {
+  local value="$1"
+  local address_output
+  local interface_index interface_name family cidr rest
+
+  [[ "$value" == 127.* ]] && return 0
+  command -v ip >/dev/null 2>&1 ||
+    fail "host IPv4 interface inspection requires ip"
+  address_output="$(ip -o -4 address show)" ||
+    fail "host IPv4 interface inspection failed"
+
+  while IFS=$' \t' read -r interface_index interface_name family cidr rest; do
+    if [[ "$family" == "inet" && "${cidr%%/*}" == "$value" ]]; then
+      return 0
+    fi
+  done <<<"$address_output"
+
+  fail "web bind address is not assigned to a host IPv4 interface: $value"
 }
-if not all(checks.values()): raise SystemExit(2)
+
+load_document_mcp_command() {
+  require_regular_file "$DOCUMENT_MCP_COMMAND_JSON" "document MCP command JSON"
+  mapfile -d '' -t DOCUMENT_MCP_COMMAND < <(
+    python3 - "$DOCUMENT_MCP_COMMAND_JSON" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+try:
+    raw = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"document MCP command JSON is unreadable: {type(exc).__name__}")
+if (
+    not isinstance(raw, list)
+    or not raw
+    or any(
+        not isinstance(item, str)
+        or not item
+        or len(item) > 4096
+        or "\x00" in item
+        or "\n" in item
+        or "\r" in item
+        for item in raw
+    )
+):
+    raise SystemExit("document MCP command JSON must be a bounded string array")
+if raw[0] in {"sh", "bash", "dash", "zsh"} or "-c" in raw:
+    raise SystemExit("document MCP command must not use a shell")
+if (
+    len(raw) < 2
+    or raw[0] != "python3"
+    or raw[1] != "/opt/formowl/python/formowl_mail/document_uat_mcp.py"
+):
+    raise SystemExit(
+        "document MCP command must invoke python3 "
+        "/opt/formowl/python/formowl_mail/document_uat_mcp.py"
+    )
+for item in raw:
+    sys.stdout.buffer.write(item.encode("utf-8") + b"\0")
 PY
+  ) || fail "document MCP command JSON is invalid"
+  (( ${#DOCUMENT_MCP_COMMAND[@]} > 0 )) || fail "document MCP command is empty"
 }
 
-rollback_exact_baseline_state() {
-  local rc=$?
-  trap - ERR EXIT INT TERM
-  if [[ "$CANDIDATE_CREATED" == 1 ]] && docker inspect "$CONTAINER" >/dev/null 2>&1; then docker rm -f "$CONTAINER" >/dev/null || true; fi
-  if [[ "$BASELINE_RENAMED" == 1 ]] && docker inspect "$ROLLBACK_NAME" >/dev/null 2>&1; then docker rename "$ROLLBACK_NAME" "$CONTAINER" >/dev/null || true; fi
-  exit "$rc"
+detect_single_runtime_launcher_contract() {
+  local option
+  for option in \
+    '"--document-first"' \
+    '"--document-mcp-url"' \
+    '"--private-codex-socket"' \
+    '"--private-codex-runtime-state-dir"'; do
+    grep -Fq -- "$option" "$UAT_LAUNCHER_HOST" ||
+      fail "UAT launcher lacks required document-first seam: $option"
+  done
 }
 
-static_self_test() {
-  [[ "$CANDIDATE_BINDING_PATH" == "__CANDIDATE_BINDING_PATH__" ]] || fail "static mode requires the literal binding placeholder"
-  [[ "$SEMANTIC_PREFLIGHT_REPORT" == "__SEMANTIC_PREFLIGHT_REPORT_PATH__" ]] || fail "static mode requires the literal semantic-report placeholder"
-  [[ "$BROWSER_CONTRACT_COMMAND" == "__INDEPENDENT_BROWSER_CONTRACT_COMMAND__" ]] || fail "static mode requires the literal browser-command placeholder"
-  [[ "$BROWSER_CONTRACT_REPORT" == "__BROWSER_CONTRACT_REPORT_PATH__" ]] || fail "static mode requires the literal browser-report placeholder"
-  [[ "$EXPECTED_COUNT" == 77 && "$EXPECTED_FINGERPRINT" == sha256:d791cfcd424910ed766f4092b51c6a9c1f1b756943935544134e626301e7c705 ]] || fail "acceptance constants drifted"
-  grep -Fq 'docker rename "$CONTAINER" "$ROLLBACK_NAME"' "$0" || fail "missing atomic rename protection"
-  grep -Fq 'assert_candidate_mcp_shape' "$0" || fail "missing candidate configuration-parity assertion"
-  grep -Fq 'docker rm -f "$CONTAINER"' "$0" || fail "missing automatic candidate removal"
-  ! grep -Eq 'docker (stop|restart|rm).*(formowl-mail-diagnostic-uat|formowl-codex-uat-sidecar)' "$0" || fail "preserved-container mutation found"
-  printf '%s\n' '{"status":"passed","static_checks":["placeholders","acceptance_constants","atomic_rename","candidate_only_rollback","preserved_container_nonmutation"]}'
+validate_worktree_launchers() {
+  local relative_path
+  require_directory "$WORKTREE_ROOT" "worktree root"
+  WORKTREE_PYTHON_HOST="$WORKTREE_ROOT/python"
+  CODEX_ENGINE_HOST="$WORKTREE_ROOT/scripts/mail_human_uat_codex_engine.py"
+  UAT_LAUNCHER_HOST="$WORKTREE_ROOT/scripts/mail_human_uat.py"
+  require_directory "$WORKTREE_PYTHON_HOST" "worktree Python package"
+  require_regular_file "$CODEX_ENGINE_HOST" "worktree Codex sidecar launcher"
+  require_regular_file "$UAT_LAUNCHER_HOST" "worktree UAT launcher"
+  require_regular_file "$FORMOWL_MAIL_INIT_SHIM_HOST" "document UAT package-init shim"
+  detect_single_runtime_launcher_contract
+  UAT_PACKAGE_INIT_SHIM_MOUNT_ARGS=(
+    --mount
+    "type=bind,src=${FORMOWL_MAIL_INIT_SHIM_HOST},dst=${FORMOWL_MAIL_INIT_CONTAINER_PATH},readonly"
+  )
+  WORKTREE_PYTHON_OVERLAY_MOUNT_ARGS=()
+  for relative_path in "${WORKTREE_PYTHON_OVERLAY_FILES[@]}"; do
+    require_regular_file \
+      "$WORKTREE_PYTHON_HOST/$relative_path" \
+      "worktree Python overlay"
+    WORKTREE_PYTHON_OVERLAY_MOUNT_ARGS+=(
+      --mount
+      "type=bind,src=${WORKTREE_PYTHON_HOST}/${relative_path},dst=${WORKTREE_PYTHON_CONTAINER_PATH}/${relative_path},readonly"
+    )
+  done
 }
 
-if [[ "${1:-}" == "--static-self-test" ]]; then static_self_test; exit 0; fi
-[[ $# -eq 0 ]] || fail "usage: $0 [--static-self-test]"
+validate_configuration() {
+  [[ -n "$IMAGE" ]] || fail "--image is required"
+  require_directory "$PRIVATE_ROOT" "private root"
+  require_directory "$BRIDGE_ROOT" "bridge root"
+  validate_worktree_launchers
+  require_regular_file "$AUTH_CACHE" "Codex auth cache"
+  require_directory "$RUNTIME_ROOT" "runtime root"
+  [[ "$CODEX_COMMAND" != *$'\n'* && "$CODEX_COMMAND" != *$'\r'* && -n "$CODEX_COMMAND" ]] ||
+    fail "Codex command is invalid"
+  require_port "$HOST_PORT" "host port"
+  require_port "$MCP_HOST_PORT" "MCP host port"
+  [[ "$HOST_PORT" != "$MCP_HOST_PORT" ]] ||
+    fail "UAT and MCP host ports must differ"
+  require_web_bind_address "$WEB_BIND_ADDRESS"
+  require_web_bind_address_assigned "$WEB_BIND_ADDRESS"
+  load_document_mcp_command
+  RUN_UID="$(id -u)"
+  RUN_GID="$(id -g)"
+  (( RUN_UID != 0 )) || fail "the UAT launcher must run as a non-root user"
+  CODEX_STATE_HOST="$RUNTIME_ROOT/codex-state"
+  UAT_STATE_HOST="$RUNTIME_ROOT/uat-state"
+  CODEX_SOCKET_DIR_HOST="$RUNTIME_ROOT/codex-socket"
+}
 
-# Nothing below this line is reached until all offline evidence is exact and bound.
-require_non_placeholder "CANDIDATE_BINDING_PATH" "$CANDIDATE_BINDING_PATH"
-require_non_placeholder "CANDIDATE_BINDING_SHA256" "$CANDIDATE_BINDING_SHA256"
-[[ "$CANDIDATE_BINDING_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "candidate binding SHA-256 must be exact lower-case hex"
-[[ -f "$CANDIDATE_BINDING_PATH" && ! -L "$CANDIDATE_BINDING_PATH" ]] || fail "candidate binding must be a regular non-symlink file"
-[[ "$(sha256_file "$CANDIDATE_BINDING_PATH")" == "$CANDIDATE_BINDING_SHA256" ]] || fail "candidate binding hash mismatch"
-require_exact_hash "$CANARY" "$EXPECTED_CANARY_SHA256"
-require_exact_hash "$BUILD_CONTEXT/SOURCE.sha256" "$EXPECTED_CONTEXT_MANIFEST_SHA256"
-require_exact_hash "$BUILD_CONTEXT/Dockerfile.overlay" "$EXPECTED_DOCKERFILE_SHA256"
-require_exact_hash "$INSPECT_SNAPSHOT" "$EXPECTED_INSPECT_SNAPSHOT_SHA256"
-require_exact_hash "$REVIEWED_IMAGE_METADATA" "$EXPECTED_REVIEWED_IMAGE_METADATA_SHA256"
-docker image inspect "$BASE_IMAGE" >/dev/null 2>&1 || fail "reviewed base image is absent"
-[[ "$(docker image inspect -f '{{.Id}}' "$BASE_IMAGE")" == "$BASE_IMAGE_ID" ]] || fail "reviewed base image ID mismatch"
-assert_preserved_container "$MAIL_CONTAINER"
-assert_preserved_container "$SIDECAR_CONTAINER"
-MAIL_BEFORE="$(safe_config_fingerprint "$MAIL_CONTAINER")"
-SIDECAR_BEFORE="$(safe_config_fingerprint "$SIDECAR_CONTAINER")"
-assert_baseline_mcp_shape
-validate_semantic_preflight
+print_dry_run() {
+  printf '%s\n' "FORMOWL_DOCUMENT_UAT_CONFIG_VALID"
+  printf '%s\n' "containers=document-mcp,codex-sidecar,uat-web"
+  printf '%s\n' "codex_sidecar_count=1"
+  printf '%s\n' "document_mcp_count=1"
+  printf '%s\n' "document_mcp_access=read-only"
+  printf '%s\n' "codex_to_mcp_route=single"
+  printf '%s\n' "ontology_runtime=disabled"
+  printf '%s\n' "public_search_runtime=disabled"
+  printf '%s\n' "public_search_network=none"
+  printf '%s\n' "second_codex_runtime=disabled"
+  printf '%s\n' "pst_parser_invocation=none"
+  printf '%s\n' "uat_mode=document-first"
+  printf '%s\n' "uat_codex_socket_option=--private-codex-socket"
+  printf '%s\n' "uat_document_mcp_option=--document-mcp-url"
+  printf '%s\n' "uat_mail_bundle=disabled"
+  printf '%s\n' "uat_upload=disabled"
+  printf '%s\n' "model_readiness_probe=authenticated_model_only_no_mcp"
+  printf '%s\n' "model_readiness_state_validation=readonly_no_metadata_mutation"
+  printf '%s\n' "model_readiness_proxy_state=ephemeral_tmpfs"
+  printf '%s\n' "worktree_python_overlay_count=${#WORKTREE_PYTHON_OVERLAY_FILES[@]}"
+  printf '%s\n' "document_mcp_overlay=formowl_mail/document_uat_mcp.py"
+  printf '%s\n' "document_mcp_guard_overlay=formowl_mail/_guards.py"
+  printf '%s\n' "formowl_mail_package_init=recovery-no-eager-import-shim"
+  printf '%s\n' "document_mcp_entrypoint=/opt/formowl/python/formowl_mail/document_uat_mcp.py"
+  printf '%s\n' "document_mcp_command_arguments=${#DOCUMENT_MCP_COMMAND[@]}"
+  printf '%s\n' "web_publish_bind_address=${WEB_BIND_ADDRESS}"
+  printf '%s\n' "web_publish_endpoint=${WEB_BIND_ADDRESS}:${HOST_PORT}"
+  printf '%s\n' "document_mcp_publish_bind_address=127.0.0.1"
+  printf '%s\n' "document_mcp_publish_endpoint=127.0.0.1:${MCP_HOST_PORT}"
+  printf '%s\n' "codex_publish=none"
+  printf '%s\n' "cdp_publish=none"
+}
 
-# Build is local-only: no pull and no build-network access.
-docker build --pull=false --network=none -f "$BUILD_CONTEXT/Dockerfile.overlay" \
-  --build-arg "FORMOWL_DIAGNOSTIC_BASE_IMAGE=$BASE_IMAGE" -t "$CANDIDATE_IMAGE" "$BUILD_CONTEXT"
-CANDIDATE_ID="$(docker image inspect -f '{{.Id}}' "$CANDIDATE_IMAGE")"
-[[ "$CANDIDATE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || fail "candidate image ID is invalid"
+prepare_runtime_paths() {
+  local path
+  for path in "$CODEX_STATE_HOST" "$UAT_STATE_HOST" "$CODEX_SOCKET_DIR_HOST"; do
+    [[ ! -e "$path" ]] ||
+      fail "runtime path already exists; choose a new empty --runtime-root"
+  done
+  for path in "$CODEX_STATE_HOST" "$UAT_STATE_HOST" "$CODEX_SOCKET_DIR_HOST"; do
+    mkdir -p -- "$path"
+    chmod 700 -- "$path"
+  done
+}
 
-# Obtain existing bridge/private host mount sources only in-memory; never print them.
-readarray -t MOUNT_SOURCES < <(docker inspect "$CONTAINER" | python3 -c '
-import json,sys
-x=json.load(sys.stdin)[0]
-found={m.get("Destination"):m for m in x.get("Mounts",[])}
-for destination in ("/formowl/bridge","/formowl/private"):
-  m=found.get(destination)
-  if not m or m.get("Type")!="bind" or m.get("RW") is not False: raise SystemExit(2)
-  print(m["Source"])')
-[[ ${#MOUNT_SOURCES[@]} -eq 2 ]] || fail "cannot safely recover required read-only mount roles"
+ensure_networks() {
+  local network
+  for network in "$CORE_NETWORK" "$CODEX_NETWORK"; do
+    if ! docker network inspect "$network" >/dev/null 2>&1; then
+      docker network create "$network" >/dev/null
+    fi
+  done
+}
 
-docker rename "$CONTAINER" "$ROLLBACK_NAME"
-BASELINE_RENAMED=1
-trap rollback_exact_baseline_state ERR EXIT INT TERM
+assert_container_absent() {
+  local container="$1"
+  ! docker container inspect "$container" >/dev/null 2>&1 ||
+    fail "container already exists: $container; use stop first"
+}
 
-docker create --name "$CONTAINER" --network "$NETWORK" --user 65532:65532 --workdir /opt/formowl \
-  --restart no --publish "127.0.0.1:${HOST_PORT}:${CONTAINER_PORT}/tcp" \
-  --mount "type=bind,src=${MOUNT_SOURCES[0]},dst=/formowl/bridge,readonly" \
-  --mount "type=bind,src=${MOUNT_SOURCES[1]},dst=/formowl/private,readonly" \
-  --mount "type=bind,src=${CANDIDATE_BINDING_PATH},dst=/formowl/private/reviewed-structural-bindings.private.json,readonly" \
-  "$CANDIDATE_IMAGE" >/dev/null
-CANDIDATE_CREATED=1
-assert_candidate_mcp_shape
+init_sidecar_state() {
+  cat -- "$AUTH_CACHE" | docker run --rm -i \
+    --user "${RUN_UID}:${RUN_GID}" \
+    --network none \
+    --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+    --mount "type=bind,src=${CODEX_STATE_HOST},dst=${CODEX_STATE_CONTAINER_PATH}" \
+    "${UAT_PACKAGE_INIT_SHIM_MOUNT_ARGS[@]}" \
+    "${WORKTREE_PYTHON_OVERLAY_MOUNT_ARGS[@]}" \
+    --mount "type=bind,src=${CODEX_ENGINE_HOST},dst=${CODEX_ENGINE_CONTAINER_PATH},readonly" \
+    -e "PYTHONPATH=${WORKTREE_PYTHON_CONTAINER_PATH}:/opt/formowl/scripts" \
+    "$IMAGE" \
+    python3 "$CODEX_ENGINE_CONTAINER_PATH" init \
+      --state-dir "$CODEX_STATE_CONTAINER_PATH" \
+      --runtime-role private-planner \
+      --chatgpt-auth-stdin \
+      --codex-command "$CODEX_COMMAND" >/dev/null
+}
 
-docker start "$CONTAINER" >/dev/null
-# Health is fail-closed without assuming an undocumented route: require running state and TCP bind.
-[[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" == "true" ]] || fail "candidate MCP did not remain running"
-for attempt in $(seq 1 30); do
-  if timeout 2s bash -c "</dev/tcp/127.0.0.1/${HOST_PORT}"; then break; fi
-  [[ "$attempt" -lt 30 ]] || fail "candidate MCP did not bind its approved local port"
-  sleep 1
-done
-# The supplied direct canary issues exactly one tools/call request; its outer timeout is < 360 seconds.
-timeout 350s python3 "$CANARY" "$HOST_PORT" 日本 >"$PLAN_DIR/direct-mcp-canary.safe.json"
-validate_browser_contract
-[[ "$(safe_config_fingerprint "$MAIL_CONTAINER")" == "$MAIL_BEFORE" ]] || fail "mail diagnostic container configuration changed"
-[[ "$(safe_config_fingerprint "$SIDECAR_CONTAINER")" == "$SIDECAR_BEFORE" ]] || fail "sidecar configuration changed"
+start_sidecar() {
+  docker run --detach --name "$CODEX_CONTAINER" \
+    --user "${RUN_UID}:${RUN_GID}" \
+    --network "$CODEX_NETWORK" \
+    --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+    --mount "type=bind,src=${CODEX_STATE_HOST},dst=${CODEX_STATE_CONTAINER_PATH}" \
+    --mount "type=bind,src=${CODEX_SOCKET_DIR_HOST},dst=$(dirname -- "$CODEX_SOCKET_CONTAINER_PATH")" \
+    "${UAT_PACKAGE_INIT_SHIM_MOUNT_ARGS[@]}" \
+    "${WORKTREE_PYTHON_OVERLAY_MOUNT_ARGS[@]}" \
+    --mount "type=bind,src=${CODEX_ENGINE_HOST},dst=${CODEX_ENGINE_CONTAINER_PATH},readonly" \
+    -e "PYTHONPATH=${WORKTREE_PYTHON_CONTAINER_PATH}:/opt/formowl/scripts" \
+    "$IMAGE" \
+    python3 "$CODEX_ENGINE_CONTAINER_PATH" serve \
+      --state-dir "$CODEX_STATE_CONTAINER_PATH" \
+      --runtime-role private-planner \
+      --socket-path "$CODEX_SOCKET_CONTAINER_PATH" \
+      --codex-command "$CODEX_COMMAND" >/dev/null
+}
 
-python3 - "$PLAN_DIR/deploy-result-safe.json" "$CANDIDATE_ID" "$ROLLBACK_NAME" <<'PY'
-import json,sys
-out,image_id,rollback=sys.argv[1:]
-with open(out,"w",encoding="utf-8") as handle:
- json.dump({"status":"passed","candidate_image_id":image_id,"candidate_container":"formowl-mcp-uat","preserved_rollback_container":rollback,"diagnostic_only":True},handle,sort_keys=True)
- handle.write("\n")
-PY
-chmod 600 "$PLAN_DIR/direct-mcp-canary.safe.json" "$PLAN_DIR/deploy-result-safe.json"
-trap - ERR EXIT INT TERM
-printf '%s\n' 'PASS: MCP-only candidate is running; the previous stopped container remains available under the printed rollback name.'
+start_document_mcp() {
+  docker run --detach --name "$MCP_CONTAINER" \
+    --user "${RUN_UID}:${RUN_GID}" \
+    --network "$CORE_NETWORK" \
+    --publish "127.0.0.1:${MCP_HOST_PORT}:8090" \
+    --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+    --mount "type=bind,src=${PRIVATE_ROOT},dst=/formowl/private,readonly" \
+    --mount "type=bind,src=${BRIDGE_ROOT},dst=/formowl/bridge,readonly" \
+    "${WORKTREE_PYTHON_OVERLAY_MOUNT_ARGS[@]}" \
+    -e "PYTHONPATH=${WORKTREE_PYTHON_CONTAINER_PATH}:/opt/formowl/scripts" \
+    "$IMAGE" "${DOCUMENT_MCP_COMMAND[@]}" >/dev/null
+}
+
+start_uat_http() {
+  local -a launcher_args=(
+    --host 0.0.0.0
+    --port 8088
+    --document-first
+    --document-mcp-url "http://${MCP_CONTAINER}:8090/mcp"
+    --state-dir "$UAT_STATE_CONTAINER_PATH"
+    --private-codex-socket "$CODEX_SOCKET_CONTAINER_PATH"
+    --private-codex-runtime-state-dir "$CODEX_STATE_CONTAINER_PATH"
+  )
+  docker run --detach --name "$UAT_CONTAINER" \
+    --user "${RUN_UID}:${RUN_GID}" \
+    --network "$CORE_NETWORK" \
+    --publish "${WEB_BIND_ADDRESS}:${HOST_PORT}:8088" \
+    --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+    --mount "type=bind,src=${UAT_STATE_HOST},dst=${UAT_STATE_CONTAINER_PATH}" \
+    --mount "type=bind,src=${CODEX_STATE_HOST},dst=${CODEX_STATE_CONTAINER_PATH},readonly" \
+    --mount "type=bind,src=${CODEX_SOCKET_DIR_HOST},dst=$(dirname -- "$CODEX_SOCKET_CONTAINER_PATH"),readonly" \
+    "${WORKTREE_PYTHON_OVERLAY_MOUNT_ARGS[@]}" \
+    --mount "type=bind,src=${UAT_LAUNCHER_HOST},dst=${UAT_LAUNCHER_CONTAINER_PATH},readonly" \
+    -e "PYTHONPATH=${WORKTREE_PYTHON_CONTAINER_PATH}:/opt/formowl/scripts" \
+    "$IMAGE" \
+    python3 "$UAT_LAUNCHER_CONTAINER_PATH" "${launcher_args[@]}" >/dev/null
+}
+
+wait_for_running_container() {
+  local container="$1"
+  local attempt
+  for attempt in $(seq 1 30); do
+    [[ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)" == "true" ]] &&
+      return 0
+    sleep 1
+  done
+  fail "container did not remain running: $container"
+}
+
+wait_for_socket() {
+  local socket_path="$1"
+  local attempt
+  for attempt in $(seq 1 30); do
+    [[ -S "$socket_path" ]] && return 0
+    sleep 1
+  done
+  fail "Codex sidecar socket was not created"
+}
+
+run_model_readiness_probe() {
+  local probe_output
+  if ! probe_output="$(
+    docker run --rm \
+      --user "${RUN_UID}:${RUN_GID}" \
+      --network none \
+      --read-only \
+      --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+      --mount "type=bind,src=${CODEX_STATE_HOST},dst=${CODEX_STATE_CONTAINER_PATH},readonly" \
+      --mount "type=bind,src=${CODEX_SOCKET_DIR_HOST},dst=$(dirname -- "$CODEX_SOCKET_CONTAINER_PATH"),readonly" \
+      "${UAT_PACKAGE_INIT_SHIM_MOUNT_ARGS[@]}" \
+      "${WORKTREE_PYTHON_OVERLAY_MOUNT_ARGS[@]}" \
+      --mount "type=bind,src=${CODEX_ENGINE_HOST},dst=${CODEX_ENGINE_CONTAINER_PATH},readonly" \
+      -e "PYTHONPATH=${WORKTREE_PYTHON_CONTAINER_PATH}:/opt/formowl/scripts" \
+      -e TMPDIR=/tmp \
+      "$IMAGE" \
+      python3 "$CODEX_ENGINE_CONTAINER_PATH" probe \
+        --state-dir "$CODEX_STATE_CONTAINER_PATH" \
+        --runtime-role private-planner \
+        --socket-path "$CODEX_SOCKET_CONTAINER_PATH"
+  )"; then
+    fail "Codex authenticated model readiness probe failed"
+  fi
+  [[ "$probe_output" == "$MODEL_READINESS_MARKER" ]] ||
+    fail "Codex authenticated model readiness probe returned an invalid response"
+}
+
+wait_for_http_health() {
+  local container="$1"
+  local url="$2"
+  local attempt
+  for attempt in $(seq 1 30); do
+    if docker exec "$container" python3 -c \
+      'from urllib.request import urlopen; import sys; sys.exit(0 if urlopen(sys.argv[1], timeout=2).status == 200 else 1)' \
+      "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "HTTP health check did not pass: $container"
+}
+
+retain_failed_start_for_diagnostics() {
+  local exit_code="$1"
+  (( exit_code == 0 )) && return 0
+  stop >/dev/null 2>&1 || true
+  printf '%s\n' \
+    "FORMOWL_DOCUMENT_UAT_START_FAILED rollback=completed" \
+    >&2
+}
+
+start() {
+  local container
+  for container in "$MCP_CONTAINER" "$CODEX_CONTAINER" "$UAT_CONTAINER"; do
+    assert_container_absent "$container"
+  done
+  prepare_runtime_paths
+  ensure_networks
+  trap 'retain_failed_start_for_diagnostics "$?"' EXIT
+
+  init_sidecar_state
+  start_sidecar
+
+  wait_for_running_container "$CODEX_CONTAINER"
+  wait_for_socket "$CODEX_SOCKET_DIR_HOST/app-server.sock"
+  run_model_readiness_probe
+
+  start_document_mcp
+  start_uat_http
+  wait_for_running_container "$MCP_CONTAINER"
+  wait_for_running_container "$UAT_CONTAINER"
+  wait_for_http_health "$MCP_CONTAINER" "http://127.0.0.1:8090/health"
+  wait_for_http_health "$UAT_CONTAINER" "http://127.0.0.1:8088/"
+  trap - EXIT
+
+  printf '%s\n' "FORMOWL_DOCUMENT_UAT_READY url=http://${WEB_BIND_ADDRESS}:${HOST_PORT}"
+  printf '%s\n' "scope=internal_document_first_uat_only"
+}
+
+stop() {
+  local container
+  for container in "$UAT_CONTAINER" "$CODEX_CONTAINER" "$MCP_CONTAINER"; do
+    docker rm -f "$container" >/dev/null 2>&1 || true
+  done
+  printf '%s\n' "FORMOWL_DOCUMENT_UAT_STOPPED"
+}
+
+status() {
+  local container
+  for container in "$MCP_CONTAINER" "$CODEX_CONTAINER" "$UAT_CONTAINER"; do
+    if docker inspect -f '{{.Name}} {{.State.Status}}' "$container" 2>/dev/null; then
+      :
+    else
+      printf '%s\n' "${container} absent"
+    fi
+  done
+}
+
+parse_args() {
+  (($# > 0)) || {
+    usage
+    exit 2
+  }
+  ACTION="$1"
+  shift
+  case "$ACTION" in
+    dry-run|start|status|stop) ;;
+    --help|-h|help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+  while (($# > 0)); do
+    case "$1" in
+      --image) IMAGE="${2-}"; shift 2 ;;
+      --private-root) PRIVATE_ROOT="${2-}"; shift 2 ;;
+      --bridge-root) BRIDGE_ROOT="${2-}"; shift 2 ;;
+      --worktree-root) WORKTREE_ROOT="${2-}"; shift 2 ;;
+      --auth-cache) AUTH_CACHE="${2-}"; shift 2 ;;
+      --runtime-root) RUNTIME_ROOT="${2-}"; shift 2 ;;
+      --document-mcp-command-json)
+        DOCUMENT_MCP_COMMAND_JSON="${2-}"
+        shift 2
+        ;;
+      --codex-command) CODEX_COMMAND="${2-}"; shift 2 ;;
+      --host-port) HOST_PORT="${2-}"; shift 2 ;;
+      --mcp-host-port) MCP_HOST_PORT="${2-}"; shift 2 ;;
+      --web-bind-address) WEB_BIND_ADDRESS="${2-}"; shift 2 ;;
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      *)
+        fail "unknown argument: $1"
+        ;;
+    esac
+  done
+}
+
+main() {
+  parse_args "$@"
+  case "$ACTION" in
+    status)
+      status
+      ;;
+    stop)
+      stop
+      ;;
+    dry-run)
+      validate_configuration
+      print_dry_run
+      ;;
+    start)
+      validate_configuration
+      start
+      ;;
+  esac
+}
+
+main "$@"

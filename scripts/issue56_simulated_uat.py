@@ -4248,10 +4248,10 @@ def _validate_native_mail_evidence_bundle_artifact(
     if artifact["bundle_fingerprint"] != sha256_json(bundle_payload):
         raise ContractValidationError("retrieval-ready mail evidence bundle fingerprint mismatch")
     try:
-        bundle = MailEvidenceBundle.from_dict(bundle_payload)
+        bundle = MailEvidenceBundle.from_persistence_dict(bundle_payload)
     except (ContractValidationError, KeyError, TypeError, ValueError) as exc:
         raise ContractValidationError("retrieval-ready mail evidence bundle is invalid") from exc
-    if bundle.to_dict() != bundle_payload:
+    if bundle.to_persistence_dict() != bundle_payload:
         raise ContractValidationError("retrieval-ready mail evidence bundle round trip mismatch")
     return bundle_payload
 

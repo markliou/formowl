@@ -1,4 +1,24 @@
 # Implementation Task Breakdown
+## PR #62 conflict integration — 2026-10-14, scoped verification complete
+- [x] Reconcile pinned main `86baa47` with PR head `cc8919f` in an isolated tree
+  and pass bounded diagnostics plus three scoped reviews. Publication goes only
+  to the existing PR branch; inspect PR #62 for its remote SHA. No main merge,
+  force-push, live8088/source/index/database mutation, or dirty-workspace reset.
+- Nine conflicted paths plus eight pre-existing malformed main Python owners
+  required semantic reconciliation. Both inventory wire identities are retained
+  through explicit private persistence; legacy exclusions never become typed proof.
+- Shared legacy tool mode is explicit; Issue56 descriptor-bound chat remains the
+  default. Private body/attachment evidence is preserved; public raw-path/secret
+  guards remain. New shared tests asserting public user paths are corrected to
+  test private preservation and public redaction, not to weaken those guards.
+- Main-authority probe: valid=true, ready=false, errors=[]; four gates remain
+  blocked. Canonical core72, prior integration194, final affected67 and synthetic
+  preservation17 passed in overlapping selections, not a full-suite claim.
+  Inherited descriptor/retention failures remain; candidate workspace456 likewise
+  fails on pristine HEAD with the same rejection fingerprint. Synthetic rebind1/1
+  passed; upload workflow12/12 and facade5 identities pass. Lorentz/Epicurus/Faraday
+  scoped AGREE. No feature/UAT release claim; r4 proof does not certify this merge.
+
 ## UAT consistency assessment — 2026-10-13 UTC, observed live diagnostic proof / 待測
 - [ ] Verify the bounded generic repairs, replay candidate browser diagnostics
   and obtain three scoped reviewer decisions before acceptance.

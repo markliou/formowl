@@ -50,6 +50,84 @@ STORAGE_BACKEND_ID = "storage_mail_upload_import"
 
 
 class MailUploadImportWorkflowTests(unittest.TestCase):
+    def test_pst_upload_import_materializes_csv_attachment_document_evidence(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-upload-import-csv-attachment")
+        stores = _workflow_stores(temp_dir)
+        upload_session = _create_mail_upload_session(
+            stores["upload_session_store"],
+            audit_store=stores["audit_store"],
+        )
+        staged_archive = _write_pst_archive(temp_dir)
+        original_pst_adapter = import_workflow.PstMailArchiveExtractor
+
+        class _RunnerBackedPstAdapter(PstMailArchiveExtractor):
+            def __init__(self) -> None:
+                super().__init__(
+                    runner=_pst_runner_with_messages([_pst_rfc822_csv_attachment()]),
+                    scratch_parent=temp_dir / "pst-scratch",
+                )
+
+        import_workflow.PstMailArchiveExtractor = _RunnerBackedPstAdapter
+        try:
+            result = run_upload_session_mail_import(
+                staged_archive,
+                upload_session_id=upload_session.upload_session_id,
+                upload_session_store=stores["upload_session_store"],
+                object_store=stores["object_store"],
+                asset_store=stores["asset_store"],
+                job_store=stores["job_store"],
+                extractor_run_store=stores["extractor_run_store"],
+                observation_store=stores["observation_store"],
+                mail_evidence_store=PostgreSQLMailEvidenceStore(
+                    _RecordingMailConnection()
+                ),
+                storage_backend_id=STORAGE_BACKEND_ID,
+                actor_user_id=OWNER_USER_ID,
+                session_id=SESSION_ID,
+                query_text="audit approval",
+                created_at=NOW,
+                asset_mime_type="application/vnd.ms-outlook",
+                extraction_config={"max_messages": 1},
+            )
+        finally:
+            import_workflow.PstMailArchiveExtractor = original_pst_adapter
+
+        observations = stores["observation_store"].list()
+        attachment = next(
+            item
+            for item in observations
+            if item.observation_type == "email_attachment_occurrence"
+        )
+        child_asset = stores["asset_store"].get(attachment.payload["child_asset_id"])
+        child_runs = [
+            item
+            for item in stores["extractor_run_store"].list()
+            if item.asset_id == child_asset.asset_id
+        ]
+        child_observations = [
+            item for item in observations if item.asset_id == child_asset.asset_id
+        ]
+
+        self.assertNotEqual(child_asset.asset_id, result.asset_id)
+        self.assertEqual(len(child_runs), 1)
+        self.assertEqual(child_runs[0].extractor_name, "attachment_document_parser")
+        self.assertEqual(child_runs[0].status, "succeeded")
+        self.assertEqual(
+            {item.observation_type for item in child_observations},
+            {"table_row", "table_cell"},
+        )
+        self.assertEqual(child_asset.permission_scope, attachment.permission_scope)
+        for observation in child_observations:
+            self.assertEqual(
+                observation.payload["lineage"]["parent_asset_id"],
+                result.asset_id,
+            )
+            self.assertEqual(
+                observation.payload["lineage"]["child_asset_id"],
+                child_asset.asset_id,
+            )
+
+
     def test_completed_partial_job_retains_bound_failed_child_exclusion(self) -> None:
         from unittest.mock import patch
 
@@ -387,83 +465,6 @@ class MailUploadImportWorkflowTests(unittest.TestCase):
         self.assertNotIn("fixture_mail_archive_extractor", rendered_summary)
         self.assertNotIn("readpst", rendered_summary)
         self.assertNotIn("pst-scratch", rendered_summary)
-
-    def test_pst_upload_import_materializes_csv_attachment_document_evidence(self) -> None:
-        temp_dir = _paths.fresh_test_dir("mail-upload-import-csv-attachment")
-        stores = _workflow_stores(temp_dir)
-        upload_session = _create_mail_upload_session(
-            stores["upload_session_store"],
-            audit_store=stores["audit_store"],
-        )
-        staged_archive = _write_pst_archive(temp_dir)
-        original_pst_adapter = import_workflow.PstMailArchiveExtractor
-
-        class _RunnerBackedPstAdapter(PstMailArchiveExtractor):
-            def __init__(self) -> None:
-                super().__init__(
-                    runner=_pst_runner_with_messages([_pst_rfc822_csv_attachment()]),
-                    scratch_parent=temp_dir / "pst-scratch",
-                )
-
-        import_workflow.PstMailArchiveExtractor = _RunnerBackedPstAdapter
-        try:
-            result = run_upload_session_mail_import(
-                staged_archive,
-                upload_session_id=upload_session.upload_session_id,
-                upload_session_store=stores["upload_session_store"],
-                object_store=stores["object_store"],
-                asset_store=stores["asset_store"],
-                job_store=stores["job_store"],
-                extractor_run_store=stores["extractor_run_store"],
-                observation_store=stores["observation_store"],
-                mail_evidence_store=PostgreSQLMailEvidenceStore(
-                    _RecordingMailConnection()
-                ),
-                storage_backend_id=STORAGE_BACKEND_ID,
-                actor_user_id=OWNER_USER_ID,
-                session_id=SESSION_ID,
-                query_text="audit approval",
-                created_at=NOW,
-                asset_mime_type="application/vnd.ms-outlook",
-                extraction_config={"max_messages": 1},
-            )
-        finally:
-            import_workflow.PstMailArchiveExtractor = original_pst_adapter
-
-        observations = stores["observation_store"].list()
-        attachment = next(
-            item
-            for item in observations
-            if item.observation_type == "email_attachment_occurrence"
-        )
-        child_asset = stores["asset_store"].get(attachment.payload["child_asset_id"])
-        child_runs = [
-            item
-            for item in stores["extractor_run_store"].list()
-            if item.asset_id == child_asset.asset_id
-        ]
-        child_observations = [
-            item for item in observations if item.asset_id == child_asset.asset_id
-        ]
-
-        self.assertNotEqual(child_asset.asset_id, result.asset_id)
-        self.assertEqual(len(child_runs), 1)
-        self.assertEqual(child_runs[0].extractor_name, "attachment_document_parser")
-        self.assertEqual(child_runs[0].status, "succeeded")
-        self.assertEqual(
-            {item.observation_type for item in child_observations},
-            {"table_row", "table_cell"},
-        )
-        self.assertEqual(child_asset.permission_scope, attachment.permission_scope)
-        for observation in child_observations:
-            self.assertEqual(
-                observation.payload["lineage"]["parent_asset_id"],
-                result.asset_id,
-            )
-            self.assertEqual(
-                observation.payload["lineage"]["child_asset_id"],
-                child_asset.asset_id,
-            )
 
     def test_bound_asset_import_requires_upload_receipt_state_and_source_ref(
         self,
@@ -976,12 +977,7 @@ class _RecordingMailConnection:
             if _matches_optional(row, statement.parameters, "mail_import_session_id") and (
                 _matches_optional(row, statement.parameters, "mail_evidence_bundle_id")
             ):
-                return {
-                    "payload": row["payload"],
-                    "mail_evidence_bundle_id": row["mail_evidence_bundle_id"],
-                    "producer_type": row["producer_type"],
-                    "bundle_created_at": row["bundle_created_at"],
-                }
+                return _project_selected_columns(row, statement.sql)
         return None
 
     def query_all(self, statement: Any) -> list[dict[str, Any]]:
@@ -998,7 +994,8 @@ class _RecordingMailConnection:
                 allowed = set(value)
                 rows = [row for row in rows if row.get(id_field) in allowed]
         return [
-            {"payload": row["payload"]} for row in sorted(rows, key=lambda row: row["payload_hash"])
+            _project_selected_columns(row, statement.sql)
+            for row in sorted(rows, key=lambda row: row["payload_hash"])
         ]
 
     def begin(self) -> None:
@@ -1042,6 +1039,11 @@ def _statement_record_id(table_name: str, parameters: dict[str, Any]) -> str:
 
 def _matches_optional(row: dict[str, Any], parameters: dict[str, Any], key: str) -> bool:
     return parameters.get(key) is None or row.get(key) == parameters[key]
+
+
+def _project_selected_columns(row: dict[str, Any], sql: str) -> dict[str, Any]:
+    selected_columns = sql.split("SELECT ", 1)[1].split(" FROM ", 1)[0]
+    return {column.strip(): row[column.strip()] for column in selected_columns.split(",")}
 
 
 class _FailingMailArchiveExtractor:

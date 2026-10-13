@@ -265,6 +265,55 @@ def stable_candidate_relation_id(
     )
 
 
+def stable_candidate_assertion_id(
+    *,
+    source_observation_ids: list[str] | tuple[str, ...],
+    assertion_kind: str,
+    subject_candidate_business_object_id: str,
+    predicate: str,
+    extractor_run_id: str,
+    ontology_revision_id: str,
+    domain_pack_id: str,
+    domain_pack_content_hash: str,
+    object_candidate_business_object_id: str | None = None,
+    actor_candidate_business_object_id: str | None = None,
+    counterparty_candidate_business_object_id: str | None = None,
+    value: JsonValue | None = None,
+    previous_value: JsonValue | None = None,
+    proposed_value: JsonValue | None = None,
+    temporal_context: dict[str, JsonValue] | None = None,
+    context: dict[str, JsonValue] | None = None,
+    epistemic_status: str = "asserted",
+    lifecycle_status: str = "active",
+) -> str:
+    return stable_resource_contract_id(
+        "cassert",
+        "CandidateAssertion",
+        {
+            "source_observation_ids": sorted(source_observation_ids),
+            "assertion_kind": assertion_kind,
+            "subject_candidate_business_object_id": subject_candidate_business_object_id,
+            "predicate": predicate,
+            "object_candidate_business_object_id": object_candidate_business_object_id,
+            "actor_candidate_business_object_id": actor_candidate_business_object_id,
+            "counterparty_candidate_business_object_id": (
+                counterparty_candidate_business_object_id
+            ),
+            "value": value,
+            "previous_value": previous_value,
+            "proposed_value": proposed_value,
+            "temporal_context": temporal_context or {},
+            "context": context or {},
+            "epistemic_status": epistemic_status,
+            "lifecycle_status": lifecycle_status,
+            "extractor_run_id": extractor_run_id,
+            "ontology_revision_id": ontology_revision_id,
+            "domain_pack_id": domain_pack_id,
+            "domain_pack_content_hash": domain_pack_content_hash,
+        },
+    )
+
+
 def stable_external_graph_import_id(
     *,
     source_system: str,

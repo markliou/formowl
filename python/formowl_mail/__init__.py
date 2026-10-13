@@ -1,62 +1,7 @@
 """Mail evidence workflow helpers for the FormOwl synthetic mail phase."""
 
-from .candidates import (
-    MailCandidateBridgeResult,
-    extract_and_store_mail_candidates,
-    extract_mail_semantics_and_candidates,
-)
-from .bundle import (
-    EmailAttachment,
-    EmailAttachmentOccurrence,
-    EmailBodySegment,
-    EmailMessage,
-    EmailMessageOccurrence,
-    EmbeddedMessageRelation,
-    MailArchiveOccurrence,
-    MailEvidenceBundle,
-    MailFolderOccurrence,
-    MailImportSession,
-    MailParseRun,
-    MailParseWarning,
-    QuotedMessageCandidate,
-    build_mail_evidence_bundle,
-)
-from .evidence import (
-    MailBodySegment,
-    MailEvidencePack,
-    MailEvidencePackStore,
-    MailEvidenceRecord,
-    MailSearchResult,
-    build_mail_evidence_pack,
-    search_mail_evidence,
-)
-from .preflight import MailPreflightReadinessReview, build_mail_preflight_readiness_review
-from .import_workflow import (
-    MailUploadImportWorkflowResult,
-    run_upload_session_mail_import,
-    validate_mail_upload_import_summary,
-)
-from .upload_session import (
-    MailUploadSessionTaskResult,
-    build_mail_upload_session_handler,
-    open_mail_upload_session,
-    validate_mail_upload_session_task,
-)
-from .upload_surface import (
-    MailUploadSurfaceReceipt,
-    receive_mail_archive_upload,
-    validate_mail_upload_surface_receipt,
-)
-from .upload_http import (
-    MailUploadHttpSurfaceConfig,
-    MailUploadHttpSurfacePostResult,
-    build_mail_upload_http_surface_handler,
-    create_mail_upload_http_surface_server,
-    mail_upload_http_error_payload,
-    receive_mail_archive_http_multipart,
-    render_mail_upload_http_form,
-    validate_mail_upload_http_post_result,
-)
+
+# Reconciliation imports from Track 2
 from .query import (
     ExistingObservationIndexBuildManifest,
     IndexedMailSnippet,
@@ -117,6 +62,68 @@ from .semantic_plan import (
     route_semantic_query,
     validate_semantic_query_plan,
 )
+
+from .candidates import (
+    MailCandidateBridgeResult,
+    extract_and_store_mail_candidates,
+    extract_mail_semantics_and_candidates,
+)
+from .bundle import (
+    EmailAttachment,
+    EmailAttachmentOccurrence,
+    EmailBodySegment,
+    EmailMessage,
+    EmailMessageOccurrence,
+    EmbeddedMessageRelation,
+    MailArchiveOccurrence,
+    MailEvidenceBundle,
+    MailFolderOccurrence,
+    MailImportSession,
+    MailParseRun,
+    MailParseWarning,
+    QuotedMessageCandidate,
+    build_mail_evidence_bundle,
+)
+from .evidence import (
+    MailBodySegment,
+    MailEvidencePack,
+    MailEvidencePackStore,
+    MailEvidenceRecord,
+    MailSearchResult,
+    build_mail_evidence_pack,
+    search_mail_evidence,
+)
+from .preflight import MailPreflightReadinessReview, build_mail_preflight_readiness_review
+from .import_workflow import (
+    MailUploadImportWorkflowResult,
+    run_upload_session_mail_import,
+    validate_mail_upload_import_summary,
+)
+from .upload_session import (
+    MailUploadSessionTaskResult,
+    build_mail_upload_session_handler,
+    open_mail_upload_session,
+    validate_mail_upload_session_task,
+)
+from .upload_surface import (
+    MailUploadSurfaceReceipt,
+    receive_mail_archive_upload,
+    validate_mail_upload_surface_receipt,
+)
+from .upload_http import (
+    MailUploadHttpSurfaceConfig,
+    MailUploadHttpSurfacePostResult,
+    build_mail_upload_http_surface_handler,
+    create_mail_upload_http_surface_server,
+    mail_upload_http_error_payload,
+    receive_mail_archive_http_multipart,
+    render_mail_upload_http_form,
+    validate_mail_upload_http_post_result,
+)
+from .query import (
+    MailEvidenceReadResult,
+    build_mail_evidence_read_handler,
+)
 from .postgres import (
     PostgreSQLMailEvidenceConnection,
     PostgreSQLMailEvidenceStore,
@@ -143,30 +150,6 @@ __all__ = [
     "EmailMessage",
     "EmailMessageOccurrence",
     "EmbeddedMessageRelation",
-    "ExistingObservationIndexBuildManifest",
-    "AuthorizedHybridMailIndex",
-    "AuthorizedSemanticMailSession",
-    "BoundedGraphPath",
-    "DEFAULT_SEMANTIC_PLAN_LIMITS",
-    "DenseEncoder",
-    "EffectiveGraphContentSnapshotPrecompute",
-    "DeterministicExactExecutionResult",
-    "ExactCoverageContract",
-    "ExactInventoryItem",
-    "EvidenceAnswerBudget",
-    "GovernedEvidenceAnswer",
-    "GovernedHybridRagResult",
-    "GovernedSemanticExecutionResult",
-    "GraphTraversalHop",
-    "HybridRagBundleScore",
-    "HybridRagCandidateScore",
-    "ISSUE56_DETERMINISTIC_ANSWER_MODEL_ID",
-    "ISSUE56_DETERMINISTIC_ANSWER_PROMPT_FINGERPRINT",
-    "ISSUE56_DETERMINISTIC_ANSWER_PROMPT_ID",
-    "ISSUE56_TARGET_RUNTIME_METHOD_FINGERPRINT",
-    "ISSUE56_TARGET_RUNTIME_METHOD_ID",
-    "RelationProjectionBaseColdDiagnostic",
-    "IndexedMailSnippet",
     "MailBodySegment",
     "MailCandidateBridgeResult",
     "MailCaseProgressAnswerResult",
@@ -177,7 +160,7 @@ __all__ = [
     "MailEvidencePackStore",
     "MailEvidenceQueryGateway",
     "MailEvidenceQueryResult",
-    "MailSnippetIndex",
+    "MailEvidenceReadResult",
     "MailEvidenceRecord",
     "MailFolderOccurrence",
     "MailImportSession",
@@ -193,24 +176,12 @@ __all__ = [
     "PostgreSQLMailEvidenceConnection",
     "PostgreSQLMailEvidenceStore",
     "QuotedMessageCandidate",
-    "SEMANTIC_QUERY_CLASSES",
-    "SemanticEvidenceScore",
-    "SemanticPlanLimits",
-    "SemanticQueryPlan",
-    "SourceBackedGraphBuild",
     "build_case_progress_answer",
-    "build_authorized_candidate_table_lookup",
-    "authorize_mail_evidence_bundles",
-    "build_authorized_hybrid_mail_index",
-    "build_authorized_semantic_mail_session",
-    "build_authorized_source_backed_effective_graph_view",
-    "precompute_effective_graph_content_snapshot",
-    "precompute_relation_projection_base_cold_diagnostic",
-    "build_existing_observation_snippet_index",
     "build_mail_case_progress_handler",
     "build_mail_evidence_bundle",
     "build_mail_evidence_pack",
     "build_mail_evidence_query_handler",
+    "build_mail_evidence_read_handler",
     "build_mail_preflight_readiness_review",
     "build_mail_upload_http_surface_handler",
     "build_mail_upload_session_handler",
@@ -218,27 +189,18 @@ __all__ = [
     "create_mail_upload_http_surface_server",
     "extract_and_store_mail_candidates",
     "extract_mail_semantics_and_candidates",
-    "execute_deterministic_exact_inventory",
     "mail_evidence_postgre_sql_tables",
     "mail_evidence_query_indexes",
-    "interpret_authorized_candidate_table_query",
     "open_mail_upload_session",
     "postgre_sql_mail_evidence_store_interfaces",
     "mail_upload_http_error_payload",
     "receive_mail_archive_upload",
     "receive_mail_archive_http_multipart",
-    "require_issue56_target_tokenizer_profile",
-    "route_semantic_query",
     "render_mail_upload_http_form",
     "run_upload_session_mail_import",
-    "run_authorized_hybrid_mail_query",
-    "run_authorized_semantic_mail_query",
-    "render_governed_evidence_answer",
     "search_mail_evidence",
     "validate_mail_upload_http_post_result",
     "validate_mail_upload_import_summary",
     "validate_mail_upload_session_task",
     "validate_mail_upload_surface_receipt",
-    "validate_semantic_query_plan",
-    "deterministic_query_class",
 ]

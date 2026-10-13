@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import stat
@@ -8,6 +9,7 @@ from unittest.mock import patch
 
 import _paths  # noqa: F401
 from formowl_contract import (
+    ContractValidationError,
     SourceInventory,
     assert_no_public_raw_references,
 )
@@ -35,12 +37,52 @@ class Issue56SourceCompletenessE2ETests(unittest.TestCase):
             persisted = SourceInventory.from_dict(
                 json.loads(inventory_path.read_text(encoding="utf-8"))
             )
-            materialization_checks.append(persisted.to_dict() == source_inventory.to_dict())
-            return real_materializer(
+            materialization_checks.append(
+                persisted.to_persistence_dict() == source_inventory.to_persistence_dict()
+            )
+            inventory_before = source_inventory.to_persistence_dict()
+            self.assertTrue(source_inventory.source_inventory_id.startswith("srcinv_"))
+            with self.assertRaises(ContractValidationError):
+                pst_module._pst_top_level_message_inventory_bindings(source_inventory)
+            message = messages[0]
+            for changed in (
+                replace(message, source_local_key="unbound-message"),
+                replace(
+                    message,
+                    attachments=(
+                        replace(
+                            message.attachments[0],
+                            source_name_fingerprint="sha256:" + "0" * 64,
+                        ),
+                    ),
+                ),
+            ):
+                with self.subTest(mismatch=changed.source_local_key != message.source_local_key):
+                    with self.assertRaises(ContractValidationError):
+                        real_materializer(
+                            [changed],
+                            extraction_input=extraction_input,
+                            source_inventory=source_inventory,
+                        )
+            observations = real_materializer(
                 messages,
                 extraction_input=extraction_input,
                 source_inventory=source_inventory,
             )
+            self.assertEqual(source_inventory.to_persistence_dict(), inventory_before)
+            self.assertEqual(
+                {
+                    o.payload["source_inventory_item_id"]
+                    for o in observations
+                    if o.observation_type in {"email_message", "email_attachment_occurrence"}
+                },
+                {
+                    item.source_inventory_item_id
+                    for item in source_inventory.items
+                    if item.processing_state == "parsed"
+                },
+            )
+            return observations
 
         with patch.object(
             pst_module,

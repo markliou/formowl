@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Run ordered ontology-operator combinations on hard full-PST mail cases.
+"""Run historical ontology-operator ablations over the default retrieval base.
 
 This experiment reuses the preserved #21 domain-hard full-PST work directory.
-It loads observations and builds the deterministic candidate KG once, then
-scores every ordered subset of the configured ontology operators in memory.
+It onboards the default source-neutral Candidate evidence method, then scores
+every ordered subset of the configured ontology operators in memory. The
+factorial operators are ablations and must not replace the default capped
+additive ontology policy.
 
 The report is public-safe hash/count/timing output only. It does not reparse the
 PST, run neural packages, write canonical KG/type/user-graph/wiki state, grant
@@ -19,6 +21,7 @@ from itertools import permutations
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 from typing import Any, Mapping, Sequence
@@ -41,6 +44,11 @@ from formowl_evaluator.report_validation import (  # noqa: E402
     require_sha256 as _require_sha256,
     validate_exact_keys_missing_first as _validate_exact_keys,
 )
+from formowl_graph import (  # noqa: E402
+    DEFAULT_CANDIDATE_EVIDENCE_METHOD_ID,
+    build_default_candidate_evidence_harness_contract,
+    require_default_candidate_evidence_harness_contract,
+)
 
 DEFAULT_BASELINE_REPORT = ROOT / ".test-tmp" / "formowl-mail-domain-hard-case-baseline-v4.json"
 DEFAULT_WORK_DIR = ROOT / ".test-tmp" / "formowl-mail-domain-hard-case-baseline-work-v4"
@@ -49,6 +57,9 @@ NOW = "2026-07-07T14:00:00+00:00"
 REPORT_TYPE = "mail_full_pst_domain_hard_ontology_factorial_eval"
 RUN_OPT_IN_ENV = "FORMOWL_RUN_FULL_PST_DOMAIN_HARD_ONTOLOGY_FACTORIAL_EVAL"
 FACTORIAL_POLICY_VERSION = "formowl_domain_hard_ontology_operator_factorial_v1"
+BASE_RETRIEVAL_POLICY_VERSION = DEFAULT_CANDIDATE_EVIDENCE_METHOD_ID
+HARNESS_CONTRACT = build_default_candidate_evidence_harness_contract()
+require_default_candidate_evidence_harness_contract(HARNESS_CONTRACT)
 CASE_COUNT = 100
 MAX_COMPONENT_EVIDENCE_PER_CASE = 10
 
@@ -94,6 +105,7 @@ _FORBIDDEN_TRUE_CLAIMS = {
 _REQUIRED_SUCCESS_METRICS = {
     "baseline_report_loaded",
     "baseline_report_validation_passed",
+    "baseline_manifest_binding_validated",
     "private_manifest_loaded",
     "observations_loaded",
     "body_segments_loaded",
@@ -121,9 +133,12 @@ _BLOCKED_REASONS = {
     "explicit_work_dir_required",
     "baseline_report_missing",
     "baseline_report_invalid",
+    "baseline_manifest_binding_mismatch",
     "work_dir_missing",
     "private_manifest_missing",
+    "private_manifest_logical_source_gold_missing",
     "observations_missing",
+    "stable_source_identity_missing",
     "ontology_factorial_eval_failed",
 }
 
@@ -172,6 +187,7 @@ def run_ontology_factorial_eval(
     *,
     baseline_report_path: Path | None = None,
     work_dir: Path | None = None,
+    private_manifest_path: Path | None = None,
 ) -> dict[str, Any]:
     if os.environ.get(RUN_OPT_IN_ENV) != "1":
         return _blocked_report("ontology_factorial_requires_explicit_opt_in")
@@ -181,6 +197,9 @@ def run_ontology_factorial_eval(
         return _run_ontology_factorial_eval_inner(
             baseline_report_path=baseline_report_path,
             work_dir=work_dir,
+            private_manifest_path=(
+                private_manifest_path or work_dir / kg_eval.PRIVATE_MANIFEST_RELATIVE
+            ),
         )
     except FileNotFoundError as exc:
         reason = str(exc)
@@ -195,6 +214,7 @@ def _run_ontology_factorial_eval_inner(
     *,
     baseline_report_path: Path,
     work_dir: Path,
+    private_manifest_path: Path,
 ) -> dict[str, Any]:
     started = time.monotonic()
     baseline_report = _read_json_file(baseline_report_path, "baseline_report_missing")
@@ -213,17 +233,22 @@ def _run_ontology_factorial_eval_inner(
 
     kg_started = time.monotonic()
     kg_index = kg_eval._build_candidate_kg_index(segments)
-    ontology_index = ontology_eval._build_ontology_index(segments, kg_index)
+    ontology = ontology_eval._build_domain_ontology()
+    ontology_index = ontology_eval._build_ontology_index(
+        tuple(kg_index.segment_by_observation_id.values()),
+        kg_index,
+        ontology,
+    )
     factorial_index = _build_factorial_index(segments, kg_index, ontology_index)
     kg_build_elapsed_ms = int((time.monotonic() - kg_started) * 1000)
 
-    manifest = _read_json_file(
-        work_dir / kg_eval.PRIVATE_MANIFEST_RELATIVE,
-        "private_manifest_missing",
-    )
+    manifest = _read_json_file(private_manifest_path, "private_manifest_missing")
     manifest_hash = sha256_json(manifest)
     cases = kg_eval._validate_private_manifest_cases(manifest)
-    baseline_rows = kg_eval._baseline_rows_by_manifest_hash(baseline_report)
+    baseline_rows = kg_eval._validate_baseline_manifest_binding(
+        baseline_report,
+        cases=cases,
+    )
 
     scoring_started = time.monotonic()
     arm_summaries = [
@@ -253,6 +278,7 @@ def _run_ontology_factorial_eval_inner(
     metrics = {
         "baseline_report_loaded": True,
         "baseline_report_validation_passed": True,
+        "baseline_manifest_binding_validated": True,
         "private_manifest_loaded": True,
         "observations_loaded": True,
         "body_segments_loaded": safe_outputs["body_segment_count"] > 0,
@@ -377,39 +403,43 @@ def _score_case_for_arm(
     factorial_index: _FactorialIndex,
 ) -> dict[str, Any]:
     result_kind = str(case["result_kind"])
-    required_ids = tuple(str(value) for value in case.get("required_source_observation_ids", []))
-    required_match_count = int(case.get("required_match_count", 0))
+    query_text = str(case.get("query_text", ""))
+    access_binding = kg_eval._access_binding_for_requester(
+        str(case.get("requester_user_id", "")),
+        kg_index=kg_index,
+    )
     baseline_status = (
         str(baseline_row.get("status"))
         if isinstance(baseline_row, Mapping) and isinstance(baseline_row.get("status"), str)
         else "unknown"
     )
+    retrieval = _retrieve_evidence_for_arm(
+        query_text=query_text,
+        arm=arm,
+        access_binding=access_binding,
+        kg_index=kg_index,
+        factorial_index=factorial_index,
+    )
+    selected_ids = retrieval.selected_observation_ids
+    selection_score = kg_eval._score_selection(
+        case,
+        selected_observation_ids=selected_ids,
+        kg_index=kg_index,
+    )
     if result_kind == "permission_denied":
-        selected_ids: tuple[str, ...] = ()
-        status = "passed"
-        matched_required_count = 0
-        selected_component_count = 0
+        status = (
+            "passed"
+            if retrieval.rejected
+            and retrieval.rejection_reason == "no_accessible_evidence"
+            and not selected_ids
+            else "failed"
+        )
+        matched_required_count = selection_score.matched_required_observation_count
+        selected_component_count = len(selection_score.selected_source_item_ids)
     else:
-        query_tokens = kg_eval._tokenize(str(case.get("query_text", "")))
-        selected_components = _rank_components_for_arm(
-            query_tokens,
-            arm=arm,
-            kg_index=kg_index,
-            factorial_index=factorial_index,
-            limit=4,
-        )
-        selected_ids = kg_eval._evidence_from_components(
-            selected_components,
-            query_tokens=query_tokens,
-            kg_index=kg_index,
-            limit=MAX_COMPONENT_EVIDENCE_PER_CASE,
-        )
-        matched_required_count = len(set(required_ids) & set(selected_ids))
-        selected_component_count = len(selected_components)
-        if result_kind == "owner_match":
-            status = "passed" if matched_required_count >= required_match_count else "failed"
-        else:
-            status = "passed" if len(selected_ids) == 0 else "failed"
+        status = selection_score.status
+        matched_required_count = selection_score.matched_required_observation_count
+        selected_component_count = len(selection_score.selected_source_item_ids)
     response_payload = {
         "case": sha256_json(str(case.get("case_id", ""))),
         "arm": _arm_id_hash(arm),
@@ -431,92 +461,94 @@ def _score_case_for_arm(
     }
 
 
-def _rank_components_for_arm(
-    query_tokens: set[str],
+def _retrieve_evidence_for_arm(
     *,
+    query_text: str,
     arm: tuple[str, ...],
+    access_binding: kg_eval.CandidateEvidenceAccessBinding,
     kg_index: kg_eval._CandidateKgIndex,
     factorial_index: _FactorialIndex,
-    limit: int,
-) -> tuple[str, ...]:
+) -> Any:
     if not arm:
-        return kg_eval._rank_components(query_tokens, kg_index, limit=limit)
-    state_tokens = set(query_tokens)
-    scores: Counter[str] = Counter()
-    _add_token_scores(scores, state_tokens, kg_index, weight=10)
-    candidate_components: set[str] = set(scores)
+        return kg_index.evidence_index.retrieve(
+            query_text=query_text,
+            limit=kg_eval.EVIDENCE_BUDGET,
+            access_binding=access_binding,
+            **kg_eval._retrieval_scope(kg_index),
+        )
+
+    use_ontology = BROAD_DOMAIN in arm
+    evidence_index = (
+        factorial_index.ontology_index.evidence_index if use_ontology else kg_index.evidence_index
+    )
+    return evidence_index.retrieve_ablation(
+        query_text=query_text,
+        ablation_id=f"ontology_factorial::{'+'.join(arm)}",
+        query_token_transform=lambda base_tokens: _transform_tokens_for_arm(
+            base_tokens,
+            query_text=query_text,
+            arm=arm,
+        ),
+        eligible_observation_filter=(
+            (
+                lambda eligible_ids, transformed_tokens: (
+                    _shacl_eligible_observation_ids(
+                        eligible_ids,
+                        query_tokens=set(transformed_tokens),
+                        kg_index=kg_index,
+                    )
+                )
+            )
+            if SHACL_PRUNING in arm
+            else None
+        ),
+        limit=kg_eval.EVIDENCE_BUDGET,
+        enable_ontology_rerank=use_ontology,
+        access_binding=access_binding,
+        ontology_revision_id=(kg_eval.EVIDENCE_ONTOLOGY_REVISION_ID if use_ontology else None),
+        ontology_signal_vocabulary_hash=(
+            factorial_index.ontology_index.ontology_signal_vocabulary_hash if use_ontology else None
+        ),
+        ontology_contract_hash=(
+            factorial_index.ontology_index.ontology_contract_hash if use_ontology else None
+        ),
+        **kg_eval._retrieval_scope(kg_index),
+    )
+
+
+def _transform_tokens_for_arm(
+    base_tokens: frozenset[str],
+    *,
+    query_text: str,
+    arm: tuple[str, ...],
+) -> set[str]:
+    state_tokens = set(base_tokens)
+    raw_terms = set(re.findall(r"[a-z0-9_@.-]+", query_text.lower()))
     for operator_name in arm:
         if operator_name == SKOS_EXPANSION:
-            expanded = _skos_expand(state_tokens)
-            new_tokens = expanded - state_tokens
-            state_tokens.update(expanded)
-            _add_token_scores(scores, new_tokens, kg_index, weight=4)
-            candidate_components.update(scores)
+            state_tokens = _skos_expand(state_tokens)
         elif operator_name == BROAD_DOMAIN:
-            domains = ontology_eval._domains_for_tokens(state_tokens)
-            for domain in domains:
-                for component_id in factorial_index.ontology_index.component_ids_by_domain.get(
-                    domain, ()
-                ):
-                    domain_score = factorial_index.ontology_index.domain_scores_by_component.get(
-                        component_id, {}
-                    ).get(domain, 0)
-                    scores[component_id] += 3 * min(domain_score, 4)
-                    candidate_components.add(component_id)
+            state_tokens = _broad_domain_expand(state_tokens)
         elif operator_name == FINE_TYPE:
-            type_names = _fine_types_for_tokens(state_tokens)
-            for type_name in type_names:
-                for component_id in factorial_index.component_ids_by_type.get(type_name, ()):
-                    type_score = factorial_index.type_scores_by_component.get(component_id, {}).get(
-                        type_name, 0
-                    )
-                    scores[component_id] += 6 * min(type_score, 3)
-                    candidate_components.add(component_id)
+            state_tokens = _fine_type_expand(state_tokens)
         elif operator_name == RELATION_SLOT:
-            slots = _relation_slots_for_tokens(state_tokens)
-            for component_id in list(candidate_components or kg_index.observation_ids_by_component):
-                slot_score = _slot_score(component_id, slots=slots, kg_index=kg_index)
-                if slot_score:
-                    scores[component_id] += slot_score
-                    candidate_components.add(component_id)
+            state_tokens = _relation_slot_expand(state_tokens | raw_terms)
         elif operator_name == SHACL_PRUNING:
-            candidate_components = _shacl_pruned_components(
-                candidate_components or set(scores),
-                query_tokens=state_tokens,
-                kg_index=kg_index,
-            )
-            scores = Counter(
-                {component_id: scores[component_id] for component_id in candidate_components}
-            )
+            continue
         else:
             raise RuntimeError("unknown ontology operator")
-    ranked = sorted(
-        candidate_components,
-        key=lambda component_id: (
-            -scores[component_id],
-            len(kg_index.observation_ids_by_component[component_id]),
-            component_id,
-        ),
-    )
-    return tuple(component_id for component_id in ranked[:limit] if scores[component_id] > 0)
-
-
-def _add_token_scores(
-    scores: Counter[str],
-    tokens: set[str],
-    kg_index: kg_eval._CandidateKgIndex,
-    *,
-    weight: int,
-) -> None:
-    for token in tokens & kg_eval._IMPORTANT_TERMS:
-        for component_id in kg_index.component_ids_by_token.get(token, ()):
-            scores[component_id] += weight
+    return state_tokens
 
 
 def _skos_expand(tokens: set[str]) -> set[str]:
     expanded = set(tokens)
     for token in tuple(tokens):
         expanded.update(_SKOS_EXPANSIONS.get(token, ()))
+    return expanded
+
+
+def _broad_domain_expand(tokens: set[str]) -> set[str]:
+    expanded = set(tokens)
     for domain, vocabulary in hard_eval.DOMAIN_VOCABULARY.items():
         domain_label_tokens = set(domain.split("_"))
         if tokens & (domain_label_tokens | vocabulary):
@@ -528,6 +560,13 @@ def _fine_types_for_tokens(tokens: set[str]) -> set[str]:
     return {
         type_name for type_name, vocabulary in _FINE_TYPE_VOCABULARY.items() if tokens & vocabulary
     }
+
+
+def _fine_type_expand(tokens: set[str]) -> set[str]:
+    expanded = set(tokens)
+    for type_name in _fine_types_for_tokens(tokens):
+        expanded.update(_FINE_TYPE_VOCABULARY[type_name])
+    return expanded
 
 
 def _relation_slots_for_tokens(tokens: set[str]) -> set[str]:
@@ -545,44 +584,35 @@ def _relation_slots_for_tokens(tokens: set[str]) -> set[str]:
     return slots
 
 
-def _slot_score(
-    component_id: str,
-    *,
-    slots: set[str],
-    kg_index: kg_eval._CandidateKgIndex,
-) -> int:
-    if not slots:
-        return 0
-    tokens = kg_index.tokens_by_component.get(component_id, frozenset())
-    size = len(kg_index.observation_ids_by_component.get(component_id, ()))
-    score = 0
-    if "multi_message" in slots and size >= 2:
-        score += 8
-    if "chronology" in slots and size >= 2 and tokens & {"deadline", "schedule", "overdue"}:
-        score += 6
-    if "conflict" in slots and tokens & hard_eval.CONFLICT_TERMS:
-        score += 10
-    if "approval_decision" in slots and tokens & _FINE_TYPE_VOCABULARY["approval_decision"]:
-        score += 10
-    if "actor_topic" in slots and size >= 2:
-        score += 3
-    return score
+def _relation_slot_expand(tokens: set[str]) -> set[str]:
+    expanded = set(tokens)
+    slots = _relation_slots_for_tokens(tokens)
+    if "chronology" in slots:
+        expanded.update({"deadline", "due", "schedule"})
+    if "conflict" in slots:
+        expanded.update({"conflict", "mismatch", "tension"})
+    if "approval_decision" in slots:
+        expanded.update(_FINE_TYPE_VOCABULARY["approval_decision"])
+    if "actor_topic" in slots:
+        expanded.update({"asked", "said", "wrote"})
+    return expanded
 
 
-def _shacl_pruned_components(
-    component_ids: set[str],
+def _shacl_eligible_observation_ids(
+    eligible_observation_ids: set[str],
     *,
     query_tokens: set[str],
     kg_index: kg_eval._CandidateKgIndex,
 ) -> set[str]:
     slots = _relation_slots_for_tokens(query_tokens)
     if not slots:
-        return component_ids
-    pruned: set[str] = set()
-    for component_id in component_ids:
-        tokens = kg_index.tokens_by_component.get(component_id, frozenset())
-        size = len(kg_index.observation_ids_by_component.get(component_id, ()))
-        if "multi_message" in slots and size < 2:
+        return eligible_observation_ids
+    admissible: set[str] = set()
+    for record in kg_index.evidence_index.records:
+        if record.observation_id not in eligible_observation_ids:
+            continue
+        tokens = record.tokens
+        if "chronology" in slots and record.observed_at is None:
             continue
         if "conflict" in slots and not (tokens & hard_eval.CONFLICT_TERMS):
             continue
@@ -590,8 +620,10 @@ def _shacl_pruned_components(
             tokens & _FINE_TYPE_VOCABULARY["approval_decision"]
         ):
             continue
-        pruned.add(component_id)
-    return pruned
+        if "actor_topic" in slots and not record.actor_tokens:
+            continue
+        admissible.add(record.observation_id)
+    return admissible
 
 
 def _safe_outputs(
@@ -1124,6 +1156,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-report", type=Path, default=None)
     parser.add_argument("--work-dir", type=Path, default=None)
+    parser.add_argument("--private-manifest", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--validate-report", type=Path, default=None)
     args = parser.parse_args(argv)
@@ -1135,6 +1168,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = run_ontology_factorial_eval(
         baseline_report_path=args.baseline_report,
         work_dir=args.work_dir,
+        private_manifest_path=args.private_manifest,
     )
     _write_json(args.output, report)
     return 0 if report.get("metrics", {}).get("ontology_factorial_eval_completed") is True else 1

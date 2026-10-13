@@ -571,7 +571,7 @@ def _fixture_bytes(body_count: int) -> tuple[bytes, bytes, bytes, bytes]:
         started_at=CREATED_AT,
         completed_at=CREATED_AT,
     )
-    bundle_payload = bundle.to_dict()
+    bundle_payload = bundle.to_persistence_dict()
     bundle_fingerprint = sha256_json(bundle_payload)
     source_snapshot_fingerprint = sha256_json("source-snapshot")
     bundle_artifact: dict[str, object] = {
@@ -579,7 +579,7 @@ def _fixture_bytes(body_count: int) -> tuple[bytes, bytes, bytes, bytes]:
         "schema_version": 1,
         "status": "passed",
         "source_snapshot_fingerprint": source_snapshot_fingerprint,
-        "source_inventory_fingerprint": sha256_json(inventory.to_dict()),
+        "source_inventory_fingerprint": sha256_json(inventory.to_persistence_dict()),
         "source_provenance_fingerprint": provenance_fingerprint,
         "bundle": bundle_payload,
         "bundle_fingerprint": bundle_fingerprint,
@@ -627,7 +627,7 @@ def _fixture_bytes(body_count: int) -> tuple[bytes, bytes, bytes, bytes]:
         "source_snapshot_fingerprint": source_snapshot_fingerprint,
         "source_asset_sha256": source_asset_sha256,
         "native_manifest_fingerprint": sha256_json("native-manifest"),
-        "source_inventory_fingerprint": sha256_json(inventory.to_dict()),
+        "source_inventory_fingerprint": sha256_json(inventory.to_persistence_dict()),
         "source_provenance_fingerprint": provenance_fingerprint,
         "permission_fingerprint": sha256_json(permission_scope.to_dict()),
         "parsed_observation_fingerprint": sha256_json(
@@ -642,7 +642,7 @@ def _fixture_bytes(body_count: int) -> tuple[bytes, bytes, bytes, bytes]:
         "authorized_result_fingerprint": sha256_json("authorized-result"),
         "denied_result_fingerprint": sha256_json("denied-result"),
         "created_at": CREATED_AT,
-        "source_inventory": inventory.to_dict(),
+        "source_inventory": inventory.to_persistence_dict(),
         "source_occurrence_observations": [],
         "parsed_mail_observations": [observation.to_dict() for observation in parsed_observations],
         "index_build_manifest": {"artifact_fingerprint": sha256_json("index-build")},

@@ -412,9 +412,7 @@ class MailCandidateAdmissionTokenizerProfile:
         ):
             raise RuntimeError("frozen tokenizer query grounding is unavailable")
         covered_offsets = {
-            offset
-            for term in ordered_terms
-            for offset in range(term.start, term.end)
+            offset for term in ordered_terms for offset in range(term.start, term.end)
         }
         if any(
             offset not in covered_offsets and not _query_grounding_omits(character)
@@ -693,6 +691,12 @@ def configured_mail_tokenizer_id() -> str:
     """Return the identifier for a newly validated configured profile."""
 
     return build_mail_candidate_admission_tokenizer_profile().tokenizer_id
+
+
+def validate_configured_mail_tokenizer() -> str:
+    """Validate the immutable runtime profile without selecting a legacy fallback."""
+
+    return configured_mail_tokenizer_id()
 
 
 def configured_mail_candidate_admission_tokens(value: str) -> set[str]:
@@ -1179,6 +1183,7 @@ DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE = (
 
 
 __all__ = [
+    "validate_configured_mail_tokenizer",
     "ASCII_IDENTIFIER_REGEX_TOKENIZER_ID",
     "DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE",
     "ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT",

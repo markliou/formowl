@@ -5,11 +5,9 @@ from typing import Any, Mapping, Sequence
 
 from formowl_contract import (
     COORDINATION_FRAME_TYPES,
-    COORDINATION_OBJECT_SUPERTYPE_IDS,
     CandidateBusinessObject,
     CandidateFrame,
     CandidateMention,
-    ContractValidationError,
     Observation,
     PermissionScope,
     sha256_json,
@@ -19,6 +17,7 @@ from formowl_contract import (
 )
 
 from .candidates import DeterministicTextCandidateExtractor
+from .domain_packs import DomainPackDefinition
 from .storage import (
     CandidateBusinessObjectStore,
     CandidateFrameStore,
@@ -37,106 +36,6 @@ _STATUS_SCORE = {
     _REDACTED: 0.75,
     _NOT_ANSWERED: 0.0,
 }
-
-
-@dataclass(frozen=True)
-class DomainPackDefinition:
-    pack_id: str
-    domain: str
-    ontology_revision_id: str
-    source_observation_ids: list[str]
-    frame_extensions: dict[str, str]
-    object_types: dict[str, str]
-    aliases: dict[str, list[str]] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "DomainPackDefinition":
-        pack = dict(value)
-        required = (
-            "pack_id",
-            "domain",
-            "ontology_revision_id",
-            "source_observation_ids",
-            "frame_extensions",
-            "object_types",
-        )
-        missing = [field_name for field_name in required if pack.get(field_name) in (None, "")]
-        if missing:
-            raise ContractValidationError(
-                f"DomainPackDefinition missing required field(s): {', '.join(missing)}"
-            )
-        if not all(
-            isinstance(pack[field_name], str)
-            for field_name in ("pack_id", "domain", "ontology_revision_id")
-        ):
-            raise ContractValidationError("DomainPackDefinition ids and domain must be strings")
-        if (
-            not isinstance(pack["source_observation_ids"], list)
-            or not pack["source_observation_ids"]
-        ):
-            raise ContractValidationError("DomainPackDefinition requires source observations")
-        if not all(isinstance(item, str) and item for item in pack["source_observation_ids"]):
-            raise ContractValidationError(
-                "DomainPackDefinition source observations must be strings"
-            )
-        if not isinstance(pack["frame_extensions"], dict) or not pack["frame_extensions"]:
-            raise ContractValidationError("DomainPackDefinition.frame_extensions must be non-empty")
-        if not isinstance(pack["object_types"], dict) or not pack["object_types"]:
-            raise ContractValidationError("DomainPackDefinition.object_types must be non-empty")
-        for domain_frame, core_frame in pack["frame_extensions"].items():
-            if not isinstance(domain_frame, str) or not domain_frame:
-                raise ContractValidationError("domain frame names must be non-empty strings")
-            if core_frame not in COORDINATION_FRAME_TYPES:
-                raise ContractValidationError("domain frame extensions must target core frames")
-        for object_type, supertype in pack["object_types"].items():
-            if not isinstance(object_type, str) or not object_type:
-                raise ContractValidationError("domain object names must be non-empty strings")
-            if supertype not in COORDINATION_OBJECT_SUPERTYPE_IDS:
-                raise ContractValidationError(
-                    "domain objects must target coordination object supertypes"
-                )
-        aliases = pack.get("aliases", {})
-        if not isinstance(aliases, dict):
-            raise ContractValidationError("DomainPackDefinition.aliases must be an object")
-        for key, items in aliases.items():
-            if not isinstance(key, str) or not isinstance(items, list):
-                raise ContractValidationError(
-                    "DomainPackDefinition.aliases must map strings to lists"
-                )
-            if not all(isinstance(item, str) and item for item in items):
-                raise ContractValidationError("DomainPackDefinition.alias entries must be strings")
-        return cls(
-            pack_id=pack["pack_id"],
-            domain=pack["domain"],
-            ontology_revision_id=pack["ontology_revision_id"],
-            source_observation_ids=list(pack["source_observation_ids"]),
-            frame_extensions=dict(pack["frame_extensions"]),
-            object_types=dict(pack["object_types"]),
-            aliases={key: list(items) for key, items in aliases.items()},
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        # Round-trip through from_dict so callers cannot serialize an invalid pack.
-        valid = type(self).from_dict(
-            {
-                "pack_id": self.pack_id,
-                "domain": self.domain,
-                "ontology_revision_id": self.ontology_revision_id,
-                "source_observation_ids": list(self.source_observation_ids),
-                "frame_extensions": dict(self.frame_extensions),
-                "object_types": dict(self.object_types),
-                "aliases": {key: list(items) for key, items in self.aliases.items()},
-            }
-        )
-        return {
-            "pack_id": valid.pack_id,
-            "domain": valid.domain,
-            "ontology_revision_id": valid.ontology_revision_id,
-            "source_observation_ids": valid.source_observation_ids,
-            "frame_extensions": valid.frame_extensions,
-            "object_types": valid.object_types,
-            "aliases": valid.aliases,
-        }
 
 
 @dataclass(frozen=True)

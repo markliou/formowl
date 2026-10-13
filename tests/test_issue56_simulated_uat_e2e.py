@@ -2198,7 +2198,7 @@ def _synthetic_diagnostic_subset_fixture(root: Path) -> dict[str, object]:
     manifest_path.parent.mkdir(parents=True)
     manifest_path.write_bytes(_serialized_json_bytes(manifest))
     bundle_path = root / "bundle.private.json"
-    bundle_path.write_bytes(_serialized_json_bytes(bundle.to_dict()))
+    bundle_path.write_bytes(_serialized_json_bytes(bundle.to_persistence_dict()))
     source_identifier_fixture = _source_identifier_candidate_fixture(
         root,
         observations=observations,
@@ -2457,7 +2457,7 @@ def _hashable_arm_behavior(arm_results) -> str:
 
 def _native_retrieval_wrapper_fixture(root: Path) -> dict[str, object]:
     _, bundle, _, _ = build_poc_inputs()
-    bundle_payload = bundle.to_dict()
+    bundle_payload = bundle.to_persistence_dict()
     source_snapshot_fingerprint = simulated_uat_module.sha256_json(
         "synthetic-native-source-snapshot"
     )

@@ -22,6 +22,7 @@ from formowl_ingestion.extraction import run_extractor
 from formowl_ingestion.extractors.mail.pst import (
     NativePstAttachmentExport, NativePstMessageExport, PstMailArchiveExtractor,
     ReadpstSidecarBackfillExtractor, parse_native_pst_message_exports,
+    PST_INVENTORY_CARRIER_OBSERVATION_TYPE,
 )
 from formowl_ingestion.jobs import create_ingestion_job, run_ingestion_job
 from formowl_ingestion.storage import JobStore, ObservationStore
@@ -56,6 +57,19 @@ def _xlsx_fixture() -> bytes:
 
 
 class IngestionMailSourcePreservationTests(unittest.TestCase):
+    def test_retained_body_and_date_helpers_use_complete_parser_apis(self) -> None:
+        from formowl_ingestion.extractors.mail.pst import _plain_body, _safe_date
+
+        message = EmailMessage()
+        message.set_content("plain evidence")
+        message.add_alternative("<p>html evidence</p>", subtype="html")
+        message.add_attachment(b"attachment only", maintype="application", subtype="octet-stream")
+        body = _plain_body(message)
+        self.assertIn("plain evidence", body)
+        self.assertIn("html evidence", body)
+        self.assertNotIn("attachment only", body)
+        self.assertEqual(_safe_date("Tue, 18 Aug 2026 12:00:00 +0800"), "2026-08-18T12:00:00+08:00")
+
     def test_malformed_address_header_is_redacted_without_aborting_headers(self) -> None:
         from formowl_ingestion.extractors.mail.pst import _safe_headers
 
@@ -78,7 +92,7 @@ class IngestionMailSourcePreservationTests(unittest.TestCase):
             b"To: Group: <a@b>; trailing-invalid\n"
             b"Subject: retained subject\nMIME-Version: 1.0\n"
             b"Content-Type: multipart/mixed; boundary=BOUNDARY\n\n"
-            b"--BOUNDARY\nContent-Type: text/plain\n\nretained body\n"
+            b"--BOUNDARY\nContent-Type: text/plain; charset=utf-8\n\nretained body\n"
             b"--BOUNDARY\nContent-Type: application/octet-stream\n"
             b"Content-Disposition: attachment; filename=fixture.bin\n\nbytes\n"
             b"--BOUNDARY--\n"
@@ -813,7 +827,14 @@ class IngestionMailSourcePreservationTests(unittest.TestCase):
                     "synthetic-test-value" in str(item.extracted_value))
         self.assertIn("Keep this", cell.text)
         self.assertNotIn("synthetic-test-value", cell.text)
+        carriers = [item for item in result.observations
+                    if item.observation_type == PST_INVENTORY_CARRIER_OBSERVATION_TYPE]
+        self.assertEqual(len(carriers), 1)
+        # Inventory/structural carriers are private persistence, not public display.
+        self.assertIn("synthetic-test-value", json.dumps(carriers[0].to_dict()))
         for item in result.observations:
+            if item.observation_type == PST_INVENTORY_CARRIER_OBSERVATION_TYPE:
+                continue
             projection = item.to_dict()
             projection.pop("extracted_value", None)
             assert_no_public_raw_references(projection)
