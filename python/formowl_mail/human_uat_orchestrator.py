@@ -833,6 +833,19 @@ class _UatTurnRequestContractBinder:
     ) -> None:
         """Reject an unexpanded terse copy before it reaches the UAT tool."""
 
+        try:
+            assert_no_public_raw_references(query_text, "query_text")
+        except ContractValidationError:
+            # Opt-in private stage stream only; no rejected content enters MCP
+            # or public diagnostics. The enclosing record owns the turn ID.
+            _record_private_citation_stage({
+                "stage": "tool_request_validation",
+                "validation_result": "unsafe_query_text",
+                "query_hash": "sha256:" + hashlib.sha256(query_text.encode("utf-8")).hexdigest(),
+                "original_query_hash": self._original_query_hash,
+            })
+            raise
+
         if self._reference_only and (
             not self._reference_binding
             or protected_reference_identifiers(query_text) != (self._reference_binding["identifier"],)
@@ -7362,7 +7375,7 @@ def _source_fallback_exhausted(
         not scan["complete"] and "incomplete" in warnings
         and scan.get("stop_reason") in {
             "deadline", "observation_limit", "callback", "source_reference_unavailable",
-            "indexed_shortlist_miss",
+            "indexed_shortlist_miss", "source_table_shortlist",
         }
     ) or (
         scan["complete"] and scan.get("stop_reason") is None

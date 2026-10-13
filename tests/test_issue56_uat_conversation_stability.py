@@ -27,9 +27,101 @@ from formowl_mail.human_uat_orchestrator import (
 )
 from formowl_contract import ContractValidationError, sha256_json
 from formowl_mail.semantic_plan import deterministic_query_class, is_identifier_reference
+from formowl_mail import human_uat_orchestrator as orchestrator
 
 
 class Issue56UatConversationStabilityTests(unittest.TestCase):
+    def test_unsafe_expanded_query_is_rejected_before_mcp_with_private_hash_trace(self):
+        prompt = "Find the review condition for UNIT-Q7 in authorized records."
+        for suffix in (" / cite evidence", " /private/fixture", " secret=synthetic"):
+            with self.subTest(suffix=suffix):
+                query = prompt + suffix
+                self.assertEqual(deterministic_query_class(prompt), "evidence_lookup")
+                with self.assertRaises(ContractValidationError):
+                    deterministic_query_class(query)
+                model = CodexResponsesConversationModel(
+                    base_url="https://synthetic.invalid/v1", api_key="synthetic",
+                )
+                tool = MagicMock(return_value={"status": "mcp_failed", "citations": []})
+                response = {"status": "completed", "output": [{
+                    "type": "function_call", "name": "query_effective_graph_view", "call_id": "unsafe-query",
+                    "arguments": json.dumps({
+                        "query_text": query, "required_terms": ["UNIT-Q7"], "table_query": None,
+                        "request_contract": {
+                            "original_query_hash": sha256_json(prompt), "query_class": "evidence_lookup",
+                            "requested_fields": ["review condition"], "source_family_scope": ["mail"],
+                            "maximum_claim_strength": "cited_evidence",
+                        },
+                    }),
+                }]}
+                final = {"status": "completed", "output_text": json.dumps({
+                    "response_kind": "clarification", "answer_text": "Please clarify the request.",
+                    "display_format": "narrative", "citation_ids": [],
+                    "coverage_status": "incomplete", "coverage_note": "No verified evidence.",
+                })}
+                stages = []
+                token = orchestrator._PRIVATE_UAT_CITATION_TRACE.set(stages)
+                try:
+                    with patch.object(model, "_request_response", side_effect=[response, final]) as transport:
+                        outcome = model.respond(
+                            history=(), user_text=prompt, latest_evidence=None,
+                            safety_identifier="synthetic", evidence_tool=tool,
+                            authorized_capability_summary={"source_families": ["mail"]},
+                        )
+                finally:
+                    orchestrator._PRIVATE_UAT_CITATION_TRACE.reset(token)
+                tool.assert_not_called()
+                self.assertEqual(transport.call_count, 2)  # Existing bounded invalid-argument handling.
+                self.assertEqual(outcome.response_kind, "clarification")
+                rejected = [item for item in stages if item["stage"] == "tool_request_validation"]
+                self.assertEqual(len(rejected), 1)
+                self.assertEqual(rejected[0]["validation_result"], "unsafe_query_text")
+                self.assertEqual(rejected[0]["query_hash"], "sha256:" + hashlib.sha256(query.encode()).hexdigest())
+                self.assertNotIn(query, json.dumps(stages))
+
+    def test_existing_bounded_repair_can_replace_unsafe_expansion_and_retrieve_once(self):
+        prompt = "Find the review condition for UNIT-Q7 in authorized records."
+        safe_query = "Retrieve the review condition for UNIT-Q7 from authorized records."
+        original_hash = "sha256:" + hashlib.sha256(prompt.encode()).hexdigest()
+        contract = {
+            "original_query_hash": original_hash, "query_class": "evidence_lookup",
+            "requested_fields": ["review condition"], "source_family_scope": ["mail"],
+            "maximum_claim_strength": "cited_evidence",
+        }
+        citation = "sha256:" + "c" * 64
+        responses = [{"status": "completed", "output": [{
+            "type": "function_call", "name": "query_effective_graph_view", "call_id": str(index),
+            "arguments": json.dumps({
+                "query_text": query, "required_terms": ["UNIT-Q7"],
+                "request_contract": contract, "table_query": None,
+            }),
+        }]} for index, query in enumerate((safe_query + " / cite evidence", safe_query))]
+        responses.append({"status": "completed", "output_text": json.dumps({
+            "response_kind": "answer", "answer_text": "The review condition is verified by the cited record.",
+            "display_format": "narrative", "citation_ids": [citation],
+            "coverage_status": "incomplete", "coverage_note": "Partial synthetic scope.",
+        })})
+        model = CodexResponsesConversationModel(base_url="https://synthetic.invalid/v1", api_key="synthetic")
+        tool = MagicMock(return_value={
+            "status": "partial", "citations": [citation],
+            "evidence": [{"citation_hash": citation, "snippet": "UNIT-Q7 review condition is verified."}],
+        })
+        with patch.object(model, "_request_response", side_effect=responses) as transport:
+            outcome = model.respond(
+                history=(), user_text=prompt, latest_evidence=None,
+                safety_identifier="synthetic", evidence_tool=tool,
+                authorized_capability_summary={"source_families": ["mail"]},
+            )
+        tool.assert_called_once()
+        request = tool.call_args.args[0]
+        self.assertEqual(request.query_text, safe_query)
+        self.assertEqual(request.required_terms, ("unit-q7",))
+        self.assertEqual(request.request_contract, contract)
+        self.assertEqual(transport.call_count, 3)
+        self.assertIn("invalid_arguments", json.dumps(transport.call_args_list[1].args[0]["input"]))
+        self.assertEqual(outcome.response_kind, "answer")
+        self.assertEqual(outcome.citation_ids, (citation,))
+
     def _turn(self, state, prompt, *, query, terms, cited=True, families=("mail",)):
         calls, contexts = [], []
         citation = "sha256:" + "b" * 64

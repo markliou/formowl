@@ -1,37 +1,49 @@
 # Implementation Task Breakdown
-## UAT consistency assessment — 2026-10-13 UTC, IN-PROGRESS / 待測
+## UAT consistency assessment — 2026-10-13 UTC, observed live diagnostic proof / 待測
 - [ ] Verify the bounded generic repairs, replay candidate browser diagnostics
   and obtain three scoped reviewer decisions before acceptance.
-- Git progress checkpoint selects verified [r2](../.formowl/uat-stability-20261013/package-r2.json)
-  (`1a502d97…`, five code deltas/252 files,37 tests) plus frozen comparator only.
-  R2 pinned `edbcd163…`: focused146/146 PASS237.894s, integration3/3 PASS108.250s,
-  lint/compile11 PASS. Comparator local15/15 PASS0.840s/Ruff; no r3 integrated,
-  final-review or deployment acceptance. Live8088 stays observability `4544e59a…`.
-- [Assessment](../.formowl/uat-stability-20261013/assessment-safe.json): baseline ten
-  actual browser turns/file=HTTP=DOM,5partial/1chat/2unexpected clarification/
-  1honest incomplete/1provider error,8comparable. Generic country→count routing,
-  lossy prior-citeability and synthetic family/selector/read-cap/parent-read defects
-  have bounded repairs; historical500ms subcause remains unproved.
-- Fixture resolver correction2/2 PASS17.935s retains hash/lineage rejection and
-  unique identities. Original r1 focused128/126PASS/2ERROR233.369s preserved;
-  original tag-based36/34PASS/2ERROR247.999s retained. Graph/mail test-key bug
-  corrected; tag `f53b8dd7…` lacks pypdf, pinned image has it; no PDF product fix.
-- R2 actual manufacturer followup has correct identifier/citation but is
-  incomparable solely due to repair_recovered. Server-owned cited unique protected
-  alphanumeric ID binding is narrow; no general numeric/person/history inference.
-  Four r2 browser lifecycle turns/reload/reset PASS; missing reference clarifies MCP0.
-- R2 indexed_shortlist_miss handling did not stop actual empty table+mail query;
-  native source_table_shortlist omission led to115s SSE timeout. Local native-stop
-  WIP is stopped/unstaged:32 tests/3ERROR,28.468s (two native subcases plus shared
-  old case; invalid negative table_query fixture). No inferred pass count; Ruff
-  not run. Next resume narrows those fixture errors and remaining stop work.
-- Artifact/source-hash anomalies and upstream causes remain OPEN; exact/error
-  exclusions, honest incomplete, source guards and unchanged budgets still apply.
-  Four methodology gates blocked, step4 in-progress; requested sol/high metadata
-  unverified. No checkbox/whole-UAT/standard promotion. This publication checkpoint
-  pauses bounded edits; it creates no blanket stop on later authorized Master/B work.
-- [Handoff](agent-goals/handoff-log.md) retains detailed failures/results. Five exact
-  pre-edit docs/hashes: [immutable checkpoint](archive/2026-10-13/uat-stability-r2-pre-sync/SNAPSHOT.md).
+- [Frozen r4](../.formowl/uat-stability-20261013/package-r4.json), code dd731bfc…:
+  [verification](../.formowl/uat-stability-20261013/r4-verification-safe.json)153/153
+  PASS254.897s, integration3/3 PASS110.247s, lint/compile12 PASS; pinned image,
+  exact252+37 post-run hashes verified. Native32/32+115subtests PASS27.697s/Ruff;
+  query guard29/29+34subtests PASS0.184s/Ruff. Original native32tests/3ERROR28.468s
+  was invalid negative table_query fixture; no derived pass count, failure retained.
+- Baseline10actual browser turns/file=HTTP=DOM:5partial/1chat/2unexpected clarification/
+  1honest incomplete/1provider error,8comparable. Generic routing, retained-ID and
+  source-budget/read repairs preserve guards/budgets; historical500ms cause unproved.
+- R3 focused150+integration3 PASS preceded browser8/6pass, one MCP contract error
+  plus dependent missing-reference clarification/no failed private record. Actual
+  root unproved. Shared unsafe expansion reproduced syntheticred3tests/3failing
+  subcases/2errors; guard now precedes MCP, existing repair keeps same ID/scope.
+  Logging fallback hashes/status only, content_redacted=true/exact_result_preserved=false.
+- R4 initial candidate8:7comparable/correct,1provider502/connect_headers1.044s
+  after valid MCP. Separate predeclared fresh-chat+delivery2/2 PASS preserves the
+  original failure/incomparability. Ten unique records/log=HTTP=DOM; guard/redacted
+  fallback untriggered live (synthetic proof only). Citation IDs match prior
+  same-source proof; no fresh native reopening, no provider-root/stability claim.
+- Nash engineering/Bacon safety/Linnaeus methodology final scoped AGREE on r4;
+  rollout gate preserves original candidate failure. [Readiness15:04:37Z](../.formowl/uat-stability-20261013/live-r4-ready-safe.json)
+  confirms8088 r4dd731bfc…/252drift0, same image/source/settings/budgets,
+  logs0600/dir0700; old observability stopped/preserved rollback.
+- [Live matrix](../.formowl/uat-stability-20261013/live-r4-safe.json)/verifier EXIT0:
+  14/14known checks PASS; all14log=HTTP=DOM text/citations.8cited partial/4chat MCP0/
+  1honest incomplete unknown(provider1/MCP1)/1reset reference clarification(no provider/MCP).
+  Thirteen provider turns comparable; reset local/identity-exempt, not provider-comparable.
+  Repeated/fresh/rephrase origin citation, same-row manufacturer, unrelated-part origin/manufacturer and
+  PO delivery match prior same-source proof. Master screenshot review; PO page1/3
+  partial requested delivery, not shipment/latest commitment. Reload/reset/postreset
+  chat PASS; source pin unchanged/no fresh native reopen. Scope is observed known
+  regressions, not whole-UAT/provider-stability/standard.
+- [Cleanup15:11:45Z](../.formowl/uat-stability-20261013/final-operational-r4-safe.json):
+  8088healthy/exact252/drift0/restart0/OOMfalse;4own candidates removed/logs+rollback
+  retained; source/index/DB/unrelated containers untouched.14private IDs/records,
+  zero recording failures/redacted/unsafe-query events; URLs404 twice,0600/0700.
+- Historical source/artifact anomalies and upstream causes remain OPEN. Exact/error
+  exclusions, honest incomplete and all-fields contracts remain required. Canonical
+  authority-resume3 valid=true/ready=false/errors=[], four blocked; step4 in-progress.
+  Requested sol/high actual metadata unverified; Master/B bounded work remains active.
+- [Handoff](agent-goals/handoff-log.md) retains failures/history; exact pre-edit5docs
+  and hashes in unchanged [archive](archive/2026-10-13/uat-stability-r3-pre-verification/SNAPSHOT.md).
 
 ## Opt-in private UAT logging — 2026-10-13 UTC, diagnostic-only / 待測
 - [ ] Capture and verify the authorized UAT interaction recorder in the candidate
@@ -47,7 +59,7 @@
   unrelated LQP MCP1/provider2/citations2, private9→7→2 IDs/file=HTTP=DOM.
   All3 scoped reviewers AGREE for logging activation only; exact evidence and
   commands: [handoff](agent-goals/handoff-log.md). No all-green integration claim.
-- Current8088: `formowl-uat-observability-live-20261013`, code4544e59a…/252drift0,
+- At logging activation8088: `formowl-uat-observability-live-20261013`, code4544e59a…/252drift0,
   same source/image/gpt-5.5 high/budgets. Live ChromiumEXIT0: chat11195ms MCP0/provider1;
   unrelated lookup23844ms MCP1/provider2/citations2/partial, file=HTTP=DOM,
   raw9→7→2 IDs, provider/turn/MCP sameID/zero log failures/private-log URL404 twice.

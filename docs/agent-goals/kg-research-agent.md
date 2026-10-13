@@ -15,52 +15,63 @@ dated closures constrain their own slices, not later authorized work.
 
 ## Objective
 Cited source retrieval and independent browser acceptance remain ACTIVE.
-Live8088 serves observability `4544e59a…`; the Git progress checkpoint selects
-verified stability r2 plus the frozen comparator, pending broader acceptance. The frozen method and strong-RAG comparison
+Live8088 serves diagnostic r4 `dd731bfc…`; three scoped reviewers agree and
+the actual14case LAN matrix passed its known checks. The frozen method and strong-RAG comparison
 remain unchanged. Mail is a diagnostic fixture, not product scope. Stability,
 source completeness and broader acceptance remain open; no whole-UAT, standard,
 methodology or completion promotion.
 
-## UAT consistency assessment — 2026-10-13 UTC, IN-PROGRESS / 待測
-- [Assessment](../../.formowl/uat-stability-20261013/assessment-safe.json): baseline10
-  actual browser turns/file=HTTP=DOM,5partial/1chat/2unexpected clarification/
-  1honest incomplete/1provider error,8comparable. Generic routing and controlled
-  source-budget/read repairs do not prove the historical500ms incident subcause.
-- [Frozen r2](../../.formowl/uat-stability-20261013/package-r2.json): `1a502d97…`,
-  five code deltas/252 files,37 tests. Pinned edbcd163… focused146/146 PASS237.894s,
-  integration3/3 PASS108.250s, lint/compile11 PASS. Git selects r2 plus frozen
-  comparator local15/15 PASS0.840s/Ruff only; no r3 integration/final-review/deploy claim.
-- Assigned sharded fixture correction2/2 PASS17.935s; original r1 focused128/
-  126PASS/2ERROR233.369s preserved. Earlier tag-based36/34PASS/2ERROR247.999s
-  retains corrected graph/mail-key error and missing-pypdf tooling gap. Pinned
-  image has pypdf; no parser/skip patch or PDF product-regression claim.
-- R2 actual manufacturer followup identifier/citation is correct but remains
-  incomparable solely due to repair_recovered. Narrow server-owned validated cited
-  protected alphanumeric ID binding keeps original current/source-turn hashes,
-  explicit NFKC ID precedence and pre-provider missing/ambiguous/reset/scope checks;
-  no general numeric/person coreference or arbitrary history inference.
-- Four r2 browser lifecycle turns/reload/reset PASS; missing reference clarifies
-  MCP0. Mail/document indexed_shortlist_miss handling alone did not stop actual
-  empty table+mail query: source_table_shortlist omission led to115s SSE timeout.
-- Native-stop WIP stopped/unstaged:32 tests/3ERROR,28.468s; two native subcases
-  plus shared old case fail on invalid negative table_query fixture. No inferred
-  pass count; Ruff not run. B reports no active PIDs. Comparator frozen15/15 is
-  separate. Live8088 remains observability4544e59a…; no new deployment accepted.
-- Artifact fingerprint/source-reopen anomalies, upstream causes and broader
-  acceptance remain OPEN. Four methodology gates blocked; step4 in-progress,
-  checkboxes unchanged, requested sol/high actual metadata unverified.
+## UAT consistency assessment — 2026-10-13 UTC, observed live diagnostic proof
+- [R4 verification](../../.formowl/uat-stability-20261013/r4-verification-safe.json),
+  code dd731bfc…: pinned153/153 PASS254.897s, integration3/3 PASS110.247s,
+  lint/compile12 PASS; exact252+37 post-run hashes. Native32/32+115subtests
+  PASS27.697s/Ruff; query guard29/29+34subtests PASS0.184s/Ruff. Earlier native
+  32tests/3ERROR28.468s invalid negative fixture remains preserved; no inferred pass count.
+- Generic routing/source-budget/read/coreference repairs retain source/hash/lineage/
+  permission/exact/ALL-fields and budgets. Protected unique cited alphanumeric ID
+  binding keeps NFKC explicit-ID precedence and distinct current/source-turn hashes;
+  no arbitrary-history or general numeric/person coreference claim.
+- R3 focused150+integration3 PASS did not establish browser acceptance:8turns/
+  6passes,1MCP contract error plus dependent missing reference, no failed private
+  record. Actual root unproved; controlled unsafe-expansion repro3tests/3failing
+  subcases/2errors justifies safety validation before MCP and existing bounded repair.
+  Positive repair keeps same ID/scope, executes one MCP and yields cited evidence.
+- Logging fallback retains hashes/status, content_redacted=true and
+  exact_result_preserved=false; no raw content or false log=HTTP=DOM claim.
+  Remote/global guards and budgets unchanged. Guard/fallback proof remains synthetic.
+- R4 candidate initial8:7comparable/correct plus provider502/connect_headers1.044s
+  after valid MCP. Separate predeclared fresh-chat/delivery2/2 passes do not erase
+  failure/incomparability. All10 unique records/log=HTTP=DOM; neither new guard nor
+  redacted fallback triggered. Citation IDs match prior same-source proof/no reopen.
+- Nash engineering/Bacon safety/Linnaeus methodology AGREE for bounded diagnostic
+  deployment. Readiness15:04:37Z confirms8088 r4dd731bfc…/252drift0, same image/
+  source/settings/budgets/logs0600/dir0700; old observability stopped for rollback.
+- [Live matrix](../../.formowl/uat-stability-20261013/live-r4-safe.json)/verifier EXIT0:
+  14/14known checks PASS, all14log=HTTP=DOM text/citations;8cited partial/4chat MCP0/
+  1honest incomplete unknown(provider1/MCP1)/1reset missing-reference clarification
+  (no provider/MCP). Thirteen provider turns comparable; reset local/identity-exempt,
+  not provider-comparable. Repeated/fresh/rephrase origin citation and same-row manufacturer,
+  unrelated-part origin/manufacturer and PO delivery match prior same-source proof. Master
+  screenshot review; PO page1/3 partial requested delivery, not shipment/latest
+  commitment. Reload/reset/postreset chat PASS; unchanged source pin/no native reopen.
+  No whole-UAT/provider-stability/standard/methodology promotion; metadata unverified.
+- R3 incident, upstream/provider502, artifact/source-hash anomalies and historical
+  500ms cause remain OPEN/unproved. Canonical authority-resume3 valid=true,
+  ready=false, errors=[]; four gates blocked, step4 in-progress, checkboxes unchanged.
 
-## Evidence and next action — publication progress checkpoint
-This bounded docs sync is ready for Master's staging. Native-stop WIP stays out
-of the Git checkpoint. On resume, narrow the invalid table_query fixture errors,
-then verify the remaining stop behavior before integration/browser/three-reviewer
-acceptance. Exact/error exclusions, honest incomplete and source guards/budgets
-remain mandatory. No upstream root-fix, whole-UAT or methodology claim.
-Master owns publication/integration; later authorized Master/B work may continue.
-[Handoff](handoff-log.md) retains counts/failures and [the immutable checkpoint](../archive/2026-10-13/uat-stability-r2-pre-sync/SNAPSHOT.md)
-preserves all five exact pre-edit documents, unique history and prior archive links.
-The historical artifact/source-hash failures remain open despite later passing
-fixtures/citations. No archive was edited or old failure erased.
+## Evidence and next action — r4 observed diagnostic checkpoint
+The observed14case live path and scoped3/3 are recorded; program remains active.
+[Cleanup15:11:45Z](../../.formowl/uat-stability-20261013/final-operational-r4-safe.json)
+confirms8088healthy/exact252/drift0/restart0/OOMfalse;4own candidates removed,
+logs/rollback retained, source/index/DB/unrelated containers untouched.14private
+IDs/records, zero recording failures/redacted/unsafe-query events; URLs404 twice,
+file0600/dir0700. The guard/redacted-fallback evidence remains synthetic only.
+Retain original candidate502 and unresolved r3/source/artifact roots; further
+investigation requires bounded evidence, not automatic retries or broader claims.
+[Handoff](handoff-log.md) retains dated counts and the unchanged [pre-edit archive](../archive/2026-10-13/uat-stability-r3-pre-verification/SNAPSHOT.md)
+retains exact documents, r1/r2 failure history, tooling evidence and prior links.
+No blanket stop on authorized Master/B work; no source/provider/Docker/git actions
+or descendants in this docs assignment.
 
 ## Non-Negotiable Method
 - Strong RAG means lexical/BM25 + dense retrieval + fusion + evidence

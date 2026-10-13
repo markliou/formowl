@@ -56,8 +56,30 @@ class RequeryProgressTests(unittest.TestCase):
         from test_issue56_source_query_stability import SourceQueryStabilityTests
 
         _, handler, arguments = SourceQueryStabilityTests.prepare(self, ("mail", "document_text"))
+        self._assert_source_start_shortlist_stops(handler, arguments, "indexed_shortlist_miss")
+
+    def test_actual_native_table_shortlist_stops_before_second_provider(self):
+        from test_issue56_source_start_exact import SourceStartExactTests
+        from formowl_gateway import issue56_sealed_source_loader as loader
+
+        for inline in (False, True):
+            with self.subTest(inline=inline):
+                case = SourceStartExactTests()
+                case.setUp()
+                self.addCleanup(case.doCleanups)
+                _, revision, _, arguments = case.prepare(inline=inline)
+                self.addCleanup(revision.source_records.runtime_store.close)
+                handler = loader._build_source_start_semantic_handler(revision, mail_tool=False)
+                arguments["table_query"] = None
+                arguments["request_contract"]["source_family_scope"] = (
+                    ["mail"] if inline else ["mail", "attachment_table"]
+                )
+                self._assert_source_start_shortlist_stops(handler, arguments, "source_table_shortlist")
+
+    def _assert_source_start_shortlist_stops(self, handler, arguments, stop_reason):
         prompt = "Find the review condition for MISSING-Q47 in authorized records."
-        contract = {**arguments["request_contract"], "original_query_hash": sha256_json(prompt)}
+        contract = {**arguments["request_contract"], "original_query_hash": sha256_json(prompt),
+                    "requested_fields": ["review condition"]}
         provider = orchestrator.CodexResponsesConversationModel(
             base_url="https://provider.example.test/v1", api_key="synthetic-provider-key",
         )
@@ -69,6 +91,12 @@ class RequeryProgressTests(unittest.TestCase):
                 **arguments, "query_text": request.query_text,
                 "required_terms": list(request.required_terms), "request_contract": request.request_contract,
             })
+            recovery = result["query_agent"]["context_bundle"]["source_recovery"]
+            self.assertIsNone(request.table_query)
+            self.assertEqual(request.request_contract["query_class"], "evidence_lookup")
+            self.assertEqual(recovery["scan"], {
+                "scanned_observation_count": 0, "complete": False, "stop_reason": stop_reason,
+            })
             results.append(result)
             return result
 
@@ -78,12 +106,12 @@ class RequeryProgressTests(unittest.TestCase):
                                      "request_contract": contract, "table_query": None}),
         }]}
         with mock.patch.object(provider, "_request_response", side_effect=[
-            tool_response, AssertionError("unnecessary provider continuation after bound empty source scan"),
+            tool_response, AssertionError(f"unnecessary provider continuation after bound {stop_reason}"),
         ]) as transport:
             outcome = provider.respond(
                 history=(), user_text=prompt, latest_evidence=None,
                 safety_identifier="synthetic-empty-source", evidence_tool=execute,
-                authorized_capability_summary={"source_families": ["mail", "document_text"]},
+                authorized_capability_summary={"source_families": contract["source_family_scope"]},
             )
         transport.assert_called_once()
         self.assertEqual(len(requests), 1)
@@ -94,7 +122,7 @@ class RequeryProgressTests(unittest.TestCase):
         self.assertTrue(recovery["attempted"])
         self.assertEqual(set(recovery["warnings"]), {"used", "incomplete"})
         self.assertEqual(recovery["scan"], {
-            "scanned_observation_count": 0, "complete": False, "stop_reason": "indexed_shortlist_miss",
+            "scanned_observation_count": 0, "complete": False, "stop_reason": stop_reason,
         })
         self.assertEqual(outcome.response_kind, "clarification")
         self.assertEqual(outcome.coverage_status, "incomplete")
@@ -109,11 +137,11 @@ class RequeryProgressTests(unittest.TestCase):
                 "selector_kind": "none", "selector_present": False, "selector_count": 0,
             },
         }, result)
-        self.assertEqual(trace["scan_stop_reason"], "indexed_shortlist_miss")
+        self.assertEqual(trace["scan_stop_reason"], stop_reason)
         for section, key, value in (
             ("agent", "original_query_hash", sha256_json("wrong")),
             ("recovery", "query_hash", sha256_json("wrong")),
-            ("recovery", "source_family_scope", ["mail"]),
+            ("recovery", "source_family_scope", ["document_text"]),
             ("recovery", "attempted", False),
             ("scan", "stop_reason", "indexed_shortlist"),
             ("result", "status", "error"),
@@ -132,6 +160,11 @@ class RequeryProgressTests(unittest.TestCase):
             "maximum_claim_strength": "complete_authorized_scope",
         })
         self.assertFalse(orchestrator._source_fallback_exhausted(exact, result))
+        table_request = replace(request, table_query={
+            "filters": [{"field": "Code", "value": "MISSING-Q47"}],
+            "projection_fields": ["State"],
+        })
+        self.assertFalse(orchestrator._source_fallback_exhausted(table_request, result))
 
     def _run(self, families, results):
         payloads, controls = [], []

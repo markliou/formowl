@@ -1,0 +1,39 @@
+{
+  "lifecycle": "immutable-history",
+  "utc": "2026-10-13T14:33:45.400427+00:00",
+  "purpose": "Exact pre-edit five-document checkpoint before awaited final r3 evidence; no result or acceptance update.",
+  "requested_worker_configuration": "gpt-6.1-sol/high",
+  "actual_worker_configuration": "unverified",
+  "files": [
+    {
+      "path": "SPEC.md",
+      "sha256": "50ba7ebd16f5e7dd2bd441e79bc122765ea216f0039c762e804361fbff883eae",
+      "bytes": 113693,
+      "lines": 2212
+    },
+    {
+      "path": "README.md",
+      "sha256": "108ce0918d4e89a89bce782e6fcadba5ce83e16c0eae52ba2b8829b21baaca71",
+      "bytes": 51121,
+      "lines": 993
+    },
+    {
+      "path": "docs/implementation-task-breakdown.md",
+      "sha256": "df56d925ba2ad6c1e31c0695e848251f784ff1aebfbab02b445530a34233ef04",
+      "bytes": 26148,
+      "lines": 313
+    },
+    {
+      "path": "docs/agent-goals/kg-research-agent.md",
+      "sha256": "049aaf64d8975043eb367c7fc1ace49122c247fdac51f7cb39cbf50c378abee4",
+      "bytes": 8980,
+      "lines": 135
+    },
+    {
+      "path": "docs/agent-goals/handoff-log.md",
+      "sha256": "d16705bef83ddcf03c996b9ac89a1f493909b2e57d88012044e7270a7e623311",
+      "bytes": 23120,
+      "lines": 277
+    }
+  ]
+}

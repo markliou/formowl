@@ -246,7 +246,7 @@ file is not an HTTP/MCP download or a general logging exemption.
 This logging slice is **diagnostic-only / 待測**. Its frozen package is
 [package-r1.json](.formowl/uat-observability-20261013/package-r1.json). Canonical36/36
 and observed candidate/live browser/log capture passed; three scoped reviewers
-Chandrasekhar/Gibbs/Harvey AGREE for logging activation only. Current8088 serves
+Chandrasekhar/Gibbs/Harvey AGREE for logging activation only. At that activation,8088 served
 `formowl-uat-observability-live-20261013`, code4544e59a…/252files/drift0, same
 source/image/gpt-5.5 high/budgets; old r12 is stopped/preserved for rollback.
 Live ordinary chat MCP0 and unrelated lookup MCP1/provider2/citations2 passed;
@@ -270,36 +270,55 @@ citeability. Synthetic repros separately prove source-family/selector starvation
 read-cap accounting loss and duplicate parent reads; the historical 500 ms cause
 is not established. Generic fixes preserve budgets, source guards and exact/all-fields contracts.
 
-[Stability package-r2](.formowl/uat-stability-20261013/package-r2.json), `1a502d97…`,
-has five code deltas/252 files and 37 test files. Pinned `edbcd163…` verification:
-focused146/146 PASS237.894s, integration3/3 PASS108.250s, lint/compile11 PASS.
-Two fixture path corrections passed2/2,17.935s; original r1 126PASS/2ERROR and
-tag-based34PASS/2ERROR remain preserved. The tag lacks `pypdf`; the pinned image
-includes it. No PDF product regression or parser/skip patch was established.
+[Frozen r4](.formowl/uat-stability-20261013/package-r4.json), `dd731bfc…`, is a
+**diagnostic rollout with observed live proof**. [Verification](.formowl/uat-stability-20261013/r4-verification-safe.json):
+pinned-image153/153 PASS254.897s, integration3/3 PASS110.247s, lint/compile12 PASS;
+exact252 code+37 tests/post-run hashes verified. Native-stop32/32+115subtests and
+query-guard29/29+34subtests passed with Ruff. Prior32tests/3ERROR and r1/r2 failures
+remain preserved; the native negative fixture was corrected without weaker guards.
 
-The server now binds a unique validated cited protected alphanumeric identifier
-for a followup; explicit normalized current IDs win, original current/source-turn
-hashes remain distinct, and missing/ambiguous/reset/scope-invalid references stop
-before provider/MCP. It does not infer arbitrary history or general numeric/person
-coreference; [SPEC §7.1](SPEC.md#71-core-query-agent-and-query-classes) defines the boundary.
-Actual r2 manufacturer identifier/citation is correct but remains incomparable
-solely due to `repair_recovered`; B's frozen comparator has local15/15 PASS0.840s/Ruff.
-The Git progress checkpoint selects verified r2 plus that comparator only.
-Native-table `source_table_shortlist` stop work is pending: r2 mail/document
-`indexed_shortlist_miss` handling alone still allowed an empty table+mail query
-to continue into a115s SSE timeout. Exact/error exclusions and honest incomplete
-outcomes remain required; no upstream root-fix claim. Master reports four r2
-browser lifecycle turns/reload/reset PASS; missing reference clarifies with MCP0.
+The server binds only a unique validated cited protected alphanumeric identifier
+for followups; explicit NFKC IDs win and original current/source-turn hashes remain
+separate. Missing/ambiguous/reset/scope-invalid references stop before provider/MCP;
+no general numeric/person or arbitrary-history inference. Expanded queries now pass
+the shared safety check before MCP; existing bounded repair keeps the same ID/scope.
+Private logging may retain hashes/status only with content_redacted=true and
+exact_result_preserved=false, which cannot prove exact log/HTTP/DOM equality.
+Contracts: [SPEC §7.1](SPEC.md#71-core-query-agent-and-query-classes) and
+[§7.3.1](SPEC.md#731-source-neutral-evidence-double-check--待測).
 
-Native-stop code/tests remain stopped/unstaged WIP:32tests/3ERROR,28.468s (two native
-subcases plus shared old case; invalid negative `table_query` fixture). No inferred
-pass count; Ruff not run. Resume narrows these errors and remaining stop behavior.
-Live8088 STILL serves observability `4544e59a…`; no r3 integrated/final-review/deploy
-claim. Artifact/source-hash anomalies remain OPEN. Four methodology gates
-are blocked, step4 in-progress, metadata unverified; no whole-UAT/standard promotion.
-Later authorized Master/B work remains open. [Current handoff](docs/agent-goals/handoff-log.md)
-and [exact pre-edit docs](docs/archive/2026-10-13/uat-stability-r2-pre-sync/SNAPSHOT.md)
-preserve the evidence and prior failures.
+R3 passed150 focused+3integration but browser8 had only6passes, one MCP contract
+error and dependent missing-reference clarification; no failed private record.
+The original cause remains unproved. The unsafe-expansion repair has controlled
+synthetic proof; r4 candidate did not trigger either query guard or redacted logging.
+R4 initial8:7comparable/correct and one provider HTTP502/connect_headers1.044s after
+valid cited MCP. Separate predeclared fresh-chat+delivery recheck2/2 passed;
+original failure stays failed/incomparable. All10 unique candidate records match
+log/HTTP/DOM exactly. Citations match prior same-source proof; no native reopen.
+
+Nash engineering/Bacon safety/Linnaeus methodology all AGREE for bounded diagnostic
+deployment. [Readiness15:04:37Z](.formowl/uat-stability-20261013/live-r4-ready-safe.json)
+confirms8088 serves r4 `dd731bfc…`,252files/drift0, same image/source/settings/budgets,
+logs0600/dir0700; old observability is stopped/preserved for rollback.
+[Actual LAN matrix](.formowl/uat-stability-20261013/live-r4-safe.json) and verifier
+EXIT0:14/14 known checks PASS, all14 log=HTTP=DOM text/citations. Eight cited partial,
+four ordinary-chat MCP0, one honest incomplete unknown (provider1/MCP1), one reset
+missing-reference clarification (no provider/MCP). Thirteen provider turns are
+comparable; reset clarification is local/identity-exempt, not provider-comparable.
+Repeated/fresh/rephrase answers retain the same origin citation; same-row manufacturer,
+unrelated-part origin/manufacturer and PO delivery match prior same-source evidence. Master
+reviewed manufacturer/delivery screenshots; PO page1/3 is partial requested-delivery
+evidence, not shipment/latest commitment. Reload/reset/postreset chat pass. No fresh
+native reopen; source pin unchanged. [Cleanup15:11:45Z](.formowl/uat-stability-20261013/final-operational-r4-safe.json):
+8088 healthy/exact252/drift0/restart0/OOMfalse; four own candidates removed, logs
+and rollback retained; source/index/DB/unrelated containers untouched.14private
+records/IDs, zero recording failures/redacted/unsafe-query events, private URLs404
+twice, file0600/dir0700.
+This is observed known-regression proof only. Upstream/provider,
+r3 incident and source/artifact anomalies remain OPEN. Four methodology gates
+blocked, step4 in-progress; no whole-UAT/provider-stability/standard promotion.
+[Handoff](docs/agent-goals/handoff-log.md) and unchanged [pre-edit archive](docs/archive/2026-10-13/uat-stability-r3-pre-verification/SNAPSHOT.md)
+preserve dated errors, tooling differences and prior review boundaries.
 
 Current adapter limits are explicit in [SPEC §14](SPEC.md#14-current-implementation-and-methodology-status):
 

@@ -218,9 +218,46 @@ class PrivateBehaviorLoggingTests(unittest.TestCase):
             path = Path(directory) / "private.jsonl"
             answer = self.ask(self.service(path), prompt="Authorization: Bearer abcdefghijklmnop")
             self.assertEqual(answer["answer"], "PRIVATE-ANSWER")
-            self.assertFalse(path.exists())
-            self.assertEqual(json.loads(stderr.getvalue().splitlines()[-1])["failure_kind"], "validation")
-            self.assertNotIn("abcdefghijklmnop", stderr.getvalue())
+            record = json.loads(path.read_text())
+            self.assertTrue(record["content_redacted"])
+            self.assertFalse(record["exact_result_preserved"])
+            self.assertIsNone(record["result"])
+            self.assertEqual(record["result_status"], "ok")
+            self.assertNotIn("abcdefghijklmnop", path.read_text() + stderr.getvalue())
+
+    def test_unsafe_query_log_retains_hashes_and_failure_without_raw_content(self):
+        query = "Find UNIT-Q7 review condition /private/fixture secret=synthetic"
+        query_hash = "sha256:" + runtime.hashlib.sha256(query.encode()).hexdigest()
+        result = {"status": "error", "answer": "The request failed.", "citations": []}
+        trace = {
+            "query_text": query, "query_hash": query_hash, "status": "mcp_failed",
+            "response_stage": "exception", "failure_reason": "tool_execution_failed",
+            "exception_class": "ContractValidationError", "timings_ms": {"mcp_call": 1.0},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "private.jsonl"
+            runtime._append_behavior_log(
+                path, prompt="Find UNIT-Q7 review condition.", result=result,
+                request_count=1, statuses=("mcp_failed",), call_traces=[trace],
+                failure_sha256=sha256_json("failure"), provider_diagnostic=None, elapsed_ms=2.0,
+                request_id=sha256_json("request"), citation_stages=[],
+            )
+            record = json.loads(path.read_text())
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertTrue(record["content_redacted"])
+        self.assertFalse(record["exact_result_preserved"])
+        self.assertEqual(record["redaction_reason"], "unsafe_record_content")
+        self.assertEqual(record["request_id"], sha256_json("request"))
+        self.assertEqual(record["result_status"], "error")
+        self.assertIsNone(record["result"])
+        self.assertEqual(record["query_hashes"], [query_hash])
+        self.assertEqual(record["mcp"]["failure_reason"], "tool_execution_failed")
+        self.assertEqual(record["mcp"]["status"], ["mcp_failed"])
+        self.assertEqual(result, {"status": "error", "answer": "The request failed.", "citations": []})
+        self.assertEqual(trace["query_text"], query)
+        for value in (query, "/private/fixture", "secret=synthetic"):
+            self.assertNotIn(value, json.dumps(record))
+        runtime.assert_no_public_raw_references(record)
 
     def test_citation_bound_and_hashing_prevent_locator_or_secret_leaks(self):
         unsafe = "/hidden/storage/secret"

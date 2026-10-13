@@ -548,6 +548,12 @@ turns cannot establish an anchor. Retention cannot widen source permissions or
 parse arbitrary history. This narrow alphanumeric-ID capability does not establish
 general numeric, person or natural-language coreference support.
 
+Expanded tool queries must pass the existing query-content safety validation
+before MCP dispatch. Rejected expansion may use only the existing bounded repair
+allowance, preserving the validated identifier, request and authorized source
+scope. A valid repaired expansion may then execute; invalid content must not reach
+MCP. This adds no retry/budget allowance and leaves remote/global guards intact.
+
 The server owns both conversation-state and transcript selection. Client
 payloads may carry the current prompt, but cannot inject, replace, or extend
 trusted prior turns. A failed turn may remain visible as a sanitized transcript
@@ -1084,7 +1090,7 @@ not full-natural-language-query subset matching.
   continuation; incomplete stop requests clarification, not an absence claim.
   Mail/document `indexed_shortlist_miss` and native-table `source_table_shortlist`
   must retain their distinct stop metadata through the same validated terminal
-  decision. The native-table integration remains pending in the checkpoint below;
+  decision. The r4 diagnostic package includes this native-table terminal handling;
   an enum alone cannot bypass attempted/binding/scope/exact/error guards.
   This separate provider plan repair must not bypass the automatic all-fields
   source-recheck rule. For graph results, outer
@@ -1146,8 +1152,8 @@ recheck**; the business-field rule does not relax metadata safety.
 latest completed outcome and provider response, and latest sanitized passed
 finalization with `repair_attempted=true`. All deployment/code/build/source,
 HTTP and MCP error/timeout checks remain mandatory. Missing, malformed, truncated,
-over-cap or latest-failed records remain incomparable. This comparator has local
-15/15 verification; frozen/browser acceptance remains pending.
+over-cap or latest-failed records remain incomparable. Local15/15 comparator
+verification and subsequent frozen integration are scoped evidence below.
 
 **Opt-in private UAT interaction recorder — diagnostic-only / 待測 (2026-10-13)**
 
@@ -1156,8 +1162,11 @@ Explicitly authorized temporary LAN UAT may pair `--behavior-log` with
 raw prompt, expanded tool query and available visible answer. The file is JSONL,
 mode `0600`, on an operator-owned persistent writable mount; it is never served
 through the browser, MCP, public diagnostics or stderr. Credentials, headers,
-cookies, raw storage paths and hidden-source internals remain excluded; rejected
-unsafe records produce a safe recording-failure event rather than a raw record.
+cookies, raw storage paths and hidden-source internals remain excluded. If content
+is unsafe to record, the private fallback retains only safe hashes/status metadata
+with `content_redacted=true` and `exact_result_preserved=false`; it retains no raw
+content. Such a record cannot establish file=HTTP=DOM equality or exact result
+preservation. A recording failure still emits only a safe failure event.
 
 Schema v2 uses a unique per-turn `request_id` even for repeated prompts in one
 session, correlated with safe provider/turn terminal and MCP traces. It retains
@@ -1176,7 +1185,7 @@ models and public diagnostic schemas remain unchanged.
 
 The frozen observability package passed canonical36/36, Ruff/compile4 and observed
 candidate/live browser capture. Three scoped reviewers (Chandrasekhar/Gibbs/Harvey)
-agreed to logging activation only. Live8088 now serves `4544e59a…` in
+agreed to logging activation only. At that activation,8088 served `4544e59a…` in
 `formowl-uat-observability-live-20261013` (252 files/drift0, same source/image/model/
 budgets): private file=HTTP=DOM answer, raw9/presented7/final2 IDs, provider/turn/MCP
 correlation, zero recording failures and two private-log URL404 checks.
@@ -1203,31 +1212,56 @@ accounting loss and duplicate parent hydration. These do not prove the
 historical 500 ms subcause. Generic repairs retain exact/native execution,
 ALL-requested-fields eligibility, source/hash/lineage/permission guards and budgets.
 
-[Frozen stability r2](.formowl/uat-stability-20261013/package-r2.json), code
-`1a502d97…`, contains five code deltas/252 files and 37 test files. Master reports
-pinned `edbcd163…` focused146/146 PASS,237.894s; integration3/3 PASS,108.250s;
-lint/compile11 PASS. The two sharded-record fixture corrections passed2/2,17.935s;
-original r1 focused128/126 PASS/2 ERRORs,233.369s remains preserved. Earlier
-tag-based36/34 PASS/2 ERRORs also remains: corrected graph/mail coverage-key bug
-and missing `pypdf` in tag `f53b8dd7…`; pinned image has it. No PDF product fix.
+[Frozen r4](.formowl/uat-stability-20261013/package-r4.json), code `dd731bfc…`,
+has observed live diagnostic proof. [Verification](.formowl/uat-stability-20261013/r4-verification-safe.json)
+records pinned-image153/153 PASS254.897s, integration3/3 PASS110.247s and
+lint/compile12 PASS, exact252 code+37 test files with post-run hashes verified.
+Native terminal32/32+115subtests PASS27.697s/Ruff and query guard29/29+34subtests
+PASS0.184s/Ruff are local evidence. Prior native32tests/3ERROR28.468s was an invalid
+negative table-query fixture; that failure remains preserved without an inferred
+pass count. R3's150 focused+3integration passes preceded browser8/6pass, one
+MCPContractValidationError and dependent missing-reference clarification; the
+failed private record was absent. Its actual expanded query/root remains unproved.
+A controlled shared unsafe-expansion repro (3tests/3failing subcases/2errors)
+justifies the pre-MCP guard and safe logging fallback, not historical attribution.
 
-Actual r2 manufacturer followup now binds the correct identifier and citation,
-but that record remains incomparable solely due to `repair_recovered`. B's
-comparator repair passed15/15,0.840s/Ruff locally and is frozen for the Git progress
-checkpoint alongside verified r2. R2's mail/document `indexed_shortlist_miss` fix was insufficient: actual
-empty table+mail retrieval continued into a115s SSE timeout because the native
-`source_table_shortlist` stop was omitted. No upstream root-fix claim follows.
-Master reports four r2 browser lifecycle turns/reload/reset PASS and missing
-reference clarification with MCP0. These observations do not establish all-UAT
-acceptance. Native-table stop code/tests remain stopped, unstaged WIP:32tests/
-3ERROR,28.468s (two native subcases plus a shared old case; invalid negative
-`table_query` fixture). No derived pass count; Ruff not run. Resume narrows those
-errors and remaining stop behavior. Live8088 STILL serves observability `4544e59a…`;
-no r3 integrated, final-review or deployment claim. Prior artifact/source-hash anomalies
-remain OPEN; four methodology gates blocked, step4 in-progress, metadata unverified.
-This Git progress checkpoint preserves later authorized Master/B work. Exact evidence and next action:
-[handoff](docs/agent-goals/handoff-log.md); exact pre-edit docs/hashes:
-[immutable checkpoint](docs/archive/2026-10-13/uat-stability-r2-pre-sync/SNAPSHOT.md).
+R4 initial candidate8 turns:7comparable/correct, one provider HTTP502 at
+connect_headers after valid cited MCP (1.044s). A predeclared separate fresh-chat
+and delivery recheck passed2/2; the original failed/incomparable turn is retained.
+All10 candidate records have unique IDs and exact log/HTTP/DOM correspondence;
+neither unsafe-query guard nor redacted fallback triggered live, so those paths
+have synthetic proof only. Citations match prior same-source proof; no fresh
+native reopening occurred. Budgets, remote/global guards and source checks remain.
+Nash engineering, Bacon safety and Linnaeus methodology all AGREE on the same r4
+fingerprint for bounded diagnostic deployment. The rollout gate preserves the
+original candidate failure. [Live readiness](.formowl/uat-stability-20261013/live-r4-ready-safe.json)
+at15:04:37Z confirms8088 serves `formowl-uat-stability-live-r4-20261013`,dd731bfc…,
+252files/drift0, same image/source/settings/budgets, logs0600/dir0700. The old
+observability container is stopped/preserved for rollback.
+
+[Live matrix](.formowl/uat-stability-20261013/live-r4-safe.json) and verifier EXIT0:
+14/14 known checks PASS, all14 log=HTTP=DOM text/citations. Eight cited partial
+answers, four ordinary-chat turns with MCP0, one honest incomplete unknown lookup
+(provider1/MCP1), and one reset missing-reference clarification (no provider/MCP).
+Thirteen provider turns are comparable; the reset clarification is local,
+identity-exempt and not a comparable provider turn. Repeated/fresh/rephrased
+identifier answers retain the same origin citation; manufacturer evidence is same-row,
+unrelated-part origin/manufacturer and PO delivery retain known citations/date. Master
+reviewed manufacturer/delivery screenshots. PO page1/3 remains partial requested
+delivery evidence, not shipment or latest commitment. Reload preserves transcript;
+reset clears server state and postreset chat uses MCP0. No fresh native reopening;
+source pin is unchanged and citation content relies on prior same-source proof.
+This proves only the observed known regression path. [Cleanup15:11:45Z](.formowl/uat-stability-20261013/final-operational-r4-safe.json):
+8088 healthy/r4 exact252/drift0/restart0/OOMfalse; four own candidates removed,
+all logs/old observability rollback retained; source/index/DB/unrelated containers
+untouched. Fourteen private IDs/records, zero recording failures/redacted/unsafe-query
+events; private URLs404 twice, file0600/dir0700. R3 incident, provider502,
+historical source/artifact anomalies and upstream causes remain OPEN. No whole-UAT,
+provider-stability, standard or methodology promotion; four gates blocked,
+step4 in-progress, requested sol/high actual metadata unverified. Exact failures,
+counts and next action: [handoff](docs/agent-goals/handoff-log.md). The unchanged
+[pre-edit archive](docs/archive/2026-10-13/uat-stability-r3-pre-verification/SNAPSHOT.md)
+preserves earlier r1/r2 results, tooling differences, contracts and review history.
 
 **Promotion gate: 待測 → 標準功能**
 

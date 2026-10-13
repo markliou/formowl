@@ -1162,7 +1162,38 @@ def _append_behavior_log(
             evidence_citation_ids(result) if result is not None else (),
         ),
     }
-    assert_no_public_raw_references(record, "issue56_temporary_lan_behavior_log")
+    try:
+        assert_no_public_raw_references(record, "issue56_temporary_lan_behavior_log")
+    except ContractValidationError:
+        # Preserve diagnostic identity, not a falsely exact transcript. Never
+        # persist rejected text, exception messages, or arbitrary nested data.
+        status = result.get("status") if result is not None else None
+        record = {
+            "schema_version": 2,
+            "request_id": request_id,
+            "timestamp": record["timestamp"],
+            "content_redacted": True,
+            "exact_result_preserved": False,
+            "redaction_reason": "unsafe_record_content",
+            "redacted_fields": ["prompt", "result", "calls", "provider_diagnostic", "citation_stages"],
+            "record_sha256": sha256_json(record),
+            "prompt_sha256": "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "prompt": None,
+            "result": None,
+            "result_status": status if status in {
+                "ok", "complete", "partial", "error", "clarification_required", "pending_review",
+                "incomplete", "permission_denied", "failed", "not_found", "no_answer",
+            } else "unknown",
+            "request_count": request_count,
+            "query_hashes": [
+                trace["query_hash"] for trace in call_traces[:_MAX_MCP_CALLS_PER_TURN]
+                if _is_browser_request_fingerprint(trace.get("query_hash"))
+            ],
+            "mcp": _safe_mcp_call_diagnostic(call_traces),
+            "failure_sha256": failure_sha256 if _is_browser_request_fingerprint(failure_sha256) else None,
+            "elapsed_ms": record["elapsed_ms"],
+        }
+        assert_no_public_raw_references(record, "issue56_temporary_lan_behavior_log_fallback")
     encoded = (
         json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode()
@@ -3171,7 +3202,7 @@ def _private_graph_recheck_trace(
         if reason is None or (
             isinstance(reason, str)
             and reason in {"deadline", "observation_limit", "callback", "source_reference_unavailable",
-                           "indexed_shortlist_miss"}
+                           "indexed_shortlist_miss", "source_table_shortlist"}
         ):
             safe["scan_stop_reason"] = reason
     for key in ("recovery_fingerprint", "source_authority_fingerprint", "source_session_binding_fingerprint"):
