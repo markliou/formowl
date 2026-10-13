@@ -1,17 +1,5 @@
 """Source-neutral evidence coverage and answer-claim contracts.
 
-
-# Reconciliation imports from Track 2
-from dataclasses import dataclass
-from datetime import datetime
-from enum import StrEnum
-from .primitives import (
-    ContractValidationError,
-    sha256_json,
-    stable_resource_contract_id,
-    to_plain,
-)
-
 These contracts are deliberately independent from mail, retrieval, MCP, and
 task-answering implementations.  They are the durable boundary between
 source onboarding, evidence persistence, and any later consumer.
@@ -24,7 +12,8 @@ payloads are rejected rather than silently serialized.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, is_dataclass, replace
-from enum import Enum
+from datetime import datetime
+from enum import Enum, StrEnum
 import hashlib
 import hmac
 import math
@@ -181,6 +170,20 @@ _ANSWER_CLAIM_PERSISTENCE_KEYS = _ANSWER_CLAIM_PUBLIC_KEYS | {
     "implementation_fingerprint",
     "scope_authority",
 }
+
+
+class SourceInventoryProcessingState(StrEnum):
+    PARSED = "parsed"
+    PRESERVED_UNPARSED = "preserved_unparsed"
+    UNSUPPORTED = "unsupported"
+    FAILED = "failed"
+    INTENTIONALLY_EXCLUDED = "intentionally_excluded"
+
+
+class SourceInventoryRawRetentionState(StrEnum):
+    RETAINED = "retained"
+    DELETED_BY_POLICY = "deleted_by_policy"
+    EXTERNALLY_MANAGED = "externally_managed"
 
 
 class ProcessingState(str, Enum):
@@ -552,6 +555,10 @@ class IntentionalExclusionProof:
     ) -> "IntentionalExclusionProof":
         if not isinstance(source_inventory_item, SourceInventoryItem):
             raise ContractValidationError("exclusion proof requires SourceInventoryItem")
+        if source_inventory_item.source_inventory_item_id.startswith("srcinvitem_"):
+            raise ContractValidationError(
+                "legacy scalar exclusions cannot establish structural scope proof"
+            )
         if not isinstance(claim_requirement, ClaimRequirement):
             raise ContractValidationError("exclusion proof requires ClaimRequirement")
         if not isinstance(version_manifest, VersionManifest):
@@ -778,7 +785,38 @@ class SourceInventoryItem:
     version_lineage: tuple[str, ...] = ()
     source_observation_ids: tuple[str, ...] = ()
 
+    permission_fingerprint: str | None = None
+    exclusion_policy_id: str | None = None
+    exclusion_policy_version: str | None = None
+    exclusion_authorized_actor_id: str | None = None
+    exclusion_reason: str | None = None
+    exclusion_out_of_scope_proof_fingerprint: str | None = None
+
     def __post_init__(self) -> None:
+        _text(self.source_inventory_item_id, "source_inventory_item_id")
+        if self.source_inventory_item_id.startswith("srcinvitem_"):
+            if (
+                self.source_inventory_id is not None
+                or self.intentional_exclusion_proof is not None
+                or self.parent_inventory_item_id is not None
+                or self.version_lineage
+                or self.source_observation_ids
+            ):
+                raise ContractValidationError(
+                    "legacy inventory items cannot carry structural membership/proof"
+                )
+            object.__setattr__(
+                self, "processing_state", _legacy_processing_state(self.processing_state)
+            )
+            object.__setattr__(
+                self, "raw_retention_state", _legacy_raw_retention_state(self.raw_retention_state)
+            )
+            self._validate_legacy()
+            object.__setattr__(self, "permission_scope", _freeze_mapping(self.permission_scope))
+            object.__setattr__(self, "location", _freeze_mapping(self.location))
+            return
+        if any(getattr(self, key) is not None for key in _LEGACY_ITEM_ONLY_FIELDS):
+            raise ContractValidationError("structural inventory items cannot carry legacy fields")
         _id(self.source_inventory_item_id, "source_inventory_item_id")
         _id(self.source_asset_id, "source_asset_id")
         _text(self.structure_kind, "source_inventory_item.structure_kind")
@@ -843,6 +881,36 @@ class SourceInventoryItem:
     @classmethod
     def create(cls, **values: Any) -> "SourceInventoryItem":
         values = dict(values)
+        item_id = values.get("source_inventory_item_id", "")
+        native_fields = _STRUCTURAL_ITEM_FIELDS & set(values)
+        # The old constructor requires source_local_key; structural callers carry
+        # explicit observation/lineage/membership fields (including empty lists).
+        legacy = str(item_id).startswith("srcinvitem_") or (
+            not item_id
+            and not native_fields
+            and (
+                "permission_fingerprint" in values
+                or isinstance(values.get("location"), Mapping)
+                and "source_local_key" in values["location"]
+            )
+        )
+        if legacy:
+            values["permission_scope"] = _legacy_canonical_mapping(
+                values.get("permission_scope"), "permission_scope"
+            )
+            values["location"] = _legacy_canonical_mapping(values.get("location"), "location")
+            values.setdefault("permission_fingerprint", sha256_json(values["permission_scope"]))
+            values.setdefault(
+                "source_inventory_item_id",
+                stable_resource_contract_id(
+                    "srcinvitem",
+                    "SourceInventoryItem",
+                    _legacy_source_inventory_item_identity(
+                        **{key: values.get(key) for key in _LEGACY_ITEM_IDENTITY_FIELDS}
+                    ),
+                ),
+            )
+            return cls.from_persistence_dict(values)
         if "version_lineage" in values:
             values["version_lineage"] = list(values["version_lineage"])
         else:
@@ -871,6 +939,13 @@ class SourceInventoryItem:
         return cls.from_persistence_dict(values)
 
     def to_persistence_dict(self) -> dict[str, Any]:
+        if self.source_inventory_item_id.startswith("srcinvitem_"):
+            self._validate_legacy()
+            return {
+                key: _persistence_plain(getattr(self, key))
+                for key in _LEGACY_ITEM_REQUIRED_FIELDS | _LEGACY_EXCLUSION_FIELDS
+                if getattr(self, key) is not None
+            }
         return _persistence_dataclass_payload(self)
 
     def to_public_dict(
@@ -906,6 +981,17 @@ class SourceInventoryItem:
     @classmethod
     def from_persistence_dict(cls, value: Mapping[str, Any]) -> "SourceInventoryItem":
         item = _mapping(value, "source_inventory_item")
+        item_id = _required_str(item, "source_inventory_item_id")
+        if item_id.startswith("srcinvitem_"):
+            _legacy_require_keys(
+                item,
+                required=_LEGACY_ITEM_REQUIRED_FIELDS,
+                optional=_LEGACY_EXCLUSION_FIELDS,
+                context="SourceInventoryItem",
+            )
+            return cls(**dict(item))
+        if _LEGACY_ITEM_ONLY_FIELDS & set(item):
+            raise ContractValidationError("structural inventory wire cannot carry legacy fields")
         if {
             "exclusion_policy_version_id",
             "exclusion_authorized_actor_id",
@@ -943,6 +1029,77 @@ class SourceInventoryItem:
             source_observation_ids=_tuple_strings(item, "source_observation_ids"),
         )
 
+    def _validate_legacy(self) -> None:
+        _legacy_nonempty_string(
+            self.source_inventory_item_id,
+            "SourceInventoryItem.source_inventory_item_id",
+        )
+        _legacy_nonempty_string(self.source_asset_id, "SourceInventoryItem.source_asset_id")
+        _legacy_nonempty_string(self.structure_kind, "SourceInventoryItem.structure_kind")
+        _legacy_nonempty_string(self.content_type, "SourceInventoryItem.content_type")
+        _nonnegative_int(self.ordinal, "SourceInventoryItem.ordinal")
+        _legacy_processing_state(self.processing_state)
+        _legacy_raw_retention_state(self.raw_retention_state)
+        _fingerprint(self.source_fingerprint, "SourceInventoryItem.source_fingerprint")
+        _fingerprint(self.parser_fingerprint, "SourceInventoryItem.parser_fingerprint")
+        _fingerprint(
+            self.permission_fingerprint,
+            "SourceInventoryItem.permission_fingerprint",
+        )
+        permission_scope = _legacy_canonical_mapping(
+            self.permission_scope,
+            "SourceInventoryItem.permission_scope",
+        )
+        location = _legacy_canonical_mapping(self.location, "SourceInventoryItem.location")
+        if not location.get("source_local_key"):
+            raise ContractValidationError(
+                "SourceInventoryItem.location.source_local_key is required"
+            )
+        _legacy_validate_location_keys(location)
+        assert_no_public_raw_references(permission_scope, "source_inventory_permission_scope")
+        assert_no_public_raw_references(location, "source_inventory_location")
+        _legacy_validate_exclusion_contract(
+            processing_state=self.processing_state,
+            exclusion_policy_id=self.exclusion_policy_id,
+            exclusion_policy_version=self.exclusion_policy_version,
+            exclusion_authorized_actor_id=self.exclusion_authorized_actor_id,
+            exclusion_reason=self.exclusion_reason,
+            exclusion_out_of_scope_proof_fingerprint=(
+                self.exclusion_out_of_scope_proof_fingerprint
+            ),
+            source_fingerprint=self.source_fingerprint,
+            parser_fingerprint=self.parser_fingerprint,
+            permission_fingerprint=self.permission_fingerprint,
+        )
+        expected_permission_fingerprint = sha256_json(permission_scope)
+        if self.permission_fingerprint != expected_permission_fingerprint:
+            raise ContractValidationError(
+                "SourceInventoryItem.permission_fingerprint does not match permission_scope"
+            )
+        expected_id = stable_resource_contract_id(
+            "srcinvitem",
+            "SourceInventoryItem",
+            _legacy_source_inventory_item_identity(
+                source_asset_id=self.source_asset_id,
+                structure_kind=self.structure_kind,
+                ordinal=self.ordinal,
+                source_fingerprint=self.source_fingerprint,
+                permission_fingerprint=self.permission_fingerprint,
+                location=location,
+                exclusion_policy_id=self.exclusion_policy_id,
+                exclusion_policy_version=self.exclusion_policy_version,
+                exclusion_authorized_actor_id=self.exclusion_authorized_actor_id,
+                exclusion_reason=self.exclusion_reason,
+                exclusion_out_of_scope_proof_fingerprint=(
+                    self.exclusion_out_of_scope_proof_fingerprint
+                ),
+            ),
+        )
+        if self.source_inventory_item_id != expected_id:
+            raise ContractValidationError(
+                "SourceInventoryItem.source_inventory_item_id is not deterministic"
+            )
+
 
 @dataclass(frozen=True)
 class SourceInventory:
@@ -952,8 +1109,22 @@ class SourceInventory:
     parser_fingerprint: str
     items: tuple[SourceInventoryItem, ...]
     created_at: str
+    permission_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
+        _text(self.source_inventory_id, "source_inventory_id")
+        _tuple_of(self.items, SourceInventoryItem, "source_inventory.items")
+        if self.source_inventory_id.startswith("srcinv_"):
+            if any(
+                not item.source_inventory_item_id.startswith("srcinvitem_") for item in self.items
+            ):
+                raise ContractValidationError("legacy inventory requires legacy items")
+            self._validate_legacy()
+            return
+        if self.permission_fingerprint is not None or any(
+            item.source_inventory_item_id.startswith("srcinvitem_") for item in self.items
+        ):
+            raise ContractValidationError("structural inventory cannot carry legacy items/fields")
         _id(self.source_inventory_id, "source_inventory_id")
         _id(self.source_asset_id, "source_asset_id")
         _fingerprint(self.source_fingerprint, "source_fingerprint")
@@ -1032,8 +1203,50 @@ class SourceInventory:
         parser_fingerprint: str,
         items: Sequence[SourceInventoryItem],
         created_at: str | None = None,
+        permission_fingerprint: str | None = None,
     ) -> "SourceInventory":
-        item_values = tuple(items)
+        item_values = tuple(
+            SourceInventoryItem.from_persistence_dict(item) if isinstance(item, Mapping) else item
+            for item in items
+        )
+        if any(not isinstance(item, SourceInventoryItem) for item in item_values):
+            raise ContractValidationError("source inventory items must be SourceInventoryItem")
+        if permission_fingerprint is not None or any(
+            item.source_inventory_item_id.startswith("srcinvitem_") for item in item_values
+        ):
+            if any(
+                not item.source_inventory_item_id.startswith("srcinvitem_") for item in item_values
+            ):
+                raise ContractValidationError("cannot mix structural and legacy inventory items")
+            canonical = tuple(
+                sorted(item_values, key=lambda item: (item.ordinal, item.source_inventory_item_id))
+            )
+            if canonical:
+                derived = canonical[0].permission_fingerprint
+                if permission_fingerprint is not None and permission_fingerprint != derived:
+                    raise ContractValidationError(
+                        "legacy inventory permission fingerprint does not match items"
+                    )
+                permission_fingerprint = derived
+            return cls(
+                source_inventory_id=stable_resource_contract_id(
+                    "srcinv",
+                    "SourceInventory",
+                    _legacy_source_inventory_identity(
+                        source_asset_id=source_asset_id,
+                        source_fingerprint=source_fingerprint,
+                        parser_fingerprint=parser_fingerprint,
+                        permission_fingerprint=permission_fingerprint,
+                        items=canonical,
+                    ),
+                ),
+                source_asset_id=source_asset_id,
+                source_fingerprint=source_fingerprint,
+                parser_fingerprint=parser_fingerprint,
+                permission_fingerprint=permission_fingerprint,
+                items=canonical,
+                created_at=created_at or now_iso(),
+            )
         for item in item_values:
             if not isinstance(item, SourceInventoryItem):
                 raise ContractValidationError("source inventory items must be SourceInventoryItem")
@@ -1106,6 +1319,11 @@ class SourceInventory:
             "parser_fingerprint": self.parser_fingerprint,
             "items": [item.to_persistence_dict() for item in self.items],
             "created_at": self.created_at,
+            **(
+                {"permission_fingerprint": self.permission_fingerprint}
+                if self.source_inventory_id.startswith("srcinv_")
+                else {}
+            ),
         }
 
     def to_public_dict(
@@ -1136,6 +1354,14 @@ class SourceInventory:
     ) -> dict[str, Any]:
         return self.to_public_dict(scope_decision=scope_decision)
 
+    def to_safe_payload(
+        self,
+        *,
+        scope_decision: "StructuralPublicScopeDecision | None" = None,
+    ) -> dict[str, Any]:
+        """Historical public entry point; never a private persistence bypass."""
+        return self.to_public_dict(scope_decision=scope_decision)
+
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "SourceInventory":
         return cls.from_persistence_dict(value)
@@ -1153,6 +1379,23 @@ class SourceInventory:
             _consume_capability,
         )
         item = _mapping(value, "source_inventory")
+        if _required_str(item, "source_inventory_id").startswith("srcinv_"):
+            _legacy_require_keys(item, required=_LEGACY_INVENTORY_FIELDS, context="SourceInventory")
+            if not isinstance(item["items"], list):
+                raise ContractValidationError("SourceInventory.items must be a list")
+            restored = cls(
+                **{
+                    **dict(item),
+                    "items": tuple(
+                        SourceInventoryItem.from_persistence_dict(record)
+                        for record in item["items"]
+                    ),
+                }
+            )
+            _clear_consumed_mapping(item, consume_input=consume_input)
+            return restored
+        if "permission_fingerprint" in item:
+            raise ContractValidationError("structural inventory wire cannot carry legacy fields")
         source_inventory_id = _required_str(item, "source_inventory_id")
         source_asset_id = _required_str(item, "source_asset_id")
         source_fingerprint = _required_str(item, "source_fingerprint")
@@ -1173,6 +1416,67 @@ class SourceInventory:
             items=items,
             created_at=created_at,
         )
+
+    def _validate_legacy(self) -> None:
+        _legacy_nonempty_string(self.source_inventory_id, "SourceInventory.source_inventory_id")
+        _legacy_nonempty_string(self.source_asset_id, "SourceInventory.source_asset_id")
+        _fingerprint(self.source_fingerprint, "SourceInventory.source_fingerprint")
+        _fingerprint(self.parser_fingerprint, "SourceInventory.parser_fingerprint")
+        _fingerprint(
+            self.permission_fingerprint,
+            "SourceInventory.permission_fingerprint",
+        )
+        _legacy_timestamp(self.created_at, "SourceInventory.created_at")
+        canonical_items = tuple(
+            sorted(self.items, key=lambda item: (item.ordinal, item.source_inventory_item_id))
+        )
+        if self.items != canonical_items:
+            raise ContractValidationError("SourceInventory.items must use canonical ordering")
+        item_ids: set[str] = set()
+        source_local_keys: set[str] = set()
+        for item in self.items:
+            item._validate_legacy()
+            if item.source_asset_id != self.source_asset_id:
+                raise ContractValidationError(
+                    "SourceInventory item source_asset_id does not match inventory"
+                )
+            if item.source_fingerprint != self.source_fingerprint:
+                raise ContractValidationError(
+                    "SourceInventory item source_fingerprint does not match inventory"
+                )
+            if item.parser_fingerprint != self.parser_fingerprint:
+                raise ContractValidationError(
+                    "SourceInventory item parser_fingerprint does not match inventory"
+                )
+            if item.permission_fingerprint != self.permission_fingerprint:
+                raise ContractValidationError(
+                    "SourceInventory item permission_fingerprint does not match inventory"
+                )
+            if item.source_inventory_item_id in item_ids:
+                raise ContractValidationError("SourceInventory item ids must be unique")
+            item_ids.add(item.source_inventory_item_id)
+            source_local_key = str(item.location["source_local_key"])
+            if source_local_key in source_local_keys:
+                raise ContractValidationError(
+                    "SourceInventory location.source_local_key values must be unique"
+                )
+            source_local_keys.add(source_local_key)
+        expected_id = stable_resource_contract_id(
+            "srcinv",
+            "SourceInventory",
+            _legacy_source_inventory_identity(
+                source_asset_id=self.source_asset_id,
+                source_fingerprint=self.source_fingerprint,
+                parser_fingerprint=self.parser_fingerprint,
+                permission_fingerprint=self.permission_fingerprint,
+                items=self.items,
+            ),
+        )
+        if self.source_inventory_id != expected_id:
+            raise ContractValidationError(
+                "SourceInventory.source_inventory_id is not deterministic"
+            )
+        assert_no_public_raw_references(self.to_persistence_dict(), "source_inventory")
 
 
 @dataclass(frozen=True)
@@ -6057,6 +6361,262 @@ def _dataclass_payload(value: Any) -> dict[str, Any]:
     return payload
 
 
+# Existing wire families, not a new schema: preserve both historical identities.
+_LEGACY_EXCLUSION_FIELDS = {
+    "exclusion_policy_id",
+    "exclusion_policy_version",
+    "exclusion_authorized_actor_id",
+    "exclusion_reason",
+    "exclusion_out_of_scope_proof_fingerprint",
+}
+_LEGACY_ITEM_ONLY_FIELDS = _LEGACY_EXCLUSION_FIELDS | {"permission_fingerprint"}
+_LEGACY_ITEM_REQUIRED_FIELDS = {
+    "source_inventory_item_id",
+    "source_asset_id",
+    "structure_kind",
+    "content_type",
+    "ordinal",
+    "processing_state",
+    "raw_retention_state",
+    "source_fingerprint",
+    "parser_fingerprint",
+    "permission_fingerprint",
+    "permission_scope",
+    "location",
+}
+_LEGACY_ITEM_IDENTITY_FIELDS = {
+    "source_asset_id",
+    "structure_kind",
+    "ordinal",
+    "source_fingerprint",
+    "permission_fingerprint",
+    "location",
+} | _LEGACY_EXCLUSION_FIELDS
+_STRUCTURAL_ITEM_FIELDS = {
+    "source_inventory_id",
+    "intentional_exclusion_proof",
+    "parent_inventory_item_id",
+    "version_lineage",
+    "source_observation_ids",
+}
+_LEGACY_INVENTORY_FIELDS = {
+    "source_inventory_id",
+    "source_asset_id",
+    "source_fingerprint",
+    "parser_fingerprint",
+    "permission_fingerprint",
+    "items",
+    "created_at",
+}
+_LEGACY_UNSAFE_LOCATION_PARTS = {
+    "backend",
+    "directory",
+    "filename",
+    "object",
+    "path",
+    "raw",
+    "scratch",
+    "uri",
+    "url",
+}
+
+
+def _legacy_source_inventory_item_identity(
+    *,
+    source_asset_id: str,
+    structure_kind: str,
+    ordinal: int,
+    source_fingerprint: str,
+    permission_fingerprint: str,
+    location: Mapping[str, Any],
+    exclusion_policy_id: str | None,
+    exclusion_policy_version: str | None,
+    exclusion_authorized_actor_id: str | None,
+    exclusion_reason: str | None,
+    exclusion_out_of_scope_proof_fingerprint: str | None,
+) -> dict[str, Any]:
+    return {
+        "source_asset_id": source_asset_id,
+        "structure_kind": structure_kind,
+        "ordinal": ordinal,
+        "source_fingerprint": source_fingerprint,
+        "permission_fingerprint": permission_fingerprint,
+        "location": _persistence_plain(location),
+        "exclusion_policy_id": exclusion_policy_id,
+        "exclusion_policy_version": exclusion_policy_version,
+        "exclusion_authorized_actor_id": exclusion_authorized_actor_id,
+        "exclusion_reason": exclusion_reason,
+        "exclusion_out_of_scope_proof_fingerprint": (exclusion_out_of_scope_proof_fingerprint),
+    }
+
+
+def _legacy_source_inventory_identity(
+    *,
+    source_asset_id: str,
+    source_fingerprint: str,
+    parser_fingerprint: str,
+    permission_fingerprint: str,
+    items: Sequence[SourceInventoryItem],
+) -> dict[str, Any]:
+    return {
+        "source_asset_id": source_asset_id,
+        "source_fingerprint": source_fingerprint,
+        "parser_fingerprint": parser_fingerprint,
+        "permission_fingerprint": permission_fingerprint,
+        "source_inventory_item_ids": [item.source_inventory_item_id for item in items],
+    }
+
+
+def _legacy_canonical_mapping(value: Any, field_name: str) -> dict[str, Any]:
+    plain = _persistence_plain(value)
+    if not isinstance(plain, dict):
+        raise ContractValidationError(f"{field_name} must be an object")
+    return {str(key): item for key, item in plain.items()}
+
+
+def _legacy_require_keys(
+    value: Mapping[str, Any],
+    *,
+    required: set[str],
+    optional: set[str] | None = None,
+    context: str,
+) -> None:
+    actual = set(value)
+    allowed = required | set(optional or ())
+    if not required.issubset(actual) or not actual.issubset(allowed):
+        missing = sorted(required - actual)
+        unexpected = sorted(actual - allowed)
+        raise ContractValidationError(
+            f"{context} fields do not match contract; "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+
+def _legacy_nonempty_string(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ContractValidationError(f"{field_name} must be a non-empty string")
+    assert_no_public_raw_references(value, field_name)
+    return value
+
+
+def _legacy_timestamp(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ContractValidationError(f"{field_name} must be a non-empty ISO timestamp")
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ContractValidationError(f"{field_name} must be an ISO timestamp") from exc
+    return value
+
+
+def _legacy_processing_state(value: Any) -> SourceInventoryProcessingState:
+    try:
+        return SourceInventoryProcessingState(value)
+    except (TypeError, ValueError) as exc:
+        raise ContractValidationError(
+            "SourceInventoryItem.processing_state must be one of "
+            + ", ".join(state.value for state in SourceInventoryProcessingState)
+        ) from exc
+
+
+def _legacy_raw_retention_state(value: Any) -> SourceInventoryRawRetentionState:
+    try:
+        return SourceInventoryRawRetentionState(value)
+    except (TypeError, ValueError) as exc:
+        raise ContractValidationError(
+            "SourceInventoryItem.raw_retention_state must be one of "
+            + ", ".join(state.value for state in SourceInventoryRawRetentionState)
+        ) from exc
+
+
+def _legacy_validate_exclusion_contract(
+    *,
+    processing_state: SourceInventoryProcessingState,
+    exclusion_policy_id: Any,
+    exclusion_policy_version: Any,
+    exclusion_authorized_actor_id: Any,
+    exclusion_reason: Any,
+    exclusion_out_of_scope_proof_fingerprint: Any,
+    source_fingerprint: str,
+    parser_fingerprint: str,
+    permission_fingerprint: str,
+) -> None:
+    values = {
+        "exclusion_policy_id": exclusion_policy_id,
+        "exclusion_policy_version": exclusion_policy_version,
+        "exclusion_authorized_actor_id": exclusion_authorized_actor_id,
+        "exclusion_reason": exclusion_reason,
+        "exclusion_out_of_scope_proof_fingerprint": (exclusion_out_of_scope_proof_fingerprint),
+    }
+    if processing_state != SourceInventoryProcessingState.INTENTIONALLY_EXCLUDED:
+        populated = sorted(key for key, value in values.items() if value is not None)
+        if populated:
+            raise ContractValidationError(
+                "exclusion proof fields are only valid for intentionally_excluded items: "
+                + ", ".join(populated)
+            )
+        return
+
+    policy_id = _legacy_nonempty_string(
+        exclusion_policy_id,
+        "SourceInventoryItem.exclusion_policy_id",
+    )
+    policy_version = _legacy_nonempty_string(
+        exclusion_policy_version,
+        "SourceInventoryItem.exclusion_policy_version",
+    )
+    actor_id = _legacy_nonempty_string(
+        exclusion_authorized_actor_id,
+        "SourceInventoryItem.exclusion_authorized_actor_id",
+    )
+    reason = _legacy_nonempty_string(
+        exclusion_reason,
+        "SourceInventoryItem.exclusion_reason",
+    )
+    proof_fingerprint = _fingerprint(
+        exclusion_out_of_scope_proof_fingerprint,
+        "SourceInventoryItem.exclusion_out_of_scope_proof_fingerprint",
+    )
+    assert_no_public_raw_references(
+        {
+            "exclusion_policy_id": policy_id,
+            "exclusion_policy_version": policy_version,
+            "exclusion_authorized_actor_id": actor_id,
+            "exclusion_reason": reason,
+            "exclusion_out_of_scope_proof_fingerprint": proof_fingerprint,
+        },
+        "source_inventory_exclusion_proof",
+    )
+    if proof_fingerprint in {
+        source_fingerprint,
+        parser_fingerprint,
+        permission_fingerprint,
+    }:
+        raise ContractValidationError(
+            "intentionally_excluded requires an independent out-of-scope proof fingerprint"
+        )
+
+
+def _legacy_validate_location_keys(location: Mapping[str, Any]) -> None:
+    for key in location:
+        normalized_key = re.sub(r"[^A-Za-z0-9]+", "_", str(key)).strip("_").lower()
+        if (
+            normalized_key in _LEGACY_EXCLUSION_FIELDS
+            or normalized_key.startswith("exclusion_")
+            or "out_of_scope" in normalized_key
+        ):
+            raise ContractValidationError(
+                "SourceInventoryItem exclusion proof must use canonical typed fields"
+            )
+        normalized_parts = {part for part in normalized_key.split("_") if part}
+        if normalized_parts & _LEGACY_UNSAFE_LOCATION_PARTS and not str(key).endswith(
+            "_fingerprint"
+        ):
+            raise ContractValidationError(
+                f"SourceInventoryItem.location field {key!r} may expose a raw locator"
+            )
+
+
 def _persistence_dataclass_payload(value: Any) -> dict[str, Any]:
     if not is_dataclass(value):
         raise ContractValidationError("contract persistence payload requires a record")
@@ -6652,6 +7212,8 @@ def _without_none(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "SourceInventoryProcessingState",
+    "SourceInventoryRawRetentionState",
     "ANSWER_CLAIM_STATE_VALUES",
     "AnswerClaim",
     "AnswerClaimState",
@@ -6707,135 +7269,3 @@ __all__ = [
     "fingerprint_manifest",
     "validate_fingerprint_binding",
 ]
-
-
-# Reconciled top-level API from Track 2
-
-class SourceInventoryProcessingState(StrEnum):
-    PARSED = "parsed"
-    PRESERVED_UNPARSED = "preserved_unparsed"
-    UNSUPPORTED = "unsupported"
-    FAILED = "failed"
-    INTENTIONALLY_EXCLUDED = "intentionally_excluded"
-
-class SourceInventoryRawRetentionState(StrEnum):
-    RETAINED = "retained"
-    DELETED_BY_POLICY = "deleted_by_policy"
-    EXTERNALLY_MANAGED = "externally_managed"
-
-_FINGERPRINT_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-
-_UNSAFE_LOCATION_PARTS = {
-    "backend",
-    "directory",
-    "filename",
-    "object",
-    "path",
-    "raw",
-    "scratch",
-    "uri",
-    "url",
-
-_EXCLUSION_FIELD_NAMES = {
-    "exclusion_policy_id",
-    "exclusion_policy_version",
-    "exclusion_authorized_actor_id",
-    "exclusion_reason",
-    "exclusion_out_of_scope_proof_fingerprint",
-
-def _source_inventory_item_identity(
-    *,
-    source_asset_id: str,
-    structure_kind: str,
-    ordinal: int,
-    source_fingerprint: str,
-    permission_fingerprint: str,
-    location: Mapping[str, Any],
-    exclusion_policy_id: str | None,
-    exclusion_policy_version: str | None,
-    exclusion_authorized_actor_id: str | None,
-    exclusion_reason: str | None,
-    exclusion_out_of_scope_proof_fingerprint: str | None,
-
-def _source_inventory_identity(
-    *,
-    source_asset_id: str,
-    source_fingerprint: str,
-    parser_fingerprint: str,
-    permission_fingerprint: str,
-    items: Sequence[SourceInventoryItem],
-
-def _canonical_mapping(value: Any, field_name: str) -> dict[str, Any]:
-    plain = to_plain(value)
-    if not isinstance(plain, dict):
-        raise ContractValidationError(f"{field_name} must be an object")
-    return {str(key): item for key, item in plain.items()}
-
-def _require_keys(
-    value: Mapping[str, Any],
-    *,
-    required: set[str],
-    optional: set[str] | None = None,
-    context: str,
-
-def _nonempty_string(value: Any, field_name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ContractValidationError(f"{field_name} must be a non-empty string")
-    assert_no_public_raw_references(value, field_name)
-    return value
-
-def _timestamp(value: Any, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ContractValidationError(f"{field_name} must be a non-empty ISO timestamp")
-    try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ContractValidationError(f"{field_name} must be an ISO timestamp") from exc
-    return value
-
-def _processing_state(value: Any) -> SourceInventoryProcessingState:
-    try:
-        return SourceInventoryProcessingState(value)
-    except (TypeError, ValueError) as exc:
-        raise ContractValidationError(
-            "SourceInventoryItem.processing_state must be one of "
-            + ", ".join(state.value for state in SourceInventoryProcessingState)
-        ) from exc
-
-def _raw_retention_state(value: Any) -> SourceInventoryRawRetentionState:
-    try:
-        return SourceInventoryRawRetentionState(value)
-    except (TypeError, ValueError) as exc:
-        raise ContractValidationError(
-            "SourceInventoryItem.raw_retention_state must be one of "
-            + ", ".join(state.value for state in SourceInventoryRawRetentionState)
-        ) from exc
-
-def _validate_exclusion_contract(
-    *,
-    processing_state: SourceInventoryProcessingState,
-    exclusion_policy_id: Any,
-    exclusion_policy_version: Any,
-    exclusion_authorized_actor_id: Any,
-    exclusion_reason: Any,
-    exclusion_out_of_scope_proof_fingerprint: Any,
-    source_fingerprint: str,
-    parser_fingerprint: str,
-    permission_fingerprint: str,
-
-def _validate_location_keys(location: Mapping[str, Any]) -> None:
-    for key in location:
-        normalized_key = re.sub(r"[^A-Za-z0-9]+", "_", str(key)).strip("_").lower()
-        if (
-            normalized_key in _EXCLUSION_FIELD_NAMES
-            or normalized_key.startswith("exclusion_")
-            or "out_of_scope" in normalized_key
-        ):
-            raise ContractValidationError(
-                "SourceInventoryItem exclusion proof must use canonical typed fields"
-            )
-        normalized_parts = {part for part in normalized_key.split("_") if part}
-        if normalized_parts & _UNSAFE_LOCATION_PARTS and not str(key).endswith("_fingerprint"):
-            raise ContractValidationError(
-                f"SourceInventoryItem.location field {key!r} may expose a raw locator"
-            )

@@ -269,7 +269,7 @@ class Issue56SourceNeutralObservationIndexEndToEndTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(
             ContractValidationError,
-            "GitHub source occurrence schema mismatch",
+            "semantic query source kind is unsupported",
         ):
             source_occurrence_lineage_from_observation(
                 mail_observation,

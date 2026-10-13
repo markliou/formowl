@@ -121,10 +121,7 @@ from .upload_http import (
     validate_mail_upload_http_post_result,
 )
 from .query import (
-    MailEvidenceQueryGateway,
-    MailEvidenceQueryResult,
     MailEvidenceReadResult,
-    build_mail_evidence_query_handler,
     build_mail_evidence_read_handler,
 )
 from .postgres import (

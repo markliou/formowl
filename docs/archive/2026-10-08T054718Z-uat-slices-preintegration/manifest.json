@@ -1,0 +1,28 @@
+{
+  "archive_date": "2026-10-08",
+  "archived_at_utc": "2026-10-08T05:47:18Z",
+  "lifecycle": "immutable-history",
+  "files": [
+    {
+      "source": "docs/implementation-task-breakdown.md",
+      "archive": "docs/archive/2026-10-08T054718Z-uat-slices-preintegration/implementation-task-breakdown.md",
+      "bytes": 30184,
+      "lines": 395,
+      "sha256": "1e7f6a311923122a423127401a31e2cd2b51414e784b21266d8307662d6e31ff"
+    },
+    {
+      "source": "docs/agent-goals/kg-research-agent.md",
+      "archive": "docs/archive/2026-10-08T054718Z-uat-slices-preintegration/kg-research-agent.md",
+      "bytes": 18675,
+      "lines": 173,
+      "sha256": "bef2f18d4754d4cdffa329c2d363d30781a83e9df9daa367486b8423aae45bee"
+    },
+    {
+      "source": "docs/agent-goals/handoff-log.md",
+      "archive": "docs/archive/2026-10-08T054718Z-uat-slices-preintegration/handoff-log.md",
+      "bytes": 77183,
+      "lines": 299,
+      "sha256": "48474e6a20844538172f968f83ee082c976974c2eaacb8004f000b2a6c28a7d6"
+    }
+  ]
+}

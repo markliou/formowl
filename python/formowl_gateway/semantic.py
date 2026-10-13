@@ -146,6 +146,7 @@ PUBLIC_TOOL_SCHEMAS = [
             "exact_field",
             "page_size",
             "cursor",
+            "required_terms",
             "requester_user_id",
         ],
         "output_keys": [
@@ -172,6 +173,8 @@ PUBLIC_TOOL_SCHEMAS = [
             "workspace_id",
             "requester_user_id",
             "query_text",
+            "required_terms",
+            "request_contract",
             "mail_import_session_id",
             "mail_evidence_bundle_id",
         ],

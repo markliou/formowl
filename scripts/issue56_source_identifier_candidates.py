@@ -859,7 +859,7 @@ def _validate_retrieval_inputs(
     except (ContractValidationError, KeyError, TypeError, ValueError) as exc:
         raise SourceIdentifierCandidateError("retrieval_snapshot_observations_invalid") from exc
     if (
-        sha256_json(inventory.to_dict()) != snapshot.get("source_inventory_fingerprint")
+        sha256_json(inventory.to_persistence_dict()) != snapshot.get("source_inventory_fingerprint")
         or sha256_json([item.to_dict() for item in observations])
         != snapshot.get("parsed_observation_fingerprint")
         or counts.get("source_inventory_item_count") != len(inventory.items)

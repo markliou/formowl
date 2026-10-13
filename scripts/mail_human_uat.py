@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import argparse
-from importlib.machinery import ModuleSpec
-from importlib.util import module_from_spec
 import json
 import os
-from pathlib import Path
 import sys
+from importlib.machinery import ModuleSpec
+from importlib.util import module_from_spec
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterable
 
@@ -319,8 +319,9 @@ def main() -> int:
         )
         conversation_model = dependencies.CodexAppServerConversationModel(
             transport,
+            legacy_evidence_tool=True,
             workspace_dir=runtime_workspace,
-            model=os.environ.get("FORMOWL_UAT_CODEX_MODEL", "").strip() or None,
+            model=os.environ.get("FORMOWL_UAT_CODEX_MODEL", "").strip() or "gpt-5.5",
             reasoning_effort=os.environ.get(
                 "FORMOWL_UAT_CODEX_REASONING_EFFORT",
                 "low",
@@ -425,7 +426,7 @@ def main() -> int:
     conversation_model = dependencies.CodexAppServerConversationModel(
         transport,
         workspace_dir=private_runtime_workspace,
-        model=model_name or None,
+        model=model_name or "gpt-5.5",
         reasoning_effort=reasoning_effort,
         ontology_context=ontology_context,
         web_grounding_transport=web_grounding_transport,

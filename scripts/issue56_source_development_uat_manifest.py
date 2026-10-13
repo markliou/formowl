@@ -344,8 +344,8 @@ def _validated_bundle_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
         bundle_payload
     ):
         raise DevelopmentManifestError("mail_evidence_bundle_fingerprint_drift")
-    bundle = MailEvidenceBundle.from_dict(bundle_payload)
-    if bundle.to_dict() != bundle_payload:
+    bundle = MailEvidenceBundle.from_persistence_dict(bundle_payload)
+    if bundle.to_persistence_dict() != bundle_payload:
         raise DevelopmentManifestError("mail_evidence_bundle_round_trip_drift")
     return bundle_payload
 

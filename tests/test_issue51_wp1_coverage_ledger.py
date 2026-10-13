@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from copy import deepcopy
 import unittest
 
 import _paths  # noqa: F401
@@ -27,6 +28,8 @@ from formowl_contract import (
     CoverageScopeAuthorityVerifier,
     CoverageScopePolicyBinding,
     CoverageVersionBinding,
+    IntentionalExclusionProof,
+    StructuralPublicScopeDecision,
     SourceInventory,
     SourceInventoryItem,
     VersionManifest,
@@ -571,6 +574,254 @@ def _complete_ledger(
         proof_records=(proof,),
         complete_authorized_scope=True,
     )
+
+
+# Synthetic wire identities captured from clean Track2 HEAD cc8919f.
+_LEGACY_WIRES = {
+    "item": {
+        "source_inventory_item_id": "srcinvitem_c2869f30aa86134c395c7bb0",
+        "source_asset_id": "asset_legacy",
+        "structure_kind": "message",
+        "content_type": "message/rfc822",
+        "ordinal": 0,
+        "processing_state": "parsed",
+        "raw_retention_state": "retained",
+        "source_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "parser_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "permission_fingerprint": "sha256:4cf29db6ae86dbf00716e9824e4320a451af351d86d15e3510eb9eca2a976313",
+        "permission_scope": {
+            "scope_type": "asset",
+            "scope_id": "asset_legacy",
+            "owner_id": "actor_legacy",
+        },
+        "location": {"source_local_key": "unit_legacy"},
+    },
+    "inventory": {
+        "source_inventory_id": "srcinv_fdf4658882d47c84297f5e3a",
+        "source_asset_id": "asset_legacy",
+        "source_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "parser_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "permission_fingerprint": "sha256:4cf29db6ae86dbf00716e9824e4320a451af351d86d15e3510eb9eca2a976313",
+        "items": [
+            {
+                "source_inventory_item_id": "srcinvitem_c2869f30aa86134c395c7bb0",
+                "source_asset_id": "asset_legacy",
+                "structure_kind": "message",
+                "content_type": "message/rfc822",
+                "ordinal": 0,
+                "processing_state": "parsed",
+                "raw_retention_state": "retained",
+                "source_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "parser_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "permission_fingerprint": "sha256:4cf29db6ae86dbf00716e9824e4320a451af351d86d15e3510eb9eca2a976313",
+                "permission_scope": {
+                    "scope_type": "asset",
+                    "scope_id": "asset_legacy",
+                    "owner_id": "actor_legacy",
+                },
+                "location": {"source_local_key": "unit_legacy"},
+            }
+        ],
+        "created_at": "2026-10-14T00:00:00+00:00",
+    },
+    "empty": {
+        "source_inventory_id": "srcinv_a336785356ef49aa0a589295",
+        "source_asset_id": "asset_legacy",
+        "source_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "parser_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "permission_fingerprint": "sha256:4cf29db6ae86dbf00716e9824e4320a451af351d86d15e3510eb9eca2a976313",
+        "items": [],
+        "created_at": "2026-10-14T00:00:00+00:00",
+    },
+    "excluded": {
+        "source_inventory_item_id": "srcinvitem_8056b289cef99f6e3cfebbd8",
+        "source_asset_id": "asset_legacy",
+        "structure_kind": "message",
+        "content_type": "message/rfc822",
+        "ordinal": 0,
+        "processing_state": "intentionally_excluded",
+        "raw_retention_state": "retained",
+        "source_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "parser_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "permission_fingerprint": "sha256:4cf29db6ae86dbf00716e9824e4320a451af351d86d15e3510eb9eca2a976313",
+        "permission_scope": {
+            "scope_type": "asset",
+            "scope_id": "asset_legacy",
+            "owner_id": "actor_legacy",
+        },
+        "location": {"source_local_key": "unit_legacy"},
+        "exclusion_policy_id": "policy_legacy",
+        "exclusion_out_of_scope_proof_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "exclusion_authorized_actor_id": "actor_legacy",
+        "exclusion_reason": "outside_claim_scope",
+        "exclusion_policy_version": "1",
+    },
+}
+
+
+class LegacySourceInventoryCompatibilityTests(unittest.TestCase):
+    def test_legacy_constructor_preserves_item_and_aggregate_wire_identity(self) -> None:
+        wire = deepcopy(_LEGACY_WIRES["item"])
+        values = {
+            k: v
+            for k, v in wire.items()
+            if k not in {"source_inventory_item_id", "permission_fingerprint"}
+        }
+        item = SourceInventoryItem.create(**values)
+        self.assertEqual(item.to_persistence_dict(), wire)
+        inventory = SourceInventory.create(
+            source_asset_id=wire["source_asset_id"],
+            source_fingerprint=wire["source_fingerprint"],
+            parser_fingerprint=wire["parser_fingerprint"],
+            items=(item,),
+            created_at=_LEGACY_WIRES["inventory"]["created_at"],
+            permission_fingerprint=wire["permission_fingerprint"],
+        )
+        self.assertEqual(inventory.to_persistence_dict(), _LEGACY_WIRES["inventory"])
+
+    def test_legacy_wire_restore_and_private_round_trip_are_lossless(self) -> None:
+        for key in ("item", "excluded", "inventory", "empty"):
+            with self.subTest(key=key):
+                record_type = (
+                    SourceInventoryItem if key in {"item", "excluded"} else SourceInventory
+                )
+                for reader in (record_type.from_dict, record_type.from_persistence_dict):
+                    self.assertEqual(
+                        reader(deepcopy(_LEGACY_WIRES[key])).to_persistence_dict(),
+                        _LEGACY_WIRES[key],
+                    )
+        wire = _LEGACY_WIRES["empty"]
+        self.assertEqual(
+            SourceInventory.create(
+                **{k: v for k, v in wire.items() if k != "source_inventory_id"}
+            ).to_persistence_dict(),
+            wire,
+        )
+
+    def test_both_wire_families_keep_public_scope_gate_and_uniform_denial(self) -> None:
+        legacy = SourceInventory.from_dict(deepcopy(_LEGACY_WIRES["inventory"]))
+        typed, _, _, authorization, _ = _fixture()
+        denied = StructuralPublicScopeDecision.deny(authorization_binding=authorization)
+        for inventory in (legacy, typed):
+            decision = StructuralPublicScopeDecision.authorize(
+                permission_scope=inventory.items[0].permission_scope,
+                authorization_binding=authorization,
+            )
+            for record in (inventory, inventory.items[0]):
+                with self.assertRaises(ContractValidationError):
+                    record.to_dict()
+                with self.assertRaises(ContractValidationError):
+                    record.to_dict(scope_decision=object())
+                self.assertEqual(
+                    record.to_dict(scope_decision=denied),
+                    {"status": "denied", "reason_code": "scope_denied"},
+                )
+                public = record.to_dict(scope_decision=decision)
+                self.assertEqual(public["status"], "authorized")
+                self.assertNotIn("permission_scope", public)
+                self.assertNotIn("source_inventory_item_id", public)
+                self.assertNotIn("items", public)
+
+    def test_legacy_validation_rejects_tampering_mixed_fields_and_mixed_families(self) -> None:
+        for changes in (
+            {"permission_fingerprint": FP2},
+            {"source_inventory_item_id": "srcinvitem_forged"},
+            {"source_observation_ids": []},
+            {"source_inventory_id": "inventory_other"},
+            {"location": {"source_local_key": "unit_legacy", "raw_path": "/private/raw"}},
+        ):
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaises(ContractValidationError):
+                    SourceInventoryItem.from_dict({**deepcopy(_LEGACY_WIRES["item"]), **changes})
+        inventory, _, _, _, _ = _fixture()
+        legacy = SourceInventoryItem.from_dict(deepcopy(_LEGACY_WIRES["item"]))
+        with self.assertRaises(ContractValidationError):
+            SourceInventory.create(
+                source_asset_id=legacy.source_asset_id,
+                items=(legacy, inventory.items[0]),
+                source_fingerprint=legacy.source_fingerprint,
+                parser_fingerprint=legacy.parser_fingerprint,
+                permission_fingerprint=legacy.permission_fingerprint,
+            )
+        typed = inventory.items[0].to_persistence_dict()
+        with self.assertRaises(ContractValidationError):
+            SourceInventoryItem.from_dict({**typed, "exclusion_policy_id": "policy_legacy"})
+
+    def test_existing_constructor_fields_discriminate_without_cross_upgrade(self) -> None:
+        values = deepcopy(_LEGACY_WIRES["item"])
+        values.pop("source_inventory_item_id")
+        values.pop("permission_fingerprint")
+        legacy = SourceInventoryItem.create(**values)
+        structural = SourceInventoryItem.create(**values, source_observation_ids=[])
+        self.assertTrue(legacy.source_inventory_item_id.startswith("srcinvitem_"))
+        self.assertTrue(structural.source_inventory_item_id.startswith("inventory_"))
+        for item in (legacy, structural):
+            self.assertEqual(SourceInventoryItem.from_dict(item.to_persistence_dict()), item)
+        with self.assertRaises(ContractValidationError):
+            SourceInventoryItem.create(**legacy.to_persistence_dict(), source_observation_ids=[])
+
+    def test_original_legacy_aggregate_and_exclusion_validators_remain_closed(self) -> None:
+        for changes in (
+            {"source_inventory_id": "srcinv_forged"},
+            {"permission_fingerprint": FP2},
+            {"source_fingerprint": FP2},
+            {"parser_fingerprint": FP},
+            {"created_at": "not-a-timestamp"},
+            {"items": [_LEGACY_WIRES["item"], _LEGACY_WIRES["item"]]},
+            {"unexpected": "rejected"},
+        ):
+            with self.subTest(changes=tuple(changes)):
+                with self.assertRaises(ContractValidationError):
+                    SourceInventory.from_dict({**deepcopy(_LEGACY_WIRES["inventory"]), **changes})
+        for key in (
+            "exclusion_policy_id",
+            "exclusion_policy_version",
+            "exclusion_authorized_actor_id",
+            "exclusion_reason",
+            "exclusion_out_of_scope_proof_fingerprint",
+        ):
+            wire = deepcopy(_LEGACY_WIRES["excluded"])
+            wire.pop(key)
+            with self.subTest(missing=key), self.assertRaises(ContractValidationError):
+                SourceInventoryItem.from_dict(wire)
+        for fingerprint in (FP, FP2, _LEGACY_WIRES["item"]["permission_fingerprint"]):
+            with self.subTest(proof=fingerprint), self.assertRaises(ContractValidationError):
+                SourceInventoryItem.from_dict(
+                    {
+                        **deepcopy(_LEGACY_WIRES["excluded"]),
+                        "exclusion_out_of_scope_proof_fingerprint": fingerprint,
+                    }
+                )
+        inventory = SourceInventory.from_dict(_LEGACY_WIRES["inventory"])
+        with self.assertRaises(ContractValidationError):
+            inventory.to_safe_payload()
+        with self.assertRaises(ContractValidationError):
+            SourceInventory.from_persistence_dict(
+                deepcopy(_LEGACY_WIRES["inventory"]), consume_input=True
+            )
+
+    def test_legacy_scalar_exclusion_never_satisfies_typed_claim_scope_proof(self) -> None:
+        legacy = SourceInventoryItem.from_dict(deepcopy(_LEGACY_WIRES["excluded"]))
+        self.assertIsNone(legacy.intentional_exclusion_proof)
+        self.assertEqual(legacy.to_persistence_dict(), _LEGACY_WIRES["excluded"])
+        inventory, requirement, manifest, authorization, _ = _fixture()
+        policy = CoverageScopePolicyBinding(
+            scope_policy_id="scope-policy-wp1",
+            scope_policy_version="1",
+            scope_policy_fingerprint=SCOPE_POLICY_FP,
+        )
+        with self.assertRaises(ContractValidationError):
+            IntentionalExclusionProof.create(
+                source_inventory_item=legacy,
+                claim_requirement=requirement,
+                version_manifest=manifest,
+                authorization_binding=authorization,
+                scope_policy=policy,
+                exclusion_policy_version_id="policy_legacy",
+            )
+        self.assertEqual(
+            SourceInventory.from_persistence_dict(inventory.to_persistence_dict()), inventory
+        )
 
 
 if __name__ == "__main__":

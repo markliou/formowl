@@ -1131,7 +1131,7 @@ def _extension_projection_validation_kwargs(
         "retrieval_bundle_sha256": extra_hashes["retrieval_bundle_sha256"],
         "retrieval_snapshot_sha256": extra_hashes["retrieval_snapshot_sha256"],
         "bundle_artifact": {
-            "bundle_fingerprint": sha256_json(bundle.to_dict()),
+            "bundle_fingerprint": sha256_json(bundle.to_persistence_dict()),
         },
         "bundle": bundle,
         "retrieval_snapshot": {
@@ -1145,7 +1145,7 @@ def _extension_projection_validation_kwargs(
                     "scope_id": "workspace_fixture",
                 }
             ),
-            "mail_evidence_bundle_fingerprint": sha256_json(bundle.to_dict()),
+            "mail_evidence_bundle_fingerprint": sha256_json(bundle.to_persistence_dict()),
             "tokenizer_profile_fingerprint": extra_hashes["lexical_profile_fingerprint"],
             "index_fingerprint": extra_hashes["index_fingerprint"],
             "snapshot_fingerprint": extra_hashes["retrieval_snapshot_fingerprint"],
@@ -3563,8 +3563,8 @@ class Issue56IndependentMailHoldoutUatE2ETests(unittest.TestCase):
             created_at="2026-08-18T12:00:00+00:00",
         )
         retrieval_snapshot |= {
-            "source_inventory": source_inventory.to_dict(),
-            "source_inventory_fingerprint": sha256_json(source_inventory.to_dict()),
+            "source_inventory": source_inventory.to_persistence_dict(),
+            "source_inventory_fingerprint": sha256_json(source_inventory.to_persistence_dict()),
             "source_asset_sha256": source_asset_sha256,
             "permission_fingerprint": permission_fingerprint,
         }

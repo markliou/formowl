@@ -98,6 +98,8 @@ def run_parser_export_once(
     command = [
         parser_command,
         *PARSER_FLAGS,
+        "-j",
+        str(PARSER_CONFIG["parser_workers"]),
         "-o",
         str(export_root),
         str(pst_path),
@@ -149,6 +151,9 @@ def run_parser_export_once(
                 "parser_failure_count": int(returncode != 0) + int(version.returncode != 0),
                 "elapsed_seconds": int(elapsed_seconds),
             },
+            "parser_exit_code": returncode if returncode >= 0 else None,
+            "parser_signal": -returncode if returncode < 0 else None,
+            "version_exit_code": version.returncode,
         }
         failure["report_fingerprint"] = _payload_fingerprint(
             failure,
@@ -161,6 +166,25 @@ def run_parser_export_once(
         )
         raise RuntimeError("parser_export_process_failed")
 
+    # Persist observed process completion before the potentially long manifest
+    # pass. A crash during finalization must not require another raw export.
+    completion = {
+        "artifact_id": "formowl_readpst_export_completion_v1",
+        "source_fingerprint": source_asset_sha256,
+        "parser_exit_code": returncode,
+        "version_exit_code": version.returncode,
+        "parser_config_fingerprint": sha256_json({"flags": list(PARSER_FLAGS), **PARSER_CONFIG}),
+        "stdout_fingerprint": stdout_sha256,
+        "stderr_fingerprint": stderr_sha256,
+        "source_completeness_certified": False,
+    }
+    completion["completion_fingerprint"] = sha256_json(completion)
+    _persist_immutable(
+        output_root / "readpst-export-complete.json", completion,
+        fingerprint_field="completion_fingerprint",
+    )
+    print(json.dumps({"status": "export_complete", "stage": "manifest_build",
+                      "elapsed_seconds": int(elapsed_seconds)}), flush=True)
     artifacts = build_manifest_from_existing_export(
         pst_path=pst_path,
         output_root=output_root,

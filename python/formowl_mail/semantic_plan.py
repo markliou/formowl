@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import re
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
+import unicodedata
 
 from formowl_contract import (
     CORE_SUPERTYPE_IDS,
@@ -15,6 +16,7 @@ from formowl_contract import (
     validate_permission_scope,
 )
 from formowl_graph import EffectiveGraphView
+from formowl_core.tokenization import _protected_identifier_spans
 
 from ._guards import assert_public_payload_safe, safe_public_string
 
@@ -26,15 +28,40 @@ SEMANTIC_QUERY_CLASSES = (
 )
 AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND = "authorized_mail_observation"
 GITHUB_PROJECT_OBSERVATION_SOURCE_KIND = "github_project_observation"
+AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND = "authorized_text_observation"
+AUTHORIZED_MULTISOURCE_OBSERVATION_SOURCE_KIND = "authorized_multisource_observation"
 _SOURCE_OCCURRENCE_SCHEMA_BY_KIND = {
     AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND: "mail_message_occurrence_v1",
     GITHUB_PROJECT_OBSERVATION_SOURCE_KIND: "github_issue_comment_occurrence_v1",
+    AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND: "document_text_line_occurrence_v1",
+    AUTHORIZED_MULTISOURCE_OBSERVATION_SOURCE_KIND: "mail_text_occurrence_union_v1",
 }
-_CLAIM_STRENGTH_BY_CLASS = {
+_SOURCE_KIND_MEMBERS_BY_KIND = {
+    AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND: (AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,),
+    GITHUB_PROJECT_OBSERVATION_SOURCE_KIND: (GITHUB_PROJECT_OBSERVATION_SOURCE_KIND,),
+    AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND: (AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND,),
+    AUTHORIZED_MULTISOURCE_OBSERVATION_SOURCE_KIND: (
+        AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND,
+        AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND,
+    ),
+}
+SEMANTIC_CLAIM_STRENGTH_BY_CLASS = {
     "evidence_lookup": "cited_evidence",
     "relation_reasoning": "bounded_relation",
     "exact_set_or_inventory": "complete_authorized_scope",
     "global_summarization": "bounded_summary",
+}
+
+# The current request boundary can include mail, attachment tables, and
+# independent document text together. Capability validation still owns access.
+SEMANTIC_REQUEST_MAX_SOURCE_FAMILIES = 3
+_CLAIM_STRENGTH_BY_CLASS = SEMANTIC_CLAIM_STRENGTH_BY_CLASS
+_SEMANTIC_REQUEST_CONTRACT_FIELDS = {
+    "original_query_hash",
+    "query_class",
+    "source_family_scope",
+    "requested_fields",
+    "maximum_claim_strength",
 }
 EXACT_QUERY_GRAMMAR_ROLES = (
     "conjunction",
@@ -61,7 +88,6 @@ _EXACT_TERMS = (
     "list all",
     "how many",
     "全部",
-    "列出",
     "清單",
     "盤點",
     "多少",
@@ -71,8 +97,362 @@ _EXACT_TERMS = (
 _CJK_EXACT_OUTPUT_GRAMMAR_V1 = (
     ("列出", "列舉", "調閱", "整理"),
     ("出來",),
-    ("全部", "都", "所有"),
+    ("全部", "都", "所有", "每"),
 )
+# A separate citation-presentation clause does not quantify the source records
+# requested by the preceding lookup. Keep record inventories/counts intact.
+_CITATION_PRESENTATION_SUFFIX = re.compile(
+    r"(?:[,;，；。]|\band\b)\s*(?:please\s+)?"
+    r"(?:list|show|include|provide|列出|附上|提供)\s*"
+    r"(?:(?:all|the|所有|全部)\s*)?(?:source\s+)?"
+    r"(?:citations?|references?|來源引用|引用來源|來源出處|來源連結)\s*[.!。！]?$"
+)
+_GREETING_MARKERS = ("hello", "hi", "hey", "嗨", "你好", "您好")
+_PRIOR_PRESENTATION_MARKERS = (
+    "reformat",
+    "rewrite",
+    "translate",
+    "summarize the above",
+    "整理上面的",
+    "改寫上面的",
+    "翻譯上面的",
+    "重新格式化",
+)
+_EXPLICIT_WORKSPACE_MARKERS = (
+    "my mail",
+    "my email",
+    "my messages",
+    "my inbox",
+    "from my inbox",
+    "workspace",
+    "信箱",
+    "我的信件",
+    "我的郵件",
+    "我的信箱",
+    "工作區",
+)
+_MAIL_CONTENT_MARKERS = ("mail", "email", "message", "信件", "郵件", "信箱")
+# A bare "信" is ambiguous (信心/信任/信號).  Require a mail noun construction:
+# incoming/outgoing/received correspondence, a possessive, or the classifier 封.
+# This also covers intervening recipients/modifiers through "的信" and "封信".
+_CJK_MAIL_CONTENT_PATTERN = re.compile(
+    r"(?:往[來来]的?|[來来]|(?:寄[出來来]|收[到取])的?|的|封)" r"信(?![心任念仰用號号息賴赖])"
+)
+_CJK_MAIL_REFERENCE_PATTERN = re.compile(r"的(?:信件|郵件|信箱)")
+# A source-backed row lookup must not depend on a fixed business-field
+# vocabulary.  UAT users can ask for an arbitrary column label (for example a
+# tenant-specific field name), so an identifier followed by a record reference
+# and 的 is a stronger routing signal than the known-field marker list.
+_RECORD_FIELD_LOOKUP_PATTERN = re.compile(
+    r"(?:\b[a-z0-9][a-z0-9._/-]{1,63}\b|[\u4e00-\u9fff]{2,24})"
+    r"\s*(?:這|該|此)(?:筆|項|個)(?:資料|目|項目)?\s*的"
+)
+_EVIDENCE_RETURN_PATTERN = re.compile(
+    r"^(?:please\s+)?return\b[^?]*\b"
+    r"(?:rows?|records?|documents?|evidence|files?|messages?|values?|citations?)\b"
+)
+# Workspace evidence is not limited to mail.  Match source nouns with word
+# boundaries in English; Chinese source nouns already form lexical units.
+# A noun alone is not a lookup: the action check below is still required.
+_WORKSPACE_CONTENT_PATTERN = re.compile(
+    r"\b(?:projects?|documents?|files?|records?|attachments?|reports?|"
+    r"issues?|tickets?|repositories|repository|evidence)\b"
+    r"|專案|项目|項目|文件|文檔|文档|檔案|档案|資料|数据|紀錄|記錄|记录|"
+    r"附件|報告|报告|工單|工单|證據|证据"
+)
+_BUSINESS_SOURCE_MARKERS = (
+    "bom",
+    "coo",
+    "component",
+    "components",
+    "country of origin",
+    "delivery",
+    "eta",
+    "etd",
+    "inventory",
+    "item",
+    "items",
+    "lead time",
+    "lookup",
+    "material",
+    "materials",
+    "mpn",
+    "part",
+    "parts",
+    "po",
+    "procurement",
+    "product",
+    "products",
+    "purchase order",
+    "quantity",
+    "quote",
+    "rfq",
+    "row",
+    "rows",
+    "sku",
+    "source",
+    "stock",
+    "supplier",
+    "table",
+    "vendor",
+    "warehouse",
+)
+_BUSINESS_SOURCE_CJK_MARKERS = (
+    "交期",
+    "交貨",
+    "供應鏈",
+    "倉庫",
+    "庫存",
+    "存貨",
+    "料件",
+    "料號",
+    "零件",
+    "產品",
+    "品項",
+    "數量",
+    "物料",
+    "採購",
+    "訂單",
+    "報價",
+    "產地",
+    "出貨",
+)
+_EVIDENCE_QUERY_ACTION_MARKERS = (
+    "find",
+    "search",
+    "list",
+    "show",
+    "retrieve",
+    "organize",
+    "summarize",
+    "summarise",
+    "review",
+    "check",
+    "get",
+    "look up",
+    "lookup",
+    "read",
+    "整理",
+    "找",
+    "查",
+    "搜尋",
+    "搜索",
+    "列出",
+    "列舉",
+    "調閱",
+    "查看",
+    "查找",
+    "盤點",
+    "摘要",
+    "總結",
+    "看",
+    "讀",
+)
+_BUSINESS_DEFINITION_MARKERS = (
+    "what is",
+    "what are",
+    "define",
+    "definition of",
+    "meaning of",
+    "how does",
+    "how do",
+    "什麼是",
+    "什么是",
+    "是什麼",
+    "是什么",
+    "何謂",
+    "意思",
+)
+_BUSINESS_CURRENT_STATE_MARKERS = (
+    "current",
+    "latest",
+    "status",
+    "state",
+    "due",
+    "deadline",
+    "today",
+    "目前",
+    "現在",
+    "最新",
+    "狀態",
+    "状态",
+    "進度",
+    "进度",
+)
+
+
+def protected_reference_identifiers(text: str) -> tuple[str, ...]:
+    """Reuse the frozen identifier policy; prose, dates and amounts are not anchors."""
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    return tuple(sorted({span.exact_token for span in _protected_identifier_spans(normalized)
+                         if span.identifier_kind == "business_identifier"}))
+
+
+def is_identifier_reference(text: str) -> bool:
+    """Recognize a reference data request, not a bare pronoun or product mention."""
+    text = _normalize_routing_text(text)
+    if not (any(
+        re.search(rf"\b{re.escape(term)}\b", text) if term.isascii() else term in text
+        for term in _EVIDENCE_QUERY_ACTION_MARKERS
+    ) or re.search(r"\b(?:what|which|who|where|when)\b|什麼|什么|誰|谁|哪|(?:呢|嗎|吗)[?？]?$", text)):
+        return False
+    return bool(re.search(
+        r"\b(?:this|that|same|previous)\s+(?:part|item|product|component|record|identifier|order)\b"
+        r"|\b(?:its|their)\s+\w+|(?:這|这|那|該|该|此|上述|前述)(?:個|个|筆|笔|項|项)?"
+        r"(?:料號|料号|零件|產品|产品|品項|品项|紀錄|记录|訂單|订单)|(?:它|其)的",
+        text, re.IGNORECASE,
+    ))
+
+
+def requires_workspace_evidence(
+    query_text: str,
+    *,
+    query_class: str | None = None,
+    prior_evidence_citeable: bool = False,
+    prior_evidence_present: bool = False,
+) -> bool:
+    """Return whether the user explicitly requested governed workspace evidence.
+
+    ``deterministic_query_class`` controls the claim and execution contract; it
+    is deliberately not a tool-choice proxy.  Treating every classified query
+    as a mandatory lookup turns ordinary conversation into an MCP request.
+    """
+    _require_nonempty_public_string(query_text, "query_text")
+    normalized = _normalize_routing_text(query_text)
+    if prior_evidence_present:
+        if prior_evidence_citeable and any(
+            marker in normalized for marker in _PRIOR_PRESENTATION_MARKERS
+        ):
+            return False
+    # Prior misses do not authorize tools for ordinary chat. Current data
+    # requests still require evidence; unresolved references are bound/clarified.
+    return is_identifier_reference(normalized) or _has_explicit_workspace_evidence_marker(
+        normalized
+    ) or _has_business_source_signal(normalized)
+
+
+def requires_query_expansion(query_text: str) -> bool:
+    """Return whether a terse evidence request needs a typed provider plan."""
+
+    _require_nonempty_public_string(query_text, "query_text")
+    normalized = _normalize_routing_text(query_text)
+    if not requires_workspace_evidence(normalized):
+        return False
+    if _EVIDENCE_RETURN_PATTERN.search(normalized) is not None:
+        return False
+    if any(marker in normalized for marker in _EVIDENCE_QUERY_ACTION_MARKERS):
+        return False
+    if any(marker in normalized for marker in _BUSINESS_CURRENT_STATE_MARKERS):
+        return False
+    if any(marker in normalized for marker in _MAIL_CONTENT_MARKERS):
+        return False
+    return any(
+        marker in normalized
+        for marker in (*_BUSINESS_SOURCE_CJK_MARKERS, *_BUSINESS_SOURCE_MARKERS, *_RELATION_TERMS)
+    )
+
+
+def is_ordinary_greeting(query_text: str) -> bool:
+    """Return whether a turn is a plain greeting, without classifying its topic."""
+
+    _require_nonempty_public_string(query_text, "query_text")
+    return _is_ordinary_greeting(_normalize_routing_text(query_text))
+
+
+def _normalize_routing_text(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def _is_ordinary_greeting(normalized: str) -> bool:
+    # Greeting prefixes are ordinary conversation unless the explicit-source
+    # check above has already found a workspace/mail task.  Do not maintain a
+    # question-specific catalogue of acceptable greeting tails.
+    return any(
+        normalized == marker
+        or normalized.startswith(f"{marker} ")
+        or normalized.startswith(f"{marker},")
+        or normalized.startswith(f"{marker}，")
+        or normalized.startswith(f"{marker}!")
+        or normalized.startswith(f"{marker}！")
+        for marker in _GREETING_MARKERS
+    )
+
+
+def _has_explicit_workspace_evidence_marker(normalized: str) -> bool:
+    if _EVIDENCE_RETURN_PATTERN.search(normalized) is not None:
+        return True
+    if any(marker in normalized for marker in _EXPLICIT_WORKSPACE_MARKERS):
+        return True
+    if _CJK_MAIL_REFERENCE_PATTERN.search(normalized) is not None:
+        return True
+    if _RECORD_FIELD_LOOKUP_PATTERN.search(normalized) is not None:
+        return True
+    if any(term in normalized for term in _RELATION_TERMS) and any(
+        action_marker in normalized for action_marker in _EVIDENCE_QUERY_ACTION_MARKERS
+    ):
+        return True
+    return (
+        any(mail_marker in normalized for mail_marker in _MAIL_CONTENT_MARKERS)
+        or _CJK_MAIL_CONTENT_PATTERN.search(normalized) is not None
+        or _WORKSPACE_CONTENT_PATTERN.search(normalized) is not None
+    ) and any(action_marker in normalized for action_marker in _EVIDENCE_QUERY_ACTION_MARKERS)
+
+
+def _has_business_source_signal(normalized: str) -> bool:
+    if any(marker in normalized for marker in _BUSINESS_DEFINITION_MARKERS):
+        # A definition request is ordinary conversation unless it also asks
+        # for a current/source-backed business value.  A property attached to
+        # a concrete subject is also source-backed: e.g. ``X 的 COO`` asks for
+        # the value of COO for X, while ``What is a supplier?`` remains chat.
+        if (
+            not any(marker in normalized for marker in _BUSINESS_CURRENT_STATE_MARKERS)
+            and not _has_scoped_business_source_signal(normalized)
+        ):
+            return False
+    if _has_scoped_business_source_signal(normalized):
+        return True
+    if any(marker in normalized for marker in _BUSINESS_SOURCE_CJK_MARKERS):
+        return True
+    has_business_marker = any(
+        re.search(rf"\b{re.escape(marker)}\b", normalized) is not None
+        for marker in _BUSINESS_SOURCE_MARKERS
+    )
+    if not has_business_marker:
+        return False
+    return (
+        any(marker in normalized for marker in _EVIDENCE_QUERY_ACTION_MARKERS)
+        or any(marker in normalized for marker in _BUSINESS_CURRENT_STATE_MARKERS)
+    )
+
+
+def _has_scoped_business_source_signal(normalized: str) -> bool:
+    """Recognize a business field bound to a user-supplied subject.
+
+    This is intentionally structural rather than a list of identifiers.  It
+    lets a private entity or arbitrary source identifier make ``X 的 COO`` a
+    governed lookup without turning bare acronym/field definitions into MCP
+    calls.
+    """
+
+    # Generic English nouns are not source identifiers.  Keep identifier-bound
+    # COO/field lookups while leaving definition questions in ordinary chat.
+    english_subject = r"(?:[a-z0-9]*\d[a-z0-9._/-]*|[a-z0-9]+(?:[._/-][a-z0-9]+)+)"
+    subject = rf"(?:{english_subject}|[\u4e00-\u9fff]{{2,32}})"
+    for marker in (*_BUSINESS_SOURCE_CJK_MARKERS, *_BUSINESS_SOURCE_MARKERS):
+        escaped_marker = re.escape(marker)
+        if re.search(
+            rf"{subject}\s*(?:的|之)\s*{escaped_marker}(?![a-z0-9_])",
+            normalized,
+        ):
+            return True
+        if marker in _BUSINESS_SOURCE_MARKERS and re.search(
+            rf"\b{escaped_marker}\b\s+(?:of|for)\s+{english_subject}",
+            normalized,
+        ):
+            return True
+    return False
+
+
 _RELATION_TERMS = (
     "relation",
     "related",
@@ -110,7 +490,12 @@ DEFAULT_SEMANTIC_PLAN_LIMITS = SemanticPlanLimits()
 
 @dataclass(frozen=True)
 class AuthorizedSemanticSource:
-    """One validated source-kind and authorization-scope binding."""
+    """One validated source-kind set and authorization-scope binding.
+
+    ``source_kind`` remains the legacy native kind for existing single-family
+    sources. The explicit multisource kind is only used when one revision
+    contains both mail and independently registered text Observations.
+    """
 
     source_kind: str
     workspace_id: str
@@ -152,6 +537,13 @@ class AuthorizedSemanticSource:
     @property
     def occurrence_schema_id(self) -> str:
         return _SOURCE_OCCURRENCE_SCHEMA_BY_KIND[self.source_kind]
+
+    @property
+    def authorized_source_kinds(self) -> tuple[str, ...]:
+        return _SOURCE_KIND_MEMBERS_BY_KIND[self.source_kind]
+
+    def authorizes_source_kind(self, source_kind: str) -> bool:
+        return source_kind in self.authorized_source_kinds
 
     @property
     def authorization_fingerprint(self) -> str:
@@ -197,8 +589,9 @@ def authorized_permission_scope_matches(
     permission_scope: Any,
     *,
     authorized_source: AuthorizedSemanticSource,
+    source_kind: str | None = None,
 ) -> bool:
-    """Check a source permission scope without widening legacy mail/GitHub paths."""
+    """Check one native source permission without widening legacy bindings."""
 
     normalized = to_plain(permission_scope)
     if not isinstance(normalized, dict):
@@ -207,15 +600,36 @@ def authorized_permission_scope_matches(
     scope_id = normalized.get("scope_id")
     if not isinstance(scope_type, str) or not isinstance(scope_id, str) or not scope_id:
         return False
-    if authorized_source.source_kind == GITHUB_PROJECT_OBSERVATION_SOURCE_KIND:
-        return scope_type == "project" and scope_id in authorized_source.source_scope_ids
-    if authorized_source.source_kind != AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND:
-        return False
-    if scope_type == "workspace":
-        return scope_id == authorized_source.workspace_id
-    if scope_type == "mail_import_session":
-        return scope_id in authorized_source.source_scope_ids
-    if scope_type != "project":
+    if source_kind is not None:
+        if not authorized_source.authorizes_source_kind(source_kind):
+            return False
+        source_kinds = (source_kind,)
+    else:
+        source_kinds = authorized_source.authorized_source_kinds
+
+    if GITHUB_PROJECT_OBSERVATION_SOURCE_KIND in source_kinds and (
+        scope_type == "project" and scope_id in authorized_source.source_scope_ids
+    ):
+        return True
+    if AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND in source_kinds:
+        if scope_type == "workspace" and scope_id == authorized_source.workspace_id:
+            return True
+        if (
+            scope_type == "mail_import_session"
+            and scope_id in authorized_source.source_scope_ids
+        ):
+            return True
+    if (
+        AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND in source_kinds
+        and scope_type == "workspace"
+        and scope_id == authorized_source.workspace_id
+        and scope_id in authorized_source.source_scope_ids
+    ):
+        return any(
+            scope.to_dict() == normalized
+            for scope in authorized_source.authorized_permission_scopes
+        )
+    if scope_type != "project" or scope_id not in authorized_source.source_scope_ids:
         return False
     return any(
         scope.to_dict() == normalized
@@ -441,20 +855,16 @@ def deterministic_query_class(query_text: str) -> str:
     """Classify a query without model calls, hidden state, or nondeterministic repair."""
 
     _require_nonempty_public_string(query_text, "query_text")
-    normalized = query_text.casefold()
-    if any(term in normalized for term in _EXACT_TERMS):
+    normalized = _CITATION_PRESENTATION_SUFFIX.sub("", query_text.casefold())
+    if any(
+        re.search(r"(?<![a-z0-9_])" + re.escape(term) + r"(?![a-z0-9_])", normalized)
+        if term.isascii() else term in normalized
+        for term in _EXACT_TERMS
+    ):
         return "exact_set_or_inventory"
-    (
-        output_verbs,
-        completion_markers,
-        inventory_markers,
-    ) = _CJK_EXACT_OUTPUT_GRAMMAR_V1
-    if (
-        any(term in normalized for term in output_verbs)
-        and (
-            any(marker in normalized for marker in completion_markers)
-            or any(marker in normalized for marker in inventory_markers)
-        )
+    output_verbs, _completion_markers, inventory_markers = _CJK_EXACT_OUTPUT_GRAMMAR_V1
+    if any(term in normalized for term in output_verbs) and any(
+        marker in normalized for marker in inventory_markers
     ):
         return "exact_set_or_inventory"
     if any(term in normalized for term in _RELATION_TERMS):
@@ -462,6 +872,84 @@ def deterministic_query_class(query_text: str) -> str:
     if any(term in normalized for term in _SUMMARY_TERMS):
         return "global_summarization"
     return "evidence_lookup"
+
+
+def validate_semantic_request_contract(
+    value: Mapping[str, Any],
+    *,
+    available_source_families: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Validate the server-bound original request goal used across tool retries."""
+
+    if not isinstance(value, Mapping) or set(value) != _SEMANTIC_REQUEST_CONTRACT_FIELDS:
+        raise ContractValidationError("semantic request contract shape is invalid")
+    original_query_hash = value["original_query_hash"]
+    query_class = value["query_class"]
+    source_family_scope = value["source_family_scope"]
+    requested_fields = value["requested_fields"]
+    maximum_claim_strength = value["maximum_claim_strength"]
+    if (
+        not isinstance(original_query_hash, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", original_query_hash) is None
+        or query_class not in SEMANTIC_QUERY_CLASSES
+    ):
+        raise ContractValidationError("semantic request contract goal is invalid")
+    if (
+        not isinstance(source_family_scope, Sequence)
+        or isinstance(source_family_scope, (str, bytes))
+        or not 1 <= len(source_family_scope) <= SEMANTIC_REQUEST_MAX_SOURCE_FAMILIES
+        or any(
+            not isinstance(family, str)
+            or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", family) is None
+            for family in source_family_scope
+        )
+        or len(set(source_family_scope)) != len(source_family_scope)
+    ):
+        raise ContractValidationError("semantic request contract source scope is invalid")
+    if available_source_families is not None and not set(source_family_scope).issubset(
+        set(available_source_families)
+    ):
+        raise ContractValidationError(
+            "semantic request contract source scope is unavailable"
+        )
+    if (
+        not isinstance(requested_fields, Sequence)
+        or isinstance(requested_fields, (str, bytes))
+        or len(requested_fields) > 8
+    ):
+        raise ContractValidationError(
+            "semantic request contract requested fields are invalid"
+        )
+    normalized_requested_fields: list[str] = []
+    for field_name in requested_fields:
+        if (
+            not isinstance(field_name, str)
+            or not field_name.strip()
+            or len(field_name.strip()) > 120
+        ):
+            raise ContractValidationError(
+                "semantic request contract requested field is invalid"
+            )
+        normalized_field_name = field_name.strip()
+        safe_public_string(normalized_field_name, "requested_field")
+        normalized_requested_fields.append(normalized_field_name)
+    if len(set(normalized_requested_fields)) != len(normalized_requested_fields):
+        raise ContractValidationError(
+            "semantic request contract requested fields are invalid"
+        )
+    if maximum_claim_strength != _CLAIM_STRENGTH_BY_CLASS[query_class]:
+        raise ContractValidationError(
+            "semantic request contract claim strength is invalid"
+        )
+    normalized = {
+        "original_query_hash": original_query_hash,
+        "query_class": query_class,
+        "source_family_scope": list(source_family_scope),
+        "requested_fields": normalized_requested_fields,
+        "maximum_claim_strength": maximum_claim_strength,
+    }
+    assert_public_payload_safe(normalized, "semantic_request_contract")
+    return normalized
 
 
 def route_semantic_query(
@@ -499,14 +987,22 @@ def route_semantic_query(
         workspace_id=workspace_id,
         source_scope_ids=source_scope_ids,
     )
-    if query_class_override is not None and (
-        query_class_override != "exact_set_or_inventory"
-        or not all(
+    if query_class_override is not None:
+        if query_class_override not in SEMANTIC_QUERY_CLASSES:
+            raise ContractValidationError("semantic query class override is invalid")
+        if query_class_override == "exact_set_or_inventory":
+            if not all(
+                isinstance(value, str) and value.strip()
+                for value in (exact_normalized_field, exact_predicate, exact_operator)
+            ):
+                raise ContractValidationError(
+                    "semantic query class override is invalid"
+                )
+        elif any(
             isinstance(value, str) and value.strip()
             for value in (exact_normalized_field, exact_predicate, exact_operator)
-        )
-    ):
-        raise ContractValidationError("semantic query class override is invalid")
+        ):
+            raise ContractValidationError("semantic query class override is invalid")
     query_class = (
         query_class_override
         if query_class_override is not None
@@ -941,8 +1437,13 @@ def _validate_query_class_shape(
 ) -> None:
     supported = set(supported_relation_types)
     if plan.seed_node_ids:
-        visible_node_ids = {node.node_id for node in effective_graph_view.visible_nodes}
-        if not set(plan.seed_node_ids).issubset(visible_node_ids):
+        indexed_store = getattr(effective_graph_view, "_indexed_runtime_store", None)
+        if indexed_store is not None:
+            missing_seed = any(indexed_store.get_node(node_id) is None for node_id in plan.seed_node_ids)
+        else:
+            visible_node_ids = {node.node_id for node in effective_graph_view.visible_nodes}
+            missing_seed = not set(plan.seed_node_ids).issubset(visible_node_ids)
+        if missing_seed:
             raise ContractValidationError("semantic query seed scope is unavailable")
     if plan.query_class == "relation_reasoning":
         if plan.max_hops < 1 or not plan.allowed_paths:
@@ -1165,17 +1666,22 @@ def _canonical_permission_scope(value: PermissionScope) -> dict[str, Any]:
 
 __all__ = [
     "AUTHORIZED_MAIL_OBSERVATION_SOURCE_KIND",
+    "AUTHORIZED_MULTISOURCE_OBSERVATION_SOURCE_KIND",
+    "AUTHORIZED_TEXT_OBSERVATION_SOURCE_KIND",
     "GITHUB_PROJECT_OBSERVATION_SOURCE_KIND",
     "AuthorizedSemanticSource",
     "DEFAULT_SEMANTIC_PLAN_LIMITS",
     "EXACT_QUERY_GRAMMAR_ROLES",
+    "SEMANTIC_CLAIM_STRENGTH_BY_CLASS",
     "SEMANTIC_QUERY_CLASSES",
     "SemanticPlanLimits",
     "SemanticQueryPlan",
     "authorized_permission_scope_matches",
     "deterministic_query_class",
+    "is_ordinary_greeting",
     "repair_relation_plan_once",
     "route_semantic_query",
     "validated_authorized_semantic_source",
+    "validate_semantic_request_contract",
     "validate_semantic_query_plan",
 ]

@@ -24,6 +24,8 @@ _PUBLIC_LOCATION_KEYS = {
     "block_id",
     "cell_range",
     "end_ms",
+    "line_end",
+    "line_start",
     "message_id",
     "occurrence_id",
     "page",
@@ -261,8 +263,20 @@ def _safe_snippet(observation: Observation) -> str | None:
 
 def _safe_location(location: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
+    line_start, line_end = location.get("line_start"), location.get("line_end")
+    # Source line numbers are one-based and must be projected as a valid pair.
+    # In particular, bool is an int subclass but is not a line number.
+    valid_line_range = (
+        isinstance(line_start, int)
+        and not isinstance(line_start, bool)
+        and isinstance(line_end, int)
+        and not isinstance(line_end, bool)
+        and 1 <= line_start <= line_end
+    )
     for key, value in location.items():
         if key not in _PUBLIC_LOCATION_KEYS or not isinstance(value, (str, int, float, bool)):
+            continue
+        if key in {"line_start", "line_end"} and not valid_line_range:
             continue
         if isinstance(value, str) and _UNSAFE_TEXT.search(value):
             continue

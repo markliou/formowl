@@ -190,10 +190,30 @@ must enforce query class, workspace/scope, source bounds, graph and ontology
 revisions, allowed relations, hop limits, candidate limits, time budget,
 evidence budget, output schema, and maximum claim strength.
 
-The runtime may perform one bounded repair pass when required entity, relation,
-temporal, or evidence slots remain unresolved. It must not broaden permissions,
-sources, or claim strength. The historical exactly-one-document-call POC is not
-a methodology constraint.
+The Query Agent may perform a bounded iterative repair/requery loop when
+required entity, relation, temporal, or evidence slots remain unresolved.
+Before each call it must expand/refine and validate the tool query; after each
+result it must inspect coverage and record the phase/iteration outcome. The
+loop must not broaden permissions, sources, or claim strength, and it cannot
+rebuild the KG or index. This general plan repair must not bypass the automatic
+all-requested-fields source-recheck rule below. The historical
+exactly-one-document-call POC is not a methodology constraint.
+
+Under the 2026-10-06 rule in `SPEC.md` §7.3.1, validated `evidence_lookup`
+with a nonempty validated requested-field set and **all** fields lacking
+verified support triggers one materially different, same-authorized-scope
+bounded source recheck when existing safety/eligibility and remaining budgets
+permit, even with unrelated citations. Partial misses must be disclosed and
+must not trigger this automatic recheck. An empty field set is not vacuously
+all missing: use the existing validated
+evidence-need plan or clarify. A source-backed explicit blank counts as verified
+coverage; citation count or status alone cannot trigger recheck. Missing,
+unsealed, or unactivated retrieval projections are distinct from an independently validated
+immutable source snapshot, not independent permission to bypass §7.3.1
+eligibility; eligible fallback may start from that snapshot
+without the failed projection, preserving authorized source/hash/lineage/
+revision checks and pinned budgets. No inline rebuild is allowed. This shared
+mail and independent-document contract remains **待測**.
 
 No ranked top-k path may claim a complete set, definitive negative, or total
 count. Those claims require deterministic enumeration and coverage evidence.

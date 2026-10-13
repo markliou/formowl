@@ -4429,16 +4429,25 @@ def mcp_list_tools_request() -> dict[str, Any]:
     }
 
 
-def mcp_query_request(prompt: str) -> dict[str, Any]:
+def mcp_query_request(
+    prompt: str,
+    *,
+    table_query: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if not isinstance(prompt, str) or not prompt.strip():
         raise ContractValidationError("diagnostic prompt is required")
+    if table_query is not None and not isinstance(table_query, Mapping):
+        raise ContractValidationError("diagnostic table query is invalid")
+    arguments: dict[str, Any] = {"query_text": prompt}
+    if table_query is not None:
+        arguments["table_query"] = dict(table_query)
     return {
         "jsonrpc": "2.0",
         "id": "issue56_diagnostic_query",
         "method": "tools/call",
         "params": {
             "name": ISSUE56_DIAGNOSTIC_TOOL_NAME,
-            "arguments": {"query_text": prompt},
+            "arguments": arguments,
         },
     }
 

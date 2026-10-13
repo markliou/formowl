@@ -4,13 +4,13 @@ import argparse
 import importlib.util
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import textwrap
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import _paths  # noqa: F401
@@ -582,6 +582,127 @@ class MailHumanUatLauncherTests(unittest.TestCase):
         self.assertTrue(conversation.closed)
         self.assertTrue(server.closed)
 
+    def test_readonly_probe_accepts_both_runtime_formats_without_mutation(self) -> None:
+        engine = _load_engine_module()
+        auth_cache = json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "OPENAI_API_KEY": None,
+                "tokens": {
+                    key: "synthetic-" + key
+                    for key in ("access_token", "account_id", "id_token", "refresh_token")
+                },
+            }
+        )
+
+        def fake_login(*args, **kwargs):
+            auth = Path(kwargs["env"]["CODEX_HOME"]) / "auth.json"
+            auth.write_text(auth_cache, encoding="utf-8")
+            auth.chmod(0o600)
+            return subprocess.CompletedProcess(args[0], 0)
+
+        def snapshot(state):
+            return {
+                str(path.relative_to(state)): (
+                    path.stat().st_mode,
+                    path.stat().st_mtime_ns,
+                    path.read_bytes() if path.is_file() else None,
+                )
+                for path in (state, *state.rglob("*"))
+            }
+
+        for mode in ("shared", "device", "custom"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as root:
+                state = Path(root) / "runtime"
+                if mode == "shared":
+                    paths = engine.prepare_codex_runtime_state_from_auth_cache(
+                        state_dir=state,
+                        auth_cache=auth_cache,
+                        allow_public_web_search=False,
+                    )
+                elif mode == "device":
+                    with mock.patch.object(
+                        engine._uat_orchestrator.subprocess, "run", side_effect=fake_login
+                    ):
+                        paths = engine.prepare_codex_runtime_state_with_device_auth(
+                            state_dir=state,
+                            codex_command="codex",
+                        )
+                else:
+                    paths = engine.prepare_codex_runtime_state_for_custom_provider(
+                        state_dir=state,
+                        base_url="https://provider.example.test/v1",
+                        env_key="FORMOWL_TEST_PROVIDER_API_KEY",
+                    )
+                before = snapshot(state)
+                with (
+                    mock.patch.object(Path, "mkdir", side_effect=AssertionError("readonly mkdir")),
+                    mock.patch.object(Path, "chmod", side_effect=AssertionError("readonly chmod")),
+                ):
+                    self.assertEqual(
+                        engine._validate_codex_runtime_state_readonly(
+                            state,
+                            allow_public_web_search=False,
+                        ),
+                        paths,
+                    )
+                    with self.assertRaises(engine.ContractValidationError):
+                        engine._validate_codex_runtime_state_readonly(
+                            state,
+                            allow_public_web_search=True,
+                        )
+                self.assertEqual(snapshot(state), before)
+                config = paths.codex_home / "config.toml"
+                config.chmod(0o600)
+                config.write_text(config.read_text() + "\n# altered\n")
+                changed = snapshot(state)
+                with self.assertRaises(engine.ContractValidationError):
+                    engine._validate_codex_runtime_state_readonly(
+                        state, allow_public_web_search=False
+                    )
+                self.assertEqual(snapshot(state), changed)
+
+    def test_readonly_probe_rejects_missing_and_nonprivate_directories(self) -> None:
+        engine = _load_engine_module()
+        with tempfile.TemporaryDirectory() as root:
+            state = Path(root) / "missing"
+            with self.assertRaises(engine.ContractValidationError):
+                engine._validate_codex_runtime_state_readonly(state, allow_public_web_search=False)
+            self.assertFalse(state.exists())
+            paths = engine.prepare_codex_runtime_state_for_custom_provider(
+                state_dir=state,
+                base_url="https://provider.example.test/v1",
+                env_key="FORMOWL_TEST_PROVIDER_API_KEY",
+            )
+            paths.workspace.chmod(0o755)
+            with self.assertRaises(engine.ContractValidationError):
+                engine._validate_codex_runtime_state_readonly(state, allow_public_web_search=False)
+            self.assertEqual(paths.workspace.stat().st_mode & 0o777, 0o755)
+
+    def test_model_readiness_probe_matches_real_transport_signatures(self) -> None:
+        engine = _load_engine_module()
+        transport = mock.create_autospec(engine.CodexAppServerStdioTransport, instance=True)
+        transport.start_thread.return_value = types.SimpleNamespace(thread_id="probe-thread")
+        transport.run_turn.return_value = types.SimpleNamespace(
+            final_message=json.dumps({"readiness": engine._MODEL_READINESS_MARKER})
+        )
+        paths = types.SimpleNamespace(workspace=Path("/isolated-runtime/workspace"))
+        with mock.patch.object(
+            engine, "CodexAppServerStdioTransport", return_value=transport
+        ) as constructor:
+            engine._probe_authenticated_model_response(
+                paths=paths,
+                socket_path=Path("/isolated-runtime/probe.sock"),
+            )
+        self.assertEqual(
+            constructor.call_args.kwargs["timeout_seconds"], engine._MODEL_READINESS_TIMEOUT_SECONDS
+        )
+        self.assertIs(constructor.call_args.kwargs["allow_public_web_search"], False)
+        self.assertEqual(transport.start_thread.call_args.kwargs["dynamic_tools"], ())
+        self.assertEqual(transport.run_turn.call_args.kwargs["additional_context"], {})
+        transport.delete_thread.assert_called_once_with("probe-thread")
+        transport.close.assert_called_once_with()
+
     def test_engine_roles_bind_web_search_to_only_the_public_runtime(self) -> None:
         engine = _load_engine_module()
 
@@ -594,7 +715,9 @@ class MailHumanUatLauncherTests(unittest.TestCase):
         engine = _load_engine_module()
         state = Path("/isolated-web-state")
         socket = Path("/run/formowl/web.sock")
-        paths = types.SimpleNamespace(codex_home=Path("/isolated-web-state/codex-home"))
+        paths = types.SimpleNamespace(
+            codex_home=Path("/isolated-web-state/codex-home"), provider_env_key=None
+        )
         observed: dict[str, object] = {}
 
         class _ExecIntercepted(Exception):

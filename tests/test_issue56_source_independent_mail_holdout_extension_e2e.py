@@ -412,7 +412,7 @@ class _Fixture:
             parse_warnings=[],
             created_at="2026-08-01T00:02:00+00:00",
         )
-        bundle_payload = bundle.to_dict()
+        bundle_payload = bundle.to_persistence_dict()
         self.bundle = bundle
         self.bundle_payload = bundle_payload
         self.expected_message_count = len(messages)

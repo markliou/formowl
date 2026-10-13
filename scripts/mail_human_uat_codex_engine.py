@@ -4,14 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import inspect
 import json
 import os
-from pathlib import Path
 import stat
 import sys
 import tempfile
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOT = ROOT / "python"
@@ -27,7 +26,9 @@ from formowl_mail.human_uat_orchestrator import (  # noqa: E402
     build_codex_runtime_environment,
     build_hardened_codex_app_server_command,
     prepare_codex_runtime_state,
+    prepare_codex_runtime_state_for_custom_provider,
     prepare_codex_runtime_state_from_auth_cache,
+    prepare_codex_runtime_state_with_device_auth,
     validate_codex_runtime_state,
 )
 
@@ -47,17 +48,6 @@ _MODEL_READINESS_SCHEMA = {
     },
     "required": ["readiness"],
 }
-_CODEX_RUNTIME_MARKER = _uat_orchestrator._CODEX_RUNTIME_MARKER  # noqa: SLF001
-_CODEX_LOGIN_METHODS = _uat_orchestrator._CODEX_LOGIN_METHODS  # noqa: SLF001
-_render_hardened_codex_config = (  # noqa: SLF001
-    _uat_orchestrator._render_hardened_codex_config
-)
-_validate_private_auth_file = (  # noqa: SLF001
-    _uat_orchestrator._validate_private_auth_file
-)
-_validate_chatgpt_auth_cache = (  # noqa: SLF001
-    _uat_orchestrator._validate_chatgpt_auth_cache
-)
 
 
 def _role_allows_public_web_search(role: str) -> bool:
@@ -90,7 +80,7 @@ def main() -> int:
     parser.add_argument(
         "--runtime-role",
         choices=_RUNTIME_ROLES,
-        required=True,
+        default=_PRIVATE_PLANNER_ROLE,
         help=(
             "private-planner disables web access; public-web-grounder enables "
             "web search and must use a separate state root and socket."
@@ -107,6 +97,10 @@ def main() -> int:
         action="store_true",
         help="Read an existing Codex ChatGPT auth.json from stdin during init.",
     )
+    auth_group.add_argument("--device-auth", action="store_true")
+    auth_group.add_argument("--custom-provider", action="store_true")
+    parser.add_argument("--custom-provider-base-url")
+    parser.add_argument("--custom-provider-env-key")
     parser.add_argument(
         "--socket-path",
         type=Path,
@@ -125,11 +119,32 @@ def main() -> int:
         _require_dual_runtime_api()
         allow_public_web_search = _role_allows_public_web_search(args.runtime_role)
         if args.command == "init":
-            if args.api_key_file is None and not args.chatgpt_auth_stdin:
+            if not any(
+                (args.api_key_file, args.chatgpt_auth_stdin, args.device_auth, args.custom_provider)
+            ):
                 parser.error("init requires exactly one Codex authentication source")
             if args.socket_path is not None:
                 parser.error("init does not accept --socket-path")
-            if args.chatgpt_auth_stdin:
+            if args.custom_provider:
+                if allow_public_web_search:
+                    parser.error("custom provider runtime is private-only")
+                if not args.custom_provider_base_url or not args.custom_provider_env_key:
+                    parser.error("custom-provider init requires base URL and environment key")
+                paths = prepare_codex_runtime_state_for_custom_provider(
+                    state_dir=args.state_dir,
+                    base_url=args.custom_provider_base_url,
+                    env_key=args.custom_provider_env_key,
+                )
+            elif args.custom_provider_base_url or args.custom_provider_env_key:
+                parser.error("custom-provider metadata requires --custom-provider")
+            elif args.device_auth:
+                if allow_public_web_search:
+                    parser.error("device auth runtime is private-only")
+                paths = prepare_codex_runtime_state_with_device_auth(
+                    codex_command=args.codex_command,
+                    state_dir=args.state_dir,
+                )
+            elif args.chatgpt_auth_stdin:
                 paths = prepare_codex_runtime_state_from_auth_cache(
                     state_dir=args.state_dir,
                     auth_cache=_read_auth_cache_stdin(),
@@ -153,7 +168,16 @@ def main() -> int:
 
         if args.socket_path is None:
             parser.error(f"{args.command} requires --socket-path")
-        if args.api_key_file is not None or args.chatgpt_auth_stdin:
+        if any(
+            (
+                args.api_key_file,
+                args.chatgpt_auth_stdin,
+                args.device_auth,
+                args.custom_provider,
+                args.custom_provider_base_url,
+                args.custom_provider_env_key,
+            )
+        ):
             parser.error(f"{args.command} does not accept authentication input")
         if args.command == "probe":
             if allow_public_web_search:
@@ -178,7 +202,9 @@ def main() -> int:
             listen_url=f"unix://{socket_path}",
             allow_public_web_search=allow_public_web_search,
         )
-        environment = build_codex_runtime_environment(paths.codex_home)
+        environment = build_codex_runtime_environment(
+            paths.codex_home, provider_env_key=paths.provider_env_key
+        )
         os.execvpe(command[0], command, environment)
     except (ContractValidationError, OSError, RuntimeError, ValueError) as exc:
         parser.error(str(exc))
@@ -220,7 +246,6 @@ def _probe_authenticated_model_response(
                     "Do not use tools, MCP, files, network search, or private data."
                 ),
                 dynamic_tools=(),
-                timeout_seconds=_MODEL_READINESS_TIMEOUT_SECONDS,
             )
             thread_id = thread.thread_id
             turn = transport.run_turn(
@@ -231,7 +256,6 @@ def _probe_authenticated_model_response(
                 reasoning_effort="low",
                 client_metadata={"surface": "formowl_uat_model_readiness"},
                 tool_handler=_reject_probe_tool_call,
-                timeout_seconds=_MODEL_READINESS_TIMEOUT_SECONDS,
             )
             try:
                 payload = json.loads(turn.final_message)
@@ -243,7 +267,6 @@ def _probe_authenticated_model_response(
             if thread_id is not None:
                 transport.delete_thread(
                     thread_id,
-                    timeout_seconds=min(_MODEL_READINESS_TIMEOUT_SECONDS, 10.0),
                 )
             transport.close()
 
@@ -262,49 +285,11 @@ def _validate_codex_runtime_state_readonly(
         "Codex app-server workspace",
         require_empty=True,
     )
-    marker_path = state / _CODEX_RUNTIME_MARKER
-    config_path = home / "config.toml"
-    allowed_state_entries = {
-        home.name,
-        workspace.name,
-        marker_path.name,
-    }
-    if {entry.name for entry in state.iterdir()} != allowed_state_entries:
-        raise ContractValidationError("Codex runtime state contains unexpected data")
-    try:
-        marker = json.loads(marker_path.read_text(encoding="utf-8"))
-        config_text = config_path.read_text(encoding="utf-8")
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ContractValidationError("Codex runtime state is not provisioned") from exc
-    login_method = marker.get("login_method") if isinstance(marker, dict) else None
-    if login_method not in _CODEX_LOGIN_METHODS:
-        raise ContractValidationError("Codex runtime state integrity check failed")
-    expected_marker = {
-        "format": "formowl_uat_codex_runtime",
-        "version": 3,
-        "login_method": login_method,
-        "allow_public_web_search": allow_public_web_search,
-        "config_sha256": hashlib.sha256(config_text.encode("utf-8")).hexdigest(),
-    }
-    if marker != expected_marker or config_text != _render_hardened_codex_config(
-        home,
-        login_method=login_method,
-        allow_public_web_search=allow_public_web_search,
-    ):
-        raise ContractValidationError("Codex runtime state integrity check failed")
-    auth_path = home / "auth.json"
-    _validate_private_auth_file(auth_path)
-    if login_method == "chatgpt":
-        try:
-            auth_cache = auth_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ContractValidationError("Codex runtime state is not provisioned") from exc
-        _validate_chatgpt_auth_cache(auth_cache)
-    return CodexRuntimePaths(
-        state_dir=state,
-        codex_home=home,
+    return _uat_orchestrator._validate_codex_runtime_contents(  # noqa: SLF001
+        state=state,
+        home=home,
         workspace=workspace,
-        login_method=login_method,
+        allow_public_web_search=allow_public_web_search,
     )
 
 

@@ -251,7 +251,7 @@ class CoordinationFrameExperimentTests(unittest.TestCase):
 
         self.assertEqual(ablation["hard_gate_false_reject_count"], 2)
         self.assertEqual(ablation["soft_gate_false_reject_count"], 0)
-        self.assertEqual(ablation["soft_gate_high_confidence_negative_reject_count"], 1)
+        self.assertEqual(ablation["soft_gate_high_confidence_negative_reject_count"], 0)
         noisy_cases = {
             item["case_id"]: item
             for item in ablation["cases"]
@@ -262,8 +262,19 @@ class CoordinationFrameExperimentTests(unittest.TestCase):
             self.assertFalse(item["soft_gate_hard_rejects"])
             self.assertEqual(
                 item["soft_gate_reason"],
-                "low_confidence_core_supertype_mismatch_soft_prior",
+                "low_confidence_core_supertype_mismatch_capped_additive_no_bonus",
             )
+        high_confidence_negative = next(
+            item
+            for item in ablation["cases"]
+            if item["case_id"] == "person_vs_project_high_confidence_negative"
+        )
+        self.assertFalse(high_confidence_negative["soft_gate_hard_rejects"])
+        self.assertEqual(
+            high_confidence_negative["soft_gate_reason"],
+            "high_confidence_core_supertype_mismatch_capped_additive_no_bonus",
+        )
+        self.assertEqual(high_confidence_negative["soft_gate_score_multiplier"], 1.0)
 
     def test_redacted_effectiveness_reproduces_hard_ontology_regression(self) -> None:
         report = _runner().run_experiment()["effectiveness_regression"]
@@ -296,35 +307,68 @@ class CoordinationFrameExperimentTests(unittest.TestCase):
         arms = report["arms"]
         summary = report["summary"]
 
-        self.assertEqual(arms["kg_soft_ontology_gate"]["exact_match_rate"], 0.666667)
+        self.assertEqual(arms["kg_soft_ontology_gate"]["exact_match_rate"], 0.5)
         self.assertEqual(arms["kg_soft_ontology_gate"]["hard_gate_false_reject_count"], 0)
-        self.assertEqual(summary["soft_gate_delta_vs_hard_ontology"], 0.5)
+        self.assertEqual(summary["soft_gate_delta_vs_hard_ontology"], 0.333333)
         self.assertTrue(summary["soft_gate_reduces_hard_false_rejects"])
         self.assertEqual(arms["coordination_frame_v2_redacted"]["exact_match_rate"], 1.0)
-        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["exact_match_rate"], 1.0)
+        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["exact_match_rate"], 0.833333)
         self.assertEqual(summary["v2_delta_vs_hard_ontology"], 0.833333)
-        self.assertEqual(summary["hybrid_delta_vs_kg_without_ontology"], 0.333333)
+        self.assertEqual(summary["hybrid_delta_vs_kg_without_ontology"], 0.166666)
         self.assertTrue(summary["v2_effective_on_redacted_replay"])
         self.assertTrue(summary["hybrid_improves_over_hard_and_kg_without_ontology"])
 
-    def test_redacted_effectiveness_scores_false_positive_guard(self) -> None:
+    def test_redacted_effectiveness_reports_soft_false_positive_without_pruning(self) -> None:
         report = _runner().run_experiment()["effectiveness_regression"]
+        arms = report["arms"]
 
-        self.assertEqual(report["arms"]["kg_without_ontology"]["false_positive_count"], 1)
-        for arm in (
-            "kg_hard_ontology",
-            "kg_soft_ontology_gate",
-            "coordination_frame_v2_redacted",
-            "hybrid_soft_gate_v2_frame",
-        ):
-            self.assertEqual(report["arms"][arm]["false_positive_count"], 0)
+        self.assertEqual(
+            {arm: arms[arm]["false_positive_count"] for arm in (
+                "kg_without_ontology",
+                "kg_hard_ontology",
+                "kg_soft_ontology_gate",
+                "coordination_frame_v2_redacted",
+                "hybrid_soft_gate_v2_frame",
+            )},
+            {
+                "kg_without_ontology": 1,
+                "kg_hard_ontology": 0,
+                "kg_soft_ontology_gate": 1,
+                "coordination_frame_v2_redacted": 0,
+                "hybrid_soft_gate_v2_frame": 1,
+            },
+        )
+        case_id = "redacted_high_confidence_negative"
         hard_negative = next(
             item
-            for item in report["arms"]["kg_hard_ontology"]["case_results"]
-            if item["case_id"] == "redacted_high_confidence_negative"
+            for item in arms["kg_hard_ontology"]["case_results"]
+            if item["case_id"] == case_id
         )
         self.assertEqual(hard_negative["status"], "correct_no_answer")
         self.assertEqual(hard_negative["missing_reason"], "hard_gate_reject")
+
+        soft_negative = next(
+            item
+            for item in arms["kg_soft_ontology_gate"]["case_results"]
+            if item["case_id"] == case_id
+        )
+        self.assertEqual(soft_negative["status"], "false_positive")
+        self.assertFalse(soft_negative["gate_decision"]["compatible"])
+        self.assertFalse(soft_negative["gate_decision"]["hard_reject"])
+        self.assertEqual(soft_negative["gate_decision"]["score_multiplier"], 1.0)
+        self.assertEqual(soft_negative["gate_decision"]["additive_score_adjustment"], 0.0)
+        self.assertEqual(
+            soft_negative["gate_decision"]["reason"],
+            "high_confidence_core_supertype_mismatch_capped_additive_no_bonus",
+        )
+
+        hybrid_negative = next(
+            item
+            for item in arms["hybrid_soft_gate_v2_frame"]["case_results"]
+            if item["case_id"] == case_id
+        )
+        self.assertEqual(hybrid_negative["status"], "false_positive")
+        self.assertFalse(hybrid_negative["gate_decision"]["hard_reject"])
 
     def test_ablation_versions_keep_original_fixture_and_new_100_case_challenge(
         self,
@@ -390,20 +434,24 @@ class CoordinationFrameExperimentTests(unittest.TestCase):
         self.assertEqual(challenge["positive_case_count"], 85)
         self.assertTrue(summary["hard_ontology_regression_reproduced"])
         self.assertEqual(summary["hard_ontology_delta_vs_kg_without_ontology"], -0.24)
-        self.assertEqual(summary["soft_gate_delta_vs_hard_ontology"], 0.52)
+        self.assertEqual(summary["soft_gate_delta_vs_hard_ontology"], 0.41)
         self.assertEqual(summary["v2_delta_vs_hard_ontology"], 0.6)
-        self.assertEqual(summary["hybrid_delta_vs_kg_without_ontology"], 0.44)
-        self.assertEqual(summary["best_arm_by_exact_match"], "hybrid_soft_gate_v2_frame")
+        self.assertEqual(summary["hybrid_delta_vs_kg_without_ontology"], 0.34)
+        self.assertEqual(
+            summary["best_arm_by_exact_match"], "coordination_frame_v2_redacted"
+        )
 
         self.assertEqual(arms["kg_without_ontology"]["exact_match_rate"], 0.46)
         self.assertEqual(arms["kg_without_ontology"]["false_positive_count"], 11)
         self.assertEqual(arms["kg_hard_ontology"]["exact_match_rate"], 0.22)
         self.assertEqual(arms["kg_hard_ontology"]["hard_gate_false_reject_count"], 30)
-        self.assertEqual(arms["kg_soft_ontology_gate"]["exact_match_rate"], 0.74)
+        self.assertEqual(arms["kg_soft_ontology_gate"]["exact_match_rate"], 0.63)
+        self.assertEqual(arms["kg_soft_ontology_gate"]["false_positive_count"], 11)
         self.assertEqual(arms["kg_soft_ontology_gate"]["hard_gate_false_reject_count"], 0)
         self.assertEqual(arms["coordination_frame_v2_redacted"]["exact_match_rate"], 0.82)
-        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["exact_match_rate"], 0.9)
-        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["slot_value_f1"], 0.981133)
+        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["exact_match_rate"], 0.8)
+        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["slot_value_f1"], 0.94859)
+        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["false_positive_count"], 11)
 
     def test_redacted_stress_benchmark_10000_distribution_and_metrics(self) -> None:
         stress = _runner().run_experiment()["redacted_stress_benchmark_10000"]
@@ -442,22 +490,25 @@ class CoordinationFrameExperimentTests(unittest.TestCase):
 
         self.assertTrue(summary["hard_ontology_regression_reproduced"])
         self.assertEqual(summary["hard_ontology_delta_vs_kg_without_ontology"], -0.24)
-        self.assertEqual(summary["soft_gate_delta_vs_hard_ontology"], 0.52)
+        self.assertEqual(summary["soft_gate_delta_vs_hard_ontology"], 0.41)
         self.assertEqual(summary["v2_delta_vs_hard_ontology"], 0.6)
-        self.assertEqual(summary["hybrid_delta_vs_kg_without_ontology"], 0.44)
-        self.assertEqual(summary["best_arm_by_exact_match"], "hybrid_soft_gate_v2_frame")
+        self.assertEqual(summary["hybrid_delta_vs_kg_without_ontology"], 0.34)
+        self.assertEqual(
+            summary["best_arm_by_exact_match"], "coordination_frame_v2_redacted"
+        )
 
         self.assertEqual(arms["kg_without_ontology"]["exact_match_rate"], 0.46)
         self.assertEqual(arms["kg_without_ontology"]["false_positive_count"], 1100)
         self.assertEqual(arms["kg_hard_ontology"]["exact_match_rate"], 0.22)
         self.assertEqual(arms["kg_hard_ontology"]["hard_gate_false_reject_count"], 3000)
-        self.assertEqual(arms["kg_soft_ontology_gate"]["exact_match_rate"], 0.74)
+        self.assertEqual(arms["kg_soft_ontology_gate"]["exact_match_rate"], 0.63)
+        self.assertEqual(arms["kg_soft_ontology_gate"]["false_positive_count"], 1100)
         self.assertEqual(arms["kg_soft_ontology_gate"]["hard_gate_false_reject_count"], 0)
         self.assertEqual(arms["coordination_frame_v2_redacted"]["exact_match_rate"], 0.82)
         self.assertEqual(arms["coordination_frame_v2_redacted"]["false_positive_count"], 100)
-        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["exact_match_rate"], 0.9)
-        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["slot_value_f1"], 0.981133)
-        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["false_positive_count"], 100)
+        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["exact_match_rate"], 0.8)
+        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["slot_value_f1"], 0.94859)
+        self.assertEqual(arms["hybrid_soft_gate_v2_frame"]["false_positive_count"], 1100)
 
     def test_redacted_stress_benchmark_rejects_malformed_seed_challenge(self) -> None:
         default_challenge = RUNNER_PATH.parent / "fixtures" / "challenge_redacted_100_cases.json"

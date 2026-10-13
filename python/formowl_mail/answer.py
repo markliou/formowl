@@ -53,7 +53,9 @@ def _candidate_table_session_binding(session: AuthorizedSemanticMailSession) -> 
 
 @dataclass(frozen=True)
 class _CandidateTableLookup:
-    profile_fingerprint: str; ledger_fingerprint: str; lookup_fingerprint: str
+    profile_fingerprint: str
+    ledger_fingerprint: str
+    lookup_fingerprint: str
     _authorized_session_binding_fingerprint: str = field(repr=False)
     header_labels: frozenset[str]
     matches: Mapping[tuple[str, str], tuple[Mapping[str, Any], ...]] = field(repr=False)
@@ -61,8 +63,10 @@ class _CandidateTableLookup:
 
 @dataclass(frozen=True)
 class _CandidateTableInterpretation:
-    query_hash: str; lookup_fingerprint: str
-    header: str; value: str
+    query_hash: str
+    lookup_fingerprint: str
+    header: str
+    value: str
     governed_citations: tuple[tuple[str, str, str], ...]
     result_fingerprint: str
     status: str = field(default="candidate_interpretation", init=False)
@@ -83,13 +87,15 @@ class _CandidateTableInterpretation:
             "exact_result": self.exact_result,
             "result_fingerprint": self.result_fingerprint,
         }
-        assert_public_payload_safe(payload, "candidate_table_interpretation"); return payload
+        assert_public_payload_safe(payload, "candidate_table_interpretation")
+        return payload
 def build_authorized_candidate_table_lookup(*, session: AuthorizedSemanticMailSession,
                                             ledger: Mapping[str, Any]) -> _CandidateTableLookup:
     if not isinstance(session, AuthorizedSemanticMailSession) or not isinstance(ledger, Mapping):
         raise ContractValidationError("candidate table lookup input is invalid")
     profile = session.index._runtime_components.tokenizer_profile
-    ledger_fingerprint = ledger.get("ledger_fingerprint"); tables = ledger.get("tables")
+    ledger_fingerprint = ledger.get("ledger_fingerprint")
+    tables = ledger.get("tables")
     payload = {key: value for key, value in ledger.items() if key != "ledger_fingerprint"}
     if (profile.profile_fingerprint != session.index.profile_fingerprint
             or ledger.get("structure_status") != "candidate_only"
@@ -126,7 +132,8 @@ def build_authorized_candidate_table_lookup(*, session: AuthorizedSemanticMailSe
             raise ContractValidationError("candidate table binding is invalid")
         return observation
     matches: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
-    ambiguous: set[tuple[str, str]] = set(); header_labels: set[str] = set()
+    ambiguous: set[tuple[str, str]] = set()
+    header_labels: set[str] = set()
     for table in tables:
         if not isinstance(table, Mapping):
             raise ContractValidationError("candidate table is invalid")
@@ -149,7 +156,8 @@ def build_authorized_candidate_table_lookup(*, session: AuthorizedSemanticMailSe
             label = header.text.strip()
             if not label:
                 raise ContractValidationError("candidate table header is invalid")
-            headers.append((label, reference)); header_labels.add(label)
+            headers.append((label, reference))
+            header_labels.add(label)
         for row_reference in rows[1:]:
             if not isinstance(row_reference, Mapping):
                 raise ContractValidationError("candidate table row is invalid")
@@ -169,7 +177,8 @@ def build_authorized_candidate_table_lookup(*, session: AuthorizedSemanticMailSe
                 for identifier, identifier_cells in identifiers.items():
                     key = (identifier, header)
                     if len(identifier_cells) != 1 or len(projections) != 1:
-                        ambiguous.add(key); continue
+                        ambiguous.add(key)
+                        continue
                     value = projections[0][1].text.strip()
                     if not value:
                         continue
@@ -226,7 +235,8 @@ def interpret_authorized_candidate_table_query(*, session: AuthorizedSemanticMai
     selected = lookup.matches.get(key, ())
     if key in lookup.ambiguous_keys or len(selected) != 1:
         return None
-    match = selected[0]; citations = match["governed_citations"]
+    match = selected[0]
+    citations = match["governed_citations"]
     if len(citations) != 4:
         raise ContractValidationError("candidate table citation binding is invalid")
     query_hash = sha256_json(query_text)
@@ -241,7 +251,8 @@ def interpret_authorized_candidate_table_query(*, session: AuthorizedSemanticMai
         query_hash=query_hash, lookup_fingerprint=lookup.lookup_fingerprint, header=match["header"],
         value=match["value"], governed_citations=citations,
         result_fingerprint=sha256_json(binding))
-    result.to_safe_dict(); return result
+    result.to_safe_dict()
+    return result
 
 @dataclass(frozen=True)
 class EvidenceAnswerBudget:

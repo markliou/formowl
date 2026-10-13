@@ -36,6 +36,7 @@ from formowl_core import (  # noqa: E402
     issue56_target_dense_embedding_profile,
     load_issue56_target_mail_tokenizer_profile,
 )
+from formowl_ingestion.storage.records import ObservationStore  # noqa: E402
 from formowl_mail import (  # noqa: E402
     EmailBodySegment,
     EmailMessage,
@@ -3734,18 +3735,18 @@ class _LazyObservationSubset(Mapping[str, Sequence[Observation]]):
 
     def _load(self) -> tuple[Observation, ...]:
         observations: list[Observation] = []
+        observation_store = ObservationStore(
+            self._observations_directory.parent.parent, create_directory=False,
+        )
         for observation_id in self._selected_observation_ids:
             try:
-                payload = json.loads(
-                    (self._observations_directory / f"{observation_id}.json").read_text(
-                        encoding="utf-8"
-                    )
-                )
-            except (OSError, json.JSONDecodeError) as exc:
+                observation = observation_store.get(observation_id)
+            except (OSError, ValueError) as exc:
                 raise ContractValidationError(
                     "preserved Observation subset is unavailable"
                 ) from exc
-            observation = Observation.from_dict(payload)
+            if observation is None:
+                raise ContractValidationError("preserved Observation subset is unavailable")
             expected = self._expected_segments[observation_id]
             if (
                 observation.observation_id != observation_id
@@ -4247,10 +4248,10 @@ def _validate_native_mail_evidence_bundle_artifact(
     if artifact["bundle_fingerprint"] != sha256_json(bundle_payload):
         raise ContractValidationError("retrieval-ready mail evidence bundle fingerprint mismatch")
     try:
-        bundle = MailEvidenceBundle.from_dict(bundle_payload)
+        bundle = MailEvidenceBundle.from_persistence_dict(bundle_payload)
     except (ContractValidationError, KeyError, TypeError, ValueError) as exc:
         raise ContractValidationError("retrieval-ready mail evidence bundle is invalid") from exc
-    if bundle.to_dict() != bundle_payload:
+    if bundle.to_persistence_dict() != bundle_payload:
         raise ContractValidationError("retrieval-ready mail evidence bundle round trip mismatch")
     return bundle_payload
 

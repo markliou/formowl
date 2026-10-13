@@ -258,7 +258,9 @@ def materialize_development_uat_observations(
 
     staging = _create_staging_directory(resolved_work_dir)
     try:
-        observation_store = ObservationStore(staging / "data")
+        # This bounded sealed export has an established flat on-disk contract;
+        # ordinary ingestion retains the store's sharded default.
+        observation_store = ObservationStore(staging / "data", write_layout="flat")
         for observation_id in selected_ids:
             observation_store.create(observation_by_id[observation_id])
         records = _validated_staged_record_inventory(
@@ -957,12 +959,25 @@ def _validated_staged_record_inventory(
     observation_by_id: Mapping[str, Observation],
 ) -> list[dict[str, str]]:
     observations_directory = staging / OBSERVATION_RELATIVE_DIRECTORY
-    actual_paths = sorted(observations_directory.glob("*.json"))
+    actual_paths = sorted(observations_directory.rglob("*.json"))
     if len(actual_paths) != EXPECTED_MATERIALIZED_OBSERVATION_COUNT:
         raise DevelopmentObservationMaterializationError("staged_observation_record_count_invalid")
+    # The store owns layout/duplicate validation; retain actual file bytes for
+    # the existing seal and mode checks, rather than reserializing records.
+    try:
+        stored = ObservationStore(staging / "data", create_directory=False).list()
+    except (OSError, ValueError) as exc:
+        raise DevelopmentObservationMaterializationError("staged_observation_record_invalid") from exc
+    paths_by_id = {path.stem: path for path in actual_paths}
+    if (
+        set(paths_by_id) != set(selected_ids)
+        or {item.observation_id for item in stored} != set(selected_ids)
+        or len(stored) != len(actual_paths)
+    ):
+        raise DevelopmentObservationMaterializationError("staged_observation_record_invalid")
     records: list[dict[str, str]] = []
     for observation_id in selected_ids:
-        path = observations_directory / f"{observation_id}.json"
+        path = paths_by_id[observation_id]
         try:
             metadata = path.lstat()
             raw = path.read_bytes()

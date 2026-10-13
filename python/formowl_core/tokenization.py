@@ -1,9 +1,5 @@
 """Frozen mail candidate-admission tokenizer profiles.
 
-
-# Reconciliation imports from Track 1
-from typing import Any
-
 The process default remains the explicitly limited ASCII diagnostic unless an
 older environment-supplied experiment is configured.  Issue #56 uses a
 separate fail-closed loader for one tracked, packaged Jieba plus SentencePiece
@@ -416,9 +412,7 @@ class MailCandidateAdmissionTokenizerProfile:
         ):
             raise RuntimeError("frozen tokenizer query grounding is unavailable")
         covered_offsets = {
-            offset
-            for term in ordered_terms
-            for offset in range(term.start, term.end)
+            offset for term in ordered_terms for offset in range(term.start, term.end)
         }
         if any(
             offset not in covered_offsets and not _query_grounding_omits(character)
@@ -697,6 +691,12 @@ def configured_mail_tokenizer_id() -> str:
     """Return the identifier for a newly validated configured profile."""
 
     return build_mail_candidate_admission_tokenizer_profile().tokenizer_id
+
+
+def validate_configured_mail_tokenizer() -> str:
+    """Validate the immutable runtime profile without selecting a legacy fallback."""
+
+    return configured_mail_tokenizer_id()
 
 
 def configured_mail_candidate_admission_tokens(value: str) -> set[str]:
@@ -1183,6 +1183,7 @@ DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE = (
 
 
 __all__ = [
+    "validate_configured_mail_tokenizer",
     "ASCII_IDENTIFIER_REGEX_TOKENIZER_ID",
     "DEFAULT_MAIL_CANDIDATE_ADMISSION_TOKENIZER_PROFILE",
     "ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT",
@@ -1203,34 +1204,3 @@ __all__ = [
     "load_default_mail_candidate_admission_tokenizer_profile",
     "load_issue56_target_mail_tokenizer_profile",
 ]
-
-
-# Reconciled top-level API from Track 1
-
-_TOKENIZER_MODE_ENV = "FORMOWL_MAIL_TOKENIZER_MODE"
-
-_FROZEN_MODE = "jieba_sentencepiece_frozen"
-
-_LEGACY_ASCII_TEST_MODE = "legacy_ascii_test"
-
-_ASCII_TOKEN = re.compile(r"[a-zA-Z0-9_@.-]+")
-
-def validate_configured_mail_tokenizer() -> str:
-    """Fail closed unless the selected tokenizer profile is fully usable."""
-
-    return configured_mail_tokenizer_id()
-
-def _configured_tokenizer_mode() -> str:
-    raw_mode = os.environ.get(_TOKENIZER_MODE_ENV, _FROZEN_MODE)
-    if not isinstance(raw_mode, str):
-        raise RuntimeError("mail tokenizer mode is invalid")
-    mode = raw_mode.strip()
-    if mode not in {_FROZEN_MODE, _LEGACY_ASCII_TEST_MODE}:
-        raise RuntimeError("mail tokenizer mode is invalid")
-    return mode
-
-@lru_cache(maxsize=1)
-
-def _configured_sentencepiece_processor(
-    model_path: str | None,
-    expected_sha256: str | None,

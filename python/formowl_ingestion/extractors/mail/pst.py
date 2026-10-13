@@ -1,26 +1,6 @@
 from __future__ import annotations
 
 
-# Reconciliation imports from Track 2
-from dataclasses import dataclass, field
-from email.utils import parsedate_to_datetime
-import json
-import time
-from formowl_contract import (
-    Observation,
-    SourceRef,
-    SourceInventory,
-    SourceInventoryItem,
-    SourceInventoryProcessingState,
-    SourceInventoryRawRetentionState,
-    assert_no_public_raw_references,
-    now_iso,
-    sha256_json,
-    stable_observation_id,
-    stable_resource_contract_hash,
-    stable_resource_contract_id,
-)
-
 from dataclasses import dataclass, field, replace
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import base64
@@ -28,10 +8,14 @@ import binascii
 from datetime import datetime, timedelta, timezone
 from email import policy
 from email.message import EmailMessage
-from email.parser import BytesParser
+from email.parser import BytesHeaderParser, BytesParser
+from email.utils import parsedate_to_datetime
 import hashlib
 from html.parser import HTMLParser
 import io
+import json
+import mimetypes
+import time
 import os
 from pathlib import Path
 import re
@@ -50,6 +34,9 @@ from xml.etree import ElementTree as ET
 from formowl_contract import (
     ContractValidationError,
     Observation,
+    SourceRef,
+    SourceInventoryProcessingState,
+    SourceInventoryRawRetentionState,
     SourceInventory,
     SourceInventoryItem,
     StructuralCell,
@@ -57,14 +44,19 @@ from formowl_contract import (
     StructuralObservation,
     StructuralRow,
     assert_no_public_raw_references,
+    redact_public_raw_references,
     now_iso,
     sha256_json,
     stable_observation_id,
+    stable_resource_contract_hash,
     stable_resource_contract_id,
     to_plain,
 )
 
-from ...extraction import ExtractionInput, ExtractionResult
+from ...extraction import (
+    AttachmentMaterializationContext, ExtractionInput, ExtractionResult,
+    extraction_config_hash,
+)
 from .fixture import _normalize_subject
 
 _PST_MIME_TYPES = [
@@ -74,6 +66,12 @@ _PST_MIME_TYPES = [
     "application/x-pst",
 ]
 _PST_HEADER = b"!BDN"
+_ATTACHMENT_MIME_TYPES_BY_SUFFIX = {
+    ".xls": "application/vnd.ms-excel",
+    ".xlsb": "application/vnd.ms-excel.sheet.binary.macroenabled.12",
+    ".xlsm": "application/vnd.ms-excel.sheet.macroenabled.12",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
 _PST_MESSAGE_LIMIT_FAILURE_CODE = "pst_parser_message_limit_reached"
 _PST_EXPORT_SYMLINK_FAILURE_CODE = "pst_export_symlink_unsupported"
 _PST_EXPORT_PATH_ESCAPE_FAILURE_CODE = "pst_export_path_escape"
@@ -205,6 +203,8 @@ class _ParsedAttachment:
     source_char_count: int | None = None
     stored_char_count: int = 0
 
+    content_bytes: bytes | None = field(default=None, repr=False, compare=False)
+
 
 @dataclass(frozen=True)
 class _AttachmentClassification:
@@ -239,6 +239,10 @@ class _ParsedBodySegment:
     content_publicly_unsafe: bool = False
     segment_index: int = 0
 
+    mime_ordinal: int | None = None
+    parent_mime_ordinal: int | None = None
+    content_type: str | None = None
+
 
 @dataclass(frozen=True)
 class _BodyLeafClassification:
@@ -246,6 +250,9 @@ class _BodyLeafClassification:
     processing_state: str
     text: str | None
     failure_code: str | None = None
+
+    mime_ordinal: int = 0
+    parent_mime_ordinal: int = 0
 
 
 @dataclass(frozen=True)
@@ -488,6 +495,10 @@ class _ParsedMessage:
     embedded_attachment_ordinal: int | None = None
     source_local_key: str | None = None
     raw_message: EmailMessage | None = field(default=None, repr=False, compare=False)
+
+    source_content_hash: str | None = None
+    html_tables: list[dict[str, Any]] = field(default_factory=list, repr=False, compare=False)
+    body_segment_locations: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _attachment_is_unresolved(attachment: _ParsedAttachment) -> bool:
@@ -1259,17 +1270,27 @@ class PstMailArchiveExtractor:
     def __init__(
         self,
         *,
-        version: str = "0.2.0",
+        version: str = "0.2.2",
         parser_command: str = "readpst",
         runner: _ParserRunner | None = None,
         scratch_parent: str | Path | None = None,
         traversal_provider: _TraversalProvider | None = None,
+        existing_export_root: str | Path | None = None,
+        native_message_exports: Sequence[NativePstMessageExport] | None = None,
+        native_source_inventory: SourceInventory | None = None,
+        native_manifest_fingerprint: str | None = None,
     ) -> None:
         self._version = version
         self._parser_command = parser_command
         self._runner = runner or _run_parser_command
         self._scratch_parent = Path(scratch_parent) if scratch_parent is not None else None
         self._traversal_provider = traversal_provider or _snapshot_export_tree
+        self._existing_export_root = Path(existing_export_root) if existing_export_root is not None else None
+        self._native_message_exports = native_message_exports
+        self._native_source_inventory = native_source_inventory
+        self._native_manifest_fingerprint = native_manifest_fingerprint
+        if existing_export_root is not None and native_message_exports is not None:
+            raise ValueError("pst_export_modes_mutually_exclusive")
 
     def name(self) -> str:
         return "pst_mail_archive_extractor"
@@ -1304,43 +1325,76 @@ class PstMailArchiveExtractor:
                 errors=["pst_parser_input_signature_mismatch"],
             )
 
-        scratch_path = _create_scratch_dir(self._scratch_parent)
-        try:
-            command = _readpst_command(
-                self._parser_command,
-                extraction_input.object_path,
-                scratch_path,
-                include_deleted_items=config.include_deleted_items,
+        if self._native_message_exports is not None:
+            if (self._native_source_inventory is None or not self._native_manifest_fingerprint
+                or extraction_input.config.get("native_manifest_fingerprint") != self._native_manifest_fingerprint):
+                return _pst_result_with_inventory(extraction_input, parser_fingerprint=parser_fingerprint,
+                    processing_state="failed", errors=["pst_native_manifest_binding_invalid"])
+            native = parse_native_pst_message_exports(
+                self._native_message_exports, source_inventory=self._native_source_inventory,
+                source_asset_id=extraction_input.asset.asset_id,
+                source_asset_sha256=extraction_input.asset.content_hash,
+                extractor_run_id=extraction_input.extractor_run_id,
+                permission_scope=extraction_input.asset.permission_scope,
+                provenance_fingerprint=sha256_json({"native_manifest_fingerprint": self._native_manifest_fingerprint,
+                                                       "config": extraction_input.config}),
+                created_at=extraction_input.created_at,
+                body_segment_max_chars=config.body_segment_max_chars,
+                max_body_segments_per_message=config.max_body_segments_per_message,
+                max_message_file_bytes=config.max_message_file_bytes,
+                attachment_materialization=extraction_input.attachment_materialization,
             )
-            try:
-                completed = self._runner(command, config.timeout_seconds)
-            except FileNotFoundError:
-                return _pst_result_with_inventory(
-                    extraction_input,
-                    parser_fingerprint=parser_fingerprint,
-                    processing_state="failed",
-                    errors=["pst_parser_unavailable"],
-                )
-            except subprocess.TimeoutExpired:
-                return _pst_result_with_partial_inventory(
+            # Descriptor-manifest evidence is distinct from a readpst traversal capability.
+            return ExtractionResult(observations=list(native.observations), warnings=[
+                warning for warning, count in native.warning_counts.items() for _ in range(count)
+            ] + ["pst_native_export_source_coverage_incomplete"])
+        if self._existing_export_root is not None:
+            marker = _bound_existing_export_marker(self._existing_export_root,
+                source_fingerprint=extraction_input.asset.content_hash,
+                marker_fingerprint=extraction_input.config.get("existing_export_binding_fingerprint"))
+            if marker is None:
+                return _pst_result_with_inventory(extraction_input, parser_fingerprint=parser_fingerprint,
+                    processing_state="failed", errors=["pst_existing_export_binding_invalid"])
+            parser_fingerprint = sha256_json({"parser": parser_fingerprint,
+                "existing_export_binding_fingerprint": sha256_json(marker)})
+        scratch_path = self._existing_export_root or _create_scratch_dir(self._scratch_parent)
+        try:
+            if self._existing_export_root is None:
+                command = _readpst_command(
+                    self._parser_command,
+                    extraction_input.object_path,
                     scratch_path,
-                    extraction_input,
-                    parser_fingerprint=parser_fingerprint,
-                    processing_state="failed",
-                    config=config,
-                    errors=["pst_parser_timeout"],
-                    traversal_provider=self._traversal_provider,
+                    include_deleted_items=config.include_deleted_items,
                 )
-            if completed.returncode != 0:
-                return _pst_result_with_partial_inventory(
-                    scratch_path,
-                    extraction_input,
-                    parser_fingerprint=parser_fingerprint,
-                    processing_state="failed",
-                    config=config,
-                    errors=["pst_parser_failed"],
-                    traversal_provider=self._traversal_provider,
-                )
+                try:
+                    completed = self._runner(command, config.timeout_seconds)
+                except FileNotFoundError:
+                    return _pst_result_with_inventory(
+                        extraction_input,
+                        parser_fingerprint=parser_fingerprint,
+                        processing_state="failed",
+                        errors=["pst_parser_unavailable"],
+                    )
+                except subprocess.TimeoutExpired:
+                    return _pst_result_with_partial_inventory(
+                        scratch_path,
+                        extraction_input,
+                        parser_fingerprint=parser_fingerprint,
+                        processing_state="failed",
+                        config=config,
+                        errors=["pst_parser_timeout"],
+                        traversal_provider=self._traversal_provider,
+                    )
+                if completed.returncode != 0:
+                    return _pst_result_with_partial_inventory(
+                        scratch_path,
+                        extraction_input,
+                        parser_fingerprint=parser_fingerprint,
+                        processing_state="failed",
+                        config=config,
+                        errors=["pst_parser_failed"],
+                        traversal_provider=self._traversal_provider,
+                    )
 
             traversal = _safe_traversal_snapshot(
                 self._traversal_provider,
@@ -1389,7 +1443,8 @@ class PstMailArchiveExtractor:
                 lookup_context=lookup_context,
             )
         finally:
-            shutil.rmtree(scratch_path, ignore_errors=True)
+            if self._existing_export_root is None:
+                shutil.rmtree(scratch_path, ignore_errors=True)
 
         if not parsed_messages:
             return _pst_result(
@@ -1410,6 +1465,8 @@ class PstMailArchiveExtractor:
             source_inventory=source_inventory,
         )
         warnings = list(parse_warnings)
+        if self._existing_export_root is not None:
+            _append_warning_once(warnings, "pst_existing_export_source_coverage_incomplete")
         if _message_limit_reached(source_unit_classifications):
             _append_warning_once(warnings, _PST_MESSAGE_LIMIT_FAILURE_CODE)
         return _pst_result(
@@ -1423,6 +1480,7 @@ class PstMailArchiveExtractor:
                 build_errors,
             ),
         )
+
 
 
 def extract_selected_readpst_export(
@@ -4402,7 +4460,7 @@ def _source_unit_kind_for_path(candidate: Path) -> str:
 
 
 def _readpst_sidecar_mime_type(name: bytes) -> str:
-    """Infer only the closed text formats supported for readpst sidecars."""
+    """Infer a bounded native MIME hint; only text formats decode inline."""
 
     try:
         decoded = name.decode("utf-8", "strict")
@@ -4415,7 +4473,7 @@ def _readpst_sidecar_mime_type(name: bytes) -> str:
         return "text/plain"
     if suffix == "eml":
         return "message/rfc822"
-    return "application/octet-stream"
+    return _ATTACHMENT_MIME_TYPES_BY_SUFFIX.get("." + suffix, "application/octet-stream")
 
 
 def _readpst_sidecar_name_fingerprint(name: bytes) -> str:
@@ -5850,6 +5908,7 @@ class _PstTableParser(HTMLParser):
         self._quote_stack: list[int] = []
         self._quote_ordinal = 0
         self._table_ordinal = 0
+        self._unclosed_marked_section = False
 
     def _flush_cell(self) -> None:
         if self._cell is not None and self._row is not None:
@@ -5864,7 +5923,7 @@ class _PstTableParser(HTMLParser):
 
     def _flush_table(self) -> None:
         self._flush_row()
-        if self._table is not None:
+        if self._table is not None and not self._table.get("invalid", False):
             table = _finalize_html_table(self._table)
             self.tables.append(table)
             if self._table_event is not None:
@@ -5895,6 +5954,7 @@ class _PstTableParser(HTMLParser):
                 "rows": [],
                 "quoted_depth": self._quote_depth,
                 "attributes": attributes,
+                "invalid": self._unclosed_marked_section,
             }
             self._table_event = {
                 "kind": "html_table",
@@ -5938,6 +5998,25 @@ class _PstTableParser(HTMLParser):
         self._flush_table()
 
 
+    def parse_marked_section(self, i: int, report: int = 1) -> int:
+        try:
+            return super().parse_marked_section(i, report)
+        except AssertionError as error:
+            message = str(error)
+            if not (message.startswith("unknown status keyword ") and message.endswith(" in marked section")):
+                raise
+        if self._table is not None:
+            self._table["invalid"] = True
+        end = self.rawdata.find("]>", i + 3)
+        self._unclosed_marked_section = end < 0
+        if end < 0:
+            return -1
+        if report:
+            self.handle_data(self.rawdata[i:end+2])
+        return end + 2
+
+
+
 def _html_span(value: str | None) -> int:
     try:
         result = int(value or "1")
@@ -5957,7 +6036,8 @@ def _extract_html_structure_events(value: str) -> list[dict[str, Any]]:
     parser = _PstTableParser()
     parser.feed(value)
     parser.close()
-    return parser.structure_events
+    return [event for event in parser.structure_events if event["kind"] != "html_table" or event["table"] is not None]
+
 
 
 def extract_xlsx_mime_attachment_tables(
@@ -7090,7 +7170,7 @@ def rehydrate_pst_observation_stream(
             raise ContractValidationError("PST observation is invalid")
         if observation.observation_type in _PST_ORDINARY_OBSERVATION_TYPES and any(
             field_name in raw_payload
-            for field_name in ("evidence_snapshot_id", "caption", "extracted_value")
+            for field_name in ("evidence_snapshot_id", "caption")
         ):
             raise ContractValidationError("PST ordinary observation envelope is not canonical")
         _pst_canonical_confidence(raw_payload.get("confidence"))
@@ -7101,7 +7181,8 @@ def rehydrate_pst_observation_stream(
         if (
             observation.asset_id != asset_id
             or observation.extractor_run_id != extractor_run_id
-            or observation.modality != PST_INVENTORY_CARRIER_MODALITY
+            or observation.modality != ("document" if observation.observation_type in {"table_row", "table_cell"}
+                                        else PST_INVENTORY_CARRIER_MODALITY)
             or _permission_scope_payload(observation.permission_scope) != expected_scope
         ):
             raise ContractValidationError("PST observation provenance does not match extraction")
@@ -7109,6 +7190,7 @@ def rehydrate_pst_observation_stream(
             *_PST_ORDINARY_OBSERVATION_TYPES,
             PST_INVENTORY_CARRIER_OBSERVATION_TYPE,
             PST_SOURCE_UNIT_OBSERVATION_TYPE,
+            "table_row", "table_cell",
         }:
             raise ContractValidationError("PST observation type is outside the closed stream")
         if not isinstance(observation.location, Mapping) or not isinstance(
@@ -7137,7 +7219,9 @@ def rehydrate_pst_observation_stream(
         # public-payload guard here would reject legitimate private table cell
         # values before the only authorized public projections can redact them.
         if observation.observation_type != PST_INVENTORY_CARRIER_OBSERVATION_TYPE:
-            assert_no_public_raw_references(payload, "pst_observation_stream")
+            public_payload = dict(payload)
+            public_payload.pop("extracted_value", None)
+            assert_no_public_raw_references(public_payload, "pst_observation_stream")
         normalized.append(observation)
 
     if set(normalized_observation.observation_id for normalized_observation in normalized) != set(
@@ -7184,8 +7268,11 @@ def rehydrate_pst_observation_stream(
         structural_observations=structural,
         expected_traversal_binding=expected_traversal_binding,
     )
+    _pst_validate_inline_projection(normalized, inventory=inventory, structural=structural)
     by_id = {observation.observation_id: observation for observation in normalized}
     return tuple(by_id[observation_id] for observation_id in trusted_ids)
+
+
 
 
 def _validate_pst_mail_observation_graph(
@@ -7207,6 +7294,31 @@ def _validate_pst_mail_observation_graph(
         {"asset_id": asset_id, "archive_sha256": expected_source_fingerprint},
     )
     mailbox_id = stable_resource_contract_id("mailbox", "PstMailbox", {"asset_id": asset_id})
+    items_by_id = {item.source_inventory_item_id: item for item in inventory.items}
+    for observation in observations:
+        if observation.observation_type in {"email_message", "email_attachment_occurrence"}:
+            native = observation.location
+            if "source_inventory_id" not in native:
+                continue
+            item = items_by_id.get(native.get("source_inventory_item_id"))
+            if (native["source_inventory_id"] != inventory.source_inventory_id or item is None
+                or native.get("source_local_key") != item.location.get("source_local_key")
+                or native.get("parent_source_local_key") != item.location.get("parent_source_local_key")):
+                raise ContractValidationError("PST native inventory mirror is invalid")
+            if observation.observation_type == "email_attachment_occurrence":
+                payload = _pst_observation_payload(observation)
+                if any(payload.get(key) != native[key] for key in
+                       ("source_inventory_id", "source_inventory_item_id", "source_local_key", "parent_source_local_key")):
+                    raise ContractValidationError("PST attachment inventory mirror is invalid")
+    inventory_by_key = {item.location.get("source_local_key"): item for item in inventory.items}
+    for observation in observations:
+        if observation.observation_type != "email_message" or "source_content_hash" not in observation.location:
+            continue
+        payload = _pst_observation_payload(observation)
+        source_key = payload.get("message_source_local_key")
+        item = inventory_by_key.get(source_key)
+        if item is None or observation.location["source_content_hash"] != "sha256:" + str(item.location.get("source_unit_content_fingerprint")):
+            raise ContractValidationError("PST message source hash inventory binding is invalid")
     ordinary = [
         observation
         for observation in observations
@@ -7723,6 +7835,8 @@ def _validate_pst_mail_observation_graph(
     )
     if any(payload.get("version_lineage") != [] for payload in persisted_threads.values()):
         raise ContractValidationError("PST reply stream must not contain version lineage")
+
+
 
 
 def _validate_pst_sidecar_attachment_graph(
@@ -8392,6 +8506,11 @@ def _validate_pst_attachment_text_segment_projection(
     expected_location = {
         field_name: parent_observation.location[field_name]
         for field_name in (
+            "source_content_hash",
+            "source_inventory_id",
+            "source_inventory_item_id",
+            "source_local_key",
+            "parent_source_local_key",
             "archive_id",
             "mailbox_id",
             "folder_path_hash",
@@ -8473,6 +8592,7 @@ def _validate_pst_attachment_text_segment_projection(
         raise ContractValidationError("PST attachment text segment location is not canonical")
     if sha256_json(payload) != sha256_json(expected_payload):
         raise ContractValidationError("PST attachment text segment payload is not canonical")
+
 
 
 def _pst_inventory_descends_from(
@@ -8564,9 +8684,20 @@ def _pst_require_exact_keys(
     *,
     optional: set[str] | None = None,
 ) -> None:
-    allowed = required | (optional or set())
+    extensions = {
+        "PST message location": {"source_content_hash"},
+        "PST header location": {"source_content_hash"},
+        "PST body location": {"source_content_hash", "mime_ordinal", "parent_mime_ordinal", "content_type"},
+        "PST attachment location": {"source_content_hash", "child_asset_id"},
+        "PST attachment payload": {"child_asset_id"},
+    }.get(field_name, set())
+    if field_name in {"PST message location", "PST header location", "PST body location", "PST attachment location", "PST attachment payload"}:
+        extensions = extensions | {"source_inventory_id", "source_inventory_item_id", "source_local_key", "parent_source_local_key"}
+    allowed = required | (optional or set()) | extensions
     if not required.issubset(value) or set(value) - allowed:
         raise ContractValidationError(f"{field_name} shape is not closed")
+
+
 
 
 def _pst_exact_int(value: Any, field_name: str, *, minimum: int = 0) -> int:
@@ -9461,6 +9592,17 @@ def _pst_rehydrate_body_segments(
             for key, value in parent_observation.location.items()
             if key != "message_index"
         }
+        native_fields = {name: observation.location[name] for name in
+                         ("mime_ordinal", "parent_mime_ordinal", "content_type")
+                         if name in observation.location}
+        if native_fields:
+            if set(native_fields) != {"mime_ordinal", "parent_mime_ordinal", "content_type"}:
+                raise ContractValidationError("PST body MIME lineage is incomplete")
+            _pst_exact_int(native_fields["mime_ordinal"], "body MIME ordinal")
+            _pst_exact_int(native_fields["parent_mime_ordinal"], "body parent MIME ordinal")
+            if native_fields["content_type"] not in {"text/plain", "text/html"}:
+                raise ContractValidationError("PST body MIME content type is invalid")
+        expected_location.update(native_fields)
         expected_location.update(
             {
                 "body_segment_index": index,
@@ -9476,15 +9618,23 @@ def _pst_rehydrate_body_segments(
             payload.get("content_publicly_unsafe"),
             "body segment safety marker",
         )
-        if end - start != len(observation.text) and not (unsafe and projection_state == "redacted"):
+        raw_value = observation.extracted_value if observation.extracted_value is not None else observation.text
+        if not isinstance(raw_value, str):
+            raise ContractValidationError("PST body retained source value is invalid")
+        if observation.extracted_value is not None and observation.text != _pst_public_body_text(raw_value):
+            raise ContractValidationError("PST body public/source projection is invalid")
+        if end - start != len(raw_value) and not (unsafe and projection_state == "redacted"):
             raise ContractValidationError("PST body segment range/text binding is invalid")
         segments.append(
             _ParsedBodySegment(
-                text=observation.text,
+                text=raw_value,
                 char_start=start,
                 char_end=end,
                 content_publicly_unsafe=unsafe,
                 segment_index=index,
+                mime_ordinal=native_fields.get("mime_ordinal"),
+                parent_mime_ordinal=native_fields.get("parent_mime_ordinal"),
+                content_type=native_fields.get("content_type"),
             )
         )
 
@@ -9534,6 +9684,7 @@ def _pst_rehydrate_body_segments(
     ):
         raise ContractValidationError("PST body parent occurrence binding is invalid")
     return segments
+
 
 
 def _pst_rehydrate_message(
@@ -9764,6 +9915,7 @@ def _pst_rehydrate_message(
         reply_headers=reply_headers,
         embedded_attachment_ordinal=embedded_attachment_ordinal,
         source_local_key=payload.get("message_source_local_key"),
+        source_content_hash=observation.location.get("source_content_hash"),
     )
     message_fingerprint = _message_fingerprint(synthetic)
     if payload["message_fingerprint"] != message_fingerprint:
@@ -9788,6 +9940,7 @@ def _pst_rehydrate_message(
         parent_attachment_id=parent_attachment_id,
     )
     return _PstRehydratedMessage(message_occurrence_id=occurrence_id, context=context)
+
 
 
 @dataclass(frozen=True)
@@ -10750,6 +10903,11 @@ def _validate_pst_projection_observations(
             archive_id=archive_id,
             mailbox_id=mailbox_id,
         )
+        child_asset_id = payload.get("child_asset_id")
+        if observation.observation_type == "email_attachment_occurrence" and child_asset_id is not None:
+            if not isinstance(child_asset_id, str) or not child_asset_id or observation.location.get("child_asset_id") != child_asset_id:
+                raise ContractValidationError("PST attachment child asset mirror is invalid")
+            assert_no_public_raw_references(child_asset_id, "pst_attachment_child_asset")
         context = context_by_occurrence.get(occurrence_id)
         if context is None:
             raise ContractValidationError("PST projection observation has an orphan message")
@@ -11129,6 +11287,7 @@ def _validate_pst_projection_observations(
             raise ContractValidationError("PST attachment text identity is invalid")
 
 
+
 def _require_mapping(value: Any, field_name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ContractValidationError(f"{field_name} must be an object")
@@ -11323,6 +11482,8 @@ def _parse_exported_messages(
             config=config,
             warnings=warnings,
             source_local_key=unit.source_local_key,
+            source_content_hash=("sha256:" + classification.source_content_fingerprint
+                                 if classification.source_content_fingerprint else None),
             folder_components=(
                 unit.canonical_relative_components[:-1]
                 if unit.canonical_relative_components is not None
@@ -11340,6 +11501,7 @@ def _parse_exported_messages(
         lookup_context=lookup_context,
     )
     return parsed, warnings, source_unit_classifications
+
 
 
 def _parse_exported_messages_parallel(
@@ -11400,6 +11562,8 @@ def _parse_exported_messages_parallel(
                     config=config,
                     warnings=warnings,
                     source_local_key=classification.source_local_key,
+                    source_content_hash=("sha256:" + classification.source_content_fingerprint
+                                         if classification.source_content_fingerprint else None),
                     folder_components=(
                         folder_components_by_key[classification.source_local_key][:-1]
                         if folder_components_by_key.get(classification.source_local_key) is not None
@@ -11417,6 +11581,7 @@ def _parse_exported_messages_parallel(
         lookup_context=lookup_context,
     )
     return parsed, warnings, source_unit_classifications
+
 
 
 def _integrate_readpst_sidecars(
@@ -11509,6 +11674,7 @@ def _integrate_readpst_sidecars(
             source_local_key=unit.source_local_key,
             source_kind="readpst_sidecar",
             text=attachment_classification.text,
+            content_bytes=attachment_classification.payload if content_hash is not None else None,
             source_name_fingerprint=classification.attachment_name_fingerprint,
             source_char_count=(
                 len(attachment_classification.text)
@@ -11533,6 +11699,7 @@ def _integrate_readpst_sidecars(
             continue
         parsed_messages[index] = updated
         lookup_context.parsed_messages_by_source_key[parent_source_key] = updated
+
 
 
 def _parse_exported_message_file_job(
@@ -11959,10 +12126,22 @@ def _parsed_message_from_email(
     embedded_attachment_ordinal: int | None = None,
     source_local_key: str | None = None,
     folder_components: tuple[bytes, ...] | None = None,
+    source_content_hash: str | None = None,
+    source_local_key_override: str | None = None,
+    folder_path_hash_override: str | None = None,
+    folder_label_override: str | None = None,
+    message_id_fallback_parts: tuple[Any, ...] | None = None,
+    include_attachments: bool = True,
 ) -> _ParsedMessage:
+    if source_local_key_override is not None:
+        source_local_key = source_local_key_override
+    if folder_components is None and folder_path_hash_override is not None:
+        folder_components = ()
     if folder_components is None:
         raise ContractValidationError("PST folder component identity is missing")
     folder_path_hash, folder_label = _folder_identity(folder_components)
+    folder_path_hash = folder_path_hash_override or folder_path_hash
+    folder_label = folder_label_override or folder_label
     subject = _safe_mail_text(_pst_first_raw_header_value(message, "subject"), "subject")
     sender = _safe_mail_text(_pst_first_raw_header_value(message, "from"), "sender")
     chronology = _interpret_chronology(message, warnings=warnings)
@@ -11988,8 +12167,8 @@ def _parsed_message_from_email(
             body_segments,
             segment_state,
             body_redacted_segment_count,
-        ) = _safe_body_segments(
-            raw_body,
+        ) = _pst_body_leaf_segments(
+            body_classifications,
             max_chars=config.body_segment_max_chars,
             max_segments=config.max_body_segments_per_message,
             preserve_private_text=config.preserve_private_body_text,
@@ -12015,7 +12194,7 @@ def _parsed_message_from_email(
     normalized_subject = _normalize_subject(subject)
     message_id = _message_id(
         message,
-        fallback_parts=(
+        fallback_parts=message_id_fallback_parts or (
             folder_path_hash,
             normalized_subject,
             sender,
@@ -12024,7 +12203,7 @@ def _parsed_message_from_email(
         ),
     )
     reply_headers = _reply_header_occurrences(message, warnings=warnings)
-    headers = _safe_headers(
+    headers = _safe_header_occurrences(
         message,
         chronology=chronology,
         reply_headers=reply_headers,
@@ -12050,7 +12229,7 @@ def _parsed_message_from_email(
         config=config,
         warnings=warnings,
         embedded_message_depth=embedded_message_depth,
-    )
+    ) if include_attachments else []
     unresolved_attachment_count = sum(
         _attachment_is_unresolved(attachment) for attachment in attachments
     )
@@ -12103,7 +12282,13 @@ def _parsed_message_from_email(
         embedded_attachment_ordinal=embedded_attachment_ordinal,
         source_local_key=source_local_key,
         raw_message=message,
+        source_content_hash=source_content_hash,
+        html_tables=_pst_body_leaf_tables(body_classifications, warnings=warnings),
+        body_segment_locations=[{"mime_ordinal": segment.mime_ordinal,
+                                 "parent_mime_ordinal": segment.parent_mime_ordinal,
+                                 "content_type": segment.content_type} for segment in body_segments],
     )
+
 
 
 _PST_FOLDER_IDENTITY_POLICY = "formowl_pst_folder_identity_v2"
@@ -12145,7 +12330,7 @@ def _message_id(message: EmailMessage, *, fallback_parts: tuple[Any, ...]) -> st
     return stable_resource_contract_id("mailmsg", "PstMessage", {"fallback": fallback_parts})
 
 
-def _safe_headers(
+def _safe_header_occurrences(
     message: EmailMessage,
     *,
     chronology: _MessageChronology,
@@ -12187,8 +12372,17 @@ def _safe_headers(
                 )
             )
             continue
+        malformed_address = False
+        if safe_name in {"from", "to", "cc"}:
+            try:
+                message.policy.header_factory(str(name), str(value))
+            except (AttributeError, TypeError, ValueError):
+                malformed_address = True
         raw_value = _pst_safe_text(value)
-        if raw_value is None:
+        if malformed_address:
+            _append_warning_once(warnings, "pst_parser_header_redacted")
+            safe_value = "redacted_header"
+        elif raw_value is None:
             _append_warning_once(warnings, "pst_parser_header_redacted")
             safe_value = _pst_opaque_text_marker(value, f"header_{safe_name}")
         else:
@@ -12212,6 +12406,8 @@ def _safe_headers(
             )
         )
     return tuple(headers)
+
+
 
 
 def _header_projection_fingerprint(
@@ -12445,6 +12641,10 @@ def _body_leaf_classifications(
 ) -> tuple[_BodyLeafClassification, ...]:
     classifications: list[_BodyLeafClassification] = []
     metadata_cache: dict[int, _MimePartMetadata] = {}
+    all_parts = list(message.walk())
+    ordinals = {id(part): index for index, part in enumerate(all_parts)}
+    parents = {id(child): ordinals[id(parent)] for parent in all_parts
+               for child in (_mime_part_metadata(parent, cache=metadata_cache).children)}
     for part in _iter_outer_content_parts(message, metadata_cache=metadata_cache):
         classification = _classify_body_leaf(
             part,
@@ -12452,8 +12652,10 @@ def _body_leaf_classifications(
             metadata=_mime_part_metadata(part, cache=metadata_cache),
         )
         if classification is not None:
-            classifications.append(classification)
+            classifications.append(replace(classification, mime_ordinal=ordinals[id(part)],
+                                           parent_mime_ordinal=parents.get(id(part), 0)))
     return tuple(classifications)
+
 
 
 def _body_projection_fingerprint(
@@ -12480,6 +12682,9 @@ def _body_projection_fingerprint(
             "body_segments": [
                 {
                     "segment_index": segment.segment_index,
+                    **({"mime_ordinal": segment.mime_ordinal,
+                        "parent_mime_ordinal": segment.parent_mime_ordinal,
+                        "content_type": segment.content_type} if segment.mime_ordinal is not None else {}),
                     "text": segment.text,
                     "char_start": segment.char_start,
                     "char_end": segment.char_end,
@@ -12489,6 +12694,7 @@ def _body_projection_fingerprint(
             ],
         }
     )
+
 
 
 def _body_projection(
@@ -12524,19 +12730,12 @@ def _body_projection(
         summary_state = "complete"
         projection_state = "complete"
 
-    plain_parts = [
-        classification.text or ""
+    body = "\n\n".join(
+        (_html_to_text(classification.text or "") if classification.content_type == "text/html"
+         else classification.text or "").strip()
         for classification in parsed
-        if classification.content_type == "text/plain"
-    ]
-    html_parts = [
-        _html_to_text(classification.text or "")
-        for classification in parsed
-        if classification.content_type == "text/html"
-    ]
-    body = "\n\n".join(part.strip() for part in plain_parts if part.strip())
-    if not body:
-        body = "\n\n".join(part.strip() for part in html_parts if part.strip())
+        if (classification.text or "").strip()
+    )
 
     if summary_state == "complete" and not body and applicable:
         projection_state = "decoded_empty"
@@ -12555,6 +12754,7 @@ def _body_projection(
         )
         source_body_char_count = None
     return body, body_hash, source_body_char_count, summary_state, projection_state, failures
+
 
 
 def _classify_body_leaf(
@@ -12882,12 +13082,14 @@ def _attachments(
                     and isinstance(classification.text, str)
                     else None
                 ),
+                content_bytes=payload if content_hash is not None else None,
                 stored_char_count=sum(
                     len(segment) for segment in classification.extracted_text_segments
                 ),
             )
         )
     return attachments
+
 
 
 def _append_warning_once(warnings: list[str], warning: str) -> None:
@@ -13240,6 +13442,7 @@ def _mail_observations_from_messages(
             archive_id=archive_id,
             mailbox_id=mailbox_id,
             source_inventory=source_inventory,
+            extraction_input=extraction_input,
         )
     )
     observations: list[Observation] = []
@@ -13252,6 +13455,7 @@ def _mail_observations_from_messages(
             location=parsed["location"],
             text=parsed.get("text"),
             payload=parsed["payload"],
+            extracted_value=parsed.get("extracted_value"),
         )
         observations.append(
             Observation(
@@ -13266,9 +13470,17 @@ def _mail_observations_from_messages(
                 permission_scope=extraction_input.asset.permission_scope,
                 created_at=created_at,
                 payload=parsed["payload"],
+                extracted_value=parsed.get("extracted_value"),
             )
         )
+    parents = {item.location["message_occurrence_id"]: item for item in observations
+               if item.observation_type == "email_message"}
+    table_index = 1
+    for context in contexts:
+        observations.extend(_inline_table_observations(context.message, parents[context.occurrence_id], table_index))
+        table_index += len(context.message.html_tables)
     return observations
+
 
 
 def _mail_message_contexts(
@@ -13603,6 +13815,38 @@ def _pst_structural_message_contexts(
     return result
 
 
+def _pst_legacy_message_inventory_bindings(
+    inventory: SourceInventory,
+    *,
+    contexts: Sequence[_MailMessageContext],
+) -> dict[str, SourceInventoryItem]:
+    """Bind the old diagnostic wire without inventing structural proof fields."""
+    bindings: dict[str, SourceInventoryItem] = {}
+    for item in inventory.items:
+        if item.structure_kind != "exported_message_occurrence":
+            continue
+        key = item.location.get("source_local_key")
+        if (
+            not isinstance(key, str)
+            or not key
+            or key in bindings
+            or item.processing_state != SourceInventoryProcessingState.PARSED
+            or item.content_type != "message/rfc822"
+        ):
+            raise ContractValidationError("PST legacy message inventory binding is invalid")
+        bindings[key] = item
+    seen: set[str] = set()
+    for context in contexts:
+        if context.parent_occurrence_id is not None:
+            # This wire never inventoried nested messages; it cannot attest them.
+            continue
+        key = context.message.source_local_key
+        if key not in bindings or key in seen:
+            raise ContractValidationError("PST legacy message source binding is invalid")
+        seen.add(key)
+    return bindings
+
+
 def _pst_attachment_inventory_index(
     source_inventory: SourceInventory,
     *,
@@ -13646,7 +13890,14 @@ def _pst_attachment_inventory_index(
         attachment_items_by_parent_message_key.setdefault(parent_message_key, []).append(item)
 
     message_key_by_occurrence_id: dict[str, str] = {}
-    if contexts:
+    if contexts and source_inventory.source_inventory_id.startswith("srcinv_"):
+        bindings = _pst_legacy_message_inventory_bindings(source_inventory, contexts=contexts)
+        for context in contexts:
+            if context.parent_occurrence_id is None:
+                key = context.message.source_local_key
+                if key in bindings:
+                    message_key_by_occurrence_id[context.occurrence_id] = key
+    elif contexts:
         for message_key, (_, context, _) in _pst_structural_message_contexts(
             source_inventory,
             contexts=contexts,
@@ -13703,9 +13954,19 @@ def _pst_attachment_observation_binding(
         if item.location.get("attachment_id") == attachment.attachment_id
         and item.location.get("attachment_ordinal") == attachment_ordinal
     ]
+    legacy_inventory = source_inventory.source_inventory_id.startswith("srcinv_")
+    if legacy_inventory:
+        # Legacy occurrence identity includes the original name and ordinal.
+        # It is not a structural source-unit witness, even when content matches.
+        candidates = [
+            item for item in candidates
+            if attachment.source_name_fingerprint
+            and item.location.get("attachment_name_fingerprint") == attachment.source_name_fingerprint
+            and item.processing_state == SourceInventoryProcessingState.PARSED
+        ]
     source_item: SourceInventoryItem | None = None
     source_key: str | None = None
-    if attachment.source_kind == "readpst_sidecar":
+    if attachment.source_kind == "readpst_sidecar" and not legacy_inventory:
         source_key = attachment.source_local_key
         if not isinstance(source_key, str) or not source_key:
             raise ContractValidationError("PST sidecar attachment source key is missing")
@@ -13795,17 +14056,27 @@ def _iter_mail_observations(
     archive_id: str,
     mailbox_id: str,
     source_inventory: SourceInventory | None = None,
+    extraction_input: ExtractionInput | None = None,
 ) -> Iterable[dict[str, Any]]:
+    legacy_inventory = (
+        source_inventory is not None
+        and source_inventory.source_inventory_id.startswith("srcinv_")
+    )
     contexts = _pst_canonical_message_context_order(
         contexts,
-        source_inventory=source_inventory,
+        source_inventory=None if legacy_inventory else source_inventory,
     )
     messages = [context.message for context in contexts]
-    top_level_message_inventory = (
-        _pst_top_level_message_inventory_bindings(source_inventory)
-        if source_inventory is not None
-        else {}
-    )
+    if legacy_inventory:
+        top_level_message_inventory = _pst_legacy_message_inventory_bindings(
+            source_inventory, contexts=contexts,
+        )
+    else:
+        top_level_message_inventory = (
+            _pst_top_level_message_inventory_bindings(source_inventory)
+            if source_inventory is not None
+            else {}
+        )
     attachment_inventory_index = (
         _pst_attachment_inventory_index(source_inventory, contexts=contexts)
         if source_inventory is not None
@@ -13888,7 +14159,8 @@ def _iter_mail_observations(
                 inventory_item = top_level_message_inventory.get(message.source_local_key)
                 if (
                     inventory_item is None
-                    or inventory_item.location.get("message_occurrence_id") != occurrence_id
+                    or (not legacy_inventory
+                        and inventory_item.location.get("message_occurrence_id") != occurrence_id)
                 ):
                     raise ContractValidationError(
                         "PST top-level message occurrence binding is invalid"
@@ -13896,7 +14168,20 @@ def _iter_mail_observations(
                 source_binding["message_source_inventory_item_id"] = (
                     inventory_item.source_inventory_item_id
                 )
+        native_source_binding = {}
+        if source_inventory is not None and context.parent_occurrence_id is None and message.source_local_key is not None:
+            item = top_level_message_inventory[message.source_local_key]
+            native_source_binding = {
+                "source_inventory_id": source_inventory.source_inventory_id,
+                "source_inventory_item_id": item.source_inventory_item_id,
+                "source_local_key": item.location["source_local_key"],
+                "parent_source_local_key": item.location["parent_source_local_key"],
+            }
+        source_hash_binding = ({"source_content_hash": message.source_content_hash}
+                               if message.source_content_hash is not None else {})
         base_location = {
+            **source_hash_binding,
+            **native_source_binding,
             "archive_id": archive_id,
             "mailbox_id": mailbox_id,
             "folder_path_hash": message.folder_path_hash,
@@ -13917,6 +14202,7 @@ def _iter_mail_observations(
                 "message_occurrence_id": occurrence_id,
                 **occurrence_lineage,
                 **source_binding,
+                **(native_source_binding if legacy_inventory else {}),
                 **embedded_relation,
                 "message_occurrence_identity_policy": ("formowl_pst_message_occurrence_content_v2"),
                 "duplicate_ordinal": duplicate_ordinal,
@@ -14043,12 +14329,17 @@ def _iter_mail_observations(
         for segment_index, body_segment in enumerate(message.body_segments, start=1):
             yield {
                 "observation_type": "email_body_segment",
-                "text": body_segment.text,
+                "text": _pst_public_body_text(body_segment.text),
+                "extracted_value": body_segment.text,
                 "location": {
                     **base_location,
                     "body_segment_index": segment_index,
                     "char_start": body_segment.char_start,
                     "char_end": body_segment.char_end,
+                    **({"mime_ordinal": body_segment.mime_ordinal,
+                        "parent_mime_ordinal": body_segment.parent_mime_ordinal,
+                        "content_type": body_segment.content_type}
+                       if body_segment.mime_ordinal is not None else {}),
                     "body_projection_policy": _PST_BODY_PROJECTION_POLICY,
                     "body_projection_fingerprint": message.body_projection_fingerprint,
                 },
@@ -14087,6 +14378,23 @@ def _iter_mail_observations(
                 source_inventory=source_inventory,
                 inventory_index=attachment_inventory_index,
             )
+            child_binding = {}
+            if extraction_input is not None and extraction_input.attachment_materialization is not None:
+                if attachment.content_bytes is not None and attachment.content_hash is not None:
+                    child_binding["child_asset_id"] = extraction_input.attachment_materialization.materialize(
+                        content=attachment.content_bytes, expected_content_hash=attachment.content_hash,
+                        mime_type=attachment.mime_type or "application/octet-stream",
+                        source_ref=SourceRef(source_system="formowl_mail_attachment",
+                            source_type="email_attachment_occurrence",
+                            source_id=attachment_binding["attachment_inventory_item_id"],
+                            source_instance=source_inventory.source_inventory_id,
+                            source_key=occurrence_id))
+            native_attachment_binding = ({
+                "source_inventory_id": source_inventory.source_inventory_id,
+                "source_inventory_item_id": attachment_binding["attachment_inventory_item_id"],
+                "source_local_key": attachment_binding["attachment_inventory_source_local_key"],
+                "parent_source_local_key": attachment_binding["attachment_parent_message_source_local_key"],
+            } if source_inventory is not None else {})
             attachment_source = (
                 {
                     "attachment_source": attachment.source_kind,
@@ -14105,6 +14413,8 @@ def _iter_mail_observations(
                     "attachment_index": attachment_index,
                     "attachment_ordinal": attachment_index,
                     "attachment_id": attachment.attachment_id,
+                    **child_binding,
+                    **native_attachment_binding,
                     **attachment_source,
                 },
                 "payload": {
@@ -14123,6 +14433,8 @@ def _iter_mail_observations(
                     "attachment_index": attachment_index,
                     "attachment_ordinal": attachment_index,
                     "filename": attachment.filename,
+                    **native_attachment_binding,
+                    **child_binding,
                     "mime_type": attachment.mime_type,
                     "content_hash": attachment.content_hash,
                     "size_bytes": attachment.size_bytes,
@@ -14147,6 +14459,7 @@ def _iter_mail_observations(
                         "attachment_index": attachment_index,
                         "attachment_id": attachment.attachment_id,
                         "attachment_text_segment_index": attachment_text_index,
+                        **native_attachment_binding,
                     },
                     "payload": {
                         "archive_id": archive_id,
@@ -14174,6 +14487,9 @@ def _iter_mail_observations(
                         "message_fingerprint": message_fingerprint,
                     },
                 }
+
+
+
 
 
 def _message_fingerprint(message: _ParsedMessage) -> str:
@@ -15180,10 +15496,151 @@ class _HtmlTextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self._parts: list[str] = []
+        self.tables: list[dict[str, Any]] = []
+        self.warnings: list[str] = []
+        self._tables: list[dict[str, Any]] = []
+        self._table_ordinal = 0
+        self._quoted_depth = 0
+        self._unclosed_marked_section = False
+
+    def parse_marked_section(self, i: int, report: int = 1) -> int:
+        try:
+            return super().parse_marked_section(i, report)
+        except AssertionError as error:
+            # Only recover HTMLParser's known malformed-status failure, not
+            # arbitrary assertions from parser state or extraction callbacks.
+            message = str(error)
+            if not (message.startswith("unknown status keyword ")
+                    and message.endswith(" in marked section")):
+                raise
+        warning = "pst_parser_html_marked_section_incomplete"
+        if warning not in self.warnings:
+            self.warnings.append(warning)
+        for frame in self._tables:
+            frame["invalid"] = True
+        end = self.rawdata.find("]>", i + 3)
+        self._unclosed_marked_section = end < 0
+        if end < 0:
+            # Let HTMLParser buffer, then flush unterminated text at close.
+            # Its fallback may parse suffix tags; their layout is unproven.
+            return -1
+        # Keep the malformed declaration as literal evidence, never parsed
+        # table markup; resume at its boundary so following text is retained.
+        if report:
+            self.handle_data(self.rawdata[i:end + 2])
+        return end + 2
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "blockquote":
+            self._quoted_depth += 1
+        if tag == "table":
+            self._table_ordinal += 1
+            self._tables.append({
+                "table_ordinal": self._table_ordinal, "quoted_depth": self._quoted_depth,
+                "rows": [], "row": None, "cell": None, "occupied": set(),
+                "invalid": self._unclosed_marked_section, "cell_count": 0,
+            })
+        elif self._tables and tag == "tr":
+            self._finish_row()
+            self._tables[-1]["row"] = {
+                "row_index": len(self._tables[-1]["rows"]) + 1, "cells": [],
+            }
+        elif self._tables and tag in {"td", "th"}:
+            frame = self._tables[-1]
+            self._finish_cell()
+            if frame["row"] is None:
+                frame["invalid"] = True
+                return
+            attributes = dict(attrs)
+            try:
+                row_span = int(attributes.get("rowspan") or "1")
+                column_span = int(attributes.get("colspan") or "1")
+            except ValueError:
+                frame["invalid"] = True
+                return
+            # Same supported cell budget as the document adapter. Unsupported
+            # spans keep body text and a coverage warning, never guessed layout.
+            if not (0 < row_span * column_span <= 10_000 and row_span > 0 and column_span > 0):
+                frame["invalid"] = True
+                return
+            row_index = frame["row"]["row_index"]
+            column = 1
+            if frame["row"]["cells"]:
+                previous = frame["row"]["cells"][-1]
+                column = previous["cell_index"] + previous["column_span"]
+            while (row_index, column) in frame["occupied"]:
+                column += 1
+            frame["cell"] = {
+                "cell_index": column, "row_span": row_span, "column_span": column_span,
+                "header_cell": tag == "th", "parts": [],
+            }
+        elif tag in {"br", "p", "div", "li"}:
+            self._parts.append("\n")
+            for frame in self._tables:
+                if frame["cell"] is not None:
+                    frame["cell"]["parts"].append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "blockquote":
+            self._quoted_depth = max(0, self._quoted_depth - 1)
+        if not self._tables:
+            return
+        if tag in {"td", "th"}:
+            self._finish_cell()
+        elif tag == "tr":
+            self._finish_row()
+        elif tag == "table":
+            self._finish_row()
+            frame = self._tables.pop()
+            if frame["invalid"]:
+                self.warnings.append("pst_parser_html_table_unsupported")
+            elif frame["rows"]:
+                self.tables.append({
+                    key: frame[key] for key in ("table_ordinal", "quoted_depth", "rows")
+                })
+
+    def _finish_cell(self) -> None:
+        frame = self._tables[-1]
+        cell = frame["cell"]
+        if cell is None:
+            return
+        frame["cell"] = None
+        frame["cell_count"] += 1
+        if frame["cell_count"] > 10_000:
+            frame["invalid"] = True
+            return
+        cell["value"] = " ".join(cell.pop("parts")).strip()
+        row = frame["row"]["row_index"]
+        column = cell["cell_index"]
+        covered = {
+            (r, c) for r in range(row, row + cell["row_span"])
+            for c in range(column, column + cell["column_span"])
+        }
+        if covered & frame["occupied"]:
+            frame["invalid"] = True
+        frame["occupied"].update(covered)
+        frame["row"]["cells"].append(cell)
+
+    def _finish_row(self) -> None:
+        self._finish_cell()
+        frame = self._tables[-1]
+        if frame["row"] is not None:
+            frame["rows"].append(frame["row"])
+            frame["row"] = None
+
+    def close(self) -> None:
+        super().close()
+        if self._tables:
+            self.warnings.append("pst_parser_html_table_incomplete")
+            self._tables.clear()
+        self.tables.sort(key=lambda table: table["table_ordinal"])
 
     def handle_data(self, data: str) -> None:
         if data.strip():
             self._parts.append(data.strip())
+            for frame in self._tables:
+                if frame["cell"] is not None:
+                    frame["cell"]["parts"].append(data.strip())
 
     def text(self) -> str:
         return " ".join(self._parts)
@@ -15192,7 +15649,9 @@ class _HtmlTextExtractor(HTMLParser):
 def _html_to_text(value: str) -> str:
     parser = _HtmlTextExtractor()
     parser.feed(value)
+    parser.close()
     return parser.text()
+
 
 
 __all__ = [
@@ -15211,21 +15670,665 @@ __all__ = [
 ]
 
 
-# Reconciled top-level API from Track 2
+
+
+# Native-manifest and offline backfill compatibility APIs.
 
 @dataclass(frozen=True)
+class _PstClassifiedSourceUnit:
+    source_local_key: str
+    processing_state: SourceInventoryProcessingState
+    content_type: str
+    parsed_message: _ParsedMessage | None
+
+
 
 @dataclass(frozen=True)
+class _BoundedPstExport:
+    candidate_paths: tuple[Path, ...]
+    stop_reason: str
+    overflow_count: int
+    parser_completed: bool
+
+
 
 @dataclass(frozen=True)
+class PstSourceCompletenessPocResult:
+    source_inventory: SourceInventory
+    observations: tuple[Observation, ...]
+    report: dict[str, Any]
+
+
 
 @dataclass(frozen=True)
+class NativePstAttachmentExport:
+    """One source-native attachment/export occurrence from a private manifest."""
+
+    source_local_key: str
+    parent_message_source_local_key: str
+    pst_attachment_node_id: str
+    attachment_content_hash: str
+    byte_count: int
+    export_disposition: str
+    export_occurrence_ordinal: int
+    export_path: Path | None = field(default=None, repr=False)
+
+
 
 @dataclass(frozen=True)
+class NativePstMessageExport:
+    """One exact source-native RFC822 export and its source lineage."""
+
+    source_local_key: str
+    parent_folder_source_local_key: str
+    pst_folder_node_id: str
+    pst_message_node_id: str
+    pst_message_data_node_id: str
+    message_content_hash: str
+    byte_count: int
+    export_path: Path = field(repr=False)
+    attachments: tuple[NativePstAttachmentExport, ...] = ()
+
+
 
 @dataclass(frozen=True)
+class NativePstParsedEvidenceResult:
+    """Authorized mail Observations derived from exact native exports."""
+
+    observations: tuple[Observation, ...]
+    warning_counts: dict[str, int]
+    message_count: int
+    header_observation_count: int
+    body_segment_observation_count: int
+    attachment_observation_count: int
+
+
 
 @dataclass(frozen=True)
+class ReadpstSidecarParentBinding:
+    """One immutable existing-message parent for incremental sidecar ingestion."""
+
+    source_content_hash: str
+    folder_path_hash: str
+    message_id: str
+    message_index: int
+    parent_observation_id: str
+    parent_extractor_run_id: str
+    parent_source_inventory_id: str
+    parent_source_inventory_item_id: str
+    archive_id: str
+    mailbox_id: str
+    message_occurrence_id: str
+    thread_id: str
+    message_fingerprint: str
+    existing_attachment_max_index: int
+    source_local_key: str | None = None
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "ReadpstSidecarParentBinding":
+        required_strings = {
+            field_name: _required_nonempty_string(value.get(field_name), field_name)
+            for field_name in (
+                "source_content_hash",
+                "folder_path_hash",
+                "message_id",
+                "parent_observation_id",
+                "parent_extractor_run_id",
+                "parent_source_inventory_id",
+                "parent_source_inventory_item_id",
+                "archive_id",
+                "mailbox_id",
+                "message_occurrence_id",
+                "thread_id",
+                "message_fingerprint",
+            )
+        }
+        message_index = _positive_int(value.get("message_index"), "message_index")
+        existing_attachment_max_index = value.get("existing_attachment_max_index")
+        if (
+            not isinstance(existing_attachment_max_index, int)
+            or isinstance(existing_attachment_max_index, bool)
+            or existing_attachment_max_index < 0
+        ):
+            raise ValueError("existing_attachment_max_index must be a non-negative integer")
+        source_local_key = value.get("source_local_key")
+        if source_local_key is not None:
+            source_local_key = _required_nonempty_string(
+                source_local_key, "source_local_key"
+            )
+        return cls(
+            **required_strings,
+            message_index=message_index,
+            existing_attachment_max_index=existing_attachment_max_index,
+            source_local_key=source_local_key,
+        )
+
+
+
+@dataclass(frozen=True)
+class _ReadpstSidecarPlan:
+    path: Path = field(repr=False)
+    source_filename: str
+    source_name_fingerprint: str
+    relative_sidecar_fingerprint: str
+    source_inventory_item: SourceInventoryItem
+    parent: ReadpstSidecarParentBinding
+    attachment_index: int
+    byte_count: int
+    mime_type: str
+
+
+
+def _readpst_sidecar_parent_window(by_parent, *, export_root, config):
+    """Select an offline source-order window, never a query/content predicate.
+
+    Keep the native sidecar ordinals from the whole inventory. Window identity
+    is part of the extraction profile so interrupted whole-corpus child assets
+    cannot silently become outputs of a new partial run.
+    """
+    rows = sorted(
+        by_parent.items(),
+        key=lambda item: str(item[0].relative_to(export_root)).lower(),
+    )
+    start = config.get("attachment_sidecar_parent_start")
+    count = config.get("attachment_sidecar_parent_count")
+    if start is None and count is None:
+        return rows, None, 0
+    if (
+        type(start) is not int or start < 0
+        or type(count) is not int or count < 1
+        or start >= len(rows)
+    ):
+        raise ValueError("pst_sidecar_parent_window_invalid")
+    end = min(len(rows), start + count)
+    ordinal_before = sum(len(children) for _, children in rows[:start])
+    window = {
+        "parent_start": start, "parent_count": end - start,
+        "requested_parent_count": count, "total_parent_count": len(rows),
+        "sidecar_ordinal_offset": ordinal_before,
+    }
+    return rows[start:end], window, ordinal_before
+
+
+
+class ReadpstSidecarBackfillExtractor:
+    """Incrementally materialize bound readpst ``-S`` attachment sidecars."""
+
+    def __init__(
+        self,
+        *,
+        existing_export_root: str | Path,
+        parent_binding_manifest: Mapping[str, Any],
+        version: str = "0.1.1",
+    ) -> None:
+        self._existing_export_root = Path(existing_export_root)
+        self._parent_binding_manifest = to_plain(dict(parent_binding_manifest))
+        self._parent_binding_manifest_fingerprint = sha256_json(
+            self._parent_binding_manifest
+        )
+        self._version = version
+
+    def name(self) -> str:
+        return "pst_readpst_sidecar_backfill_extractor"
+
+    def version(self) -> str:
+        return self._version
+
+    def supported_mime_types(self) -> list[str]:
+        return list(_PST_MIME_TYPES)
+
+    def extractor_type(self) -> str:
+        return "mail_attachment_backfill"
+
+    def extract(self, extraction_input: ExtractionInput) -> ExtractionResult:
+        manifest = self._parent_binding_manifest
+        config = extraction_input.config
+        marker = _bound_existing_export_marker(
+            self._existing_export_root,
+            source_fingerprint=extraction_input.asset.content_hash,
+            marker_fingerprint=config.get("existing_export_binding_fingerprint"),
+        )
+        if marker is None:
+            return ExtractionResult(errors=["pst_existing_export_binding_invalid"])
+        if (
+            config.get("parent_binding_manifest_fingerprint")
+            != self._parent_binding_manifest_fingerprint
+            or manifest.get("schema_version") != 1
+            or manifest.get("source_asset_id") != extraction_input.asset.asset_id
+            or manifest.get("source_fingerprint") != extraction_input.asset.content_hash
+            or manifest.get("prior_ingestion_job_id")
+            != config.get("prior_ingestion_job_id")
+            or manifest.get("prior_parent_run_id") != config.get("prior_parent_run_id")
+            or manifest.get("prior_job_fingerprint")
+            != config.get("prior_job_fingerprint")
+            or manifest.get("permission_scope_fingerprint")
+            != sha256_json(extraction_input.asset.permission_scope)
+        ):
+            return ExtractionResult(errors=["pst_sidecar_parent_binding_invalid"])
+        records = manifest.get("records")
+        if not isinstance(records, list) or not records:
+            return ExtractionResult(errors=["pst_sidecar_parent_binding_invalid"])
+        if manifest.get("parent_binding_count") != len(records):
+            return ExtractionResult(errors=["pst_sidecar_parent_binding_invalid"])
+        if manifest.get("parent_binding_fingerprint") != sha256_json(records):
+            return ExtractionResult(errors=["pst_sidecar_parent_binding_invalid"])
+        try:
+            bindings = tuple(
+                ReadpstSidecarParentBinding.from_dict(record) for record in records
+            )
+        except (TypeError, ValueError):
+            return ExtractionResult(errors=["pst_sidecar_parent_binding_invalid"])
+        if any(
+            binding.parent_extractor_run_id != manifest["prior_parent_run_id"]
+            for binding in bindings
+        ):
+            return ExtractionResult(errors=["pst_sidecar_parent_binding_invalid"])
+
+        by_parent, detached_paths = _readpst_separate_attachment_index(
+            self._existing_export_root
+        )
+        if not detached_paths:
+            return ExtractionResult(errors=["pst_sidecar_export_empty"])
+        try:
+            parent_rows, parent_window, ordinal = _readpst_sidecar_parent_window(
+                by_parent, export_root=self._existing_export_root, config=config,
+            )
+        except ValueError:
+            return ExtractionResult(errors=["pst_sidecar_parent_window_invalid"])
+        if parent_window is not None and (
+            not isinstance(config.get("attachment_backfill_batch_id"), str)
+            or not config["attachment_backfill_batch_id"].strip()
+        ):
+            return ExtractionResult(errors=["pst_sidecar_parent_window_batch_invalid"])
+        bindings_by_key: dict[
+            tuple[str, str], list[ReadpstSidecarParentBinding]
+        ] = {}
+        for binding in bindings:
+            bindings_by_key.setdefault(
+                (binding.source_content_hash, binding.folder_path_hash), []
+            ).append(binding)
+
+        parser_fingerprint = stable_resource_contract_hash(
+            "ReadpstSidecarBackfillProfile",
+            {
+                "extractor_name": self.name(),
+                "extractor_version": self.version(),
+                "source_fingerprint": extraction_input.asset.content_hash,
+                "existing_export_binding_fingerprint": sha256_json(marker),
+                "parent_binding_manifest_fingerprint": (
+                    self._parent_binding_manifest_fingerprint
+                ),
+                **({
+                    "parent_window": parent_window,
+                    "parent_window_batch_id": config["attachment_backfill_batch_id"],
+                } if parent_window is not None else {}),
+            },
+        )
+        plans: list[_ReadpstSidecarPlan] = []
+        repaired_parents: list[Observation] = []
+        inventory_items: list[SourceInventoryItem] = []
+        try:
+            for parent_path, sidecar_paths in parent_rows:
+                source_content_hash, _ = _sha256_path(parent_path)
+                folder_path_hash = sha256_json(
+                    str(
+                        _safe_relative_parent(
+                            parent_path, self._existing_export_root
+                        )
+                    ).replace("\\", "/")
+                )
+                canonical_folder_hash, _ = _folder_identity(
+                    _canonical_relative_components(parent_path, self._existing_export_root)[:-1])
+                candidates = bindings_by_key.get((source_content_hash, canonical_folder_hash), [])
+                if not candidates:
+                    candidates = bindings_by_key.get((source_content_hash, folder_path_hash), [])
+                if not candidates and config.get("repair_missing_sidecar_parents") is True:
+                    repaired, parent = _missing_sidecar_parent(
+                        parent_path,
+                        export_root=self._existing_export_root,
+                        source_content_hash=source_content_hash,
+                        extraction_input=extraction_input,
+                    )
+                    repaired_parents.append(repaired)
+                elif len(candidates) == 1:
+                    parent = candidates[0]
+                else:
+                    return ExtractionResult(
+                        errors=["pst_sidecar_parent_binding_unresolved"]
+                    )
+                for sidecar_offset, sidecar_path in enumerate(
+                    sidecar_paths, start=1
+                ):
+                    ordinal += 1
+                    byte_count = sidecar_path.stat().st_size
+                    source_filename = sidecar_path.name.partition("-")[2]
+                    relative_sidecar_fingerprint = sha256_json(
+                        str(
+                            sidecar_path.relative_to(self._existing_export_root)
+                        ).replace("\\", "/")
+                    )
+                    source_local_key = stable_resource_contract_id(
+                        "pstsidecarsrc",
+                        "PstReadpstSidecarSourceOccurrence",
+                        {
+                            "source_asset_id": extraction_input.asset.asset_id,
+                            "parent_message_observation_id": (
+                                parent.parent_observation_id
+                            ),
+                            "relative_sidecar_fingerprint": (
+                                relative_sidecar_fingerprint
+                            ),
+                        },
+                    )
+                    location = {
+                        "source_local_key": source_local_key,
+                        "parent_message_observation_id": (
+                            parent.parent_observation_id
+                        ),
+                        "parent_extractor_run_id": parent.parent_extractor_run_id,
+                        "parent_source_inventory_id": (
+                            parent.parent_source_inventory_id
+                        ),
+                        "parent_source_inventory_item_id": (
+                            parent.parent_source_inventory_item_id
+                        ),
+                        "parent_message_occurrence_id": (
+                            parent.message_occurrence_id
+                        ),
+                        "relative_sidecar_fingerprint": (
+                            relative_sidecar_fingerprint
+                        ),
+                        "sidecar_ordinal": ordinal,
+                        "sidecar_byte_count": byte_count,
+                    }
+                    if parent.source_local_key is not None:
+                        location["parent_source_local_key"] = parent.source_local_key
+                    item = SourceInventoryItem.create(
+                        source_asset_id=extraction_input.asset.asset_id,
+                        structure_kind="regular_attachment_occurrence",
+                        content_type=_attachment_mime_type(source_filename),
+                        ordinal=ordinal,
+                        processing_state=SourceInventoryProcessingState.PARSED,
+                        raw_retention_state=(
+                            SourceInventoryRawRetentionState.RETAINED
+                        ),
+                        source_fingerprint=extraction_input.asset.content_hash,
+                        parser_fingerprint=parser_fingerprint,
+                        permission_scope=extraction_input.asset.permission_scope,
+                        location=location,
+                    )
+                    inventory_items.append(item)
+                    plans.append(
+                        _ReadpstSidecarPlan(
+                            path=sidecar_path,
+                            source_filename=source_filename,
+                            source_name_fingerprint=sha256_json(source_filename),
+                            relative_sidecar_fingerprint=(
+                                relative_sidecar_fingerprint
+                            ),
+                            source_inventory_item=item,
+                            parent=parent,
+                            attachment_index=(
+                                parent.existing_attachment_max_index
+                                + sidecar_offset
+                            ),
+                            byte_count=byte_count,
+                            mime_type=_attachment_mime_type(source_filename),
+                        )
+                    )
+        except OSError:
+            return ExtractionResult(errors=["pst_sidecar_source_unreadable"])
+
+        source_inventory = SourceInventory.create(
+            source_asset_id=extraction_input.asset.asset_id,
+            items=inventory_items,
+            source_fingerprint=extraction_input.asset.content_hash,
+            parser_fingerprint=parser_fingerprint,
+            created_at=extraction_input.created_at or now_iso(),
+            permission_fingerprint=sha256_json(
+                extraction_input.asset.permission_scope
+            ),
+        )
+        materialization_limit = _positive_int(
+            config.get("max_attachment_hash_bytes", 5 * 1024 * 1024),
+            "max_attachment_hash_bytes",
+        )
+        observations: list[Observation] = list(repaired_parents)
+        warnings = ["pst_sidecar_backfill_source_coverage_incomplete"] + [
+            "pst_sidecar_malformed_header_parent_repaired"
+            for _ in repaired_parents
+        ]
+        for plan in plans:
+            try:
+                content_hash, byte_count, content = _sidecar_content(
+                    plan.path,
+                    materialization_limit=materialization_limit,
+                )
+            except OSError:
+                return ExtractionResult(
+                    warnings=warnings,
+                    errors=["pst_sidecar_source_unreadable"],
+                )
+            if byte_count != plan.byte_count:
+                return ExtractionResult(
+                    warnings=warnings,
+                    errors=["pst_sidecar_source_size_drift"],
+                )
+            parent = plan.parent
+            child_binding: dict[str, Any] = {}
+            if content is None:
+                warnings.append(
+                    "pst_sidecar_attachment_materialization_byte_limit_reached"
+                )
+            elif extraction_input.attachment_materialization is not None:
+                child_binding["child_asset_id"] = (
+                    extraction_input.attachment_materialization.materialize(
+                        content=content,
+                        expected_content_hash=content_hash,
+                        mime_type=plan.mime_type,
+                        source_ref=SourceRef(
+                            source_system="formowl_mail_attachment",
+                            source_type="email_attachment_occurrence",
+                            source_id=(
+                                plan.source_inventory_item.source_inventory_item_id
+                            ),
+                            source_instance=source_inventory.source_inventory_id,
+                            source_key=parent.message_occurrence_id,
+                        ),
+                    )
+                )
+            safe_filename = _safe_mail_text(plan.source_filename, "filename")
+            attachment_id = stable_resource_contract_id(
+                "mailatt",
+                "PstReadpstSidecarAttachment",
+                {
+                    "source_inventory_item_id": (
+                        plan.source_inventory_item.source_inventory_item_id
+                    ),
+                    "content_hash": content_hash,
+                    "attachment_index": plan.attachment_index,
+                },
+            )
+            base_location = {
+                "archive_id": parent.archive_id,
+                "mailbox_id": parent.mailbox_id,
+                "folder_path_hash": parent.folder_path_hash,
+                "message_id": parent.message_id,
+                "message_index": parent.message_index,
+                "message_occurrence_id": parent.message_occurrence_id,
+                "thread_id": parent.thread_id,
+                "parent_message_observation_id": parent.parent_observation_id,
+                "parent_extractor_run_id": parent.parent_extractor_run_id,
+                "prior_ingestion_job_id": manifest["prior_ingestion_job_id"],
+                "source_inventory_id": source_inventory.source_inventory_id,
+                "source_inventory_item_id": (
+                    plan.source_inventory_item.source_inventory_item_id
+                ),
+                "parent_inventory_item_id": (
+                    parent.parent_source_inventory_item_id
+                ),
+                "source_local_key": (
+                    plan.source_inventory_item.location["source_local_key"]
+                ),
+                "relative_sidecar_fingerprint": (
+                    plan.relative_sidecar_fingerprint
+                ),
+                "source_content_hash": content_hash,
+                "attachment_index": plan.attachment_index,
+                "attachment_id": attachment_id,
+                **child_binding,
+            }
+            if parent.source_local_key is not None:
+                base_location["parent_source_local_key"] = (
+                    parent.source_local_key
+                )
+            observations.append(
+                _native_bound_mail_observation(
+                    source_asset_id=extraction_input.asset.asset_id,
+                    extractor_run_id=extraction_input.extractor_run_id,
+                    observation_type="email_attachment_occurrence",
+                    text=safe_filename,
+                    location=base_location,
+                    payload={
+                        **base_location,
+                        "filename": safe_filename,
+                        "mime_type": plan.mime_type,
+                        "content_hash": content_hash,
+                        "size_bytes": byte_count,
+                        "message_fingerprint": parent.message_fingerprint,
+                        "evidence_state": "source_observation",
+                        "canonical_fact_status": "not_asserted",
+                    },
+                    permission_scope=to_plain(
+                        extraction_input.asset.permission_scope
+                    ),
+                    created_at=extraction_input.created_at or now_iso(),
+                )
+            )
+        return ExtractionResult(observations=observations, warnings=warnings)
+
+
+
+
+def _missing_sidecar_parent(
+    path: Path,
+    *,
+    export_root: Path,
+    source_content_hash: str,
+    extraction_input: ExtractionInput,
+) -> tuple[Observation, ReadpstSidecarParentBinding]:
+    """Admit a previously omitted malformed numeric source, not inferred headers."""
+    if not path.name.isdecimal() or int(path.name) < 1:
+        raise ValueError("pst_sidecar_missing_parent_coordinate_invalid")
+    if path.stat().st_size > 25 * 1024 * 1024:
+        raise ValueError("pst_sidecar_missing_parent_byte_limit_reached")
+    raw = path.read_bytes()
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != source_content_hash:
+        raise ValueError("pst_sidecar_missing_parent_source_drift")
+    header = BytesHeaderParser(policy=policy.default).parsebytes(raw)
+    defects = [type(defect).__name__ for defect in header.defects]
+    if _is_mail_message(header) or "MissingHeaderBodySeparatorDefect" not in defects:
+        raise ValueError("pst_sidecar_missing_parent_not_header_admission_exclusion")
+    # This is the readpst source number, never a position in a repaired subset.
+    native_number = int(path.name)
+    source_key = _exported_message_source_local_key(
+        path, export_root=export_root, message_index=native_number
+    )
+    asset = extraction_input.asset
+    folder_hash = sha256_json(
+        str(_safe_relative_parent(path, export_root)).replace("\\", "/")
+    )
+    archive_id = stable_resource_contract_id(
+        "mailarchive", "PstArchive",
+        {"asset_id": asset.asset_id, "archive_sha256": asset.content_hash},
+    )
+    mailbox_id = stable_resource_contract_id(
+        "mailbox", "PstMailbox", {"asset_id": asset.asset_id}
+    )
+    message_id = _message_id(header, fallback_parts=(source_key, source_content_hash))
+    occurrence_id = stable_resource_contract_id(
+        "mailocc", "PstMessageOccurrence",
+        {
+            "archive_id": archive_id, "mailbox_id": mailbox_id,
+            "folder_path_hash": folder_hash, "message_id": message_id,
+            "message_index": native_number,
+        },
+    )
+    thread_id = stable_resource_contract_id(
+        "mailthread", "PstThread", {"normalized_subject": message_id}
+    )
+    location = {
+        "archive_id": archive_id, "mailbox_id": mailbox_id,
+        "folder_path_hash": folder_hash, "message_id": message_id,
+        "message_occurrence_id": occurrence_id, "thread_id": thread_id,
+        "message_index": native_number, "native_message_number": native_number,
+        "message_index_basis": "readpst_numeric_filename",
+        "source_local_key": source_key, "source_content_hash": source_content_hash,
+        "relative_source_fingerprint": sha256_json(
+            str(path.relative_to(export_root)).replace("\\", "/")
+        ),
+        "source_byte_start": 0, "source_byte_end": len(raw),
+    }
+    item = SourceInventoryItem.create(
+        source_asset_id=asset.asset_id, structure_kind="exported_message_occurrence",
+        content_type="message/rfc822", ordinal=native_number,
+        processing_state=SourceInventoryProcessingState.PARSED,
+        raw_retention_state=SourceInventoryRawRetentionState.RETAINED,
+        source_fingerprint=asset.content_hash,
+        parser_fingerprint=extraction_config_hash(extraction_input.config),
+        permission_scope=asset.permission_scope,
+        location={"source_local_key": source_key,
+                  "relative_source_fingerprint": location["relative_source_fingerprint"],
+                  "source_content_hash": source_content_hash,
+                  "native_message_number": native_number},
+    )
+    inventory = SourceInventory.create(
+        source_asset_id=asset.asset_id, items=[item],
+        source_fingerprint=asset.content_hash,
+        parser_fingerprint=extraction_config_hash(extraction_input.config),
+        created_at=extraction_input.created_at or now_iso(),
+        permission_fingerprint=sha256_json(asset.permission_scope),
+    )
+    location.update(source_inventory_id=inventory.source_inventory_id,
+                    source_inventory_item_id=item.source_inventory_item_id)
+    message_fingerprint = sha256_json({
+        "source_content_hash": source_content_hash, "source_local_key": source_key,
+        "header_defects": defects,
+    })
+    observation = _native_bound_mail_observation(
+        source_asset_id=asset.asset_id,
+        extractor_run_id=extraction_input.extractor_run_id,
+        observation_type="email_message", text="", location=location,
+        payload={
+            **location, "subject": "", "normalized_subject": "", "sender": "",
+            "sent_at": "", "message_fingerprint": message_fingerprint,
+            "fingerprint_policy": "source_bound_malformed_header_parent_v1",
+            "message_id_origin": "source_bound_fallback_not_header",
+            "header_parse_defects": defects,
+            "parsed_header_field_names": list(header.keys()),
+            "header_values_state": "unknown",
+            "body_extraction_state": "not_performed",
+            "source_admission": "numeric_readpst_sidecar_parent_header_defect_repair",
+            "prior_ingestion_job_id": extraction_input.config["prior_ingestion_job_id"],
+            "canonical_fact_status": "not_asserted",
+        },
+        permission_scope=to_plain(asset.permission_scope),
+        created_at=extraction_input.created_at or now_iso(),
+    )
+    return observation, ReadpstSidecarParentBinding(
+        source_content_hash=source_content_hash, folder_path_hash=folder_hash,
+        message_id=message_id, message_index=native_number,
+        parent_observation_id=observation.observation_id,
+        parent_extractor_run_id=observation.extractor_run_id,
+        parent_source_inventory_id=inventory.source_inventory_id,
+        parent_source_inventory_item_id=item.source_inventory_item_id,
+        archive_id=archive_id, mailbox_id=mailbox_id,
+        message_occurrence_id=occurrence_id, thread_id=thread_id,
+        message_fingerprint=message_fingerprint, existing_attachment_max_index=0,
+        source_local_key=source_key,
+    )
+
+
 
 def parse_native_pst_message_exports(
     message_exports: Sequence[NativePstMessageExport],
@@ -15238,8 +16341,454 @@ def parse_native_pst_message_exports(
     provenance_fingerprint: str,
     created_at: str,
     body_segment_max_chars: int = 4000,
-    max_body_segments_per_message: int = 3,
+    max_body_segments_per_message: int | None = None,
     max_message_file_bytes: int = 8 * 1024 * 1024,
+    attachment_materialization: AttachmentMaterializationContext | None = None,
+) -> NativePstParsedEvidenceResult:
+    """Parse exact native RFC822 exports without deriving identity from paths.
+
+    ``message_exports`` is expected to come from a separately validated private
+    source-native manifest. Paths are used only to read bytes; every emitted
+    Observation is identified by the manifest's source-local descriptor key and
+    is bound to the corresponding existing ``SourceInventoryItem``.
+
+    Native attachment/export occurrences are materialized from the manifest
+    lineage, not guessed from MIME filename or ordinal matches. This preserves
+    descriptor-only and separate-format exports even when the RFC822 payload
+    does not expose them as MIME attachments.
+    """
+
+    if source_inventory.source_asset_id != source_asset_id:
+        raise ValueError("native_pst_source_inventory_asset_mismatch")
+    if source_inventory.source_fingerprint != source_asset_sha256:
+        raise ValueError("native_pst_source_inventory_fingerprint_mismatch")
+    if source_inventory.permission_fingerprint != sha256_json(permission_scope):
+        raise ValueError("native_pst_source_inventory_permission_mismatch")
+    for field_name, value in (
+        ("source_asset_id", source_asset_id),
+        ("source_asset_sha256", source_asset_sha256),
+        ("extractor_run_id", extractor_run_id),
+        ("provenance_fingerprint", provenance_fingerprint),
+        ("created_at", created_at),
+    ):
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"native_pst_{field_name}_missing")
+        assert_no_public_raw_references(value, f"native_pst_{field_name}")
+
+    config = _parser_config(
+        {
+            "max_messages": None,
+            "timeout_seconds": 1,
+            "max_message_file_bytes": max_message_file_bytes,
+            "body_segment_max_chars": body_segment_max_chars,
+            "max_body_segments_per_message": max_body_segments_per_message,
+            "max_attachment_hash_bytes": 1,
+            "include_deleted_items": False,
+            "parser_workers": 1,
+        }
+    )
+    item_by_source_key = {
+        str(item.location.get("source_local_key")): item
+        for item in source_inventory.items
+        if isinstance(item.location.get("source_local_key"), str)
+    }
+    ordered_exports = sorted(message_exports, key=lambda item: item.source_local_key)
+    if not ordered_exports:
+        raise ValueError("native_pst_message_exports_empty")
+    if len({item.source_local_key for item in ordered_exports}) != len(ordered_exports):
+        raise ValueError("native_pst_message_source_local_key_duplicate")
+
+    archive_id = stable_resource_contract_id(
+        "mailarchive",
+        "PstArchive",
+        {
+            "asset_id": source_asset_id,
+            "archive_sha256": source_asset_sha256,
+        },
+    )
+    mailbox_id = stable_resource_contract_id(
+        "mailbox",
+        "PstMailbox",
+        {"asset_id": source_asset_id},
+    )
+    warnings: list[str] = []
+    parsed_rows: list[
+        tuple[
+            NativePstMessageExport,
+            _ParsedMessage,
+            SourceInventoryItem,
+            SourceInventoryItem,
+        ]
+    ] = []
+    for native_export in ordered_exports:
+        message_item = item_by_source_key.get(native_export.source_local_key)
+        folder_item = item_by_source_key.get(native_export.parent_folder_source_local_key)
+        if (
+            message_item is None
+            or message_item.structure_kind
+            not in {"email_message_occurrence", "exported_message_occurrence"}
+            or message_item.processing_state != SourceInventoryProcessingState.PARSED
+        ):
+            raise ValueError("native_pst_message_inventory_binding_missing")
+        if (
+            folder_item is None
+            or folder_item.structure_kind != "mail_folder_descriptor_occurrence"
+            or folder_item.processing_state != SourceInventoryProcessingState.PARSED
+        ):
+            raise ValueError("native_pst_folder_inventory_binding_missing")
+        if (
+            message_item.location.get("parent_source_local_key")
+            != native_export.parent_folder_source_local_key
+            or message_item.location.get("message_content_hash")
+            != native_export.message_content_hash
+        ):
+            raise ValueError("native_pst_message_inventory_lineage_drift")
+        if not native_export.export_path.is_file():
+            raise ValueError("native_pst_message_export_missing")
+        if native_export.export_path.stat().st_size != native_export.byte_count:
+            raise ValueError("native_pst_message_export_byte_count_drift")
+        if native_export.byte_count > config.max_message_file_bytes:
+            raise ValueError("native_pst_message_export_too_large")
+        raw_message = native_export.export_path.read_bytes()
+        if "sha256:" + hashlib.sha256(raw_message).hexdigest() != (
+            native_export.message_content_hash
+        ):
+            raise ValueError("native_pst_message_export_content_hash_drift")
+        try:
+            email_message = BytesParser(policy=policy.default).parsebytes(raw_message)
+        except Exception as exc:
+            raise ValueError("native_pst_message_export_parse_failed") from exc
+        if not _is_mail_message(email_message):
+            raise ValueError("native_pst_message_export_not_rfc822")
+        parsed_message = _parsed_message_from_email(
+            email_message,
+            candidate_path=native_export.export_path,
+            export_root=native_export.export_path.parent,
+            message_index=1,
+            config=config,
+            warnings=warnings,
+            source_local_key_override=native_export.source_local_key,
+            folder_path_hash_override=sha256_json(
+                {
+                    "source_asset_sha256": source_asset_sha256,
+                    "pst_folder_node_id": native_export.pst_folder_node_id,
+                }
+            ),
+            folder_label_override=(
+                "native_folder_" + sha256_json(native_export.pst_folder_node_id)[-16:]
+            ),
+            message_id_fallback_parts=(
+                native_export.source_local_key,
+                native_export.message_content_hash,
+            ),
+            include_attachments=False,
+            source_content_hash=native_export.message_content_hash,
+        )
+        parsed_rows.append(
+            (
+                native_export,
+                parsed_message,
+                message_item,
+                folder_item,
+            )
+        )
+
+    folder_observations: dict[str, Observation] = {}
+    observations: list[Observation] = []
+    for native_export, parsed_message, _, folder_item in parsed_rows:
+        folder_key = native_export.parent_folder_source_local_key
+        if folder_key in folder_observations:
+            continue
+        folder_observation = _native_bound_mail_observation(
+            source_asset_id=source_asset_id,
+            extractor_run_id=extractor_run_id,
+            observation_type="mail_folder_occurrence",
+            text=parsed_message.folder_label,
+            location={
+                "archive_id": archive_id,
+                "mailbox_id": mailbox_id,
+                "source_inventory_id": source_inventory.source_inventory_id,
+                "source_inventory_item_id": folder_item.source_inventory_item_id,
+                "source_local_key": folder_key,
+                "folder_path_hash": parsed_message.folder_path_hash,
+                "pst_folder_node_id": native_export.pst_folder_node_id,
+                "source_provenance_fingerprint": provenance_fingerprint,
+            },
+            payload={
+                "archive_id": archive_id,
+                "mailbox_id": mailbox_id,
+                "source_inventory_id": source_inventory.source_inventory_id,
+                "source_inventory_item_id": folder_item.source_inventory_item_id,
+                "source_local_key": folder_key,
+                "folder_path_hash": parsed_message.folder_path_hash,
+                "folder_label": parsed_message.folder_label,
+                "source_provenance_fingerprint": provenance_fingerprint,
+                "evidence_state": "source_observation",
+                "canonical_fact_status": "not_asserted",
+            },
+            permission_scope=permission_scope,
+            created_at=created_at,
+        )
+        folder_observations[folder_key] = folder_observation
+        observations.append(folder_observation)
+
+    header_observation_count = 0
+    body_segment_observation_count = 0
+    attachment_observation_count = 0
+    next_table_index = 1
+    for native_export, parsed_message, message_item, folder_item in parsed_rows:
+        folder_observation = folder_observations[native_export.parent_folder_source_local_key]
+        occurrence_id = stable_resource_contract_id(
+            "mailocc",
+            "PstNativeMessageOccurrence",
+            {
+                "archive_id": archive_id,
+                "mailbox_id": mailbox_id,
+                "source_local_key": native_export.source_local_key,
+                "message_content_hash": native_export.message_content_hash,
+            },
+        )
+        thread_id = _thread_id(parsed_message)
+        attachment_hashes = sorted(
+            attachment.attachment_content_hash for attachment in native_export.attachments
+        )
+        message_fingerprint = sha256_json(
+            {
+                "message_id": parsed_message.message_id,
+                "normalized_subject": parsed_message.normalized_subject,
+                "sender": parsed_message.sender,
+                "sent_at": parsed_message.sent_at,
+                "body_hash": parsed_message.body_hash,
+                "attachment_hashes": attachment_hashes,
+            }
+        )
+        base_location: dict[str, Any] = {
+            "archive_id": archive_id,
+            "mailbox_id": mailbox_id,
+            "source_inventory_id": source_inventory.source_inventory_id,
+            "source_inventory_item_id": message_item.source_inventory_item_id,
+            "parent_inventory_item_id": folder_item.source_inventory_item_id,
+            "source_local_key": native_export.source_local_key,
+            "parent_source_local_key": native_export.parent_folder_source_local_key,
+            "parent_folder_observation_id": folder_observation.observation_id,
+            "source_content_hash": native_export.message_content_hash,
+            "folder_path_hash": parsed_message.folder_path_hash,
+            "message_id": parsed_message.message_id,
+            "message_occurrence_id": occurrence_id,
+            "thread_id": thread_id,
+            "pst_folder_node_id": native_export.pst_folder_node_id,
+            "pst_message_node_id": native_export.pst_message_node_id,
+            "pst_message_data_node_id": native_export.pst_message_data_node_id,
+            "source_provenance_fingerprint": provenance_fingerprint,
+        }
+        message_payload = {
+            **base_location,
+            "subject": parsed_message.subject,
+            "normalized_subject": parsed_message.normalized_subject,
+            "sender": parsed_message.sender,
+            "sent_at": parsed_message.sent_at,
+            "body_hash": parsed_message.body_hash,
+            "message_fingerprint": message_fingerprint,
+            "fingerprint_policy": "formowl_mail_fingerprint_v1",
+            "evidence_state": "source_observation",
+            "canonical_fact_status": "not_asserted",
+        }
+        observations.append(
+            _native_bound_mail_observation(
+                source_asset_id=source_asset_id,
+                extractor_run_id=extractor_run_id,
+                observation_type="email_message",
+                text=parsed_message.subject,
+                location=base_location,
+                payload=message_payload,
+                permission_scope=permission_scope,
+                created_at=created_at,
+            )
+        )
+        parent_message = observations[-1]
+        for header_index, header in enumerate(parsed_message.headers, start=1):
+            header_name = header.header_name
+            header_value = header.header_value or ("[source chronology]" if header.chronology is not None
+                                                   else "[source reply header]")
+            header_observation_count += 1
+            observations.append(
+                _native_bound_mail_observation(
+                    source_asset_id=source_asset_id,
+                    extractor_run_id=extractor_run_id,
+                    observation_type="email_header",
+                    text=f"{header_name}: {header_value}",
+                    location={
+                        **base_location,
+                        "header_index": header_index,
+                        "header_name": header_name,
+                    },
+                    payload={
+                        **base_location,
+                        "header_name": header_name,
+                        "header_value": header_value,
+                        "message_fingerprint": message_fingerprint,
+                        "evidence_state": "source_observation",
+                        "canonical_fact_status": "not_asserted",
+                    },
+                    permission_scope=permission_scope,
+                    created_at=created_at,
+                )
+            )
+        for segment_index, body_segment in enumerate(
+            parsed_message.body_segments,
+            start=1,
+        ):
+            body_segment_observation_count += 1
+            observations.append(
+                _native_bound_mail_observation(
+                    source_asset_id=source_asset_id,
+                    extractor_run_id=extractor_run_id,
+                    observation_type="email_body_segment",
+                    text=_pst_public_body_text(body_segment.text),
+                    extracted_value=body_segment.text,
+                    location={
+                        **base_location,
+                        "body_segment_index": segment_index,
+                        **parsed_message.body_segment_locations[segment_index - 1],
+                    },
+                    payload={
+                        **base_location,
+                        "body_segment_index": segment_index,
+                        "message_fingerprint": message_fingerprint,
+                        "evidence_state": "source_observation",
+                        "canonical_fact_status": "not_asserted",
+                    },
+                    permission_scope=permission_scope,
+                    created_at=created_at,
+                )
+            )
+        for attachment in sorted(
+            native_export.attachments,
+            key=lambda item: item.source_local_key,
+        ):
+            attachment_item = item_by_source_key.get(attachment.source_local_key)
+            if (
+                attachment_item is None
+                or not attachment_item.structure_kind.endswith("occurrence")
+                or attachment_item.processing_state != SourceInventoryProcessingState.PARSED
+            ):
+                raise ValueError("native_pst_attachment_inventory_binding_missing")
+            if (
+                attachment.parent_message_source_local_key != native_export.source_local_key
+                or attachment_item.location.get("parent_source_local_key")
+                != native_export.source_local_key
+                or attachment_item.location.get("attachment_content_hash")
+                != attachment.attachment_content_hash
+            ):
+                raise ValueError("native_pst_attachment_inventory_lineage_drift")
+            attachment_observation_count += 1
+            attachment_id = stable_resource_contract_id(
+                "mailatt",
+                "PstNativeAttachment",
+                {
+                    "source_local_key": attachment.source_local_key,
+                    "attachment_content_hash": attachment.attachment_content_hash,
+                    "pst_attachment_node_id": attachment.pst_attachment_node_id,
+                },
+            )
+            opaque_filename = "native_attachment_" + sha256_json(attachment.source_local_key)[-16:]
+            child_binding: dict[str, Any] = {}
+            if attachment_materialization is not None:
+                if attachment.export_path is None:
+                    warnings.append("pst_native_attachment_export_unavailable_incomplete")
+                else:
+                    if attachment.export_path.stat().st_size != attachment.byte_count:
+                        raise ValueError("native_pst_attachment_export_byte_count_drift")
+                    content = attachment.export_path.read_bytes()
+                    if "sha256:" + hashlib.sha256(content).hexdigest() != attachment.attachment_content_hash:
+                        raise ValueError("native_pst_attachment_export_content_hash_drift")
+                    child_binding["child_asset_id"] = attachment_materialization.materialize(
+                        content=content,
+                        expected_content_hash=attachment.attachment_content_hash,
+                        mime_type="application/octet-stream",
+                        source_ref=SourceRef(
+                            source_system="formowl_mail_attachment",
+                            source_type="email_attachment_occurrence",
+                            source_id=attachment_item.source_inventory_item_id,
+                            source_instance=source_inventory.source_inventory_id,
+                            source_key=occurrence_id,
+                        ),
+                    )
+            observations.append(
+                _native_bound_mail_observation(
+                    source_asset_id=source_asset_id,
+                    extractor_run_id=extractor_run_id,
+                    observation_type="email_attachment_occurrence",
+                    text=opaque_filename,
+                    location={
+                        **base_location,
+                        "source_inventory_item_id": (attachment_item.source_inventory_item_id),
+                        "parent_inventory_item_id": (message_item.source_inventory_item_id),
+                        "source_local_key": attachment.source_local_key,
+                        "parent_source_local_key": native_export.source_local_key,
+                        "source_content_hash": attachment.attachment_content_hash,
+                        "pst_attachment_node_id": attachment.pst_attachment_node_id,
+                        "export_occurrence_ordinal": (attachment.export_occurrence_ordinal),
+                        "export_disposition": attachment.export_disposition,
+                        "attachment_index": attachment.export_occurrence_ordinal,
+                        "attachment_id": attachment_id,
+                        **child_binding,
+                    },
+                    payload={
+                        **base_location,
+                        "source_inventory_item_id": (attachment_item.source_inventory_item_id),
+                        "parent_inventory_item_id": (message_item.source_inventory_item_id),
+                        "source_local_key": attachment.source_local_key,
+                        "parent_source_local_key": native_export.source_local_key,
+                        "source_content_hash": attachment.attachment_content_hash,
+                        "pst_attachment_node_id": attachment.pst_attachment_node_id,
+                        "export_occurrence_ordinal": (attachment.export_occurrence_ordinal),
+                        "export_disposition": attachment.export_disposition,
+                        "attachment_id": attachment_id,
+                        "filename": opaque_filename,
+                        "mime_type": (
+                            "message/rfc822"
+                            if attachment.export_disposition == "embedded_message_exported"
+                            else "application/octet-stream"
+                        ),
+                        "content_hash": attachment.attachment_content_hash,
+                        "size_bytes": attachment.byte_count,
+                        "message_fingerprint": message_fingerprint,
+                        "evidence_state": "source_observation",
+                        "canonical_fact_status": "not_asserted",
+                        **child_binding,
+                    },
+                    permission_scope=permission_scope,
+                    created_at=created_at,
+                )
+            )
+
+        observations.extend(
+            _inline_table_observations(parsed_message, parent_message, next_table_index)
+        )
+        next_table_index += len(parsed_message.html_tables)
+
+    if any(
+        "skipped" in warning or "limit_reached" in warning
+        or "unsupported" in warning or "incomplete" in warning
+        or warning == "pst_parser_header_redacted"
+        for warning in warnings
+    ):
+        warnings.append("partial_extraction")
+    warning_counts: dict[str, int] = {}
+    for warning in warnings:
+        warning_counts[warning] = warning_counts.get(warning, 0) + 1
+    return NativePstParsedEvidenceResult(
+        observations=tuple(observations),
+        warning_counts=dict(sorted(warning_counts.items())),
+        message_count=len(parsed_rows),
+        header_observation_count=header_observation_count,
+        body_segment_observation_count=body_segment_observation_count,
+        attachment_observation_count=attachment_observation_count,
+    )
+
+
+
 
 def _native_bound_mail_observation(
     *,
@@ -15251,6 +16800,37 @@ def _native_bound_mail_observation(
     payload: Mapping[str, Any],
     permission_scope: Mapping[str, Any],
     created_at: str,
+    modality: str = "mail",
+    extracted_value: Any = None,
+) -> Observation:
+    normalized_location = dict(location)
+    normalized_payload = dict(payload)
+    observation_id = stable_observation_id(
+        asset_id=source_asset_id,
+        extractor_run_id=extractor_run_id,
+        observation_type=observation_type,
+        modality=modality,
+        location=normalized_location,
+        text=text,
+        payload=normalized_payload,
+        extracted_value=extracted_value,
+    )
+    return Observation(
+        observation_id=observation_id,
+        asset_id=source_asset_id,
+        extractor_run_id=extractor_run_id,
+        observation_type=observation_type,
+        modality=modality,
+        text=text,
+        location=normalized_location,
+        confidence=1.0,
+        permission_scope=dict(permission_scope),
+        created_at=created_at,
+        payload=normalized_payload,
+        extracted_value=extracted_value,
+    )
+
+
 
 def run_bounded_pst_source_completeness_poc(
     pst_path: str | Path,
@@ -15266,6 +16846,111 @@ def run_bounded_pst_source_completeness_poc(
     max_exported_bytes: int = 16 * 1024 * 1024,
     timeout_seconds: int = 30,
     max_message_file_bytes: int = 4 * 1024 * 1024,
+) -> PstSourceCompletenessPocResult:
+    """Run a bounded, diagnostic-only source-inventory reconciliation slice.
+
+    The parser export is inventoried before Observation materialization. The
+    inventory is persisted and loaded back before it is supplied to the
+    Observation binding path. Stopping the parser at a cap makes this a partial
+    diagnostic and never a source-completeness authority result.
+    """
+
+    source_path = Path(pst_path)
+    if not _looks_like_pst(source_path):
+        raise ValueError("pst_source_signature_mismatch")
+    max_exported_files = _positive_int(max_exported_files, "max_exported_files")
+    max_exported_bytes = _positive_int(max_exported_bytes, "max_exported_bytes")
+    timeout_seconds = _positive_int(timeout_seconds, "timeout_seconds")
+    max_message_file_bytes = _positive_int(
+        max_message_file_bytes,
+        "max_message_file_bytes",
+    )
+    config = _parser_config(
+        {
+            "timeout_seconds": timeout_seconds,
+            "max_message_file_bytes": max_message_file_bytes,
+            "body_segment_max_chars": 4000,
+            "max_body_segments_per_message": 3,
+            "max_attachment_hash_bytes": max_message_file_bytes,
+            "include_deleted_items": False,
+            "parser_workers": 1,
+        }
+    )
+    source_fingerprint = _bounded_source_fingerprint(source_path)
+    parser_fingerprint = stable_resource_contract_hash(
+        "PstBoundedSourceCompletenessProfile",
+        {
+            "parser_command_fingerprint": sha256_json(parser_command),
+            "max_exported_files": max_exported_files,
+            "max_exported_bytes": max_exported_bytes,
+            "timeout_seconds": timeout_seconds,
+            "max_message_file_bytes": max_message_file_bytes,
+        },
+    )
+    scratch_path = _create_scratch_dir(Path(scratch_parent) if scratch_parent is not None else None)
+    try:
+        bounded_export = _bounded_readpst_export(
+            parser_command=parser_command,
+            pst_path=source_path,
+            output_dir=scratch_path,
+            max_exported_files=max_exported_files,
+            max_exported_bytes=max_exported_bytes,
+            timeout_seconds=timeout_seconds,
+        )
+        classified_units = _classify_exported_source_units(
+            bounded_export.candidate_paths,
+            export_root=scratch_path,
+            config=config,
+        )
+        source_inventory = _pst_source_inventory_from_classified_units(
+            classified_units,
+            source_asset_id=source_asset_id,
+            source_fingerprint=source_fingerprint,
+            parser_fingerprint=parser_fingerprint,
+            permission_scope=permission_scope,
+            created_at=created_at,
+        )
+        persisted_inventory = _persist_source_inventory_round_trip(
+            source_inventory,
+            Path(inventory_path),
+        )
+        parsed_messages = [
+            unit.parsed_message for unit in classified_units if unit.parsed_message is not None
+        ]
+        observations = tuple(
+            _mail_observations_from_messages(
+                parsed_messages,
+                extraction_input=_diagnostic_extraction_input(
+                    source_path=source_path,
+                    source_asset_id=source_asset_id,
+                    source_fingerprint=source_fingerprint,
+                    permission_scope=permission_scope,
+                    extractor_run_id=extractor_run_id,
+                    created_at=created_at,
+                ),
+                source_inventory=persisted_inventory,
+            )
+        )
+        report = reconcile_pst_source_inventory(
+            persisted_inventory,
+            observations,
+            bounded_source_unit_count=len(classified_units),
+            bounded_overflow_count=bounded_export.overflow_count,
+            parser_stop_reason=bounded_export.stop_reason,
+            parser_completed=bounded_export.parser_completed,
+            persisted_round_trip_verified=(
+                persisted_inventory.to_persistence_dict() == source_inventory.to_persistence_dict()
+            ),
+        )
+        return PstSourceCompletenessPocResult(
+            source_inventory=persisted_inventory,
+            observations=observations,
+            report=report,
+        )
+    finally:
+        shutil.rmtree(scratch_path, ignore_errors=True)
+
+
 
 def _diagnostic_extraction_input(
     *,
@@ -15275,6 +16960,31 @@ def _diagnostic_extraction_input(
     permission_scope: Mapping[str, Any],
     extractor_run_id: str,
     created_at: str,
+) -> ExtractionInput:
+    from formowl_contract import Asset
+
+    return ExtractionInput(
+        asset=Asset(
+            asset_id=source_asset_id,
+            storage_backend_id="storage_diagnostic_private",
+            object_uri="formowl://asset/" + source_asset_id,
+            content_hash=source_fingerprint,
+            file_size=source_path.stat().st_size,
+            mime_type="application/vnd.ms-outlook",
+            created_at=created_at,
+            registered_at=created_at,
+            owner_user_id=str(permission_scope.get("owner_user_id", "user_diagnostic")),
+            workspace_id=str(permission_scope.get("workspace_id", "workspace_diagnostic")),
+            permission_scope=dict(permission_scope),
+            lifecycle_state="active",
+        ),
+        object_path=source_path,
+        extractor_run_id=extractor_run_id,
+        config={},
+        created_at=created_at,
+    )
+
+
 
 def _bounded_source_fingerprint(path: Path, *, sample_bytes: int = 1024 * 1024) -> str:
     with path.open("rb") as handle:
@@ -15287,6 +16997,8 @@ def _bounded_source_fingerprint(path: Path, *, sample_bytes: int = 1024 * 1024) 
         }
     )
 
+
+
 def _bounded_readpst_export(
     *,
     parser_command: str,
@@ -15295,12 +17007,74 @@ def _bounded_readpst_export(
     max_exported_files: int,
     max_exported_bytes: int,
     timeout_seconds: int,
+) -> _BoundedPstExport:
+    command = _readpst_command(
+        parser_command,
+        pst_path,
+        output_dir,
+        include_deleted_items=False,
+    )
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError as exc:
+        raise ValueError("pst_parser_unavailable") from exc
+
+    started = time.monotonic()
+    stop_reason = "completed"
+    parser_completed = False
+    while True:
+        paths = tuple(_iter_exported_files(output_dir))
+        exported_bytes = sum(_safe_file_size(path) for path in paths)
+        if len(paths) >= max_exported_files:
+            stop_reason = "file_cap"
+            _terminate_process(process)
+            break
+        if exported_bytes >= max_exported_bytes:
+            stop_reason = "byte_cap"
+            _terminate_process(process)
+            break
+        returncode = process.poll()
+        if returncode is not None:
+            parser_completed = returncode == 0
+            stop_reason = "completed" if parser_completed else "parser_failed"
+            break
+        if time.monotonic() - started >= timeout_seconds:
+            stop_reason = "timeout"
+            _terminate_process(process)
+            break
+        time.sleep(0.05)
+
+    all_paths = tuple(_iter_exported_files(output_dir))
+    selected: list[Path] = []
+    selected_bytes = 0
+    for candidate in all_paths:
+        candidate_size = _safe_file_size(candidate)
+        if len(selected) >= max_exported_files:
+            continue
+        if selected and selected_bytes + candidate_size > max_exported_bytes:
+            continue
+        selected.append(candidate)
+        selected_bytes += candidate_size
+    return _BoundedPstExport(
+        candidate_paths=tuple(selected),
+        stop_reason=stop_reason,
+        overflow_count=max(0, len(all_paths) - len(selected)),
+        parser_completed=parser_completed,
+    )
+
+
 
 def _safe_file_size(path: Path) -> int:
     try:
         return path.stat().st_size
     except OSError:
         return 0
+
+
 
 def _terminate_process(process: subprocess.Popen[Any]) -> None:
     if process.poll() is not None:
@@ -15312,11 +17086,94 @@ def _terminate_process(process: subprocess.Popen[Any]) -> None:
         process.kill()
         process.wait(timeout=2)
 
+
+
 def _classify_exported_source_units(
     candidate_paths: Sequence[Path],
     *,
     export_root: Path,
     config: _PstParserConfig,
+) -> tuple[_PstClassifiedSourceUnit, ...]:
+    classified: list[_PstClassifiedSourceUnit] = []
+    for source_ordinal, candidate in enumerate(candidate_paths, start=1):
+        source_local_key = _exported_message_source_local_key(
+            candidate,
+            export_root=export_root,
+            message_index=source_ordinal,
+        )
+        try:
+            size_bytes = candidate.stat().st_size
+        except OSError:
+            classified.append(
+                _PstClassifiedSourceUnit(
+                    source_local_key=source_local_key,
+                    processing_state=SourceInventoryProcessingState.FAILED,
+                    content_type="application/octet-stream",
+                    parsed_message=None,
+                )
+            )
+            continue
+        if size_bytes > config.max_message_file_bytes:
+            classified.append(
+                _PstClassifiedSourceUnit(
+                    source_local_key=source_local_key,
+                    processing_state=(SourceInventoryProcessingState.PRESERVED_UNPARSED),
+                    content_type="application/octet-stream",
+                    parsed_message=None,
+                )
+            )
+            continue
+        try:
+            message = BytesParser(policy=policy.default).parsebytes(candidate.read_bytes())
+        except Exception:
+            classified.append(
+                _PstClassifiedSourceUnit(
+                    source_local_key=source_local_key,
+                    processing_state=SourceInventoryProcessingState.FAILED,
+                    content_type="application/octet-stream",
+                    parsed_message=None,
+                )
+            )
+            continue
+        if not _is_mail_message(message):
+            classified.append(
+                _PstClassifiedSourceUnit(
+                    source_local_key=source_local_key,
+                    processing_state=SourceInventoryProcessingState.UNSUPPORTED,
+                    content_type=_safe_mail_text(
+                        message.get_content_type(),
+                        "source_content_type",
+                    )
+                    or "application/octet-stream",
+                    parsed_message=None,
+                )
+            )
+            continue
+        warnings: list[str] = []
+        parsed_message = _parsed_message_from_email(
+            message,
+            candidate_path=candidate,
+            export_root=export_root,
+            message_index=source_ordinal,
+            config=config,
+            warnings=warnings,
+            source_local_key=source_local_key,
+            folder_components=_canonical_relative_components(candidate, export_root)[:-1],
+        )
+        if parsed_message.source_local_key != source_local_key:
+            raise ValueError("pst_source_inventory_key_drift")
+        classified.append(
+            _PstClassifiedSourceUnit(
+                source_local_key=source_local_key,
+                processing_state=SourceInventoryProcessingState.PARSED,
+                content_type="message/rfc822",
+                parsed_message=parsed_message,
+            )
+        )
+    return tuple(classified)
+
+
+
 
 def _pst_source_inventory_from_classified_units(
     units: Sequence[_PstClassifiedSourceUnit],
@@ -15326,10 +17183,110 @@ def _pst_source_inventory_from_classified_units(
     parser_fingerprint: str,
     permission_scope: Mapping[str, Any],
     created_at: str,
+) -> SourceInventory:
+    root_source_local_key = stable_resource_contract_id(
+        "pstroot",
+        "PstSourceInventoryRoot",
+        {
+            "source_asset_id": source_asset_id,
+            "source_fingerprint": source_fingerprint,
+        },
+    )
+    inventory_items: list[SourceInventoryItem] = []
+    item_ordinal = 0
+    for unit in units:
+        item_ordinal += 1
+        structure_kind = (
+            "exported_message_occurrence"
+            if unit.processing_state == SourceInventoryProcessingState.PARSED
+            else "exported_source_unit"
+        )
+        inventory_items.append(
+            SourceInventoryItem.create(
+                source_asset_id=source_asset_id,
+                structure_kind=structure_kind,
+                content_type=unit.content_type,
+                ordinal=item_ordinal,
+                processing_state=unit.processing_state,
+                raw_retention_state=SourceInventoryRawRetentionState.RETAINED,
+                source_fingerprint=source_fingerprint,
+                parser_fingerprint=parser_fingerprint,
+                permission_scope=permission_scope,
+                location={
+                    "source_local_key": unit.source_local_key,
+                    "parent_source_local_key": root_source_local_key,
+                },
+            )
+        )
+        if unit.parsed_message is None:
+            continue
+        for attachment_ordinal, attachment in enumerate(
+            unit.parsed_message.attachments,
+            start=1,
+        ):
+            if not attachment.source_name_fingerprint:
+                raise ValueError("pst_attachment_source_name_fingerprint_missing")
+            attachment_source_local_key = stable_resource_contract_id(
+                "pstattsrc",
+                "PstAttachmentSourceOccurrence",
+                {
+                    "parent_source_local_key": unit.source_local_key,
+                    "attachment_id": attachment.attachment_id,
+                    "attachment_ordinal": attachment_ordinal,
+                    "attachment_name_fingerprint": (attachment.source_name_fingerprint),
+                },
+            )
+            item_ordinal += 1
+            inventory_items.append(
+                SourceInventoryItem.create(
+                    source_asset_id=source_asset_id,
+                    structure_kind="regular_attachment_occurrence",
+                    content_type=attachment.mime_type or "application/octet-stream",
+                    ordinal=item_ordinal,
+                    processing_state=SourceInventoryProcessingState.PARSED,
+                    raw_retention_state=SourceInventoryRawRetentionState.RETAINED,
+                    source_fingerprint=source_fingerprint,
+                    parser_fingerprint=parser_fingerprint,
+                    permission_scope=permission_scope,
+                    location={
+                        "source_local_key": attachment_source_local_key,
+                        "parent_source_local_key": unit.source_local_key,
+                        "attachment_id": attachment.attachment_id,
+                        "attachment_ordinal": attachment_ordinal,
+                        "attachment_name_fingerprint": (attachment.source_name_fingerprint),
+                    },
+                )
+            )
+    return SourceInventory.create(
+        source_asset_id=source_asset_id,
+        items=inventory_items,
+        source_fingerprint=source_fingerprint,
+        parser_fingerprint=parser_fingerprint,
+        created_at=created_at,
+        permission_fingerprint=sha256_json(permission_scope),
+    )
+
+
 
 def _persist_source_inventory_round_trip(
     source_inventory: SourceInventory,
     inventory_path: Path,
+) -> SourceInventory:
+    inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        inventory_path.parent.chmod(0o700)
+    temporary = inventory_path.with_name(inventory_path.name + "." + uuid.uuid4().hex + ".tmp")
+    temporary.write_text(
+        json.dumps(source_inventory.to_persistence_dict(), sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    if os.name != "nt":
+        temporary.chmod(0o600)
+    os.replace(temporary, inventory_path)
+    persisted = json.loads(inventory_path.read_text(encoding="utf-8"))
+    return SourceInventory.from_dict(persisted)
+
+
 
 def reconcile_pst_source_inventory(
     source_inventory: SourceInventory,
@@ -15340,6 +17297,156 @@ def reconcile_pst_source_inventory(
     parser_stop_reason: str,
     parser_completed: bool,
     persisted_round_trip_verified: bool,
+) -> dict[str, Any]:
+    processing_state_counts = {state.value: 0 for state in SourceInventoryProcessingState}
+    raw_retention_state_counts = {state.value: 0 for state in SourceInventoryRawRetentionState}
+    for item in source_inventory.items:
+        processing_state_counts[item.processing_state.value] += 1
+        raw_retention_state_counts[item.raw_retention_state.value] += 1
+
+    expected_ids = {
+        item.source_inventory_item_id
+        for item in source_inventory.items
+        if item.processing_state == SourceInventoryProcessingState.PARSED
+        and item.structure_kind in {"exported_message_occurrence", "regular_attachment_occurrence"}
+    }
+    referenced_ids: set[str] = set()
+    for observation in observations:
+        if observation.observation_type not in {
+            "email_message",
+            "email_attachment_occurrence",
+        }:
+            continue
+        payload = observation.payload or {}
+        item_id = payload.get("source_inventory_item_id")
+        if isinstance(item_id, str) and item_id:
+            referenced_ids.add(item_id)
+    matched_ids = expected_ids & referenced_ids
+    unexplained_loss_count = len(expected_ids - matched_ids)
+    unexpected_reference_count = len(referenced_ids - expected_ids)
+    report: dict[str, Any] = {
+        "artifact_id": "issue56_source_completeness_diagnostic_v1",
+        "status": ("diagnostic_partial" if source_inventory.items else "diagnostic_blocked"),
+        "source_inventory_fingerprint": sha256_json(source_inventory.to_persistence_dict()),
+        "processing_state_counts": processing_state_counts,
+        "raw_retention_state_counts": raw_retention_state_counts,
+        "inventory_item_count": len(source_inventory.items),
+        "bounded_source_unit_count": bounded_source_unit_count,
+        "bounded_overflow_count": bounded_overflow_count,
+        "expected_observation_binding_count": len(expected_ids),
+        "matched_observation_binding_count": len(matched_ids),
+        "unexplained_loss_count": unexplained_loss_count,
+        "unexpected_observation_reference_count": unexpected_reference_count,
+        "parser_stop_status": parser_stop_reason,
+        "parser_completed_metric": parser_completed,
+        "persisted_round_trip_verified_metric": persisted_round_trip_verified,
+        "claim_boundary": {
+            "source_complete": False,
+            "real_source_authority_gate_passed": False,
+            "diagnostic_partial_only": True,
+        },
+    }
+    report["report_fingerprint"] = sha256_json(report)
+    assert_no_public_raw_references(report, "issue56_source_completeness_report")
+    return report
+
+
+
+def _required_nonempty_string(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return value
+
+
+
+def _readpst_separate_attachment_index(
+    export_root: Path,
+) -> tuple[dict[Path, tuple[Path, ...]], set[Path]]:
+    """Bind readpst -S sidecars to their numeric sibling message file."""
+    attachment_paths: dict[Path, list[Path]] = {}
+    detached_paths: set[Path] = set()
+    stack = [export_root]
+    while stack:
+        current = stack.pop()
+        try:
+            children = sorted(current.iterdir(), key=lambda item: item.name.lower())
+        except OSError:
+            continue
+        files = {child.name: child for child in children if child.is_file()}
+        stack.extend(child for child in reversed(children) if child.is_dir())
+        for child in files.values():
+            message_name, separator, attachment_name = child.name.partition("-")
+            if (
+                not separator
+                or not message_name.isdecimal()
+                or not attachment_name
+            ):
+                continue
+            message_path = files.get(message_name)
+            if message_path is None:
+                continue
+            attachment_paths.setdefault(message_path, []).append(child)
+            detached_paths.add(child)
+    return (
+        {
+            message_path: tuple(sorted(paths, key=lambda item: item.name.lower()))
+            for message_path, paths in attachment_paths.items()
+        },
+        detached_paths,
+    )
+
+
+
+def _bound_existing_export_marker(
+    export_root: Path,
+    *,
+    source_fingerprint: str,
+    marker_fingerprint: Any,
+) -> dict[str, Any] | None:
+    try:
+        marker = json.loads(
+            (export_root.parent / "readpst-export-complete.json").read_bytes()
+        )
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    if (
+        not export_root.is_dir()
+        or marker.get("source_fingerprint") != source_fingerprint
+        or marker_fingerprint != sha256_json(marker)
+    ):
+        return None
+    return marker
+
+
+
+def _sha256_path(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    byte_count = 0
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+            byte_count += len(chunk)
+    return "sha256:" + digest.hexdigest(), byte_count
+
+
+
+def _sidecar_content(
+    path: Path,
+    *,
+    materialization_limit: int,
+) -> tuple[str, int, bytes | None]:
+    expected_size = path.stat().st_size
+    if expected_size <= materialization_limit:
+        content = path.read_bytes()
+        return (
+            "sha256:" + hashlib.sha256(content).hexdigest(),
+            len(content),
+            content,
+        )
+    content_hash, byte_count = _sha256_path(path)
+    return content_hash, byte_count, None
+
+
 
 def _iter_exported_files(export_root: Path) -> Iterable[Path]:
     stack = [export_root]
@@ -15355,6 +17462,8 @@ def _iter_exported_files(export_root: Path) -> Iterable[Path]:
             elif child.is_file():
                 yield child
 
+
+
 def _safe_relative_parent(candidate_path: Path, export_root: Path) -> Path:
     try:
         relative = candidate_path.parent.relative_to(export_root)
@@ -15362,15 +17471,35 @@ def _safe_relative_parent(candidate_path: Path, export_root: Path) -> Path:
         return Path("mailbox")
     return relative if str(relative) not in {"", "."} else Path("mailbox")
 
+
+
 def _folder_label(relative_parent: Path) -> str:
     label = " / ".join(part for part in relative_parent.parts if part not in {"", "."})
     return _safe_mail_text(label or "Mailbox", "folder_label")
+
+
 
 def _exported_message_source_local_key(
     candidate_path: Path,
     *,
     export_root: Path,
     message_index: int,
+) -> str:
+    try:
+        relative_file = candidate_path.relative_to(export_root)
+        relative_file_fingerprint = sha256_json(str(relative_file).replace("\\", "/"))
+    except ValueError:
+        relative_file_fingerprint = sha256_json({"external_export_candidate": message_index})
+    return stable_resource_contract_id(
+        "pstmsgsrc",
+        "PstExportedMessageSourceOccurrence",
+        {
+            "relative_file_fingerprint": relative_file_fingerprint,
+            "message_index": message_index,
+        },
+    )
+
+
 
 def _safe_date(value: str) -> str:
     text = str(value or "").strip()
@@ -15382,39 +17511,43 @@ def _safe_date(value: str) -> str:
         return _safe_mail_text(text, "date")
     return parsed.isoformat()
 
+
+
 def _safe_header_tokens(value: str, field_name: str) -> list[str]:
     tokens = [item for item in re.split(r"\s+", str(value or "").strip()) if item]
     return [_safe_mail_text(token, field_name) for token in tokens[:25]]
+
+
 
 def _safe_optional_header(value: str | None, field_name: str) -> str | None:
     if value in (None, ""):
         return None
     return _safe_mail_text(str(value), field_name)
 
+
+
 def _plain_body(message: EmailMessage) -> str:
-    plain_parts: list[str] = []
-    html_parts: list[str] = []
-    for part in message.walk() if message.is_multipart() else [message]:
-        if part.is_multipart():
-            continue
-        disposition = part.get_content_disposition()
-        if disposition == "attachment":
-            continue
-        content_type = part.get_content_type()
-        try:
-            content = part.get_content()
-        except Exception:
-            continue
-        if not isinstance(content, str):
-            continue
-        if content_type == "text/plain":
-            plain_parts.append(content)
-        elif content_type == "text/html":
-            html_parts.append(_html_to_text(content))
-    body = "\n\n".join(part.strip() for part in plain_parts if part.strip())
-    if body:
-        return body
-    return "\n\n".join(part.strip() for part in html_parts if part.strip())
+    warnings: list[str] = []
+    return _body_projection(_body_leaf_classifications(message, warnings=warnings), warnings=warnings)[0]
+
+
+
+def _body_segments(
+    text: str, *, max_chars: int, max_segments: int | None, warnings: list[str]
+) -> list[str]:
+    segments: list[str] = []
+    for paragraph in _body_paragraphs(text):
+        if max_segments is not None and len(segments) >= max_segments:
+            warnings.append("pst_parser_body_segment_limit_reached")
+            break
+        for chunk in _chunks(paragraph, max_chars):
+            if max_segments is not None and len(segments) >= max_segments:
+                warnings.append("pst_parser_body_segment_limit_reached")
+                break
+            segments.append(chunk)
+    return segments
+
+
 
 def _body_paragraphs(text: str) -> list[str]:
     normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -15424,11 +17557,25 @@ def _body_paragraphs(text: str) -> list[str]:
     single = normalized.strip()
     return [single] if single else []
 
+
+
 def _chunks(value: str, size: int) -> Iterable[str]:
     for start in range(0, len(value), size):
         chunk = value[start : start + size].strip()
         if chunk:
             yield chunk
+
+
+
+def _attachment_mime_type(filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    return (
+        _ATTACHMENT_MIME_TYPES_BY_SUFFIX.get(suffix)
+        or mimetypes.guess_type(filename)[0]
+        or "application/octet-stream"
+    )
+
+
 
 def _pst_source_inventory(
     messages: Sequence[_ParsedMessage],
@@ -15437,6 +17584,96 @@ def _pst_source_inventory(
     parser_name: str,
     parser_version: str,
     config: _PstParserConfig,
+) -> SourceInventory:
+    source_fingerprint = extraction_input.asset.content_hash
+    parser_fingerprint = stable_resource_contract_hash(
+        "PstSourceInventoryParserProfile",
+        {
+            "parser_name": parser_name,
+            "parser_version": parser_version,
+            "parser_config": {
+                "max_messages": config.max_messages,
+                "max_message_file_bytes": config.max_message_file_bytes,
+                "body_segment_max_chars": config.body_segment_max_chars,
+                "max_body_segments_per_message": config.max_body_segments_per_message,
+                "max_attachment_hash_bytes": config.max_attachment_hash_bytes,
+                "include_deleted_items": config.include_deleted_items,
+            },
+        },
+    )
+    root_source_local_key = stable_resource_contract_id(
+        "pstroot",
+        "PstSourceInventoryRoot",
+        {
+            "source_asset_id": extraction_input.asset.asset_id,
+            "source_fingerprint": source_fingerprint,
+        },
+    )
+    inventory_items: list[SourceInventoryItem] = []
+    item_ordinal = 0
+    for message in messages:
+        item_ordinal += 1
+        inventory_items.append(
+            SourceInventoryItem.create(
+                source_asset_id=extraction_input.asset.asset_id,
+                structure_kind="exported_message_occurrence",
+                content_type="message/rfc822",
+                ordinal=item_ordinal,
+                processing_state=SourceInventoryProcessingState.PARSED,
+                raw_retention_state=SourceInventoryRawRetentionState.RETAINED,
+                source_fingerprint=source_fingerprint,
+                parser_fingerprint=parser_fingerprint,
+                permission_scope=extraction_input.asset.permission_scope,
+                location={
+                    "source_local_key": message.source_local_key,
+                    "parent_source_local_key": root_source_local_key,
+                },
+            )
+        )
+        for attachment_ordinal, attachment in enumerate(message.attachments, start=1):
+            if not attachment.source_name_fingerprint:
+                raise ValueError("pst_attachment_source_name_fingerprint_missing")
+            attachment_source_local_key = stable_resource_contract_id(
+                "pstattsrc",
+                "PstAttachmentSourceOccurrence",
+                {
+                    "parent_source_local_key": message.source_local_key,
+                    "attachment_id": attachment.attachment_id,
+                    "attachment_ordinal": attachment_ordinal,
+                    "attachment_name_fingerprint": attachment.source_name_fingerprint,
+                },
+            )
+            item_ordinal += 1
+            inventory_items.append(
+                SourceInventoryItem.create(
+                    source_asset_id=extraction_input.asset.asset_id,
+                    structure_kind="regular_attachment_occurrence",
+                    content_type=attachment.mime_type or "application/octet-stream",
+                    ordinal=item_ordinal,
+                    processing_state=SourceInventoryProcessingState.PARSED,
+                    raw_retention_state=SourceInventoryRawRetentionState.RETAINED,
+                    source_fingerprint=source_fingerprint,
+                    parser_fingerprint=parser_fingerprint,
+                    permission_scope=extraction_input.asset.permission_scope,
+                    location={
+                        "source_local_key": attachment_source_local_key,
+                        "parent_source_local_key": message.source_local_key,
+                        "attachment_id": attachment.attachment_id,
+                        "attachment_ordinal": attachment_ordinal,
+                        "attachment_name_fingerprint": (attachment.source_name_fingerprint),
+                    },
+                )
+            )
+    return SourceInventory.create(
+        source_asset_id=extraction_input.asset.asset_id,
+        items=inventory_items,
+        source_fingerprint=source_fingerprint,
+        parser_fingerprint=parser_fingerprint,
+        created_at=extraction_input.created_at or now_iso(),
+        permission_fingerprint=sha256_json(extraction_input.asset.permission_scope),
+    )
+
+
 
 def _message_occurrence_id(
     message: _ParsedMessage,
@@ -15444,3 +17681,214 @@ def _message_occurrence_id(
     message_index: int,
     archive_id: str,
     mailbox_id: str,
+) -> str:
+    return stable_resource_contract_id(
+        "mailocc",
+        "PstMessageOccurrence",
+        {
+            "archive_id": archive_id,
+            "mailbox_id": mailbox_id,
+            "folder_path_hash": message.folder_path_hash,
+            "message_id": message.message_id,
+            "message_index": message_index,
+        },
+    )
+
+
+
+def _inline_table_observations(
+    message: _ParsedMessage, parent: Observation, first_table_index: int
+) -> list[Observation]:
+    # Reuse the document owner's candidate header interpretation. HTML cell
+    # coordinates are source evidence, not reviewed/formal XLSX semantics.
+    from ..document.attachment import (
+        _candidate_row_structures, _cell_structure, _public_table_structure,
+        _row_structure,
+    )
+
+    result = []
+    for table_index, table in enumerate(message.html_tables, first_table_index):
+        rows = [
+            (row["row_index"], [(cell["cell_index"], cell["value"]) for cell in row["cells"]])
+            for row in table["rows"]
+        ]
+        merges = tuple(
+            (
+                cell["cell_index"], row["row_index"],
+                cell["cell_index"] + cell["column_span"] - 1,
+                row["row_index"] + cell["row_span"] - 1,
+            )
+            for row in table["rows"] for cell in row["cells"]
+            if cell["row_span"] > 1 or cell["column_span"] > 1
+        )
+        candidates, paths = _candidate_row_structures(rows, (), merges)
+        lineage = {
+            **parent.location,
+            "parent_asset_id": parent.asset_id,
+            "parent_message_observation_id": parent.observation_id,
+            "source_family": "mail_inline_table",
+            "row_index_base": 1,
+            "cell_index_base": 1,
+            "structural_ordinal_base": 0,
+            **{key: table[key] for key in (
+                "mime_ordinal", "parent_mime_ordinal", "table_ordinal", "quoted_depth",
+            )},
+        }
+        for source_row, (row_index, cells) in zip(table["rows"], rows, strict=True):
+            structure = _row_structure(
+                row_index=row_index, cells=cells, formal_tables=(),
+                candidate_structures=candidates,
+            )
+            values = [("table_row", "\t".join(value for _, value in cells), None)]
+            values.extend(("table_cell", cell["value"], cell) for cell in source_row["cells"])
+            for kind, raw_value, cell in values:
+                location = {**lineage, "table_index": table_index, "row_index": row_index}
+                cell_structure = structure
+                source_cell = {}
+                if cell is not None:
+                    location["cell_index"] = cell["cell_index"]
+                    cell_structure = _cell_structure(
+                        structure, cell_index=cell["cell_index"],
+                        header_path=paths.get(row_index, {}).get(cell["cell_index"], ()),
+                    )
+                    source_cell = {
+                        "row_span": cell["row_span"],
+                        "column_span": cell["column_span"],
+                        "header_cell": cell["header_cell"],
+                        "cell_state": "populated" if raw_value else "absent",
+                    }
+                text = redact_public_raw_references(raw_value)[0]
+                payload = {
+                    "value": text, "lineage": lineage,
+                    "table_structure": _public_table_structure(cell_structure),
+                    "canonical_fact_status": "not_asserted", **source_cell,
+                }
+                result.append(_native_bound_mail_observation(
+                    source_asset_id=parent.asset_id,
+                    extractor_run_id=parent.extractor_run_id,
+                    observation_type=kind, modality="document",
+                    text=text, extracted_value=raw_value,
+                    location=location, payload=payload,
+                    permission_scope=to_plain(parent.permission_scope), created_at=parent.created_at,
+                ))
+    return result
+
+
+
+
+def _pst_public_body_text(value: str) -> str:
+    projected, count = redact_public_raw_references(value)
+    return "redacted_mail_body_segment " + projected if count else projected
+
+
+def _pst_body_leaf_segments(classifications, *, max_chars, max_segments, preserve_private_text, warnings):
+    segments = []
+    offset = 0
+    redacted = 0
+    parsed = [item for item in classifications if item.processing_state == "parsed" and (item.text or "").strip()]
+    for leaf_index, leaf in enumerate(parsed):
+        text = (_html_to_text(leaf.text or "") if leaf.content_type == "text/html" else leaf.text or "").strip()
+        if leaf_index:
+            text = "\n\n" + text
+        # Preserve feature paragraph boundaries without normalizing away source
+        # separators: each delimiter remains the prefix of the following span.
+        boundaries = [0] + [match.start() for match in re.finditer(r"\n[ \t]*\n+", text)
+                            if match.start() > 0] + [len(text)]
+        for start, end in zip(boundaries, boundaries[1:]):
+            values, state, count = _safe_body_segments(text[start:end], max_chars=max_chars,
+                max_segments=(None if max_segments is None else max_segments-len(segments)),
+                preserve_private_text=preserve_private_text, warnings=warnings)
+            for value in values:
+                segments.append(replace(value, char_start=offset+start+value.char_start,
+                    char_end=offset+start+value.char_end, segment_index=len(segments)+1,
+                    mime_ordinal=leaf.mime_ordinal, parent_mime_ordinal=leaf.parent_mime_ordinal,
+                    content_type=leaf.content_type))
+            redacted += count
+            if state == "truncated":
+                return segments, state, redacted
+        offset += len(text)
+    return segments, "redacted" if redacted else "complete", redacted
+
+
+def _pst_body_leaf_tables(classifications, *, warnings):
+    tables = []
+    for leaf in classifications:
+        if leaf.processing_state != "parsed" or leaf.content_type != "text/html":
+            continue
+        parser = _HtmlTextExtractor()
+        parser.feed(leaf.text or "")
+        parser.close()
+        warnings.extend(parser.warnings)
+        tables.extend({**table, "mime_ordinal": leaf.mime_ordinal,
+                       "parent_mime_ordinal": leaf.parent_mime_ordinal,
+                       "content_type": leaf.content_type} for table in parser.tables)
+    return tables
+
+
+def _pst_validate_inline_projection(observations, *, inventory, structural):
+    parents = {item.observation_id: item for item in observations if item.observation_type == "email_message"}
+    for observation in observations:
+        if observation.observation_type not in {"table_row", "table_cell"}:
+            continue
+        location = observation.location
+        parent = parents.get(location.get("parent_message_observation_id"))
+        if parent is None or location.get("source_family") != "mail_inline_table":
+            raise ContractValidationError("PST inline projection parent is invalid")
+        if any(location.get(key) != value for key, value in parent.location.items()):
+            raise ContractValidationError("PST inline projection source lineage is invalid")
+        source_key = _pst_observation_payload(parent).get("message_source_local_key")
+        if source_key is None:
+            raise ContractValidationError("PST inline projection source key is missing")
+        candidates = [item for item in structural if item.mime_ordinal == location.get("mime_ordinal")
+                      and item.table_ordinal == location.get("table_ordinal")
+                      and item.quoted_depth == location.get("quoted_depth")
+                      and item.attachment_ordinal is None
+                      and any(source_key + ":message" == part for part in item.occurrence_lineage)]
+        if len(candidates) != 1:
+            raise ContractValidationError("PST inline projection structural binding is not unique")
+        table = candidates[0]
+        if (type(location.get("row_index_base")) is not int or location["row_index_base"] != 1
+            or type(location.get("cell_index_base")) is not int or location["cell_index_base"] != 1
+            or type(location.get("structural_ordinal_base")) is not int or location["structural_ordinal_base"] != 0):
+            raise ContractValidationError("PST inline ordinal basis is invalid")
+        row_index = _pst_exact_int(location.get("row_index"), "inline row index", minimum=1)
+        rows = [row for row in table.rows if row.row_ordinal == row_index-1]
+        if len(rows) != 1:
+            raise ContractValidationError("PST inline projection row is missing")
+        populated = [cell for cell in rows[0].cells if cell.cell_state not in {"covered", "absent"}]
+        if observation.observation_type == "table_cell":
+            column = _pst_exact_int(location.get("cell_index"), "inline cell index", minimum=1)
+            cells = [cell for cell in rows[0].cells if cell.column_ordinal == column-1]
+            if len(cells) != 1:
+                raise ContractValidationError("PST inline projection cell is missing")
+            expected_value = cells[0].value or ""
+        else:
+            expected_value = "\t".join(cell.value or "" for cell in populated)
+        if observation.extracted_value != expected_value:
+            raise ContractValidationError("PST inline projection source value is invalid")
+        if observation.text != redact_public_raw_references(expected_value)[0]:
+            raise ContractValidationError("PST inline public projection is invalid")
+
+
+
+
+def _safe_headers(message: EmailMessage, *, warnings: list[str]) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    # Iterate raw header pairs so a malformed headerregistry object cannot
+    # abort the complete message while materializing ``message.items()``.
+    for name, _ in message.raw_items():
+        header_name = str(name).strip().lower()
+        if header_name not in _SAFE_HEADER_NAMES:
+            continue
+        safe_name = _safe_header_name(header_name)
+        try:
+            value = message.get(name)
+            headers[safe_name] = _safe_mail_text(str(value), f"header_{safe_name}")
+        except (AttributeError, TypeError, ValueError):
+            # Do not expose the malformed raw address; retain only a safe
+            # marker and explicit degraded-coverage warning.
+            headers[safe_name] = "redacted_header"
+            warnings.append("pst_parser_header_redacted")
+    if "message-id" not in headers and message.get("message-id"):
+        headers["message-id"] = _message_id(message, fallback_parts=("header",))
+    return headers

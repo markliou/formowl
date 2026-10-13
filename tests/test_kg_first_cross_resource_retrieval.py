@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from contextvars import Context, copy_context
+from dataclasses import replace
 import json
+from pathlib import Path
 import unittest
+from unittest.mock import Mock, patch
 
 import _paths  # noqa: F401
 from formowl_auth import FileAuditLogStore
-from formowl_contract import ContractValidationError, Grant, Observation, PermissionScope
+from formowl_contract import (
+    Asset, ContractValidationError, Grant, Observation, PermissionScope, sha256_json, to_plain,
+)
+from formowl_core import load_default_mail_candidate_admission_tokenizer_profile
 from formowl_graph import EffectiveGraphView
 from formowl_graph.index import (
     FileVectorStore,
@@ -13,16 +20,753 @@ from formowl_graph.index import (
     GraphProjectionNode,
     VectorRecord,
     VectorSearchResult,
+    requester_has_graph_access,
 )
 from formowl_graph.storage import CandidateAtomStore, CanonicalGraphStore
-from formowl_ingestion.storage import ObservationStore
+from formowl_ingestion.assets import register_asset_from_local_file
+from formowl_ingestion.extraction import StoredExtractionResult, run_extractor
+from formowl_ingestion.extractors.text import PlainTextObservationExtractor
+from formowl_ingestion.storage import (
+    AssetStore,
+    ExtractorRunStore,
+    FileObjectStore,
+    ObservationStore,
+    StorageBackendRegistry,
+)
 from formowl_retrieval import ObservationStoreEvidenceResolver, RetrievalGateway
+from formowl_retrieval.gateway import (
+    DEVELOPMENT_POC_SOURCE_EVIDENCE_BOUNDARY_ID,
+    SECURITY_REVIEW_SOURCE_EVIDENCE_BOUNDARY_ID,
+    SOURCE_EVIDENCE_OBSERVATION_LIMIT,
+    SOURCE_NEUTRAL_EVIDENCE_SOURCE_FAMILIES,
+    SourceEvidenceScan,
+    SourceEvidenceExecutionPolicy,
+    check_source_evidence_deadline,
+    source_evidence_deadline_scope,
+    source_evidence_double_check,
+)
 
 NOW = "2026-07-10T08:00:00+00:00"
 PUBLIC_SCOPE = {"scope_type": "public", "visibility": "public"}
 
 
 class KgFirstCrossResourceRetrievalTests(unittest.TestCase):
+    def test_shared_double_check_all_missing_fields_override_unrelated_citations(self) -> None:
+        for requested, supported, count, should_read in (
+            (("deadline", "owner"), (), 1, True),
+            (("deadline", "owner"), ("deadline",), 1, False),
+            (("deadline",), ("deadline",), 1, False),
+            ((" ｄｅａｄｌｉｎｅ ",), ("deadline",), 1, False),
+            ((), (), 1, False),
+            ((), (), 0, True),
+        ):
+            with self.subTest(requested=requested, supported=supported, count=count):
+                reader = Mock(return_value=SourceEvidenceScan((), 0, False, "deadline"))
+                project = Mock()
+                result = source_evidence_double_check(
+                    initial_status="partial", query_class="evidence_lookup",
+                    result_query_class="evidence_lookup", initial_warnings=(),
+                    verified_evidence_count=count, evidence_limit=2,
+                    requested_fields=requested, supported_requested_fields=supported,
+                    sealed_coverage_complete=False, read_source=reader,
+                    project_observation=project,
+                )
+                self.assertEqual(reader.call_count, int(should_read))
+                project.assert_not_called()
+                if should_read:
+                    self.assertEqual(result.status, "pending_review")
+                    self.assertFalse(result.scan.complete)
+                    self.assertNotIn("complete_no_match", result.warnings)
+                else:
+                    self.assertIsNone(result.scan)
+                    self.assertIsNone(result.status)
+
+    def test_shared_double_check_rejects_malformed_or_unbound_field_support(self) -> None:
+        for requested, supported, count in (
+            ("deadline", (), 1),
+            (("deadline",), "deadline", 1),
+            (("deadline",), ("owner",), 1),
+            ((), ("deadline",), 1),
+            (("deadline",), ("deadline",), 0),
+            (("deadline", ""), (), 1),
+            (("deadline", " deadline "), (), 1),
+            (("deadline",), (None,), 1),
+        ):
+            with self.subTest(requested=requested, supported=supported, count=count):
+                reader, project = Mock(), Mock()
+                with self.assertRaises(ContractValidationError):
+                    source_evidence_double_check(
+                        initial_status="partial", query_class="evidence_lookup",
+                        result_query_class="evidence_lookup", initial_warnings=(),
+                        verified_evidence_count=count, evidence_limit=2,
+                        requested_fields=requested, supported_requested_fields=supported,
+                        sealed_coverage_complete=True, read_source=reader,
+                        project_observation=project,
+                    )
+                reader.assert_not_called()
+                project.assert_not_called()
+
+    def test_shared_double_check_field_miss_unavailable_or_incomplete_is_not_absence(self) -> None:
+        for reader, coverage in (
+            (None, True),
+            (Mock(return_value=SourceEvidenceScan((), 1, False, "deadline")), True),
+            (Mock(return_value=SourceEvidenceScan((), 1, True)), False),
+        ):
+            with self.subTest(reader_available=reader is not None, coverage=coverage):
+                result = source_evidence_double_check(
+                    initial_status="partial", query_class="evidence_lookup",
+                    result_query_class="evidence_lookup", initial_warnings=(),
+                    verified_evidence_count=1, evidence_limit=2,
+                    requested_fields=("deadline",), supported_requested_fields=(),
+                    sealed_coverage_complete=coverage, read_source=reader,
+                    project_observation=Mock(),
+                )
+                self.assertEqual(result.status, "pending_review")
+                self.assertEqual(result.evidence, ())
+                self.assertNotIn("complete_no_match", result.warnings)
+
+    def test_shared_double_check_field_trigger_preserves_exclusions(self) -> None:
+        for overrides in (
+            {"initial_status": "error"},
+            {"initial_status": "permission_denied"},
+            {"initial_status": "replan_required"},
+            {"query_class": "exact_set_or_inventory"},
+            {"result_query_class": "exact_set_or_inventory"},
+            {"initial_warnings": ("exact_query_requires_structured_binding",)},
+        ):
+            with self.subTest(overrides=overrides):
+                reader, project = Mock(), Mock()
+                result = source_evidence_double_check(**{
+                    "initial_status": "partial", "query_class": "evidence_lookup",
+                    "result_query_class": "evidence_lookup", "initial_warnings": (),
+                    "verified_evidence_count": 1, "evidence_limit": 2,
+                    "requested_fields": ("deadline",), "supported_requested_fields": (),
+                    "sealed_coverage_complete": True, "read_source": reader,
+                    "project_observation": project, **overrides,
+                })
+                reader.assert_not_called()
+                project.assert_not_called()
+                self.assertIsNone(result.scan)
+                self.assertEqual(result.evidence, ())
+                self.assertEqual(
+                    result.status,
+                    overrides["initial_status"]
+                    if overrides.get("initial_status") in ("error", "permission_denied")
+                    else "pending_review",
+                )
+
+    def test_shared_double_check_total_cap_includes_initial_unrelated_evidence(self) -> None:
+        observation = Mock(spec=Observation)
+        for initial_count, cap in ((1, 2), (2, 2), (127, 128), (128, 200)):
+            with self.subTest(initial_count=initial_count, cap=cap):
+                project = Mock(side_effect=lambda *_: (
+                    sha256_json(project.call_count),
+                    {"citation_hash": sha256_json(project.call_count)},
+                ))
+                reader = Mock(return_value=SourceEvidenceScan(
+                    tuple((observation, "scope") for _ in range(5)), 5, True,
+                ))
+                result = source_evidence_double_check(
+                    initial_status="partial", query_class="evidence_lookup",
+                    result_query_class="evidence_lookup", initial_warnings=(),
+                    verified_evidence_count=initial_count, evidence_limit=cap,
+                    requested_fields=("deadline",), supported_requested_fields=(),
+                    sealed_coverage_complete=True, read_source=reader,
+                    project_observation=project,
+                )
+                self.assertLessEqual(initial_count + len(result.evidence), min(cap, 128))
+                if initial_count < min(cap, 128):
+                    reader.assert_called_once()
+                    self.assertEqual(len(result.evidence), 1)
+                else:
+                    reader.assert_not_called()
+                    project.assert_not_called()
+                self.assertNotEqual(result.status, "not_found")
+
+    def test_shared_double_check_optional_deadline_preserves_phase_cap(self) -> None:
+        for supplied, scoped, expected in (
+            (None, None, 10.7),
+            (11, None, 10.7),
+            (10.4, None, 10.4),
+            (None, 10.5, 10.5),
+            (10.4, 10.5, 10.4),
+            (10.5, 10.4, 10.4),
+        ):
+            with self.subTest(deadline=supplied, scoped=scoped):
+                clock = Mock(return_value=10.0)
+                observation = Mock(spec=Observation)
+                evidence = {"citation_hash": sha256_json("deadline-fixture")}
+                project = Mock(return_value=(evidence["citation_hash"], evidence))
+                begin = Mock()
+
+                def prepare():
+                    clock.return_value = 10.2
+
+                def read_source(**kwargs):
+                    self.assertEqual(kwargs["max_observations"], 8192)
+                    self.assertEqual(kwargs["deadline_monotonic"], expected)
+                    self.assertFalse(kwargs["observation_callback"](observation, "scope"))
+                    return SourceEvidenceScan((), 1, True)
+
+                reader = Mock(side_effect=read_source)
+                with (
+                    patch("formowl_retrieval.gateway.time.monotonic", clock),
+                    source_evidence_deadline_scope(scoped),
+                ):
+                    result = source_evidence_double_check(
+                        initial_status="no_answer", query_class="evidence_lookup",
+                        result_query_class="evidence_lookup", initial_warnings=(),
+                        verified_evidence_count=0, evidence_limit=1,
+                        sealed_coverage_complete=True, read_source=reader,
+                        project_observation=project, prepare=prepare, begin=begin,
+                        deadline_monotonic=supplied,
+                    )
+                reader.assert_called_once()
+                begin.assert_called_once_with(expected)
+                project.assert_called_once_with(observation, "scope", expected)
+                self.assertEqual(result.status, "ok")
+                self.assertEqual(result.evidence, (evidence,))
+                self.assertEqual(result.warnings, ("used", "incomplete"))
+                self.assertFalse(result.scan.complete)
+                self.assertEqual(result.scan.stop_reason, "callback")
+
+    def test_shared_double_check_expired_deadline_skips_callbacks(self) -> None:
+        for deadline in (9.0, 10.0):
+            for overrides, status, warnings in (
+                ({}, "pending_review", ("used", "incomplete")),
+                ({"initial_status": "error"}, "error", ()),
+                ({"initial_status": "permission_denied"}, "permission_denied", ()),
+                (
+                    {"initial_status": "replan_required"},
+                    "pending_review", ("skipped_replan",),
+                ),
+                (
+                    {"query_class": "exact_set_or_inventory"},
+                    "pending_review", ("skipped_exact",),
+                ),
+                ({"verified_evidence_count": 1}, None, ()),
+            ):
+                with self.subTest(deadline=deadline, overrides=overrides):
+                    reader, project, prepare, begin = Mock(), Mock(), Mock(), Mock()
+                    bindings = {
+                        "initial_status": "no_answer", "query_class": "evidence_lookup",
+                        "result_query_class": "evidence_lookup", "initial_warnings": (),
+                        "verified_evidence_count": 0, "evidence_limit": 1,
+                        "sealed_coverage_complete": True, "read_source": reader,
+                        "project_observation": project, "prepare": prepare, "begin": begin,
+                        "deadline_monotonic": deadline,
+                    }
+                    with patch("formowl_retrieval.gateway.time.monotonic", return_value=10.0):
+                        result = source_evidence_double_check(**{**bindings, **overrides})
+                    for callback in (reader, project, prepare, begin):
+                        callback.assert_not_called()
+                    self.assertEqual(result.status, status)
+                    self.assertEqual(result.warnings, warnings)
+                    self.assertEqual(result.evidence, ())
+                    if overrides:
+                        self.assertIsNone(result.scan)
+                    else:
+                        self.assertEqual(result.scan.scanned_observation_count, 0)
+                        self.assertFalse(result.scan.complete)
+                        self.assertEqual(result.scan.stop_reason, "deadline")
+
+    def test_shared_double_check_prepare_cannot_reset_absolute_deadline(self) -> None:
+        clock = Mock(return_value=10.0)
+        reader, project, begin = Mock(), Mock(), Mock()
+
+        def expire_during_prepare():
+            clock.return_value = 10.25
+
+        prepare = Mock(side_effect=expire_during_prepare)
+        with patch("formowl_retrieval.gateway.time.monotonic", clock):
+            result = source_evidence_double_check(
+                initial_status="no_answer", query_class="evidence_lookup",
+                result_query_class="evidence_lookup", initial_warnings=(),
+                verified_evidence_count=0, evidence_limit=1, sealed_coverage_complete=True,
+                read_source=reader, project_observation=project,
+                prepare=prepare, begin=begin, deadline_monotonic=10.25,
+            )
+        prepare.assert_called_once()
+        for callback in (reader, project, begin):
+            callback.assert_not_called()
+        self.assertEqual(result.status, "pending_review")
+        self.assertEqual(result.warnings, ("used", "incomplete"))
+        self.assertEqual(result.evidence, ())
+        self.assertEqual(result.scan.scanned_observation_count, 0)
+        self.assertFalse(result.scan.complete)
+        self.assertEqual(result.scan.stop_reason, "deadline")
+
+    def test_shared_double_check_reader_return_enforces_absolute_deadline(self) -> None:
+        for observations in ((), ((Mock(spec=Observation), "scope"),)):
+            with self.subTest(batch=bool(observations)):
+                clock = Mock(return_value=10.0)
+                project = Mock()
+
+                def read_source(**kwargs):
+                    self.assertEqual(kwargs["deadline_monotonic"], 10.25)
+                    clock.return_value = 10.25
+                    return SourceEvidenceScan(observations, len(observations), True)
+
+                reader = Mock(side_effect=read_source)
+                with patch("formowl_retrieval.gateway.time.monotonic", clock):
+                    result = source_evidence_double_check(
+                        initial_status="no_answer", query_class="evidence_lookup",
+                        result_query_class="evidence_lookup", initial_warnings=(),
+                        verified_evidence_count=0, evidence_limit=1,
+                        sealed_coverage_complete=True, read_source=reader,
+                        project_observation=project, deadline_monotonic=10.25,
+                    )
+                reader.assert_called_once()
+                project.assert_not_called()
+                self.assertEqual(result.status, "pending_review")
+                self.assertEqual(result.warnings, ("used", "incomplete"))
+                self.assertEqual(result.evidence, ())
+                self.assertEqual(result.scan.scanned_observation_count, len(observations))
+                self.assertFalse(result.scan.complete)
+                self.assertEqual(result.scan.stop_reason, "deadline")
+
+    def test_shared_double_check_rejects_invalid_absolute_deadline(self) -> None:
+        reader, project, prepare, begin = Mock(), Mock(), Mock(), Mock()
+        for deadline in (True, False, "10.25", [], float("nan"), float("inf"), -float("inf")):
+            with self.subTest(deadline=deadline):
+                with self.assertRaisesRegex(ContractValidationError, "source evidence deadline"):
+                    source_evidence_double_check(
+                        initial_status="no_answer", query_class="evidence_lookup",
+                        result_query_class="evidence_lookup", initial_warnings=(),
+                        verified_evidence_count=0, evidence_limit=1,
+                        sealed_coverage_complete=True, read_source=reader,
+                        project_observation=project, prepare=prepare, begin=begin,
+                        deadline_monotonic=deadline,
+                    )
+                with self.assertRaisesRegex(ContractValidationError, "source evidence deadline"):
+                    with source_evidence_deadline_scope(deadline):
+                        self.fail("invalid deadline entered the scope")
+        for callback in (reader, project, prepare, begin):
+            callback.assert_not_called()
+
+    def test_shared_double_check_deadline_scope_nesting_restores_after_error(self) -> None:
+        reader = Mock(return_value=SourceEvidenceScan((), 0, True))
+        project = Mock()
+
+        def effective_deadline():
+            result = source_evidence_double_check(
+                initial_status="no_answer", query_class="evidence_lookup",
+                result_query_class="evidence_lookup", initial_warnings=(),
+                verified_evidence_count=0, evidence_limit=1, sealed_coverage_complete=True,
+                read_source=reader, project_observation=project,
+            )
+            self.assertEqual(result.status, "not_found")
+            return reader.call_args.kwargs["deadline_monotonic"]
+
+        with patch("formowl_retrieval.gateway.time.monotonic", return_value=10.0):
+            self.assertEqual(effective_deadline(), 10.5)
+            with source_evidence_deadline_scope(10.4):
+                self.assertEqual(effective_deadline(), 10.4)
+                for inherited in (None, 11):
+                    with source_evidence_deadline_scope(inherited):
+                        self.assertEqual(effective_deadline(), 10.4)
+                with self.assertRaisesRegex(RuntimeError, "synthetic scope failure"):
+                    with source_evidence_deadline_scope(10.2):
+                        self.assertEqual(effective_deadline(), 10.2)
+                        raise RuntimeError("synthetic scope failure")
+                self.assertEqual(effective_deadline(), 10.4)
+            self.assertEqual(effective_deadline(), 10.5)
+        project.assert_not_called()
+
+    def test_shared_double_check_deadline_scope_isolated_between_contexts(self) -> None:
+        reader = Mock(return_value=SourceEvidenceScan((), 0, True))
+        project, prepare, begin = Mock(), Mock(), Mock()
+
+        def check():
+            return source_evidence_double_check(
+                initial_status="no_answer", query_class="evidence_lookup",
+                result_query_class="evidence_lookup", initial_warnings=(),
+                verified_evidence_count=0, evidence_limit=1, sealed_coverage_complete=True,
+                read_source=reader, project_observation=project, prepare=prepare, begin=begin,
+            )
+
+        with patch("formowl_retrieval.gateway.time.monotonic", return_value=10.0):
+            with source_evidence_deadline_scope(10.0):
+                captured = copy_context()
+                result = check()
+                self.assertEqual(result.status, "pending_review")
+                self.assertEqual(result.scan.stop_reason, "deadline")
+                for callback in (reader, project, prepare, begin):
+                    callback.assert_not_called()
+                self.assertEqual(Context().run(check).status, "not_found")
+                self.assertEqual(reader.call_args.kwargs["deadline_monotonic"], 10.5)
+                self.assertEqual(check().status, "pending_review")
+                reader.assert_called_once()
+            self.assertEqual(check().status, "not_found")
+            self.assertEqual(reader.call_count, 2)
+            self.assertEqual(captured.run(check).status, "pending_review")
+            self.assertEqual(reader.call_count, 2)
+            self.assertEqual(check().status, "not_found")
+            self.assertEqual(reader.call_count, 3)
+        project.assert_not_called()
+
+    def test_shared_double_check_resolves_real_standalone_documents_locally(self) -> None:
+        # Local diagnostic only: no revision-runtime/document-handler composition.
+        for filename, mime_type in (("notes.md", "text/markdown"), ("notes.txt", "text/plain")):
+            with self.subTest(mime_type=mime_type):
+                temp_dir = _paths.fresh_test_dir(f"source-recheck-{filename}")
+                bindings, asset, extraction, store = _document_recheck_bindings(
+                    temp_dir, filename=filename, mime_type=mime_type
+                )
+                stored_before = [item.to_dict() for item in store.list()]
+                with patch("formowl_retrieval.gateway.time.monotonic", return_value=10.0):
+                    result = source_evidence_double_check(**bindings)
+                bindings["read_source"].assert_called_once()
+                read_args = bindings["read_source"].call_args.kwargs
+                self.assertEqual(read_args["max_observations"], 8192)
+                self.assertEqual(read_args["deadline_monotonic"], 10.5)
+                self.assertEqual(result.status, "ok")
+                self.assertEqual(
+                    result.execution_boundary_id,
+                    DEVELOPMENT_POC_SOURCE_EVIDENCE_BOUNDARY_ID,
+                )
+                self.assertEqual(
+                    result.supported_source_families,
+                    SOURCE_NEUTRAL_EVIDENCE_SOURCE_FAMILIES,
+                )
+                self.assertEqual(result.warnings, ("used", "incomplete"))
+                self.assertEqual(len(result.evidence), 1)
+                evidence = result.evidence[0]
+                self.assertEqual(evidence["modality"], "text")
+                self.assertEqual(evidence["asset_id"], asset.asset_id)
+                self.assertEqual(evidence["location"], {"line_start": 3, "line_end": 4})
+                self.assertEqual(evidence["snippet"], "ZX-421 requires review.\nApproval recorded.")
+                self.assertEqual(evidence["source_revision"], asset.content_hash)
+                self.assertEqual(evidence["extractor_run_id"], extraction.extractor_run.extractor_run_id)
+                self.assertEqual(
+                    evidence["source_observation_hash"],
+                    sha256_json(store.get(evidence["observation_id"]).to_dict()),
+                )
+                self.assertNotIn("mail_import_session_id", json.dumps(result.evidence))
+                self.assertNotIn("attachment", json.dumps(result.evidence))
+                self.assertNotIn(str(temp_dir), json.dumps(result.evidence))
+                self.assertEqual([item.to_dict() for item in store.list()], stored_before)
+
+    def test_security_review_boundary_fails_closed_before_source_access(self) -> None:
+        bindings, _, _, _ = _document_recheck_bindings(
+            _paths.fresh_test_dir("source-recheck-security-boundary")
+        )
+        with self.assertRaisesRegex(
+            ContractValidationError,
+            "security review source evidence boundary requires",
+        ):
+            source_evidence_double_check(
+                **bindings,
+                execution_policy=SourceEvidenceExecutionPolicy(
+                    boundary_id=SECURITY_REVIEW_SOURCE_EVIDENCE_BOUNDARY_ID,
+                ),
+            )
+        bindings["read_source"].assert_not_called()
+
+    def test_security_review_boundary_is_explicit_and_still_source_neutral(self) -> None:
+        policy = SourceEvidenceExecutionPolicy.security_review(
+            authority_ready=True,
+            source_completeness_verified=True,
+            execution_fingerprint_bound=True,
+            same_pipeline_ablation_verified=True,
+            final_answer_acceptance_verified=True,
+            reviewer_agreement_count=3,
+        )
+        self.assertEqual(
+            policy.supported_source_families,
+            SOURCE_NEUTRAL_EVIDENCE_SOURCE_FAMILIES,
+        )
+        self.assertEqual(policy.to_safe_dict()["claim_class"], "security_review_evidence_candidate")
+
+    def test_document_double_check_empty_result_needs_scan_and_sealed_coverage(self) -> None:
+        temp_dir = _paths.fresh_test_dir("source-recheck-document-miss")
+        bindings, _, _, _ = _document_recheck_bindings(
+            temp_dir, query_text="ZX-9999 review",
+        )
+        for sealed_coverage in (True, False):
+            with self.subTest(sealed_coverage=sealed_coverage):
+                result = source_evidence_double_check(
+                    **{**bindings, "sealed_coverage_complete": sealed_coverage}
+                )
+                self.assertEqual(result.status, "not_found" if sealed_coverage else "pending_review")
+                self.assertEqual(result.evidence, ())
+                self.assertTrue(result.scan.complete)
+                # A shared word cannot override the frozen protected identifier.
+                self.assertEqual(result.scan.scanned_observation_count, 3)
+        for overrides in (
+            {"read_source": None},
+            {"evidence_limit": 0},
+            {"read_source": Mock(return_value=SourceEvidenceScan((), 1, False, "deadline"))},
+        ):
+            with self.subTest(overrides=overrides):
+                result = source_evidence_double_check(**{**bindings, **overrides})
+                self.assertEqual(result.status, "pending_review")
+                self.assertEqual(result.evidence, ())
+
+    def test_document_double_check_security_exceptions_are_not_softened(self) -> None:
+        temp_dir = _paths.fresh_test_dir("source-recheck-document-denied")
+        bindings, asset, extraction, store = _document_recheck_bindings(temp_dir, grants=[])
+        with self.assertRaises(PermissionError):
+            source_evidence_double_check(**bindings)
+        bindings["project_observation"].assert_not_called()
+        # The actual resolver also rechecks the grant, even for an incorrect reader.
+        observation = store.get(extraction.observations[1].observation_id)
+        bindings["read_source"] = Mock(
+            return_value=SourceEvidenceScan(((observation, asset.asset_id),), 1, True)
+        )
+        with self.assertRaises(PermissionError):
+            source_evidence_double_check(**bindings)
+
+        bindings, asset, extraction, store = _document_recheck_bindings(
+            _paths.fresh_test_dir("source-recheck-document-binding")
+        )
+        observation = store.get(extraction.observations[1].observation_id)
+        for item, scope in (
+            (observation, "asset_other"),
+            (replace(observation, text="changed"), asset.asset_id),
+            (replace(observation, extractor_run_id="extractor_other"), asset.asset_id),
+        ):
+            with self.subTest(scope=scope, observation=item.observation_id):
+                bindings["read_source"] = Mock(
+                    return_value=SourceEvidenceScan(((item, scope),), 1, True)
+                )
+                with self.assertRaises(ContractValidationError):
+                    source_evidence_double_check(**bindings)
+
+    def test_shared_double_check_caps_noncooperating_reader_and_does_not_replay(self) -> None:
+        bindings, asset, extraction, store = _document_recheck_bindings(
+            _paths.fresh_test_dir("source-recheck-bounds")
+        )
+        observation = store.get(extraction.observations[1].observation_id)
+        project = Mock(return_value=None)
+
+        def excessive_reader(**kwargs):
+            for _ in range(SOURCE_EVIDENCE_OBSERVATION_LIMIT + 2):
+                kwargs["observation_callback"](observation, asset.asset_id)
+            return SourceEvidenceScan((), SOURCE_EVIDENCE_OBSERVATION_LIMIT + 2, True)
+
+        with patch("formowl_retrieval.gateway.time.monotonic", return_value=10.0):
+            result = source_evidence_double_check(
+                **{**bindings, "read_source": excessive_reader, "project_observation": project}
+            )
+        self.assertEqual(project.call_count, 8192)
+        self.assertEqual(result.status, "pending_review")
+        self.assertFalse(result.scan.complete)
+        self.assertEqual(result.scan.stop_reason, "observation_limit")
+
+        def duplicate_reader(**kwargs):
+            callback = kwargs["observation_callback"]
+            self.assertFalse(callback(observation, asset.asset_id))
+            self.assertFalse(callback(observation, asset.asset_id))
+            # A noncooperating reader cannot override the core's early stop.
+            return SourceEvidenceScan(((observation, asset.asset_id),), 2, True)
+
+        result = source_evidence_double_check(**{**bindings, "read_source": duplicate_reader})
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(len(result.evidence), 1)
+        self.assertFalse(result.scan.complete)
+        self.assertEqual(result.scan.stop_reason, "callback")
+        self.assertEqual(result.warnings, ("used", "incomplete"))
+        bindings["project_observation"].assert_called_once()
+
+        bindings["project_observation"].reset_mock()
+        unread = store.get(extraction.observations[2].observation_id)
+        batch_reader = Mock(return_value=SourceEvidenceScan(
+            ((observation, asset.asset_id), (unread, asset.asset_id)), 2, True,
+        ))
+        result = source_evidence_double_check(**{**bindings, "read_source": batch_reader})
+        self.assertEqual(len(result.evidence), 1)
+        self.assertFalse(result.scan.complete)
+        self.assertEqual(result.scan.stop_reason, "callback")
+        self.assertEqual(result.warnings, ("used", "incomplete"))
+        bindings["project_observation"].assert_called_once()
+
+    def test_shared_double_check_rejects_invalid_plan_before_source_access(self) -> None:
+        read_source, project, prepare, begin = Mock(), Mock(), Mock(), Mock()
+        for query_class, result_class in (
+            ("ordinary_chat", None),
+            ("unknown", "evidence_lookup"),
+            (None, "evidence_lookup"),
+            ([], None),
+            ("evidence_lookup", "ordinary_chat"),
+            ("evidence_lookup", {}),
+        ):
+            with self.subTest(query_class=query_class, result_class=result_class):
+                result = source_evidence_double_check(
+                    initial_status="not_found", query_class=query_class,
+                    result_query_class=result_class, initial_warnings=(),
+                    verified_evidence_count=0, evidence_limit=5, sealed_coverage_complete=True,
+                    read_source=read_source, project_observation=project,
+                    prepare=prepare, begin=begin,
+                )
+                self.assertEqual(result.status, "pending_review")
+                self.assertEqual(result.warnings, ("skipped_invalid_plan",))
+                self.assertEqual(result.evidence, ())
+                self.assertIsNone(result.scan)
+        for callback in (read_source, project, prepare, begin):
+            callback.assert_not_called()
+
+    def test_observation_resolver_preserves_independently_extracted_text_line_ranges(self) -> None:
+        for filename, mime_type, content, expected in (
+            (
+                "acceptance.md",
+                "text/markdown",
+                "# Acceptance notes\n\nReview must pass.\nApproval must be recorded.\n\nDone.\n",
+                [(1, 1, "heading"), (3, 4, "paragraph"), (6, 6, "paragraph")],
+            ),
+            (
+                "acceptance.txt",
+                "text/plain",
+                "\nAcceptance notes\n\nReview must pass.\nApproval must be recorded.\n\nDone.",
+                [(2, 2, "paragraph"), (4, 5, "paragraph"), (7, 7, "paragraph")],
+            ),
+        ):
+            with self.subTest(mime_type=mime_type):
+                temp_dir = _paths.fresh_test_dir(f"kg-first-extracted-{filename}")
+                asset, extraction, store = _extract_document(
+                    temp_dir, filename=filename, mime_type=mime_type, content=content
+                )
+                self.assertEqual(extraction.extractor_run.status, "succeeded")
+                self.assertEqual(extraction.extractor_run.input_hash, asset.content_hash)
+                self.assertEqual(len(extraction.observations), len(expected))
+                stored_before = [item.to_dict() for item in store.list()]
+                resolver = ObservationStoreEvidenceResolver(ObservationStore(temp_dir))
+
+                resolved, unresolved = resolver.resolve(
+                    [item.observation_id for item in extraction.observations],
+                    requester_user_id="user_pm",
+                    grants=[_document_read_grant()],
+                    now=NOW,
+                )
+
+                self.assertEqual(unresolved, [])
+                self.assertEqual(len(resolved), len(expected))
+                by_id = {item.observation_id: item for item in resolved}
+                for observation, (start, end, kind) in zip(extraction.observations, expected):
+                    evidence = by_id[observation.observation_id]
+                    self.assertEqual(evidence.location, {"line_start": start, "line_end": end})
+                    self.assertEqual(evidence.observation_type, kind)
+                    self.assertEqual(evidence.modality, "text")
+                    self.assertEqual(evidence.asset_id, asset.asset_id)
+                    self.assertEqual(
+                        evidence.evidence_locator,
+                        f"formowl://observation/{observation.observation_id}",
+                    )
+                    self.assertEqual(
+                        evidence.snippet, "\n".join(content.splitlines()[start - 1 : end])
+                    )
+                    self.assertEqual(
+                        observation.extractor_run_id, extraction.extractor_run.extractor_run_id
+                    )
+                    self.assertEqual(observation.payload["source_ref"]["source_type"], "file")
+                self.assertEqual([item.to_dict() for item in store.list()], stored_before)
+
+    def test_observation_resolver_denies_extracted_document_without_matching_grant(self) -> None:
+        temp_dir = _paths.fresh_test_dir("kg-first-extracted-document-denied")
+        asset, extraction, store = _extract_document(
+            temp_dir,
+            filename="private.md",
+            mime_type="text/markdown",
+            content="Restricted acceptance condition.\n",
+        )
+        observation_ids = [item.observation_id for item in extraction.observations]
+        self.assertEqual(len(observation_ids), 1)
+        resolver = ObservationStoreEvidenceResolver(store)
+        for grants in (
+            [],
+            [_document_read_grant(scope_id="project_other")],
+            [_document_read_grant(grantee_user_id="user_other")],
+            [_document_read_grant(expires_at="2026-07-09T00:00:00+00:00")],
+        ):
+            with self.subTest(grants=grants):
+                resolved, unresolved = resolver.resolve(
+                    observation_ids, requester_user_id="user_pm", grants=grants, now=NOW
+                )
+                self.assertEqual(resolved, [])
+                self.assertEqual(unresolved, observation_ids)
+                self.assertNotIn(asset.asset_id, json.dumps(unresolved))
+
+    def test_observation_resolver_omits_invalid_or_unpaired_line_ranges(self) -> None:
+        temp_dir = _paths.fresh_test_dir("kg-first-invalid-line-ranges")
+        store = ObservationStore(temp_dir)
+        resolver = ObservationStoreEvidenceResolver(store)
+        invalid_ranges = [
+            {"line_start": 1},
+            {"line_end": 2},
+            {"line_start": True, "line_end": 2},
+            {"line_start": 1, "line_end": True},
+            {"line_start": False, "line_end": 2},
+            {"line_start": 1, "line_end": False},
+            {"line_start": 0, "line_end": 2},
+            {"line_start": 1, "line_end": 0},
+            {"line_start": -1, "line_end": 2},
+            {"line_start": 3, "line_end": 2},
+            {"line_start": 1.0, "line_end": 2},
+            {"line_start": 1, "line_end": 2.0},
+            {"line_start": "1", "line_end": 2},
+            {"line_start": 1, "line_end": "2"},
+            {"line_start": None, "line_end": 2},
+            {"line_start": 1, "line_end": None},
+            {"line_start": [], "line_end": 2},
+            {"line_start": 1, "line_end": {}},
+            {"line_start": "/srv/private/document.txt", "line_end": 2},
+        ]
+        for index, line_range in enumerate(invalid_ranges):
+            with self.subTest(line_range=line_range):
+                observation = _observation(
+                    f"obs_invalid_lines_{index}",
+                    "asset_document",
+                    "paragraph",
+                    "text",
+                    {**line_range, "page_number": 2, "section": "Acceptance"},
+                    "Safe evidence remains available.",
+                )
+                stored = store.create(observation)
+                resolved, unresolved = resolver.resolve(
+                    [observation.observation_id],
+                    requester_user_id="user_pm",
+                    grants=[],
+                    now=NOW,
+                )
+                self.assertEqual(unresolved, [])
+                self.assertEqual(len(resolved), 1)
+                self.assertEqual(resolved[0].location, {"page_number": 2, "section": "Acceptance"})
+                self.assertEqual(resolved[0].snippet, observation.text)
+                self.assertNotIn("/srv/private", json.dumps(resolved[0].to_dict()))
+                self.assertEqual(store.get(observation.observation_id).to_dict(), stored.to_dict())
+
+    def test_observation_resolver_keeps_path_filters_with_valid_line_ranges(self) -> None:
+        temp_dir = _paths.fresh_test_dir("kg-first-line-range-path-filter")
+        store = ObservationStore(temp_dir)
+        observation = _observation(
+            "obs_text_paths",
+            "asset_document",
+            "paragraph",
+            "text",
+            {
+                "line_start": 3,
+                "line_end": 4,
+                "raw_path": "/srv/private/document.txt",
+                "section": "nas/private/document.txt",
+                "block_id": "block_safe",
+            },
+            "Source is /srv/private/document.txt",
+        )
+        store.create(observation)
+        resolved, unresolved = ObservationStoreEvidenceResolver(store).resolve(
+            [observation.observation_id], requester_user_id="user_pm", grants=[], now=NOW
+        )
+        self.assertEqual(unresolved, [])
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(
+            resolved[0].location, {"line_start": 3, "line_end": 4, "block_id": "block_safe"}
+        )
+        self.assertIsNone(resolved[0].snippet)
+        rendered = json.dumps(resolved[0].to_dict())
+        self.assertNotIn("/srv/private", rendered)
+        self.assertNotIn("nas/private", rendered)
+        self.assertNotIn("raw_path", rendered)
+
     def test_kg_first_hit_resolves_mail_slide_and_project_evidence_without_fallback(
         self,
     ) -> None:
@@ -836,6 +1580,146 @@ class KgFirstCrossResourceRetrievalTests(unittest.TestCase):
             r"workspace\\private",
         ):
             self.assertNotIn(forbidden, rendered)
+
+
+def _document_recheck_bindings(
+    temp_dir: Path, *, filename="notes.md", mime_type="text/markdown",
+    query_text="ZX-421 review", grants=None,
+):
+    """Bind real extracted standalone evidence locally, not a runtime adapter."""
+    asset, extraction, store = _extract_document(
+        temp_dir, filename=filename, mime_type=mime_type,
+        content="# Release notes\n\nZX-421 requires review.\nApproval recorded.\n\nZX-422 remains open.\n",
+    )
+    grants = [_document_read_grant()] if grants is None else grants
+    requester_user_id, workspace_id = "user_pm", "workspace_main"
+    snapshot = {
+        item.observation_id: sha256_json(store.get(item.observation_id).to_dict())
+        for item in extraction.observations
+    }
+    snapshot_seal = sha256_json(snapshot)
+    resolver = ObservationStoreEvidenceResolver(store)
+    profile = load_default_mail_candidate_admission_tokenizer_profile()
+    query_terms, protected = set(), set()
+
+    def begin(deadline):
+        tokenization = profile.analyze(query_text)
+        check_source_evidence_deadline(deadline)
+        query_terms.update(tokenization.tokens)
+        protected.update(span.exact_token for span in tokenization.protected_identifiers)
+
+    def read_source(*, max_observations, deadline_monotonic, observation_callback):
+        if asset.workspace_id != workspace_id or not requester_has_graph_access(
+            to_plain(asset.permission_scope), requester_user_id=requester_user_id,
+            grants=grants, now=NOW,
+        ):
+            raise PermissionError("document scope denied")
+        if (
+            sha256_json(snapshot) != snapshot_seal
+            or extraction.extractor_run.input_hash != asset.content_hash
+        ):
+            raise ContractValidationError("document seal mismatch")
+        scanned = 0
+        for observation_id in snapshot:
+            check_source_evidence_deadline(deadline_monotonic)
+            if scanned >= max_observations:
+                return SourceEvidenceScan((), scanned, False, "observation_limit")
+            observation = store.get(observation_id)
+            if not requester_has_graph_access(
+                to_plain(observation.permission_scope), requester_user_id=requester_user_id,
+                grants=grants, now=NOW,
+            ):
+                raise PermissionError("document Observation denied")
+            scanned += 1
+            if not observation_callback(observation, asset.asset_id):
+                return SourceEvidenceScan((), scanned, False, "callback")
+        return SourceEvidenceScan((), scanned, True)
+
+    def project(observation, scope, deadline):
+        observation_hash = sha256_json(observation.to_dict())
+        if (
+            scope != asset.asset_id
+            or observation.asset_id != asset.asset_id
+            or observation.extractor_run_id != extraction.extractor_run.extractor_run_id
+            or observation_hash != snapshot.get(observation.observation_id)
+            or observation_hash != sha256_json(store.get(observation.observation_id).to_dict())
+        ):
+            raise ContractValidationError("document source binding mismatch")
+        resolved, unresolved = resolver.resolve(
+            [observation.observation_id], requester_user_id=requester_user_id,
+            grants=grants, now=NOW,
+        )
+        if unresolved:
+            raise PermissionError("document projection denied")
+        tokens = set(profile.analyze(observation.text or "").tokens)
+        check_source_evidence_deadline(deadline)
+        if not protected.issubset(tokens) or not query_terms.intersection(tokens):
+            return None
+        return observation_hash, {
+            **resolved[0].to_dict(), "source_observation_hash": observation_hash,
+            "source_revision": asset.content_hash,
+            "extractor_run_id": observation.extractor_run_id,
+        }
+
+    return {
+        "initial_status": "not_found", "query_class": "evidence_lookup",
+        "result_query_class": "evidence_lookup", "initial_warnings": (),
+        "verified_evidence_count": 0, "evidence_limit": 1, "sealed_coverage_complete": True,
+        "read_source": Mock(side_effect=read_source),
+        "project_observation": Mock(side_effect=project), "begin": begin,
+    }, asset, extraction, store
+
+
+def _extract_document(
+    temp_dir: Path, *, filename: str, mime_type: str, content: str
+) -> tuple[Asset, StoredExtractionResult, ObservationStore]:
+    source = temp_dir / filename
+    source.write_text(content, encoding="utf-8")
+    registry = StorageBackendRegistry(temp_dir)
+    backend = registry.register_local_backend(
+        temp_dir / "object-store", workspace_scope="workspace_main"
+    )
+    object_store = FileObjectStore(registry)
+    asset = register_asset_from_local_file(
+        source,
+        object_store=object_store,
+        asset_store=AssetStore(temp_dir),
+        storage_backend_id=backend.storage_backend_id,
+        workspace_id="workspace_main",
+        owner_user_id="user_owner",
+        permission_scope=PermissionScope.project("project_document"),
+        mime_type=mime_type,
+        created_at=NOW,
+        registered_at=NOW,
+    )
+    observation_store = ObservationStore(temp_dir)
+    extraction = run_extractor(
+        asset=asset,
+        object_store=object_store,
+        extractor_run_store=ExtractorRunStore(temp_dir),
+        observation_store=observation_store,
+        adapter=PlainTextObservationExtractor(),
+        started_at=NOW,
+        completed_at=NOW,
+    )
+    return asset, extraction, observation_store
+
+
+def _document_read_grant(
+    *,
+    scope_id: str = "project_document",
+    grantee_user_id: str = "user_pm",
+    expires_at: str = "2026-07-11T00:00:00+00:00",
+) -> Grant:
+    return Grant(
+        grant_id="grant_document_read",
+        owner_user_id="user_owner",
+        grantee_user_id=grantee_user_id,
+        scope_type="project",
+        scope_id=scope_id,
+        permission="read",
+        expires_at=expires_at,
+    )
 
 
 def _view(node: GraphProjectionNode) -> EffectiveGraphView:

@@ -768,7 +768,7 @@ def _build_private_export(capture: Mapping[str, Any]) -> dict[str, Any]:
         "source_occurrence_schema_fingerprint": (SOURCE_OCCURRENCE_SCHEMA_FINGERPRINT),
         "asset": asset.to_dict(),
         "extractor_run": extractor_run.to_dict(),
-        "source_inventory": inventory.to_dict(),
+        "source_inventory": inventory.to_persistence_dict(),
         "observations": [observation.to_dict() for observation in observations],
         "record_bindings": record_bindings,
         "source_snapshot_fingerprint": source_snapshot_fingerprint,

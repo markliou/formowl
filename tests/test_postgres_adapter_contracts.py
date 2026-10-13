@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError, PermissionScope
@@ -19,11 +19,11 @@ from formowl_graph.index import (
 )
 from formowl_graph.storage import (
     CanonicalCommitProposal,
-    PostgreSQLConnectionConfig,
-    PostgreSQLMigrationRunner,
-    PostgreSQLMetadataRepository,
-    PostgreSQLUnitOfWork,
     PostgresMigration,
+    PostgreSQLConnectionConfig,
+    PostgreSQLMetadataRepository,
+    PostgreSQLMigrationRunner,
+    PostgreSQLUnitOfWork,
     ReviewDecision,
     UserGraphRevision,
     build_permission_query_index_sql,
@@ -74,6 +74,16 @@ class PostgreSQLMetadataAdapterContractTests(unittest.TestCase):
         index_names = grant_audit_query_indexes()
 
         migration_filenames = tuple(item.filename for item in manifest)
+        self.assertTrue(
+            {
+                "001_metadata_store.sql",
+                "002_vector_index.sql",
+                "003_ingestion_records.sql",
+                "004_mail_evidence.sql",
+                "005_oauth_identity.sql",
+                "006_evidence_coverage.sql",
+            }.issubset(set(migration_filenames))
+        )
         wp1_migrations = [item for item in manifest if item.filename == "006_evidence_coverage.sql"]
         migration_replay = all(item.statement_count >= 3 for item in manifest)
         grant_audit_query_indexes_marker = {

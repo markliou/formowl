@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import re
+import secrets
+import subprocess
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from email import policy
 from email.message import EmailMessage, Message
 from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
-import hashlib
 from html.parser import HTMLParser
-import os
 from pathlib import Path
-import re
-import secrets
-import subprocess
-import tempfile
 from typing import Iterable
 
 from formowl_contract import (
@@ -26,14 +26,15 @@ from formowl_contract import (
 from formowl_ingestion.extraction import ExtractionInput
 from formowl_ingestion.extractors.mail import PstMailArchiveExtractor
 
-from ._guards import assert_authorized_evidence_payload_safe
 from .bundle import (
     EmailBodySegment,
-    EmailMessage as MailEvidenceMessage,
     MailEvidenceBundle,
     MailImportSession,
     MailParseRun,
     build_mail_evidence_bundle,
+)
+from .bundle import (
+    EmailMessage as MailEvidenceMessage,
 )
 from .query import _redact_mail_public_text
 
@@ -413,10 +414,9 @@ def _parse_uat_uploaded_pst(
         retention_policy="retain_30_days",
         parse_warnings=result.warnings,
     )
-    assert_authorized_evidence_payload_safe(
-        bundle.to_dict(),
-        "mail_human_uat_uploaded_pst_bundle",
-    )
+    # Validate the private envelope without applying a public-text policy to
+    # retained evidence. Query/public projections own text redaction.
+    bundle.to_persistence_dict()
     return ParsedUatResourceUpload(
         content_hash=content_hash,
         source_format="pst",
@@ -438,7 +438,7 @@ def _parsed_document_upload(
     if len(text) > _MAX_DOCUMENT_CHARS:
         text = text[:_MAX_DOCUMENT_CHARS]
         warnings.append(f"uat_{source_format}_text_truncated")
-    safe_text = _safe_mail_text(text)
+    safe_text = text.strip()
     if not safe_text:
         raise ContractValidationError("uploaded reference file has no searchable text")
     suffix = _content_hash_digest(content_hash)[:24]
@@ -521,10 +521,9 @@ def _parsed_document_upload(
         parse_warnings=[],
         created_at=created_at,
     )
-    assert_authorized_evidence_payload_safe(
-        bundle.to_dict(),
-        "mail_human_uat_uploaded_reference_bundle",
-    )
+    # Validate the private envelope without applying a public-text policy to
+    # retained evidence. Query/public projections own text redaction.
+    bundle.to_persistence_dict()
     return ParsedUatResourceUpload(
         content_hash=content_hash,
         source_format=source_format,
@@ -563,7 +562,7 @@ def parse_uat_uploaded_eml(
     if len(body) > _MAX_BODY_CHARS:
         body = body[:_MAX_BODY_CHARS]
         warnings.append("uat_eml_body_truncated")
-    safe_body = _safe_mail_text(body)
+    safe_body = body.strip()
     if not safe_body:
         safe_body = subject
     if not safe_body:
@@ -650,10 +649,9 @@ def parse_uat_uploaded_eml(
         parse_warnings=[],
         created_at=resolved_created_at,
     )
-    assert_authorized_evidence_payload_safe(
-        bundle.to_dict(),
-        "mail_human_uat_uploaded_bundle",
-    )
+    # Validate the private envelope without applying a public-text policy to
+    # retained evidence. Query/public projections own text redaction.
+    bundle.to_persistence_dict()
     return ParsedUatMailUpload(
         content_hash=content_hash,
         bundle=bundle,

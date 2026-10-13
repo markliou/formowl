@@ -223,6 +223,12 @@ class Issue56StepwiseDiscriminatorReplanMcpE2ETests(
             session=session,
             effective_graph_view=graph_view,
             safe_binding={},
+            observations=session.authorized_observations,
+            query_bundle=SimpleNamespace(
+                mail_import_session=SimpleNamespace(
+                    mail_import_session_id=SOURCE_SCOPE_ID,
+                ),
+            ),
         )
         with (
             patch.object(

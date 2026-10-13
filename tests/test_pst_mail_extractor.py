@@ -335,11 +335,15 @@ class PstMailArchiveExtractorTests(unittest.TestCase):
             result.extractor_run.warnings,
         )
         private_body_segments = [
-            observation.text
+            observation.extracted_value
             for observation in result.observations
             if observation.observation_type == "email_body_segment"
         ]
         self.assertIn(unsafe_body, private_body_segments)
+        public_body_segments = [observation.text for observation in result.observations
+                                if observation.observation_type == "email_body_segment"]
+        self.assertNotIn(unsafe_body, public_body_segments)
+        self.assertNotIn("C:\\tmp", " ".join(public_body_segments))
         self.assertIn("redacted_filename_", private_rendered)
         self.assertNotIn(unsafe_attachment, private_rendered)
 
@@ -474,12 +478,14 @@ class _PstExtractionContext:
         *,
         temp_dir: Path,
         object_store: FileObjectStore,
+        asset_store: AssetStore,
         run_store: ExtractorRunStore,
         observation_store: ObservationStore,
         asset,
     ) -> None:
         self.temp_dir = temp_dir
         self.object_store = object_store
+        self.asset_store = asset_store
         self.run_store = run_store
         self.observation_store = observation_store
         self.asset = asset
@@ -529,6 +535,7 @@ class _PstExtractionContext:
         return cls(
             temp_dir=temp_dir,
             object_store=object_store,
+            asset_store=asset_store,
             run_store=ExtractorRunStore(temp_dir),
             observation_store=ObservationStore(temp_dir),
             asset=asset,

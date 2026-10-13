@@ -92,6 +92,7 @@ class IngestionWorker:
                 config=self.config,
                 started_at=started_at,
                 completed_at=completed_at,
+                attachment_asset_store=self.asset_store,
             )
             processed.append(completed.ingestion_job_id)
             if completed.status == "succeeded":

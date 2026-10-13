@@ -69,7 +69,9 @@ proposals. A projection never becomes canonical graph state by implication.
 ## 3. Strong RAG Is a Required Component
 
 FormOwl must not use graph retrieval as a substitute for source evidence.
-Strong RAG is both a production fallback and the competitive baseline:
+For retrieval-projection misses eligible under `SPEC.md` §7.3.1 (not merely
+because a projection failed), Strong RAG is the source-grounded
+recovery path and the competitive baseline:
 
 ```text
 BM25 or equivalent lexical retrieval
@@ -122,8 +124,22 @@ planner model/prompt/settings fingerprint, when used
 ```
 
 Invalid, under-specified, scope-widening, or revision-unbound plans fail closed.
-One bounded repair pass is allowed only inside the original source and
-permission scope.
+The Query Agent must expand and validate the tool query before each call when
+the request needs semantic resolution. A bounded repair/requery loop may issue
+successive refined or expanded plans only inside the original source and
+permission scope; every iteration consumes the pinned budgets and cannot
+rebuild the KG or index. General plan repair must not bypass the automatic
+all-requested-fields source-recheck rule below.
+
+Under the 2026-10-06 rule in `SPEC.md` §7.3.1, validated `evidence_lookup`
+with a nonempty validated requested-field set and **all** fields lacking
+verified support triggers one materially different, same-authorized-scope
+bounded source recheck when existing safety/eligibility and remaining budgets
+permit, even with unrelated citations. Partial misses must be disclosed and
+must not trigger this automatic recheck. An empty field set uses the validated
+evidence-need plan or clarification, not vacuous
+“all missing”. Source-backed explicit blanks count as verified coverage;
+citation count or status alone cannot trigger recheck.
 
 ## 6. Candidate Retrieval and Scoring
 
@@ -149,6 +165,11 @@ Rules:
 - graph and ontology signals cannot compensate for absent source evidence;
 - hidden or denied nodes are not materialized and do not influence scores;
 - fallback retrieval creates no hidden candidate or canonical writes.
+- missing, unsealed, or unactivated retrieval projections are distinct from
+  independently validated immutable source snapshots; projection failure
+  grants no independent §7.3.1 eligibility. Eligible fallback may use those
+  snapshots without the failed projection, retains source/hash/lineage/revision
+  and permission checks, and never rebuilds inline.
 
 ## 7. Hard Invariants and Soft Semantics
 

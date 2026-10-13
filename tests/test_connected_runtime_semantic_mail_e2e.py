@@ -70,14 +70,113 @@ class ConnectedRuntimeSemanticMailE2ETests(unittest.IsolatedAsyncioTestCase):
                 observations_by_bundle_id=indexed, bundles=inputs.bundles,
                 requester_user_id=SYNTHETIC_REQUESTER_USER_ID,
                 workspace_id=SYNTHETIC_WORKSPACE_ID)
-        loaded = SimpleNamespace(session=session, effective_graph_view=inputs.effective_graph_view,
-                                 safe_binding={})
+        lineaged_observation_ids = {
+            lineage.source_observation_id for lineage in session.occurrence_lineages
+        }
+        unlineaged_observations = tuple(
+            observation
+            for observation in session.authorized_observations
+            if observation.observation_id not in lineaged_observation_ids
+        )
+        self.assertTrue(unlineaged_observations)
+        self.assertEqual(
+            {observation.observation_type for observation in unlineaged_observations},
+            {"mail_folder_occurrence"},
+        )
+        loaded = SimpleNamespace(
+            session=session,
+            effective_graph_view=inputs.effective_graph_view,
+            safe_binding={},
+            observations=session.authorized_observations,
+            query_bundle=bundle,
+        )
         with (patch.object(gateway_loader, "APPROVER_ACTOR", SYNTHETIC_REQUESTER_USER_ID),
               patch.object(gateway_loader, "WORKSPACE_ID", SYNTHETIC_WORKSPACE_ID),
               patch.object(gateway_loader, "_load_approved_sealed_source", return_value=loaded),
               patch.object(gateway_loader, "_validated_owner_safe_binding", return_value={}),
               patch.object(gateway_loader, "_build_mail_source_occurrence_providers", return_value=())):
             retrieval_handler = gateway_loader.build_issue56_production_semantic_retrieval_handler()
+        incomplete_loaded = SimpleNamespace(
+            session=session,
+            effective_graph_view=inputs.effective_graph_view,
+            safe_binding={},
+        )
+        with (
+            patch.object(gateway_loader, "APPROVER_ACTOR", SYNTHETIC_REQUESTER_USER_ID),
+            patch.object(gateway_loader, "WORKSPACE_ID", SYNTHETIC_WORKSPACE_ID),
+            patch.object(
+                gateway_loader,
+                "_load_approved_sealed_source",
+                return_value=incomplete_loaded,
+            ),
+            patch.object(gateway_loader, "_validated_owner_safe_binding", return_value={}),
+            patch.object(
+                gateway_loader,
+                "_build_mail_source_occurrence_providers",
+                return_value=(),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "sealed source fallback binding is unavailable",
+            ):
+                gateway_loader.build_issue56_production_semantic_retrieval_handler()
+        unlineaged_nonfolder = replace(
+            unlineaged_observations[0],
+            observation_id="obs_issue56_semantic_unlineaged_nonfolder",
+            observation_type="email_header",
+        )
+        invalid_loaded = SimpleNamespace(
+            session=replace(
+                session,
+                authorized_observations=(
+                    *session.authorized_observations,
+                    unlineaged_nonfolder,
+                ),
+            ),
+            effective_graph_view=inputs.effective_graph_view,
+            safe_binding={},
+            observations=replace(
+                session,
+                authorized_observations=(
+                    *session.authorized_observations,
+                    unlineaged_nonfolder,
+                ),
+            ).authorized_observations,
+            query_bundle=bundle,
+        )
+        with (
+            patch.object(
+                gateway_loader,
+                "APPROVER_ACTOR",
+                SYNTHETIC_REQUESTER_USER_ID,
+            ),
+            patch.object(
+                gateway_loader,
+                "WORKSPACE_ID",
+                SYNTHETIC_WORKSPACE_ID,
+            ),
+            patch.object(
+                gateway_loader,
+                "_load_approved_sealed_source",
+                return_value=invalid_loaded,
+            ),
+            patch.object(
+                gateway_loader,
+                "_validated_owner_safe_binding",
+                return_value={},
+            ),
+            patch.object(
+                gateway_loader,
+                "_build_mail_source_occurrence_providers",
+                return_value=(),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                ContractValidationError,
+                "production evidence lineage binding is invalid",
+            ):
+                gateway_loader.build_issue56_production_semantic_retrieval_handler()
         with tempfile.TemporaryDirectory() as temporary_directory:
             environment = _write_runtime_environment(Path(temporary_directory))
             config = ConnectedRuntimeConfig.from_env_and_secrets(environment)

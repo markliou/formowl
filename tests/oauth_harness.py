@@ -4147,6 +4147,27 @@ class _FunctionFingerprint:
     fingerprint: str
 
 
+def _canonical_ast_dump(node: ast.AST) -> str:
+    """Serialize AST semantics without interpreter-specific empty fields."""
+
+    def encode(value: object) -> object:
+        if isinstance(value, ast.AST):
+            fields: dict[str, object] = {}
+            for field in value._fields:
+                child = getattr(value, field)
+                if isinstance(child, list) and not child:
+                    continue
+                fields[field] = encode(child)
+            return {"fields": fields, "node": type(value).__name__}
+        if isinstance(value, list):
+            return {"list": [encode(item) for item in value]}
+        if isinstance(value, tuple):
+            return {"tuple": [encode(item) for item in value]}
+        return {"scalar": repr(value)}
+
+    return json.dumps(encode(node), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def _function_fingerprints(source: str) -> list[_FunctionFingerprint]:
     tree = ast.parse(source)
     results: list[_FunctionFingerprint] = []
@@ -4161,7 +4182,7 @@ def _function_fingerprints(source: str) -> list[_FunctionFingerprint]:
             qualname = ".".join((*parents, node.name))
             if _excluded_function(node):
                 continue
-            normalized = ast.dump(node, annotate_fields=True, include_attributes=False)
+            normalized = _canonical_ast_dump(node)
             results.append(
                 _FunctionFingerprint(
                     qualname=qualname,

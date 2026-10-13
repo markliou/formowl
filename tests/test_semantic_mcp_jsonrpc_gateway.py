@@ -225,6 +225,21 @@ class SemanticMcpJsonRpcGatewayTests(unittest.TestCase):
                 "exact_inventory_kind": {"type": "string"},
                 "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
                 "query_text": {"type": "string"},
+                "required_terms": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 80},
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "description": (
+                        "Literal content anchors combined with AND: every term must match within "
+                        "the same candidate evidence item. Include identity and genuine topic "
+                        "terms from the original request. The authorized selector and validated "
+                        "request contract determine source-family/scope; source-family and "
+                        "operation/action words are not content terms unless the user explicitly "
+                        "requests those literal words. These terms do not grant or widen "
+                        "authorization."
+                    ),
+                },
             },
         )
         self.assertFalse(tool_schema["additionalProperties"])

@@ -3,26 +3,27 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import textwrap
 import threading
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import _paths  # noqa: F401
 from formowl_contract import ContractValidationError, sha256_json
 from formowl_mail._guards import assert_public_payload_safe
+from formowl_mail.document_uat_mcp import validate_document_uat_payload
 from formowl_mail.human_uat_orchestrator import (
+    _CODEX_DISABLED_FEATURES,
     CodexAppServerConversationModel,
     CodexAppServerStdioTransport,
     CodexAppServerThread,
     CodexAppServerTurn,
     CodexDynamicToolInvocation,
     UatConversationMessage,
-    _CODEX_DISABLED_FEATURES,
     _assert_hardened_codex_runtime,
     build_codex_app_server_proxy_command,
     build_hardened_codex_app_server_command,
@@ -30,7 +31,6 @@ from formowl_mail.human_uat_orchestrator import (
     prepare_codex_runtime_state_from_auth_cache,
     validate_codex_runtime_state,
 )
-from formowl_mail.document_uat_mcp import validate_document_uat_payload
 
 
 def _decision(
@@ -578,6 +578,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
                 model="gpt-test",
                 reasoning_effort="low",
@@ -651,6 +652,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
             )
             outcome = model.respond(
@@ -712,6 +714,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
             )
             outcome = model.respond(
@@ -811,6 +814,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as workspace:
                     model = CodexAppServerConversationModel(
                         transport,
+                        legacy_evidence_tool=True,
                         workspace_dir=workspace,
                     )
                     with self.assertRaises(ContractValidationError):
@@ -851,6 +855,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
             )
             with self.assertRaisesRegex(RuntimeError, "invalid UAT answer"):
@@ -907,6 +912,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as workspace:
                     model = CodexAppServerConversationModel(
                         transport,
+                        legacy_evidence_tool=True,
                         workspace_dir=workspace,
                     )
                     outcome = model.respond(
@@ -940,6 +946,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
             )
             outcome = model.respond(
@@ -964,6 +971,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
             )
             for safety_identifier in ("session-a", "session-a", "session-b"):
@@ -996,6 +1004,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
             )
             model.respond(
@@ -1053,6 +1062,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as workspace:
                     model = CodexAppServerConversationModel(
                         transport,
+                        legacy_evidence_tool=True,
                         workspace_dir=workspace,
                     )
                     with self.assertRaises((RuntimeError, ValueError)):
@@ -1111,6 +1121,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
             )
             with self.assertRaisesRegex(RuntimeError, "too many UAT tools"):
@@ -1154,6 +1165,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
             )
             with self.assertRaisesRegex(RuntimeError, "too many UAT tools"):
@@ -1191,6 +1203,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
             )
             with self.assertRaisesRegex(RuntimeError, "too many UAT tools"):
@@ -1212,6 +1225,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
             )
             with self.assertRaisesRegex(RuntimeError, "invalid UAT answer"):
@@ -1234,6 +1248,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
             )
             identifier = "formowl_uat_" + "9" * 48
@@ -1275,6 +1290,7 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             model = CodexAppServerConversationModel(
                 transport,
+                legacy_evidence_tool=True,
                 workspace_dir=workspace,
                 max_threads=2,
             )
@@ -1687,8 +1703,8 @@ class MailHumanUatOrchestratorTests(unittest.TestCase):
         )
         self.assertIn('sandbox_mode="read-only"', command)
         self.assertNotIn('sandbox_mode="danger-full-access"', command)
-        self.assertIn("web_search=disabled", command)
-        self.assertIn("web_search=live", web_command)
+        self.assertIn('web_search="disabled"', command)
+        self.assertIn('web_search="live"', web_command)
         self.assertNotIn("web_search=enabled", web_command)
         self.assertIn("mcp_servers={}", command)
         self.assertNotIn("OPENAI_API_KEY", " ".join(command))

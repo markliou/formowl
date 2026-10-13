@@ -17,6 +17,7 @@ from formowl_contract import (
     StructuralPublicScopeDecision,
     VersionManifest,
     now_iso,
+    redact_public_raw_references,
     sha256_json,
     stable_resource_contract_id,
     to_plain,
@@ -1375,7 +1376,9 @@ def build_mail_evidence_bundle(
         raise ContractValidationError("server_side_parser mail import requires upload_session_id")
     mail_observations: list[Observation] = []
     for observation in observations:
-        observation_payload = observation.to_dict()
+        # Source-authored display metadata is projected on a copy. The private
+        # body and original Observation remain source-preserving.
+        observation_payload = _mail_bundle_projection(observation).to_dict()
         try:
             _assert_private_observation_envelope_safe(observation_payload)
             normalized_observation = Observation.from_dict(observation_payload)
@@ -1941,7 +1944,13 @@ def _safe_payload_str(payload: dict[str, Any], field_name: str) -> str | None:
 
 
 def _private_observation_text(observation: Observation) -> str:
-    value = observation.text
+    # PST retains the original text separately from its public-safe display.
+    # This value is private evidence, never the bundle's public projection.
+    value = (
+        observation.extracted_value
+        if isinstance(observation.extracted_value, str) and observation.extracted_value
+        else observation.text
+    )
     if not isinstance(value, str) or not value:
         raise ContractValidationError("email evidence segment text must be a non-empty string")
     return value
@@ -1955,6 +1964,8 @@ def _assert_private_observation_envelope_safe(value: Mapping[str, Any]) -> None:
         "email_attachment_text_segment",
     }:
         safe_view["text"] = "[governed_private_mail_text]"
+        if isinstance(safe_view.get("extracted_value"), str):
+            safe_view["extracted_value"] = "[governed_private_mail_text]"
     elif observation_type == "pst_source_inventory_carrier":
         # The carrier is private persistence evidence and is excluded from
         # bundle records below.  Check only a non-sensitive envelope here;
@@ -2294,3 +2305,20 @@ __all__ = [
     "QuotedMessageCandidate",
     "build_mail_evidence_bundle",
 ]
+
+
+def _mail_bundle_projection(observation: Observation) -> Observation:
+    """Redact display metadata in a copy, never private body/source evidence.
+
+    Child document evidence is retained by the ingestion/index owner and is not
+    a mail bundle field. Structural identifiers still pass the existing strict
+    bundle validators; only source-authored display text is projected here.
+    """
+    payload = dict(observation.payload or {})
+    for name in ("subject", "normalized_subject", "sender", "folder_label", "filename"):
+        if isinstance(payload.get(name), str):
+            payload[name] = redact_public_raw_references(payload[name])[0]
+    return replace(
+        observation,
+        payload=payload,
+    )

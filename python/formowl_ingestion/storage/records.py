@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -29,18 +30,32 @@ class _JsonRecordStore(Generic[T]):
         id_field: str,
         factory: Callable[[dict[str, Any]], T],
         serializer: Callable[[T], dict[str, Any]],
+        sharded: bool = False,
+        create_directory: bool = True,
+        new_records_sharded: bool = True,
     ) -> None:
         self.base_dir = Path(base_dir) / "ingestion" / collection
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        if create_directory:
+            self.base_dir.mkdir(parents=True, exist_ok=True)
         self.id_field = id_field
         self.factory = factory
         self.serializer = serializer
+        self._sharded = sharded
+        self._new_records_sharded = new_records_sharded
 
     def create(self, record: T | dict[str, Any]) -> T:
         validated = self._validate(record)
         payload = self.serializer(validated)
         record_id = str(payload[self.id_field])
-        _write_json(self._record_path(record_id), payload)
+        path = self._record_path(record_id)
+        _write_json(
+            path, payload,
+            staging_directory=(
+                self._shard_record_path(record_id).parent
+                if self._sharded and (path.parent != self.base_dir or path.exists())
+                else None
+            ),
+        )
         return validated
 
     def get(self, record_id: str) -> T | None:
@@ -55,10 +70,20 @@ class _JsonRecordStore(Generic[T]):
             path.unlink()
 
     def list(self) -> list[T]:
-        return [self.factory(_read_json(path)) for path in sorted(self.base_dir.glob("*.json"))]
+        paths = list(self.base_dir.glob("*.json"))
+        if self._sharded:
+            paths.extend(self.base_dir.glob("_shards/[0-9a-f][0-9a-f]/*.json"))
+            if len({path.name for path in paths}) != len(paths):
+                raise ValueError("duplicate record identity across storage layouts")
+            if any(
+                path.parent != self.base_dir and path != self._shard_record_path(path.stem)
+                for path in paths
+            ):
+                raise ValueError("invalid sharded record location")
+        return [self.factory(_read_json(path)) for path in sorted(paths, key=lambda path: path.name)]
 
     def validate_record_id(self, record_id: str) -> None:
-        self._record_path(record_id)
+        self._legacy_record_path(record_id)
 
     def _validate(self, record: T | dict[str, Any]) -> T:
         if isinstance(record, dict):
@@ -66,6 +91,27 @@ class _JsonRecordStore(Generic[T]):
         return self.factory(self.serializer(record))
 
     def _record_path(self, record_id: str) -> Path:
+        legacy = self._legacy_record_path(record_id)
+        if not self._sharded:
+            return legacy
+        sharded = self._shard_record_path(record_id)
+        # Existing IDs keep their physical location. Two copies are ambiguous,
+        # even if identical; never select one as an implicit source of truth.
+        if legacy.exists():
+            if sharded.exists():
+                raise ValueError("duplicate record identity across storage layouts")
+            return legacy
+        # Computing a keyed path never creates directories or scans records.
+        # Only the existing write owner creates the shard on a new write.
+        if self._new_records_sharded or sharded.exists():
+            return sharded
+        return legacy
+
+    def _shard_record_path(self, record_id: str) -> Path:
+        bucket = hashlib.sha256(record_id.encode("utf-8")).hexdigest()[:2]
+        return self.base_dir / "_shards" / bucket / f"{record_id}.json"
+
+    def _legacy_record_path(self, record_id: str) -> Path:
         if not record_id or not _SAFE_RECORD_ID.fullmatch(record_id):
             raise ValueError(f"{self.id_field} must be a safe file name")
         return self.base_dir / f"{record_id}.json"
@@ -135,13 +181,23 @@ class ExtractorRunStore:
 
 
 class ObservationStore:
-    def __init__(self, base_dir: str | Path) -> None:
+    def __init__(
+        self, base_dir: str | Path, *, create_directory: bool = True,
+        write_layout: str = "sharded",
+    ) -> None:
+        if write_layout not in {"sharded", "flat"}:
+            raise ValueError("Observation write layout is invalid")
         self._store = _JsonRecordStore[Observation](
             base_dir,
             collection="observations",
             id_field="observation_id",
             factory=Observation.from_dict,
             serializer=lambda value: value.to_dict(),
+            sharded=True,
+            create_directory=create_directory,
+            # A finite sealed export may require flat NEW records. Reads and
+            # existing identities still use both layouts without migration.
+            new_records_sharded=write_layout == "sharded",
         )
 
     def create(self, observation: Observation | dict[str, Any]) -> Observation:
@@ -181,9 +237,14 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _write_json(path: Path, payload: Any) -> None:
+def _write_json(path: Path, payload: Any, *, staging_directory: Path | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    directory = staging_directory if staging_directory is not None else path.parent
+    if directory != path.parent:
+        directory.mkdir(parents=True, exist_ok=True)
+    # Legacy replacements use a shard-local temporary entry: the saturated
+    # flat directory needs no new name. Rename remains atomic on this filesystem.
+    temp_path = directory / f".{path.name}.{uuid.uuid4().hex}.tmp"
     temp_path.write_text(
         json.dumps(to_plain(payload), ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",

@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 import re
 import sys
+import unicodedata
+import unittest
+from dataclasses import replace
 from statistics import median
 from time import perf_counter
-import unicodedata
 from unittest.mock import patch
-import unittest
 
 import _paths  # noqa: F401
+import formowl_mail.query as mail_query
 from formowl_contract import ContractValidationError, Grant, PermissionScope, SourceRef
 from formowl_gateway import (
     SemanticGatewaySession,
@@ -27,8 +28,6 @@ from formowl_ingestion.storage import (
     ObservationStore,
     StorageBackendRegistry,
 )
-import formowl_mail.query as mail_query
-from formowl_mail._guards import assert_authorized_evidence_payload_safe
 from formowl_mail import (
     MailCaseProgressGateway,
     MailEvidenceQueryGateway,
@@ -36,6 +35,7 @@ from formowl_mail import (
     build_mail_evidence_bundle,
     build_mail_evidence_query_handler,
 )
+from formowl_mail._guards import assert_authorized_evidence_payload_safe
 
 NOW = "2026-07-05T10:00:00+00:00"
 
@@ -507,7 +507,7 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
         self.assertNotIn("copy supplier_private from", rendered)
         self.assertNotIn("with supplier_private as", rendered)
 
-    def test_authorized_mail_evidence_preserves_ordinary_body_urls_and_user_paths(
+    def test_private_mail_evidence_preserves_body_public_lookup_redacts_raw_paths(
         self,
     ) -> None:
         temp_dir = _paths.fresh_test_dir("mail-evidence-authorized-body")
@@ -538,11 +538,16 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
         ).to_dict()
 
         self.assertEqual(query["status"], "ok")
-        self.assertEqual(query["evidence_snippets"][0]["subject"], ordinary_subject)
-        self.assertEqual(query["evidence_snippets"][0]["snippet"], ordinary_text)
-        self.assertNotIn("content_redacted", query["evidence_snippets"][0])
-        self.assertEqual(query["redaction_counts"]["unsafe_snippets"], 0)
-        self.assertNotIn("unsafe_mail_evidence_content_redacted", query["warnings"])
+        self.assertEqual(bundle.messages[0].subject, ordinary_subject)
+        self.assertEqual(bundle.body_segments[0].text, ordinary_text)
+        self.assertIn("PO470002002", query["evidence_snippets"][0]["subject"])
+        self.assertIn("delivery remains 2026/07/24", query["evidence_snippets"][0]["snippet"])
+        self.assertNotIn("/Users/may", str(query))
+        self.assertNotIn("C:\\Users", str(query))
+        self.assertNotIn("supplier.example.com", str(query))
+        self.assertTrue(query["evidence_snippets"][0]["content_redacted"])
+        self.assertEqual(query["redaction_counts"]["unsafe_snippets"], 1)
+        self.assertIn("unsafe_mail_evidence_content_redacted", query["warnings"])
 
         read = gateway.read_mail_evidence(
             requester_user_id="user_yifan",
@@ -553,7 +558,10 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
             now=NOW,
         ).to_dict()
         self.assertEqual(read["status"], "ok")
-        self.assertEqual(read["evidence_segments"][0]["snippet"], ordinary_text)
+        self.assertEqual(
+            read["evidence_segments"][0]["snippet"], query["evidence_snippets"][0]["snippet"]
+        )
+        self.assertEqual(bundle.body_segments[0].text, ordinary_text)
 
         denied = gateway.query_mail_evidence(
             query_text="PO470002002 delivery",
@@ -609,7 +617,7 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
         self.assertTrue(snippet["content_redacted"])
         self.assertIn("ordinary context remains", snippet["snippet"])
         self.assertIn(
-            "Normal link https://supplier.example.com/status stays visible.",
+            "Normal link [redacted_locator] stays visible.",
             snippet["snippet"],
         )
         self.assertIn("After diagnostics, delivery remains 2026/07/24.", snippet["snippet"])
@@ -697,6 +705,114 @@ class MailEvidenceMcpGatewayTests(unittest.TestCase):
             mail_query._build_snippet_index = original
 
         self.assertEqual(build_count, 1)
+
+    def test_mail_evidence_query_lazy_index_scans_source_text_with_citation(self) -> None:
+        temp_dir = _paths.fresh_test_dir("mail-evidence-query-lazy-index")
+        archive = _mail_archive()
+        archive["messages"][0]["body"] = "聯絡人：劉一帆\n\nBlocker: Waiting on audit approval"
+        archive["messages"][0]["body_hash"] = "sha256:body-launch-yifan"
+        bundle = _mail_bundle(temp_dir, archive)
+        base_segment = bundle.body_segments[0]
+        scan_limit = 4_096
+        self.assertEqual(mail_query._LAZY_SOURCE_SCAN_SEGMENT_LIMIT, scan_limit)
+        late_segments = [
+            replace(
+                base_segment,
+                email_body_segment_id=f"lazy-segment-{index:04d}",
+                source_observation_id=f"lazy-observation-{index:04d}",
+                text="No participant match in this segment",
+                body_segment_hash=f"sha256:lazy-segment-{index:04d}",
+                body_segment_index=index,
+            )
+            for index in range(scan_limit)
+        ]
+        late_segments[-1] = replace(
+            late_segments[-1],
+            text="聯絡人：劉一帆",
+        )
+        bundle = replace(bundle, body_segments=late_segments)
+
+        with patch.object(
+            mail_query,
+            "_build_snippet_index",
+            side_effect=AssertionError("lazy gateway must not build a full index"),
+        ):
+            gateway = MailEvidenceQueryGateway([bundle], lazy_index=True)
+            result = gateway.query_mail_evidence(
+                query_text="把劉一帆的信統整出來",
+                requester_user_id="user_yifan",
+                workspace_id="workspace_formowl",
+                session_id="session_lazy",
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+                now=NOW,
+            ).to_dict()
+            zero_limit = gateway.query_mail_evidence(
+                query_text="把劉一帆的信統整出來",
+                requester_user_id="user_yifan",
+                workspace_id="workspace_formowl",
+                session_id="session_lazy_zero",
+                mail_import_session_id=bundle.mail_import_session.mail_import_session_id,
+                limit=0,
+                now=NOW,
+            ).to_dict()
+
+        self.assertEqual(gateway.index_fingerprints, {bundle.mail_evidence_bundle_id: None})
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["citations"])
+        self.assertEqual(
+            result["citations"][0]["source_observation_id"],
+            result["evidence_snippets"][0]["source_observation_id"],
+        )
+        self.assertEqual(result["evidence_snippets"][0]["subject"], "Launch checklist")
+        self.assertIn("劉一帆", result["evidence_snippets"][0]["snippet"])
+        self.assertEqual(result["redaction_counts"]["unsafe_snippets"], 0)
+        self.assertEqual(zero_limit["status"], "ok")
+        self.assertEqual(zero_limit["evidence_snippets"], [])
+        self.assertEqual(zero_limit["citations"], [])
+        self.assertEqual(zero_limit["warnings"], ["no_visible_mail_evidence_matched"])
+
+        beyond_bound_segments = [
+            replace(segment, text="No participant match in this segment")
+            for segment in late_segments
+        ]
+        beyond_bound_segments.append(
+            replace(
+                base_segment,
+                email_body_segment_id=f"lazy-segment-{scan_limit:04d}",
+                source_observation_id=f"lazy-observation-{scan_limit:04d}",
+                text="聯絡人：劉一帆",
+                body_segment_hash=f"sha256:lazy-segment-{scan_limit:04d}",
+                body_segment_index=scan_limit,
+            )
+        )
+        beyond_bound_bundle = replace(bundle, body_segments=beyond_bound_segments)
+        with patch.object(
+            mail_query,
+            "_build_snippet_index",
+            side_effect=AssertionError("lazy gateway must not build a full index"),
+        ):
+            beyond_bound_gateway = MailEvidenceQueryGateway(
+                [beyond_bound_bundle],
+                lazy_index=True,
+            )
+            beyond_bound = beyond_bound_gateway.query_mail_evidence(
+                query_text="把劉一帆的信統整出來",
+                requester_user_id="user_yifan",
+                workspace_id="workspace_formowl",
+                session_id="session_lazy_bound",
+                mail_import_session_id=(
+                    beyond_bound_bundle.mail_import_session.mail_import_session_id
+                ),
+                now=NOW,
+            ).to_dict()
+
+        self.assertEqual(beyond_bound["status"], "ok")
+        self.assertEqual(beyond_bound["evidence_snippets"], [])
+        self.assertEqual(beyond_bound["citations"], [])
+        self.assertEqual(
+            beyond_bound["warnings"],
+            ["no_visible_mail_evidence_matched"],
+        )
 
     @unittest.skipUnless(sys.platform == "linux", "fork index parity is Linux-only")
     def test_parallel_snippet_index_is_exactly_equal_to_single_process_index(

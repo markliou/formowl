@@ -1,5 +1,3 @@
-
-# Reconciliation imports from Track 1
 from .tokenization import (
     ASCII_IDENTIFIER_REGEX_TOKENIZER_ID,
     JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
@@ -8,8 +6,15 @@ from .tokenization import (
     configured_mail_tokenizer_id,
     jieba_sentencepiece_frozen_profile_candidate_admission_tokens,
     validate_configured_mail_tokenizer,
+    ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT,
+    MailCandidateAdmissionTokenizerProfile,
+    OrderedQueryGroundingAnalysis,
+    OrderedQueryGroundingTerm,
+    QueryGroundingGrammarRole,
+    build_ascii_identifier_regex_tokenizer_profile,
+    load_default_mail_candidate_admission_tokenizer_profile,
+    load_issue56_target_mail_tokenizer_profile,
 )
-
 from .core import diff_lines, sha256_prefixed, sha256_prefixed_id
 from .dense_embedding import (
     DenseEmbeddingProfile,
@@ -32,20 +37,6 @@ from .dense_embedding import (
     load_issue56_target_runtime_components,
 )
 from .json_files import read_json_object, write_json_atomic
-from .tokenization import (
-    ASCII_IDENTIFIER_REGEX_TOKENIZER_ID,
-    ISSUE56_TARGET_MAIL_TOKENIZER_PROFILE_FINGERPRINT,
-    JIEBA_SENTENCEPIECE_FROZEN_PROFILE_TOKENIZER_ID,
-    MailCandidateAdmissionTokenizerProfile,
-    OrderedQueryGroundingAnalysis,
-    OrderedQueryGroundingTerm,
-    QueryGroundingGrammarRole,
-    ascii_identifier_regex_tokens,
-    build_ascii_identifier_regex_tokenizer_profile,
-    jieba_sentencepiece_frozen_profile_candidate_admission_tokens,
-    load_default_mail_candidate_admission_tokenizer_profile,
-    load_issue56_target_mail_tokenizer_profile,
-)
 
 __all__ = [
     "ASCII_IDENTIFIER_REGEX_TOKENIZER_ID",
@@ -83,4 +74,7 @@ __all__ = [
     "sha256_prefixed",
     "sha256_prefixed_id",
     "write_json_atomic",
+    "configured_mail_candidate_admission_tokens",
+    "configured_mail_tokenizer_id",
+    "validate_configured_mail_tokenizer",
 ]

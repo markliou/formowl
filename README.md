@@ -3,10 +3,10 @@
 <!-- Future agents: read AGENTS.md first. Current methodology authority lives in docs/methodology-authority.json, docs/kg-research-method.md, and GitHub issue #56. Historical files and archived snapshots are not current instructions. -->
 
 FormOwl is a source-preserving, graph-governed knowledge system for integrating
-heterogeneous enterprise evidence. Email is the first source fixture, not the
-product model. Calendar, ticket, project, document, database, media, and future
-source adapters must enter the same evidence, governance, permission, and query
-architecture.
+heterogeneous enterprise evidence in native forms: mail, documents, standalone
+spreadsheets/XLSX, tables/databases, images, speech, non-speech audio/music,
+video, and connected business systems. Email is the first diagnostic fixture.
+All adapters enter the same evidence, governance, permission, and query architecture.
 
 ## Active Architecture
 
@@ -17,42 +17,63 @@ heterogeneous sources
   -> Asset / EvidenceSnapshot
   -> ExtractorRun
   -> source-preserving Observation
-  -> candidate mentions, entities, claims, relations, and frames
-  -> reviewed canonical KG + scoped ontology mappings
-  -> permission-filtered EffectiveGraphView
+       -> authorized source retrieval / native structured execution
+       -> optional zero-to-many semantic annotations and candidate knowledge
+            -> review -> canonical KG + scoped ontology mappings
+            -> permission-filtered EffectiveGraphView
 ```
 
 Query execution:
 
 ```text
-user query
-  -> typed router
-  -> validated SemanticQueryPlan
-  -> BM25 + dense retrieval
-  -> entity linking + bounded graph traversal
+user prompt + bounded conversation state
+  -> Query Agent: intent/coreference and current capability discovery
+  -> expanded, validated SemanticQueryPlan / tool plans
+  -> authorized modality-appropriate retrieval / native structured execution
+  -> graph/ontology signals when used, each hop bound to source evidence
   -> temporal, provenance, and coverage filtering
   -> capped soft ontology scoring
   -> evidence-bundle reranking
+  -> bounded coverage inspection / repair / source-context selection
   -> deterministic executor or citation-grounded LLM answer
 ```
 
 The layers have different jobs:
 
-- **Strong RAG** retrieves source evidence and is both a required component and
-  the competitive control.
+- **Strong RAG** retrieves native source evidence and is both a required component
+  and the competitive control. The frozen issue #56 text control remains
+  lexical/BM25 + dense retrieval, fusion, and reranking.
 - **The KG** contributes reviewed identity, cross-source joins, bounded paths,
   temporal/current-state structure, contradiction, provenance, and reusable
   integration semantics.
 - **The ontology** is small-core, scoped, data-first, versioned, and a capped
   additive signal. An inferred mismatch does not remove admitted evidence.
 - **Deterministic execution** handles exact sets, counts, inventories,
-  aggregation, completeness, and definitive-negative claims.
+  native table lookups/calculations, aggregation, completeness, and
+  definitive-negative claims over validated source records and coverage.
 - **The answer model** may explain only the authorized evidence produced by a
   validated plan; it may not fill missing evidence from model memory.
 
 Sources and model output are not canonical truth. Extractors and LLMs may
 create reviewable candidates, but they may not silently mutate canonical graph
 or type state, user graph revisions, wiki revisions, or external systems.
+
+Ontology supplies vocabulary and optional zero-to-many source-addressed
+annotations; the reviewed KG supplies an identity/relation overlay linked to
+Observations. Direct authorized lookup and structured execution require no
+graph match or annotation. Missing annotations, nodes, or edges cannot prove
+absence in the source. Native image regions, audio/music intervals, and video
+frames/clips remain evidence; OCR, transcripts, and descriptions have their own
+accuracy and coverage limits.
+
+Answers receive bounded verified source context with native citations, such as
+an adjacent paragraph, table header/cell range, image crop, or media clip.
+Each read revalidates source/hash/revision/lineage/permission and remaining
+budgets; graph visibility or an evidence-snippet grant does not grant whole-asset
+access. Spreadsheet operations preserve raw values, formulas, cached results,
+displayed values, types/precision/units, blanks/nulls, merged headers,
+coordinates, and same-row association. Exact claims need source coverage;
+graph properties and top-k chunks cannot substitute for native values.
 
 ## Active KG Research Program
 
@@ -70,7 +91,7 @@ method: evidence_to_knowledge_kg_ontology_v2_hybrid_v1
 tokenizer: jieba_sentencepiece_frozen_profile_candidate_admission_v1
 ```
 
-Current runtime truth on August 18, 2026:
+Historical runtime truth on August 18, 2026 (not current instructions):
 
 ```text
 method: mail_candidate_kg_broad_ontology_diagnostic_v1
@@ -86,8 +107,10 @@ python3 scripts/methodology_authority_check.py --check
 python3 scripts/methodology_authority_check.py --require-ready
 ```
 
-`--check` is currently valid. `--require-ready` is expected to exit nonzero
-until runtime alignment, source completeness, execution-bound reports,
+The recorded October 2, 2026 canonical dev-container `--check` was valid with
+the target method/tokenizer and CJK support true; this is dated diagnostic
+evidence, not proof of current readiness. `--require-ready` remains blocked
+until source completeness, execution-bound reports,
 same-pipeline real-source ablation, and real-user final-answer acceptance all
 pass. Diagnostic implementation may continue, but no active document or report
 may claim that KG + ontology already beats strong RAG.
@@ -144,6 +167,174 @@ These slices do not establish production readiness, source-complete
 heterogeneous integration, automatic canonical writes, general parser
 coverage, or KG + ontology superiority.
 
+Business examples are target applications of one generic query core, not 30
+implemented functions. Native-table fields bind to the actual authorized schema;
+attachment content retains its mail parent, while standalone documents retain
+independent source bindings. The bounded integration target is exact
+UnitPrice/Quantity retrieval, DOCX attachment content and a standalone clause.
+It does not establish aggregation, currency math or latest-revision completeness.
+
+At the historical 2026-10-12 checkpoint, serving manifest r12 (`b2f4fa44…`) ran on
+live8089, full252 product files/drift0; candidate8096 was deployed/proved, then
+removed at19:35:25Z. Old r5 remains stopped/preserved for rollback.
+Canonical focused **117/117,174.049s,EXIT0**, zero
+failures/errors/skips, exact252 code/34 tests verified pre/post and rechecked;
+Hypatia/Archimedes/Lagrange retention-only scoped **AGREE3/3**. The retention
+constant derives from unchanged request cap6 (local19/19,0.818s/Ruff);
+no model/budget/deadline change or full-suite/standard promotion.
+
+R11's108/108,170.274s/EXIT0 and three scoped agreements remain bounded.
+Fixture-r11 EXIT0 proved synthetic PDF/independent-document cue/citation/lifecycle,
+but all six responses remain incomparable: deployment/code/build absent, with
+four-attempt business turns retaining three records. Later bindings do not
+retrospectively repair them. Freeze-helper TypeError/empty tree and readonly-
+template chmod failure are retained; the latter was fixed only in the operator
+helper's private tmpfs-copy handling, no product/secret change.
+
+The safe audit proved native PDF text was erased by redaction, not absent.
+Generic span preservation leaves detector/final guard unchanged; version0.6.2
+required a new offline job/revision. Same2048/all-formats r3 completed
+18:57:38Z/EXIT0 (622,631 Observations/7,211 runs), prep-r4 completed19:18:55Z/EXIT0.
+New partial pin `5e222fc…`:1,100,143 references/407,401 helpers/10,671,080 postings,
+zero independent-document helpers; native PDF admission retained three indexed
+paragraphs. Old runs/pins/failures remain preserved. Ordinary Observation writes
+stay sharded; only the finite sealed materializer explicitly keeps flat export
+([SPEC §11.1](SPEC.md#111-query-independent-offline-batch-indexing--待測)).
+
+Candidate original-source acceptance passed19:26Z: both citations reopened/hash/
+run/parent checked; requested delivery, not PO/approval dates, shipment or latest
+supplier schedule. The unrelated actual attachment proof is not independently
+registered document proof. Live Chromium LAN EXIT0: all four responses comparable,
+delivery22.829s and unrelated attachment17.833s, each MCP1/provider2/citation1;
+ordinary/reload/reset/postreset MCP0. Evidence turns honestly remain partial.
+First live citation reopen failed
+`ContractValidationError: ingestion revision completed job changed`.
+Once-only instrumentation then verified both LIVE citations and original-source
+meaning with loader/guards unchanged and all three job digests agreeing across
+engines. Archimedes scoped **AGREE**: **this observed question's source-verified
+answer was obtained in the real LAN webpage**. The first failure remains
+unexplained and blocks stability/reproducibility acceptance, not that observed
+answer. No corruption/root-fix, full-UAT, source-complete or docs acceptance claim.
+
+The bounded diagnostic producer binds trusted frozen manifest/operator attestation
+to read-only full-inventory/runtime and image/settings/validated-source identity.
+This is not remote attestation or formal readiness; missing/mismatched/truncated
+identity remains incomparable. Canonical authority-resume4 is
+valid=true/ready=false/errors=[]/EXIT0. Feature待測, step4 in-progress and all four
+blocked gates remain unchanged; no user-only blocker. Safe evidence and next
+action: [handoff](docs/agent-goals/handoff-log.md).
+
+For explicitly authorized temporary LAN UAT diagnostics, the existing launcher
+requires both opt-in flags together:
+
+```text
+--behavior-log /uat-private/behavior.jsonl --record-raw-uat-interactions
+```
+
+The operator must provide a persistent writable mount at the chosen log
+directory, restricted to the service/operator, outside browser-served content.
+The recorder enforces a regular `0600` JSONL file and rejects symlink files.
+Raw prompt, expanded query and available visible answer stay only in this private
+file; public diagnostics/stderr contain safe metadata and request correlation,
+never raw content, credentials, headers, cookies or backend storage paths.
+Schema v2 distinguishes repeated questions and records citation membership at
+raw/presented/final stages plus available validated plan, field support and scan
+stop metadata. Recording errors retain the business result and emit a safe
+failure event. Operator persistence must survive container replacement; the
+file is not an HTTP/MCP download or a general logging exemption.
+
+This logging slice is **diagnostic-only / 待測**. Its frozen package is
+[package-r1.json](.formowl/uat-observability-20261013/package-r1.json). Canonical36/36
+and observed candidate/live browser/log capture passed; three scoped reviewers
+Chandrasekhar/Gibbs/Harvey AGREE for logging activation only. At that activation,8088 served
+`formowl-uat-observability-live-20261013`, code4544e59a…/252files/drift0, same
+source/image/gpt-5.5 high/budgets; old r12 is stopped/preserved for rollback.
+Live ordinary chat MCP0 and unrelated lookup MCP1/provider2/citations2 passed;
+private file=HTTP=DOM, raw9/presented7/final2 IDs, matching provider/turn/MCP IDs,
+zero log failures and private-log URL404 checks. Repeated-prompt verification is
+candidate evidence, not a repeated live test. Candidate cleanup completed with
+logs retained and live healthy; unrelated containers untouched. Frozen fixture
+integration retains one PASS/one pre-service artifact-fingerprint ERROR, root
+unresolved; it is not all green. The COO-answer
+inconsistency is still unresolved, and all four methodology
+gates remain blocked. Contract and limitations: [SPEC](SPEC.md#731-source-neutral-evidence-double-check--待測)
+and [handoff](docs/agent-goals/handoff-log.md).
+
+The later authorized **UAT consistency repair is IN-PROGRESS / 待測**.
+[Baseline](.formowl/uat-stability-20261013/baseline-safe.json): ten actual browser
+turns/file=HTTP=DOM, five cited partial answers, one chat, two unexpected
+clarifications, one honest incomplete lookup and one provider error; eight
+comparable. Demonstrated causes include `country` matching the `count` substring
+and provider chat routing using lossy prior evidence while runtime retained
+citeability. Synthetic repros separately prove source-family/selector starvation,
+read-cap accounting loss and duplicate parent reads; the historical 500 ms cause
+is not established. Generic fixes preserve budgets, source guards and exact/all-fields contracts.
+
+[Frozen r4](.formowl/uat-stability-20261013/package-r4.json), `dd731bfc…`, is a
+**diagnostic rollout with observed live proof**. [Verification](.formowl/uat-stability-20261013/r4-verification-safe.json):
+pinned-image153/153 PASS254.897s, integration3/3 PASS110.247s, lint/compile12 PASS;
+exact252 code+37 tests/post-run hashes verified. Native-stop32/32+115subtests and
+query-guard29/29+34subtests passed with Ruff. Prior32tests/3ERROR and r1/r2 failures
+remain preserved; the native negative fixture was corrected without weaker guards.
+
+The server binds only a unique validated cited protected alphanumeric identifier
+for followups; explicit NFKC IDs win and original current/source-turn hashes remain
+separate. Missing/ambiguous/reset/scope-invalid references stop before provider/MCP;
+no general numeric/person or arbitrary-history inference. Expanded queries now pass
+the shared safety check before MCP; existing bounded repair keeps the same ID/scope.
+Private logging may retain hashes/status only with content_redacted=true and
+exact_result_preserved=false, which cannot prove exact log/HTTP/DOM equality.
+Contracts: [SPEC §7.1](SPEC.md#71-core-query-agent-and-query-classes) and
+[§7.3.1](SPEC.md#731-source-neutral-evidence-double-check--待測).
+
+R3 passed150 focused+3integration but browser8 had only6passes, one MCP contract
+error and dependent missing-reference clarification; no failed private record.
+The original cause remains unproved. The unsafe-expansion repair has controlled
+synthetic proof; r4 candidate did not trigger either query guard or redacted logging.
+R4 initial8:7comparable/correct and one provider HTTP502/connect_headers1.044s after
+valid cited MCP. Separate predeclared fresh-chat+delivery recheck2/2 passed;
+original failure stays failed/incomparable. All10 unique candidate records match
+log/HTTP/DOM exactly. Citations match prior same-source proof; no native reopen.
+
+Nash engineering/Bacon safety/Linnaeus methodology all AGREE for bounded diagnostic
+deployment. [Readiness15:04:37Z](.formowl/uat-stability-20261013/live-r4-ready-safe.json)
+confirms8088 serves r4 `dd731bfc…`,252files/drift0, same image/source/settings/budgets,
+logs0600/dir0700; old observability is stopped/preserved for rollback.
+[Actual LAN matrix](.formowl/uat-stability-20261013/live-r4-safe.json) and verifier
+EXIT0:14/14 known checks PASS, all14 log=HTTP=DOM text/citations. Eight cited partial,
+four ordinary-chat MCP0, one honest incomplete unknown (provider1/MCP1), one reset
+missing-reference clarification (no provider/MCP). Thirteen provider turns are
+comparable; reset clarification is local/identity-exempt, not provider-comparable.
+Repeated/fresh/rephrase answers retain the same origin citation; same-row manufacturer,
+unrelated-part origin/manufacturer and PO delivery match prior same-source evidence. Master
+reviewed manufacturer/delivery screenshots; PO page1/3 is partial requested-delivery
+evidence, not shipment/latest commitment. Reload/reset/postreset chat pass. No fresh
+native reopen; source pin unchanged. [Cleanup15:11:45Z](.formowl/uat-stability-20261013/final-operational-r4-safe.json):
+8088 healthy/exact252/drift0/restart0/OOMfalse; four own candidates removed, logs
+and rollback retained; source/index/DB/unrelated containers untouched.14private
+records/IDs, zero recording failures/redacted/unsafe-query events, private URLs404
+twice, file0600/dir0700.
+This is observed known-regression proof only. Upstream/provider,
+r3 incident and source/artifact anomalies remain OPEN. Four methodology gates
+blocked, step4 in-progress; no whole-UAT/provider-stability/standard promotion.
+[Handoff](docs/agent-goals/handoff-log.md) and unchanged [pre-edit archive](docs/archive/2026-10-13/uat-stability-r3-pre-verification/SNAPSHOT.md)
+preserve dated errors, tooling differences and prior review boundaries.
+
+Current adapter limits are explicit in [SPEC §14](SPEC.md#14-current-implementation-and-methodology-status):
+
+| Slice | Evidence and remaining gap |
+| --- | --- |
+| Mail and independent Markdown/plain-text | Diagnostic mail and the real `PlainTextObservationExtractor`; §7.3.1 live mail/document acceptance remains open. |
+| XLSX/delimited attachment tables | `AttachmentDocumentExtractor` reads bounded ZIP/XML values, row/cell coordinates, formula/raw/cached/date/precision/blank metadata where available, and formal table metadata, with candidate merged-header paths. It does not recalculate formulas or guarantee native display/style/type/unit/null semantics or full-workbook completeness, and does not establish the standalone XLSX end-to-end product path. |
+| OCR/images | `FixtureOcrExtractor` uses `read_text()` on page/bbox fixtures; real-image OCR, visual retrieval, and source-region verification are unproved. |
+| Audio/music | `FixtureAudioTranscriptExtractor` uses `read_text()` on timestamp/speaker/transcript fixtures; real decoding/ASR, acoustic verification, non-speech audio and music paths are unproved. |
+| Video | `FixtureVideoSceneExtractor` uses `read_text()` on scene/keyframe descriptions; real decoding, temporal/visual retrieval, and native clip/frame verification are unproved. |
+
+Unsupported native features remain coverage gaps. MIME/modality labels and
+cited text proxies do not establish native media capability. This SPEC/doc
+clarification changes no runtime, frozen methodology/tokenizer, comparison
+arms, UAT status, readiness, or independent reviewer acceptance.
+
 The connected closed-beta identity path uses one stable non-secret predefined
 client ID selected and recorded by the deployment operator before discovery.
 ChatGPT supplies and displays only the production callback
@@ -160,6 +351,38 @@ Issue #20 closure has not yet passed.
 Issue #41 separately owns generic Asset tenant/owner binding, byte storage,
 occurrence lineage, upload recovery, retention, purge, and authorization. A
 source adapter must not create a parallel asset or permission system.
+
+Attachment format expansion also implements bounded XLS/XLSM, native-text PDF,
+DOCX/PPTX and text/delimited parsing through the same Observation owner. Known
+child parser failures remain failed and disclose partial parent coverage; unknown
+errors still fail the batch. Offline backfill and RAG activation are separate
+from parser support and remain unaccepted for live UAT. Scan-only PDF/OCR, XLS
+formula identity and complete native display semantics are not established.
+
+### Source-neutral evidence recheck — 待測
+
+The 2026-10-06 contract in `SPEC.md` §7.3.1 applies to validated
+`evidence_lookup` for both mail and independent Markdown/plain-text documents.
+Parsed mail attachment text remains mail evidence; it does not satisfy the
+independent-document acceptance case. A nonempty validated requested-field set with **all
+fields** lacking verified support triggers one materially different,
+same-authorized-scope bounded source recheck when existing safety/eligibility
+and remaining budgets permit, even with unrelated citations. Partial misses
+must be disclosed and must not trigger this automatic recheck. An empty field
+set uses the validated evidence-need plan or clarification, never vacuous
+“all missing”; source-backed
+explicit blanks count as verified coverage. Citation count or status alone
+cannot trigger recheck.
+
+Missing, unsealed, or unactivated retrieval projections are distinct from an
+independently validated immutable source snapshot, not independent permission
+to bypass §7.3.1 eligibility. Eligible fallback may use that snapshot without
+the failed projection, but preserves authorized source/hash/lineage/
+revision checks, permission scope, and existing bounded budgets; no inline
+rebuild. Exact deterministic, permission, schema, and provider-error boundaries
+are unchanged. Incomplete scans/timeouts never prove absence; scoped complete
+negatives require complete coverage proof. Feature remains **待測**; this is
+not implementation, live UAT, review, or methodology acceptance evidence.
 
 ## Storage and Runtime Direction
 

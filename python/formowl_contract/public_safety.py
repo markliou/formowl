@@ -12,7 +12,7 @@ _BACKEND_LOCATOR = re.compile(
     r"postgres(?:ql)?|mysql|mariadb|sqlite|mssql|sqlserver|oracle|"
     r"redis(?:s)?|mongodb(?:\+srv)?|amqp|rabbitmq|kafka|"
     r"imap(?:s)?|smtp(?:s)?|pop3(?:s)?|mapi|ews"
-    r"):\/\/",
+    r"):\/\/[^\s'\"<>]+",
     re.IGNORECASE,
 )
 _URL_USERINFO = re.compile(
@@ -20,7 +20,7 @@ _URL_USERINFO = re.compile(
     re.IGNORECASE,
 )
 _INTERNAL_FORMOWL_LOCATOR = re.compile(
-    r"\bformowl://(?:object|storage|backend|scratch|raw)(?:/|$)",
+    r"\bformowl://(?:object|storage|backend|scratch|raw)(?:/[^\s'\"<>]*)?",
     re.IGNORECASE,
 )
 _SQL_TEXT = re.compile(
@@ -79,9 +79,11 @@ _SECRET_FIELD_NAMES = {
     "token",
 }
 _SECRET_COMPACT_FIELD_NAMES = {name.replace("_", "") for name in _SECRET_FIELD_NAMES}
+# Detection admits bare roots and Unicode paths. Consume those same spans so
+# unrelated evidence survives; the final unsafe-string guard remains fail closed.
 _RAW_PATH_TOKEN = re.compile(
-    r"(?:(?<=^)|(?<=[\s'\"([{=,:;]))(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+|"
-    r"[A-Za-z]:[\\/][^\s'\"<>]+|\\\\[^\s'\"<>]+)",
+    r"(?:(?<=^)|(?<=[\s'\"([{=,:;]))(?:/[^\s\"<>]*|"
+    r"[A-Za-z]:[\\/][^\s'\"<>]*|\\\\[^\s'\"<>]*)",
     re.IGNORECASE,
 )
 _LOCATOR_TOKEN = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>]+", re.IGNORECASE)

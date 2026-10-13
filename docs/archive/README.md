@@ -63,6 +63,13 @@ role instructions.
 - [`manifest.json`](2026-08-25/manifest.json) records its source path, byte
   count, line count, and SHA-256 hash for mechanical comparison.
 
+## Snapshot 2026-10-01
+
+- [`handoff-log.md`](2026-10-01/handoff-log.md) preserves the complete
+  byte-identical 308-line active handoff immediately before the retention trim.
+- [`manifest.json`](2026-10-01/manifest.json) records its source path, byte
+  count, line count, and SHA-256 hash.
+
 ## Archive Rules
 
 - Snapshots are byte-identical to active source files immediately before archival.
@@ -70,3 +77,17 @@ role instructions.
   archival cycles.
 - Keep archive links relative and verify them after every archival cycle.
 - Do not use archived lifecycle labels or statuses as current operational state.
+
+## Snapshot 2026-10-07T081844Z — UAT/source-start truth
+
+- [`kg-research-agent.md`](2026-10-07T081844Z-uat-source-start-truth/kg-research-agent.md)
+- [`handoff-log.md`](2026-10-07T081844Z-uat-source-start-truth/handoff-log.md)
+- [`implementation-task-breakdown.md`](2026-10-07T081844Z-uat-source-start-truth/implementation-task-breakdown.md)
+- [`manifest.json`](2026-10-07T081844Z-uat-source-start-truth/manifest.json) records the pre-update source paths, byte counts, line counts, and SHA-256 hashes.
+
+## Snapshot 2026-10-04
+
+- [`handoff-log.md`](2026-10-04/handoff-log.md) preserves the complete
+  301-line active handoff log immediately before the retention trim.
+- [`manifest.json`](2026-10-04/manifest.json) records the source path, archive
+  path, byte count, line count, and SHA-256 hash.

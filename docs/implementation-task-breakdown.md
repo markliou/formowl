@@ -1,222 +1,252 @@
 # Implementation Task Breakdown
+## PR #62 conflict integration — 2026-10-14, scoped verification complete
+- [x] Reconcile pinned main `86baa47` with PR head `cc8919f` in an isolated tree
+  and pass bounded diagnostics plus three scoped reviews. Publication goes only
+  to the existing PR branch; inspect PR #62 for its remote SHA. No main merge,
+  force-push, live8088/source/index/database mutation, or dirty-workspace reset.
+- Nine conflicted paths plus eight pre-existing malformed main Python owners
+  required semantic reconciliation. Both inventory wire identities are retained
+  through explicit private persistence; legacy exclusions never become typed proof.
+- Shared legacy tool mode is explicit; Issue56 descriptor-bound chat remains the
+  default. Private body/attachment evidence is preserved; public raw-path/secret
+  guards remain. New shared tests asserting public user paths are corrected to
+  test private preservation and public redaction, not to weaken those guards.
+- Main-authority probe: valid=true, ready=false, errors=[]; four gates remain
+  blocked. Canonical core72, prior integration194, final affected67 and synthetic
+  preservation17 passed in overlapping selections, not a full-suite claim.
+  Inherited descriptor/retention failures remain; candidate workspace456 likewise
+  fails on pristine HEAD with the same rejection fingerprint. Synthetic rebind1/1
+  passed; upload workflow12/12 and facade5 identities pass. Lorentz/Epicurus/Faraday
+  scoped AGREE. No feature/UAT release claim; r4 proof does not certify this merge.
 
-This is the bounded active work board. Lossless history is indexed in
-`docs/archive/README.md`; archived files are not current instructions.
+## UAT consistency assessment — 2026-10-13 UTC, observed live diagnostic proof / 待測
+- [ ] Verify the bounded generic repairs, replay candidate browser diagnostics
+  and obtain three scoped reviewer decisions before acceptance.
+- [Frozen r4](../.formowl/uat-stability-20261013/package-r4.json), code dd731bfc…:
+  [verification](../.formowl/uat-stability-20261013/r4-verification-safe.json)153/153
+  PASS254.897s, integration3/3 PASS110.247s, lint/compile12 PASS; pinned image,
+  exact252+37 post-run hashes verified. Native32/32+115subtests PASS27.697s/Ruff;
+  query guard29/29+34subtests PASS0.184s/Ruff. Original native32tests/3ERROR28.468s
+  was invalid negative table_query fixture; no derived pass count, failure retained.
+- Baseline10actual browser turns/file=HTTP=DOM:5partial/1chat/2unexpected clarification/
+  1honest incomplete/1provider error,8comparable. Generic routing, retained-ID and
+  source-budget/read repairs preserve guards/budgets; historical500ms cause unproved.
+- R3 focused150+integration3 PASS preceded browser8/6pass, one MCP contract error
+  plus dependent missing-reference clarification/no failed private record. Actual
+  root unproved. Shared unsafe expansion reproduced syntheticred3tests/3failing
+  subcases/2errors; guard now precedes MCP, existing repair keeps same ID/scope.
+  Logging fallback hashes/status only, content_redacted=true/exact_result_preserved=false.
+- R4 initial candidate8:7comparable/correct,1provider502/connect_headers1.044s
+  after valid MCP. Separate predeclared fresh-chat+delivery2/2 PASS preserves the
+  original failure/incomparability. Ten unique records/log=HTTP=DOM; guard/redacted
+  fallback untriggered live (synthetic proof only). Citation IDs match prior
+  same-source proof; no fresh native reopening, no provider-root/stability claim.
+- Nash engineering/Bacon safety/Linnaeus methodology final scoped AGREE on r4;
+  rollout gate preserves original candidate failure. [Readiness15:04:37Z](../.formowl/uat-stability-20261013/live-r4-ready-safe.json)
+  confirms8088 r4dd731bfc…/252drift0, same image/source/settings/budgets,
+  logs0600/dir0700; old observability stopped/preserved rollback.
+- [Live matrix](../.formowl/uat-stability-20261013/live-r4-safe.json)/verifier EXIT0:
+  14/14known checks PASS; all14log=HTTP=DOM text/citations.8cited partial/4chat MCP0/
+  1honest incomplete unknown(provider1/MCP1)/1reset reference clarification(no provider/MCP).
+  Thirteen provider turns comparable; reset local/identity-exempt, not provider-comparable.
+  Repeated/fresh/rephrase origin citation, same-row manufacturer, unrelated-part origin/manufacturer and
+  PO delivery match prior same-source proof. Master screenshot review; PO page1/3
+  partial requested delivery, not shipment/latest commitment. Reload/reset/postreset
+  chat PASS; source pin unchanged/no fresh native reopen. Scope is observed known
+  regressions, not whole-UAT/provider-stability/standard.
+- [Cleanup15:11:45Z](../.formowl/uat-stability-20261013/final-operational-r4-safe.json):
+  8088healthy/exact252/drift0/restart0/OOMfalse;4own candidates removed/logs+rollback
+  retained; source/index/DB/unrelated containers untouched.14private IDs/records,
+  zero recording failures/redacted/unsafe-query events; URLs404 twice,0600/0700.
+- Historical source/artifact anomalies and upstream causes remain OPEN. Exact/error
+  exclusions, honest incomplete and all-fields contracts remain required. Canonical
+  authority-resume3 valid=true/ready=false/errors=[], four blocked; step4 in-progress.
+  Requested sol/high actual metadata unverified; Master/B bounded work remains active.
+- [Handoff](agent-goals/handoff-log.md) retains failures/history; exact pre-edit5docs
+  and hashes in unchanged [archive](archive/2026-10-13/uat-stability-r3-pre-verification/SNAPSHOT.md).
+
+## Opt-in private UAT logging — 2026-10-13 UTC, diagnostic-only / 待測
+- [ ] Capture and verify the authorized UAT interaction recorder in the candidate
+  and live browser, then obtain three sequential scoped reviewer approvals.
+  [Frozen r1](../.formowl/uat-observability-20261013/package-r1.json), code `4544e59a…`,
+  copies r12 plus only two logging owners and two tests; unrelated dirty drift preserved.
+- Local canonical worker evidence: final logging9/9 + terminal6/6, Ruff/diff PASS;
+  earlier working-tree fixture PASS predates final provider correlation.
+  Master frozen36/36,2.192s,EXIT0 (`focused-r1b.log`); prior Docker125/zero tests
+  preserved. Final integration2: cookie PASS, opt-in fixture FAIL before service
+  with `private_artifact_fingerprint_invalid` (`integration-r1.log`,20.501s/EXIT1).
+  Candidate8096 Chromium/log capture PASS: repeated chat MCP0/distinct IDs,
+  unrelated LQP MCP1/provider2/citations2, private9→7→2 IDs/file=HTTP=DOM.
+  All3 scoped reviewers AGREE for logging activation only; exact evidence and
+  commands: [handoff](agent-goals/handoff-log.md). No all-green integration claim.
+- At logging activation8088: `formowl-uat-observability-live-20261013`, code4544e59a…/252drift0,
+  same source/image/gpt-5.5 high/budgets. Live ChromiumEXIT0: chat11195ms MCP0/provider1;
+  unrelated lookup23844ms MCP1/provider2/citations2/partial, file=HTTP=DOM,
+  raw9→7→2 IDs, provider/turn/MCP sameID/zero log failures/private-log URL404 twice.
+  [Live proof](../.formowl/uat-observability-20261013/live-browser-log-safe.json) and
+  [correlation](../.formowl/uat-observability-20261013/live-correlation-safe.json).
+  Repeat-prompt proof remains candidate-only. [Cleanup](../.formowl/uat-observability-20261013/final-operational-safe.json)
+  09:28:05Z: candidate removed/logs retained, live healthy/restart0/OOMfalse,
+  prior r12 stopped/preserved rollback; unrelated containers untouched.
+- Private schema v2 retains unique turn IDs, available validated plan/query/support,
+  citation membership and scan-stop metadata. Paired flags, private0600 persistent
+  operator mount, safe recording failures and unchanged public schemas/budgets:
+  [SPEC](../SPEC.md#731-source-neutral-evidence-double-check--待測).
+- Underlying COO inconsistency remains unresolved. [Canonical authority](../.formowl/uat-observability-20261013/authority-check.json)
+  valid=true/ready=false/errors=[], four gates blocked. No checkbox/standard/readiness
+  promotion; whole regression non-green and source-stability investigation OPEN.
+- Five complete pre-edit docs and hashes: [immutable checkpoint](archive/2026-10-13/uat-observability-checkpoint/SNAPSHOT.md).
+## Prior r12 LAN publication checkpoint — 2026-10-13 UTC, historical / 待測
+- User-confirmed target `8088`: `formowl-uat-live-8088-20261013` served the unchanged
+  verified r12 snapshot (`b2f4fa44…`), inventory252/drift0, same partial source `5e222fc…`.
+  [Readiness](../.formowl/publication-20261013/uat-8088/ready-safe.json): health OK;
+  [Final cutover](../.formowl/publication-20261013/uat-8088/final-safe.json): old8088/8089
+  stopped/preserved; primary8088 health OK before/after stopping8089.
+- [Cleanup](../.formowl/publication-20261013/cleanup/final-safe.json): six test containers
+  removed; logs/private artifacts retained, unrelated containers untouched; no image,
+  volume or data changes. This is operational cleanup, not broader acceptance.
+- Publication selects tested r12 bytes in Git index, preserving later two-file
+  working-tree changes; commit identity is in Git history. Selected75 paths/diff74:
+  frozen `dense_embedding.py` already equals HEAD; drift-byte audit matches, unrelated Issue20 unstaged.
+  GitLab push **NOT done**: outside-sandbox glab auth valid, configured bot belongs to
+  another project; no FormOwl remote, awaiting correct repository URL.
+- [8088 Chromium](../.formowl/publication-20261013/uat-8088/browser/acceptance-safe.json)
+  EXIT0, screenshots reviewed: ordinary MCP0/provider1; delivery MCP1/provider2/citation1;
+  COO MCP1/provider2/citations2; all comparable under trusted new deployment binding.
+  Delivery/COO remain partial; answers/citations match prior source-verified evidence
+  under identical code/source, **not a fresh native-source reopen**. Cutover scope only.
+- [Canonical authority](../.formowl/publication-20261013/authority-check.json): valid=true,
+  ready=false, errors=[], four gates blocked. No release/feature/methodology completion
+  or checkbox promotion; whole regression non-green, source-stability investigation parked/OPEN.
+## Delivery-resolution checkpoint — 2026-10-12 UTC, ACTIVE / 待測
+- At that dated checkpoint live `8089` ran r12/new partial source `5e222fc…`; full252 files, drift0.
+  Chromium LAN journey EXIT0: cited delivery and unrelated actual attachment,
+  ordinary MCP0/reload/reset/postreset pass; all four responses comparable.
+  **This observed question's source-verified answer was obtained in the real LAN
+  webpage**; Archimedes scoped AGREE. A first citation reopen failed with
+  `ingestion revision completed job changed`; once-only instrumentation then
+  passed both citations with original guards/results unchanged. Cause remains
+  unresolved: stability/reproducibility acceptance is blocked, not this observed
+  answer. No full-UAT, user-only blocker, phase-final or completion claim.
+- 2026-10-13 user-authorized investigation **parked pending recurrence**;
+  stability/reproducibility acceptance **OPEN/待查**. One full read **23.116s/EXIT0**:
+  all three same-call job fingerprints/counts and same-input hash engines match,
+  metadata stable during this call; two original browser citations resolve.
+  Current code/image/source match; first failed process unbound, mismatch branch/
+  values absent. Old mtimes/ctimes do not prove historical immutability or exclude
+  transient target swaps. Static hypotheses unproved; observed-date proof retained.
+  On recurrence, capture same-call job index, expected/actual hashes/counts and
+  frozen runtime/source identity before any retry; never repin/weaken guards or
+  reload to chase success. Operator helper only, no product diagnostic/patch/deploy/
+  rebuild/retry changes. Fresh canonical check valid=true/ready=false/errors=[]/
+  EXIT0 (`1123ffb9…`); four gates blocked, host dependency failure supplemental.
+  Partial diagnostic status only; no acceptance/release gate sought or checkbox
+  promotion. Safe evidence/capture boundaries: [handoff](agent-goals/handoff-log.md).
+- Storage O1/binder r4: canonical **49/49**, Ruff; three scoped agreements carried
+  through the r5 compatibility review. R5 materializer: **58/58**, Ruff, three
+  scoped agreements. B diagnostic binding: **19/19**, scoped Hypatia AGREE.
+  These close only their named findings, not source/business/full-UAT acceptance.
+- R10 corrected the rejected r8/r9 extra-file inventory: exactly **252 code +
+  33 test files**; Archimedes/Lagrange scoped AGREE. Combined canonical **82 tests,
+  81 pass / 1 failure, 170.385s** remains recorded. The failure was the mock's
+  nonpositional snippet/citation pairing, not paragraph content: deterministic red,
+  keyed repair **1/1 + 2/2**, Ruff/compile, Hypatia AGREE/closed. R11 focused
+  integration below supersedes that one failure; no whole-suite-green claim.
+- Fixed 2048-parent r2 extraction completed **17:10Z / EXIT0**, **622,631
+  Observations / 7,211 runs**. Prep-r2 failed on an old composer; corrected
+  prep-r3 reused that completed delta and finished **17:44:25Z / EXIT0**:
+  **5,588,435 Observations / 1,100,143 references / 10,479,384 postings**, pin
+  `7c11bec0…`, **not activated**. Successful extraction is not source completeness.
+- Safe source audit proves one successful native PDF run's three paragraphs all
+  became `[redacted_mail_evidence]`, losing identifier/date postings. **Source is
+  not absent.** B's generic path-span consumer repair is frozen: **26/26**, zero
+  failures/errors/skips, **0.601s**, Ruff. Detector/final guard unchanged;
+  attachment extractor version only **0.6.2**. Original red four tests/20 failing
+  subcases and two intermediate permission-fixture failures remain preserved.
+- Master r11: exactly **252 code + 34 test files**, fingerprint `ac409901…`;
+  two product deltas plus citation-fixture correction. Canonical **108/108,
+  170.274s, EXIT0**, zero failures/errors/skips; exact pre/post inventories verified.
+  Hypatia/Archimedes/Lagrange r11 scoped **AGREE (3/3)**, not broad release.
+  Fixture-r11 **EXIT0**: synthetic native PDF + independent document pass late cue,
+  native citation, ordinary MCP0/reload/reset. Safe-v2 proves all six responses
+  incomparable (missing deployment/code/build); each four-attempt business turn
+  retained only three records. Diagnostic only, not actual-date acceptance.
+  The NEW same-source-order **2048-parent/all-formats** version0.6.2 r3 batch
+  completed **18:57:38Z/EXIT0**, **622,631 Observations/7,211 runs**; prep-r4
+  completed **19:18:55Z/EXIT0**. Pin `5e222fc…`: **1,100,143 references /
+  407,401 helpers /10,671,080 postings**, still partial, zero independent-document
+  helpers. Admission found a successful native PDF run and three preserved indexed
+  paragraphs. Old runs, pins and ledgers remain preserved.
+- Prior serving r12 (`b2f4fa44…`), exact252+34: B's frozen retention-only repair
+  derives safe diagnostic capacity from the **unchanged six-request cap**;
+  **19/19,0.818s**, zero failures/errors/skips, Ruff. Final focused r12
+  **117/117,174.049s,EXIT0**, zero failures/errors/skips; pre/post exact252+34.
+  Hypatia/Archimedes/Lagrange scoped **AGREE (3/3)**. Active serving manifest is
+  then r12 on live8089; that candidate8096 proved then removed at19:35:25Z.
+  Old r5 remains stopped/preserved for rollback.
+  Initial freeze-helper TypeError/empty unpublished tree and operator readonly-
+  template chmod failure remain preserved; only the operator helper's private
+  tmpfs copy was corrected, no product/secrets changed by that correction.
+  Candidate citations reopened/hash/run/parent checked at19:26Z: requested
+  delivery, not PO/approval dates, shipment or latest supplier schedule.
+  Unrelated attachment proof is not independently registered document proof.
+  Live source/native proof later passed; first reopen failure remains unclosed.
+  Missing/truncated identity stays incomparable; standard/broad-source gates open.
+- Canonical `authority-resume4.json`: **valid=true / ready=false / errors=[] / EXIT0**;
+  four gates blocked, feature 待測, step 4 `in-progress`, no checkbox promotion.
+  Host dependency exit2 is supplemental only. Requested sol/high, actual
+  configuration unverified; no descendants. This checkpoint changes docs only.
+- Evidence and next-action detail: [handoff](agent-goals/handoff-log.md).
+  Full pre-edit history is preserved byte-for-byte with hashes in the
+  [immutable checkpoint](archive/2026-10-12/delivery-resolution-pre-span-repair/README.md).
+  Diagnostic/storage/redaction contracts reflect r11 extraction and r12 serving;
+  live source-stability acceptance and broad-source evidence remain open. Seven pre-edit
+  docs are [archived](archive/2026-10-12/delivery-resolution-r12-staged-checkpoint/SNAPSHOT.md).
+  No blanket worker/Master stop.
 
 ## Retention Rule
-
 - Keep every unchecked checklist item.
 - Keep current phase summaries and at most five concise recent completions.
 - Keep this file at or below 400 lines; archive before 500.
 - Never edit an existing dated archive.
-
 ## Status Legend
-
 - `[x]` complete and verified for its stated scope.
 - `[ ]` incomplete, blocked, or not verified.
 - Goal files hold durable role state; this board holds task completion.
+## Current Worker Policy
+Requested `gpt-6.1-sol`/`high` is traceability, not an availability gate. Record
+unobserved actual metadata as unverified; current explicit bounded assignments
+supersede dated stop/closure language. No descendants or silent tier relabelling.
 
-## Current Phase Summary — 2026-08-29
+## Generic attachment/query recovery — 2026-10-12 UTC, 待測
+- [ ] Fixed source-order offline recovery windows: version0.6.2 same2048/all-formats r3 and prep-r4 completed; preserved native paragraphs admitted, partial source was deployed with r12 at that checkpoint. First live reopen failed completed-job validation; later instrumented native proof passed without changing guards. Cause/stability and full-source acceptance remain open. Earlier directory-index ENOSPC and separate metadata_unreadable failure are preserved, not overwritten or conflated.
+- [x] Bounded source-start exact identifier/field implementation: final12/12+Ruff, integrated39/39, three scoped reviewers AGREE, synthetic native XLSX real-provider browser passed. Corpus/live integration and native-value limitations remain separate.
+- [x] Bounded new-evidence/field-support progress and safe attachment-scope trace: final15/15+Ruff, integrated39/39, three scoped reviewers AGREE. Repeated citations alone are not progress; no full-provider-lifecycle acceptance.
+- [ ] Completed partial source-native artifacts validated; r12 candidate original-source crosswalk passed, live delivery/attachment content/citation/lifecycle browser passed. Observed live answer/native source proof has scoped AGREE; unresolved first reopen failure blocks stability/reproducibility, not that observed answer. Full-source/transfer acceptance remains open. Earlier r5 proof is historical; no checkbox promotion.
+## Historical SSE slice — open follow-ups, not current deployment status
+- [x] Stage 1 bounded local fix: named/flat SSE errors parsed before failure; malformed/EOF/timeout/terminal distinctions and safe service traces verified. Pre-fix new suite11 tests/16 subcase failures retained; frozen compatible44/44 zero skips1.842s/Ruff PASS; Euclid/Rawls/Godel explicitly AGREE for this scope only.
+- [ ] Stage 2 upstream diagnosis remains open: identical-payload direct/bridge greeting both completed (~2.7s/tools0); candidate web planning reachedMCP2/citations2 with no provider failure. Historical upstream error not reproduced; no proxy/timeout/quota cause established.
+- [ ] Stage 3 countermeasure: proved local diagnostic defects repaired/deployed; upstream-specific change deferred until actual error evidence. No blind retry, timeout inflation, model substitution or index action.
+- [ ] Stage 4 candidate/live basic chat/reload/reset PASS; candidate delivery EXIT1/mail_failed despite provider completion and repair_recovered. Preserve no_data_match=true/source_binding_verified=false; business/full-UAT/provider-stability acceptance stays open. That slice did not rerun postlive delivery; later partial diagnostics are archived.
 
-- The active KG program is GitHub issue #56, not the historical issue #33 plan
-  or issue #55 document-first POC.
-- Frozen method and tokenizer remain
-  `evidence_to_knowledge_kg_ontology_v2_hybrid_v1` and
-  `jieba_sentencepiece_frozen_profile_candidate_admission_v1`.
-- Pinned methodology authority is valid but blocked. The normal runtime-method
-  gate is passed; source completeness, accepted execution-fingerprint binding,
-  same-pipeline real-source ablation, and independent final-answer acceptance
-  remain blocked.
-- The existing safe source-completeness report passes its own sealed contract:
-  `8,443` raw/source inventory units reconcile to `8,443` Observations with
-  unexplained loss `0`. Its report/snapshot fingerprints are
-  `sha256:9bf59781bb846f87934511fe7378626eddd380cbe9e1acea201aa0625f11f8b6`
-  and
-  `sha256:55df0dc7d96a7822271f4b7f4509b4da1bbb94f26bb7710e3919f8134d28f2d1`.
-  The authority gate remains blocked because no formal all-four-gate evidence
-  bundle has been authored and atomically promoted.
-- Commits `6e4663a` and `ad08b22` implement the current source-to-promotion
-  binding slice: the source evidence author validates the exact complete
-  execution bundle against report, source, counts, and authority before
-  output, while promotion preflight accepts the existing v3
-  `execution_binding` and cross-binds it to the single validated dependency.
-- Pinned-E5 focused E2E passed `48/48`; both cross-reviews returned `AGREE`
-  after one private-helper dependency blocker was corrected to use the public
-  bundle loader.
-- The generic participant-any deterministic inventory now runs an actual-user
-  request through `ConnectedRuntime`, OAuth, and normal ASGI `/mcp` with typed
-  intent. The raw request is not retained; its request fingerprint is
-  `sha256:ace0484e2706d363d53a4733e269e1c0814fc9629d5ad8ebf2f1a645f4621d1d`.
-- The run completed `21` bound-cursor pages with
-  returned/total/union `2069/2069/2069`, duplicate count `0`, and `2086`
-  governed references/citations. Per-page HTTP latency was
-  `260.323–319.288 ms`, total query HTTP time was `6415.888 ms`, and one-time
-  compose/load time was `600090.276 ms`.
-- Coverage correctly remains `incomplete`: the full permission-authorized
-  scope is `2793`, partitioned into `2069` matches, `174` proven nonmatches,
-  and `550` unresolved occurrences, with unsupported/redacted `0/0`. The
-  unresolved source gap is primarily legacy or malformed participant evidence
-  that the standard mailbox parser cannot recover. Therefore neither “all”
-  nor production readiness is supported.
-- The source-native conversation-closure experiment was removed. This run did
-  not use the `317` oracle; that count belongs to a different private prompt
-  and cannot be compared with this actual-user request.
-- Full coverage is measured against the permission-authorized sealed-source
-  occurrence scope, not the smaller retrieval projection. The lineage
-  crosswalk cache key and owner/gateway validation bind the same
-  index/graph/source-session fingerprints.
-- The latest focused pinned-E5 verification passed `62` tests with `0`
-  skipped. `authority_valid=true` and `methodology_ready=false`; the authority
-  execution fingerprint is
-  `sha256:78cebbb2af8c6e4bcde3f2819436c6f62bd34e957f381dff610bf8a0a477711d`.
-- No formal evidence was authored or promoted, and no methodology-quality UAT,
-  independent holdout, transfer, or v1-v7 diagnostic rerun occurred. The same
-  four authority gates remain blocked; no readiness, superiority, or
-  completion claim is supported.
-- Strong RAG is a required component/control. KG adds heterogeneous identity,
-  joins, bounded topology, time, contradiction, provenance, and coverage.
-  Ontology is scoped/data-first/capped soft scoring. Exact sets use a
-  deterministic executor.
-- The existing five-step POC plan is unchanged and step 4 remains
-  `in-progress`.
-- The sealed workspace-only development package over exactly `456`
-  Observations passed its artifact/identity-scope contract. Its mode is
-  `workspace_only_v1`, and no `tenant_id` field or key exists.
-- Read-only source tracing established that the earlier synthetic fixed
-  prompt did not bind to the approved source: both requested terms had zero
-  occurrences in raw source, parser-native output, and sealed retrieval.
-  This was a prompt-to-source mismatch, not a graph traversal defect.
-- The development diagnostic one-shot claim
-  `issue56-development-workspace-only-diagnostic-one-shot-20260820-v1` was
-  consumed. It must not be rerun, retried, or parameter-tuned. Its report is
-  blocked: Hybrid `0/100`, graph paired CI `[0,0]`, citation support `0%`,
-  no-answer false positives `100`, p95 `1510.841 ms`, and permission leakage
-  `0`.
-- The user separately approved a versioned, non-claim-bearing minimum E2E plus
-  phase-tracing diagnostic slice. Its synthetic, non-sealed path passed:
-  prompt -> ASGI `/mcp` -> synthetic preverified workspace-only principal ->
-  dispatcher actor injection -> `SemanticMcpGateway` ->
-  `AuthorizedSemanticMailSession` -> deterministic cited response, with `2`
-  citations and `2` graph paths. Canonical focused evidence is `25+5` passing
-  tests, including the new five-test slice.
-- The deterministic
-  `issue56_source_backed_connected_identifier_prompt_selection_v1` selector
-  now chooses only real protected identifiers with authorized exact-term and
-  lexical lineage plus an existing source-backed connected path. Its focused
-  selector/gateway E2E evidence passed `11/11`.
-- One canonical full regression ran `1873` total / `1781` passed /
-  `54` failures / `23` errors / `15` skips. Primary blockers were the
-  `formowl-dev` Python 3.13 versus pinned E5 runtime mismatch and existing
-  Issue #20/#33/authority drift. The sole directly related stale v3 test
-  expectation was corrected and passed in pinned E5 `11/11`; the full suite
-  was not rerun and remains non-green. The real V4 POC diagnostic passed, but
-  repository-wide completion cannot be claimed.
-- Immutable mode
-  `issue56-sealed-source-real-prompt-phase-traced-diagnostic-20260823-v4`
-  consumed one real-source diagnostic claim over the same `456` Observations.
-  It ran as `workspace_only_v1` for `workspace_formowl`, actor/approver
-  `user_full_pst_domain_hard_case_eval_owner`, with no tenant dimension.
-- V4 passed its bounded path with `2` lexical anchors, `10` graph paths, and
-  `1` citation. Query/gateway/HTTP timings were `951.148333`, `953.544449`,
-  and `982.203990 ms`; `relation_projection` was the largest semantic phase at
-  `717.357210 ms`, and `deadline_exhausted_phase` was null.
-- Loader time was `678625.866681 ms` for one-time sealed source loading,
-  precompute, and prompt selection outside the request. It is not request
-  latency.
-- V4 immutable hashes are claim
-  `sha256:2b092814194dd90d597161dfcd04822be75c97fc5c5364478bbc8b52307098cb`
-  (byte seal
-  `sha256:76dda5b18801a7587b212631b0d4d7ae0544646910e143ced0883f14e5db69b8`),
-  report byte seal
-  `sha256:40f48fea0145d523f5d14e2943b41750a48923e111cdf6e6c5e3cd265903a458`,
-  trace `sha256:4b518dd33bc406027f2fe0104559ead2cdb27a096b3357d9470acdac34e09ef4`,
-  and execution
-  `sha256:031cfe6f04c9b595bed6fd24375590a78df18dd03e07b68821c955bc03ad0b94`.
-- Source, gateway selection, owner selection, result, and answer bindings are
-  `sha256:b3959bba1267879ba3bcc6889fd063363f899987722b2447685aad844f6b53ae`,
-  `sha256:5c6bbbac6df98afb061d5aa4b21a7802fdcab7d9d09d32dadaec2f1ac0ab3c1a`,
-  `sha256:84857528eb34f4e03e343c078f5a9f89e6c8278a6807a6d84cc72fdc2d59b543`,
-  `sha256:cd4791354b612ae652da2f76d9733c28946bc18c63856b2a08f6e0a9bab63670`,
-  and `sha256:025d02916a7c0c1a816fba06754d9578a327a7e442ff9d1e34b2f273d2af20f7`.
-- Formal v6 mode
-  `issue56-sealed-source-real-prompt-relation-projection-equivalence-phase-traced-diagnostic-20260825-v6`
-  consumed its canonical claim over the same `456` Observations as
-  `workspace_only_v1` for `workspace_formowl`, approved actor
-  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
-- V6 is blocked. Outside request execution, sealed loading, before-arm graph
-  content preseal, and owner relation-base precompute took `677442.490893`,
-  `60990.781102`, and `4245.079389 ms`.
-- The before arm completed `graph_snapshot` in `0.036742 ms` and Strong RAG in
-  `90.802575 ms`, then exhausted the `1500 ms` budget in
-  `relation_projection` after `1415.389724 ms`. Query/HTTP were
-  `1520.515069`/`1555.417065 ms`; it returned `0` graph paths, citations, and
-  scores.
-- The after arm completed every required semantic phase. Relation projection,
-  query, and HTTP took `57.939772`, `291.040282`, and `346.270890 ms`; it
-  returned `10` graph paths, `1` citation, and `48` scores.
-- Relation binding/base cache entries moved before `0/0 -> 1/0` and after
-  `1/1 -> 1/1`. Graph, index, permission, plan, and runtime gates passed; the
-  remaining equivalence groups failed because the before arm exhausted its
-  deadline before traversal and result production.
-- V6 claim/claim-byte/report-byte hashes are
-  `sha256:6b045800e19d82fa187ff4271ab2d854189726a3449bcd4cedf1c03c47c2639e`,
-  `sha256:65b3b3d1f9889e1d82ec47ade77fb7dc44b4a9a3711f7bd37a538cdc9e986b61`,
-  and `sha256:ae10a358242f6f44b1f92267a80e48eac296ebd677eb1ac27bcc24f6111909f1`.
-  Execution/source/preseal/trace bindings are
-  `sha256:7ecf2c31901116ddb32d2a8a7cb41b0e3b504648006a68b3e23e89ee22b2c1cf`,
-  `sha256:bbc67d7fc7051a597488034d277c772a4a5c68bc09dc8ce696bfd2bcc0d8db8b`,
-  `sha256:4900fd366f300af097de355b59feeb6059a06b41574d01d9834e51576c4eed27`,
-  and `sha256:040cb86b70af99fd6f0467306423e0e556a6dfc41b1ed734227b613248c27a93`.
-- Temporary v6 tests passed `6/6`, the combined focused suite passed `31/31`,
-  and independent cross-review found no blocker. The formal v6 root is
-  consumed; this diagnostic-only evidence does not establish methodology
-  readiness, quality, or KG/ontology superiority.
-- Formal v7 mode
-  `issue56-sealed-source-real-prompt-relation-projection-offline-equivalence-phase-traced-diagnostic-20260825-v7`
-  consumed its canonical claim and passed over the same `456` Observations as
-  `workspace_only_v1` for `workspace_formowl`, approved actor
-  `user_full_pst_domain_hard_case_eval_owner`; no tenant dimension exists.
-- The two isolated presealed views each bound `10281` nodes and `29748` edges.
-  Cold/after graph preseal took `61825.028571`/`61485.804325 ms`; the after-arm
-  relation precompute took `4344.986693 ms`.
-- After the persistent claim, the cold binding snapshot and base builder took
-  `633.968035` and `3196.093676 ms`; offline precompute total was
-  `35771.614738 ms`, and its cache moved exactly `0/0 -> 1/1`.
-- Both arms then used the normal `1500 ms` budget through complete ASGI `/mcp`.
-  Cold/after query times were `290.941898`/`298.654947 ms`, HTTP times were
-  `366.720007`/`361.008008 ms`, and relation projection was
-  `57.473886`/`58.790683 ms`. Each returned `10` paths, `1` citation, and `48`
-  scores with no exhausted deadline.
-- All `13` timing-free semantic equivalence groups, all `5` cache acceptance
-  checks, and every applicable boundary gate passed.
-- V7 claim/claim-byte/report-byte hashes are
-  `sha256:879e903599e95d38d52e0bd1fb0d29fb6266371e7168289547d0bbc23a1d643b`,
-  `sha256:4de4d694f042f46b3a0d6c68dd93101ca7c7610a0b3f97496f44be34f20b7a0c`,
-  and `sha256:5b34d191244391c560cda849c0666c2f7e41be1d220fd3799108b6ca738a99d0`;
-  claim/report sizes are `1508`/`30893` bytes.
-- Trace/execution/source/preflight/offline-evidence/owner/precompute/cache bindings are
-  `sha256:9af61b1918c6ef2c31a91a8d6f73a875e796bbf678b13c49f7db44530189e6d6`,
-  `sha256:a99e1fa89b01d2d383209ae09f742ee55cfddcd2095992c9391878d73b00c649`,
-  `sha256:b5a8112dd88eb829b26ec7b795a6071ca81a6327362a0d265c1749d41c5f002e`,
-  `sha256:10c44440e0cde947591af7c8ad9797ba47b755d50d027d280c0cfa464dd8baf0`,
-  `sha256:bd6d0e962d07ba10f273caa83996a6e57114d6801d56660c551d3728a655fdf1`,
-  `sha256:8f63bdcf6baa4d18b6574071905900baf002318d9227e0d0da0523bf297a293e`,
-  `sha256:b2edcd214a19a6b3283abc475a8b67abd984753653a6136396b1630bfbfecf3b`,
-  and `sha256:d15cf0214e9112b1a28130496dc5ea0c554587606e32dd423886ee14364e110f`.
-- Temporary v7 evidence passed `51/51`; final cross-review found no blocker.
-  Together with v6's latency-necessity evidence, v7 establishes the bounded,
-  behavior-neutral, same-real-source relation-precompute POC. It is not
-  methodology, UAT, holdout, readiness, completion, or superiority evidence.
-- Diagnostic versions v1 through v7 are consumed and must never be rerun,
-  retried, or tuned. The four methodology authority gates remain blocked.
-- V4 is neither an independent holdout nor promotion evidence and
-  cannot support KG/ontology superiority. The sealed 41-case and additive
-  59-case mail holdouts and the GitHub transfer holdout remain unexecuted.
-- The v3 gate-evidence-to-atomic-promotion contract is implemented and focused
-  tests pass, but no formal all-four-gate evidence bundle exists to promote.
-- PostgreSQL/pgvector remains canonical. Neo4j work is not active.
-- Pre-rewrite KG/methodology/coordination documents were preserved losslessly
-  under `docs/archive/2026-08-18/` before active documents were rewritten.
+## Earlier bounded repairs — unresolved acceptance carried forward
+- [ ] Earlier source guard and provider scope/transport repairs were assigned without waiting for dense indexing; no whole-UAT/full-source acceptance. That slice's unchanged-live boundary is historical; prior r12 deployment and source-stability failure remain dated evidence above.
+- [ ] Generic parser/backfill/RAG activation and browser delivery remain **待測**. Four explicit XLS/PDF/PDF-text/PPTX parser failures now preserve failed children and partial-parent binding; unknown/mixed failures still abort. Canonical parser/backfill/prior binding `21/21` passed; parent-binding focused `3/3` passed; full composition + connected attachment modules `98/98`, zero skips, `286.778s`, passed. Scoped lint/diff passed; not full regression or live acceptance.
+Prior provider failures, failed batches, independent source-integrity checks,
+partial browser passes and scoped reviewer decisions remain in the lossless
+checkpoint; none authorize a retry or imply present service/job state.
+
+## Source-neutral descriptor + evidence double-check — 待測
+- [ ] Implement and verify the approved shared contract in [SPEC §7.3.1](../SPEC.md#731-source-neutral-evidence-double-check--待測); not yet 標準功能.
+  - Mail and independent Markdown/plain-text lookup share one core; attachments are not independent documents. 2026-10-06 SPEC §7.3.1: validated `evidence_lookup` + nonempty validated requested fields **ALL lack verified support (所有要求欄位都缺少)** => one materially different same-authorized-scope recheck when safety/eligibility/budgets permit, even with unrelated citations. Partial misses MUST be disclosed/MUST NOT trigger; blanks are verified coverage; empty resolve validated plan/clarify. Zero citations/status/projection failure alone cannot trigger/establish eligibility. Eligible immutable source lookup needs no failed projection, keeps source/hash/lineage/revision/permission/no-rebuild. ANY missing diagnostic identity => incomparable is separate. Exact stays deterministic; errors/denial stay errors, incomplete never means absence. Docs fixed; runtime all-fields predicate/tests/UAT remain 待測.
+  - Acceptance verifies citations against source/content, not counts alone; retain ordinary-chat MCP=0, both mail and independent-document paths, reload/reset, and contextless-chat MCP=0. Promotion still requires safety/exact/incomplete checks, full regression, three reviewers, and authority gates.
+  - [ ] Verify the diagnostic comparability/observability precondition: bind loaded deployment/code/build/source fingerprints and preserve top-level/per-attempt canonical request-shape, full tool-descriptor fingerprint, upstream HTTP status, terminal outcome, and valid-attempt marker. This is not a fifth methodology gate; missing evidence yields `diagnostic_only/incomparable`, and provider failure never becomes absence/`not_found`.
+R12 candidate and live each have four comparable trusted-bound responses; this
+does not establish live source stability, full coverage or formal readiness.
+Errors remain errors; incomplete coverage, source redaction and missing graph
+matches never establish source absence. Offline policy/extractor changes require
+new governed jobs/revisions, never query-triggered rebuilds. Native locators,
+source/hash/lineage/permission checks and existing budgets remain mandatory.
 
 ## Current Unchecked Work
 
@@ -304,17 +334,9 @@ This is the bounded active work board. Lossless history is indexed in
 - [x] Active KG/methodology documentation was losslessly archived and rewritten
   around issue #56 on 2026-08-18.
 
-## Pre-Feature Production Cleanup
+## Pre-Feature Cleanup
 
-The completed production-cleanup record remains immutable history in
-`docs/archive/2026-08-18/active/docs/implementation-task-breakdown.md`. It is
-retained as a completion boundary for Issue #20 finalization tooling, not as a
-new KG task.
-
-## Pre-Feature Structural Cleanup
-
-The completed structural-cleanup record is preserved in the same archive. No
-historical cleanup item is reopened by the issue #56 documentation rewrite.
+Completed production and structural cleanup records remain immutable history under `docs/archive/2026-08-18/active/`; no historical cleanup item is reopened by the issue #56 rewrite.
 
 ## Dispatch
 

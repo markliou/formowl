@@ -1,0 +1,8 @@
+{
+  "snapshot_id": "2026-10-07T081844Z",
+  "files": [
+    {"path":"kg-research-agent.md","bytes":14830,"lines":176,"sha256":"sha256:2e2eba4b5a4a89b652cd3853d1c69a708ffe09ff391bec15754d6a4a1679e84f"},
+    {"path":"handoff-log.md","bytes":74050,"lines":301,"sha256":"sha256:fffdeff07306156fc1b1d28026d6adc06f4abb7fa12d5e8e49ca6ed3a631bf04"},
+    {"path":"implementation-task-breakdown.md","bytes":42541,"lines":411,"sha256":"sha256:5447ca3090e0de59eb8ad430520cad2e9e4539b80a3beb16b61a6f0a35eb1db5"}
+  ]
+}

@@ -3,15 +3,17 @@
 ## 1. Purpose and Authority
 
 The Resource Extraction Layer converts registered heterogeneous sources into
-source-preserving, citeable Observations and reviewable semantic candidates.
+source-preserving, citeable Observations and optional reviewable semantic candidates.
 
 It is the evidence boundary beneath graph governance, strong RAG, graph-guided
 retrieval, deterministic execution, and projections. It does not decide
 canonical truth and it does not generate definitive business answers as a side
 effect of parsing.
 
-This specification applies to every source family. Mail is the first large
-fixture, not a special extraction architecture.
+This specification applies to mail, documents, standalone spreadsheets/XLSX,
+tables/databases, images, speech, non-speech audio/music, video, and connected
+business systems. Native structure and modality are preserved; mail is the
+first diagnostic fixture. Product requirements do not establish adapter support.
 
 The layer may produce:
 
@@ -77,6 +79,12 @@ Raw resources or governed source captures remain the evidence authority.
 Derived metadata, text, OCR, transcripts, captions, summaries, embeddings, and
 graph candidates are rebuildable artifacts.
 
+Observations retain text, structured values, or governed references to native
+binary regions/intervals. OCR/transcripts/descriptions have separate provenance,
+accuracy, and coverage limits; they cannot alone verify visual, acoustic,
+musical, or motion-dependent claims. Native evidence remains usable without
+ontology annotation or graph match.
+
 Deduplication may reuse bytes or normalized content, but it must not erase
 source occurrences. The same message, file, attachment, row, or event appearing
 in multiple exports, folders, accounts, or systems retains each occurrence and
@@ -134,7 +142,22 @@ deduplication or occurrence-lineage loss
 unknown unexplained loss
 ```
 
-Unexplained loss blocks the source-completeness gate.
+Only intentional policy redaction may be absent without failing source
+completeness. Reconciliation covers authorized source occurrences and native
+features needed for the claim, including formulas/types/display semantics and
+media regions, not counts of chunks, annotations, graph nodes, or indexed hits.
+Missing derived graph/ontology/index state is distinct from missing source
+content. Unexplained loss blocks the source-completeness gate.
+
+Public redaction must consume the complete unsafe span recognized by its
+existing detector, including path roots and Unicode suffixes, while preserving
+safe surrounding source text. The final unsafe-content guard remains fail-closed;
+no allowlist, question-specific exception or raw-source rewrite is implied.
+Accidental whole-paragraph erasure is evidence loss, not intentional policy
+redaction or proof of absence. Attachment version0.6.2 records the
+changed persisted output: a new governed offline job/source revision is required,
+not query-time repair, mutation of old runs/pins, or silent reuse as new policy.
+Content hash, source/run/permission bindings and native locators remain required.
 
 ---
 
@@ -215,7 +238,10 @@ content hash
 ```
 
 An Observation may contain text, structured values, or a safe reference to
-binary content. It is evidence, not a canonical fact.
+native binary content. Native content references preserve regions, cell ranges,
+or time spans and any transformation metadata. It is evidence, not a canonical
+fact. Source-native observations support authorized retrieval and structured
+execution independently of semantic annotation or graph admission.
 
 ### 3.4 SemanticMetadata and candidate knowledge
 
@@ -240,6 +266,19 @@ review state
 
 Candidate output may be accepted, corrected, split, merged, rejected, deferred,
 or superseded only through the graph-governance workflow.
+
+Cardinality is zero-to-many: each source document and each Observation may
+produce no semantic annotation, or any number of source-addressed
+`SemanticMetadata`, candidate atoms, candidate entities/business objects,
+relations, and frames. A candidate may bind multiple Observations, but it
+retains every contributing Observation ID and source occurrence. Neither an
+adapter nor an ontology may impose one annotation per document or Observation.
+Ontology may constrain and compress relation vocabulary, arity, and allowed
+edge shapes; it does not cap source-addressed candidate cardinality or erase
+distinct occurrences to reduce graph complexity.
+No annotation, type mapping, or graph entry is required to admit otherwise
+authorized evidence. Missing annotations or unmatched graph nodes never prove
+source absence; reviewed KG identity/relation overlays keep evidence links.
 
 ### 3.5 Source-completeness artifact
 
@@ -336,10 +375,15 @@ Preserve page/image ID, bounding box, OCR language, confidence, orientation,
 and model/parser revision. AI-generated descriptions are explicitly marked as
 model-generated candidates.
 
+Retain a governed native image/region reference, crop coordinates and any
+transformation lineage. OCR text does not exhaust an image, chart, or diagram.
+Visual claims require authorized source-region inspection; unsupported native
+access is disclosed rather than treated as a successful text-only interpretation.
+
 Representative tools include Tesseract, PaddleOCR, EasyOCR, Docling OCR,
 ExifTool, and governed vision-model adapters.
 
-### 5.3 Audio and video
+### 5.3 Speech, non-speech audio/music, and video
 
 Expected observation types include:
 
@@ -347,34 +391,55 @@ Expected observation types include:
 transcript segment
 speaker segment
 word timestamp
-audio event
+native audio/music interval and track/channel occurrence
+non-speech acoustic or musical interpretation candidate
+audio event candidate
 video scene
-keyframe and keyframe OCR
+native clip/keyframe reference and keyframe OCR
 visual or screen-step candidate
 ```
 
-Preserve start/end time, speaker label and confidence, scene/frame indexes,
-bounding boxes, and audio/video technical metadata.
+Preserve track/channel identity, start/end time, speaker label and confidence
+when applicable, scene/frame indexes, bounding boxes, audio/video technical
+metadata, governed native references, and transformation lineage. Speech
+transcripts do not represent nonverbal sound, music, visual content, or motion.
+Native clips/frames must verify modality-dependent claims; ASR, captions,
+scene descriptions, speaker identification, and musical interpretations retain
+their own confidence, review state, and unsupported-feature disclosures.
 
 Representative tools include FFmpeg, ffprobe, MediaInfo, Whisper or WhisperX,
 pyannote, and PySceneDetect.
 
-### 5.4 Spreadsheets and databases
+### 5.4 Standalone spreadsheets/XLSX, attachment tables, and databases
 
 Expected observations include:
 
 ```text
 workbook, sheet, table, and schema metadata
-row and cell values
+row and cell raw values, source types, and displayed values
+formula text, cached results, and result/recalculation provenance when available
+merged ranges, header paths, explicit blanks/nulls, and row associations
 query or export snapshot occurrence
 transaction or record occurrence
 primary/business identifier candidates
 ```
 
-Preserve sheet/table name, row/column or record key, export/query revision,
-source-system timestamp, null semantics, and type precision. A database row or
-spreadsheet cell is evidence; it does not directly become a canonical entity or
-relation.
+Standalone spreadsheets/XLSX enter through the generic Asset boundary without
+a mail dependency. Preserve workbook/sheet/table identity, cell coordinates,
+row/column or record key, export/query revision, source-system timestamps,
+types/precision/units and explicit blank/null semantics. Raw values, formulas,
+cached results and formatted display are distinct evidence; a cached XML value
+does not prove a freshly calculated formula result. Keep merged/header paths
+and same-row association; inferred headers remain candidates until validated.
+
+Deterministic lookup, filtering, joins, sorting, aggregation and counts use
+validated native rows/cells/schema or a faithful revision-bound projection with
+proved lineage/coverage. Cite cells/ranges and state which value representation
+and calculation semantics the operation uses. Graph properties, generated
+summaries and top-k chunks cannot substitute for source values. Unsupported
+formulas/types/display features, ambiguous headers, incomplete rows or redacted
+ranges weaken or block exact claims. A row or cell is evidence; it does not
+directly become a canonical entity or relation.
 
 ### 5.5 Calendar, ticket, project, and business systems
 
@@ -496,6 +561,9 @@ ocr_low_confidence
 asr_low_confidence
 speaker_uncertain
 table_structure_uncertain
+formula_result_unverified
+native_value_semantics_unsupported
+native_media_access_unsupported
 time_normalization_uncertain
 quoted_message_unresolved
 attachment_skipped
@@ -509,12 +577,29 @@ effect. Partial observation output is allowed only when the run explicitly
 records partial status, exact output manifest, missing-source taxonomy, and
 claim limits.
 
+Known attachment parser exclusions are handled per child, not as successful
+extraction: the existing materializer may retain a failed child Asset/ExtractorRun
+for bounded byte/table/cell limits and explicit generic, XLS, PDF parsing/text
+extraction, or PPTX parsing failure codes. The parent may finish processing only
+with `attachment_child_extraction_incomplete`, the original error codes, and
+`partial_extraction`; failed-child content is not successful evidence. Downstream
+consumption still requires the existing bound failure-exclusion contract where
+applicable. Unknown/mixed errors, exceptions, and invalid source/hash/permission
+bindings still fail; no wildcard error suppression or relabelling is allowed.
+Retries use new batch/run identities and preserve previous failed ledgers.
+This diagnostic implementation remains **待測** for real-source UAT acceptance.
+
 ---
 
 ## 8. Tokenization, Indexing, and Retrieval Boundary
 
-Extraction produces source-preserving Observations. Query-time lexical/dense
-indexes are derived projections over authorized Observations.
+Extraction produces source-preserving text, structured and native-media
+Observations. Modality-appropriate retrieval indexes are derived projections;
+text lexical/dense retrieval is one branch. Spreadsheet access uses native
+schemas/coordinates, image retrieval verifies regions, audio/music verifies
+intervals, and video verifies scenes/clips/frames. Actual adapter/model/index
+capabilities and revisions must be discovered; unsupported branches remain
+explicitly unsupported/incomplete, never source absence.
 
 The active target tokenizer/profile is:
 
@@ -537,8 +622,134 @@ Required index rules:
 - no silent ASCII-regex, substring, stale-index, or unpinned-model fallback;
 - indexing does not create canonical graph writes.
 
+The query-independent offline batch contract is [SPEC §11.1](SPEC.md#111-query-independent-offline-batch-indexing--待測).
+Reuse the existing PostgreSQL JSONB Observation owner/pgvector baseline; the
+recovered UAT stores remain file-backed. Existing SQLite derivatives persist
+sealed reference/occurrence/attachment-parent and document neighbor locators,
+not source truth. Admitted keyed artifacts support mail and independent real
+PlainText/Markdown extraction paths without request-time tail scans or
+`list.index`; selected source/hash/job/revision/permission/native locators are
+revalidated within existing caps. Native rows/cells stay with their existing
+sealed owner. Shortlists/misses remain incomplete; coverage separately reports
+unsupported extraction, parse failure, truncation and unavailable projections.
+This slice is 待測, not live document coverage, full RAG or source completeness.
+
 Strong RAG and graph-guided retrieval consume the same Observation snapshot.
 Graph or ontology ranking cannot hide source-completeness failure.
+Activated lexical/dense index revisions and provider manifests are persistent
+derived projections reused by request handling. A prompt must not trigger
+re-extraction, re-embedding, KG construction, or index construction inline.
+Under the 2026-10-06 rule in `SPEC.md` §7.3.1, validated `evidence_lookup`
+with a nonempty validated requested-field set and **all** fields lacking
+verified support triggers one materially different, same-authorized-scope
+bounded source recheck when existing safety/eligibility and remaining budgets
+permit, even with unrelated citations. Partial misses must be disclosed and
+must not trigger this automatic recheck. An empty field set is not vacuously
+all missing: use the existing validated evidence-need plan
+or clarify. A source-backed explicit blank counts as verified coverage;
+citation count or status alone cannot trigger recheck. Feature remains **待測**.
+
+For a protected identifier plus a requested field, the retrieval contract first
+performs a typed exact lookup against the current authorized source schema.
+Bounded validated expansion may recover through the applicable source-native
+strong-RAG branch, lexical+dense for text, under the existing contracts.
+A provider timeout/error is an
+operational failure and must not be reported as no source evidence or a
+definitive absent value.
+
+The agent, not the MCP tool, owns query enrichment. When the request needs
+intent, identifier, field, source, or schema resolution, the agent must form an
+expanded and schema-validated query before the first tool call. Each follow-up
+call is another validated refinement or expansion after inspecting the prior
+result and coverage. This is a bounded iteration under the request's pinned
+budgets, not an unbounded retry and not a reason to rebuild the KG or index.
+Safe per-phase and per-iteration timing/outcome traces are retained with the
+request fingerprint without exposing raw source or infrastructure details.
+
+Authorized direct retrieval and native structured execution need no matching
+graph node/edge or ontology annotation. Optional graph/ontology signals retain
+source evidence for every contributing hop. Bounded source context may include
+adjacent paragraphs/headings, headers/cell ranges, image crops or media clips;
+revalidate source occurrence/hash/revision/lineage/permission/native locator and
+remaining budgets. Snippet grants do not grant whole assets. These reads reuse
+valid sources/projections without inline extraction, re-embedding or rebuild;
+automatic recheck still obeys §7.3.1, and its mail/text `16 KiB` presentation cap
+is not a universal native-media context limit or capability proof.
+
+### 8.1 Current adapter evidence and gaps
+
+This is a product/extraction contract clarification, not implementation,
+native-media acceptance or methodology completion. [SPEC §14](SPEC.md#14-current-implementation-and-methodology-status)
+records current slices:
+
+| Adapter slice | Current evidence and limit |
+| --- | --- |
+| Mail and independent text | Diagnostic mail and real `PlainTextObservationExtractor` for Markdown/plain-text; live §7.3.1 acceptance remains open. |
+| `AttachmentDocumentExtractor` | Bounded XLSX/XLSM, XLS, native-text PDF, DOCX/PPTX, plain text/Markdown and CSV/TSV parsing. XLSX preserves raw/cached/formula/date/precision/blank metadata and coordinates where available; merged-header paths are candidates. It does not recalculate formulas or guarantee display/style/unit/null semantics or whole-workbook proof. XLS formula identity and scan-only PDF/OCR remain unsupported. Parser tests do not establish standalone-document/live UAT or activated RAG coverage. |
+| `FixtureOcrExtractor` | `read_text()` page/bbox fixtures; no real-image OCR, visual retrieval or native-region proof. |
+| `FixtureAudioTranscriptExtractor` | `read_text()` timestamp/speaker/transcript fixtures; no real decoding/ASR, acoustic verification or non-speech/music path proof. |
+| `FixtureVideoSceneExtractor` | `read_text()` scene/keyframe descriptions; no real decoding, temporal/visual retrieval or native-clip/frame proof. |
+
+Parser capability, query-path capability and activated source coverage are
+separate evidence. The deployed bounded source-start path indexes and rehydrates parsed
+attachment `paragraph`/`heading`/`list_item` content under `mail`, with genuine
+parent/child/run/hash/revision/permission and native-locator checks; an attachment
+does not become an independent document. Independent Markdown/plain-text stays
+`document_text`. The attachment-inclusive lexical surface policy requires a
+matching new offline artifact; an older attachment-omitting artifact or clone
+cannot acquire that coverage from a code deployment alone.
+
+The 2026-10-12 bounded integration targets native-table field retrieval, DOCX
+attachment content and a standalone clause. Existing exact-cell tests verify
+source-provided column labels, same-row constraints, explicit blanks and partial
+coverage; the executor currently exposes `extracted_cell_text`, not complete
+spreadsheet calculation semantics. UnitPrice/Quantity retrieval is a bounded
+target, not aggregation, currency math or latest-revision completeness proof.
+At the 2026-10-12 checkpoint, r12/new partial source runs on live8089, full252/drift0;
+candidate8096 was deployed/proved, then removed at19:35:25Z. Old r5 remains
+stopped/preserved for rollback. Earlier
+fixed2048 r2/prep-r3 success did not preserve all text: the safe audit proved a
+successful PDF run's three paragraphs were erased by redaction, not source absence.
+R11 span-consumer repair leaves detector/final guard unchanged; output version0.6.2
+required a NEW same2048/all-formats replay, not a query-time fix or old-run mutation.
+R3 completed18:57:38Z/EXIT0,622,631 Observations/7,211 runs; prep-r4 completed
+19:18:55Z/EXIT0. Pin `5e222fc…` has1,100,143 references/407,401 helpers/
+10,671,080 postings, zero independent-document helpers, partial coverage.
+Admission verified one successful native PDF run and three preserved indexed hits.
+
+R11 exact252+34 passed108/108,170.274s/EXIT0, zero failures/errors/skips and
+three scoped agreements; worker26/26 and original red/fixture failures retained.
+Fixture-r11 EXIT0 PDF/independent-document cue/citation/lifecycle remains diagnostic:
+six responses incomparable, missing deployment/code/build; four-attempt business
+turns retained three. R12 retention derives from unchanged cap6, local19/19,
+final focused117/117,174.049s/EXIT0, zero failures/errors/skips, exact252+34
+pre/post/current inventory checked and Hypatia/Archimedes/Lagrange scoped AGREE3/3.
+Active serving manifest is r12; extraction remains the recorded r11/version0.6.2 job.
+
+Candidate source crosswalk passed19:26Z: both original-attachment citations
+reopened/hash/run/parent checked; requested-delivery column visually verified,
+not PO/approval dates, shipment or latest supplier schedule. Unrelated attachment
+paragraph/native hash proof is not independent-document registration proof.
+Live Chromium LAN EXIT0/all four comparable, delivery and unrelated attachment
+each MCP1/provider2/citation1, chat/reload/reset pass; evidence coverage stays partial.
+First live citation reopen failed
+`ContractValidationError: ingestion revision completed job changed`.
+Once-only instrumentation then passed the unchanged original loader/guards;
+all three job digests agreed across engines, both LIVE citations reopened/hash/
+run/parent checked. Archimedes scoped AGREE supports this observed source-correct
+answer in the real LAN webpage. The first failure remains preserved/unexplained
+and blocks stability/reproducibility acceptance, not the demonstrated answer;
+no mutation/corruption/root-fix, full-UAT or source-completeness claim.
+
+Canonical authority-resume4: valid=true/ready=false/errors=[]/EXIT0;
+feature待測/four methodology gates stay blocked. Trusted diagnostic bindings are
+not remote attestation, source stability or retrospective repair of unbound records.
+See [SPEC §14](SPEC.md#14-current-implementation-and-methodology-status) and the
+[dated handoff](docs/agent-goals/handoff-log.md) for exact pins and preserved failures.
+
+MIME/modality declarations and fixture locators cannot establish native support.
+These limits leave source coverage explicit while preserving the wider product
+requirements, frozen method/tokenizer, strong RAG control and issue #56 gates.
 
 ---
 
@@ -570,6 +781,17 @@ No model may:
 The same final answer model and settings are used across comparison arms. A
 candidate-generation model is not automatically the answer model.
 
+When an LLM has low confidence about a user instruction, domain term, schema
+concept, or MCP tool usage, it may consult redacted public-web information only
+to disambiguate semantics, understand terminology or schemas, or propose a
+candidate MCP tool-plan expansion. The resulting plan is not executable until
+it is checked against the actual current MCP tool schema and current caller
+permissions. Public-web context remains untrusted and separate from workspace
+evidence and provenance; private source content, prompt details, identifiers,
+values, secrets, and tool results must not be sent outward. Web material cannot
+authorize access or writes, create canonical KG or ontology state, or replace
+source-grounded deterministic exact execution and coverage evidence.
+
 ---
 
 ## 10. Re-Extraction and Rebuild Policy
@@ -599,6 +821,26 @@ canonical graph -> changes only through governed commits and lifecycle events
 projection -> rebuildable from pinned evidence and graph revisions
 ```
 
+These rebuilds are explicit offline or governed lifecycle operations. A query
+miss, exact-lookup miss, provider retry, or answer request never starts a
+per-query rebuild. Missing, unsealed, or unactivated retrieval projections are
+distinct from an independently validated immutable source snapshot, not
+independent permission to bypass `SPEC.md` §7.3.1 eligibility. Eligible
+same-authorized Observation/source fallback may use that snapshot without the
+failed projection, but retains authorized scope and source/hash/lineage/revision
+checks and existing budgets. Invalid source bindings, permission/schema/provider
+errors, and exact-query boundaries remain fail-closed. Incomplete scans and
+timeouts are not absence; only proven complete source coverage can support a
+scoped complete negative.
+
+Under [SPEC §11.1](SPEC.md#111-query-independent-offline-batch-indexing--待測),
+source/policy/extractor changes require explicit offline jobs and versioned
+artifacts, not question-driven ingestion. Reopen/reuse validated batch artifacts;
+legacy missing locator metadata stays unavailable, with no inline migration.
+Offline clone mode preserves verified postings without retokenization and does
+not fill missing lexical surfaces. Raw assets and prior source lineage remain
+preserved; no new canonical store or schema service is introduced.
+
 ---
 
 ## 11. Storage and Security Boundary
@@ -618,6 +860,16 @@ index projection stores
 
 PostgreSQL is canonical for metadata, provenance, permission, review, and graph
 state. Raw and large binary payloads live behind an object-store abstraction.
+
+Before extraction, object verification must bind the expected hash/size to a
+complete, stable descriptor read and the still-current governed path/target.
+Path replacement, symlink retargeting, detectable file mutation, short reads
+and mismatches fail without invoking an extractor. Operator diagnostics retain
+only same-call hash/count/stability/completion facts and safe reason codes;
+never raw paths or exception text. Do not retry until a hash happens to pass,
+repin source expectations, or present later verification as the failed call's
+evidence. These guards do not by themselves explain historical inconsistent
+digests or certify whole-source completeness.
 
 Graph and projection records reference stable FormOwl identifiers:
 
@@ -658,15 +910,23 @@ Resource Extraction is aligned when:
    knowledge remain distinct;
 4. every derived artifact pins extractor, policy, model, prompt, package, and
    source revisions as applicable;
-5. heterogeneous adapters preserve source-native locators and time semantics;
+5. heterogeneous adapters preserve native text/structure/media, locators and
+   time semantics; text proxies cannot establish native-media capability;
 6. source completeness is compared with an independent source inventory and
    unexplained loss fails the gate;
 7. re-extraction creates a new run and never overwrites historical evidence;
 8. tokenizer/embedding re-indexing can reuse authorized Observations without
    reparsing source content;
-9. semantic tools and LLMs remain replaceable candidate generators;
-10. no extractor writes canonical graph/type, user graph, wiki, or external
+9. activated indexes and graph projections are reused by requests without a
+   per-query rebuild; eligible validated index/graph misses preserve the same
+   authorized source scope, and agent-expanded tool calls iterate only within
+   pinned budgets;
+10. semantic tools and LLMs remain replaceable candidate generators;
+11. no extractor writes canonical graph/type, user graph, wiki, or external
     business-system state;
-11. public records expose only governed identifiers and safe summaries; and
-12. canonical dev-container tests cover positive, partial, failed, denied,
+12. unannotated evidence remains retrievable, native table operations preserve
+    formula/raw/cached/display/type/coordinate/row semantics and coverage,
+    and bounded source context retains native citations and separate access checks;
+13. public records expose only governed identifiers and safe summaries; and
+14. canonical dev-container tests cover positive, partial, failed, denied,
     duplicate-occurrence, re-extraction, and leak-guard behavior.

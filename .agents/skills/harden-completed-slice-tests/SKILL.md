@@ -9,14 +9,23 @@ description: Use when Codex must harden tests for completed implementation slice
 
 Use this skill to finish completed-slice or per-item test hardening without
 drifting into unrelated feature work. The operating mode is strict: one reviewer
-finding at a time, code and tests repaired by the main agent, and release only
-after the configured reviewer gate has enough explicit read-only approvals.
+finding at a time, code and tests repaired by the explicitly authorized implementer
+within its bounded write set, and release only after the configured reviewer gate
+has enough explicit read-only approvals.
 
 ## Startup
 
 Read the repository agent instructions first. If the repo names a work board,
 implementation breakdown, specs, or canonical verification commands, read those
 before editing.
+
+Current repository instructions and bounded user assignments take precedence over
+this skill. The Master is ordinarily orchestration-only: it may inspect and
+coordinate, but an explicit current user assignment may authorize edits in named
+code, test, or durable-document paths. This workflow grants no additional
+workers, reviewers, descendants, write paths, or verification scope, and missing
+worker metadata or an unavailable handle does not block an explicitly bounded
+assignment.
 
 Treat the work board as the shared source of truth. Do not mark a checkbox
 complete unless code, tests, relevant docs, canonical verification, and any
@@ -46,8 +55,8 @@ Use reviewers as read-only critics. They do not need to run tests, edit files,
 or execute commands. Their job is to inspect code and tests, state whether the
 tests can be released, and identify blocking gaps.
 
-When a reviewer finds a blocker, the main agent fixes it and then returns to the
-same reviewer for re-review. Count that reviewer only after they explicitly
+When a reviewer finds a blocker, the authorized implementer fixes it within its
+assigned paths; the coordinator returns to the same reviewer for re-review. Count that reviewer only after they explicitly
 agree there are no blocking findings. Close a reviewer only after recording its
 final agreement or non-counted failure.
 
@@ -57,12 +66,12 @@ effective reviewers have explicitly agreed.
 
 When the user has configured a reviewer count for ongoing work, apply that gate
 to every newly completed implementation item before calling it complete. The
-default gate in this repository is 6 effective read-only reviewers unless the
-user changes it for a specific slice: 3 Codex/GPT reviewers and 3 Antigravity
-Gemini reviewers through the real local `agy` CLI. Do not substitute Codex
-`multi_agent_v1`, a GPT model override, or an "agy folder" GPT substitute for
-the Antigravity Gemini reviewers. Do not carry over approvals from a previous
-item; each item gets its own reviewer count and findings.
+default gate in this repository is 3 effective independent read-only Codex/GPT
+reviewers across engineering, governance/safety, and research methodology unless
+the user changes it for a specific slice. Antigravity/`agy` is suspended: do not
+invoke, dispatch, wait for, or count it unless the user explicitly re-enables it.
+Do not carry over approvals from a previous item; each item gets its own
+reviewer count and findings.
 
 Use `docs/agent-goals/reviewer-gate.md` for the current repository reviewer
 composition, Antigravity authorization, and reviewer output format.

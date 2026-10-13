@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+import re
+from unittest.mock import patch
 
 import _paths  # noqa: F401
 from formowl_contract import (
@@ -15,6 +17,7 @@ from formowl_contract import (
     UploadSession,
     User,
 )
+from formowl_contract import public_safety
 
 
 class ContractEdgeCaseTests(unittest.TestCase):
@@ -171,6 +174,67 @@ class ContractEdgeCaseTests(unittest.TestCase):
             with self.subTest(object_uri=object_uri):
                 with self.assertRaises(ContractValidationError):
                     Asset.from_dict(payload)
+
+    def test_path_span_redaction_preserves_unrelated_multilingual_values(self) -> None:
+        prefix, suffix = "SYN-LEFT 稽核 café Qty 23.75 ", " Grade B SYN-RIGHT"
+        for span, replacement, count in (
+            ("/ /", "[redacted_path] [redacted_path]", 2),
+            ("/私密/樣本.txt", "[redacted_path]", 1),
+            ("/private/樣本.txt", "[redacted_path]", 1),
+            ("/private/O'Brien.txt", "[redacted_path]", 1),
+            ("C:\\", "[redacted_path]", 1),
+            ("C:/", "[redacted_path]", 1),
+            ("\\\\", "[redacted_path]", 1),
+            ("\\\\主機\\私密\\樣本.txt", "[redacted_path]", 1),
+        ):
+            with self.subTest(span=span):
+                original = prefix + span + suffix
+                with self.assertRaises(ContractValidationError):
+                    public_safety.assert_no_public_raw_references(original)
+                redacted, actual_count = public_safety.redact_public_raw_references(original)
+                self.assertEqual(redacted, prefix + replacement + suffix)
+                self.assertEqual(actual_count, count)
+                public_safety.assert_no_public_raw_references(redacted)
+                self.assertEqual(public_safety.redact_public_raw_references(redacted), (redacted, 0))
+
+    def test_path_redactor_covers_detector_boundaries_without_broadening_detection(self) -> None:
+        for prefix in ("", " ", "\n", "'", '"', "(", "[", "{", "=", ",", ":", ";"):
+            with self.subTest(prefix=prefix):
+                value = prefix + "/私密/樣本.txt SYN-SAFE"
+                with self.assertRaises(ContractValidationError):
+                    public_safety.assert_no_public_raw_references(value)
+                self.assertEqual(
+                    public_safety.redact_public_raw_references(value),
+                    (prefix + "[redacted_path] SYN-SAFE", 1),
+                )
+        safe = "SYN-SAFE 稽核 café Qty 23.75 A/B kg/unit"
+        public_safety.assert_no_public_raw_references(safe)
+        self.assertEqual(public_safety.redact_public_raw_references(safe), (safe, 0))
+
+    def test_span_redaction_retains_secret_sql_backend_guards_and_final_fallback(self) -> None:
+        for unsafe in (
+            "password=synthetic-password", "api_key=synthetic-key",
+            "Bearer SYNTHETICCREDENTIALVALUE", "SELECT private_column FROM fixture_table",
+            "postgresql://user:password@db.invalid/fixture", "s3://private-bucket/fixture",
+            "https://user:password@example.invalid/fixture", "formowl://scratch/private-item",
+        ):
+            with self.subTest(unsafe=unsafe):
+                original = "SYN-LEFT " + unsafe + " SYN-RIGHT"
+                with self.assertRaises(ContractValidationError):
+                    public_safety.assert_no_public_raw_references(original)
+                redacted, count = public_safety.redact_public_raw_references(original)
+                self.assertNotIn(unsafe, redacted)
+                self.assertIn("SYN-LEFT", redacted)
+                self.assertIn("SYN-RIGHT", redacted)
+                self.assertGreater(count, 0)
+                public_safety.assert_no_public_raw_references(redacted)
+        for key in ("apiKey", "password", "refresh_token"):
+            with self.assertRaises(ContractValidationError):
+                public_safety.assert_no_public_raw_references({key: "synthetic"})
+        # If a future detector rule has no span consumer, failure remains closed.
+        with patch.object(public_safety, "_RAW_PATH_TOKEN", re.compile(r"(?!)")):
+            self.assertEqual(public_safety.redact_public_raw_references("SYN /private/path SAFE"),
+                             ("[redacted_mail_evidence]", 1))
 
 
 def _valid_candidate_atom() -> dict[str, object]:

@@ -13,6 +13,7 @@ from unittest import mock
 
 import _paths  # noqa: F401
 from formowl_contract import (
+    ContractValidationError,
     Observation,
     PermissionScope,
     SourceInventory,
@@ -61,9 +62,19 @@ class Issue56DevelopmentUatObservationMaterializationE2ETests(unittest.TestCase)
                 (output / materializer.OBSERVATION_RELATIVE_DIRECTORY).glob("*.json")
             )
             self.assertEqual(len(observation_paths), 456)
+            self.assertEqual(
+                list((output / materializer.OBSERVATION_RELATIVE_DIRECTORY).glob("_shards/*/*.json")), [],
+            )
 
             private_bytes = (output / materializer.PRIVATE_ARTIFACT_FILENAME).read_bytes()
             private = json.loads(private_bytes)
+            expected_byte_hashes = {
+                record["observation_id"]: record["record_byte_sha256"]
+                for record in private["records"]
+            }
+            for path in observation_paths:
+                self.assertEqual(_sha256_path(path), expected_byte_hashes[path.stem])
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             materializer.validate_private_materialization_artifact(private)
             materializer.validate_safe_materialization_report(
                 safe_report,
@@ -91,6 +102,58 @@ class Issue56DevelopmentUatObservationMaterializationE2ETests(unittest.TestCase)
             self.assertNotIn("obs_body_", safe_serialized)
             self.assertNotIn("Synthetic evidence", safe_serialized)
             self.assertNotIn(str(root), safe_serialized)
+
+    def test_legacy_and_mixed_layout_preserve_inventory_and_keyed_reader(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = _write_fixture(root / "inputs")
+            output = root / "materialized"
+            artifacts = materializer.materialize_development_uat_observations(
+                **_build_kwargs(fixture, output)
+            )
+            directory = artifacts.observations_directory
+            paths = sorted(directory.rglob("*.json"))
+            records = artifacts.private_artifact["records"]
+            expected = {row["observation_id"]: Observation.from_dict(row)
+                        for row in fixture.snapshot["parsed_mail_observations"]}
+            selected = [record["observation_id"] for record in records]
+            # Only synthetic test records are re-created in a mixed layout;
+            # the sealed export itself retains its established flat format.
+            store = materializer.ObservationStore(output / "data")
+            for group in ((), paths[:len(paths) // 2]):
+                for path in group:
+                    observation = Observation.from_dict(json.loads(path.read_bytes()))
+                    path.unlink()
+                    store.create(observation)
+                self.assertEqual(materializer._validated_staged_record_inventory(
+                    staging=output, selected_ids=selected,
+                    adjudicated_ids=frozenset(artifacts.private_artifact["adjudicated_observation_ids"]),
+                    observation_by_id=expected,
+                ), records)
+                before = _tree_bytes(output)
+                with (
+                    mock.patch.object(Path, "glob", side_effect=AssertionError("reader enumerated")),
+                    mock.patch.object(Path, "rglob", side_effect=AssertionError("reader enumerated")),
+                    mock.patch.object(Path, "mkdir", side_effect=AssertionError("reader wrote")),
+                ):
+                    bundle, subset = simulated_uat._bounded_preserved_projection(
+                        bundle_payload=fixture.bundle_artifact["bundle"], manifest=fixture.manifest,
+                        manifest_byte_hash=fixture.manifest_sha256, observations_directory=directory,
+                    )
+                    self.assertEqual(len(subset[bundle.mail_evidence_bundle_id]), 456)
+                    self.assertEqual(subset.source_observation_hash_by_id, {
+                        record["observation_id"]: record["observation_hash"] for record in records
+                    })
+                self.assertEqual(_tree_bytes(output), before)
+            # Duplicate physical identities fail closed instead of selecting one.
+            sharded_path = next(directory.rglob(paths[0].name))
+            paths[0].write_bytes(sharded_path.read_bytes())
+            _, duplicate = simulated_uat._bounded_preserved_projection(
+                bundle_payload=fixture.bundle_artifact["bundle"], manifest=fixture.manifest,
+                manifest_byte_hash=fixture.manifest_sha256, observations_directory=directory,
+            )
+            with self.assertRaisesRegex(ContractValidationError, "subset is unavailable"):
+                duplicate[bundle.mail_evidence_bundle_id]
 
     def test_identical_sealed_inputs_are_byte_deterministic_across_roots(
         self,
@@ -508,7 +571,7 @@ def _fixture_bytes(body_count: int) -> tuple[bytes, bytes, bytes, bytes]:
         started_at=CREATED_AT,
         completed_at=CREATED_AT,
     )
-    bundle_payload = bundle.to_dict()
+    bundle_payload = bundle.to_persistence_dict()
     bundle_fingerprint = sha256_json(bundle_payload)
     source_snapshot_fingerprint = sha256_json("source-snapshot")
     bundle_artifact: dict[str, object] = {
@@ -516,7 +579,7 @@ def _fixture_bytes(body_count: int) -> tuple[bytes, bytes, bytes, bytes]:
         "schema_version": 1,
         "status": "passed",
         "source_snapshot_fingerprint": source_snapshot_fingerprint,
-        "source_inventory_fingerprint": sha256_json(inventory.to_dict()),
+        "source_inventory_fingerprint": sha256_json(inventory.to_persistence_dict()),
         "source_provenance_fingerprint": provenance_fingerprint,
         "bundle": bundle_payload,
         "bundle_fingerprint": bundle_fingerprint,
@@ -564,7 +627,7 @@ def _fixture_bytes(body_count: int) -> tuple[bytes, bytes, bytes, bytes]:
         "source_snapshot_fingerprint": source_snapshot_fingerprint,
         "source_asset_sha256": source_asset_sha256,
         "native_manifest_fingerprint": sha256_json("native-manifest"),
-        "source_inventory_fingerprint": sha256_json(inventory.to_dict()),
+        "source_inventory_fingerprint": sha256_json(inventory.to_persistence_dict()),
         "source_provenance_fingerprint": provenance_fingerprint,
         "permission_fingerprint": sha256_json(permission_scope.to_dict()),
         "parsed_observation_fingerprint": sha256_json(
@@ -579,7 +642,7 @@ def _fixture_bytes(body_count: int) -> tuple[bytes, bytes, bytes, bytes]:
         "authorized_result_fingerprint": sha256_json("authorized-result"),
         "denied_result_fingerprint": sha256_json("denied-result"),
         "created_at": CREATED_AT,
-        "source_inventory": inventory.to_dict(),
+        "source_inventory": inventory.to_persistence_dict(),
         "source_occurrence_observations": [],
         "parsed_mail_observations": [observation.to_dict() for observation in parsed_observations],
         "index_build_manifest": {"artifact_fingerprint": sha256_json("index-build")},

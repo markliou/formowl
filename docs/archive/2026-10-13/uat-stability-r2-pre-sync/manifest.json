@@ -1,0 +1,32 @@
+{
+  "lifecycle": "immutable-history",
+  "utc": "2026-10-13T11:18:31.876921+00:00",
+  "purpose": "Exact pre-edit five-document checkpoint before minimal r2 evidence sync; historical evidence, not current instructions.",
+  "files": [
+    {
+      "path": "SPEC.md",
+      "sha256": "efc345a6fdd4d8b010a51174f285e2efcced452e01fb734f1b849f12e5b48fb4",
+      "bytes": 111403
+    },
+    {
+      "path": "README.md",
+      "sha256": "5900cca3217f83659ca233f8dc58fc8cd5eb84fe7299e354183e71ea0f1fc6e9",
+      "bytes": 50404
+    },
+    {
+      "path": "docs/implementation-task-breakdown.md",
+      "sha256": "a1038a831280ecbd98098d8a2a26febc168696ed0d93140231081f386aa7df77",
+      "bytes": 26195
+    },
+    {
+      "path": "docs/agent-goals/kg-research-agent.md",
+      "sha256": "2889dd2f0c2ad0851b1c43e013071e1ba46e29a8d1fc3dfc764cd2720a63d142",
+      "bytes": 9974
+    },
+    {
+      "path": "docs/agent-goals/handoff-log.md",
+      "sha256": "291262b718a61d41f125583aee34a74ebb0225468d99e178ef68d90b0feb9f40",
+      "bytes": 21645
+    }
+  ]
+}

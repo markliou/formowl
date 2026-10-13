@@ -49,6 +49,7 @@ import sys
 if "-V" in sys.argv:
     print("ReadPST / LibPST v0.6.76")
     raise SystemExit(0)
+assert sys.argv[sys.argv.index("-j") + 1] == "1"
 output = Path(sys.argv[sys.argv.index("-o") + 1])
 folder = output / "Mailbox"
 folder.mkdir(parents=True)
@@ -88,6 +89,10 @@ message.add_attachment(
 
         self.assertEqual(artifacts.private_manifest["status"], "passed")
         self.assertEqual(artifacts.public_report["status"], "passed")
+        completion = json.loads((output_root / "readpst-export-complete.json").read_text())
+        self.assertEqual(completion["source_fingerprint"], expected_asset_sha256)
+        self.assertEqual(completion["parser_exit_code"], 0)
+        self.assertFalse(completion["source_completeness_certified"])
         self.assertEqual(
             artifacts.private_manifest["source_asset_sha256"],
             expected_asset_sha256,
